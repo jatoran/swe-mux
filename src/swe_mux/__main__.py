@@ -11,7 +11,8 @@ from pathlib import Path
 from aiohttp import web
 
 from .config import LOOPBACK_HOSTS, Config, load_config
-from .lifecycle import ledger
+from .http_support import ACCESS_LOG_FORMAT
+from .lifecycle import heartbeat_pid, ledger, pid_running
 from .logsetup import enable_crash_tracebacks, setup_daemon_logging
 from .process_reaper import process_in_job
 from .server import create_app, wait_runtime_ready
@@ -93,7 +94,9 @@ async def serve(
         desktop_shutdown_event=shutdown_event,
         relaunch_command=relaunch_command,
     )
-    runner = web.AppRunner(app)
+    # The access format carries the correlation id, so a request line in
+    # `access.log` joins the lines it caused in `daemon.log`.
+    runner = web.AppRunner(app, access_log_format=ACCESS_LOG_FORMAT)
     await runner.setup()
     sites: list[web.TCPSite] = []
     log = logging.getLogger(__name__)
@@ -202,6 +205,52 @@ def wait_for_port_free(host: str, port: int, timeout_seconds: float = 90.0) -> N
     )
 
 
+#: How long a successor waits for its predecessor to finish draining before it
+#: starts its own database work. Sized against the predecessor's teardown, which
+#: stops ~30 services and closes thirteen store connections; well under the 90s
+#: this gate already tolerates for the port itself.
+PREDECESSOR_DRAIN_TIMEOUT_SECONDS = 20.0
+
+
+def wait_for_predecessor_exit(
+    data_dir: Path, timeout_seconds: float = PREDECESSOR_DRAIN_TIMEOUT_SECONDS
+) -> None:
+    """Second half of the successor start gate: let the predecessor finish writing.
+
+    Freeing the port is not the end of a daemon's life. `runner.cleanup()` closes
+    the listener *first* and only then runs `_teardown_runtime`, which is where
+    the last durable writes happen - the terminal ledger, the recovery rows, the
+    telemetry and notification-decision rows that describe the restart itself.
+    A successor that started the moment the port opened spent that whole window
+    holding `mux.db` for its own integrity check and schema work, and the
+    predecessor's writes came back `database is locked` and were dropped
+    (measured across a 2026-08-23 restart: ten of them, in four subsystems,
+    silently).
+
+    So the successor waits for the predecessor *process*, which the heartbeat
+    record names, rather than for its socket. Bounded, and a timeout is a
+    warning and not a refusal: a wedged predecessor must not stop a restart, and
+    `sqlite_store`'s drain widening is the second line for exactly that case.
+    """
+    log = logging.getLogger(__name__)
+    pid = heartbeat_pid(data_dir)
+    if pid <= 0 or pid == os.getpid() or not pid_running(pid):
+        return
+    log.info("waiting for predecessor daemon pid %d to finish its shutdown drain", pid)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not pid_running(pid):
+            log.info("predecessor daemon pid %d has exited; continuing startup", pid)
+            return
+        time.sleep(0.25)
+    log.warning(
+        "predecessor daemon pid %d has not exited after %.0fs; starting anyway "
+        "(its last writes may be lost to a database lock)",
+        pid,
+        timeout_seconds,
+    )
+
+
 def _warn_if_inside_job(config: Config) -> None:
     """Loud breadcrumb for the poisoned-launch state while the daemon is healthy.
 
@@ -250,6 +299,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     _warn_if_inside_job(config)
     if args.relaunch_wait:
         wait_for_port_free(config.host, config.port)
+        # Then for the predecessor's *drain*, which happens after the port frees.
+        wait_for_predecessor_exit(config.data_dir)
     token = os.environ.get("SWE_MUX_DESKTOP_CONTROL_TOKEN") or None
     try:
         asyncio.run(

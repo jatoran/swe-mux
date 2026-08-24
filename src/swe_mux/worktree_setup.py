@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +9,6 @@ from typing import Any, Literal
 
 from .worktree_exec import (
     WorktreeCommand,
-    bounded_output,
     convention_command,
     resolve_worktree_command,
     run_bounded_command,
@@ -90,10 +88,6 @@ def resolve_setup_command(worktree: Path, project_values: dict[str, Any]) -> Set
         config_key="setup_command",
         script_name=".worktree-setup",
     )
-
-
-async def _bounded_output(stream: asyncio.StreamReader) -> tuple[bytes, bool]:
-    return await bounded_output(stream, MAX_SETUP_OUTPUT_BYTES, label="setup")
 
 
 async def run_worktree_setup(

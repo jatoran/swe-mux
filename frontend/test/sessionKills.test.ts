@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  KILL_TOMBSTONE_TTL_MS, applyKillTombstones, expiredKillIds, killRemovedTheSession,
-  killedSessionIds, nextActiveAfterKill, type KillTombstones,
+  KILL_TOMBSTONE_TTL_MS, applyKillTombstones, clearableEndedSessions, expiredKillIds,
+  killRemovedTheSession, killedSessionIds, nextActiveAfterKill, type KillTombstones,
 } from '../src/sessionKills.ts'
 import {
   openTab, removeLeaf, splitTerminal, terminalLeaf, visibleTerminalIds, type PaneLayout,
@@ -198,6 +198,79 @@ test('killing the last session in a project leaves nothing focused', () => {
     layout: afterKilling(stacked('s1'), 's1'),
     sessions: [session('s1')],
     killedId: 's1', projectId: 'p1', activeId: 's1',
+  })
+  assert.equal(next, null)
+})
+
+test('a sweep takes both ways a session can end, and only in the Project asked for', () => {
+  const fleet = [
+    session('live'),
+    session('exited', { state: 'exited' }),
+    session('crashed', { state: 'crashed' }),
+    session('other-exited', { state: 'exited', project_id: 'p2' }),
+  ]
+  assert.deepEqual(
+    clearableEndedSessions(fleet, 'p1', {}).map(item => item.id),
+    ['exited', 'crashed'])
+  assert.deepEqual(
+    clearableEndedSessions(fleet, 'p2', {}).map(item => item.id),
+    ['other-exited'])
+})
+
+test('a sweep leaves out a row whose own DELETE is still in the air', () => {
+  const fleet = [
+    session('e1', { state: 'exited' }),
+    session('e2', { state: 'crashed' }),
+    session('e3', { state: 'exited' }),
+  ]
+  assert.deepEqual(
+    clearableEndedSessions(fleet, 'p1', tombstones(tombstone('e2'))).map(item => item.id),
+    ['e1', 'e3'])
+})
+
+test('a sweep of a Project with nothing dead in it is empty, not the whole Project', () => {
+  const fleet = [session('s1'), session('s2', { state: 'awaiting' })]
+  assert.deepEqual(clearableEndedSessions(fleet, 'p1', {}), [])
+})
+
+test('a sweep keeps the order the sidebar drew, so its layout write is deterministic', () => {
+  const fleet = [
+    session('e3', { state: 'exited' }),
+    session('e1', { state: 'exited' }),
+    session('e2', { state: 'crashed' }),
+  ]
+  assert.deepEqual(
+    clearableEndedSessions(fleet, 'p1', {}).map(item => item.id),
+    ['e3', 'e1', 'e2'])
+})
+
+test('a sweep that takes the focused session hands focus to a survivor, not to another corpse', () => {
+  // What `clearEndedSessions` computes once for the whole batch: the layout it passes
+  // already has every ended leaf out, so the successor can only be a live session.
+  const fleet = [
+    session('e1', { state: 'exited' }),
+    session('e2', { state: 'crashed' }),
+    session('live'),
+  ]
+  const layout = stacked('e1', 'e2', 'live')
+  const swept = clearableEndedSessions(fleet, 'p1', {})
+  const nextLayout = swept.reduce((current, item) => removeLeaf(current, 'terminal', item.id), layout)
+  const next = nextActiveAfterKill({
+    layout: nextLayout, sessions: fleet, killedId: 'e1', projectId: 'p1', activeId: 'e1',
+    recent: ['e1', 'e2', 'live'],
+  })
+  assert.equal(next, 'live')
+  assert.deepEqual(visibleTerminalIds(nextLayout), ['live'])
+})
+
+test('a sweep that empties the Project leaves nothing focused', () => {
+  const fleet = [session('e1', { state: 'exited' }), session('e2', { state: 'exited' })]
+  const swept = clearableEndedSessions(fleet, 'p1', {})
+  const nextLayout = swept.reduce(
+    (current, item) => removeLeaf(current, 'terminal', item.id), stacked('e1', 'e2'))
+  const next = nextActiveAfterKill({
+    layout: nextLayout, sessions: fleet, killedId: 'e2', projectId: 'p1', activeId: 'e2',
+    recent: ['e2', 'e1'],
   })
   assert.equal(next, null)
 })

@@ -31,15 +31,37 @@ The rules callers must follow are in `runtime-rules.md`.
 
 ### `lifecycle.py`
 
-Daemon death forensics: the rewritten heartbeat record, the append-only lifecycle ledger, unclean-death detection at startup, and clean-exit marking.
+Daemon death forensics: the rewritten heartbeat record, the append-only lifecycle ledger, unclean-death detection at startup, clean-exit marking, and `planned_handoff`.
+
+`planned_handoff` is what keeps the unclean-death report honest.
+A clean exit is written *last*, after the whole teardown drain, and a planned restart never gets that far: `redeploy_desktop.py` asks the daemon to detach, watches health, and terminates the process about three seconds after it stops answering.
+So the predecessor died with `clean_exit` false every time, and every successor reported a crash - 39 of them in one log, none real, which is worse than no warning at all.
+The intent is now recorded when it is *decided*, by the endpoint that decides it (`POST /api/desktop/shutdown`, `POST /api/daemon/restart`), and a successor that finds `planned_intent` on the record reports the handoff at INFO instead of a crash at WARNING.
+A record is not treated as proof of a clean shutdown; it only says which of the two stories the missing clean exit belongs to.
 
 **Not:** logging configuration, or process supervision.
 
 ### `logsetup.py`
 
-Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, and runtime root-logger level control.
+Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, runtime root-logger level control, and the two things that make a line reconstructable rather than merely readable.
 
-**Not:** the supervisor's logging, which is stdlib-inline there to keep its import closure frozen.
+- **`StructuredFormatter` serializes `extra`.** The plain format string dropped every keyword a call site passed through `extra=`, so instrumentation that had been written years apart - `git_monitor`'s root and git exit code, `observation`'s session and elapsed seconds, `usage`'s source count - produced nothing at the sink.
+  Fields are appended after the message as `key=value`, which is the shape the daemon already logs in by hand (`git_mutation_started operation_id=… cwd=…`), so one convention covers both and `daemon.log` stays greppable instead of becoming a file of JSON objects.
+  A value holding a space, a quote, an `=` or a newline is JSON-quoted, so a line always parses back into the fields it came from and always stays one line; values are truncated at `MAX_EXTRA_VALUE_CHARS` so one oversized field cannot push a rotation's worth of real lines out of the file.
+  The traceback stays last, after the fields, where a reader expects it.
+- **`CorrelationFilter` stamps the in-flight request id.** `request_id_var` is a contextvar; `bound_request_id` binds it, and the correlation middleware does that per request.
+  The filter goes on the *handlers*, not on the root logger: `Logger.handle` consults only the filters of the logger the call was made on, so one installed on root would look armed and stamp nothing a submodule logs.
+  `access.log` keeps the plain formatter (aiohttp's `AccessLogger` passes its whole atom table through `extra=`, which would repeat every line's contents twice over) and gets the id through `ACCESS_LOG_FORMAT` instead.
+
+**Not:** the supervisor's logging, which is stdlib-inline there to keep its import closure frozen; nor deciding *what* is worth logging, which belongs to the module doing the work.
+
+### `errors.py`
+
+`NotFound`, the typed domain refusal `error_middleware` answers 404 for.
+It subclasses `KeyError` deliberately: the convention it replaces has catch sites as well as raise sites (`routes/diagnostics.py` falls back to a post-mortem view when a session does not resolve, `mcp.py` maps a miss onto its own scope error), and a new base class would have silently stopped every one of them catching what it was written to catch.
+Only the raise sites moved; each catch site can narrow to `NotFound` later, one at a time, on purpose.
+
+**Not:** transport. It knows nothing about aiohttp, which is what lets every layer below the routes raise it.
 
 ## Transport
 
@@ -53,7 +75,8 @@ The types are annotations (`CONFIG: web.AppKey[Config]`) with the runtime type a
 
 ### `http_support.py`
 
-The transport primitives with no domain knowledge: the compact JSON response, response security headers, the loopback-peer check, and one-shot task-failure logging.
+The transport primitives with no domain knowledge: the compact JSON response, response security headers, the loopback-peer check, one-shot task-failure logging, and the correlation-id names (`REQUEST_ID_HEADER`, the typed `REQUEST_ID_KEY` request slot, `ACCESS_LOG_FORMAT`).
+The header and the access format live together so the two spellings of the same id cannot drift apart.
 Outside `routes/` deliberately, because `preview_transport.py` streams its own response and needs the security headers, and a module below the route layer reaching up into `routes/` would invert the dependency direction the package boundary states.
 
 **Not:** the middlewares themselves, static-asset cache headers, or resolving a request to the Project or session it names (`routes/support.py`).
@@ -77,6 +100,15 @@ Its callers are the composition root (the watch loop) and every route that write
 - `_teardown_runtime` reads every handle back out of `app` and treats each as optional, because a shutdown can now arrive with the runtime half-built.
   Cancelling a task is not the same as stopping the work it started: a one-shot task waiting on `asyncio.to_thread` leaves its worker running, and the loop joins that worker in `shutdown_default_executor` after this function has already returned.
   The startup native-history reconcile is cancelled through `scan_external_transcripts_async`, which hands the worker a token it polls per file, so the walk ends here rather than after teardown (`development/PERFORMANCE_RUNBOOK.md` § Traps).
+- **The handoff between two daemons is a shared window, not two independent lifetimes**, and both halves of it are handled here.
+  `runner.cleanup()` closes the listener *first* and only then runs `_teardown_runtime`, so the port frees several seconds before the last durable writes happen - the terminal ledger, the recovery rows, and exactly the telemetry that would explain the restart.
+  A successor that started the moment the port opened spent that whole window holding `mux.db` for its own integrity check and schema work, and the predecessor's writes came back `database is locked` and were dropped: ten of them across a measured 2026-08-23 restart, in four subsystems, silently.
+  So the successor's start gate has two halves (`__main__.wait_for_port_free`, then `wait_for_predecessor_exit`, which reads the pid off the heartbeat record and waits up to 20s, bounded, warning rather than refusing);
+  and `_teardown_runtime` opens with `sqlite_store.begin_shutdown_drain()`, which widens the busy timeout for whatever is left of an 8s budget and makes any write still lost to a lock log `sqlite_write_lost` naming the store and the method (`technical/backend/sqlite.md`).
+  The ordering fix is the real one; the drain is the second line for the redeploy path, where the predecessor is terminated about three seconds after health stops answering and does not get to choose how long it lives.
+- The middleware chain is `correlation → error → security → starting → compression`.
+  `correlation_middleware` is outermost so that the two refusals that never reach a handler - `unsupported Host` and `daemon_starting` - carry a request id too, and so that anything the middlewares below it log is correlated with it.
+  It binds a contextvar rather than passing an argument down, because `asyncio.create_task` and `asyncio.to_thread` both inherit the context: the background work a handler starts stays correlated after the response has been written, which is the span an incident covers.
 - What may be deferred is decided by whether serving depends on it, and the reason is recorded at each site. Deferred: process-ownership restore (a full psutil sweep, measured 20.7s cold / 6.0s warm over 482 processes; the inspector's own poll refreshes it forever afterwards, and `start()` lives inside the deferring task so the poll cannot run against a half-restored map).
   Deliberately not deferred: the historical provider-collision reconcile (it hides false runs from the first request), the provider-account reconcile (system auth is authoritative, `architecture.md` invariant 10), and every `restore()` whose loop is started immediately after it.
 

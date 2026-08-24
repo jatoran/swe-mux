@@ -13,17 +13,24 @@ from time import monotonic
 from typing import Any, TypeVar
 
 from .background_tasks import background
+from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .git_review import resolve_comparison_ref
 from .models import GitState
 from .session import Session, SessionManager
-from .subprocess_flags import background_creation_flags, reap_process_tree
 
 log = logging.getLogger(__name__)
 
 GIT_MONITOR_LOOP = "git-monitor"
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
+#: What one Git query may hold in memory. Every caller here parses what it gets
+#: back, so a capture that lost its middle is not a smaller answer - it is a wrong
+#: one, and is reported as `GIT_OUTPUT_CAPPED` rather than returned.
+GIT_OUTPUT_LIMIT_BYTES = 16 * 1024 * 1024
+#: Beside the reserved 124 for a timeout, and for the same reason: a caller has to
+#: be able to tell "Git could not answer" from "Git answered nothing".
+GIT_OUTPUT_CAPPED = 125
 #: Repository roots retained in the diffstat memo. One entry per checkout the
 #: fleet has open, so this is bounded by how many worktrees exist, not by time.
 DIFFSTAT_CACHE_LIMIT = 256
@@ -42,7 +49,9 @@ async def _git(
     """Run one bounded, **read-only** Git query and always reap the subprocess.
 
     Code 124 is reserved for a timeout so API callers can return a typed diagnostic
-    instead of hanging a terminal-facing request indefinitely.
+    instead of hanging a terminal-facing request indefinitely, and 125 for a capture
+    that hit the output cap - every caller here parses what it gets, so a truncated
+    answer must read as a failure rather than as a shorter repository.
 
     `--no-optional-locks` is what makes this read-only, and it is not a tuning knob.
     `git status` refreshes the index and *writes it back* whenever any tracked file's
@@ -64,25 +73,22 @@ async def _git(
     a monitor must not mutate what it monitors.
     """
     try:
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "--no-optional-locks",
-            "-C",
-            cwd,
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            ("git", "--no-optional-locks", "-C", cwd, *args),
+            label="git",
+            timeout_seconds=timeout_seconds,
+            output_limit=GIT_OUTPUT_LIMIT_BYTES,
+            stderr_limit=GIT_OUTPUT_LIMIT_BYTES,
         )
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-        except TimeoutError:
-            await reap_process_tree(process)
-            return 124, f"git timed out after {timeout_seconds:g}s"
-        output = stdout if process.returncode == 0 else stderr or stdout
-        return process.returncode or 0, output.decode("utf-8", "replace").strip()
     except OSError:
         return 1, ""
+    if outcome.timed_out:
+        return 124, f"git timed out after {timeout_seconds:g}s"
+    if outcome.truncated:
+        return GIT_OUTPUT_CAPPED, f"git output exceeded {GIT_OUTPUT_LIMIT_BYTES} bytes"
+    code = outcome.exit_code or 0
+    output = outcome.stdout if code == 0 else outcome.stderr or outcome.stdout
+    return code, output.decode("utf-8", "replace").strip()
 
 
 #: The read-only runner under its public name, for callers outside this module that
@@ -448,26 +454,22 @@ async def _git_bytes(cwd: str, *args: str, timeout_seconds: float = GIT_TIMEOUT_
     a repaired string rather than of the file git stores.
     """
     try:
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "--no-optional-locks",
-            "-C",
-            cwd,
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            ("git", "--no-optional-locks", "-C", cwd, *args),
+            label="git-bytes",
+            timeout_seconds=timeout_seconds,
+            # The only caller digests a blob, and `read_blob_digest` has already
+            # refused anything above this by asking `cat-file -s` first - so a
+            # capture that hits the cap is one whose bytes are not the file's, and
+            # an empty answer is the only honest one.
+            output_limit=BLOB_DIGEST_MAX_BYTES,
+            stderr_limit=GIT_OUTPUT_LIMIT_BYTES,
         )
-        try:
-            stdout, _stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout_seconds
-            )
-        except TimeoutError:
-            await reap_process_tree(process)
-            return b""
-        return stdout if process.returncode == 0 else b""
     except OSError:
         return b""
+    if outcome.timed_out or outcome.stdout_truncated or outcome.exit_code != 0:
+        return b""
+    return outcome.stdout
 
 
 async def read_blob_digest(cwd: str, blob: str) -> str | None:

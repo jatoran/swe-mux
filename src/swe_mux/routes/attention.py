@@ -13,6 +13,7 @@ from .. import (
 from .. import (
     session_titles,
 )
+from ..errors import NotFound
 from ..http_support import json_response
 from ..session import (
     SessionManager,
@@ -128,7 +129,7 @@ async def attention_feedback(request: web.Request) -> web.Response:
         request.match_info["item_id"], action
     )
     if updated is None:
-        raise KeyError(request.match_info["item_id"])
+        raise NotFound(request.match_info["item_id"], kind="attention item")
     return json_response(updated)
 
 

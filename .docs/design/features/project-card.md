@@ -60,6 +60,11 @@ today, so those four bounds and the `builtin:project-card` spender row describe 
 not run. Either the generated build comes back and they are correct, or they retire with it -
 what they must not go on being is enforced-looking settings for code nothing calls.
 
+For the same reason `ProjectCardService.forget_project(project_id)` - which drops the
+per-Project lock, memo, and failure entries that nothing evicted (audit F24) - has no caller
+yet. Whoever mounts the service owes it one, from the Project-removal path; a held lock is
+skipped and retired on a later call, following `voice.py`.
+
 ## Key files
 
 - Service and fixed file contract: `src/swe_mux/project_context.py`

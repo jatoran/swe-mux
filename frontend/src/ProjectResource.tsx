@@ -19,7 +19,7 @@ import { currentKeybindings, KEYBINDINGS_EVENT } from './keybindingsStore.ts'
 import { scrollLineIntoView, type ViewportScroller } from './noteScroll'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
-import { CodeEditor } from './CodeEditor'
+import { LazyCodeEditor } from './LazyCodeEditor'
 import { projectResourceCreationParent } from './projectResourceCreate'
 import { fileSaveTarget, globalNoteSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
 import { resourceSaveIndicator } from './resourceSaveIndicator'
@@ -1571,10 +1571,10 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       />:isDelimitedFile?<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>
       // A code/text file: the syntax-highlighting editor, keyed per resource so language and undo
       // history are fresh per file. Delimited files keep the raw textarea (their view is the table).
-      :<CodeEditor key={`code:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} onChange={setText} ariaLabel={resource.id}/> )
+      :<LazyCodeEditor key={`code:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} onChange={setText} ariaLabel={resource.id}/> )
       :isDelimitedFile&&readableFile&&fileViewMode==='raw'?<textarea readOnly value={text} spellcheck={false}/>
       // A read-only text file (previously just "This resource is read-only"): show it, highlighted.
-      :readableFile&&presentation?.kind==='text'?<CodeEditor key={`code-ro:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} readOnly ariaLabel={resource.id}/>
+      :readableFile&&presentation?.kind==='text'?<LazyCodeEditor key={`code-ro:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} readOnly ariaLabel={resource.id}/>
       :<div class="resource-unavailable">{status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>
         :unavailableMessage
         // Reachable while a retry is still pending, so it says what is happening rather

@@ -30,6 +30,7 @@ from ..automation_registry import resolve_config as resolve_automation_config
 from ..automation_store import AutomationStore
 from ..behavioral_consumers import ADAPTIVE_TITLE_RULE_ID
 from ..config import Config
+from ..errors import NotFound
 from ..http_support import json_response
 from ..llm_endpoint import LLM_PROVIDERS, LlmEndpoint, LlmReadiness
 from ..llm_endpoint import readiness as llm_readiness
@@ -189,7 +190,7 @@ async def patch_automation_rule(request: web.Request) -> web.Response:
             )
         )
     if not found:
-        raise KeyError(rule_id)
+        raise NotFound(rule_id, kind="automation rule")
     text = serialize_rules(rules)
     parse_rules(text)
     path = request.app[keys.CONFIG].data_dir / "rules.toml"
@@ -206,7 +207,7 @@ async def automation_dry_run(request: web.Request) -> web.Response:
     sequence = int(body.get("event_seq") or 0)
     rows = await request.app[keys.HISTORY].events(after_seq=max(0, sequence - 1), limit=1)
     if not rows or int(rows[0]["seq"]) != sequence:
-        raise KeyError(sequence)
+        raise NotFound(sequence, kind="event")
     row = rows[0]
     event = MuxEvent(
         float(row["ts"]),
@@ -770,7 +771,7 @@ async def patch_automation_notification(request: web.Request) -> web.Response:
         request.match_info["notification_id"], bool(body.get("read", True))
     )
     if not changed:
-        raise KeyError(request.match_info["notification_id"])
+        raise NotFound(request.match_info["notification_id"], kind="notification")
     return json_response({"ok": True})
 
 

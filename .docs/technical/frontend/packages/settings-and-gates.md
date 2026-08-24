@@ -5,12 +5,27 @@ Design: `../../../design/features/setting-links.md`, `../../../design/features/b
 
 ## Settings
 
-`Settings.tsx`, `settingsTabs.ts`, `settingsDraft.ts`, `settingsSearch.ts`, `fuzzyText.ts`,
-`HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
+`Settings.tsx`, `settingsTabs.ts`, `settingsDraft.ts`, `settingsSave.ts`, `settingsSearch.ts`,
+`fuzzyText.ts`, `HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
 
 Global options only, including the machine-wide worktree root.
 Per-Project options belong to `ProjectsManager.tsx`.
 The lifecycle is an explicit draft, save, and discard.
+
+### One save, one request, one apply
+
+Save posts the config delta and the keybindings map together to `POST /api/settings/apply` (`design/interfaces.md`), which commits both or neither.
+The pair of requests it replaced could half-succeed, and the panel's single catch reported every failure as "invalid · nothing was changed" - a claim about the daemon's disk.
+`settingsSave.ts` is where that message is now derived rather than assumed: it is browser-free and reads the `committed` array off the error body, so the three outcomes read differently, and a request that never came back says the outcome is unknown instead of guessing in the reassuring direction.
+That module is separate from the panel for the usual reason - the rule is worth asserting without mounting `Settings.tsx`.
+
+`adoptConfig` is the one place a config becomes authoritative in this panel.
+The open, save, and restore-defaults paths each spelled the same chain out, and had already drifted: open applied the theme and skipped the note-editor, chrome-scale, and rail-density applications, so a value written from another device reached the draft and never the document.
+The three device previews are idempotent (`App.applyConfig` re-applies the same set on every daemon `configuration_changed`), which is what makes one function safe for all three callers.
+
+Restore defaults raises a confirmation before it writes: it rewrites the whole saved configuration on one click, is not staged behind Save, and cannot be undone.
+The dialog is its own dismiss level (`settings-reset-confirm`), so back and Escape reach it before the panel, and it is registered in an effect - a renderer spec must wait for focus to land inside it before pressing Escape, or the key reaches the panel's level instead.
+`test/renderer/settings-save.spec.ts` covers both paths against a harness that can be told to refuse (`?fail=reset`, `?fail=apply`) and records every request the panel made.
 
 ### Search and ranking
 

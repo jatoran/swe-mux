@@ -22,6 +22,29 @@ from .network_usage import (
 
 log = logging.getLogger(__name__)
 
+#: Response (and accepted request) header carrying the per-request correlation
+#: id. The hyphenated spelling is the one proxies, browser devtools and log
+#: aggregators already know.
+REQUEST_ID_HEADER = "X-Request-ID"
+#: Where `correlation_middleware` parks the same id on the request, for a
+#: handler that wants to put it in a response body or hand it to a service.
+#: A typed `web.RequestKey` for the same reason `app_keys.py` uses `web.AppKey`:
+#: aiohttp warns on bare string keys, and request-scoped state has exactly one
+#: writer here, so the key belongs beside the header it mirrors.
+REQUEST_ID_KEY: web.RequestKey[str] = web.RequestKey("request_id")
+#: aiohttp's default access format plus the correlation id, so a line in
+#: `access.log` can be joined to the lines it caused in `daemon.log`. `%{…}o`
+#: reads a *response* header, which is where `correlation_middleware` stamps it.
+ACCESS_LOG_FORMAT = (
+    '%a %t "%r" %s %b "%{Referer}i" "%{User-Agent}i" ' f"request_id=%{{{REQUEST_ID_HEADER}}}o"
+)
+
+
+def request_id(request: web.Request) -> str:
+    """This request's correlation id, or empty outside the middleware chain."""
+    value = request.get(REQUEST_ID_KEY, "")
+    return value if isinstance(value, str) else ""
+
 
 def json_response(data: Any, status: int = 200) -> web.Response:
     return compact_json_response(data, status=status)

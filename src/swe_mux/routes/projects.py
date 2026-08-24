@@ -17,6 +17,7 @@ from .. import (
     app_keys as keys,
 )
 from ..config import Config, update_config
+from ..errors import NotFound
 from ..git_projects import ProjectIdentity, resolve_project
 from ..harness import (
     agent_harnesses,
@@ -216,7 +217,7 @@ async def get_project_scope(request: web.Request) -> web.Response:
     history: HistoryIndex = request.app[keys.HISTORY]
     scope = await history.project_scope(request.match_info["scope_id"])
     if not scope:
-        raise KeyError(request.match_info["scope_id"])
+        raise NotFound(request.match_info["scope_id"], kind="project scope")
     artifacts = await history.artifacts(scope["id"])
     for artifact in artifacts:
         path = (Path(scope["root"]) / artifact["relative_path"]).resolve()
@@ -250,7 +251,7 @@ async def patch_project_scope(request: web.Request) -> web.Response:
         request.match_info["scope_id"], bool(body.get("hidden"))
     )
     if not changed:
-        raise KeyError(request.match_info["scope_id"])
+        raise NotFound(request.match_info["scope_id"], kind="project scope")
     history = request.app[keys.HISTORY]
     return json_response(await history.project_scope(request.match_info["scope_id"]))
 
@@ -272,7 +273,7 @@ async def transfer_artifact(request: web.Request) -> web.Response:
         (a for a in await history.artifacts() if a["id"] == request.match_info["artifact_id"]), None
     )
     if not artifact:
-        raise KeyError(request.match_info["artifact_id"])
+        raise NotFound(request.match_info["artifact_id"], kind="artifact")
     body = await request.json()
     target = await history.project_scope(str(body.get("project_scope_id") or ""))
     source = await history.project_scope(artifact["project_scope_id"])

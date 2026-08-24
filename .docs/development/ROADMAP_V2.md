@@ -287,41 +287,129 @@ All four build on S3/S4 structure; conflicts between them are minimal because S3
 
 ### S7 - diagnosability (logsetup, middleware; F5, F25)
 
-- [ ] S7.1 Structured sink: JSON (or key=value) formatter that serializes `extra` fields, so the correlation data call sites already write reaches `daemon.log`.
-- [ ] S7.2 Request correlation: contextvar request-ID middleware, ID returned in a response header and included in every log line; carry into subprocess/service logs where operation IDs already exist.
-- [ ] S7.3 Typed error translation (F5): introduce a `NotFound(KeyError)` (or typed domain exceptions) for the 30+ deliberate raise sites; let bare `TypeError` reach the 500 path; log both translation paths at debug with method, path, and request ID; stop echoing raw key reprs in 404 bodies.
-- [ ] S7.4 Restart-overlap durability (D2 finding 1): during a session-preserving restart the dying daemon's last writes hit `sqlite3.OperationalError: database is locked` (operational_telemetry, session_recovery, push, history) and are silently lost - precisely the telemetry that would explain the restart. Flush/close stores before the handoff or retry with bounded backoff during the shutdown drain, and make any final loss loud instead of silent.
-- [ ] S7.5 Planned-restart lifecycle truth (D2 finding 3): "previous daemon died without a clean shutdown" fires on every planned restart because the redeploy terminates the predecessor after asking it to detach. A planned handoff must record itself so the successor stops reporting a crash that did not happen.
-- [ ] S7.T Tests: formatter round-trip of extras; middleware test proving an accidental `KeyError` from a handler bug 500s with a traceback while a deliberate `NotFound` 404s; request-ID presence test; restart-overlap write-loss test; planned-restart-no-crash-warning test.
-- [ ] S7.D Docs: logging section of the relevant technical doc.
+- [x] S7.1 Structured sink: JSON (or key=value) formatter that serializes `extra` fields, so the correlation data call sites already write reaches `daemon.log`.
+- [x] S7.2 Request correlation: contextvar request-ID middleware, ID returned in a response header and included in every log line; carry into subprocess/service logs where operation IDs already exist.
+- [x] S7.3 Typed error translation (F5): introduce a `NotFound(KeyError)` (or typed domain exceptions) for the 30+ deliberate raise sites; let bare `TypeError` reach the 500 path; log both translation paths at debug with method, path, and request ID; stop echoing raw key reprs in 404 bodies.
+- [x] S7.4 Restart-overlap durability (D2 finding 1): during a session-preserving restart the dying daemon's last writes hit `sqlite3.OperationalError: database is locked` (operational_telemetry, session_recovery, push, history) and are silently lost - precisely the telemetry that would explain the restart. Flush/close stores before the handoff or retry with bounded backoff during the shutdown drain, and make any final loss loud instead of silent.
+- [x] S7.5 Planned-restart lifecycle truth (D2 finding 3): "previous daemon died without a clean shutdown" fires on every planned restart because the redeploy terminates the predecessor after asking it to detach. A planned handoff must record itself so the successor stops reporting a crash that did not happen.
+- [x] S7.T Tests: formatter round-trip of extras; middleware test proving an accidental `KeyError` from a handler bug 500s with a traceback while a deliberate `NotFound` 404s; request-ID presence test; restart-overlap write-loss test; planned-restart-no-crash-warning test.
+- [x] S7.D Docs: logging section of the relevant technical doc.
+
+Five decisions worth knowing before D3, and one thing S7 deliberately did not do.
+
+- **The sink is `key=value`, not JSON.** The daemon already logs `git_mutation_started operation_id=… cwd=…` by hand in dozens of places, so appending `extra` in the same shape makes one convention instead of two and keeps `daemon.log` greppable; a JSON-object-per-line sink would have made every existing message a string field inside it. Values that hold a space, a quote, an `=` or a newline are JSON-quoted, so a line still parses back into its fields and always stays one line.
+- **The correlation filter is on the handlers, not on the root logger**, and that is not a style choice. `Logger.handle` consults only the filters of the logger the call was made on, so a filter installed on root would have looked armed and stamped nothing that `swe_mux.session` logs. The first version of this had that bug and every unit test passed anyway; `test_the_configured_daemon_writes_fields_and_ids_into_daemon_log` is what catches it, because it reads the real file.
+- **`NotFound` subclasses `KeyError`** so only the *raise* sites had to move (36 of them, plus `configurator.py`'s catalog-carrying one). The catch sites - `routes/diagnostics.py`'s post-mortem fallback, `routes/usage.py`, `mcp.py`'s scope mapping - keep catching what they were written to catch, and several tests stub a resolver that raises a bare `KeyError`. Narrowing a catch site to `NotFound` is now a deliberate one-at-a-time change rather than a precondition.
+  `supervisor.py:655` is the one deliberate raise site left alone: it is inside the hash-gated supervisor closure, its `KeyError` never reaches the HTTP middleware, and touching it would force a session reap for nothing.
+- **S7.4's real fix is ordering, not retry.** The root cause is that `runner.cleanup()` frees the port *before* `_teardown_runtime` writes anything durable, so `--relaunch-wait` (which waited only for the port) had the successor running its 12-61s integrity check on `mux.db` while the predecessor was still flushing. The successor now also waits for the predecessor *process* (`wait_for_predecessor_exit`, bounded at 20s, warns rather than refuses). The drain widening in `run_sqlite_operation` is the second line, for the redeploy path where the predecessor is terminated ~3s after health stops answering: it widens the busy timeout rather than re-running the operation, so nothing executes twice and a batched commit cannot re-apply a batch.
+- **A lost write is now loud wherever it happens**, not only during a drain: `sqlite_write_lost` names the store and method off the operation closure's qualified name, so no store passes its own name down. D3 should watch for that line as much as for the S2 counters.
+- **Not done, and deliberately:** `routes/project_files.py`'s two `raise ValueError("project resource does not exist")` still answer 400 where they mean 404. Converting them is a wire change outside S7's scope; it is a one-line change per site whenever someone wants it. Its four `raise TypeError` validation sites *were* converted to `ValueError`, because those did have to move - a bare `TypeError` is now a 500.
 
 ### S8 - subprocess and process consolidation (usage, provider_accounts, git_monitor, harness, agent_environment, processes)
 
-- [ ] S8.1 Shared bounded runner (F/codex-G): extract the `worktree_exec` pattern (chunked bounded read, truncation reporting, timeout and `CancelledError` process-tree reap, correlation) into one helper; migrate `usage.py`, `provider_accounts.py`, `git_monitor.py`.
-- [ ] S8.2 `probe_cli_version` unification (F22): one implementation (keep the shim-recursion-safe `which_real` behavior), one cache policy, both call sites.
-- [ ] S8.3 `snapshot_all` grouping (F20): build the `session_id -> processes` index in one pass and serialize each process once.
-- [ ] S8.4 Graveyard purge retry cap (D2 finding 2): `worktree_graveyard_purge_failed` retries already-absent paths forever (1,165 warnings since 2026-08-21, up to 24 repeats per path). Treat an absent path as purged, and bound retries for paths that persistently fail with a terminal log line.
-- [ ] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test; absent-path purge idempotency test.
+- [x] S8.1 Shared bounded runner (F/codex-G): extract the `worktree_exec` pattern (chunked bounded read, truncation reporting, timeout and `CancelledError` process-tree reap, correlation) into one helper; migrate `usage.py`, `provider_accounts.py`, `git_monitor.py`.
+- [x] S8.2 `probe_cli_version` unification (F22): one implementation (keep the shim-recursion-safe `which_real` behavior), one cache policy, both call sites.
+- [x] S8.3 `snapshot_all` grouping (F20): build the `session_id -> processes` index in one pass and serialize each process once.
+- [x] S8.4 Graveyard purge retry cap (D2 finding 2): `worktree_graveyard_purge_failed` retries already-absent paths forever (1,165 warnings since 2026-08-21, up to 24 repeats per path). Treat an absent path as purged, and bound retries for paths that persistently fail with a terminal log line.
+- [x] S8.T Tests: runner cancellation-reap test; output-cap truncation test; version-probe cache test; snapshot projection equivalence test; absent-path purge idempotency test.
+
+Delivered as `src/swe_mux/bounded_subprocess.py` (`run_bounded`, `bounded_read`) and
+`src/swe_mux/cli_version.py` (`probe`, `CliVersion`), with
+`tests/test_bounded_subprocess.py`, `tests/test_cli_version_probe.py`,
+`tests/test_processes_snapshot_grouping.py`, and six additions to
+`tests/test_worktree_graveyard.py`.
+
+Four decisions worth knowing before D3:
+
+- **`run_bounded` raises `OSError` from the spawn rather than folding it into an
+  outcome.** Every caller already phrases its own "could not start" diagnostic
+  (`install ccusage`, `Could not start codex`), and swallowing the error would have
+  made each of them re-derive it from a string field. Everything *after* the spawn
+  reaps the tree on its way out, `CancelledError` included - which is the gap the
+  audit correctly identified, against a timeout leak that did not exist.
+- **The cap is per stream and reported, never hidden.** `usage.py` raises its
+  existing "exceeded 10 MiB" on `stdout_truncated` (same message, but the limit now
+  bounds memory instead of describing it after the fact), while `git_monitor._git`
+  returns a new code **125** beside its reserved 124: every Git caller parses what it
+  gets back, so a capture that lost its middle has to read as a failure rather than
+  as a smaller repository.
+- **The two `probe_cli_version` bodies were unified at the mechanism and kept apart
+  at the presentation.** One subprocess per resolved executable per 5-minute TTL,
+  `which_real` resolution for both (which additionally stops the agent-environment
+  path from ever probing a mux shim); the registry still returns the version *token*
+  because `version_is_untested` compares it against a bound, and the inventory still
+  returns the CLI's own line and still requires a zero exit because it is shown to a
+  person and used as an MCP catalog cache key. Collapsing those would have changed a
+  displayed string and a cache key for nothing.
+- **The graveyard's retry bound is in memory and dies with the daemon**, which is the
+  point: a restart is a cheap deliberate "try that again", so a lock held by a process
+  that has since exited gets a fresh budget while a live one stops writing the same
+  warning forever. An absent path now counts as purged and says nothing at all.
+
+One behavior difference worth watching in the D3 soak: `git_monitor` now spawns Git
+with `stdin=DEVNULL` (it previously inherited the daemon's), so a Git invocation that
+decides to prompt fails fast instead of blocking on a stdin nothing will ever write.
+No query here reads stdin, so this should be invisible.
 
 ### S9 - MCP and automation consumers (mcp.py, deterministic_consumers.py)
 
-- [ ] S9.1 `handle_rpc` narrowing (F24): catch `ScopeMiss`/`AmbiguousIdentity`, not base `KeyError`, so handler bugs error instead of reading as "no such session".
-- [ ] S9.2 Test-file classifier (F26): explicit path-segment and basename conventions (`tests/`, `test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.tsx`, `__tests__/`); false-positive tests for `latest.py`-class names.
-- [ ] S9.3 Blast-radius honesty (F/codex): failed provenance reads return `co_change_available: false` with a typed reason and a log line, not a silent empty list.
-- [ ] S9.4 Parse-timeout guard (F24): stop advising retry while the abandoned parse still occupies an executor slot; single-flight per transcript with the timeout attached to the flight, not the wait.
-- [ ] S9.5 Lock-map eviction (F24): evict per-key locks (scan_timeline, assistant dialogs, project_card) when their keyed entity ends.
-- [ ] S9.6 `list_sessions` size fitting (F24): per-item size accounting instead of full re-serialization per popped item.
-- [ ] S9.7 Doc-ownership cache (F/codex-K, F22): fingerprint paths+count+mtime_ns+size instead of max-mtime, and make the uncached `mcp.py` caller share the cached builder.
-- [ ] S9.T Tests for each of the seven items.
+- [x] S9.1 `handle_rpc` narrowing (F24): catch `ScopeMiss`/`AmbiguousIdentity`, not base `KeyError`, so handler bugs error instead of reading as "no such session".
+- [x] S9.2 Test-file classifier (F26): explicit path-segment and basename conventions (`tests/`, `test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.tsx`, `__tests__/`); false-positive tests for `latest.py`-class names.
+- [x] S9.3 Blast-radius honesty (F/codex): failed provenance reads return `co_change_available: false` with a typed reason and a log line, not a silent empty list.
+- [x] S9.4 Parse-timeout guard (F24): stop advising retry while the abandoned parse still occupies an executor slot; single-flight per transcript with the timeout attached to the flight, not the wait.
+- [x] S9.5 Lock-map eviction (F24): evict per-key locks (scan_timeline, assistant dialogs, project_card) when their keyed entity ends.
+- [x] S9.6 `list_sessions` size fitting (F24): per-item size accounting instead of full re-serialization per popped item.
+- [x] S9.7 Doc-ownership cache (F/codex-K, F22): fingerprint paths+count+mtime_ns+size instead of max-mtime, and make the uncached `mcp.py` caller share the cached builder.
+- [x] S9.T Tests for each of the seven items.
+
+Landed in `tests/test_mcp_consumer_hardening.py` (52 tests). Three notes for whoever reads
+this next:
+
+- S9.1 narrows to `ScopeMiss`/`AmbiguousIdentity` **and** adds a `-32603` catch-all with a
+  logged traceback, because narrowing alone would only have moved an accidental `KeyError`
+  into the transport middleware, which turns it into the same unlogged 404 (that half is
+  S7.3's). Two legitimate misses that used to ride the base-`KeyError` path were typed at
+  their call sites instead: `run_action`'s catalog race now answers `unknown_action`, and
+  `configurator_guide` already converted its own.
+- S9.4 keys the flight on the transcript path and *refuses* a request for a different page
+  of a transcript that is mid-parse, rather than running a second thread for it. The worker
+  thread cannot be cancelled, so the flight is retired on thread completion; a caller that
+  gave up is exactly the case the old code got wrong.
+- S9.5's `ProjectCardService.forget_project` has no caller: nothing constructs that service
+  yet (`project-card.md` already records this). The other two evict from their own
+  lifecycles - scan-timeline after an ended session's final scan, plus a liveness-gated sweep
+  that catches what a chained catch-up leaves behind, and the assistant when a dialog's turn
+  finishes with nothing queued behind it.
 
 ### S10 - frontend quality (Settings, CodeEditor, bundle; server half lands in the S3-created route modules)
 
-- [ ] S10.1 Atomic settings save (F11): one server endpoint transacting config and keybindings together; client sends one request; the failure message can no longer claim "nothing was changed" when half committed.
-- [ ] S10.2 Restore defaults (F11): confirmation dialog on the destructive action, error handling with a visible failure status.
-- [ ] S10.3 Post-save chain dedup (F22): one shared apply-config function for the save/reset/load paths.
-- [ ] S10.4 CodeEditor (F/codex): last-emitted-string ref to skip the second full-document serialization and compare.
-- [ ] S10.5 Bundle splitting (F17): lazy-load the resource editor (with on-demand grammar loading) and the change map (Sigma/Graphology); record the before/after main-asset size in the PR description.
-- [ ] S10.T Tests: settings-atomicity test (server rejects half-commits); renderer specs for the confirm dialog and lazy routes; bundle-size assertion if the build exposes one cheaply.
+- [x] S10.1 Atomic settings save (F11): one server endpoint transacting config and keybindings together; client sends one request; the failure message can no longer claim "nothing was changed" when half committed.
+- [x] S10.2 Restore defaults (F11): confirmation dialog on the destructive action, error handling with a visible failure status.
+- [x] S10.3 Post-save chain dedup (F22): one shared apply-config function for the save/reset/load paths.
+- [x] S10.4 CodeEditor (F/codex): last-emitted-string ref to skip the second full-document serialization and compare.
+- [x] S10.5 Bundle splitting (F17): lazy-load the resource editor (with on-demand grammar loading) and the change map (Sigma/Graphology); record the before/after main-asset size in the PR description.
+- [x] S10.T Tests: settings-atomicity test (server rejects half-commits); renderer specs for the confirm dialog and lazy routes; bundle-size assertion if the build exposes one cheaply.
+
+`POST /api/settings/apply` (in the S3 settings route module) is the transaction, and its guarantee is an *ordering* rather than a database one, because the config and the keybindings are separate files: check the revision and normalize the chords (both pure, so an invalid document of either kind is a 422 with nothing written), stage the keybindings beside their destination, let `update_config` validate the whole candidate before it saves, then rename the staged file into place.
+Only that last rename can fail after something has committed, and it answers 500 with `committed: ["config"]` instead of denying both.
+Every answer carries `committed`, and `settingsSave.ts` derives the footer message from it - including the case the old code could not distinguish at all, a request that never came back, which now says the outcome is unknown rather than that nothing changed.
+
+Two things found while doing it, both fixed here:
+
+- The footer's dirty hint won over everything but "saving…", and a rejected save leaves the draft dirty - so the explanation the panel had just produced was replaced by "unsaved changes" and only the errors block said anything. A write in flight or refused now speaks over the hint.
+- `CodeEditor`'s value reconcile could not tell a *lagging echo* from an external rewrite. The parent stores each emitted string and re-renders, so it is a turn behind the keyboard; during a burst the effect ran with a document the editor had already moved past, replaced the document with that older copy, re-emitted, and replaced it again. At machine typing speed this wedges the page outright (reproduced on the pre-change code, so it predates S10.4); at human speed it silently drops characters. `pendingEchoes` answers it - the ref S10.4 asked for handles the caught-up case in O(1), and the count handles the lagging one.
+
+Bundle, measured on this branch (`npm run build`, entry chunk):
+
+| | raw | gzip |
+| --- | --- | --- |
+| before | 3,421.45 kB | 1,075.35 kB |
+| after | 2,165.91 kB | 654.55 kB |
+| change | -1,255.54 kB (-36.7%) | -420.80 kB (-39.1%) |
+
+CSS moved 467.10 -> 467.60 kB raw (77.70 -> 77.78 kB gzip), the two placeholder rules.
+`CodeEditor` (361.56 kB / 117.32 kB gzip) and `ChangeMapPane` (176.28 kB / 44.40 kB gzip) became their own chunks, and each grammar its own; none is preloaded from `index.html`, so they are fetched on the click that needs them.
+The dynamic grammar specifiers are mirrored into `optimizeDeps.include` because dev answers a runtime-discovered dependency with a full page reload that lands mid-spec in the renderer suite; `bundleSplit.test.ts` fails if the two lists drift.
 
 ### D3 - deploy checkpoint (primary; no reap)
 

@@ -47,6 +47,7 @@ import logging
 import math
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -62,10 +63,11 @@ from .code_graph import (
 from .deterministic_consumers import (
     PROJECT_FACT_WINDOW_SECONDS,
     build_doc_debt_map,
-    build_doc_ownership,
     build_provenance_edges,
+    cached_doc_ownership,
     claim_match,
     detect_declared_vs_verified,
+    is_test_path,
     normalize_target,
 )
 from .git_projects import ProjectIdentity
@@ -1936,6 +1938,20 @@ def tools_for(caller: Any) -> list[dict[str, Any]]:
     return TOOLS
 
 
+@dataclass(slots=True)
+class _ParseFlight:
+    """One in-progress transcript parse, and the deadline that belongs to it.
+
+    The deadline is a property of the *flight*, not of whoever is waiting on it:
+    a caller that arrives late waits for what is left of the one parse, and a
+    caller that is told to retry does not restart the clock by asking again.
+    """
+
+    signature: str
+    task: asyncio.Task[dict[str, Any]]
+    deadline: float
+
+
 class McpAuthError(Exception):
     """Raised when no live session owns the presented bearer token."""
 
@@ -2042,6 +2058,12 @@ class McpService:
         self.calls = 0
         self.denied = 0
         self.writes = 0
+        # One transcript parse in flight per transcript (F24). Keyed by path,
+        # cleared when the worker thread actually finishes - not when a caller
+        # gives up waiting for it.
+        self._transcript_flights: dict[str, _ParseFlight] = {}
+        self.parse_timeouts = 0
+        self.parse_refusals = 0
         self.tool_stats: dict[str, dict[str, int]] = {}
         # Retrieval-outcome measurement for the Phase 7.5 memory tools (ROADMAP
         # 7.5): per tool, how often it returned something, returned empty, and how
@@ -2364,6 +2386,18 @@ class McpService:
         if after is not None:
             candidates = [entry for entry in candidates if entry[0] > after]
         selected = candidates[:limit]
+        # Per-item size accounting (F24). The previous shape re-serialized the
+        # entire result - every session item included - once per item popped,
+        # which is quadratic in the page exactly when the page is at its largest.
+        # Each item is measured once here; only the small envelope (whose `count`
+        # and `next_cursor` do change as the tail is trimmed) is re-measured.
+        prefix_bytes = [0]
+        for _key, _kind, item in selected:
+            prefix_bytes.append(
+                prefix_bytes[-1] + len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            )
+        live_count = sum(1 for _key, kind, _item in selected if kind == "live")
+        ended_count = len(selected) - live_count
         while selected:
             has_more = len(candidates) > len(selected)
             next_cursor = (
@@ -2380,20 +2414,38 @@ class McpService:
                 if has_more
                 else None
             )
-            live = [item for _key, kind, item in selected if kind == "live"]
-            ended = [item for _key, kind, item in selected if kind == "ended"]
             result: dict[str, Any] = {
-                "sessions": live,
+                "sessions": [],
                 "count": len(selected),
                 "has_more": has_more,
                 "next_cursor": next_cursor,
                 **self._scope_envelope(scope, hidden),
             }
             if include_ended:
-                result["ended_sessions"] = ended
-            if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= LIST_MAX_BYTES:
+                result["ended_sessions"] = []
+            # `json.dumps` puts ", " between array elements by default, so a
+            # populated array costs its items plus two bytes per gap. That makes
+            # this an exact size, not an estimate - `test_mcp.py` pins it.
+            gaps = 2 * (max(0, live_count - 1) + max(0, ended_count - 1))
+            total = (
+                len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+                + prefix_bytes[len(selected)]
+                + gaps
+            )
+            if total <= LIST_MAX_BYTES:
+                result["sessions"] = [
+                    item for _key, kind, item in selected if kind == "live"
+                ]
+                if include_ended:
+                    result["ended_sessions"] = [
+                        item for _key, kind, item in selected if kind == "ended"
+                    ]
                 return result
-            selected.pop()
+            _key, popped_kind, _item = selected.pop()
+            if popped_kind == "live":
+                live_count -= 1
+            else:
+                ended_count -= 1
 
         result = {
             "sessions": [],
@@ -2526,19 +2578,14 @@ class McpService:
             opening = str((checkpoint or {}).get("text") or "").strip()
         if not opening and conversation_is_readable(path, backend, native_id):
             try:
-                page = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        transcript_message_page,
-                        path,
-                        backend,
-                        direction="head",
-                        anchor=None,
-                        max_bytes=TRANSCRIPT_MAX_BYTES,
-                        max_messages=8,
-                        include_system=False,
-                        native_id=native_id,
-                    ),
-                    timeout=PARSE_TIMEOUT_SECONDS,
+                page = await self._transcript_page(
+                    path,
+                    backend,
+                    direction="head",
+                    anchor=None,
+                    max_messages=8,
+                    include_system=False,
+                    native_id=native_id,
                 )
             except (OSError, TimeoutError):
                 page = {"messages": []}
@@ -2556,6 +2603,108 @@ class McpService:
             "opening_request": _redact(bounded),
             "opening_request_truncated": truncated,
         }
+
+    def _retire_flight(self, key: str, flight: _ParseFlight) -> None:
+        """Drop a finished flight, and never leave its exception unretrieved."""
+        if self._transcript_flights.get(key) is flight:
+            self._transcript_flights.pop(key, None)
+        if not flight.task.cancelled():
+            # The caller that started this parse may already have given up, in
+            # which case nobody will ever await the task; reading the exception
+            # here keeps that from surfacing as an asyncio "never retrieved"
+            # warning with no owner attached to it.
+            flight.task.exception()
+
+    async def _transcript_page(
+        self,
+        path: Path | None,
+        backend: str,
+        *,
+        direction: str,
+        anchor: Any,
+        max_messages: int,
+        include_system: bool,
+        native_id: str | None,
+    ) -> dict[str, Any]:
+        """One bounded transcript parse, single-flight per transcript (F24).
+
+        The old shape was `wait_for(to_thread(...))`: a slow parse blew the
+        timeout, the caller was told "retry", and the worker thread kept running
+        in the shared default executor. Every retry added another. A transcript
+        pathological enough to time out once is pathological every time, so the
+        advice to retry was itself the amplifier.
+
+        Two rules replace it. The flight lives until the *thread* finishes, so a
+        retry joins the running parse instead of starting a second one; and the
+        deadline belongs to the flight, so a chain of retries cannot each buy a
+        fresh `PARSE_TIMEOUT_SECONDS` of the same work.
+
+        Raises `TimeoutError` when the flight's deadline passes with no result,
+        and whatever the parser raised (`OSError`) otherwise - both of which the
+        callers already translate.
+        """
+        loop = asyncio.get_running_loop()
+        key = str(path)
+        signature = _query_signature(
+            {
+                "backend": backend,
+                "direction": direction,
+                "anchor": anchor,
+                "max_messages": max_messages,
+                "include_system": include_system,
+                "native_id": native_id or "",
+            }
+        )
+        flight = self._transcript_flights.get(key)
+        if flight is not None and flight.task.done():
+            self._retire_flight(key, flight)
+            flight = None
+        if flight is not None and flight.signature != signature:
+            # A different page of a transcript that is already being parsed. Two
+            # threads over one pathological file is the stacking this exists to
+            # prevent, so this asks for a retry *without* starting work.
+            self.parse_refusals += 1
+            log.warning(
+                "transcript parse refused, another page of the same transcript "
+                "is still parsing path=%s overdue=%.1fs",
+                key,
+                max(0.0, loop.time() - flight.deadline),
+            )
+            raise TimeoutError("another read of this transcript is still running")
+        if flight is None:
+            task = asyncio.ensure_future(
+                asyncio.to_thread(
+                    transcript_message_page,
+                    path,
+                    backend,
+                    direction=direction,
+                    anchor=anchor,
+                    max_bytes=TRANSCRIPT_MAX_BYTES,
+                    max_messages=max_messages,
+                    include_system=include_system,
+                    native_id=native_id,
+                )
+            )
+            flight = _ParseFlight(signature, task, loop.time() + PARSE_TIMEOUT_SECONDS)
+            self._transcript_flights[key] = flight
+            started = flight
+            task.add_done_callback(lambda _t: self._retire_flight(key, started))
+        remaining = flight.deadline - loop.time()
+        if remaining <= 0:
+            self.parse_timeouts += 1
+            raise TimeoutError("transcript parse deadline already passed")
+        try:
+            # Shielded: a caller giving up must not cancel the parse everyone
+            # else is waiting on, and cancelling would not stop the thread anyway.
+            return await asyncio.wait_for(asyncio.shield(flight.task), timeout=remaining)
+        except TimeoutError:
+            self.parse_timeouts += 1
+            log.warning(
+                "transcript parse exceeded its deadline path=%s timeout=%.1fs",
+                key,
+                PARSE_TIMEOUT_SECONDS,
+            )
+            raise
 
     async def read_transcript(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         scope = self._requested_scope(caller, args)
@@ -2774,19 +2923,14 @@ class McpService:
                 **self._scope_envelope(scope),
             }
         try:
-            page = await asyncio.wait_for(
-                asyncio.to_thread(
-                    transcript_message_page,
-                    path,
-                    backend,
-                    direction=direction,
-                    anchor=(cursor or {}).get("anchor"),
-                    max_bytes=TRANSCRIPT_MAX_BYTES,
-                    max_messages=max_messages,
-                    include_system=include_system,
-                    native_id=native_id,
-                ),
-                timeout=PARSE_TIMEOUT_SECONDS,
+            page = await self._transcript_page(
+                path,
+                backend,
+                direction=direction,
+                anchor=(cursor or {}).get("anchor"),
+                max_messages=max_messages,
+                include_system=include_system,
+                native_id=native_id,
             )
         except (OSError, TimeoutError):
             # Never a partial or fabricated result (CP §7.3): a parse that did
@@ -3348,6 +3492,17 @@ class McpService:
                 "trust_required",
                 f"{exc} Ask the operator to approve it in the Project Run menu.",
                 status=409,
+            ) from exc
+        except KeyError as exc:
+            # The catalog is re-read inside the runner, so an action can vanish
+            # between the ownership check above and the run. Typed here because
+            # `handle_rpc` no longer treats a bare KeyError as "not found" (F24)
+            # - and this one genuinely is.
+            raise QueueError(
+                "unknown_action",
+                f"action {action_id!r} is no longer declared by "
+                f"{owner.name!r}; call project_actions again.",
+                status=404,
             ) from exc
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
@@ -3921,7 +4076,7 @@ class McpService:
         for project in projects:
             root = str(project.root)
             ownership = await asyncio.to_thread(
-                build_doc_ownership, Path(root) / ".docs"
+                cached_doc_ownership, Path(root) / ".docs"
             )
             if not ownership:
                 continue
@@ -4295,27 +4450,48 @@ class McpService:
 
     @staticmethod
     def _is_test_path(path: str) -> bool:
-        lowered = path.lower()
-        return (
-            "test" in lowered
-            or lowered.endswith(".spec.ts")
-            or lowered.endswith(".spec.tsx")
-            or "/tests/" in lowered
-            or lowered.startswith("tests/")
-        )
+        """Convention-based test classification, shared with the consumers (F26).
 
-    async def _git_rows(self, project_id: str) -> list[dict[str, Any]]:
+        Kept as a thin alias so both readers here - `blast_radius`'s covering
+        tests and `test_gap`'s suppression - move together with the one
+        definition in `deterministic_consumers`.
+        """
+        return is_test_path(path)
+
+    async def _git_rows(self, project_id: str) -> tuple[list[dict[str, Any]], str]:
+        """Provenance rows for the co-change net, and why they may be missing.
+
+        Returns `(rows, unavailable_reason)`. An empty list with an empty reason
+        is a project with no recorded commits; an empty list *with* a reason is a
+        read that did not happen. Collapsing the two was the fail-silent half of
+        this path: `blast_radius` reported "no co-changed files", which reads as
+        evidence of a narrow change, when it had actually learned nothing.
+        """
         reader = getattr(self.history, "git_provenance", None)
         if reader is None:
-            return []
+            return [], "provenance_reader_unavailable"
         try:
             rows = await reader(project_id=project_id, limit=500)
-        except Exception:
-            return []
-        return list(rows or [])
+        except Exception as exc:  # noqa: BLE001 - fail soft, never fail silent
+            log.warning(
+                "blast_radius co-change read failed project_id=%s error=%s: %s",
+                project_id,
+                type(exc).__name__,
+                str(exc)[:200],
+            )
+            return [], "provenance_read_failed"
+        return list(rows or []), ""
 
     async def _owning_docs(self, project_root: str, identity: str) -> list[str]:
-        ownership = await asyncio.to_thread(build_doc_ownership, Path(project_root) / ".docs")
+        """Docs that own one source file, from the shared ownership cache.
+
+        `cached_doc_ownership`, not `build_doc_ownership`: this used to reparse
+        the whole docs tree on every `blast_radius` call while the
+        deterministic-consumer loop kept an identical map cached beside it (F22).
+        """
+        ownership = await asyncio.to_thread(
+            cached_doc_ownership, Path(project_root) / ".docs"
+        )
         docs: set[str] = set()
         for source_path, owners in (ownership or {}).items():
             if normalize_target(source_path, project_root) == identity:
@@ -4330,6 +4506,11 @@ class McpService:
         covering tests among the reachable set, and the docs that own it. The
         static reverse set is a lower bound and says so; empty is never proof a
         change is safe.
+
+        Every entry carries `co_change_available`. False means the git
+        provenance read did not happen (`co_change_unavailable_reason` names
+        which way), so `co_changed_files` being empty says nothing at all - the
+        distinction the silent empty list used to erase.
         """
         self._require_code_graph("blast_radius")
         target_arg = str(args.get("file") or "").strip()
@@ -4348,30 +4529,43 @@ class McpService:
             callers = [
                 {"path": node.path, "hop": node.hop, "via": node.via} for node in reverse
             ]
-            co_changed = co_change_net(await self._git_rows(pid), identity, project_root=root)
+            git_rows, co_change_unavailable = await self._git_rows(pid)
+            co_changed = co_change_net(git_rows, identity, project_root=root)
             covering_tests = sorted({c["path"] for c in callers if self._is_test_path(c["path"])})
             owning_docs = await self._owning_docs(root, identity)
-            if not (callers or co_changed or owning_docs):
+            # A project whose co-change read failed is still reported: "nothing
+            # co-changes with this file" and "the co-change net could not be
+            # read" are opposite answers, and only one of them is safe to act on.
+            if not (callers or co_changed or owning_docs or co_change_unavailable):
                 continue
-            results.append(
-                {
-                    "file": identity,
-                    "project_id": pid,
-                    "callers": callers[:MEMORY_MAX_RESULTS],
-                    "co_changed_files": [
-                        {"path": p, "shared_commits": n}
-                        for p, n in co_changed[:MEMORY_MAX_RESULTS]
-                    ],
-                    "covering_tests": covering_tests,
-                    "owning_docs": owning_docs,
-                    "has_no_covering_test": not covering_tests,
-                }
-            )
+            entry: dict[str, Any] = {
+                "file": identity,
+                "project_id": pid,
+                "callers": callers[:MEMORY_MAX_RESULTS],
+                "co_changed_files": [
+                    {"path": p, "shared_commits": n}
+                    for p, n in co_changed[:MEMORY_MAX_RESULTS]
+                ],
+                "co_change_available": not co_change_unavailable,
+                "covering_tests": covering_tests,
+                "owning_docs": owning_docs,
+                "has_no_covering_test": not covering_tests,
+            }
+            if co_change_unavailable:
+                entry["co_change_unavailable_reason"] = co_change_unavailable
+            results.append(entry)
         returned = sum(len(r["callers"]) + len(r["co_changed_files"]) for r in results)
         self._record_memory_outcome("blast_radius", returned=returned, suppressed=0)
+        note = self._GRAPH_BLIND_SPOTS
+        if any(not entry["co_change_available"] for entry in results):
+            note += (
+                " The git co-change net could not be read for at least one "
+                "project (see co_change_unavailable_reason), so an empty "
+                "co_changed_files there is unknown, not empty."
+            )
         return {
             "blast_radius": results,
-            "note": self._GRAPH_BLIND_SPOTS,
+            "note": note,
             **self._disabled_note(disabled, "code_graph"),
             **self._scope_envelope(scope),
         }
@@ -4930,7 +5124,9 @@ class McpService:
         try:
             text = await asyncio.to_thread(read_guide, requested)
         except KeyError as exc:
-            raise ValueError(str(exc.args[0] if exc.args else exc)) from exc
+            # `errors.NotFound.__str__` is the message that names the catalog;
+            # `args[0]` is only the id the caller already sent.
+            raise ValueError(str(exc)) from exc
         return {"id": requested, "text": text}
 
     async def configurator_diagnostics(
@@ -5133,10 +5329,14 @@ class McpService:
                         "isError": True,
                     }
                 )
-            except KeyError as exc:
-                # Scope miss and true miss answer identically: not found. The
-                # text names the argument that widens the search, because a
-                # default an agent cannot discover reads as a prohibition.
+            except ScopeMiss as exc:
+                # `ScopeMiss`, not bare `KeyError` (F24). Scope miss and true
+                # miss answer identically: not found, with text naming the
+                # argument that widens the search, because a default an agent
+                # cannot discover reads as a prohibition. An *accidental*
+                # KeyError - a handler indexing a dict that has no such key -
+                # is a defect, and it now falls through to the internal-error
+                # path below instead of impersonating this answer.
                 return ok(
                     {
                         "content": [
@@ -5148,10 +5348,21 @@ class McpService:
                         "isError": True,
                     }
                 )
+            except AmbiguousIdentity as exc:
+                # A `ValueError` already, and answered as one; named here so the
+                # typed pair stays visible beside the miss it is not.
+                return error(-32602, str(exc))
             except (ValueError, TypeError) as exc:
                 return error(-32602, str(exc))
             except RuntimeError as exc:
                 return ok({"content": [{"type": "text", "text": str(exc)}], "isError": True})
+            except Exception:  # noqa: BLE001 - a handler defect is not a tool result
+                # Everything typed has been answered above, so reaching here
+                # means the tool broke. Report it as an internal error with the
+                # traceback in the log rather than as a plausible-looking
+                # "not found" the agent would act on.
+                log.exception("MCP tool raised an unhandled error tool=%s", name)
+                return error(-32603, f"internal error in tool {name}")
             encoded = json.dumps(result, default=str)
             stats = self.tool_stats.setdefault(
                 name, {"calls": 0, "response_bytes": 0, "truncated_results": 0}
@@ -5181,6 +5392,14 @@ class McpService:
             "calls": self.calls,
             "denied": self.denied,
             "writes": self.writes,
+            # Transcript-parse health. `in_flight` above zero at rest, or
+            # `refusals` climbing, means one transcript is parsing pathologically
+            # slowly - which used to present only as agents being told to retry.
+            "transcript_parses": {
+                "in_flight": len(self._transcript_flights),
+                "timeouts": self.parse_timeouts,
+                "refusals": self.parse_refusals,
+            },
             "tools": {name: dict(values) for name, values in sorted(self.tool_stats.items())},
             # Retrieval-outcome measurement (ROADMAP 7.5): a memory tool whose
             # `empty` count dominates its `calls` is returning nothing useful and

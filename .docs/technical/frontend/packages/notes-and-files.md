@@ -5,7 +5,8 @@ Design: `../../../design/features/project-resources.md`.
 
 ## Project resources
 
-`ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `DelimitedTextViewer.tsx`, `ImageViewer.tsx`,
+`ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `LazyCodeEditor.tsx`, `CodeEditor.tsx`,
+`codeLanguage.ts`, `codeTheme.ts`, `DelimitedTextViewer.tsx`, `ImageViewer.tsx`,
 `delimitedText.ts`, `projectResourceCreate.ts`, `noteSaveQueue.ts`, `noteEditGuard.ts`,
 `noteEditorSettings.ts`, `noteFind.ts`,
 `noteOutline.ts`, `noteScroll.ts`, `layoutBox.ts`, `fileClipboard.ts`, `recentFiles.ts`,
@@ -19,6 +20,25 @@ Design: `../../../design/features/project-resources.md`.
 - The pure config to editor-configuration resolution: element props versus `--continuity-*` properties, with chord-overlay sanitizing.
 - Shared path, reveal, and clipboard actions across the Files tree and opened-file tabs.
 - The Files tab's three mutually exclusive bodies - the lazy tree, the flat search results, and the Recent list - with search winning over Recent because typing a query is an explicit act.
+
+### The source editor is two dynamic boundaries, not one
+
+`LazyCodeEditor.tsx` is the boundary for CodeMirror's core (view, state, commands, language, autocomplete, search, and this app's theme layer), on the same pattern as `LazyGitDiff.tsx`.
+`codeLanguage.ts` is the second: every one of its ~28 grammars is behind its own `import()`, so a session that opens one `.ts` file fetches one grammar rather than the set.
+Both were static, and together they were the largest avoidable part of the entry chunk - paid for on every page load, including phones that never open a file.
+
+Two consequences worth keeping:
+
+- `languageLoaderForFilename` is **synchronous and returns a loader**, not a promise of an extension.
+  Naming a file must not fetch anything, and "plain text" has to be distinguishable from "a grammar that has not arrived yet" without awaiting.
+  `CodeEditor` therefore creates the view with an empty language compartment and reconfigures the grammar in when it lands: the document is readable immediately, and the alternative - awaiting the grammar before mounting - would put a spinner in front of every file to buy colours a frame earlier.
+- Every dynamic specifier is also listed in `vite.config.ts`'s `optimizeDeps.include`.
+  Dev answers a dependency it first discovers at runtime with a full page reload, which in the renderer suite lands mid-spec; `bundleSplit.test.ts` fails if the two lists drift apart.
+
+`CodeEditor` reconciles an external `value` against its document, and does it by counting its own echoes.
+The parent stores each string `onChange` hands it and re-renders, so it is a turn behind the keyboard: during a burst the effect runs with a document the editor has already moved past.
+Comparing strings cannot tell that from a genuine external rewrite - both are simply "not the current document" - and treating it as one replaces the document with an older copy of itself, which re-emits, which replaces it again.
+`lastEmitted` answers the caught-up case by reference (no second serialization per keystroke), and `pendingEchoes` answers the lagging one; only a value arriving with no echoes outstanding is an external change.
 
 ### Recent is Git's answer, phrased
 

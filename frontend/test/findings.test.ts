@@ -18,7 +18,7 @@ test('Activity draws Timeline, Findings, and the Change Map, gating only the tim
   assert.match(segments, /id: 'timeline'[^\n]*available: hasTranscript/)
   assert.ok(host.includes("<ScanTimelineTab"))
   assert.ok(host.includes("<FindingsPane"))
-  assert.ok(host.includes("<ChangeMapPane"))
+  assert.ok(host.includes("<LazyChangeMap"))
   // A shell session with no timeline falls back to an available segment rather than a
   // dead tab. That rule used to be inline in InsightTab; it belongs to every segmented
   // tab now, so it lives in `resolveDrawerSegment`.

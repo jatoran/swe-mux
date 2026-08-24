@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import stat
 import subprocess
@@ -260,6 +261,133 @@ def test_purge_clears_read_only_files_and_reports_what_it_removed(tmp_path: Path
 
 def test_purge_of_a_missing_graveyard_is_not_an_error(tmp_path: Path) -> None:
     assert worktree_graveyard.purge(tmp_path / "never-created") == (0, 0)
+
+
+def test_a_path_that_is_already_gone_counts_as_purged_and_warns_about_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The D2 finding: 1,165 warnings for directories that were already deleted.
+
+    A graveyard entry can vanish between the listing and the delete - a concurrent
+    purge took it, or Windows is still listing a directory it has marked
+    delete-pending while reporting every operation on it as missing. Either way the
+    postcondition the purge exists for already holds.
+    """
+    worktree_graveyard.reset_purge_attempts()
+    root = tmp_path / "graveyard"
+    root.mkdir()
+    vanishing = root / "buried-abc"
+    vanishing.mkdir()
+
+    real_iterdir = Path.iterdir
+
+    def listing_of_a_ghost(self: Path) -> Any:
+        entries = list(real_iterdir(self))
+        if self == root:
+            # Listed, then gone before anyone touches it.
+            vanishing.rmdir()
+        return iter(entries)
+
+    with caplog.at_level(logging.WARNING, logger="swe_mux.worktree_graveyard"):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Path, "iterdir", listing_of_a_ghost)
+            removed, failed = worktree_graveyard.purge(root)
+
+    assert (removed, failed) == (1, 0)
+    assert [record.message for record in caplog.records] == []
+
+
+def test_a_delete_that_raises_file_not_found_is_purged_not_failed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree_graveyard.reset_purge_attempts()
+    root = tmp_path / "graveyard"
+    (root / "buried-abc").mkdir(parents=True)
+
+    def vanished(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(worktree_graveyard.shutil, "rmtree", vanished)
+
+    with caplog.at_level(logging.WARNING, logger="swe_mux.worktree_graveyard"):
+        removed, failed = worktree_graveyard.purge(root)
+
+    assert (removed, failed) == (1, 0)
+    assert not any("purge_failed" in record.message for record in caplog.records)
+
+
+def test_a_path_that_never_deletes_is_retried_a_bounded_number_of_times(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bounded, with a terminal line - not 24 identical warnings for one checkout."""
+    worktree_graveyard.reset_purge_attempts()
+    root = tmp_path / "graveyard"
+    (root / "buried-abc").mkdir(parents=True)
+
+    def locked(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(13, "The process cannot access the file")
+
+    monkeypatch.setattr(worktree_graveyard.shutil, "rmtree", locked)
+
+    with caplog.at_level(logging.WARNING, logger="swe_mux.worktree_graveyard"):
+        outcomes = [worktree_graveyard.purge(root) for _ in range(10)]
+
+    limit = worktree_graveyard.PURGE_ATTEMPT_LIMIT
+    # Every purge up to the limit reports the failure; every one after it skips the
+    # path without a word, and the tree is still on disk for a human to look at.
+    assert outcomes[: limit - 1] == [(0, 1)] * (limit - 1)
+    assert outcomes[limit - 1] == (0, 1)
+    assert outcomes[limit:] == [(0, 0)] * (10 - limit)
+    failures = [r for r in caplog.records if "purge_failed" in r.message]
+    abandonments = [r for r in caplog.records if "purge_abandoned" in r.message]
+    assert len(failures) == limit - 1
+    assert len(abandonments) == 1
+    assert (root / "buried-abc").is_dir()
+
+
+def test_a_path_that_finally_deletes_forgets_its_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient lock must not spend the budget a later real failure needs."""
+    worktree_graveyard.reset_purge_attempts()
+    root = tmp_path / "graveyard"
+    buried = root / "buried-abc"
+    buried.mkdir(parents=True)
+
+    real_rmtree = worktree_graveyard.shutil.rmtree
+    attempts = {"count": 0}
+
+    def flaky(path: Any, **kwargs: Any) -> None:
+        attempts["count"] += 1
+        if attempts["count"] <= worktree_graveyard.PURGE_ATTEMPT_LIMIT - 1:
+            raise PermissionError(13, "still locked")
+        real_rmtree(path, **kwargs)
+
+    monkeypatch.setattr(worktree_graveyard.shutil, "rmtree", flaky)
+
+    limit = worktree_graveyard.PURGE_ATTEMPT_LIMIT
+    outcomes = [worktree_graveyard.purge(root) for _ in range(limit)]
+
+    assert outcomes[-1] == (1, 0)
+    assert not buried.exists()
+    key = worktree_graveyard._purge_key(buried)
+    assert key not in worktree_graveyard._purge_attempts
+    assert key not in worktree_graveyard._purge_abandoned
+
+
+def test_purging_an_empty_graveyard_twice_says_nothing_either_time(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    worktree_graveyard.reset_purge_attempts()
+    root = tmp_path / "graveyard"
+    (root / "buried-abc").mkdir(parents=True)
+
+    with caplog.at_level(logging.WARNING, logger="swe_mux.worktree_graveyard"):
+        first = worktree_graveyard.purge(root)
+        second = worktree_graveyard.purge(root)
+
+    assert (first, second) == ((1, 0), (0, 0))
+    assert [record.message for record in caplog.records] == []
 
 
 def test_the_startup_sweep_clears_what_a_killed_purge_left(repo: Path, tmp_path: Path) -> None:

@@ -28,6 +28,7 @@ from .agent_environment import capture_config_baseline
 from .background_tasks import background
 from .cli_state import CliStateMonitor, ConversationHolder, ParkedMove
 from .composer_input import ComposerState, clear_composer
+from .errors import NotFound
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .harness import (
@@ -7289,5 +7290,5 @@ class SessionManager:
             return self.sessions[identity]
         matches = [s for s in self.sessions.values() if s.record.name == identity]
         if len(matches) != 1:
-            raise KeyError(identity)
+            raise NotFound(identity, kind="session")
         return matches[0]

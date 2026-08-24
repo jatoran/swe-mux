@@ -77,6 +77,29 @@ export function killRemovedTheSession(status: number | undefined): boolean {
   return status === 404
 }
 
+/**
+ * The ended sessions one "clear ended" sweep takes off a Project.
+ *
+ * A sweep is the same removal as the single-row one, applied to every row in the
+ * Project that has nothing behind it any more, so the filter is exactly the row's own
+ * ended test plus the tombstone set. Ids already hidden by an in-flight kill are
+ * excluded rather than re-issued: their DELETE is still in the air, and taking a
+ * second tombstone for one would let the first `finally` release the id while the
+ * second request is still running, briefly showing a row the operator has twice said
+ * they are done with.
+ *
+ * Order follows the caller's list, so the sweep removes rows in the order the sidebar
+ * drew them and the layout write below stays deterministic.
+ */
+export function clearableEndedSessions(
+  sessions: readonly Session[], projectId: string, tombstones: KillTombstones,
+): Session[] {
+  return sessions.filter(session =>
+    session.project_id === projectId
+    && (session.state === 'exited' || session.state === 'crashed')
+    && !tombstones[session.id])
+}
+
 export type NextActiveInput = {
   /** Layout with the killed leaf already removed. */
   layout: PaneLayout

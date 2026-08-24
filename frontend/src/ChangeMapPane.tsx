@@ -32,7 +32,7 @@ import type { Project, Session } from './types'
 //              being answered as a list; it does not survive being answered by a canvas
 //              that renders blank.
 
-type Props = {
+export type ChangeMapPaneProps = {
   session: Session | null
   project?: Project
   /** Drawer only: pop this map out into its own workspace pane. */
@@ -79,7 +79,7 @@ function readChrome(): Chrome {
 const DIM_NODE = 0.82
 const DIM_EDGE = 0.55
 
-export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props) {
+export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: ChangeMapPaneProps) {
   const [data, setData] = useState<ChangeMap | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)

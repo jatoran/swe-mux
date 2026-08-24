@@ -1,6 +1,7 @@
 import { Fragment } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { api } from './api'
+import { api, type ApiError } from './api'
+import { saveFailureStatus, type SettingsApplyResponse } from './settingsSave'
 import { displayChord, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
 import { dismissStack } from './dismissStack.ts'
@@ -209,6 +210,11 @@ type KeybindingsResponse = {
   policy:KeybindingPolicy;rejected:Record<string,string>
 }
 type CloseIntent = 'close'|'usage'|'automation'|'tutorial'
+/** The two in-flight statuses, named because the footer and the dialogs both test for them. */
+const SAVING = 'saving…'
+const RESTORING = 'restoring defaults…'
+/** The one atomic-save answer: the new config, the keybindings as re-read, and what committed. */
+type SettingsApplyResult = SettingsApplyResponse<Config>
 
 // One round trip for everything the panel needs on open. `config` is required;
 // every other part arrives null when its section failed server-side, with the
@@ -372,6 +378,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
   const [noteChordQuery,setNoteChordQuery] = useState('')
   const [closeIntent,setCloseIntent] = useState<CloseIntent|null>(null)
+  // Restore defaults is the one control in this panel that writes the whole saved
+  // configuration on a single click, is not staged behind Save, and cannot be undone.
+  // It asks first.
+  const [resetIntent,setResetIntent] = useState(false)
   const [query,setQuery] = useState('')
   const [highlight,setHighlight] = useState(0)
   const [jump,setJump] = useState<{entry:SettingsSearchEntry}|null>(null)
@@ -382,8 +392,27 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const searchIndex = useRef<{source:Config|null;entries:SettingsSearchEntry[]}|null>(null)
   const wasSearching = useRef(false)
   const confirmPanel = useRef<HTMLElement>(null)
+  const resetPanel = useRef<HTMLElement>(null)
   const themeFile = useRef<HTMLInputElement>(null)
   const restoreFocus = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null)
+
+  // One place that takes a config as newly authoritative. Three paths do it — the panel
+  // opening, a save returning, and Restore defaults — and each used to spell the chain
+  // out again. They had already drifted apart: open applied the theme and nothing else,
+  // so a note-editor, chrome-scale, or rail-density value written from another device
+  // reached this panel's draft but never the document. The three device previews are
+  // idempotent (`App.applyConfig` re-applies the same set on every daemon
+  // `configuration_changed`), so running them on open costs nothing and closes the gap.
+  const adoptConfig = useCallback((next: Config) => {
+    setConfig(next)
+    setDraft(next)
+    setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])))
+    configureCustomTheme(next.custom_theme)
+    applyTheme(next.theme)
+    applyNoteEditorConfig(next)
+    onUiScalePreview(next)
+    applyRailDensity(next)
+  },[onUiScalePreview])
 
   useEffect(() => {
     api<RemoteStatus>('GET','/api/remote/status').then(setRemote).catch(()=>setRemote(null))
@@ -406,8 +435,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         setStatus(bundle.errors.keybindings?`keybindings: ${bundle.errors.keybindings}`:'settings payload incomplete')
         return
       }
-      setConfig(next); setDraft(next)
-      setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])))
+      adoptConfig(next)
       setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy({
         browser_reserved:keyData.policy?.browser_reserved||[],desktop_only:keyData.policy?.desktop_only||[],application_reserved:keyData.policy?.application_reserved||[],
@@ -420,7 +448,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       // /api/config does not (it returns the stored list, which is now vestigial).
       if(bundle.profiles){setDetectedProfiles(bundle.profiles.detected);setSavedProfiles(bundle.profiles.profiles)}
       setAutomation(bundle.automation);setProvider(bundle.provider); setUsage(bundle.usage)
-      configureCustomTheme(next.custom_theme); applyTheme(next.theme)
     }).catch(error => setStatus(error.message))
   }, [])
 
@@ -604,6 +631,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     ||!sameDraftValue(bindings,savedBindings)
   )),[config,draft,harnessArgs,bindings,savedBindings])
 
+  // A write to the daemon is in flight, or the last one was refused. Both are things the
+  // footer has to say over the dirty hint, and `errors` is exactly the failure's lifetime:
+  // every path that writes clears it on success and fills it on refusal.
+  const writeBusy = status===SAVING||status===RESTORING
+  const writeFailed = Object.keys(errors).length>0
+
   const leaveSettings = useCallback((intent:CloseIntent) => {
     setCloseIntent(null)
     if(intent==='usage'&&openUsage){openUsage();return}
@@ -635,6 +668,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   useDismissLevel(()=>setQuery(''),!!query&&!capturingCommand,'settings-search')
   useDismissLevel(()=>setThemePickerOpen(false),themePickerOpen&&!capturingCommand,'settings-theme-picker')
   useDismissLevel(()=>setCloseIntent(null),!!closeIntent&&!capturingCommand,'settings-close-confirm')
+  useDismissLevel(()=>setResetIntent(false),resetIntent&&!capturingCommand,'settings-reset-confirm')
 
   const loadLatency=()=>{void api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
   const resetLatency=()=>{void api<LatencyReportPayload>('DELETE','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
@@ -744,6 +778,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     confirmPanel.current?.querySelector<HTMLElement>('button')?.focus()
   },[closeIntent])
 
+  useEffect(() => {
+    if(!resetIntent)return
+    resetPanel.current?.querySelector<HTMLElement>('button')?.focus()
+  },[resetIntent])
+
   useEffect(() => () => restoreFocus.current?.focus(),[])
 
   // Index what the tab on screen actually rendered, shortly after it settles —
@@ -837,7 +876,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         searchInput.current?.focus()
         searchInput.current?.select()
       }
-      const focusRoot=closeIntent?confirmPanel.current:panel.current
+      const focusRoot=closeIntent?confirmPanel.current:resetIntent?resetPanel.current:panel.current
       if (isFocusTraversalKey(event) && focusRoot) {
         const focusable = [...focusRoot.querySelectorAll<HTMLElement>('button,input,select,textarea,[tabindex]:not([tabindex="-1"])')].filter(item => !item.hasAttribute('disabled'))
         if (!focusable.length) return
@@ -848,7 +887,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
     window.addEventListener('keydown', close, true)
     return () => window.removeEventListener('keydown', close, true)
-  }, [closeIntent,capturingCommand])
+  }, [closeIntent,resetIntent,capturingCommand])
 
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)
@@ -939,31 +978,50 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         .map(([word,spoken])=>[word.trim().toLowerCase(),spoken.trim()])
         .filter(([word,spoken])=>word&&spoken)),
     }
-    setStatus('saving…')
-    const body: Record<string,unknown> = {_revision:config.revision}
+    setStatus(SAVING)
+    const changes: Record<string,unknown> = {}
     for (const key of Object.keys(savingDraft) as (keyof Config)[]) {
-      if (!['revision','host','port','data_dir','requires_auth'].includes(key) && savingDraft[key] !== config[key]) body[key] = savingDraft[key]
+      if (!['revision','host','port','data_dir','requires_auth'].includes(key) && savingDraft[key] !== config[key]) changes[key] = savingDraft[key]
     }
+    // One request, because two could half-succeed. Save used to fire a `PATCH /api/config`
+    // and a `PUT /api/keybindings` through `Promise.all` and report either failure as
+    // "invalid · nothing was changed" — which a `_revision` conflict raised by another
+    // device said *after* the keybindings file had already been rewritten. The daemon now
+    // commits both or neither (see `routes/settings.apply_settings`), and the one case it
+    // genuinely cannot make atomic reports which half landed instead of denying both.
     try {
-      await api('PUT','/api/keybindings?validate=1',{bindings})
-      const [next] = await Promise.all([
-        api<Config & {hot_applied:string[];restart_required:string[]}>('PATCH','/api/config',body),
-        api('PUT','/api/keybindings',{bindings}),
-      ])
-      setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])));setErrors({})
-      setSavedBindings(bindings)
+      const result = await api<SettingsApplyResult>('POST','/api/settings/apply',{
+        _revision: config.revision,
+        config: changes,
+        keybindings: {bindings},
+      })
+      const next = result.config
+      adoptConfig(next); setErrors({})
+      if (result.keybindings?.bindings) { setBindings(result.keybindings.bindings); setSavedBindings(result.keybindings.bindings) }
+      else setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
-      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); applyRailDensity(next)
       return true
     } catch (error) {
-      const typed = error as Error & {fields?:Record<string,string>}
-      setErrors(typed.fields || {settings:typed.message}); setStatus('invalid · nothing was changed')
+      const typed = error as ApiError
+      setErrors(typed.fields || {settings:typed.message})
+      setStatus(saveFailureStatus(typed))
       return false
     }
   }
   const reset = async () => {
-    const next = await api<Config>('POST','/api/config/reset',{})
-    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); applyRailDensity(next); setStatus('defaults restored')
+    setResetIntent(false)
+    setStatus(RESTORING)
+    try {
+      adoptConfig(await api<Config>('POST','/api/config/reset',{}))
+      setErrors({})
+      setStatus('defaults restored')
+    } catch (error) {
+      // A failed reset used to be an unhandled rejection: the button reported nothing,
+      // and the panel went on showing a draft that no longer matched the daemon.
+      const typed = error as ApiError
+      setErrors(typed.fields || {settings:typed.message})
+      setStatus(`restore failed · ${typed.message}`)
+    }
   }
   const exportConfig = () => {
     if (!draft) return
@@ -1246,7 +1304,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               Cancel/Save into a horizontally scrolling footer. */}
           <section><h3>Configuration file</h3>
             <div class="settings-config-actions"><div><p>Stored in <code>{draft.data_dir}</code>. The export is sanitized of credentials. Restoring defaults rewrites the saved configuration at once — it is not staged behind <em>Save changes</em>, and it discards unsaved edits.</p></div>
-              <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button class="danger" onClick={()=>void reset()}>Restore defaults</button></div>
+              <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button class="danger" onClick={()=>setResetIntent(true)}>Restore defaults</button></div>
             </div>
           </section>
         </Fragment>}
@@ -2199,7 +2257,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     else if(event.key==='ArrowUp'){event.preventDefault();setHighlight((activeResult-1+searchResults.length)%searchResults.length)}
     else if(event.key==='Enter'){event.preventDefault();openResult(searchResults[activeResult])}
   }
-  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent} aria-hidden={Boolean(closeIntent)} aria-label="Settings">
+  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label="Settings">
     <header>{navTrigger}{heading}
       <div class="settings-search">
         <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={searchResults.length>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
@@ -2220,13 +2278,25 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {tabContent(activeTab)}
       </div>
     </main>
-    <footer><span aria-live="polite">{status==='saving…'?status:dirty?'unsaved changes':status}</span><button onClick={()=>requestClose()}>Cancel</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||status==='saving…'} onClick={()=>void save()}>{status==='saving…'?'Saving…':dirty?'Save changes':'Saved'}</button></footer>
+    {/* The dirty hint is a *default*, not an override. It used to win over everything but
+        "saving…", which meant a rejected save's own explanation never reached the footer:
+        the draft is still dirty after a failure, so the honest status was replaced by
+        "unsaved changes" and only the errors block said what happened. A write in flight,
+        or one that failed, has something to say that the hint does not. */}
+    <footer><span aria-live="polite">{writeBusy||writeFailed?status:dirty?'unsaved changes':status}</span><button onClick={()=>requestClose()}>Cancel</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||writeBusy} onClick={()=>void save()}>{status===SAVING?'Saving…':dirty?'Save changes':'Saved'}</button></footer>
   </section>
   {closeIntent&&<div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setCloseIntent(null)}>
     <section class="modal settings-confirm" ref={confirmPanel} role="alertdialog" aria-modal="true" aria-label="Unsaved settings" onMouseDown={event=>event.stopPropagation()}>
       <div class="modal-heading"><div><span>SETTINGS::UNSAVED</span><h2>Save your changes?</h2></div><button aria-label="Keep editing" onClick={()=>setCloseIntent(null)}>×</button></div>
       <div class="settings-confirm-body"><p>You have changes that have not been saved. Save them before leaving Settings, or discard them and restore the last saved configuration.</p></div>
-      <div class="modal-footer"><span>Settings stay open if saving fails.</span><button onClick={()=>setCloseIntent(null)}>Keep editing</button><button class="danger" onClick={discardAndLeave}>Discard</button><button class="primary" disabled={status==='saving…'} onClick={()=>void saveAndLeave()}>Save changes</button></div>
+      <div class="modal-footer"><span>Settings stay open if saving fails.</span><button onClick={()=>setCloseIntent(null)}>Keep editing</button><button class="danger" onClick={discardAndLeave}>Discard</button><button class="primary" disabled={writeBusy} onClick={()=>void saveAndLeave()}>Save changes</button></div>
+    </section>
+  </div>}
+  {resetIntent&&<div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setResetIntent(false)}>
+    <section class="modal settings-confirm settings-reset-confirm" ref={resetPanel} role="alertdialog" aria-modal="true" aria-label="Restore default settings" onMouseDown={event=>event.stopPropagation()}>
+      <div class="modal-heading"><div><span>SETTINGS::RESTORE</span><h2>Restore every setting to its default?</h2></div><button aria-label="Keep current settings" onClick={()=>setResetIntent(false)}>×</button></div>
+      <div class="settings-confirm-body"><p>This rewrites the saved configuration in <code>{draft.data_dir}</code> immediately — it is not staged behind <em>Save changes</em>, it discards unsaved edits, and there is no undo. Keyboard shortcuts, Projects, and provider accounts are kept; everything on these tabs goes back to its default.</p></div>
+      <div class="modal-footer"><span>Nothing changes unless you confirm.</span><button onClick={()=>setResetIntent(false)}>Cancel</button><button class="danger" disabled={writeBusy} onClick={()=>void reset()}>Restore defaults</button></div>
     </section>
   </div>}
   </div>
