@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
@@ -1983,8 +1982,6 @@ class HarnessInstallation:
 TESTED_CLI_VERSIONS: dict[str, str] = {}
 
 _VERSION_TOKEN = re.compile(r"\d+(?:\.\d+)*")
-_cli_version_cache: dict[tuple[str, str], tuple[float, str | None]] = {}
-_CLI_VERSION_TTL = 300.0
 
 
 def _parse_version(text: str | None) -> tuple[int, ...] | None:
@@ -2014,38 +2011,22 @@ def probe_cli_version(name: str, executable: str | None = None) -> str | None:
 
     Kept out of :func:`detect_installation` so the hot enablement path stays a
     filesystem-only check; only the registry payload pays for the subprocess.
-    """
-    import subprocess
 
-    from .shim_paths import which_real
-    from .subprocess_flags import background_creation_flags
+    The probe itself is `cli_version.py`, shared with the agent-environment
+    inventory. What stays here is the shape the registry wants: the version *token*,
+    because :func:`version_is_untested` compares it against a tested bound, with the
+    CLI's own first line as the fallback when nothing in the banner parses as a
+    version. The exit status is deliberately not consulted - a CLI that prints its
+    version and exits nonzero has still told us its version.
+    """
+    from .cli_version import probe
 
     harness = HARNESSES[name]
     override = executable.strip() if executable and executable.strip() else ""
-    resolved = which_real(override or harness.executable)
-    if not resolved:
+    result = probe(override or harness.executable)
+    if result is None:
         return None
-    key = (name, resolved)
-    now = time.monotonic()
-    cached = _cli_version_cache.get(key)
-    if cached is not None and now < cached[0]:
-        return cached[1]
-    version: str | None = None
-    try:
-        completed = subprocess.run(  # noqa: S603 - resolved real executable, fixed arg
-            [resolved, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=6,
-            creationflags=background_creation_flags(),
-        )
-        output = (completed.stdout or completed.stderr or "").strip()
-        match = _VERSION_TOKEN.search(output)
-        version = match.group() if match else (output.splitlines()[0].strip() if output else None)
-    except (OSError, subprocess.SubprocessError):
-        version = None
-    _cli_version_cache[key] = (now + _CLI_VERSION_TTL, version)
-    return version
+    return result.token or (result.first_line or None)
 
 
 def detect_installation(name: str, executable: str | None = None) -> HarnessInstallation:

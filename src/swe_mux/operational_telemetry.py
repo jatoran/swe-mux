@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, TypeVar, assert_never
 
 from .background_tasks import background
+from .errors import NotFound
 from .event_bus import EventBus
 from .harness import (
     HARNESSES,
@@ -2011,7 +2012,7 @@ class OperationalTelemetryStore:
                     "SELECT provider FROM quota_reset_events WHERE id=?", (reset_id,)
                 ).fetchone()
                 if row is None:
-                    raise KeyError(reset_id)
+                    raise NotFound(reset_id, kind="quota reset")
                 if resolution == "manual_usage" and row["provider"] != "codex":
                     raise ValueError("manual_usage is only valid for Codex quota evidence")
             reviewed_at = time.time()

@@ -53,6 +53,7 @@ from .code_graph import CodeGraphStore
 from .config import Config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore
+from .errors import NotFound
 from .event_bus import EventBus
 from .fleet_intelligence import FleetIntelligence
 from .ghost_windows import GhostWindowSweeper
@@ -65,7 +66,13 @@ from .harness import (
 from .history import HistoryIndex
 from .history_backfill import HistoryBackfillManager
 from .history_scan import HistoryScanManager
-from .http_support import apply_security_headers, json_response, log_task_failure
+from .http_support import (
+    REQUEST_ID_HEADER,
+    REQUEST_ID_KEY,
+    apply_security_headers,
+    json_response,
+    log_task_failure,
+)
 from .land_queue import LandQueueService
 from .land_store import LandStore
 from .launchers import (
@@ -83,6 +90,7 @@ from .lifecycle import (
 from .llm_endpoint import LlmReadiness
 from .llm_endpoint import readiness as llm_readiness
 from .llm_endpoint import resolve_endpoint as resolve_llm_endpoint
+from .logsetup import bound_request_id, new_request_id, valid_request_id
 from .loop_lag import LoopLagMonitor
 from .mcp import McpService
 from .meta_hooks import MetaHookEngine
@@ -165,7 +173,7 @@ from .session_media import cleanup_expired_preview_shots, cleanup_expired_sessio
 from .session_recovery import SessionRecoveryStore
 from .session_watch import SessionWatchService
 from .settings_store import SettingsStore
-from .sqlite_store import prepare_database
+from .sqlite_store import begin_shutdown_drain, prepare_database
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
@@ -219,13 +227,62 @@ STARTUP_RETRY_AFTER_SECONDS = 3
 
 
 @web.middleware
+async def correlation_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    """Give every request an id, put it on the response, and bind it for logging.
+
+    Outermost of the middleware chain so that a refusal from the security or
+    startup middleware is correlated too - those are exactly the requests an
+    operator is trying to account for when they read `access.log` beside
+    `daemon.log`.
+
+    A well-formed inbound `X-Request-ID` is adopted rather than replaced, so a
+    caller that already has a trace (the browser, an agent's MCP client, the
+    redeploy script) keeps one id across the boundary. It is validated first:
+    the value lands in a log file, and an unbounded one could forge a field
+    boundary or a whole extra line there.
+
+    The id is bound as a contextvar, not passed down: `asyncio.create_task` and
+    `asyncio.to_thread` both inherit the context, so the background work a
+    handler starts stays correlated after the response has been written -
+    which is the span an incident actually covers.
+    """
+    supplied = request.headers.get(REQUEST_ID_HEADER, "").strip()
+    request_id = supplied if valid_request_id(supplied) else new_request_id()
+    request[REQUEST_ID_KEY] = request_id
+    with bound_request_id(request_id):
+        try:
+            response = await handler(request)
+        except web.HTTPException as exc:
+            exc.headers[REQUEST_ID_HEADER] = request_id
+            raise
+    # A prepared response has already written its headers (every WebSocket
+    # upgrade, and the preview passthrough's stream); stamping one there would
+    # be a silent no-op rather than an error, and pretending otherwise is worse
+    # than the absence.
+    if not response.prepared:
+        response.headers[REQUEST_ID_HEADER] = request_id
+    return response
+
+
+@web.middleware
 async def error_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
     try:
         return await handler(request)
     except web.HTTPException:
         raise
-    except KeyError as exc:
-        return json_response({"error": f"not found: {exc.args[0]}"}, 404)
+    except NotFound as exc:
+        # The deliberate half of the KeyError convention (`errors.NotFound`).
+        # The key stays in the log and out of the body: echoing it back made a
+        # 404 a reflection of arbitrary request text, and told the caller
+        # nothing it did not already know.
+        log.debug(
+            "request_not_found method=%s path=%s kind=%s key=%s",
+            request.method,
+            request.path,
+            exc.kind,
+            exc.key,
+        )
+        return json_response({"error": str(exc), "code": "not_found", "kind": exc.kind}, 404)
     except ProviderAccountConflict as exc:
         # Distinct from a bad request: the caller must resolve an ownership
         # clash or explicitly force the action.
@@ -265,7 +322,18 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         return json_response(
             {"error": str(exc), "code": exc.code, "fields": exc.fields}, exc.status
         )
-    except (ValueError, TypeError, ProviderAccountError) as exc:
+    except (ValueError, ProviderAccountError) as exc:
+        # `TypeError` used to be translated here too, and almost never meant a
+        # bad request: it is what a handler raises when it calls something with
+        # the wrong arguments. It now falls through to the 500 path with a
+        # traceback. Route-level *validation* that wants a 400 raises
+        # `ValueError`, which is the only one of the two a caller can act on.
+        log.debug(
+            "request_rejected method=%s path=%s error_type=%s",
+            request.method,
+            request.path,
+            type(exc).__name__,
+        )
         return json_response({"error": str(exc)}, 400)
     except SupervisorUnavailable as exc:
         # A refusal with a reason, not a bug. The one that matters is the spawn
@@ -293,7 +361,13 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             {"error": str(exc) or "the operation timed out", "code": "timeout"}, 504
         )
     except Exception:
-        log.exception("unhandled request error")
+        # Where an accidental `KeyError` or `TypeError` now lands, with the
+        # traceback that names the line. The request id is on this record too
+        # (the correlation filter), so the 500 the caller saw and the traceback
+        # that explains it can be matched without guessing from timestamps.
+        log.exception(
+            "unhandled request error method=%s path=%s", request.method, request.path
+        )
         return json_response({"error": "internal server error"}, 500)
 
 
@@ -449,8 +523,12 @@ def create_app(
     # `starting_middleware` sits inside the security check so an unauthorized
     # caller is still refused as unauthorized during the startup window, and
     # outside compression so a 503 is compressed like any other response.
+    # `correlation_middleware` is outermost so that every answer - including the
+    # two refusals above, which never reach a handler - carries an id, and so
+    # that anything those middlewares log is correlated with it.
     app = web.Application(
         middlewares=[
+            correlation_middleware,
             error_middleware,
             security_middleware,
             starting_middleware,
@@ -1905,6 +1983,12 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     runtime half-constructed, and a teardown that assumed a complete runtime
     would raise on the first missing handle and leak everything after it.
     """
+    # Everything below this line is the last chance any of these rows have to be
+    # written, and the listener is already closed - so a successor may already
+    # be holding `mux.db`. `begin_shutdown_drain` lets a colliding write wait for
+    # the file instead of being dropped, and makes a write that is dropped
+    # anyway say so (`sqlite_store`).
+    begin_shutdown_drain()
     config: Config = app[keys.CONFIG]
     supervisor_client: SupervisorClient | None = app.get(keys.SUPERVISOR)
     network_usage: NetworkUsage | None = app.get(keys.NETWORK_USAGE)

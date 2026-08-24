@@ -223,6 +223,17 @@ continues to own every terminal.
   indistinguishable from an ordinary blip.
   Nothing here is load-bearing for the redeploy itself - it only buys the UI a progress chip, so an
   unreachable or older daemon costs nothing but the old behaviour.
+- **A planned stop records itself before it happens**, because it usually does not get to finish.
+  `POST /api/desktop/shutdown` and `POST /api/daemon/restart` both call `lifecycle.planned_handoff`
+  at the moment they decide the intent, which is the last moment the daemon is guaranteed to still
+  be running: the script watches health and terminates the process about three seconds after it
+  stops answering, several seconds before the teardown reaches its clean-exit write.
+  Without that record every planned restart looked like a crash to the next daemon - 39 false
+  "previous daemon died without a clean shutdown" warnings in one log, a forensic that was right
+  0% of the time and sent every investigation after a crash that never happened.
+  A genuinely unannounced death still warns, exactly as before.
+  The successor also waits for the predecessor *process* rather than just for its port
+  (`packages/daemon-runtime.md`), because the port frees before the last durable writes happen.
 - Packaged `--daemon-child` re-enters the daemon entry inside a separate process; source mode
   uses `python -m swe_mux`. Packaged `--supervisor-child` mirrors the same split for the PTY
   supervisor; source mode uses `python -m swe_mux.supervisor`. The daemon discovers-or-spawns

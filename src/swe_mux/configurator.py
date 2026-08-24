@@ -62,6 +62,7 @@ from .automation_registry import (
     REGISTRY as AUTOMATION_REGISTRY,
 )
 from .config import RESTART_FIELDS, Config
+from .errors import NotFound
 from .harness import HarnessInstallation, enabled_backends, public_harness_registry
 from .mcp_contract import (
     CONFIGURATOR_READ_TOOL_NAMES,
@@ -479,9 +480,13 @@ def read_guide(guide_id: str) -> str:
     """
     guide = _GUIDES_BY_ID.get(str(guide_id).strip())
     if guide is None:
-        raise KeyError(
-            f"unknown guide: {guide_id!r}; available: "
-            + ", ".join(entry.id for entry in GUIDES)
+        # The catalog belongs in the body here, unlike the id the caller sent:
+        # it is a fixed list of what this build ships, and it is the only thing
+        # that turns "no such guide" into a next step.
+        raise NotFound(
+            guide_id,
+            kind="guide",
+            message="unknown guide; available: " + ", ".join(entry.id for entry in GUIDES),
         )
     try:
         return guide.path.read_text(encoding="utf-8")

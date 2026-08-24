@@ -55,9 +55,31 @@ The POSIX stand-in for `KILL_ON_JOB_CLOSE`: a separate process, started outside 
 
 ## `subprocess_flags.py`
 
-Consoleless flags for daemon-owned Windows background commands, and `popen_outside_job` breakaway spawn (with a plain-spawn fallback) for children that must outlive any inherited Job object.
+Consoleless flags for daemon-owned Windows background commands, `reap_process_tree` (kill the descendants before reaping the child, because a Windows `cmd.exe` wrapper's real workers survive `process.kill()` and hold the pipes), and `popen_outside_job` breakaway spawn (with a plain-spawn fallback) for children that must outlive any inherited Job object.
 
 **Not:** interactive ConPTY children.
+
+## `bounded_subprocess.py`
+
+The one runner for every daemon-owned *one-shot* subprocess: chunked head-and-tail bounded capture per stream with the truncation reported rather than hidden, and a timeout that returns `exit_code=None` instead of a zero.
+It reaps the process tree on the timeout **and** on `CancelledError`, drains the pipes under a grace afterwards so an escaped descendant holding one cannot hang the caller, and rate-limits its timeout and cap warnings per label.
+
+`run_bounded` raises `OSError` from the spawn rather than folding it into an outcome, because "install ccusage" and "could not start codex" are the callers' diagnostics to phrase.
+It returns bytes and never decodes: `git cat-file blob` needs the bytes git stores, and `errors="replace"` would digest a repaired string.
+
+Callers: `usage.py`, `provider_accounts.py`, `git_monitor.py`, and `worktree_exec.py` (whose pattern this is).
+Migrating the first three closed three real gaps - `usage.py` buffered ccusage to completion through `communicate()` and only then compared it against its own 10 MiB limit, the other two had no cap at all, and none of the three reaped on cancellation despite all of them running inside supervised background loops.
+
+**Not:** interpreting an exit status, decoding, long-lived or interactive stdio children (the Codex quota app-server in `provider_accounts.py` speaks JSON-RPC over a held stdin and stays hand-rolled), or ConPTY sessions.
+
+## `cli_version.py`
+
+One `<cli> --version` probe: `which_real` resolution, one subprocess per resolved executable per TTL, and a `CliVersion` carrying the exit code and the merged banner with no judgement about what it means.
+
+The two former implementations disagreed on timeout (6 s against 2 s), TTL (5 minutes against an hour), and resolution (`which_real` against none), so one binary could be probed twice in a request and answer differently.
+What deliberately stays with each caller is the *presentation*: `harness.probe_cli_version` returns the version token, because `version_is_untested` compares it against a tested bound; `agent_environment.probe_cli_version` returns the CLI's own line and requires a zero exit, because it is shown to a person and used as part of an MCP catalog's cache key.
+
+**Not:** deciding whether a version is supported (`harness.version_is_untested`), or running on the event loop - both call sites reach it through `asyncio.to_thread`.
 
 ## `path_identity.py`
 

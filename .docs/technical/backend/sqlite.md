@@ -28,6 +28,38 @@ reduce contention but do not replace the operation lock or explicit transaction 
 keys are **not** enabled (sqlite3 defaults them off and no store turns them on), and no schema
 declares one — a `FOREIGN KEY ... ON DELETE CASCADE` added today would be silently unenforced.
 
+### The one window where the lock does not help: two daemons
+
+The per-file operation lock is process-wide, and during a session-preserving restart there are
+two processes. The successor holds `mux.db` for its own integrity check and schema work while
+the predecessor is still draining, and nothing in either can serialize them.
+
+Two things follow, and both live in `run_sqlite_operation` because it is the one place every
+store's every operation passes through.
+
+- **`begin_shutdown_drain()`**, called once at the top of `_teardown_runtime`, widens the busy
+  timeout to whatever is left of `SHUTDOWN_DRAIN_BUDGET_SECONDS` (8s), so a last write that
+  collides with the successor waits for the file. Widening the timeout rather than re-running
+  the operation is the point: SQLite does the waiting, nothing is executed twice, and an
+  operation that commits in batches cannot re-apply a batch it already committed. The budget is
+  for the whole drain, not per statement, because the predecessor does not get to choose how
+  long it lives - the redeploy terminates it about three seconds after its listener closes.
+- **A write lost to a lock logs `sqlite_write_lost`** at ERROR, naming the store and the method
+  it came from (`HistoryStore.record_event`, read off the operation closure's qualified name, so
+  no store passes its own name down) and whether a drain was in flight. Before this, a locked
+  write was a bare `OperationalError` that each caller swallowed or logged in its own words:
+  across a measured 2026-08-23 restart, ten rows in `operational_telemetry`, `session_recovery`,
+  the notification-decision store and `history` went missing with nothing naming the loss as a
+  loss - and those rows were precisely the telemetry that would have explained the restart.
+
+`is_locked_error` is deliberately narrow. `sqlite3.OperationalError` is also how a store reports
+a missing table and how `history.py` surfaces an interrupted query, and treating either as a lock
+would wait on something that will never succeed.
+
+The ordering fix that makes both of these rare is in `__main__.wait_for_predecessor_exit`
+(`packages/daemon-runtime.md`): the successor waits for the predecessor *process*, not just for
+its port.
+
 ## Schema versions and a corrupt file
 
 - Schema versions live in a shared `schema_versions(store, version)` table, read and written
@@ -277,10 +309,15 @@ Tests should cover concurrent operations from different stores, exceptions after
 expected duplicate paths, and returning with an open transaction. A terminal spawn/PTY attach
 regression is valuable because these user-visible paths historically exposed leaked writer locks.
 
+The two-daemon window has its own tests in `tests/test_diagnosability.py`, over a second real
+`sqlite3.connect` holding `BEGIN IMMEDIATE` — a second *connection*, not a second thread, because
+what is being reproduced is contention the per-file lock cannot see.
+
 ## Key files
 
 - `src/swe_mux/sqlite_store.py` — the operation wrapper, the per-file lock, the integrity cache,
-  and the shared `escape_like` / `like_contains` LIKE helpers.
+  the shutdown drain and its lost-write reporting, and the shared `escape_like` /
+  `like_contains` LIKE helpers.
 - `src/swe_mux/history.py`
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/operational_telemetry.py`

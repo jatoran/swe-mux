@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .errors import NotFound
 from .profiles import resolve_profile
 from .spawn_contract import parse_spawn_env, resolve_contained_cwd
 
@@ -1006,7 +1007,7 @@ class ProjectActionService:
         catalog = self.catalog(project_root)
         action = next((item for item in catalog.actions if item.id == action_id), None)
         if action is None:
-            raise KeyError(action_id)
+            raise NotFound(action_id, kind="Project Action")
         # Per action, not per catalog: an unapproved `package.json` no longer blocks
         # an approved `.swe-mux/actions.toml`. The file that defines *this* action is
         # the one that has to be approved.

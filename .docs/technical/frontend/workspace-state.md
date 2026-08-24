@@ -219,6 +219,14 @@ Two rules keep a tombstone from outliving what it stands for, since a tombstone 
 
 Bulk close (`closeWorkAndHideProject`) tombstones its sessions but still awaits every DELETE, because hiding a Project is refused while live work is attached.
 
+`clearEndedSessions` sweeps every ended row out of one Project at once (`design/features/ui.md` § the sweep), and it is deliberately not `killNow` in a loop.
+`killNow` writes the layout and re-reads the whole fleet per session, so nine dead rows through it would be nine layout PATCHes racing each other's revision and nine refreshes, with the sidebar re-sorting between each.
+The sweep does what one kill does, once: one optimistic removal, one layout write, one `refresh`, with the DELETEs issued together underneath and one tombstone taken per session for the same reason a single kill takes one.
+`clearableEndedSessions` picks the batch, and excludes ids that already carry a tombstone rather than re-issuing them - their DELETE is still in the air, and a second tombstone for one would let the first `finally` release the id while the second request is still running, briefly showing a row the operator has twice said they are done with.
+Focus is decided by a single `nextActiveAfterKill` call for the whole batch rather than one per session: it already refuses every exited or crashed id as a landing spot, and the layout handed to it has all of the batch's leaves out, so no member of the batch can be chosen as the successor to another.
+The deferred layout write keeps its rule per session - only the ones whose DELETE succeeded have their leaf removed from the written layout, so a session that failed to delete is put back where it was by the refresh rather than into a pane the layout no longer holds it in.
+Failures collapse into one toast naming the first, because a sweep of nine that loses one is still eight rows cleared and nine stacked errors would bury which one it was.
+
 ### Where focus lands, and why it is not layout order
 
 `nextActiveAfterKill` prefers **recency over position**: the most recently focused surviving session, preferring one that shared the killed session's pane.
@@ -383,7 +391,10 @@ handler stayed API-free.
   every branch of the post-kill focus choice (unfocused kill, recency over layout order, the
   vacated pane outranking a more recent session elsewhere, a dead entry in the stack being
   skipped, on-screen outranking a recent session that left the layout, visible sibling,
-  stacked-behind fallback, ended and cross-Project exclusions, last session in a Project).
+  stacked-behind fallback, ended and cross-Project exclusions, last session in a Project);
+  plus the sweep's batch selection - both end states, the Project scope, the in-flight-kill
+  exclusion, sidebar order, and the two focus outcomes when a sweep takes the focused row
+  (a live survivor, and nothing left at all).
 - `frontend/test/sessionFocusHistory.test.ts`: the recency stack itself - head ordering without
   duplicates, identity on an unchanged head, per-Project separation, the bound, and forgetting a
   killed session everywhere.

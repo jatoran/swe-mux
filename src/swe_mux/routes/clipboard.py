@@ -10,6 +10,7 @@ from .. import (
     app_keys as keys,
 )
 from ..clipboard_store import ClipboardStore
+from ..errors import NotFound
 from ..http_support import json_response
 
 log = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ async def capture_clipboard_entry(request: web.Request) -> web.Response:
 async def get_clipboard_entry(request: web.Request) -> web.Response:
     entry = _clipboard_store(request).entry(request.match_info["entry_id"])
     if entry is None:
-        raise KeyError(request.match_info["entry_id"])
+        raise NotFound(request.match_info["entry_id"], kind="clipboard entry")
     return json_response(entry.snapshot(include_text=True))
 
 
@@ -91,7 +92,7 @@ async def patch_clipboard_entry(request: web.Request) -> web.Response:
 async def delete_clipboard_entry(request: web.Request) -> web.Response:
     entry_id = request.match_info["entry_id"]
     if not await _clipboard_store(request).delete(entry_id):
-        raise KeyError(entry_id)
+        raise NotFound(entry_id, kind="clipboard entry")
     await _emit_clipboard_changed(request, "deleted", entry_id)
     return json_response({"ok": True})
 
