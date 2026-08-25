@@ -108,10 +108,12 @@ def test_a_single_model_endpoint_still_has_to_name_its_model() -> None:
     # The other half of the move above. Nothing was relaxed: an endpoint with no
     # catalog to pick from still cannot run, and now says so in a sentence rather
     # than as a form error on a field whose necessity depends on a probe.
+    #
+    # Asked of a *proven* endpoint, because that is the only state in which the
+    # answer is knowable - see the ordering test below.
+    endpoint = custom_endpoint(base_url="http://127.0.0.1:11434/v1", model="")
     blank = readiness(
-        custom_endpoint(base_url="http://127.0.0.1:11434/v1", model=""),
-        api_key=None,
-        verified_fingerprint=None,
+        endpoint, api_key=None, verified_fingerprint=endpoint.fingerprint(None)
     )
     assert blank.code == "no_model"
 
@@ -366,8 +368,13 @@ def test_readiness_names_the_specific_thing_to_fix() -> None:
                      verified_fingerprint=None).ready
     blank = custom_endpoint(base_url="", model="")
     assert readiness(blank, api_key=None, verified_fingerprint=None).code == "no_endpoint"
+    # `no_model` only after the endpoint is proven: until then nobody knows whether
+    # it publishes a catalog, so nobody knows whether a model id is needed at all.
     no_model = custom_endpoint(base_url="http://host/v1", model="")
-    assert readiness(no_model, api_key=None, verified_fingerprint=None).code == "no_model"
+    assert readiness(no_model, api_key=None, verified_fingerprint=None).code == "unverified"
+    assert readiness(
+        no_model, api_key=None, verified_fingerprint=no_model.fingerprint(None)
+    ).code == "no_model"
     endpoint = _custom()
     assert readiness(endpoint, api_key=None,
                      verified_fingerprint=None).code == "unverified"

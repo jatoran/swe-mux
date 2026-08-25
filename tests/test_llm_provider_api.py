@@ -89,10 +89,16 @@ class ProviderStub:
         self.verified.append(endpoint.provider)
         if self.error:
             raise OpenRouterError(self.error)
+        effective = endpoint.resolve_model(model)
+        if not effective:
+            # Faithful to the real client, and load-bearing: the fallback this
+            # replaced made a blank model verify happily in tests while raising in
+            # production, which is the one asymmetry a stub must not have.
+            raise OpenRouterError("an exact model id is required to verify an endpoint")
         return OpenRouterVerification(
             provider=endpoint.provider,
             origin=endpoint.origin,
-            requested_model=endpoint.resolve_model(model) or "qwen2.5-coder:7b",
+            requested_model=effective,
             resolved_model="qwen2.5-coder:7b",
             output=self.output,
             latency_ms=91,
@@ -101,9 +107,9 @@ class ProviderStub:
             cost_usd=None,
         )
 
-    async def probe_catalog(self, *, endpoint: Any = None) -> str:
+    async def catalog_probe(self, *, endpoint: Any = None) -> tuple[str, list[str]]:
         self.probed.append(endpoint.provider)
-        return self.catalog
+        return self.catalog, (["qwen2.5-coder:7b"] if self.catalog != "none" else [])
 
     async def models(self, *, endpoint: Any = None) -> list[dict[str, Any]]:
         self.listed.append(endpoint.provider)
@@ -392,11 +398,17 @@ async def test_a_failed_verification_measures_nothing(tmp_path: Path) -> None:
         await client.post("/api/automation/provider/verify", json={})
         assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "annotated"
         app[keys.OPENROUTER].error = "connection refused"
-        app[keys.OPENROUTER].probed.clear()
+        app[keys.OPENROUTER].catalog = "none"
         response = await client.post("/api/automation/provider/verify", json={})
         assert response.status == 422
-        assert app[keys.OPENROUTER].probed == []
+        # The probe runs first now, to answer which model the completion should go
+        # to. What must still hold is that nothing it saw was *recorded*: a probe
+        # against an unreachable host reports `none`, and durably pinning a capable
+        # endpoint to the pessimistic profile over one bad minute is the failure.
         assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "annotated"
+        record = await store.provider_verification("custom")
+        assert record is not None
+        assert json.loads(record["capabilities_json"])["catalog"] == "annotated"
     finally:
         await client.close()
         store.close()
@@ -448,6 +460,64 @@ async def test_clearing_the_key_forgets_the_measurement_with_the_proof(
         await client.post("/api/automation/provider/key", json={"operation": "clear"})
         assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "none"
         assert await store.provider_verification("custom") is None
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_a_catalog_endpoint_verifies_without_a_model_being_typed_in(
+    tmp_path: Path,
+) -> None:
+    """The bootstrap, and the dead end it closes.
+
+    An endpoint that publishes a catalog does not need its single-model field
+    filled in - that is the whole point of measuring one. But *verifying* means
+    sending one completion somewhere, so requiring a model in order to prove the
+    field was unnecessary made the field block its own removal: point at a
+    gateway, leave the model blank because blank is correct, and the panel says
+    "no model id yet" on a screen that never mentions verifying.
+
+    So the probe runs first and the completion goes to a model out of the catalog.
+    """
+    config = custom_config(tmp_path, model="")
+    config.openrouter_cheap_model = "qwen2.5-coder:7b"
+    app, store = build(tmp_path, config)
+    app[keys.OPENROUTER].catalog = "annotated"
+    client = await client_for(app)
+    try:
+        before = await (await client.get("/api/automation/provider")).json()
+        # Told to verify, not told to go and type an id.
+        assert before["llm"]["code"] == "unverified"
+
+        body = await (await client.post("/api/automation/provider/verify", json={})).json()
+        assert body["ok"] is True
+        # The install's own cheap model, because a reader already chose it for
+        # high-volume work: a failure against it is informative rather than
+        # incidental.
+        assert body["requested_model"] == "qwen2.5-coder:7b"
+        assert body["capabilities"]["catalog"] == "annotated"
+
+        after = await (await client.get("/api/automation/provider")).json()
+        assert after["llm"]["ready"] is True
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_a_catalog_less_endpoint_still_needs_its_one_model_named(
+    tmp_path: Path,
+) -> None:
+    # The other side. With nothing to pick from there is no model to send the
+    # proving completion to, and `verify` refuses with its own message rather than
+    # this guessing at one.
+    config = custom_config(tmp_path, model="")
+    app, store = build(tmp_path, config)
+    app[keys.OPENROUTER].catalog = "none"
+    client = await client_for(app)
+    try:
+        response = await client.post("/api/automation/provider/verify", json={})
+        assert response.status == 422
+        assert "model id is required" in (await response.json())["error"]
     finally:
         await client.close()
         store.close()

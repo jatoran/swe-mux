@@ -681,13 +681,28 @@ class OpenRouterClient:
         single-model case, not an error worth surfacing: the verify completion
         that runs beside this is what decides whether the endpoint works.
         """
+        return (await self.catalog_probe(endpoint=endpoint))[0]
+
+    async def catalog_probe(
+        self, *, endpoint: LlmEndpoint | None = None
+    ) -> tuple[CatalogShape, list[str]]:
+        """The catalog's shape and the ids in it, from one fetch.
+
+        The ids matter because of a bootstrap the shape alone cannot solve: an
+        endpoint that publishes a catalog does not need its single-model field
+        filled in, but *verifying* it means naming a model to send one completion
+        to. Asking the operator to type an id they will never use again, into a
+        field the very act of verifying makes unnecessary, is a dead end - so the
+        verify action picks one from here instead.
+        """
         target = endpoint if endpoint is not None else self.endpoint
         try:
             entries = await self._catalog_entries(target)
         except OpenRouterError:
-            return "none"
+            return "none", []
         if not entries:
-            return "none"
+            return "none", []
+        ids = [str(item["id"]) for item in entries]
         annotated = sum(
             1
             for item in entries
@@ -696,7 +711,7 @@ class OpenRouterClient:
             and isinstance(item.get("pricing"), dict)
             and item["pricing"]
         )
-        return "annotated" if annotated * 2 > len(entries) else "bare"
+        return ("annotated" if annotated * 2 > len(entries) else "bare"), ids
 
     def _remember_accepted_profile(
         self, key: tuple[str, str, str], profile: dict[str, Any]

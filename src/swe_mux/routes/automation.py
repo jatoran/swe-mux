@@ -700,6 +700,32 @@ async def automation_provider_key(request: web.Request) -> web.Response:
         )
 
 
+def _verification_model(
+    endpoint: LlmEndpoint, catalog_ids: list[str], config: Config
+) -> str:
+    """Which model one proving completion should go to.
+
+    The endpoint's own pin wins wherever there is one: that is the model it will
+    actually serve, so proving anything else proves the wrong thing.
+
+    Otherwise the endpoint publishes a catalog and the pin is deliberately blank,
+    and the choice is only about which id makes the cheapest honest probe. The
+    install's cheap model is preferred when the catalog has it - it is the one a
+    reader already chose for high-volume work, so a failure here is informative
+    rather than incidental - and the first catalogued id is the fallback.
+
+    An empty string means neither existed, and `verify` refuses with its own
+    message rather than this guessing at one.
+    """
+    if endpoint.model_override:
+        return endpoint.model_override
+    catalogued = set(catalog_ids)
+    for preferred in (config.openrouter_cheap_model, config.openrouter_standard_model):
+        if preferred and preferred in catalogued:
+            return preferred
+    return catalog_ids[0] if catalog_ids else ""
+
+
 async def verify_automation_provider(request: web.Request) -> web.Response:
     """Prove one configured endpoint with a single completion, and record it.
 
@@ -718,9 +744,25 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
     store: PlatformSecretStore = request.app[keys.SECRET_STORE]
     automation_store: AutomationStore = request.app[keys.AUTOMATION_STORE]
     capability_store = request.app[keys.LLM_CAPABILITIES]
+    config: Config = request.app[keys.CONFIG]
     endpoint = _unproven_endpoint(request, body)
+    # Probed before the completion rather than after, to answer the one question
+    # the completion cannot: *which model to send it to*. An endpoint that
+    # publishes a catalog does not need its single-model field filled in, so
+    # requiring one in order to prove that was a dead end - the field the act of
+    # verifying makes unnecessary was the field blocking the verify.
+    #
+    # Probing early is safe because nothing is *recorded* until the completion
+    # succeeds. A probe against an unreachable host reports `none`, and durably
+    # pinning a capable endpoint to the pessimistic profile over one bad minute
+    # is the thing that would matter - the same reasoning that makes a failed
+    # verification record nothing at all.
+    catalog, catalog_ids = await provider.catalog_probe(endpoint=endpoint)
     try:
-        result = await provider.verify(endpoint=endpoint)
+        result = await provider.verify(
+            endpoint=endpoint,
+            model=_verification_model(endpoint, catalog_ids, config),
+        )
     except (OpenRouterError, ValueError) as exc:
         record = await automation_store.provider_verification(endpoint.provider)
         return json_response(
@@ -735,13 +777,9 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
             },
             422,
         )
-    # Measured only once the completion has proved the endpoint answers at all.
-    # A catalog probe against an unreachable host would report `none`, and
-    # recording that as a *measurement* would durably pin a capable endpoint to
-    # the pessimistic profile because of one bad minute - the same reasoning that
-    # makes a failed verification record nothing.
+    # Recorded only now the completion has proved the endpoint answers at all.
     capabilities = EndpointCapabilities(
-        catalog=await provider.probe_catalog(endpoint=endpoint),
+        catalog=catalog,
         reports_cost=result.reports_cost,
         reports_cache=result.reports_cache,
     )

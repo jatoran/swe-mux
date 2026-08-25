@@ -152,7 +152,25 @@ def test_a_blank_model_is_ready_with_a_catalog_and_not_without_one() -> None:
     verdict = readiness(proven, api_key="k", verified_fingerprint=proven.fingerprint("k"))
     assert verdict.ready is True
     blank = custom_endpoint(base_url="http://127.0.0.1:11434/v1", model="")
-    assert readiness(blank, api_key=None, verified_fingerprint=None).code == "no_model"
+    assert readiness(
+        blank, api_key=None, verified_fingerprint=blank.fingerprint(None)
+    ).code == "no_model"
+
+
+def test_an_unproven_endpoint_is_told_to_verify_before_it_is_told_to_pick_a_model() -> None:
+    """The ordering, and the dead end it exists to prevent.
+
+    An endpoint nobody has proven has no capability record, so it reads as having
+    no catalog, so a *correctly* blank model was reported as "no model id yet" -
+    sending the reader to fill in a field that verifying would have made
+    unnecessary, on a screen that never mentioned verifying. Whether a model is
+    needed at all is only knowable after the endpoint is measured, so "prove it"
+    has to come first.
+    """
+    blank = custom_endpoint(base_url="http://127.0.0.1:8190/openai/v1", model="")
+    verdict = readiness(blank, api_key="k", verified_fingerprint=None)
+    assert verdict.code == "unverified"
+    assert "verify" in verdict.reason.casefold()
 
 
 # --- the probe ----------------------------------------------------------------

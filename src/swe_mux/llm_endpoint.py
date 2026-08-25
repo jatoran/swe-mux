@@ -667,20 +667,13 @@ def readiness(
             "The custom model endpoint has no base URL yet.",
             reports_cost,
         )
-    # Asked only where there is nothing to choose from. An endpoint serving the
-    # annotated catalog has a picker behind it and each feature's own model
-    # setting means what it says, so demanding a single pinned id as well would
-    # refuse a perfectly configured install for the sake of a field it stopped
-    # needing. This is the requirement `model_error` cannot state, because
-    # whether it applies is a measured property rather than a config one.
-    if not endpoint.supports_model_catalog and not endpoint.model_override:
-        return LlmReadiness(
-            False,
-            endpoint.provider,
-            "no_model",
-            "The custom model endpoint has no model id yet.",
-            reports_cost,
-        )
+    # Before the model question, not after, and the order is the fix for a real
+    # dead end: an endpoint nobody has proven has no capability record, so it
+    # reads as having no catalog, so a *correctly* blank model was reported as
+    # "no model id yet" - sending the reader to fill in a field that verifying
+    # would have made unnecessary, on a screen that never mentioned verifying.
+    # Whether a model is needed is only knowable after the endpoint is measured,
+    # so "prove it" has to come first.
     if not verified_fingerprint:
         return LlmReadiness(
             False,
@@ -688,6 +681,21 @@ def readiness(
             "unverified",
             "The custom model endpoint has not been verified yet. "
             "Verify it in Settings → Accounts to see one real reply from it.",
+            reports_cost,
+        )
+    # Asked only where there is nothing to choose from. An endpoint serving a
+    # catalog has a picker behind it and each feature's own model setting means
+    # what it says, so demanding a single pinned id as well would refuse a
+    # perfectly configured install for the sake of a field it stopped needing.
+    # This is the requirement `model_error` cannot state, because whether it
+    # applies is a measured property rather than a config one.
+    if not endpoint.supports_model_catalog and not endpoint.model_override:
+        return LlmReadiness(
+            False,
+            endpoint.provider,
+            "no_model",
+            "This endpoint publishes no model catalog, so it needs the one model "
+            "it serves named under Settings → Accounts.",
             reports_cost,
         )
     if verified_fingerprint != endpoint.fingerprint(api_key):
