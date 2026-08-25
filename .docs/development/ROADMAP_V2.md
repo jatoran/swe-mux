@@ -530,6 +530,17 @@ Any task here that changes a dependency must run the mandated flow: `uv sync --e
 - [ ] S12.5 Preview JS rewriting (F21, optional): move the lexical rewrite to tree-sitter-based specifier rewriting in the S3.3 Preview module, with negative fixtures for strings, comments, templates, and data blocks. Defer if wave capacity is short; the practical exposure is narrow.
 - [ ] S12.T The gates themselves are the tests; CI must be green with both ratchets on.
 
+### W4.5 - D3 findings sweep (added from the D3 soak; parallel with S11/S12, lands before D4)
+
+Five defects the D3 soak surfaced, none caused by Wave 3; files are disjoint from S11/S12.
+
+- [ ] W4.5.1 Code-graph staleness after a landed merge (D3 finding 1, medium): `index_project` runs once per project per process and `maintain_files` covers only this daemon's own edits, so files arriving via `git merge` are invisible or stale in `code_context`/`blast_radius` (post-Wave-3, `errors.py`/`bounded_subprocess.py`/`cli_version.py` were absent and `logsetup.py` answered with pre-S7 symbols). Reindex on trunk movement or fingerprint-invalidate per file; a stale-but-plausible answer is worse than the empty one the tools already warn about.
+- [ ] W4.5.2 `SessionManager._fanout` task ownership (D3 finding 4): 48 unowned "Task was destroyed but it is pending" ERRORs since 2026-08-19 (and the same line appears in the 2026-08-05 incident logs); own and drain fanout tasks like the sibling sites.
+- [ ] W4.5.3 `run_bounded` operation correlation (D3 finding 3): all three migrated callers omit `operation_id`, so a poll timeout logs with no identifier; wire real ids so S7's correlation reaches subprocess logs.
+- [ ] W4.5.4 Scan-timeline accepted-profile cache (D3 finding 5): every call pays a rejected round-trip (23,132 log lines since 2026-08-20) because the accepted profile is never cached per model; cache it.
+- [ ] W4.5.5 ccusage refresh timeout (D3 finding 2): timing out at 30s since 2026-08-21, pre-existing; diagnose with the bounded runner's new legibility and fix the cause or the bound, whichever the evidence names.
+- [ ] W4.5.T Tests per item where a regression test is expressible; W4.5.1 needs one proving a merge-arrived file becomes visible.
+
 ### D4 - final checkpoint (primary; no reap)
 
 - [ ] D4.1 Full gate with ratchets on, redeploy, confirm the voice extra preflight fires when deliberately unset.
