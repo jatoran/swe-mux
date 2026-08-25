@@ -448,10 +448,22 @@ class OpenRouterClient:
         json_body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
         endpoint: LlmEndpoint | None = None,
+        absolute_url: str = "",
+        bare_list_key: str = "",
     ) -> dict[str, Any]:
+        """One bounded, retried request against the configured endpoint.
+
+        `absolute_url` exists for the one resource that is not under the chat
+        origin: an endpoint's model catalog, which its operator may have pointed
+        somewhere else entirely (`LlmEndpoint.catalog_url`). It is still install
+        configuration read off the endpoint descriptor - no caller, agent, or HTTP
+        body can name a URL here, which is the property `path` was protecting and
+        the reason the parameter is not a general escape hatch.
+        """
         target = endpoint if endpoint is not None else self.endpoint
         headers = self._auth_headers(target, key)
         name = target.label
+        url = absolute_url or f"{target.origin}{path}"
         # Held across attempts so the final raise can report the provider's own words
         # rather than the bare status the last attempt happened to see.
         detail = ""
@@ -461,7 +473,7 @@ class OpenRouterClient:
             try:
                 async with client.request(
                     method,
-                    f"{target.origin}{path}",
+                    url,
                     headers=headers,
                     json=json_body,
                     params=params,
@@ -500,6 +512,12 @@ class OpenRouterClient:
                             status=response.status,
                             retryable=True,
                         ) from exc
+                    if isinstance(value, list) and bare_list_key:
+                        # A top-level array, wrapped so every caller still sees one
+                        # envelope shape. Only where a caller asked for it: a
+                        # completion that answered with an array is malformed, and
+                        # accepting it everywhere would hide that.
+                        return {bare_list_key: value}
                     if not isinstance(value, dict):
                         raise OpenRouterError(
                             f"{name} returned an invalid response envelope",
@@ -612,6 +630,36 @@ class OpenRouterClient:
             spent_budget_reasoning=not text and output_tokens > 0,
         )
 
+    async def _catalog_entries(self, target: LlmEndpoint) -> list[dict[str, Any]]:
+        """Every usable model row from wherever this endpoint's catalog lives.
+
+        Three envelopes are accepted, and the tolerance is the point rather than
+        laxness. `{"data": [...]}` is OpenAI's and OpenRouter's. `{"models":
+        [...]}` is what several proxies publish, including this gateway's own
+        native route. A bare `[...]` is what a hand-written catalog file tends to
+        be, and a hand-written catalog is exactly the case a configurable catalog
+        URL exists to serve - refusing the most natural shape for it would make
+        the feature useless to the people it is for.
+
+        Rows without an `id` are dropped rather than failing the fetch: one
+        malformed entry in six hundred is a bad row, not a bad catalog.
+        """
+        payload = await self._request(
+            "GET",
+            "",
+            endpoint=target,
+            absolute_url=target.catalog_url,
+            bare_list_key="data",
+        )
+        raw = payload.get("data")
+        if not isinstance(raw, list):
+            raw = payload.get("models")
+        if not isinstance(raw, list):
+            raw = payload.get("items") if isinstance(payload.get("items"), list) else None
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict) and item.get("id")]
+
     async def probe_catalog(self, *, endpoint: LlmEndpoint | None = None) -> CatalogShape:
         """What this endpoint's `/models` is actually worth, asked once.
 
@@ -635,11 +683,9 @@ class OpenRouterClient:
         """
         target = endpoint if endpoint is not None else self.endpoint
         try:
-            payload = await self._request("GET", "/models", endpoint=target)
+            entries = await self._catalog_entries(target)
         except OpenRouterError:
             return "none"
-        entries = [item for item in (payload.get("data") or []) if isinstance(item, dict)]
-        entries = [item for item in entries if item.get("id")]
         if not entries:
             return "none"
         annotated = sum(
@@ -704,34 +750,39 @@ class OpenRouterClient:
 
     async def models(self, *, endpoint: LlmEndpoint | None = None) -> list[dict[str, Any]]:
         target = endpoint if endpoint is not None else self.endpoint
-        payload = await self._request("GET", "/models", endpoint=target)
+        entries = await self._catalog_entries(target)
         if not target.supports_model_catalog:
             # An OpenAI-compatible `/models` is a list of ids and nothing else: no
             # pricing, no `supported_parameters`, no modality. Running the filter
             # below over it would drop every entry - "does not advertise
             # response_format" is indistinguishable from "advertises nothing" -
             # and report an endpoint with a loaded model as having none. So the
-            # ids come back bare, and the capability question is answered by the
-            # verify action actually calling the thing instead.
+            # filter is skipped here, and the capability question is answered by
+            # the verify action actually calling the thing instead.
+            #
+            # Whatever a row *does* carry is kept, though, rather than flattened
+            # to the id. A hand-written catalog is the case a configurable catalog
+            # URL exists to serve, and the reason to write one is to name and
+            # price models a server publishes bare - discarding exactly that would
+            # make the feature pointless to the person who used it.
             bare: list[dict[str, Any]] = [
                 {
                     "id": str(item["id"]),
-                    "name": str(item.get("id")),
-                    "context_length": 0,
-                    "prompt_price": None,
-                    "completion_price": None,
-                    "supported_parameters": [],
+                    "name": str(item.get("name") or item["id"]),
+                    "context_length": _integer(item.get("context_length")),
+                    "prompt_price": _catalog_price(item, "prompt"),
+                    "completion_price": _catalog_price(item, "completion"),
+                    "supported_parameters": sorted(
+                        _string_set(item.get("supported_parameters"))
+                    ),
                 }
-                for item in payload.get("data") or []
-                if isinstance(item, dict) and item.get("id")
+                for item in entries
             ]
             # Not cached into `_model_capabilities`: an empty capability set would
             # make `_completion_profiles` believe it had been told something.
             return bare
         result: list[dict[str, Any]] = []
-        for item in payload.get("data") or []:
-            if not isinstance(item, dict) or not item.get("id"):
-                continue
+        for item in entries:
             supported = _string_set(item.get("supported_parameters"))
             architecture = item.get("architecture")
             architecture = architecture if isinstance(architecture, dict) else {}
@@ -1329,6 +1380,20 @@ def _string_set(value: Any) -> set[str]:
     if not isinstance(value, list):
         return set()
     return {str(item) for item in value if item is not None}
+
+
+def _catalog_price(item: dict[str, Any], side: str) -> float | None:
+    """One per-token price from a catalog row, however that row spells it.
+
+    OpenRouter nests them under `pricing`, and a hand-written catalog is as
+    likely to put `prompt_price` at the top level - both are read because the
+    alternative is silently unpriced models in a document whose whole purpose was
+    to price them. `None` stays `None`: an absent price is unknown, never free.
+    """
+    pricing = item.get("pricing")
+    if isinstance(pricing, dict) and pricing.get(side) is not None:
+        return _number(pricing.get(side))
+    return _number(item.get(f"{side}_price"))
 
 
 def _integer(value: Any) -> int:

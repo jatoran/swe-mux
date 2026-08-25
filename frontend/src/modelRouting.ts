@@ -1,13 +1,18 @@
 /**
- * Which model every model-backed feature calls, and where the control that decides
- * it lives.
+ * Which model every model-backed feature calls, and the one place that decides it.
  *
- * The controls stay with the features they configure - the assistant's model beside
- * the assistant's budget and trust policy, the scan timeline's beside its caps -
- * because a feature is set up in one pass, and a shared "all the models" form would
- * split every one of those passes across two tabs. The cost of that choice is what
- * this table pays back: with the pickers scattered, there was nowhere to see what
- * the install as a whole is spending model calls on.
+ * The controls used to stay with the features they configure - the assistant's model
+ * beside the assistant's budget, the scan timeline's beside its caps - on the rule
+ * that a feature is set up in one pass. That rule optimised the wrong axis. Changing
+ * *provider* is the operation that touches every one of these at once, and under it
+ * the per-feature layout meant four tabs of hunting to find out whether anything had
+ * broken - with no screen anywhere answering "what does this install call, and does
+ * the endpoint I just switched to even have it".
+ *
+ * So this table is the editor now, rendered once under Accounts → Models, and each
+ * feature tab keeps a read-only row naming its resolved model with a link back here.
+ * That preserves the half of the old rule worth keeping - standing on the voice tab
+ * and wanting to know what it calls - without a second control writing the same key.
  *
  * It lives apart from `ModelRoutingSummary.tsx` for the reason `settingsTabs.ts`
  * lives apart from `Settings.tsx`: none of it needs a renderer, and "which model
@@ -79,51 +84,61 @@ export const MODEL_ROUTES: readonly ModelRoute[] = [
   },
   {
     feature: 'Scan timeline', key: 'scan_timeline_model', kind: 'pinned',
-    where: 'Automation → Scan timeline',
-    target: { tab: 'automation', setting: 'scan_timeline_model' },
+    where: 'Accounts → Models',
+    target: { tab: 'accounts', setting: 'scan_timeline_model' },
     note: 'Samples continuously over long transcript slices, so it has to be cheap at volume and reliable at structured output at once.',
   },
   {
     feature: 'Attention narration', key: 'attention_narration_model', kind: 'override',
-    fallback: 'openrouter_cheap_model', where: 'Automation → Attention',
-    target: { tab: 'automation', setting: 'attention_narration_model' },
+    fallback: 'openrouter_cheap_model', where: 'Accounts → Models',
+    target: { tab: 'accounts', setting: 'attention_narration_model' },
   },
   {
     feature: 'Spoken summary', key: 'tts_summary_model', kind: 'override',
-    fallback: 'openrouter_cheap_model', where: 'Voice → Spoken summary',
-    target: { tab: 'voice', setting: 'tts_summary_model' },
+    fallback: 'openrouter_cheap_model', where: 'Accounts → Models',
+    target: { tab: 'accounts', setting: 'tts_summary_model' },
   },
   {
     feature: 'Mux assistant', key: 'assistant_model', kind: 'pinned',
-    where: 'Voice → Mux assistant',
-    target: { tab: 'voice', setting: 'assistant_model' },
+    where: 'Accounts → Models',
+    target: { tab: 'accounts', setting: 'assistant_model' },
     note: 'An agentic tool-calling loop: a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one.',
   },
   {
     feature: 'Project context card', key: 'project_card_model', kind: 'override',
-    fallback: 'openrouter_cheap_model', where: 'Automation → Budgets and execution',
-    target: { tab: 'automation', setting: 'project_card_model' },
+    fallback: 'openrouter_cheap_model', where: 'Accounts → Models',
+    target: { tab: 'accounts', setting: 'project_card_model' },
     note: 'Beside the budget and the per-build token ceilings that bound one rebuild of the card.',
   },
 ]
 
 /**
- * How a custom endpoint changes every row above.
+ * When a custom endpoint collapses every row above onto one model, and when it does not.
  *
- * A local server serves one model, and every id in the table names an OpenRouter route
- * that server has never heard of, so the client redirects all of them to
+ * A server with **no catalog** serves one model, and every id in the table names a
+ * route it has never heard of, so the client redirects all of them to
  * `custom_llm_model`. The table is kept rather than emptied - these settings still hold
  * their values and apply again the moment the provider is switched back - but a summary
  * that went on listing seven distinct model ids while one model answered all of them
- * would be the most misleading thing on the screen, which is exactly the failure the
- * index exists to prevent.
+ * would be the most misleading thing on the screen.
+ *
+ * An endpoint that **serves a catalog** collapses nothing. There is something to choose
+ * between, the daemon stops redirecting (`llm_endpoint.custom_endpoint`), and every one
+ * of these settings reaches the wire exactly as written. Reporting the collapse anyway
+ * is the same failure in the opposite direction, and a worse one: it tells you the
+ * models you carefully chose have been silently replaced when they have not, which is
+ * a reason not to switch provider at all.
+ *
+ * `hasCatalog` therefore comes from the measured capability record rather than from the
+ * provider id - the whole point being that `custom` no longer implies anything.
  */
 export type ProviderOverride = { provider: string; model: string } | null
 
 export function customProviderOverride(
   config: { llm_provider?: string; custom_llm_model?: string },
+  hasCatalog = false,
 ): ProviderOverride {
-  if (config.llm_provider !== 'custom') return null
+  if (config.llm_provider !== 'custom' || hasCatalog) return null
   return { provider: 'custom', model: (config.custom_llm_model || '').trim() }
 }
 

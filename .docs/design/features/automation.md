@@ -87,6 +87,17 @@ and the declared minimum observation capability.
   A single annotated row among bare ones is deliberately not enough.
   Caching is gated on the same signal rather than on "reports cache numbers", because reporting
   is not translating: marking a prefix nobody honours writes no cache and reports zero hits.
+- **Where the catalog lives is configurable** (`custom_llm_catalog_url`).
+  Blank derives `{base_url}/models`, which is right for every OpenAI-compatible server and for
+  a gateway serving the catalog beside its chat route.
+  It exists because a catalog is not always published by the thing serving completions, and
+  because an operator whose server publishes none may point at a document they wrote themselves
+  naming and pricing what it actually loads - a hand-written catalog is the case this feature is
+  for, so the reader accepts `{"data": [...]}`, `{"models": [...]}`, and a bare array alike, and
+  keeps whatever name, context length, and price each row carries rather than flattening it to
+  the id.
+  It is covered by the verification fingerprint, because the capability record is measured
+  *through* it: repoint the catalog and what was proven was proven about a different document.
 - A custom endpoint **with no catalog** serves one model, and every model setting in the app
   names an OpenRouter id it has never heard of, so the client redirects all of them to
   `custom_llm_model` at the seam.

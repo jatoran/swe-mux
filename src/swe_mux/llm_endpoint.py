@@ -80,7 +80,9 @@ __all__ = [
     "LlmReadiness",
     "base_url_error",
     "capabilities_of_record",
+    "catalog_url_error",
     "normalize_base_url",
+    "normalize_catalog_url",
     "openrouter_endpoint",
     "readiness",
     "resolve_endpoint",
@@ -320,9 +322,28 @@ class LlmEndpoint:
     where "no catalog" is not.
     """
 
+    catalog_override: str = ""
+    """Where this endpoint's model catalog lives, when it is not `origin/models`.
+
+    Blank derives it, which is right for every OpenAI-compatible server and for a
+    gateway serving the catalog beside its chat route. A separate value exists
+    because a catalog is not always published by the thing serving completions,
+    and because an operator with a server that publishes none at all may point at
+    a document they wrote themselves naming and pricing what it actually loads.
+
+    Held as an absolute URL rather than a base, so nothing is appended: the
+    catalog may legitimately live at `/api/models`, at a static JSON file, or
+    behind a query string that bounds the page.
+    """
+
     @property
     def is_openrouter(self) -> bool:
         return self.provider == "openrouter"
+
+    @property
+    def catalog_url(self) -> str:
+        """The exact URL a catalog fetch goes to."""
+        return self.catalog_override or f"{self.origin}/models"
 
     @property
     def pins_one_model(self) -> bool:
@@ -349,7 +370,16 @@ class LlmEndpoint:
         that stores it holds no other copy of the secret.
         """
         material = "\n".join(
-            [self.provider, self.origin, self.model_override, api_key or ""]
+            [
+                self.provider,
+                self.origin,
+                self.model_override,
+                # Covered because the capability record is measured *through* it:
+                # repoint the catalog and what was proven about this endpoint was
+                # proven about a different document.
+                self.catalog_override,
+                api_key or "",
+            ]
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
@@ -381,6 +411,7 @@ def custom_endpoint(
     *,
     base_url: str,
     model: str,
+    catalog_url: str = "",
     capabilities: EndpointCapabilities = UNPROVEN_CAPABILITIES,
 ) -> LlmEndpoint:
     """A bring-your-own endpoint, shaped by whatever it proved it could do.
@@ -420,6 +451,7 @@ def custom_endpoint(
         label="Custom OpenAI-compatible endpoint",
         reports_cost=capabilities.reports_cost,
         capabilities=capabilities,
+        catalog_override=normalize_catalog_url(catalog_url),
     )
 
 
@@ -463,6 +495,42 @@ def base_url_error(value: str) -> str | None:
         return "must not carry a query string or fragment"
     try:
         # `urlsplit` defers port parsing, so a garbage port only raises on access.
+        _ = parts.port
+    except ValueError:
+        return "has an invalid port"
+    return None
+
+
+def normalize_catalog_url(value: str) -> str:
+    """Trim a catalog URL. Unlike a base URL, its path is used exactly as given."""
+    return str(value or "").strip()
+
+
+def catalog_url_error(value: str) -> str | None:
+    """Why this catalog URL cannot be used, or `None`. Blank is legal.
+
+    Deliberately looser than `base_url_error` in exactly one way: a query string
+    is allowed, because nothing is appended to this URL and a catalog may
+    legitimately need one to page or to bound itself. Every other rejection is
+    the same and for the same reason - a scheme aiohttp will not dial, or
+    credentials that would be logged along with the URL.
+    """
+    raw = normalize_catalog_url(value)
+    if not raw:
+        return None
+    if len(raw) > MAX_BASE_URL_CHARS:
+        return f"must be at most {MAX_BASE_URL_CHARS} characters"
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return "must be a valid URL"
+    if parts.scheme not in {"http", "https"}:
+        return "must start with http:// or https://"
+    if not parts.hostname:
+        return "must include a host"
+    if "@" in parts.netloc:
+        return "must not embed credentials; put the key in the API key field"
+    try:
         _ = parts.port
     except ValueError:
         return "has an invalid port"
@@ -522,6 +590,7 @@ def resolve_endpoint(
     return custom_endpoint(
         base_url=str(getattr(config, "custom_llm_base_url", "") or ""),
         model=str(getattr(config, "custom_llm_model", "") or ""),
+        catalog_url=str(getattr(config, "custom_llm_catalog_url", "") or ""),
         capabilities=measured,
     )
 

@@ -36,6 +36,7 @@ from swe_mux.llm_endpoint import (
     CapabilityStore,
     EndpointCapabilities,
     capabilities_of_record,
+    catalog_url_error,
     custom_endpoint,
     openrouter_endpoint,
     readiness,
@@ -275,3 +276,130 @@ def test_a_measurement_never_reaches_the_default_provider() -> None:
     endpoint = resolve_endpoint(Config(llm_provider="openrouter"), store)
     assert endpoint.capabilities == OPENROUTER_CAPABILITIES
     assert endpoint.supports_model_catalog is True
+
+
+# --- where the catalog lives --------------------------------------------------
+
+
+def test_a_catalog_url_defaults_to_the_models_beside_the_chat_route() -> None:
+    # Right for every OpenAI-compatible server and for the gateway, so the field
+    # exists for the minority who need it rather than as another thing to fill in.
+    assert _custom().catalog_url == "http://127.0.0.1:11434/v1/models"
+    moved = custom_endpoint(
+        base_url="http://127.0.0.1:11434/v1",
+        model="m",
+        catalog_url="https://example.test/catalog.json?page=all",
+    )
+    assert moved.catalog_url == "https://example.test/catalog.json?page=all"
+
+
+def test_repointing_the_catalog_un_verifies_the_endpoint() -> None:
+    # The capability record is measured *through* the catalog, so repointing it
+    # means what was proven about this endpoint was proven about a different
+    # document. Same reasoning as the URL, the model, and the key.
+    before = _custom().fingerprint("k")
+    after = custom_endpoint(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen2.5-coder:7b",
+        catalog_url="https://example.test/catalog.json",
+    ).fingerprint("k")
+    assert before != after
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",  # blank is legal: it derives the URL
+        "http://127.0.0.1:11434/v1/models",
+        "https://example.test/catalog.json?limit=1000",  # a query string is allowed
+    ],
+)
+def test_a_usable_catalog_url_is_accepted(value: str) -> None:
+    assert catalog_url_error(value) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["ftp://host/models", "not a url", "http://user:pass@host/models", "http://host:x/m"],
+)
+def test_an_unusable_catalog_url_is_refused_for_shape(value: str) -> None:
+    # Same rejections as a base URL, and for the same reasons - a scheme aiohttp
+    # will not dial, or credentials that would be logged along with the URL.
+    assert catalog_url_error(value) is not None
+
+
+async def test_the_probe_fetches_the_configured_catalog_url_verbatim() -> None:
+    session = FakeSession([FakeResponse(200, {"data": [{"id": "a"}]})])
+    endpoint = custom_endpoint(
+        base_url="http://127.0.0.1:11434/v1",
+        model="m",
+        catalog_url="https://example.test/catalog.json",
+    )
+    client = OpenRouterClient(MemorySecrets(""), session=session, endpoint=endpoint)
+    assert await client.probe_catalog() == "bare"
+    assert session.requests[0][1] == "https://example.test/catalog.json"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"data": [{"id": "a"}, {"id": "b"}]},
+        # What several proxies publish, including this gateway's own native route.
+        {"models": [{"id": "a"}, {"id": "b"}]},
+        # What a hand-written catalog file naturally is - and a hand-written
+        # catalog is exactly the case a configurable URL exists to serve.
+        [{"id": "a"}, {"id": "b"}],
+    ],
+)
+async def test_the_catalog_reader_accepts_the_envelopes_servers_actually_publish(
+    payload: Any,
+) -> None:
+    session = FakeSession([FakeResponse(200, payload)])
+    client = OpenRouterClient(MemorySecrets(""), session=session, endpoint=_custom())
+    assert await client.probe_catalog() == "bare"
+
+
+async def test_a_hand_written_catalog_keeps_the_names_and_prices_it_carries() -> None:
+    """The reason to write one is to name and price models a server publishes bare.
+
+    Flattening every row to its id - which is what "no annotated catalog" used to
+    mean - would discard exactly the thing the operator wrote the document for.
+    """
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                [
+                    {
+                        "id": "local/qwen-coder",
+                        "name": "Qwen Coder 7B",
+                        "context_length": 32768,
+                        "prompt_price": "0.0000001",
+                        "completion_price": "0.0000002",
+                    },
+                    {"id": "local/bare"},
+                ],
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(""), session=session, endpoint=_custom())
+    models = await client.models()
+    named = next(model for model in models if model["id"] == "local/qwen-coder")
+    assert named["name"] == "Qwen Coder 7B"
+    assert named["context_length"] == 32768
+    assert named["prompt_price"] == 0.0000001
+    # A row carrying nothing still lists, falling back to its id rather than
+    # vanishing - and its price stays `None`, which is unknown and never free.
+    plain = next(model for model in models if model["id"] == "local/bare")
+    assert plain["name"] == "local/bare"
+    assert plain["prompt_price"] is None
+
+
+async def test_openrouter_style_nested_pricing_is_read_too() -> None:
+    # The same field under the shape OpenRouter uses, because a catalog copied
+    # from one is at least as likely as a catalog written from scratch.
+    session = FakeSession(
+        [FakeResponse(200, {"models": [{"id": "a", "pricing": {"prompt": "0.5"}}]})]
+    )
+    client = OpenRouterClient(MemorySecrets(""), session=session, endpoint=_custom())
+    assert (await client.models())[0]["prompt_price"] == 0.5

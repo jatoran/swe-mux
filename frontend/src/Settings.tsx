@@ -54,10 +54,11 @@ import type { PromptTemplate } from './promptTemplates'
 import type { LaunchProfile, Project, ProjectBackend } from './types'
 import { formatCommandLine, launchPreview, parseCommandLine } from './commandLine'
 import { Dropdown } from './Dropdown'
-import { ModelPicker } from './ModelPicker'
 import { includeSelectedModel, type ModelOption } from './modelFilter'
 import { ModelRoutingSummary } from './ModelRoutingSummary'
-import { customProviderOverride } from './modelRouting'
+import {
+  customProviderOverride, MODEL_ROUTES, resolveRoute, type ModelRoutingConfig,
+} from './modelRouting'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
@@ -133,7 +134,7 @@ type Config = {
   automation_daily_budget:Budget;automation_rule_daily_budget:Budget
   automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
-  llm_provider:string;custom_llm_base_url:string;custom_llm_model:string
+  llm_provider:string;custom_llm_base_url:string;custom_llm_model:string;custom_llm_catalog_url:string
   // The Project context card is an automation like any other, so its model, its
   // budget, and its per-build token ceilings are all edited in Settings ->
   // Automation -> Budgets and execution. The model was config-file only until the
@@ -1277,6 +1278,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
   </section></div>
   const modelOptions=(selected:string)=>includeSelectedModel(provider?.models.models||[],selected)
+  // What the *active* endpoint was measured to publish, off the entry for the
+  // provider actually selected rather than off the payload's top level: the panel
+  // shows both endpoints and only one of them is answering calls.
+  const activeEndpoint=provider?.providers.find(entry=>entry.id===draft.llm_provider)
+  const catalogKnown=(activeEndpoint?.verification.capabilities?.catalog??'none')!=='none'
+  // Null unless the endpoint publishes no catalog at all, in which case it serves
+  // one model and every route resolves to it (`modelRouting.ts`). Derived from the
+  // measurement rather than from the provider id, which is the whole point: being
+  // `custom` no longer implies anything about what the endpoint can do.
+  const endpointOverride=customProviderOverride(draft,catalogKnown)
+  /** What one route resolves to right now, for the read-only rows on feature tabs. */
+  const routedModel=(key:keyof ModelRoutingConfig)=>
+    resolveRoute(MODEL_ROUTES.find(route=>route.key===key)!,draft,endpointOverride).model||'not set'
   // Diagnostics reuses the app's own command registry rather than re-implementing
   // the three reload paths, so a change to what "reload daemon" means reaches this
   // panel for free. The registry arrives as a prop; a command that is absent (an
@@ -1662,7 +1676,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <ProviderReadiness readiness={provider?.llm}/>
             {draft.llm_provider==='custom'&&<Fragment>
               <label data-setting="custom_llm_base_url">Base URL<input type="url" autocomplete="off" spellcheck={false} value={draft.custom_llm_base_url} placeholder="http://127.0.0.1:11434/v1" onInput={event=>change('custom_llm_base_url',event.currentTarget.value)} /><small>Everything up to but not including <code>/chat/completions</code>. Ollama serves <code>http://127.0.0.1:11434/v1</code>, llama.cpp and LM Studio <code>http://127.0.0.1:8080/v1</code> and <code>:1234/v1</code>, vLLM whatever host you started it on.</small></label>
-              <label data-setting="custom_llm_model">Model<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_model} placeholder="qwen2.5-coder:7b" onInput={event=>change('custom_llm_model',event.currentTarget.value)} /><small>The one model this endpoint serves. Every feature's own model setting is an OpenRouter id your server has never heard of, so while a custom endpoint is selected they all resolve to this one — which is why it cannot be left blank.</small></label>
+              <label data-setting="custom_llm_model">Model<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_model} placeholder="qwen2.5-coder:7b" onInput={event=>change('custom_llm_model',event.currentTarget.value)} /><small>Only used when this endpoint publishes no model catalog, in which case it serves one model and every setting under <strong>Models</strong> resolves to it. Leave it blank if there is a catalog — then each feature's own model reaches the wire exactly as written.</small></label>
+            <label data-setting="custom_llm_catalog_url">Model catalog URL<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_catalog_url} placeholder={`${draft.custom_llm_base_url||'http://host/v1'}/models`} onInput={event=>change('custom_llm_catalog_url',event.currentTarget.value)} /><small>Optional. Blank uses the <code>/models</code> beside the base URL above, which is right for every OpenAI-compatible server. Set it when the catalog lives somewhere else — including a document you wrote yourself listing the models your server loads, with their names and prices. Accepts <code>{'{"data":[…]}'}</code>, <code>{'{"models":[…]}'}</code>, or a bare array. Whatever it publishes is what the pickers under <strong>Models</strong> offer; verify the endpoint again after changing it.</small></label>
               <label>API key<input type="password" autocomplete="off" value={customKey} placeholder={customProvider?.secret.configured?'write only · enter to replace':'often unnecessary for a local server'} onInput={event=>setCustomKey(event.currentTarget.value)} /><small>Optional. llama.cpp and Ollama accept requests with no credential; a hosted proxy usually does not. Stored in the platform credential store, never in config.</small></label>
               <div class="theme-actions">
                 <button class="primary" disabled={!customKey} onClick={()=>void providerKeyAction('set','custom')}>Store key</button>
@@ -1713,18 +1728,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section><h3>Models</h3>
-            <p>The two routed models every model-backed feature draws from. A feature that only wants a cheaper or better model overrides one of these rather than replacing them; a feature whose model has to satisfy a capability the routed pair cannot guarantee pins its own instead. Either way the control lives with the feature, and every choice is listed here.</p>
-            {/* The index is only truthful while OpenRouter is doing the routing. A custom
-                endpoint serves one model, so every row below resolves to it, and a table
-                still listing seven distinct OpenRouter ids would be the most misleading
-                thing on the screen. */}
-            {draft.llm_provider==='custom'&&<p class="settings-warning">A custom endpoint is selected, so every row below resolves to <code>{draft.custom_llm_model||'(no model set)'}</code> instead of the id it names. These settings are kept, and apply again the moment the provider is switched back to OpenRouter.</p>}
-            <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span>{!!provider?.models.fetched_at&&<span>prices as of {new Date(provider.models.fetched_at*1000).toLocaleDateString()}</span>}</div>
-            <label for="cheap-model-picker" data-setting="openrouter_cheap_model">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/><small>High-volume, low-stakes work: observers, summaries, titles. Every override falls back to this one.</small></label>
-            <label for="standard-model-picker" data-setting="openrouter_standard_model">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
-            <h4>Where each model is used</h4>
-            <p>Read-only. Each row resolves the model a feature will actually call with the edits currently in this form, and opens the control that decides it.</p>
-            <ModelRoutingSummary draft={draft} catalog={provider?.models.models||[]} override={customProviderOverride(draft)} onOpen={goToSetting}/>
+            <p>Every model this install calls, edited in one place. Two of them are <em>routed</em> defaults that the rest draw from: a feature wanting something cheaper or better <em>overrides</em> one, and a feature needing a capability the routed pair cannot guarantee <em>pins</em> its own. They are together rather than beside the features they configure because switching endpoint changes all of them at once, and checking seven settings across four tabs afterwards is how a broken one goes unnoticed.</p>
+            {/* Only truthful while the endpoint is doing no routing of its own. A server
+                with no catalog serves one model, so every row resolves to it; one that
+                serves a catalog collapses nothing, and saying otherwise would report the
+                models you chose as silently replaced when they are not. */}
+            {endpointOverride&&<p class="settings-warning">This endpoint publishes no model catalog, so it serves one model and every row below resolves to <code>{draft.custom_llm_model||'(no model set)'}</code> instead of the id it names. These settings are kept, and apply again the moment you point at an endpoint that has a catalog.</p>}
+            <div class="theme-actions"><button onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span>{!!provider?.models.fetched_at&&<span>prices as of {new Date(provider.models.fetched_at*1000).toLocaleDateString()}</span>}</div>
+            {!catalogKnown&&<p><small>This endpoint publishes no catalog swe-mux could read, so there is nothing to pick from — type an exact model id into any row and choose <em>Use&nbsp;…</em>. Setting a <strong>Model catalog URL</strong> above turns these back into pickers.</small></p>}
+            <ModelRoutingSummary draft={draft} catalog={modelOptions(draft.openrouter_cheap_model)} override={endpointOverride} catalogKnown={catalogKnown} onChange={(key,value)=>change(key,value)}/>
           </section>
         </Fragment>}
 
@@ -1806,7 +1818,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               them to edit the config file. */}
           <h4>Project context card</h4>
           <p>What building a Project's context card may cost, beside the daily budget above. Each Project opts in separately, and a Project's own card content is edited in its <strong>Scan timeline</strong> tab rather than here.</p>
-          <label for="project-card-model-picker" data-setting="project_card_model">Project card model<ModelPicker id="project-card-model-picker" value={draft.project_card_model} options={modelOptions(draft.project_card_model)} emptyLabel="Use the cheap model…" onChange={value=>change('project_card_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>, and with neither set there is simply no card.</small></label>
+          <div class="model-routing-elsewhere" data-setting="project_card_model"><span>Project card model</span><code>{routedModel('project_card_model')}</code><button type="button" onClick={()=>goToSetting('accounts','project_card_model')}>Edit in Accounts → Models</button></div><small>An override. Left blank it follows the cheap model, and with neither set there is simply no card.</small>
           <label data-setting="project_card_max_input_tokens">Card maximum input tokens<input type="number" min="512" max="128000" value={draft.project_card_max_input_tokens} onInput={event=>change('project_card_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label data-setting="project_card_max_output_tokens">Card maximum output tokens<input type="number" min="128" max="4096" value={draft.project_card_max_output_tokens} onInput={event=>change('project_card_max_output_tokens',Number(event.currentTarget.value))}/><small>The card is a brief rather than a document; too low truncates it mid-sentence.</small></label>
           </section>
@@ -1835,7 +1847,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Scan timeline</h3>
           <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Each Project still permits it separately, and each conversation is armed from its Timeline tab.</p>
           <label class="settings-toggle" data-setting="scan_timeline_enabled"><input type="checkbox" checked={draft.scan_timeline_enabled} onChange={event=>change('scan_timeline_enabled',event.currentTarget.checked)}/>Allow scan timeline<small>The install-wide gate. Off, nothing is scanned anywhere, whatever any Project permitted.</small></label>
-          <label for="scan-timeline-model-picker" data-setting="scan_timeline_model">Scan timeline model<ModelPicker id="scan-timeline-model-picker" value={draft.scan_timeline_model} options={modelOptions(draft.scan_timeline_model)} emptyLabel="Select exact model…" required onChange={value=>change('scan_timeline_model',value)}/><small>Pinned rather than routed: scanning runs continuously over long transcript slices, so it needs a model that is both cheap at volume and reliable at structured output. Defaults to the DeepSeek V4 Flash latest alias. Needs the OpenRouter key under <strong>Accounts</strong>.</small></label>
+          <div class="model-routing-elsewhere" data-setting="scan_timeline_model"><span>Scan timeline model</span><code>{routedModel('scan_timeline_model')}</code><button type="button" onClick={()=>goToSetting('accounts','scan_timeline_model')}>Edit in Accounts → Models</button></div><small>Pinned rather than routed: scanning runs continuously over long transcript slices, so it needs a model that is both cheap at volume and reliable at structured output. Defaults to the DeepSeek V4 Flash latest alias.</small>
           <BudgetControl name="scan_timeline_daily_budget" label="Scan timeline, daily" value={draft.scan_timeline_daily_budget} onChange={value=>change('scan_timeline_daily_budget',value)} maxTokens={100000000} minTokens={512} maxUsd={1000} usdStep={0.25} reportsCost={provider?.llm?.reports_cost} hint="Across every Project and session, reset daily (UTC)."/>
           <BudgetControl name="scan_timeline_run_budget" label="Scan timeline, per conversation" value={draft.scan_timeline_run_budget} onChange={value=>change('scan_timeline_run_budget',value)} maxTokens={20000000} minTokens={512} maxUsd={1000} usdStep={0.25} reportsCost={provider?.llm?.reports_cost} hint="What one conversation may spend before its timeline stops. Resets when the conversation does."/>
           <label>Hourly scan cap<input type="number" min="1" max="100000" value={draft.scan_timeline_hourly_call_cap} onInput={event=>change('scan_timeline_hourly_call_cap',Number(event.currentTarget.value))}/></label>
@@ -1849,7 +1861,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Incident window seconds<input type="number" min="60" max="86400" value={draft.attention_incident_window_seconds} onInput={event=>change('attention_incident_window_seconds',Number(event.currentTarget.value))}/></label>
           <label class="check"><span>Report shell breakpoints (OSC 133)</span><input type="checkbox" checked={draft.attention_breakpoint_markers} onChange={event=>change('attention_breakpoint_markers',event.currentTarget.checked)}/></label>
           <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
-          <label for="narration-model-picker" data-setting="attention_narration_model">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
+          <div class="model-routing-elsewhere" data-setting="attention_narration_model"><span>Narration model</span><code>{routedModel('attention_narration_model')}</code><button type="button" onClick={()=>goToSetting('accounts','attention_narration_model')}>Edit in Accounts → Models</button></div><small>An override. Left blank it follows the cheap model.</small>
           <BudgetControl name="attention_narration_daily_budget" label="Attention narration, daily" value={draft.attention_narration_daily_budget} onChange={value=>change('attention_narration_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost}/>
           <label data-setting="attention_narration_max_output_tokens">Narration maximum output tokens<input type="number" min="32" max="2048" value={draft.attention_narration_max_output_tokens} onInput={event=>change('attention_narration_max_output_tokens',Number(event.currentTarget.value))}/><small>A narration is a sentence or two explaining why an item is worth your attention, so this is a ceiling on one line rather than on a document.</small></label>
           </section>
@@ -1962,7 +1974,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Spoken summary</h3>
           <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts. Verbatim never touches a model.</p>
           <label>Content<Dropdown value={draft.tts_content} onChange={value=>change('tts_content',value as Config['tts_content'])} options={[{value:'summary',label:'Spoken summary (LLM)'},{value:'verbatim',label:'Verbatim reply (markdown stripped)'}]}/><small>The default for every session. The voice panel's <code>tts</code> tab and the pane's player strip both override it for that session alone.</small></label>
-          <label for="summary-model-picker" data-setting="tts_summary_model">Summary model<ModelPicker id="summary-model-picker" value={draft.tts_summary_model} options={modelOptions(draft.tts_summary_model)} emptyLabel="Use the cheap model…" onChange={value=>change('tts_summary_model',value)}/><small>An override. Left blank it follows the cheap model under <strong>Accounts</strong>.</small></label>
+          <div class="model-routing-elsewhere" data-setting="tts_summary_model"><span>Summary model</span><code>{routedModel('tts_summary_model')}</code><button type="button" onClick={()=>goToSetting('accounts','tts_summary_model')}>Edit in Accounts → Models</button></div><small>An override. Left blank it follows the cheap model.</small>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
           <BudgetControl name="tts_daily_budget" label="Read-aloud summaries, daily" value={draft.tts_daily_budget} onChange={value=>change('tts_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} unpricedCalls={voiceInfo?.spend_today?.unpriced_calls}/>
           <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /><small>Applies to the verbatim mode only, where no model is involved to shorten anything.</small></label>
@@ -2032,7 +2044,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Mux assistant</h3>
           <p>The conversational operator behind the chat view and the voice grammar's fallback: an unmatched wake-word utterance becomes an assistant turn instead of a refusal. It reads the fleet, queues and rewords messages, spawns sessions, and navigates — through the same command registry and queue every other surface uses. Reads run silently; reversible actions follow the trust setting; interrupts, sends, and session ends always confirm. Calls go to OpenRouter under its own daily budget.</p>
           <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
-          <label for="assistant-model-picker" data-setting="assistant_model">Assistant model<ModelPicker id="assistant-model-picker" value={draft.assistant_model} options={modelOptions(draft.assistant_model)} emptyLabel="Select exact model…" required onChange={value=>change('assistant_model',value)}/><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small></label>
+          <div class="model-routing-elsewhere" data-setting="assistant_model"><span>Assistant model</span><code>{routedModel('assistant_model')}</code><button type="button" onClick={()=>goToSetting('accounts','assistant_model')}>Edit in Accounts → Models</button></div><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small>
           <BudgetControl name="assistant_daily_budget" label="Assistant, daily" value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
           <label>Reversible-action trust<Dropdown value={draft.assistant_trust_reversible} onChange={value=>change('assistant_trust_reversible',value as Config['assistant_trust_reversible'])} options={[{value:'cancel_window',label:'Announce with a cancel window (default)'},{value:'confirm',label:'Always confirm'},{value:'auto',label:'Run silently'}]}/><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
           <label class="check" data-setting="assistant_stream_replies"><span>Stream the reply as it is written</span><input type="checkbox" checked={draft.assistant_stream_replies} onChange={e=>change('assistant_stream_replies',e.currentTarget.checked)} /></label>

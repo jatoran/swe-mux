@@ -45,13 +45,12 @@ test('an unrecognised code still produces a sentence rather than blank prose', (
   assert.match(heading, /model provider/)
 })
 
-// The routing index is the thing Accounts owns, and a custom endpoint invalidates every
-// row of it at once: one server, one model, seven settings that name OpenRouter ids it
-// has never heard of. A table still listing those ids would be the most misleading
-// surface in the panel.
-test('a custom endpoint overrides every route, pin included', () => {
+// A *catalog-less* custom endpoint invalidates every row at once: one server, one
+// model, seven settings that name ids it has never heard of. A table still listing
+// those ids would be the most misleading surface in the panel.
+test('a catalog-less custom endpoint overrides every route, pin included', () => {
   const draft = { llm_provider: 'custom', custom_llm_model: 'qwen2.5-coder:7b' }
-  const override = customProviderOverride(draft)
+  const override = customProviderOverride(draft, false)
   assert.deepEqual(override, { provider: 'custom', model: 'qwen2.5-coder:7b' })
   const resolved = resolveRoutes(config(), override)
   assert.equal(resolved.length, MODEL_ROUTES.length)
@@ -67,6 +66,21 @@ test('an override beats a pin, because the pin is not what gets sent', () => {
   assert.equal(resolved.model, 'local-model')
 })
 
+// The other half, and the one that decides whether switching provider is safe. An
+// endpoint that publishes a catalog collapses nothing: the daemon stops redirecting,
+// every setting reaches the wire as written, and reporting a collapse anyway would say
+// the models you chose had been silently replaced when they had not - which is a reason
+// not to switch provider at all.
+test('a custom endpoint with a catalog overrides nothing', () => {
+  const draft = { llm_provider: 'custom', custom_llm_model: 'qwen2.5-coder:7b' }
+  assert.equal(customProviderOverride(draft, true), null)
+  const resolved = resolveRoutes(config(), customProviderOverride(draft, true))
+  assert.equal(resolved.find(item => item.route.key === 'assistant_model')!.model,
+    'openai/gpt-5.6-terra')
+  assert.equal(resolved.find(item => item.route.key === 'scan_timeline_model')!.model,
+    'deepseek/deepseek-v4-flash')
+})
+
 test('OpenRouter is not an override, so nothing about the existing table changes', () => {
   assert.equal(customProviderOverride({ llm_provider: 'openrouter', custom_llm_model: 'x' }), null)
   assert.equal(customProviderOverride({}), null)
@@ -78,7 +92,7 @@ test('an empty custom model still overrides, so the summary reports the gap', ()
   // The alternative - falling through to the OpenRouter ids - would show seven models
   // for an endpoint that cannot answer at all. The daemon refuses to save this state;
   // the browser can still be looking at an unsaved draft in it.
-  const override = customProviderOverride({ llm_provider: 'custom', custom_llm_model: '  ' })
+  const override = customProviderOverride({ llm_provider: 'custom', custom_llm_model: '  ' }, false)
   assert.deepEqual(override, { provider: 'custom', model: '' })
   assert.equal(resolveRoutes(config(), override).every(item => item.model === ''), true)
 })
@@ -177,4 +191,36 @@ test('the daemon and the browser agree on the catalog vocabulary', () => {
   assert.deepEqual(declared, ['annotated', 'bare', 'none'])
   const rendered = source('llmProvider.ts')
   for (const value of declared) assert.match(rendered, new RegExp(`'${value}'`))
+})
+
+// --- centralisation ----------------------------------------------------------
+
+test('every model route is edited in one place', () => {
+  // The rule this replaced put each control beside the feature it configured, which
+  // optimised for setting one feature up and against the operation that touches all
+  // seven at once. If a row drifts back to another tab, the Accounts table stops being
+  // the whole answer and the hunting starts again.
+  for (const route of MODEL_ROUTES) {
+    assert.equal(route.target?.tab, 'accounts', `${route.key} must be edited in Accounts`)
+    assert.match(route.where, /Accounts/, `${route.key} must say where it lives`)
+  }
+})
+
+test('the panel holds no second control for a routed model', () => {
+  // Two controls writing one config key is how a panel starts disagreeing with itself.
+  // The feature tabs show these read-only and link back, so a `ModelPicker` bound to one
+  // of these keys anywhere but the routing table is the regression this catches.
+  const settings = source('Settings.tsx')
+  assert.ok(!settings.includes('ModelPicker'),
+    'Settings.tsx must render model pickers only through the routing table')
+  const table = source('ModelRoutingSummary.tsx')
+  assert.ok(table.includes('ModelPicker'), 'the routing table is where the pickers live')
+})
+
+test('a model absent from the endpoint catalog is flagged rather than left to fail', () => {
+  // A model configured against one endpoint and missing from the next fails at call
+  // time as a provider error. The table has the catalog in hand, so it can say so first.
+  const table = source('ModelRoutingSummary.tsx')
+  assert.match(table, /model-routing-missing/)
+  assert.match(table, /catalogKnown/)
 })

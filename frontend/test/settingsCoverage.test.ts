@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
+import { MODEL_ROUTES } from '../src/modelRouting.ts'
 import { SETTINGS_CONFIG_FIXTURE } from './renderer/settingsConfigFixture.ts'
 
 /**
@@ -41,6 +42,9 @@ export const configFields = (): string[] => {
 const settingsSources = [
   'Settings.tsx', 'NotificationPushSettings.tsx', 'SessionRowSettings.tsx',
   'ProviderAccounts.tsx', 'remoteConnection.tsx', 'WslBridgePanel.tsx',
+  // The seven model settings live here now rather than beside the features they
+  // configure, because switching endpoint changes all of them at once.
+  'ModelRoutingSummary.tsx',
 ].map(source).join('\n')
 
 /**
@@ -90,10 +94,23 @@ const CONFIG_ONLY: Record<string, string> = {
   attention_observers_enabled: 'Same: the dashboard enables the attention observer group as one rule.',
 }
 
+/**
+ * The seven model settings, which are rendered from a list rather than written out.
+ *
+ * `ModelRoutingSummary` loops `MODEL_ROUTES` and emits one picker per entry, so none
+ * of their keys appears literally in any source this file reads - string matching
+ * cannot see them however many files it scans. Membership of `MODEL_ROUTES` is the
+ * control, and it is not a weaker check than the others here: a new model setting
+ * still has to be added to that list to count, and `modelRouting.test.ts` separately
+ * refuses a model key the panel knows about that the list has missed.
+ */
+const ROUTED_MODEL_KEYS = new Set<string>(MODEL_ROUTES.map(route => route.key))
+
 const hasControl = (field: string): boolean =>
   settingsSources.includes(`change('${field}'`)
   || settingsSources.includes(`<BudgetControl name="${field}"`)
   || settingsSources.includes(`data-setting="${field}"`)
+  || ROUTED_MODEL_KEYS.has(field)
   || (field in BESPOKE_CONTROLS && settingsSources.includes(BESPOKE_CONTROLS[field]))
 
 test('every Config field has a Settings control or an explicit reason it has none', () => {

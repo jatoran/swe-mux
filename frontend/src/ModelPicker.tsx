@@ -9,9 +9,21 @@ import { modelMetaLabel, modelMetaTitle } from './modelPricing'
  * It is a filtering combobox rather than a `<select>` because the catalog is the
  * whole structured-output half of OpenRouter - hundreds of entries - which a
  * native select can only present as an unsearchable scroll, and on a phone as a
- * system wheel with no way to narrow it. It is not a free-text box either: every
- * one of these settings is validated as an *exact* model id, so a typo is a
- * silently dead feature rather than a rejected form.
+ * system wheel with no way to narrow it.
+ *
+ * It also takes a model id the catalog has never heard of, through one explicit
+ * row rather than by committing whatever was typed. That row is the difference
+ * between this and a free-text box, and it is what keeps the original reason for
+ * not being one: every setting here is validated as an *exact* id, so a typo has
+ * to be chosen rather than merely typed, and a mistake shows up as "Use
+ * <em>gpt-5.6-terar</em>" sitting under a "No matching models" list instead of as
+ * a silently dead feature.
+ *
+ * Typing an id is not an edge case. A bring-your-own endpoint may serve no
+ * catalog at all, in which case naming the model by hand is the *only* way to
+ * configure it; and even a full catalog lags a provider that shipped a model this
+ * morning. A picker that could only offer what it already knew made both of those
+ * unconfigurable.
  *
  * Each row states three things, in the order they are decided on: what the model
  * is called, which exact id that is, and what it costs. The id stays visible
@@ -50,6 +62,14 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
   const [active,setActive]=useState(0)
   const matches=useMemo(()=>filterModelOptions(options,query),[options,query])
   const listId=`${id}-options`
+  // The typed id, offered only when it is not already one of the rows above. An
+  // exact match would otherwise render twice and the two would commit the same
+  // value, which reads as a bug in the list rather than as an escape hatch.
+  const typed=query.trim()
+  const custom=typed&&!options.some(model=>model.id===typed)?typed:''
+  // Keyboard commit resolves the same way the list reads top to bottom: a
+  // highlighted row wins, and the custom row is what Enter falls through to.
+  const commitKey=()=>matches[active]?.id??custom
 
   useEffect(()=>{
     if(!open)return
@@ -114,7 +134,7 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
         onKeyDown={event=>{
           if(event.key==='ArrowDown'){event.preventDefault();move(1)}
           else if(event.key==='ArrowUp'){event.preventDefault();move(-1)}
-          else if(event.key==='Enter'&&open&&matches[active]){event.preventDefault();choose(matches[active].id)}
+          else if(event.key==='Enter'&&open&&commitKey()){event.preventDefault();choose(commitKey())}
           else if(event.key==='Escape'&&open){event.preventDefault();setOpen(false);setQuery('')}
         }}
       />
@@ -152,6 +172,23 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
         ><strong>{model.name}</strong><span class="model-picker-meta"><span>{model.id}</span>{meta&&<span class="model-picker-price">{meta}</span>}</span></button>
       })}
       {!matches.length&&<span class="model-picker-empty">No matching models</span>}
+      {/* Last, never first. Above the list it would sit under the cursor as soon
+          as typing began and take the Enter meant for the row being searched for;
+          below it, it is what you reach only once the catalog has nothing. */}
+      {custom&&<button
+        type="button"
+        role="option"
+        aria-selected={custom===value}
+        class="model-picker-custom"
+        title={`Use ${custom} even though it is not in this endpoint's catalog`}
+        onPointerDown={event=>{press.current={x:event.clientX,y:event.clientY}}}
+        onClick={event=>{
+          const from=press.current
+          press.current=null
+          if(from&&Math.hypot(event.clientX-from.x,event.clientY-from.y)>DROPDOWN_PRESS_SLOP_PX)return
+          choose(custom)
+        }}
+      ><strong>Use <code>{custom}</code></strong><span class="model-picker-meta"><span>not in this endpoint's catalog</span></span></button>}
     </div>}
   </div>
 }

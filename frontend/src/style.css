@@ -350,6 +350,21 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .model-picker-options .model-picker-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;white-space:normal}
 .model-picker-options .model-picker-price{color:var(--text);opacity:.75;text-align:right}
 .model-picker-empty{padding:10px;color:var(--muted)}
+/* The escape hatch for a model the catalog does not list. Marked with a rule above
+   and a dimmer face so it reads as a different *kind* of row from the catalog
+   entries rather than as one more of them - choosing it means asserting something
+   the endpoint has not confirmed, and the row should look like it. */
+.model-picker-options .model-picker-custom{border-top:1px solid var(--line);background:var(--panel2)}
+.model-picker-options .model-picker-custom code{font-size:inherit}
+.model-picker-options .model-picker-custom .model-picker-meta{color:var(--muted)}
+/* A feature tab's read-only view of a model edited under Accounts → Models. It is
+   deliberately not shaped like the control it replaced: a reader who has learned
+   that a bordered row here is editable should not have to press one to find out
+   this one is not. */
+.model-routing-elsewhere{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;padding:6px 0}
+.model-routing-elsewhere>span{color:var(--muted)}
+.model-routing-elsewhere>code{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.model-routing-missing{color:var(--amber,#d08b28)}
 /* Where each model is used: a read-only inventory, so it is a list of stated facts
    rather than a form. Rows are cards instead of table rows because the "where" cell
    is a control and the note wraps to several lines, neither of which survives a

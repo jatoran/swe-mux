@@ -82,6 +82,7 @@ class ProviderStub:
         self.catalog = catalog
         self.verified: list[str] = []
         self.probed: list[str] = []
+        self.listed: list[str] = []
 
     async def verify(self, *, endpoint: Any = None, model: str = "",
                      max_tokens: int = 32) -> OpenRouterVerification:
@@ -103,6 +104,12 @@ class ProviderStub:
     async def probe_catalog(self, *, endpoint: Any = None) -> str:
         self.probed.append(endpoint.provider)
         return self.catalog
+
+    async def models(self, *, endpoint: Any = None) -> list[dict[str, Any]]:
+        self.listed.append(endpoint.provider)
+        return [{"id": "qwen2.5-coder:7b", "name": "Qwen", "context_length": 8192,
+                 "prompt_price": None, "completion_price": None,
+                 "supported_parameters": ["response_format"]}]
 
     async def test_key(self, candidate: str | None = None, *, endpoint: Any = None
                        ) -> dict[str, Any]:

@@ -259,7 +259,8 @@
   endpoint answering with an empty string or a chat template's own scaffolding is reachable and
   unusable at once.
   `capabilities_json` is what the proving call *measured* about the endpoint - its catalog
-  shape, whether it reported cost, whether it reported cache detail - and lives here rather
+  shape (read from `custom_llm_catalog_url` when set, `{base_url}/models` otherwise), whether
+  it reported cost, whether it reported cache detail - and lives here rather
   than in its own table because the two have exactly one lifetime: an edit that invalidates
   the fingerprint invalidates the measurement with it, since the thing measured is no longer
   the thing configured.

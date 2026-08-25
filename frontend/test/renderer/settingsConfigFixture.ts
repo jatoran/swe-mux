@@ -92,6 +92,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "clipboard_history_retention_hours": 24,
   "custom_llm_base_url": "",
   "custom_llm_model": "",
+  "custom_llm_catalog_url": "",
   "custom_theme": {
     "background": "#090a0c",
     "panel": "#0d0f12",

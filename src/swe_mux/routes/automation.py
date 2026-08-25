@@ -760,6 +760,18 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
     # permitted to behave, rather than as the deliberately unproven shape the
     # probe itself had to run against.
     endpoint = _requested_endpoint(request, body)
+    # The cached catalog belongs to whichever endpoint was last asked, and a
+    # verification is exactly the moment that changed. Leaving it meant the model
+    # pickers offered the *previous* endpoint's models until somebody thought to
+    # press Refresh - and every one of them would then read as absent from the new
+    # catalog, which is the opposite of the truth. Failure is not fatal here: the
+    # endpoint is proven either way, and a stale catalog is a worse reason to
+    # report a successful verification as failed.
+    if endpoint.supports_model_catalog:
+        try:
+            await automation_store.cache_models(await provider.models(endpoint=endpoint))
+        except OpenRouterError as exc:
+            log.info("catalog refresh after verification failed: %s", exc)
     forget_llm_readiness(request.app)
     await request.app[keys.EVENTS].emit(
         "llm_provider_verified",

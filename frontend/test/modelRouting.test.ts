@@ -7,19 +7,6 @@ import { settingsTabs } from '../src/settingsTabs.ts'
 
 const source = (name:string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
 
-/**
- * The JSX of the one `<label>` carrying a `data-setting` mark.
- *
- * Matched to the label's own close rather than by a character budget, so a control
- * that grows a help paragraph does not silently fall out of the window and turn
- * these assertions into passes that check nothing.
- */
-const controlMarkup = (settings:string, setting:string):string => {
-  const match = settings.match(new RegExp(`data-setting="${setting}"[\\s\\S]*?</label>`))
-  assert.ok(match, `Settings.tsx has no labelled control marked data-setting="${setting}"`)
-  return match[0]
-}
-
 const config = (overrides:Partial<ModelRoutingConfig> = {}):ModelRoutingConfig => ({
   openrouter_cheap_model: 'deepseek/deepseek-v4-flash',
   openrouter_standard_model: '',
@@ -88,12 +75,24 @@ test('every route names a real settings tab', () => {
 })
 
 test('every linked control carries the data-setting the link reveals', () => {
-  // `settingReveal.ts` finds the control by `[data-setting]`, so a renamed or
-  // dropped mark strands the link silently. This is the same guard
-  // `settingTargets.test.ts` applies to links from outside Settings.
+  // `settingReveal.ts` finds the control by `[data-setting]`, so a dropped mark
+  // strands the link silently. The mark is now one dynamic attribute on the row the
+  // table renders per route, which is why this asserts the loop rather than seven
+  // static attributes: with the rows generated, a single route cannot drift out of
+  // the marked set without every one of them going with it.
+  const table = source('ModelRoutingSummary.tsx')
+  assert.match(table, /<li key=\{route\.key\} data-setting=\{route\.key\}>/,
+    'each routing row must carry its own data-setting mark')
+  // And every model that used to be edited on a feature tab still has a row there
+  // linking back, so the reader standing on Voice can still find out what it calls.
+  // The two routed defaults are exempt because they never lived on a feature tab -
+  // they have always been the thing the others fall back to, edited here.
   const settings = source('Settings.tsx')
-  for (const route of MODEL_ROUTES) {
-    if (route.target) controlMarkup(settings, route.target.setting)
+  const relocated = MODEL_ROUTES.filter(route => route.kind !== 'routed')
+  assert.equal(relocated.length, 5)
+  for (const route of relocated) {
+    assert.match(settings, new RegExp(`model-routing-elsewhere[\\s\\S]{0,400}?${route.key}`),
+      `${route.key} has no read-only row linking back from its feature tab`)
   }
 })
 
@@ -111,24 +110,28 @@ test('the routing table covers every OpenRouter model key the panel knows about'
 
 test('no model setting is still rendered as a native select or a bare text input', () => {
   // The three-widget drift this table replaced: a `<select>` cannot filter hundreds
-  // of catalog entries and cannot show a price, and a text input accepts a typo the
-  // daemon then rejects as an exact-id validation error.
-  const settings = source('Settings.tsx')
-  for (const route of MODEL_ROUTES) {
-    if (!route.target) continue
-    const markup = controlMarkup(settings, route.target.setting)
-    assert.match(markup, /<ModelPicker\b/, `${route.target.setting} is not on a ModelPicker`)
-    assert.doesNotMatch(markup, /<(select|input)\b/, `${route.target.setting} still has a raw form control`)
-  }
+  // of catalog entries and cannot show a price, and a text input commits a typo
+  // without ever saying it was not in the catalog.
+  //
+  // One loop renders all seven now, so the drift this guards against would have to
+  // be a second control somewhere else rather than one row diverging - which is what
+  // the `ModelPicker`-free assertion over `Settings.tsx` in `llmProvider.test.ts`
+  // covers. Here the table itself has to hold exactly one picker and no raw control.
+  const table = source('ModelRoutingSummary.tsx')
+  assert.match(table, /<ModelPicker\b/, 'the routing table must render the picker')
+  assert.doesNotMatch(table, /<(select|input)\b/, 'the routing table must hold no raw form control')
 })
 
 test('a pinned model uses the picker that cannot clear itself', () => {
   // `required` suppresses the clear-the-setting row. Without it the control can
   // produce a blank the daemon rejects on Save, which reads as a broken form.
-  const settings = source('Settings.tsx')
-  for (const route of MODEL_ROUTES) {
-    if (route.kind !== 'pinned' || !route.target) continue
-    assert.match(controlMarkup(settings, route.target.setting), /\srequired\s/,
-      `${route.target.setting} is pinned but its picker can be cleared`)
-  }
+  //
+  // Asserted on the expression rather than on seven rendered controls, because one
+  // loop renders them all: the table has to decide `required` *from* the route kind,
+  // and a table that hardcoded it either way would be wrong for four rows or three.
+  const table = source('ModelRoutingSummary.tsx')
+  assert.match(table, /required=\{route\.kind === 'pinned'\}/,
+    'the picker must take `required` from the route kind')
+  assert.ok(MODEL_ROUTES.some(route => route.kind === 'pinned'),
+    'a table deriving `required` from a kind nothing uses would assert nothing')
 })

@@ -22,6 +22,7 @@ from .harness import (
 from .host_platform import IS_MACOS, IS_WINDOWS, platform_key
 from .keybindings import is_command
 from .llm_endpoint import LLM_PROVIDERS, base_url_error
+from .llm_endpoint import catalog_url_error as llm_catalog_url_error
 from .llm_endpoint import model_error as llm_model_error
 
 
@@ -1134,15 +1135,28 @@ class Config:
     # what every existing install keeps without touching anything.
     #
     # `custom` is one OpenAI-compatible `/chat/completions` - llama.cpp, Ollama,
-    # vLLM, and LM Studio all present that shape - described by exactly three
-    # values, with the key in the secret store rather than here. The model is a
-    # *pin* rather than an override (`modelRouting.ts` vocabulary): blank is a
-    # validation error, because there is no routed default a local server could
-    # inherit and every other model setting in this file names an OpenRouter id
-    # it has never heard of. See `llm_endpoint.py`.
+    # vLLM, and LM Studio all present that shape - with the key in the secret
+    # store rather than here.
+    #
+    # `custom_llm_model` is the single model an endpoint with no catalog serves,
+    # and is used only then: once a catalog is proven there is something to choose
+    # between, so every other model setting in this file means what it says and
+    # this one is ignored. Blank is therefore legal and `readiness` decides whether
+    # it was needed, because that answer depends on a measurement `_validate`
+    # cannot reach. See `llm_endpoint.py`.
+    #
+    # `custom_llm_catalog_url` is where that catalog lives, when it is not the
+    # `/models` beside the chat route. Blank derives it, which is right for every
+    # OpenAI-compatible server and for the gateway. It exists because a catalog is
+    # not always served by the thing serving completions - a proxy may publish one
+    # elsewhere, and an operator may want to point at a hand-written document that
+    # names and prices the models their server actually loads. It is an operator's
+    # assertion about their own install rather than something inferred, which is
+    # also why it is install configuration and never a request parameter.
     llm_provider: str = "openrouter"
     custom_llm_base_url: str = ""
     custom_llm_model: str = ""
+    custom_llm_catalog_url: str = ""
     # Phase 10.6 Mux assistant: the conversational operator behind the voice
     # grammar's tier-3 fallback and the workspace chat surface. Off by default
     # like every model-cost feature; the model slot is configurable with a
@@ -1776,6 +1790,8 @@ def _validate(config: Config) -> None:
             errors["custom_llm_base_url"] = error
         if error := llm_model_error(config.custom_llm_model):
             errors["custom_llm_model"] = error
+        if error := llm_catalog_url_error(config.custom_llm_catalog_url):
+            errors["custom_llm_catalog_url"] = error
     if not isinstance(config.tts_lexicon, dict) or len(config.tts_lexicon) > 500:
         errors["tts_lexicon"] = "must be a map of at most 500 respellings"
     else:

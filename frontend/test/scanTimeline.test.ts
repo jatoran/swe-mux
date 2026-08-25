@@ -25,11 +25,15 @@ test('scan timeline shows every cap and names whichever one is closest to bindin
   assert.ok(timeline.includes('state.skip_reason'))
   assert.ok(timeline.includes('Not scanning:'))
   assert.ok(timeline.includes('?rehydrate=1'))
-  // The scan-timeline model is a changeable default, not a fixed one - and its
-  // control sits with the caps it is priced against rather than a tab away, so
-  // "which model is this budget being spent on" is answerable without navigating.
+  // The scan-timeline model is a changeable default, not a fixed one, and "which
+  // model is this budget being spent on" still has to be answerable from the tab
+  // holding the caps. The *control* moved to Accounts - switching endpoint changes
+  // all seven models at once, and checking them across four tabs is how a broken
+  // one goes unnoticed - so what stays here is the resolved value and a link.
   assert.ok(settings.includes('data-setting="scan_timeline_model"'))
-  assert.ok(settings.includes('id="scan-timeline-model-picker"'))
+  assert.match(settings, /model-routing-elsewhere[\s\S]{0,400}?scan_timeline_model/)
+  assert.match(settings, /routedModel\('scan_timeline_model'\)/)
+  assert.match(settings, /goToSetting\('accounts','scan_timeline_model'\)/)
   assert.ok(settings.indexOf('data-setting="scan_timeline_model"')
     > settings.indexOf("activeTab==='automation'"))
   assert.ok(!app.includes('ScanSpendStatus'))

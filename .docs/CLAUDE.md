@@ -79,12 +79,23 @@
   `design/features/ui.md`, `technical/frontend/packages.md`, plus the owning feature's doc
   (`design/features/scan-timeline.md`, `design/features/voice.md`,
   `design/features/assistant.md`, `design/features/automation.md`).
-  The rule the split exists to enforce: only the two *routed* defaults (`openrouter_cheap_model`,
-  `openrouter_standard_model`) live in Settings -> Accounts. A model belonging to one feature is
-  edited with that feature, because a feature is configured in one pass; Accounts carries a
-  read-only index of them all instead of a second set of controls, and `modelRouting.ts` is that
-  index. Whether a blank value is legal is the whole distinction: an **override** falls through to
-  the cheap model, a **pin** is a validation error, and the two must never render the same.
+  The rule, **reversed 2026-08-25**: every model setting is edited in Settings -> Accounts ->
+  Models, rendered from `MODEL_ROUTES` by `ModelRoutingSummary`, and each feature tab keeps a
+  read-only row naming its resolved model with a link back.
+  The old rule put each control beside the feature it configured, on the grounds that a feature
+  is set up in one pass.
+  That optimised the wrong axis: changing *endpoint* is the operation that touches all seven at
+  once, and under it the split meant four tabs of hunting to find out whether anything had
+  broken, with no screen anywhere answering "what does this install call, and does the endpoint
+  I just switched to even have it".
+  Two controls writing one config key is still forbidden, which is why the feature tabs show
+  these read-only rather than duplicating the picker.
+  Whether a blank value is legal is still the distinction that matters: an **override** falls
+  through to the cheap model, a **pin** is refused by the control (`required`), and the two must
+  never render the same.
+  Note that the guard tests here assert a *loop*, not seven static controls
+  (`modelRouting.test.ts`, `settingsCoverage.test.ts` - which counts membership of
+  `MODEL_ROUTES` as the control, because a generated key appears literally in no source).
 - Adding a surface that goes inert behind a switch, changing how one reaches that switch
   (the deep link, the scroll-and-flash arrival, the `data-setting` marks), or adding a
   switch a gate may turn on: `design/features/setting-links.md`, `design/features/ui.md`,
