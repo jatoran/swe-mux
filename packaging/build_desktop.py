@@ -117,6 +117,7 @@ def build_app_bundle(distpath: Path | None = None) -> None:
     still running (nothing under dist/swe-mux is touched), then swaps the
     finished bundle in after stopping it.
     """
+    verify_build_extras_installed()
     create_tray_image(256).save(
         ROOT / "packaging" / "swe-mux.ico",
         format="ICO",
@@ -139,6 +140,72 @@ def build_app_bundle(distpath: Path | None = None) -> None:
     )
     verify_bundle_licenses(output_root / "swe-mux")
     print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
+
+
+# Extras the bundle is built from. Optional at *install* time - a source run
+# without `voice-local` degrades to the browser speech stack with a typed
+# diagnostic - but mandatory at *build* time, and not only because the frozen app
+# has no browser fallback for TTS. `num2words` reaches the closure through
+# `voice-local` and is LGPL: the relink condition is satisfied by the spec's
+# `collect_all` writing it as readable source under `_internal/num2words/`, and
+# `collect_all` on a package that is not installed collects nothing and does not
+# fail. So a build run in an environment missing the extra produces a bundle that
+# `verify_bundle_licenses` then rejects - after several minutes of PyInstaller.
+# Checking membership up front turns that into an immediate, legible refusal, and
+# `redeploy_desktop`'s preflight runs the same check before it stops anything.
+REQUIRED_BUILD_EXTRAS = ("desktop", "voice-local")
+
+
+def missing_extra_distributions(
+    extras: Sequence[str] = REQUIRED_BUILD_EXTRAS,
+) -> list[str]:
+    """Distributions declared by `extras` that are not installed for this build.
+
+    Membership is read from `pyproject.toml` rather than listed here so adding a
+    package to an extra cannot leave the check behind. Presence is decided by
+    distribution metadata, not by importing: `en-core-web-sm` imports as
+    `en_core_web_sm` and importing spaCy to find out costs seconds.
+
+    Markers are evaluated against *this* interpreter, unlike the license audit's
+    walk across every supported platform: this answers "can this machine build a
+    compliant bundle", so a Windows-only package is correctly not required when
+    the build runs elsewhere.
+    """
+    import tomllib
+    from importlib.metadata import PackageNotFoundError, version
+
+    from packaging.requirements import Requirement
+
+    declared = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["optional-dependencies"]
+    missing: list[str] = []
+    for extra in extras:
+        for entry in declared.get(extra, []):
+            requirement = Requirement(entry)
+            if requirement.marker is not None and not requirement.marker.evaluate():
+                continue
+            try:
+                version(requirement.name)
+            except PackageNotFoundError:
+                missing.append(f"{requirement.name} (--extra {extra})")
+    return missing
+
+
+def verify_build_extras_installed() -> None:
+    """Refuse to build from an environment that cannot produce a compliant bundle."""
+    missing = missing_extra_distributions()
+    if missing:
+        extras = " ".join(f"--extra {extra}" for extra in REQUIRED_BUILD_EXTRAS)
+        raise SystemExit(
+            "The desktop bundle is built from every distributed extra, and these "
+            "are not installed:\n  "
+            + "\n  ".join(missing)
+            + f"\nRun `uv sync {extras}` and build again. This is a license "
+            "requirement as well as a functional one: num2words is LGPL and must "
+            "ship as replaceable source under _internal/num2words/, which the "
+            "spec's collect_all cannot do for a package that is absent."
+        )
 
 
 # LGPL packages that must ship as replaceable source rather than frozen into the

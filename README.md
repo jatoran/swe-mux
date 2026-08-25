@@ -15,6 +15,11 @@ cd ..
 uv run muxd
 ```
 
+On-device speech (Kokoro text-to-speech and faster-whisper dictation) is optional and adds
+`uv sync --extra voice-local`. Without it swe-mux speaks through the OS voice engine and
+dictates through the browser, and Settings reports the local engines as unavailable rather
+than failing. The desktop bundle is always built with it.
+
 Windows desktop mode adds a WebView2 window and system-tray supervisor while keeping `muxd`
 as the independent terminal owner:
 
@@ -30,8 +35,8 @@ confirms when terminals are live and then stops the daemon; closing the window d
 Build the distributable `dist/swe-mux/swe-mux.exe` folder with:
 
 ```powershell
-uv sync --extra desktop --group package
-uv run --extra desktop --group package python packaging/build_desktop.py
+uv sync --extra desktop --extra voice-local --group package
+uv run --extra desktop --extra voice-local --group package python packaging/build_desktop.py
 ```
 
 The build is intentionally `onedir`: distribute the complete `dist/swe-mux/` folder, not only

@@ -592,6 +592,33 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: ANN001 - Config
     # -- preflight ---------------------------------------------------------
+    # Cheapest check first, and the only one that costs nothing: the build
+    # environment must carry every distributed extra. `voice-local` is optional
+    # to install and mandatory to build from, because `num2words` is LGPL and its
+    # relink condition is met by the spec collecting it as readable source -
+    # which silently collects nothing when the package is absent. Without this,
+    # the failure surfaces minutes later inside `verify_bundle_licenses`, and a
+    # redeploy started from the UI reports it only as a generic build failure.
+    if not args.skip_build:
+        missing = build_desktop.missing_extra_distributions()
+        if missing:
+            extras = " ".join(
+                f"--extra {extra}" for extra in build_desktop.REQUIRED_BUILD_EXTRAS
+            )
+            log(
+                "ABORT: the build environment is missing "
+                + ", ".join(missing)
+                + f". Run `uv sync {extras}` and redeploy again; the bundle cannot "
+                "satisfy its LGPL relink obligation without them."
+            )
+            outcome.record(
+                OUTCOME_REFUSED,
+                "Dependencies for the voice extra are missing, so the bundle could "
+                "not be built license-compliant. Run `uv sync "
+                f"{extras}` and redeploy. Nothing was changed.",
+                code=2,
+            )
+            return 2
     supervisor = supervisor_process(config)
     if supervisor is None:
         message = (

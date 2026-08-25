@@ -186,7 +186,7 @@ The sidebar marks a quantity whose root carries more than one live session
 - Capture status is part of daemon background health and reports running state, captured rows, dropped observations, pending commit calls, and the last error.
   Failures are rate-limited in logs and never interrupt Git polling or terminal event delivery.
 - Historical provenance is an explicit, idempotent operator action, never a startup migration.
-  `python -m swe_mux.git_provenance_backfill PROJECT` is read-only and reports the proposed evidence classes; `--apply` writes the same plan in one bounded transaction.
+  `python -m swe_mux.tools.git_provenance_backfill PROJECT` is read-only and reports the proposed evidence classes; `--apply` writes the same plan in one bounded transaction.
   `--all-projects` sweeps every registered Project instead of one, which is what re-attributing existing history needs.
   The sweep skips removed Projects, whose checkout is usually gone; naming one explicitly still imports it.
 - The pass has five parts: import commits from native transcripts, promote rows the retired shared-checkout rule downgraded, derive contributors for the commits already recorded, name the branch each merge commit unified, and reclassify the occupancy the monitor wrote before it could tell authorship from arrival.
@@ -570,7 +570,7 @@ and provider-managed worktrees may live outside that root.
 ## Key files
 
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
-- Durable session-to-commit capture and explicit historical import: `src/swe_mux/git_provenance.py`, `src/swe_mux/git_provenance_backfill.py`, `src/swe_mux/history.py`
+- Durable session-to-commit capture and explicit historical import: `src/swe_mux/git_provenance.py`, `src/swe_mux/tools/git_provenance_backfill.py`, `src/swe_mux/history.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - First-time repository creation and the starter ignore file: `src/swe_mux/git_init.py`
 - Routes: `src/swe_mux/server.py`

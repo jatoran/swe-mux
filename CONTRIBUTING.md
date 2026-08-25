@@ -91,7 +91,7 @@ rather than by review:
 After changing any dependency, regenerate the notices:
 
 ```bash
-uv sync --extra desktop
+uv sync --extra desktop --extra voice-local
 uv run python packaging/license_audit.py --write
 ```
 

@@ -165,8 +165,14 @@
   replaceable source under `_internal/<pkg>/`, which is why `pystray` and `num2words` sit in
   the spec's `collect_all` loop. No espeak-ng in any form, which is a dependency-review rule
   rather than a preference (`development/ROADMAP.md` Phase 10.5 holds the measurements).
-  After any dependency change: `uv sync --extra desktop` then
+  After any dependency change: `uv sync --extra desktop --extra voice-local` then
   `uv run python packaging/license_audit.py --write`, and commit both generated files.
+  Both extras, because the closure walk is defined over `DISTRIBUTED_EXTRAS` and
+  `--write` reads licenses out of what is actually installed. `voice-local` is
+  optional to install and mandatory to build from: `num2words` reaches the closure
+  through it, so `build_desktop.verify_build_extras_installed` and the
+  `redeploy_desktop` preflight both refuse a build without it rather than shipping
+  a bundle whose `_internal/num2words/` is missing.
 - Changing the project's own license, trademark posture, contribution terms, or how swe-mux
   describes its relationship to the agent vendors: `LICENSE`, `NOTICE`, `TRADEMARK.md`,
   `CONTRIBUTING.md`, `README.md`, `site/index.html`,

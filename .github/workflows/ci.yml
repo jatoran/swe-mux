@@ -41,8 +41,12 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # `voice-local` is optional to install but not optional to test: the real
+      # misaki G2P tests are `importorskip`-guarded, so a bare sync turns them
+      # into silent skips rather than failures. The Linux job below deliberately
+      # syncs bare, which is what proves the package still imports without it.
       - name: Sync backend
-        run: uv sync
+        run: uv sync --extra voice-local
 
       - name: ruff
         run: uv run ruff check src/swe_mux tests packaging
@@ -127,6 +131,10 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # Deliberately bare: no extras. This is the leg that proves `pip install
+      # swe-mux` still yields an importable package now that the voice closure
+      # sits behind `voice-local` - a module-scope `import onnxruntime` anywhere
+      # would fail here and nowhere else.
       - name: Sync backend
         run: uv sync
 

@@ -726,6 +726,11 @@ async def test_daemon_stt_validates_wav_and_reports_stage_timings(tmp_path: Path
 
 def test_whisper_decoding_never_touches_the_disk(tmp_path: Path) -> None:
     """Audio is discarded by construction, not by a sweep that can lose a race."""
+    # Reaches the real decoder through `_transcribe_whisper`, so it needs the
+    # `voice-local` extra actually installed. A bare `uv sync` leaves it out
+    # by design; `.worktree-setup` and the Windows CI job sync it, so this
+    # skips only for a developer who chose not to install local speech.
+    pytest.importorskip("faster_whisper")
     service, _events, _emitted, _record = make_service(tmp_path)
     seen: list[Any] = []
 
@@ -840,7 +845,12 @@ def test_routing_model_failure_falls_back_to_the_dictation_model(tmp_path: Path)
 def test_whisper_model_load_falls_back_when_cuda_runtime_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import ctranslate2
+    # Reaches the real decoder through `_transcribe_whisper`, so it needs the
+    # `voice-local` extra actually installed. A bare `uv sync` leaves it out
+    # by design; `.worktree-setup` and the Windows CI job sync it, so this
+    # skips only for a developer who chose not to install local speech.
+    pytest.importorskip("faster_whisper")
+    ctranslate2 = pytest.importorskip("ctranslate2")
 
     service, _events, _emitted, _record = make_service(tmp_path)
     calls: list[tuple[str, str]] = []

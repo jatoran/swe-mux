@@ -87,9 +87,55 @@ def test_python_closure_excludes_dev_only_packages() -> None:
 def test_python_closure_includes_the_desktop_extra_and_its_transitives() -> None:
     closure = license_audit.python_closure()
     assert "pystray" in closure  # the desktop extra ships in the bundle
-    assert "num2words" in closure  # a direct runtime dependency via misaki.en
+    assert "num2words" in closure  # declared by the voice-local extra, via misaki.en
     assert "misaki" in closure
     assert "onnxruntime" in closure
+
+
+def test_the_closure_walk_covers_every_distributed_extra() -> None:
+    """The walk is over `DISTRIBUTED_EXTRAS`, not over what happens to be synced.
+
+    `voice-local` is optional at install time, so the machine running the audit
+    may not have a single one of its packages present. If the walk followed the
+    environment instead of the declaration, the gate would report a clean,
+    copyleft-free closure on that machine while the bundle ships LGPL num2words.
+    """
+    assert "voice-local" in license_audit.DISTRIBUTED_EXTRAS
+    assert "desktop" in license_audit.DISTRIBUTED_EXTRAS
+    # preview-capture is deliberately absent: Playwright is never bundled.
+    assert "preview-capture" not in license_audit.DISTRIBUTED_EXTRAS
+
+
+def test_the_lgpl_packages_are_reached_only_through_their_extras() -> None:
+    """Both allowlisted LGPL packages are optional, which is why the walk matters.
+
+    Neither is a plain runtime dependency any more, so dropping either extra
+    from `DISTRIBUTED_EXTRAS` silently removes an LGPL package from the audited
+    closure while the bundle keeps shipping it. Pinning the ownership makes that
+    a test failure rather than a diligence finding.
+    """
+    assert license_audit.owning_extra("num2words") == "voice-local"
+    assert license_audit.owning_extra("pystray") == "desktop"
+    # A non-optional dependency belongs to no extra.
+    assert license_audit.owning_extra("aiohttp") is None
+
+
+def test_dropping_the_voice_extra_would_lose_the_lgpl_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Proves the previous test's stake: the walk is load-bearing, not decorative."""
+    monkeypatch.setattr(license_audit, "DISTRIBUTED_EXTRAS", ("desktop",))
+    narrowed = license_audit.python_closure()
+    assert "num2words" not in narrowed
+    assert "misaki" not in narrowed
+    assert "pystray" in narrowed
+
+
+def test_notices_tell_a_source_user_which_extra_carries_each_lgpl_package() -> None:
+    """A bare `uv sync` installs neither, so a single `uv sync` line would lie."""
+    notices = (REPO_ROOT / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8")
+    assert "`uv sync --extra voice-local && uv run muxd`" in notices
+    assert "`uv sync --extra desktop && uv run muxd`" in notices
 
 
 def test_python_closure_drops_unreachable_platform_markers() -> None:
@@ -279,6 +325,109 @@ def test_bundle_verification_passes_a_compliant_tree(tmp_path: Path) -> None:
         (internal / name).mkdir(parents=True, exist_ok=True)
         (internal / name / "__init__.py").write_text("x = 1\n", encoding="utf-8")
     build_desktop.verify_bundle_licenses(tmp_path / "swe-mux")
+
+
+# --------------------------------------------------------------- the build environment
+
+
+def test_the_build_requires_every_distributed_extra() -> None:
+    """Build-time and audit-time must cover the same extras.
+
+    They answer different questions - "what is redistributed" and "can this
+    machine produce it" - but a package the audit calls redistributed and the
+    build does not require is one the bundle can silently omit.
+    """
+    assert set(build_desktop.REQUIRED_BUILD_EXTRAS) == set(
+        license_audit.DISTRIBUTED_EXTRAS
+    )
+
+
+def test_a_fully_synced_environment_reports_nothing_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The positive case, pinned against a fixture rather than against this venv.
+
+    Asserting `[]` for the real `voice-local` would make the test say whether
+    the machine happens to have the extra synced, which is not a property of the
+    code and fails the deliberately-bare base install.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        "[project.optional-dependencies]\n"
+        'desktop = ["pytest>=8"]\n'
+        'voice-local = ["packaging"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_desktop, "ROOT", tmp_path)
+    assert build_desktop.missing_extra_distributions() == []
+    build_desktop.verify_build_extras_installed()  # does not raise
+
+
+def test_missing_extra_distributions_is_read_from_pyproject(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Membership comes from the declaration, so a new package cannot be forgotten."""
+    (tmp_path / "pyproject.toml").write_text(
+        "[project.optional-dependencies]\n"
+        'voice-local = ["definitely-not-installed-xyz>=1.0", "pytest>=8"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_desktop, "ROOT", tmp_path)
+    missing = build_desktop.missing_extra_distributions(("voice-local",))
+    assert missing == ["definitely-not-installed-xyz (--extra voice-local)"]
+
+
+def test_missing_extra_distributions_skips_packages_this_platform_cannot_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Windows-only package is not missing when the build runs elsewhere.
+
+    Unlike the license walk, which spans every distributed platform, this asks
+    whether *this* machine can build - so the marker is evaluated for real.
+    """
+    other = "linux" if sys.platform == "win32" else "win32"
+    (tmp_path / "pyproject.toml").write_text(
+        "[project.optional-dependencies]\n"
+        f'desktop = ["definitely-not-installed-xyz>=1.0; sys_platform == \'{other}\'"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_desktop, "ROOT", tmp_path)
+    assert build_desktop.missing_extra_distributions(("desktop",)) == []
+
+
+def test_building_without_the_extra_is_refused_before_pyinstaller_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is the whole point: `collect_all` on an absent package is silent.
+
+    Without this the build succeeds, ships no `_internal/num2words/`, and is
+    caught only by `verify_bundle_licenses` several minutes later - or, if that
+    check ever regresses, not at all.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        "[project.optional-dependencies]\n"
+        'voice-local = ["definitely-not-installed-xyz>=1.0"]\n'
+        "desktop = []\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_desktop, "ROOT", tmp_path)
+    with pytest.raises(SystemExit) as raised:
+        build_desktop.verify_build_extras_installed()
+    message = str(raised.value)
+    assert "definitely-not-installed-xyz" in message
+    assert "--extra voice-local" in message
+    assert "num2words" in message  # says why it is a license failure, not a bug
+
+
+def test_the_spec_collects_the_voice_closure_the_extra_provides() -> None:
+    """Every voice-local package the frozen app resolves by name, not by import.
+
+    spaCy loads its language modules from a registry, `en_core_web_sm` is a data
+    package, misaki ships its lexicon as data, and num2words is the LGPL one.
+    PyInstaller's source graph follows none of those.
+    """
+    spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
+    for name in ("spacy", "en_core_web_sm", "misaki", "num2words"):
+        assert f'"{name}",' in spec, f"{name} must stay in the collect_all loop"
 
 
 # ----------------------------------------------------------------- the project's own terms

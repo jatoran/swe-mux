@@ -42,3 +42,13 @@
 # `wsl -d Ubuntu -- bash /mnt/d/.../tools/wsl_dev_setup.sh`, straight off the Windows
 # working copy, so the Windows line endings reach a Linux interpreter directly.
 *.sh text eol=lf
+
+# The two worktree scripts are bash too, without the extension that would say so.
+# `* text=auto eol=lf` above already covers them; they are named because the rule
+# is the same one as for `*.sh` and the reason is stronger than the general case.
+# `.worktree-setup` is invoked as `bash .worktree-setup`, and `.worktree-verify`
+# is the land queue's gate command, run under WSL bash as well as Git Bash; a CRLF
+# checkout makes the shebang read as `/usr/bin/env bash^M` and every land fails
+# with `bad interpreter: ^M` rather than with anything about the branch.
+.worktree-setup text eol=lf
+.worktree-verify text eol=lf

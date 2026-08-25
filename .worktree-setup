@@ -12,8 +12,14 @@ note() { printf 'worktree-setup: %s\n' "$*" >&2; }
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
 export npm_config_cache="${npm_config_cache:-$HOME/.npm}"
 
-note "installing python deps (uv sync)"
-uv sync
+# `--extra voice-local` because the gate is not the same gate without it: the
+# real misaki G2P tests in `test_kokoro_tts.py` are `importorskip`-guarded, so
+# a bare sync turns them into silent skips. The extra is optional at install
+# time for a user who is happy with the browser's speech stack; a worktree that
+# runs the verification gate is not that user. `--extra desktop` is deliberately
+# NOT here: a worktree never builds or runs the app (CLAUDE.md § Worktrees).
+note "installing python deps (uv sync --extra voice-local)"
+uv sync --extra voice-local
 
 if [ -f frontend/package-lock.json ]; then
     note "installing frontend deps (npm ci)"

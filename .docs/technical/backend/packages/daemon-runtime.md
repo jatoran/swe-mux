@@ -156,12 +156,14 @@ Shared by the redeploy script's pre-build and pre-stop gates and by the endpoint
 ### `packaging/license_audit.py`
 
 The metadata half of the distribution license gate, and the generator behind `THIRD-PARTY-NOTICES.md`.
-Resolves the *distributed* closure - `uv.lock` walked from the runtime dependencies plus the `desktop` extra, dev groups excluded so build-only `pyinstaller` (GPL-2.0-with-exception) never cries wolf - with dependency markers evaluated against every supported platform rather than the running one, because the Linux artifact carries Linux-only packages whatever host the audit runs on.
+Resolves the *distributed* closure: `uv.lock` walked from the runtime dependencies plus every extra in `DISTRIBUTED_EXTRAS` (`desktop` and `voice-local`), with dev groups excluded so build-only `pyinstaller` (GPL-2.0-with-exception) never cries wolf.
+Dependency markers are evaluated against every supported platform rather than the running one, because the Linux artifact carries Linux-only packages whatever host the audit runs on.
+The walk is defined over that declared set rather than over what is installed, which is what keeps the answer independent of the syncing machine: `num2words` reaches the closure only through `voice-local`, so a walk over a bare `uv sync` would report a copyleft-free bundle that ships it anyway.
 Licenses come from installed `dist-info`, falling back to sniffing the shipped license text when a PEP 639 package declares nothing; an undeterminable license fails the gate rather than passing as permissive.
 `--write` needs the full closure installed and refreshes both the notices file and the machine-readable sidecar `packaging/third_party_licenses.json`; `--check` needs no environment at all and reconciles that sidecar against both lockfiles, so a dependency entering or moving fails on any machine.
 Copyleft ships only with an `ALLOWLIST` entry naming the reason and the relink story - `pystray` and `num2words` today, both LGPL.
 
-**Not:** inspecting the built bundle (`build_desktop.verify_bundle_licenses` owns the artifact half, because declared metadata is exactly what hid the original PyAV defect), and not choosing swe-mux's own license.
+**Not:** inspecting the built bundle (`build_desktop.verify_bundle_licenses` owns the artifact half, because declared metadata is exactly what hid the original PyAV defect), not deciding whether the build environment can produce a compliant bundle (`build_desktop.verify_build_extras_installed`), and not choosing swe-mux's own license.
 
 ## Desktop shell
 
