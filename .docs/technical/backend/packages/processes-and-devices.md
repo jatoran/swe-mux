@@ -56,8 +56,10 @@ Serving a registered Preview through the daemon at `/preview/{preview_id}/…`: 
 The proxy streams its own `StreamResponse`, so it stamps `apply_security_headers` before `prepare()`: the security middleware stamps after a handler returns, which is too late once bytes are on the wire.
 It never copies `Content-Length` from an upstream response it decompressed, because aiohttp would then truncate the outbound body to the compressed length - a silent fail-open.
 
-The JavaScript rewriting is lexical, so a `from '/x'` inside an ordinary string or comment is rewritten too (audit F21).
-The surface is narrow and the tree-sitter stack is already a dependency if it ever bites; this module is where that work would go.
+The JavaScript rewriting is parsed, not matched (S12.5, closing audit F21).
+A module specifier is found by *being* one - a `string` reached through `import_statement.source`, `export_statement.source`, or a dynamic `import()`'s argument, in the tree-sitter javascript grammar the code graph already depends on - so the identical characters inside an ordinary string, a comment, or a template literal are not reachable and are not rewritten.
+Two consequences beyond the fix: a protocol-relative `//cdn…/lib.js` now stays on its own origin instead of becoming a path on the mux one, and a body that does not parse as JavaScript falls back to the old lexical regex, which is deliberate - an over-broad rewrite beats a Preview whose every module 404s.
+The parser and query are built once and reused, and their import is deferred so the module still imports where the grammars are absent.
 
 **Not:** the registry that answers *which* Preview this is (`processes.py`), the durable mirror (`preview_store.py`), screenshots (`preview_capture.py`), or route registration (`routes/processes.py`).
 

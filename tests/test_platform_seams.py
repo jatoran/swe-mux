@@ -576,7 +576,7 @@ def test_the_posix_firewall_advises_rather_than_repairs() -> None:
         assert "8765" in command
 
 def test_the_default_agent_command_is_shaped_for_this_host() -> None:
-    """`claude.exe` is not a cosmetic default off Windows - it selects the wrong binary.
+    r"""`claude.exe` is not a cosmetic default off Windows - it selects the wrong binary.
 
     Under WSL the Windows install is on PATH through interop, so
     `shutil.which("claude.exe")` *succeeds* and resolves to `/mnt/c/.../claude.exe`.

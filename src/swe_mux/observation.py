@@ -5664,7 +5664,8 @@ async def find_codex_transcript(cwd: str, created_at: float, stop: asyncio.Event
             if path.stat().st_mtime + 2 < created_at:
                 continue
             try:
-                first = path.open("r", encoding="utf-8", errors="replace").readline()
+                with path.open("r", encoding="utf-8", errors="replace") as handle:
+                    first = handle.readline()
                 event = json.loads(first)
                 payload = event.get("payload") or {}
                 if (

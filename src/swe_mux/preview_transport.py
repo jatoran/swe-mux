@@ -265,7 +265,90 @@ def rewrite_preview_javascript(data: bytes, prefix: str) -> bytes:
     return _rewrite_javascript_text(text, prefix).encode("utf-8")
 
 
+#: The lexical fallback, kept for the one case the parser cannot serve: a body that does
+#: not parse as JavaScript. It matches the *text* `from "/…"`, so it also matches that text
+#: inside an ordinary string, a comment, or a template literal, and rewrites it there.
 _JS_ROOT_SPECIFIER = re.compile(r"(?P<start>\b(?:from\s*|import\s*|import\s*\(\s*)[\"'])/")
+
+
+#: Every place a module specifier can appear: static import, re-export, dynamic import.
+#: Matching the grammar rather than the text is the whole point - a `string` node reached
+#: through `import_statement.source` is a specifier by construction, and the identical
+#: characters inside a comment or a template literal are not reachable this way at all.
+_JS_SPECIFIER_QUERY = """
+(import_statement source: (string) @specifier)
+(export_statement source: (string) @specifier)
+(call_expression function: (import) arguments: (arguments . (string) @specifier))
+"""
+
+
+class _JavaScriptSpecifiers:
+    """The tree-sitter parser and query used to find module specifiers.
+
+    Built on first use and then reused: the grammars are a shared library load, and the
+    Preview proxy rewrites every JavaScript response that passes through it. Import is
+    deferred so this module still imports on a host where the grammars are absent, where
+    the lexical fallback takes over - the same arrangement `code_graph` uses.
+    """
+
+    def __init__(self) -> None:
+        self._loaded = False
+        self._parser: Any = None
+        self._query: Any = None
+        self._cursor_cls: Any = None
+
+    def _load(self) -> None:
+        self._loaded = True
+        try:
+            from tree_sitter import Query, QueryCursor
+            from tree_sitter_language_pack import get_language, get_parser
+
+            self._parser = get_parser("javascript")
+            self._query = Query(get_language("javascript"), _JS_SPECIFIER_QUERY)
+            self._cursor_cls = QueryCursor
+        except Exception as exc:  # pragma: no cover - environment dependent
+            log.warning("preview: tree-sitter unavailable, rewriting lexically: %s", exc)
+            self._parser = None
+
+    def spans(self, source: bytes) -> list[tuple[int, int]] | None:
+        """Byte spans of each root-absolute specifier, or None if this is not JavaScript.
+
+        None means "the caller should fall back", and is returned for a parse that
+        produced errors as well as for a missing grammar. A partly-broken body is exactly
+        where the parser's answer would be partly wrong in a way nothing downstream could
+        tell from a correct one, so it does not get to answer at all.
+        """
+        if not self._loaded:
+            self._load()
+        if self._parser is None:
+            return None
+        try:
+            tree = self._parser.parse(source)
+            if tree.root_node.has_error:
+                return None
+            captures = self._cursor_cls(self._query).captures(tree.root_node)
+        except Exception as exc:  # pragma: no cover - grammar dependent
+            log.warning("preview: javascript parse failed, rewriting lexically: %s", exc)
+            return None
+        found: list[tuple[int, int]] = []
+        for node in captures.get("specifier", ()):
+            fragment = next(
+                (child for child in node.children if child.type == "string_fragment"), None
+            )
+            if fragment is None or fragment.text is None:
+                continue
+            value = fragment.text
+            # A single leading slash is root-absolute and is what the Preview origin has
+            # to prefix. Two is a protocol-relative URL to another origin, which prefixing
+            # would turn into a path on this one - the lexical rewrite did exactly that.
+            if not value.startswith(b"/") or value.startswith(b"//"):
+                continue
+            found.append((fragment.start_byte, fragment.end_byte))
+        found.sort()
+        return found
+
+
+_JS_SPECIFIERS = _JavaScriptSpecifiers()
 
 
 _SCRIPT_ELEMENT = re.compile(
@@ -281,7 +364,31 @@ _SCRIPT_SRC = re.compile(r"\bsrc\s*=", flags=re.IGNORECASE)
 
 
 def _rewrite_javascript_text(text: str, prefix: str) -> str:
-    return _JS_ROOT_SPECIFIER.sub(rf"\g<start>{prefix}", text)
+    """Prefix root-absolute module specifiers, and only module specifiers.
+
+    Parsed, not matched. `_JS_ROOT_SPECIFIER` rewrites its own text wherever it appears -
+    inside an ordinary string, a comment, or a template literal - which for a Preview means
+    an app's own data or documentation quietly changing on the way to the browser
+    (`.docs/development/CODE_QUALITY_AUDIT_2026-08-23.md` finding 21). Asking the grammar
+    for `import_statement.source` cannot reach any of those, because none of them is one.
+    """
+    source = text.encode("utf-8")
+    spans = _JS_SPECIFIERS.spans(source)
+    if spans is None:
+        return _JS_ROOT_SPECIFIER.sub(rf"\g<start>{prefix}", text)
+    if not spans:
+        return text
+    encoded_prefix = prefix.encode("utf-8")
+    out = bytearray()
+    cursor = 0
+    for start, end in spans:
+        out += source[cursor:start]
+        # The specifier's own leading slash is replaced by the prefix, which ends in one,
+        # exactly as the lexical rewrite did.
+        out += encoded_prefix + source[start + 1 : end]
+        cursor = end
+    out += source[cursor:]
+    return out.decode("utf-8")
 
 
 def _rewrite_inline_scripts(text: str, prefix: str) -> str:

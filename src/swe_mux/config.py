@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import tomllib
+from collections.abc import Collection
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1331,6 +1332,277 @@ def _validate_project_init_scripts(config: Config, errors: dict[str, str]) -> No
             errors[f"{prefix}.default_enabled"] = "must be a boolean"
 
 
+# ---------------------------------------------------------------------------- #
+# Validation tables
+#
+# `_validate` below is one deliberate choke point (see its own comment), and that
+# is the right shape: one place answers "is this settings payload legal", so no
+# surface can accept a value another surface would refuse. What it should not be
+# is one hundred and seventy hand-written branches, which is what it had grown to
+# and what made C901 read it as the worst function in the codebase by a factor of
+# two (`.docs/development/CODE_QUALITY_AUDIT_2026-08-23.md` finding 27).
+#
+# So the three mechanical families - a numeric range, a fixed set of spellings, a
+# bounded string - are declared as data and checked by one loop each. Everything
+# that is not mechanical stays written out in `_validate`, because a rule with a
+# reason attached is worth reading.
+#
+# The messages here are the exact strings the previous branches produced, byte
+# for byte: they are asserted on by tests and shown in the settings UI, so this
+# is a restatement of the same rules, not a redefinition of them.
+# ---------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class _Range:
+    """An inclusive numeric range, with the message for a value outside it."""
+
+    field: str
+    low: float
+    high: float
+    message: str
+    #: 0 means "off" or "inherit the default" for this field and skips the range.
+    zero_disables: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _Choice:
+    """A field whose value must be one of a fixed set of spellings."""
+
+    field: str
+    #: Membership is all this needs, so an existing module constant can be named
+    #: directly rather than copied into a tuple that could then drift from it.
+    allowed: Collection[str]
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Text:
+    """A string field bounded by length, and optionally required to be non-empty."""
+
+    field: str
+    max_chars: int
+    message: str
+    required: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _Pattern:
+    """A string field that must match a pattern whole."""
+
+    field: str
+    pattern: re.Pattern[str]
+    message: str
+
+
+_RANGE_RULES: tuple[_Range, ...] = (
+    _Range("port", 1, 65535, "must be between 1 and 65535"),
+    _Range(
+        "note_font_size_px",
+        8,
+        48,
+        "must be 0 (editor default) or between 8 and 48",
+        zero_disables=True,
+    ),
+    _Range(
+        "note_line_height",
+        1.0,
+        3.0,
+        "must be 0 (editor default) or between 1.0 and 3.0",
+        zero_disables=True,
+    ),
+    _Range(
+        "note_rail_button_size_px",
+        32,
+        96,
+        "must be 0 (editor default) or between 32 and 96",
+        zero_disables=True,
+    ),
+    _Range("mobile_scroll_sensitivity", 0.25, 4, "must be between 0.25 and 4"),
+    _Range("ccusage_refresh_minutes", 0, 24 * 60, "must be between 0 and 1440 minutes"),
+    _Range("scrollback_bytes", 1024, 1024 * 1024 * 1024, "must be between 1 KiB and 1 GiB"),
+    _Range("attach_replay_bytes", 1024, 1024 * 1024 * 1024, "must be between 1 KiB and 1 GiB"),
+    _Range(
+        "session_recovery_checkpoint_bytes",
+        0,
+        64 * 1024 * 1024,
+        "must be between 0 and 64 MiB",
+    ),
+    _Range("session_recovery_retention_days", 0, 365, "must be between 0 and 365 days"),
+    _Range("session_recovery_max_sessions", 0, 1000, "must be between 0 and 1000 sessions"),
+    _Range("git_poll_seconds", 0.25, 3600, "must be between 0.25 and 3600 seconds"),
+    _Range("process_poll_seconds", 0.5, 60, "must be between 0.5 and 60 seconds"),
+    _Range("process_orphan_grace_seconds", 1, 3600, "must be between 1 and 3600 seconds"),
+    _Range("ghost_window_poll_seconds", 0.5, 60, "must be between 0.5 and 60 seconds"),
+    _Range("process_evidence_retention_days", 1, 3650, "must be between 1 and 3650"),
+    _Range("operational_telemetry_retention_days", 1, 3650, "must be between 1 and 3650"),
+    _Range("status_timeline_retention_days", 1, 3650, "must be between 1 and 3650"),
+    _Range("provider_quota_poll_minutes", 5, 1440, "must be between 5 and 1440"),
+    _Range("provider_quota_turn_refresh_min_minutes", 1, 1440, "must be between 1 and 1440"),
+    _Range("history_limit", 1, 10000, "must be between 1 and 10000"),
+    _Range("clipboard_history_limit", 1, 2000, "must be between 1 and 2000 entries"),
+    _Range(
+        "clipboard_history_entry_max_chars",
+        256,
+        1000000,
+        "must be between 256 and 1000000 characters",
+    ),
+    _Range(
+        "clipboard_history_retention_hours",
+        0,
+        8760,
+        "must be between 0 (keep until evicted) and 8760 hours",
+    ),
+    _Range("automation_retention_days", 1, 3650, "must be between 1 and 3650"),
+    _Range("prompt_queue_retention_days", 1, 3650, "must be between 1 and 3650"),
+    # Auto-delivery bounds. The lower bounds are the point: a zero-length
+    # stability window or an unbounded grant would defeat the gate they exist
+    # to be (`ROADMAP.md` Phase 5).
+    _Range("auto_delivery_stable_seconds", 2, 600, "must be between 2 and 600 seconds"),
+    _Range("auto_delivery_max_consecutive", 1, 50, "must be between 1 and 50 sends"),
+    _Range("auto_delivery_session_ttl_minutes", 1, 1440, "must be between 1 and 1440 minutes"),
+    _Range("auto_delivery_refusal_backoff_seconds", 0, 3600, "must be between 0 and 3600 seconds"),
+    # 0 is legal here and nowhere else in this group: the reply window is the one
+    # bound that only ever *holds off* another bound, so switching it off is a
+    # narrowing rather than the unbounded grant the others must refuse.
+    _Range("auto_delivery_reply_window_minutes", 0, 1440, "must be between 0 and 1440 minutes"),
+    # Approval bounds. Every lower bound here is the point: an unbounded grant or
+    # an unbounded answer count is standing authority, which is the one thing
+    # this feature must not become.
+    _Range("approval_grant_ttl_minutes", 1, 480, "must be between 1 and 480 minutes"),
+    _Range("approval_max_auto_per_grant", 1, 5000, "must be between 1 and 5000 requests"),
+    _Range("approval_hook_timeout_seconds", 1, 60, "must be between 1 and 60 seconds"),
+    _Range("approval_keystroke_window_seconds", 1, 300, "must be between 1 and 300 seconds"),
+    _Range("agent_message_max_chars", 1, 100000, "must be between 1 and 100000 characters"),
+    _Range("agent_message_hourly_budget", 0, 1000, "must be between 0 and 1000 messages per hour"),
+    _Range("agent_message_pending_per_target", 1, 100, "must be between 1 and 100 messages"),
+    _Range("agent_message_max_chain_depth", 1, 10, "must be between 1 and 10 hops"),
+    _Range("agent_message_max_thread_turns", 1, 100, "must be between 1 and 100 messages"),
+    _Range(
+        "agent_interject_hourly_budget",
+        0,
+        1000,
+        "must be between 0 and 1000 mid-turn deliveries per hour",
+    ),
+    _Range("agent_interject_min_interval_seconds", 0, 3600, "must be between 0 and 3600 seconds"),
+    _Range("session_control_hourly_budget", 0, 1000, "must be between 0 and 1000 actions per hour"),
+    _Range("session_control_graceful_timeout_s", 1, 120, "must be between 1 and 120 seconds"),
+    _Range("agent_spawn_hourly_budget", 0, 1000, "must be between 0 and 1000 spawns per hour"),
+    _Range("session_watch_max_per_session", 1, 100, "must be between 1 and 100 watches"),
+    _Range("session_watch_max_minutes", 1, 24 * 60, "must be between 1 minute and 24 hours"),
+    _Range("scheduled_runs_max_concurrent", 0, 50, "must be between 0 and 50 sessions"),
+    _Range("land_hourly_budget", 0, 1000, "must be between 0 and 1000 land requests per hour"),
+    _Range("land_hold_timeout_seconds", 60, 24 * 3600, "must be between 60 seconds and 24 hours"),
+    _Range("land_verify_memo_seconds", 0, 7 * 24 * 3600, "must be between 0 (no reuse) and 7 days"),
+    _Range("scheduled_runs_poll_seconds", 1, 300, "must be between 1 and 300 seconds"),
+    _Range("scheduled_run_retention_days", 1, 3650, "must be between 1 and 3650 days"),
+    _Range("automation_concurrency", 1, 16, "must be between 1 and 16"),
+    _Range("automation_queue_size", 16, 4096, "must be between 16 and 4096"),
+    _Range("automation_max_input_tokens", 128, 128000, "must be between 128 and 128000"),
+    _Range("automation_max_output_tokens", 16, 8192, "must be between 16 and 8192"),
+    _Range("automation_hourly_call_cap", 1, 10000, "must be between 1 and 10000"),
+    _Range("automation_rule_hourly_call_cap", 1, 10000, "must be between 1 and 10000"),
+    _Range("project_card_max_input_tokens", 512, 128000, "must be between 512 and 128000"),
+    _Range("project_card_max_output_tokens", 128, 4096, "must be between 128 and 4096"),
+    _Range("scan_timeline_hourly_call_cap", 1, 100000, "must be between 1 and 100000"),
+    _Range("scan_timeline_max_output_tokens", 256, 8192, "must be between 256 and 8192"),
+    _Range("attention_daily_interrupt_budget", 0, 100, "must be between 0 and 100"),
+    _Range("attention_hourly_interrupt_cap", 0, 100, "must be between 0 and 100"),
+    _Range("attention_incident_window_seconds", 60, 86400, "must be between 60 and 86400"),
+    _Range("attention_narration_max_output_tokens", 32, 2048, "must be between 32 and 2048"),
+    _Range("openrouter_request_timeout_seconds", 1, 120, "must be between 1 and 120"),
+    _Range("assistant_max_output_tokens", 128, 8192, "must be between 128 and 8192"),
+    _Range("assistant_context_messages", 2, 200, "must be between 2 and 200"),
+    _Range("tts_kokoro_speed", 0.5, 2.0, "must be between 0.5 and 2.0"),
+    _Range("tts_sapi_rate", -10, 10, "must be between -10 and 10"),
+    _Range("tts_summary_max_tokens", 64, 2000, "must be between 64 and 2000"),
+    _Range("tts_verbatim_max_chars", 200, 40000, "must be between 200 and 40000"),
+    _Range("tts_cache_mb", 10, 5000, "must be between 10 and 5000"),
+    _Range("voice_chat_patience_ms", 0, 5000, "must be between 0 and 5000 milliseconds"),
+)
+
+_CHOICE_RULES: tuple[_Choice, ...] = (
+    _Choice(
+        "host",
+        LOOPBACK_HOSTS,
+        "must be a loopback address (127.0.0.1, localhost, or ::1); "
+        "direct tailnet listening uses the detected Tailscale address automatically",
+    ),
+    _Choice("terminal_renderer", ("auto", "dom", "webgl"), "must be auto, dom, or webgl"),
+    _Choice("notes_default_open", ("dock", "popout"), "must be dock or popout"),
+    _Choice("note_syntax", ("markdown", "plain"), "must be markdown or plain"),
+    _Choice("note_tab_behavior", ("indent", "focus"), "must be indent or focus"),
+    _Choice(
+        "note_shortcut_policy",
+        ("browser-safe", "editor-first", "none"),
+        "must be browser-safe, editor-first, or none",
+    ),
+    _Choice("note_command_rail", ("auto", "on", "off"), "must be auto, on, or off"),
+    _Choice(
+        "mobile_vertical_drag",
+        ("smart", "terminal", "application", "disabled"),
+        "must be smart, terminal, application, or disabled",
+    ),
+    _Choice("mobile_scroll_direction", ("natural", "wheel"), "must be natural or wheel"),
+    _Choice("mobile_long_press", ("context_menu", "disabled"), "must be context_menu or disabled"),
+    _Choice(
+        "assistant_trust_reversible",
+        ("auto", "cancel_window", "confirm"),
+        "must be auto, cancel_window, or confirm",
+    ),
+    _Choice("tts_default_mode", ("off", "on_demand", "auto"), "must be off, on_demand, or auto"),
+    _Choice("tts_content", ("summary", "verbatim"), "must be summary or verbatim"),
+    _Choice("tts_engine", ("sapi", "kokoro"), "must be sapi (the OS voice) or kokoro"),
+    _Choice("stt_engine", ("sapi", "whisper"), "must be sapi or whisper"),
+    _Choice("drawer_tab_display", ("icon", "title"), "must be icon or title"),
+    _Choice("utility_rail_display", ("icon", "title"), "must be icon or title"),
+    # These three build their message from the allowed set, exactly as the branches
+    # they replace did, so a new theme or density is named by the error without an
+    # edit here.
+    _Choice("theme", tuple(sorted(THEMES)), f"must be one of {', '.join(sorted(THEMES))}"),
+    _Choice(
+        "rail_density_desktop",
+        tuple(RAIL_DENSITIES),
+        f"must be one of {', '.join(RAIL_DENSITIES)}",
+    ),
+    _Choice(
+        "rail_density_mobile",
+        tuple(RAIL_DENSITIES),
+        f"must be one of {', '.join(RAIL_DENSITIES)}",
+    ),
+)
+
+_TEXT_RULES: tuple[_Text, ...] = (
+    _Text("note_font_family", 200, "must be 200 characters or fewer"),
+    _Text("scan_timeline_model", 200, "must be an exact OpenRouter model id", required=True),
+    _Text("assistant_model", 200, "must be an exact OpenRouter model id", required=True),
+    _Text(
+        "stt_whisper_model",
+        120,
+        "must name a Whisper model in 120 characters or fewer",
+        required=True,
+    ),
+    _Text(
+        "stt_routing_model",
+        120,
+        "must name a Whisper model in 120 characters or fewer, or be blank",
+    ),
+)
+
+_PATTERN_RULES: tuple[_Pattern, ...] = (
+    _Pattern(
+        "tts_kokoro_voice",
+        re.compile(r"[a-z]{2}_[a-z]+"),
+        "must be a Kokoro voice id such as af_heart",
+    ),
+    _Pattern(
+        "stt_language",
+        re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?"),
+        "must be a language tag such as en-US",
+    ),
+)
+
+
 def _validate(config: Config) -> None:
     errors: dict[str, str] = {}
     # Every spending cap validates through one implementation against the bounds
@@ -1346,13 +1618,24 @@ def _validate(config: Config) -> None:
             min_tokens=spec.min_tokens,
             min_usd=spec.min_usd,
         )
-    if config.host not in LOOPBACK_HOSTS:
-        errors["host"] = (
-            "must be a loopback address (127.0.0.1, localhost, or ::1); "
-            "direct tailnet listening uses the detected Tailscale address automatically"
-        )
-    if not 1 <= config.port <= 65535:
-        errors["port"] = "must be between 1 and 65535"
+    # The mechanical families, declared as data above. A field appears in exactly
+    # one table and in no hand-written check below, so neither can shadow the other.
+    for range_rule in _RANGE_RULES:
+        range_value = getattr(config, range_rule.field)
+        if range_rule.zero_disables and range_value == 0:
+            continue
+        if not range_rule.low <= range_value <= range_rule.high:
+            errors[range_rule.field] = range_rule.message
+    for choice_rule in _CHOICE_RULES:
+        if getattr(config, choice_rule.field) not in choice_rule.allowed:
+            errors[choice_rule.field] = choice_rule.message
+    for text_rule in _TEXT_RULES:
+        text_value = str(getattr(config, text_rule.field))
+        if len(text_value) > text_rule.max_chars or (text_rule.required and not text_value.strip()):
+            errors[text_rule.field] = text_rule.message
+    for pattern_rule in _PATTERN_RULES:
+        if not pattern_rule.pattern.fullmatch(str(getattr(config, pattern_rule.field))):
+            errors[pattern_rule.field] = pattern_rule.message
     if config.default_backend != "shell" and not is_agent_harness(config.default_backend):
         errors["default_backend"] = "must be shell or a registered agent"
     if config.default_harness and not is_agent_harness(config.default_harness):
@@ -1360,8 +1643,6 @@ def _validate(config: Config) -> None:
         # exists precisely to answer "which agent", and accepting `shell` would
         # let it be set to a value that can never satisfy the callers that read it.
         errors["default_harness"] = "must be empty or a registered agent"
-    if config.terminal_renderer not in {"auto", "dom", "webgl"}:
-        errors["terminal_renderer"] = "must be auto, dom, or webgl"
     # `bool` is an `int` subclass and `True` would otherwise validate as a 1-column cap.
     if (
         not isinstance(config.claude_max_columns, int)
@@ -1372,24 +1653,6 @@ def _validate(config: Config) -> None:
         errors["claude_max_columns"] = f"must be one of {allowed} (0 removes the cap)"
     if str(config.log_level).strip().upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
         errors["log_level"] = "must be DEBUG, INFO, WARNING, or ERROR"
-    if config.notes_default_open not in {"dock", "popout"}:
-        errors["notes_default_open"] = "must be dock or popout"
-    if config.note_syntax not in {"markdown", "plain"}:
-        errors["note_syntax"] = "must be markdown or plain"
-    if config.note_tab_behavior not in {"indent", "focus"}:
-        errors["note_tab_behavior"] = "must be indent or focus"
-    if config.note_shortcut_policy not in {"browser-safe", "editor-first", "none"}:
-        errors["note_shortcut_policy"] = "must be browser-safe, editor-first, or none"
-    if config.note_command_rail not in {"auto", "on", "off"}:
-        errors["note_command_rail"] = "must be auto, on, or off"
-    if len(config.note_font_family) > 200:
-        errors["note_font_family"] = "must be 200 characters or fewer"
-    if config.note_font_size_px != 0 and not 8 <= config.note_font_size_px <= 48:
-        errors["note_font_size_px"] = "must be 0 (editor default) or between 8 and 48"
-    if config.note_line_height != 0 and not 1.0 <= config.note_line_height <= 3.0:
-        errors["note_line_height"] = "must be 0 (editor default) or between 1.0 and 3.0"
-    if config.note_rail_button_size_px != 0 and not 32 <= config.note_rail_button_size_px <= 96:
-        errors["note_rail_button_size_px"] = "must be 0 (editor default) or between 32 and 96"
     if not isinstance(config.note_shortcut_overrides, dict):
         errors["note_shortcut_overrides"] = "must be a mapping of chord to command"
     elif len(config.note_shortcut_overrides) > 128:
@@ -1409,14 +1672,6 @@ def _validate(config: Config) -> None:
                 'each entry must map a normalized chord to a command id or "" '
                 "(release); invalid: " + ", ".join(bad_chords)
             )
-    if config.mobile_vertical_drag not in {"smart", "terminal", "application", "disabled"}:
-        errors["mobile_vertical_drag"] = "must be smart, terminal, application, or disabled"
-    if config.mobile_scroll_direction not in {"natural", "wheel"}:
-        errors["mobile_scroll_direction"] = "must be natural or wheel"
-    if not 0.25 <= config.mobile_scroll_sensitivity <= 4:
-        errors["mobile_scroll_sensitivity"] = "must be between 0.25 and 4"
-    if config.mobile_long_press not in {"context_menu", "disabled"}:
-        errors["mobile_long_press"] = "must be context_menu or disabled"
     if not isinstance(config.mobile_gestures, dict):
         errors["mobile_gestures"] = "must be a mapping of gesture slots to command ids"
     else:
@@ -1490,20 +1745,6 @@ def _validate(config: Config) -> None:
         )
     if config.ccusage_enabled and not config.usage_command:
         errors["usage_command"] = "must not be empty while usage analytics is enabled"
-    if not 0 <= config.ccusage_refresh_minutes <= 24 * 60:
-        errors["ccusage_refresh_minutes"] = "must be between 0 and 1440 minutes"
-    if not 1024 <= config.scrollback_bytes <= 1024 * 1024 * 1024:
-        errors["scrollback_bytes"] = "must be between 1 KiB and 1 GiB"
-    if not 1024 <= config.attach_replay_bytes <= 1024 * 1024 * 1024:
-        errors["attach_replay_bytes"] = "must be between 1 KiB and 1 GiB"
-    if not 0 <= config.session_recovery_checkpoint_bytes <= 64 * 1024 * 1024:
-        errors["session_recovery_checkpoint_bytes"] = "must be between 0 and 64 MiB"
-    if not 0 <= config.session_recovery_retention_days <= 365:
-        errors["session_recovery_retention_days"] = "must be between 0 and 365 days"
-    if not 0 <= config.session_recovery_max_sessions <= 1000:
-        errors["session_recovery_max_sessions"] = "must be between 0 and 1000 sessions"
-    if not 0.25 <= config.git_poll_seconds <= 3600:
-        errors["git_poll_seconds"] = "must be between 0.25 and 3600 seconds"
     if not isinstance(config.worktree_root, str):
         errors["worktree_root"] = "must be an absolute directory path or empty"
     elif config.worktree_root.strip():
@@ -1520,141 +1761,10 @@ def _validate(config: Config) -> None:
             errors["new_project_parent"] = "must be an absolute directory path or empty"
         elif project_parent.parent == project_parent:
             errors["new_project_parent"] = "must not be a filesystem root"
-    if not 0.5 <= config.process_poll_seconds <= 60:
-        errors["process_poll_seconds"] = "must be between 0.5 and 60 seconds"
-    if not 1 <= config.process_orphan_grace_seconds <= 3600:
-        errors["process_orphan_grace_seconds"] = "must be between 1 and 3600 seconds"
-    if not 0.5 <= config.ghost_window_poll_seconds <= 60:
-        errors["ghost_window_poll_seconds"] = "must be between 0.5 and 60 seconds"
-    if not 1 <= config.process_evidence_retention_days <= 3650:
-        errors["process_evidence_retention_days"] = "must be between 1 and 3650"
-    if not 1 <= config.operational_telemetry_retention_days <= 3650:
-        errors["operational_telemetry_retention_days"] = "must be between 1 and 3650"
-    if not 1 <= config.status_timeline_retention_days <= 3650:
-        errors["status_timeline_retention_days"] = "must be between 1 and 3650"
-    if not 5 <= config.provider_quota_poll_minutes <= 1440:
-        errors["provider_quota_poll_minutes"] = "must be between 5 and 1440"
-    if not 1 <= config.provider_quota_turn_refresh_min_minutes <= 1440:
-        errors["provider_quota_turn_refresh_min_minutes"] = "must be between 1 and 1440"
-    if not 1 <= config.history_limit <= 10000:
-        errors["history_limit"] = "must be between 1 and 10000"
-    if not 1 <= config.clipboard_history_limit <= 2000:
-        errors["clipboard_history_limit"] = "must be between 1 and 2000 entries"
-    if not 256 <= config.clipboard_history_entry_max_chars <= 1_000_000:
-        errors["clipboard_history_entry_max_chars"] = "must be between 256 and 1000000 characters"
-    if not 0 <= config.clipboard_history_retention_hours <= 8760:
-        errors["clipboard_history_retention_hours"] = (
-            "must be between 0 (keep until evicted) and 8760 hours"
-        )
-    if not 1 <= config.automation_retention_days <= 3650:
-        errors["automation_retention_days"] = "must be between 1 and 3650"
-    if not 1 <= config.prompt_queue_retention_days <= 3650:
-        errors["prompt_queue_retention_days"] = "must be between 1 and 3650"
-    # Auto-delivery bounds. The lower bounds are the point: a zero-length
-    # stability window or an unbounded grant would defeat the gate they exist
-    # to be (`ROADMAP.md` Phase 5).
-    if not 2 <= config.auto_delivery_stable_seconds <= 600:
-        errors["auto_delivery_stable_seconds"] = "must be between 2 and 600 seconds"
-    if not 1 <= config.auto_delivery_max_consecutive <= 50:
-        errors["auto_delivery_max_consecutive"] = "must be between 1 and 50 sends"
-    if not 1 <= config.auto_delivery_session_ttl_minutes <= 1440:
-        errors["auto_delivery_session_ttl_minutes"] = "must be between 1 and 1440 minutes"
-    if not 0 <= config.auto_delivery_refusal_backoff_seconds <= 3600:
-        errors["auto_delivery_refusal_backoff_seconds"] = "must be between 0 and 3600 seconds"
-    # 0 is legal here and nowhere else in this block: the reply window is the one
-    # bound that only ever *holds off* another bound, so switching it off is a
-    # narrowing rather than the unbounded grant the others must refuse.
-    if not 0 <= config.auto_delivery_reply_window_minutes <= 1440:
-        errors["auto_delivery_reply_window_minutes"] = "must be between 0 and 1440 minutes"
-    # Approval bounds. Every lower bound here is the point: an unbounded grant or
-    # an unbounded answer count is standing authority, which is the one thing
-    # this feature must not become.
-    if not 1 <= config.approval_grant_ttl_minutes <= 480:
-        errors["approval_grant_ttl_minutes"] = "must be between 1 and 480 minutes"
-    if not 1 <= config.approval_max_auto_per_grant <= 5000:
-        errors["approval_max_auto_per_grant"] = "must be between 1 and 5000 requests"
-    if not 1 <= config.approval_hook_timeout_seconds <= 60:
-        errors["approval_hook_timeout_seconds"] = "must be between 1 and 60 seconds"
-    if not 1 <= config.approval_keystroke_window_seconds <= 300:
-        errors["approval_keystroke_window_seconds"] = "must be between 1 and 300 seconds"
     for field_name in ("auto_delivery_quiet_start", "auto_delivery_quiet_end"):
         value = str(getattr(config, field_name) or "")
         if value and not QUIET_TIME.fullmatch(value):
             errors[field_name] = "must be empty or a HH:MM time"
-    if not 1 <= config.agent_message_max_chars <= 100_000:
-        errors["agent_message_max_chars"] = "must be between 1 and 100000 characters"
-    if not 0 <= config.agent_message_hourly_budget <= 1000:
-        errors["agent_message_hourly_budget"] = "must be between 0 and 1000 messages per hour"
-    if not 1 <= config.agent_message_pending_per_target <= 100:
-        errors["agent_message_pending_per_target"] = "must be between 1 and 100 messages"
-    if not 1 <= config.agent_message_max_chain_depth <= 10:
-        errors["agent_message_max_chain_depth"] = "must be between 1 and 10 hops"
-    if not 1 <= config.agent_message_max_thread_turns <= 100:
-        errors["agent_message_max_thread_turns"] = "must be between 1 and 100 messages"
-    if not 0 <= config.agent_interject_hourly_budget <= 1000:
-        errors["agent_interject_hourly_budget"] = (
-            "must be between 0 and 1000 mid-turn deliveries per hour"
-        )
-    if not 0 <= config.agent_interject_min_interval_seconds <= 3600:
-        errors["agent_interject_min_interval_seconds"] = (
-            "must be between 0 and 3600 seconds"
-        )
-    if not 0 <= config.session_control_hourly_budget <= 1000:
-        errors["session_control_hourly_budget"] = "must be between 0 and 1000 actions per hour"
-    if not 1 <= config.session_control_graceful_timeout_s <= 120:
-        errors["session_control_graceful_timeout_s"] = "must be between 1 and 120 seconds"
-    if not 0 <= config.agent_spawn_hourly_budget <= 1000:
-        errors["agent_spawn_hourly_budget"] = "must be between 0 and 1000 spawns per hour"
-    if not 1 <= config.session_watch_max_per_session <= 100:
-        errors["session_watch_max_per_session"] = "must be between 1 and 100 watches"
-    if not 1 <= config.session_watch_max_minutes <= 24 * 60:
-        errors["session_watch_max_minutes"] = "must be between 1 minute and 24 hours"
-    if not 0 <= config.scheduled_runs_max_concurrent <= 50:
-        errors["scheduled_runs_max_concurrent"] = "must be between 0 and 50 sessions"
-    if not 0 <= config.land_hourly_budget <= 1000:
-        errors["land_hourly_budget"] = "must be between 0 and 1000 land requests per hour"
-    if not 60 <= config.land_hold_timeout_seconds <= 24 * 3600:
-        errors["land_hold_timeout_seconds"] = "must be between 60 seconds and 24 hours"
-    if not 0 <= config.land_verify_memo_seconds <= 7 * 24 * 3600:
-        errors["land_verify_memo_seconds"] = (
-            "must be between 0 (no reuse) and 7 days"
-        )
-    if not 1 <= config.scheduled_runs_poll_seconds <= 300:
-        errors["scheduled_runs_poll_seconds"] = "must be between 1 and 300 seconds"
-    if not 1 <= config.scheduled_run_retention_days <= 3650:
-        errors["scheduled_run_retention_days"] = "must be between 1 and 3650 days"
-    if not 1 <= config.automation_concurrency <= 16:
-        errors["automation_concurrency"] = "must be between 1 and 16"
-    if not 16 <= config.automation_queue_size <= 4096:
-        errors["automation_queue_size"] = "must be between 16 and 4096"
-    if not 128 <= config.automation_max_input_tokens <= 128_000:
-        errors["automation_max_input_tokens"] = "must be between 128 and 128000"
-    if not 16 <= config.automation_max_output_tokens <= 8192:
-        errors["automation_max_output_tokens"] = "must be between 16 and 8192"
-    if not 1 <= config.automation_hourly_call_cap <= 10_000:
-        errors["automation_hourly_call_cap"] = "must be between 1 and 10000"
-    if not 1 <= config.automation_rule_hourly_call_cap <= 10_000:
-        errors["automation_rule_hourly_call_cap"] = "must be between 1 and 10000"
-    if not 512 <= config.project_card_max_input_tokens <= 128_000:
-        errors["project_card_max_input_tokens"] = "must be between 512 and 128000"
-    if not 128 <= config.project_card_max_output_tokens <= 4096:
-        errors["project_card_max_output_tokens"] = "must be between 128 and 4096"
-    if not config.scan_timeline_model.strip() or len(config.scan_timeline_model) > 200:
-        errors["scan_timeline_model"] = "must be an exact OpenRouter model id"
-    if not 1 <= config.scan_timeline_hourly_call_cap <= 100_000:
-        errors["scan_timeline_hourly_call_cap"] = "must be between 1 and 100000"
-    if not 256 <= config.scan_timeline_max_output_tokens <= 8_192:
-        errors["scan_timeline_max_output_tokens"] = "must be between 256 and 8192"
-    if not 0 <= config.attention_daily_interrupt_budget <= 100:
-        errors["attention_daily_interrupt_budget"] = "must be between 0 and 100"
-    if not 0 <= config.attention_hourly_interrupt_cap <= 100:
-        errors["attention_hourly_interrupt_cap"] = "must be between 0 and 100"
-    if not 60 <= config.attention_incident_window_seconds <= 86_400:
-        errors["attention_incident_window_seconds"] = "must be between 60 and 86400"
-    if not 32 <= config.attention_narration_max_output_tokens <= 2048:
-        errors["attention_narration_max_output_tokens"] = "must be between 32 and 2048"
-    if not 1 <= config.openrouter_request_timeout_seconds <= 120:
-        errors["openrouter_request_timeout_seconds"] = "must be between 1 and 120"
     if config.llm_provider not in LLM_PROVIDERS:
         errors["llm_provider"] = "must be " + " or ".join(LLM_PROVIDERS)
     elif config.llm_provider == "custom":
@@ -1666,24 +1776,6 @@ def _validate(config: Config) -> None:
             errors["custom_llm_base_url"] = error
         if error := llm_model_error(config.custom_llm_model):
             errors["custom_llm_model"] = error
-    if not config.assistant_model.strip() or len(config.assistant_model) > 200:
-        errors["assistant_model"] = "must be an exact OpenRouter model id"
-    if not 128 <= config.assistant_max_output_tokens <= 8_192:
-        errors["assistant_max_output_tokens"] = "must be between 128 and 8192"
-    if not 2 <= config.assistant_context_messages <= 200:
-        errors["assistant_context_messages"] = "must be between 2 and 200"
-    if config.assistant_trust_reversible not in {"auto", "cancel_window", "confirm"}:
-        errors["assistant_trust_reversible"] = "must be auto, cancel_window, or confirm"
-    if config.tts_default_mode not in {"off", "on_demand", "auto"}:
-        errors["tts_default_mode"] = "must be off, on_demand, or auto"
-    if config.tts_content not in {"summary", "verbatim"}:
-        errors["tts_content"] = "must be summary or verbatim"
-    if config.tts_engine not in {"sapi", "kokoro"}:
-        errors["tts_engine"] = "must be sapi (the OS voice) or kokoro"
-    if not re.fullmatch(r"[a-z]{2}_[a-z]+", config.tts_kokoro_voice):
-        errors["tts_kokoro_voice"] = "must be a Kokoro voice id such as af_heart"
-    if not 0.5 <= config.tts_kokoro_speed <= 2.0:
-        errors["tts_kokoro_speed"] = "must be between 0.5 and 2.0"
     if not isinstance(config.tts_lexicon, dict) or len(config.tts_lexicon) > 500:
         errors["tts_lexicon"] = "must be a map of at most 500 respellings"
     else:
@@ -1703,24 +1795,6 @@ def _validate(config: Config) -> None:
                     "non-empty respellings of at most 200 characters"
                 )
                 break
-    if not -10 <= config.tts_sapi_rate <= 10:
-        errors["tts_sapi_rate"] = "must be between -10 and 10"
-    if not 64 <= config.tts_summary_max_tokens <= 2000:
-        errors["tts_summary_max_tokens"] = "must be between 64 and 2000"
-    if not 200 <= config.tts_verbatim_max_chars <= 40_000:
-        errors["tts_verbatim_max_chars"] = "must be between 200 and 40000"
-    if not 10 <= config.tts_cache_mb <= 5000:
-        errors["tts_cache_mb"] = "must be between 10 and 5000"
-    if config.stt_engine not in {"sapi", "whisper"}:
-        errors["stt_engine"] = "must be sapi or whisper"
-    if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?", config.stt_language):
-        errors["stt_language"] = "must be a language tag such as en-US"
-    if not config.stt_whisper_model.strip() or len(config.stt_whisper_model) > 120:
-        errors["stt_whisper_model"] = "must name a Whisper model in 120 characters or fewer"
-    if len(config.stt_routing_model) > 120:
-        errors["stt_routing_model"] = (
-            "must name a Whisper model in 120 characters or fewer, or be blank"
-        )
     if (
         not isinstance(config.voice_wake_words, list)
         or not 1 <= len(config.voice_wake_words) <= 64
@@ -1730,8 +1804,6 @@ def _validate(config: Config) -> None:
         )
     ):
         errors["voice_wake_words"] = "must be 1–64 non-empty wake words of 40 characters or fewer"
-    if not 0 <= config.voice_chat_patience_ms <= 5000:
-        errors["voice_chat_patience_ms"] = "must be between 0 and 5000 milliseconds"
     if not isinstance(config.voice_commands, list) or len(config.voice_commands) > 64:
         errors["voice_commands"] = "must be an array of at most 64 command definitions"
     else:
@@ -1760,12 +1832,6 @@ def _validate(config: Config) -> None:
                 errors[f"{prefix}.phrases"] = (
                     "must be up to 64 non-empty phrases of 80 characters or fewer"
                 )
-    if config.theme not in THEMES:
-        errors["theme"] = f"must be one of {', '.join(sorted(THEMES))}"
-    if config.drawer_tab_display not in {"icon", "title"}:
-        errors["drawer_tab_display"] = "must be icon or title"
-    if config.utility_rail_display not in {"icon", "title"}:
-        errors["utility_rail_display"] = "must be icon or title"
     for scale_field in ("ui_scale_desktop", "ui_scale_mobile"):
         # TOML round-trips 1.0 as a float but a JSON PATCH sends bare `1`, so an
         # int is a legitimate spelling of a scale and must not be rejected here.
@@ -1775,9 +1841,6 @@ def _validate(config: Config) -> None:
         elif not any(abs(float(value) - step) < 1e-9 for step in UI_SCALES):
             allowed = ", ".join(f"{step:g}" for step in sorted(UI_SCALES))
             errors[scale_field] = f"must be one of {allowed}"
-    for density_field in ("rail_density_desktop", "rail_density_mobile"):
-        if getattr(config, density_field) not in RAIL_DENSITIES:
-            errors[density_field] = f"must be one of {', '.join(RAIL_DENSITIES)}"
     if set(config.custom_theme) != CUSTOM_THEME_KEYS or any(
         not isinstance(value, str)
         or len(value) != 7

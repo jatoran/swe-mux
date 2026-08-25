@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import test from 'node:test'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, sessionsMatchingFleetPredicate } from '../src/fleetStatus.ts'
 import type { Project, Session } from '../src/types.ts'
 
@@ -11,18 +12,31 @@ const session = (id:string, state:Session['state'], awaiting:Session['awaiting_r
   awaiting_reason:awaiting,measurement_source:'pty_screen',delivery_readiness:{state:awaiting?'blocked':'safe',reason:awaiting||'ready',authorized:false},
 })
 
-const model = buildFleetReadModel([
+const fleet = () => buildFleetReadModel([
   session('one','working'), session('two','awaiting','approval'), session('three','crashed',null,500),
 ],[project],1000)
-assert.equal(model.sessions[0].state.source,'pty_screen')
-assert.equal(model.sessions[0].activity.ageSeconds,10)
-assert.equal(sessionsMatchingFleetPredicate(model,'approval')[0].session.id,'two')
-assert.equal(sessionsMatchingFleetPredicate(model,'crashed')[0].session.id,'three')
-assert.equal(fleetRundown(model),'Fleet status. Total sessions, 3. Active sessions, 1. Awaiting your approval, 1. Awaiting your answer, 0. Needing attention, 1. End of fleet status.')
-assert.match(fleetRundownDetail(model),/Session 2\. Name, Agent two\. Project, Alpha\. Status, awaiting approval\./)
-assert.match(fleetRundownDetail(model,{
-  addressFor:item=>({projectNumber:4,sessionNumber:item.session.id==='two'?7:3}),compound:true,
-}),/Project 4, Session 7\. Name, Agent two\./)
-assert.match(fleetRundownDetail(model),/End of detailed fleet status\./)
 
-console.log('fleet status tests passed')
+test('the fleet read model carries each session\'s measurement source and age', () => {
+  const model = fleet()
+  assert.equal(model.sessions[0].state.source,'pty_screen')
+  assert.equal(model.sessions[0].activity.ageSeconds,10)
+})
+
+test('fleet predicates select by what a session is waiting on', () => {
+  const model = fleet()
+  assert.equal(sessionsMatchingFleetPredicate(model,'approval')[0].session.id,'two')
+  assert.equal(sessionsMatchingFleetPredicate(model,'crashed')[0].session.id,'three')
+})
+
+test('the spoken rundown counts every category and closes itself', () => {
+  assert.equal(fleetRundown(fleet()),'Fleet status. Total sessions, 3. Active sessions, 1. Awaiting your approval, 1. Awaiting your answer, 0. Needing attention, 1. End of fleet status.')
+})
+
+test('the detailed rundown numbers sessions, and compound mode addresses them by project', () => {
+  const model = fleet()
+  assert.match(fleetRundownDetail(model),/Session 2\. Name, Agent two\. Project, Alpha\. Status, awaiting approval\./)
+  assert.match(fleetRundownDetail(model,{
+    addressFor:item=>({projectNumber:4,sessionNumber:item.session.id==='two'?7:3}),compound:true,
+  }),/Project 4, Session 7\. Name, Agent two\./)
+  assert.match(fleetRundownDetail(model),/End of detailed fleet status\./)
+})

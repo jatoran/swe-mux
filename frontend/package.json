@@ -11,7 +11,7 @@
     "postbuild": "node scripts/compress-static.mjs && node scripts/verify-bundle.mjs",
     "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "check": "tsc --noEmit",
-    "check:renderer": "tsc --noEmit -p tsconfig.test.json",
+    "check:tests": "tsc --noEmit -p tsconfig.test.json",
     "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "test": "node --experimental-strip-types test/all.ts",
     "test:renderer": "playwright test --config playwright.renderer.config.ts",

@@ -3,7 +3,14 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import type { ClipboardSelectionType } from '@xterm/addon-clipboard'
 import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, claimTerminalTextPaste, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing } from '../src/terminalClipboard.ts'
+
+// xterm declares `ClipboardSelectionType` as an ambient `const enum`, which
+// `isolatedModules` forbids reading at runtime, so the member cannot be named here.
+// `SYSTEM` is the literal 'c' these tests already passed; the cast keeps the value and
+// gives the calls the parameter type the provider actually declares.
+const SYSTEM = 'c' as ClipboardSelectionType
 
 test('ordinary paste events prefer an image file when one is present', () => {
   const image = new Blob(['png'], { type: 'image/png' })
@@ -25,7 +32,7 @@ test('OSC 52 clipboard failures retain text for a user-gesture retry', async () 
     () => assert.fail('ordinary clipboard text should not be rejected'),
     { readText: async () => '', writeText: async () => { throw new Error('blocked') } },
   )
-  await provider.writeText('c', 'prepared by Claude')
+  await provider.writeText(SYSTEM, 'prepared by Claude')
   assert.equal(pending, 'prepared by Claude')
 })
 
@@ -36,7 +43,7 @@ test('OSC 52 clipboard payloads are bounded', async () => {
     message => { rejected = message },
     { readText: async () => '', writeText: async () => undefined },
   )
-  await provider.writeText('c', 'x'.repeat(MAX_TERMINAL_CLIPBOARD_CHARS + 1))
+  await provider.writeText(SYSTEM, 'x'.repeat(MAX_TERMINAL_CLIPBOARD_CHARS + 1))
   assert.match(rejected, /safety limit/)
 })
 
@@ -51,11 +58,11 @@ test('replayed OSC 52 writes are dropped instead of overwriting the clipboard', 
   )
   // While replaying (or the tab is hidden) the predicate reports true and the
   // stale scrollback payload never reaches the system clipboard.
-  await provider.writeText('c', 'stale replay payload')
+  await provider.writeText(SYSTEM, 'stale replay payload')
   assert.deepEqual(writes, [])
   // A live copy once the predicate clears still writes through.
   suppressed = false
-  await provider.writeText('c', 'live copy')
+  await provider.writeText(SYSTEM, 'live copy')
   assert.deepEqual(writes, ['live copy'])
 })
 
@@ -65,7 +72,7 @@ test('manual copy fallback runs synchronously while mobile activation is live', 
     focus: () => calls.push('focus'),
     select: () => calls.push('select'),
     setSelectionRange: (start:number,end:number) => calls.push(`range:${start}:${end}`),
-  } as HTMLTextAreaElement
+  } as unknown as HTMLTextAreaElement
   const copied = await copyPreparedText(
     'mobile text',
     textarea,

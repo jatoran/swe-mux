@@ -41,9 +41,6 @@ from swe_mux.llm_endpoint import openrouter_endpoint
 from swe_mux.models import MuxEvent, ProjectRecord, SessionRecord
 from swe_mux.openrouter import OpenRouterToolTurn
 
-pytestmark = pytest.mark.asyncio
-
-
 # --------------------------------------------------------------------------- #
 # Stubs
 # --------------------------------------------------------------------------- #

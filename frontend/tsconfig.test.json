@@ -1,5 +1,6 @@
 {
-  "//": "Typechecks the Playwright renderer harnesses/specs, which the base tsconfig (include: src) skips. A renderer harness mounts real components, so a prop that drifts from a component silently fails only at Playwright runtime otherwise - which is exactly how pane-layout.spec.ts rotted. Scoped to test/renderer because the Node unit tests under test/ use loose runtime-checked typing that a strict pass would flag wholesale.",
+  "//": "Typechecks everything under test/ - the Node unit suites and the Playwright renderer harnesses/specs - which the base tsconfig (include: src) skips entirely. Two things rot without it. A renderer harness mounts real components, so a prop that drifts from a component fails only at Playwright runtime (which is how pane-layout.spec.ts rotted). And a unit test builds fixtures by hand, so a field added to a type it fakes goes unnoticed until the assertion it should have failed passes for the wrong reason - the state gitReview.test.ts and gitWorktrees.test.ts were both in when this widened from test/renderer to test.",
+  "//strictness": "Full strict, inherited from tsconfig.json - no relaxation. The 184 unit-test files cost 12 errors in 4 files to adopt, which is not worth a second, weaker set of rules to remember. One config rather than two because the second would recompile all of src for nothing: src+test is ~23s against ~10s for src+test/renderer, where two separate passes would be ~33s.",
   "extends": "./tsconfig.json",
-  "include": ["src", "test/renderer"]
+  "include": ["src", "test"]
 }

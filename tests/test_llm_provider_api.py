@@ -203,7 +203,12 @@ async def test_a_failed_verification_does_not_disprove_the_last_good_one(
     client = await client_for(app)
     try:
         await client.post("/api/automation/provider/verify", json={})
-        app[keys.OPENROUTER] = ProviderStub(error="connection refused")
+        # Script the installed stub rather than replacing the app key: aiohttp
+        # deprecates mutating application state once the app has started, and the
+        # test only needs this call to fail, not a different provider object.
+        installed = app[keys.OPENROUTER]
+        assert isinstance(installed, ProviderStub)
+        installed.error = "connection refused"
         response = await client.post("/api/automation/provider/verify", json={})
         assert response.status == 422
         body = await response.json()

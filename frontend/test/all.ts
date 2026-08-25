@@ -1,6 +1,7 @@
 // Asserts that this list is complete. First, so a file nobody registered is reported
 // before the suites that depend on it having been run.
 import './testRegistry.test.ts'
+import './sourceText.test.ts'
 import './terminalKeys.test.ts'
 import './terminalActions.test.ts'
 import './composerInsertion.test.ts'

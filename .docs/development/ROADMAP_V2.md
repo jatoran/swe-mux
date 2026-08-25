@@ -523,12 +523,107 @@ Any task here that changes a dependency must run the mandated flow: `uv sync --e
 
 ### S12 - test infrastructure and ratchets
 
-- [ ] S12.1 Frontend unit-test typechecking (F28): a tsconfig that covers the 184 untypechecked files, fixing fallout; wire it into `.worktree-verify` next to `check:renderer`.
-- [ ] S12.2 Source-text test migration (F28): convert the worst of the 37 readFileSync-regex test files to behavior tests (controller units or renderer specs); leave a documented allowlist for the rest.
-- [ ] S12.3 Complexity ratchet (F27): enable C901 with the threshold set at today's maximum and a recorded plan to step it down; first targeted reduction is table-driving `Config._validate`'s range checks (no Pydantic).
-- [ ] S12.4 Warnings gate (F28): with AppKey landed (S3.4), fix residual warnings and make new warnings fail CI.
-- [ ] S12.5 Preview JS rewriting (F21, optional): move the lexical rewrite to tree-sitter-based specifier rewriting in the S3.3 Preview module, with negative fixtures for strings, comments, templates, and data blocks. Defer if wave capacity is short; the practical exposure is narrow.
-- [ ] S12.T The gates themselves are the tests; CI must be green with both ratchets on.
+- [x] S12.1 Frontend unit-test typechecking (F28): a tsconfig that covers the 184 untypechecked files, fixing fallout; wire it into `.worktree-verify` next to `check:renderer`.
+- [x] S12.2 Source-text test migration (F28): convert the worst of the 37 readFileSync-regex test files to behavior tests (controller units or renderer specs); leave a documented allowlist for the rest.
+- [x] S12.3 Complexity ratchet (F27): enable C901 with the threshold set at today's maximum and a recorded plan to step it down; first targeted reduction is table-driving `Config._validate`'s range checks (no Pydantic).
+- [x] S12.4 Warnings gate (F28): with AppKey landed (S3.4), fix residual warnings and make new warnings fail CI.
+- [x] S12.5 Preview JS rewriting (F21, optional): move the lexical rewrite to tree-sitter-based specifier rewriting in the S3.3 Preview module, with negative fixtures for strings, comments, templates, and data blocks. Defer if wave capacity is short; the practical exposure is narrow.
+- [x] S12.T The gates themselves are the tests; CI must be green with both ratchets on.
+
+Done 2026-08-24. Both ratchets are on, `.worktree-verify` is green in 74s against 62s before, and the
+suite went from 4907 to 5025 backend tests and 2042 to 2104 frontend tests with no behaviour change.
+
+**S12.1 widened `tsconfig.test.json` rather than adding a second config.** It now includes `src` +
+`test` (was `src` + `test/renderer`) at full `strict`, and `check:renderer` became `check:tests` in
+`package.json`, CI, and `.worktree-verify`. Two measurements decided both halves. Adopting the 184
+unit-test files under the same strict rules the renderer harnesses already use cost **12 errors in 4
+files** - a stale `GitProvenance` fixture missing the two fields S7 added, an `as const` fixture
+whose readonly arrays no longer matched `GitGraphCommit`, a `never`-narrowed capture, and four calls
+passing a bare `'c'` where xterm declares a `const enum` - so a weaker second set of rules for the
+unit tests would have bought nothing and cost a rule everyone has to remember. And one config beats
+two because the second recompiles all of `src` for nothing: `src`+`test` is ~23s where
+`src`+`test/renderer` was ~10s, while two separate passes would have been ~33s.
+
+**The trap the widening exposed is worse than the typing.** Twelve `*.test.ts` files asserted at
+*module scope* rather than inside `test()`. Measured by breaking one deliberately: `all.ts` stops
+importing at the throw, **2042 tests became 1047 - and all 1047 were reported passing, `# fail 0`**.
+Only the exit code told the truth, so anything reading the summary (a human, a `| grep fail`) reads
+it as green. All twelve were converted, and `testRegistry.test.ts` now fails any test file that does
+not register with `node:test`, so the thirteenth cannot be written.
+
+**S12.2 is one conversion plus a guard with reasons, and the ratio is the finding.** The audit
+counted 37; the real number is 42, and reading each one shows why they are not simply bad tests:
+18 read `App.tsx` (the composition root, which has no unit seam - the fix is a controller
+extraction, as S4 did five of, not a renderer spec), and 16 read `style.css` (which *is* the
+artifact - a contrast floor is a fact about the CSS, and a renderer spec could only check the states
+it happens to mount). `railDensity`'s assertion that Comfortable writes no `data-rail-density`
+attribute became a real behaviour test against a stubbed root element, and gained a second test for
+the per-device-class key it could not previously reach. The rest are listed in
+`frontend/test/sourceText.test.ts` against eight reason codes, each saying what channel does not
+exist yet; a test file that reads source without a listed reason fails the gate, an entry that
+outlives its file fails it too, and an unclaimed reason code fails it as well so the list cannot
+quietly grow reasons nobody uses. Two of the codes - `negative-invariant` (asserting something is
+*absent* from a whole file, like the second cron implementation `schedules.test.ts` forbids) and
+`stylesheet` - do not expire; `component-jsx` and `composition-root` are the debt, and a renderer
+harness is the way off them.
+
+**S12.3's threshold is 88 and it is `server._build_runtime_handles`.** `Config._validate` was 170,
+twice anything else in the codebase; table-driving its **103** mechanical checks (76 numeric ranges,
+20 fixed-spelling choices, 5 bounded strings, 2 whole-value patterns) into four declarative tables
+took it to **76**, which handed the maximum to the composition root. So the ratchet starts one step
+lower than "today's worst" would have been, and still requires no refactor of anything else. No
+Pydantic, as the audit argued: the choke point is the design, not the accident.
+
+The rewrite was mechanical *and proved so*. An AST pass identified each branch by shape rather than
+by text, so nothing was deleted that had not been shown to have the form; then a differential run
+imported HEAD's `config.py` alongside the new one and drove both with **505 probe values** across
+every table field - each range's `low-1`/`low`/`high`/`high+1`/`0`, every legal spelling of every
+choice, every string bound, every pattern - and found **zero divergence**. Every error message is
+the byte-identical string the branch produced, which matters beyond the tests: `settings_catalog`
+*probes* `_validate` for the sentence it shows an agent (`design/features/configurator.md`), so a
+reworded message would have silently changed the configurator's advertised constraints.
+`tests/test_config_validation_tables.py` (106 tests) keeps the tables honest afterwards - one rule
+per field, every rule refuses both ends, no rule refuses its own default.
+
+Step-down plan, to be taken one function at a time and only when that function is being touched for
+another reason - a decomposition done to satisfy a number is how a choke point becomes six places
+that disagree:
+
+| threshold | unblocked by | note |
+| --- | --- | --- |
+| 88 (now) | S12.3 | `server._build_runtime_handles` (88), then `config._validate` (76) |
+| 76 | decomposing `_build_runtime_handles` into per-subsystem handle builders | the composition root is the natural place for this; S3 left it whole deliberately |
+| 48 | `_validate` (76), `history.search_history_index` (47), `operational_telemetry.scan_native_telemetry` (44), `observation.apply_hook_observation` (42), `config.load_config` (41) | five functions, four owners |
+| 30 | the ~10 functions between 30 and 40 | |
+| 25 | the long tail | 192 functions were over 10 at the audit; 25 is where a reviewer can still hold a function in their head |
+
+**S12.4 starts from zero, not from an allowlist.** The 18 warnings were three causes, all ours and
+all fixed rather than filtered: a docstring containing `\wsl.localhost` that was not a raw string
+(11), a module-level `pytest.mark.asyncio` in `test_assistant.py` that `asyncio_mode = "auto"` has
+made redundant since it was written and which warned once per *sync* test in the file (6), and an
+`app[key] = …` write after the app had started (1). `filterwarnings = ["error", …]` is now in
+`pyproject.toml` with the rule that every entry is dated and expected to be removed. There is
+exactly one entry and it is structural: `ResourceWarning` fires when the garbage collector reaches
+an unclosed handle rather than when the leak happens, so under `-n auto` it attaches to whichever
+test allocated next and its count varies run to run - promoting it would redden the gate over
+machine load rather than over the code, the same failure mode CLAUDE.md records for fixed
+`asyncio.sleep` calls. Turning it on *deliberately* (`-W error::ResourceWarning`) still works and is
+how the two real leaks this found were fixed: `adapters/codex.py` and `observation.py` each opened a
+transcript to read one line and never closed it.
+
+**S12.5 was done rather than deferred**, because tree-sitter and the javascript grammar are already
+dependencies (the code graph loads them) so the cost was the query, not the stack. A module
+specifier is now found by *being* one - a `string` reached through `import_statement.source`,
+`export_statement.source`, or a dynamic `import()`'s argument - which no comment, ordinary string, or
+template literal can be. Two findings beyond F21 came out of writing the negative fixtures: the
+lexical rewrite also prefixed **protocol-relative** specifiers, turning `import "//cdn.example.com/lib.js"`
+into a path on the mux origin; and a body that does not parse as JavaScript now falls back to the old
+regex on purpose, because an over-broad rewrite beats a Preview whose every module 404s.
+
+Two things the next package should know. `.worktree-verify` grew by ~12s, all of it the widened
+typecheck, and that is the whole added cost - the two ratchets are free at runtime. And the frontend
+suite's real hazard is not the typing but the reporting: `# fail 0` is not evidence that the suite
+ran, only `# tests <N>` is.
 
 ### W4.5 - D3 findings sweep (added from the D3 soak; parallel with S11/S12, lands before D4)
 

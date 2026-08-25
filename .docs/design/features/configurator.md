@@ -37,6 +37,9 @@ Adding a field to `Config` adds a row here with no second edit, which is the who
 **The per-field constraints are the sharpest case.**
 Rather than transcribing "must be DEBUG, INFO, WARNING, or ERROR" into a table beside the validator, `settings_catalog` asks the validator: it sets a value that cannot be legal on a detached candidate, runs `_validate`, and keeps the sentence that comes back.
 The validator is the authority for writes, so quoting it is the only description of a constraint that cannot be wrong.
+This survived S12.3, which moved the mechanical families - a numeric range, a fixed set of spellings, a bounded string, a whole-value pattern - out of `_validate`'s branches and into four declarative tables beside it (`_RANGE_RULES`, `_CHOICE_RULES`, `_TEXT_RULES`, `_PATTERN_RULES`).
+The probe still asks the validator and still gets the same sentences: the tables carry the exact strings the branches produced, and a differential run over 505 probe values found no divergence.
+A field's constraint is now editable in one line rather than three, and `tests/test_config_validation_tables.py` holds the invariants that keep the tables honest - one rule per field, every rule refuses something, no rule refuses its own default.
 
 Three consequences follow and are all deliberate:
 

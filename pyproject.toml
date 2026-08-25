@@ -101,13 +101,54 @@ markers = [
   "conpty: real Windows ConPTY integration test; spawns a live shell (Windows-only)",
 ]
 
+# A new warning fails the run. A warning is the library telling us something is
+# wrong or about to break, and a suite that prints eighteen of them is a suite
+# where the nineteenth is invisible - which is how the aiohttp `AppKey`
+# deprecation went unread across ~632 call sites until S3.4 (see
+# `.docs/development/CODE_QUALITY_AUDIT_2026-08-23.md` finding 28).
+#
+# The floor this starts from is zero: the last three (a non-raw docstring
+# containing `\w`, a redundant module-level `pytest.mark.asyncio` on a file with
+# six sync tests, and a post-start `app[key] = ...` write) were fixed in S12.4
+# rather than listed here.
+#
+# **Every entry below is an exception with a date and a reason, and is expected
+# to be removed.** Add one only for a warning that is not ours to fix; fix ours.
+filterwarnings = [
+  "error",
+  # `ResourceWarning` fires when the garbage collector gets to an unclosed
+  # handle, not when the leak happens, so under `-n auto` it is attributed to
+  # whichever test happened to allocate next and its count varies run to run
+  # (13 in one measured run, from four different subsystems). Promoting it would
+  # redden the gate over machine load rather than over the code - the same
+  # failure mode CLAUDE.md records for fixed `asyncio.sleep` calls. Restored to
+  # Python's own default for this category, which is to ignore it; `-W
+  # error::ResourceWarning` on the command line still overrides this for anyone
+  # hunting a leak deliberately, and that is how the two real ones this ratchet
+  # found (`adapters/codex.py`, `observation.py`) were fixed.
+  # Reviewed 2026-08-24; this one is structural, not a fix owed.
+  "ignore::ResourceWarning",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC"]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "C901"]
 ignore = ["ASYNC240"]
+
+# A ratchet, not a style rule: the threshold is today's worst function, so nothing
+# has to be refactored to turn it on and nothing may be written worse than the worst
+# thing already here. It steps down as the named offenders come down; the plan and
+# its measurements live in `.docs/development/ROADMAP_V2.md` § S12.
+#
+# 2026-08-24: 88, which is `server._build_runtime_handles` - the composition root,
+# and now the maximum. It took over from `config._validate`, which was 170 (twice
+# anything else in the codebase) until S12.3 table-drove its 103 mechanical range,
+# choice, and bounded-string checks down to 76.
+[tool.ruff.lint.mccabe]
+max-complexity = 88
 
 [tool.ruff.lint.per-file-ignores]
 # windows_firewall.py embeds PowerShell scripts as f-strings; their pipeline

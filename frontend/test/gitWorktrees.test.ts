@@ -30,6 +30,7 @@ import {
   shortBranch,
   sortWorktreesByActivity,
   worktreeForPath,
+  type GitGraphCommit,
   type GitProvenance,
   type GitRefMove,
   type SessionGit,
@@ -280,7 +281,7 @@ test('graph decorations expose HEAD, comparison, refs, and worktree tips without
       {worktree:'/repo/.codex/worktrees/usage',HEAD:oid,branch:'refs/heads/worktree-usage',main:false,comparison_counts:{ahead:0,behind:0},unstaged:null,staged:null,conflicted:null,branch_delta:null},
     ],
   })!
-  const line={kind:'commit',graph:'| * ',oid,parents:[],refs:['other','tag: v1','worktree-usage','master','HEAD'],author:'Ada',committedAt:1,subject:'tip'} as const
+  const line:GitGraphCommit={kind:'commit',graph:'| * ',oid,parents:[],refs:['other','tag: v1','worktree-usage','master','HEAD'],author:'Ada',committedAt:1,subject:'tip'}
   assert.equal(graphNodeLane(line.graph),1)
   assert.deepEqual(graphDecorations(line,overview).map(item=>[item.kind,item.label]),[
     ['head','HEAD'],
@@ -304,7 +305,7 @@ test('several linked worktrees at one commit collapse to one exact tip badge',()
       {worktree:'/wt/two',HEAD:oid,branch:'refs/heads/two',main:false,comparison_counts:{ahead:0,behind:0},unstaged:null,staged:null,conflicted:null,branch_delta:null},
     ],
   })!
-  const line={kind:'commit',graph:'* ',oid,parents:[],refs:['HEAD','master','one','two'],author:'Ada',committedAt:1,subject:'shared'} as const
+  const line:GitGraphCommit={kind:'commit',graph:'* ',oid,parents:[],refs:['HEAD','master','one','two'],author:'Ada',committedAt:1,subject:'shared'}
   const tips=graphDecorations(line,overview).filter(item=>item.kind==='worktree-tip')
   assert.equal(tips[0].label,'2 WORKTREES')
   assert.match(tips[0].title,/one on one/)

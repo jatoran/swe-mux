@@ -292,7 +292,8 @@ class CodexAdapter(BackendAdapter):
 
     def _association(self, path: Path) -> tuple[str, str] | None:
         try:
-            first = json.loads(path.open("r", encoding="utf-8", errors="replace").readline())
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                first = json.loads(handle.readline())
             payload = first.get("payload") or {}
             if payload.get("parent_thread_id"):
                 return None

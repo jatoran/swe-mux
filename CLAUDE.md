@@ -168,6 +168,17 @@ Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
 These are exactly what `.worktree-verify` runs.
 
+**Two ratchets are on, and both start from a clean floor.**
+`filterwarnings = ["error", ...]` in `pyproject.toml` makes a new warning fail the run; there
+is exactly one exception (`ResourceWarning`, which fires at garbage-collection time and would
+redden the gate over machine load rather than over the code), and every entry there carries a
+date and a reason and is expected to be removed. Fix your warning; do not add a filter.
+`C901` caps cyclomatic complexity at **88**, which is today's worst function
+(`server._build_runtime_handles`) - so nothing needs refactoring to satisfy it and nothing may
+be written worse than the worst thing already here. The step-down plan and its measurements are
+in `.docs/development/ROADMAP_V2.md` § S12; lower the number when a function comes down, not to
+force one down.
+
 **The gate runs pytest across the host's cores** (pytest-xdist, a `dev` dependency).
 Measured 2026-08-21 on the 16-physical-core primary host: 241.9s serial against 39.5-47.3s
 over seven `-n auto` runs, all 4214 tests passing in every one - about 6x, and `-n 32`
@@ -210,11 +221,21 @@ the registry with no adapter/spawn coverage) — the `not live_*` filter does no
 them. `.github/workflows/ci.yml` mirrors this gate on `windows-latest` and adds the
 production frontend build and the full Playwright renderer suite
 (`npm run test:renderer`, in `frontend/`). `frontend/tsconfig.json` includes only
-`src`, so the plain `npx tsc --noEmit` does NOT typecheck `frontend/test/`; the
-renderer harnesses are typechecked separately by `npm run check:renderer`
-(`tsconfig.test.json`, `src` + `test/renderer`), which `.worktree-verify` now runs so a
+`src`, so the plain `npx tsc --noEmit` does NOT typecheck `frontend/test/`; everything
+under `test/` is typechecked separately by `npm run check:tests`
+(`tsconfig.test.json`, `src` + `test`), which `.worktree-verify` runs so a
 harness prop that drifts from the component it mounts fails at typecheck instead of only
-at Playwright runtime (the way `pane-layout.spec.ts` once rotted).
+at Playwright runtime (the way `pane-layout.spec.ts` once rotted), and a hand-built unit
+fixture that no longer matches the type it fakes fails there too.
+It is full `strict`, the same rules as `src` - adopting the 184 unit-test files cost 12
+errors in 4 files, which was not worth a weaker second set of rules to remember.
+
+**Put every assertion inside a `test()` body.** A `*.test.ts` that asserts at module
+scope is the suite's worst failure mode: when such an assertion throws, `all.ts` stops
+importing there, every later suite silently never registers, and the summary still reads
+`# fail 0` (measured: 2042 tests became 1047, all "passing"; only the exit code told the
+truth). `testRegistry.test.ts` fails the gate on any test file that does not register
+with `node:test`.
 
 **The renderer suite binds a port and is therefore not parallel-safe by default.** It
 drives a Vite dev server on 4174 with `reuseExistingServer`, so a second checkout that

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { MOBILE_QUERY } from '../src/deviceSettings.ts'
 import {
-  DEFAULT_RAIL_DENSITY, RAIL_DENSITIES, railDensityConfigKey, railDensityFrom,
+  applyRailDensity, DEFAULT_RAIL_DENSITY, RAIL_DENSITIES, railDensityConfigKey, railDensityFrom,
 } from '../src/railDensity.ts'
 
 const CSS = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
@@ -41,12 +42,56 @@ test('each device class reads its own key and ignores the other', () => {
   assert.equal(railDensityConfigKey('mobile'), 'rail_density_mobile')
 })
 
+/** A root element and a `window` just real enough for `applyRailDensity` to write to. */
+function withFakeRoot<T>(mobile: boolean, run: (attributes: Map<string, string>) => T): T {
+  const attributes = new Map<string, string>()
+  const previous = {
+    window: (globalThis as { window?: unknown }).window,
+    document: (globalThis as { document?: unknown }).document,
+  }
+  ;(globalThis as { window?: unknown }).window = {
+    matchMedia: (query: string) => ({ matches: mobile && query === MOBILE_QUERY }),
+  }
+  ;(globalThis as { document?: unknown }).document = {
+    documentElement: {
+      setAttribute: (name: string, value: string) => { attributes.set(name, value) },
+      removeAttribute: (name: string) => { attributes.delete(name) },
+    },
+  }
+  try {
+    return run(attributes)
+  } finally {
+    ;(globalThis as { window?: unknown }).window = previous.window
+    ;(globalThis as { document?: unknown }).document = previous.document
+  }
+}
+
 test('Comfortable writes no attribute at all, so an opted-out device is the old build', () => {
-  const source = readFileSync(new URL('../src/railDensity.ts', import.meta.url), 'utf8')
-  assert.match(source, /if \(density === DEFAULT_RAIL_DENSITY\) root\.removeAttribute\('data-rail-density'\)/)
+  withFakeRoot(false, attributes => {
+    applyRailDensity({ rail_density_desktop: 'dense' })
+    assert.equal(attributes.get('data-rail-density'), 'dense')
+    // Back to Comfortable and the attribute is gone, not set to "comfortable": a device
+    // that never opted in and one that opted back out must be indistinguishable.
+    applyRailDensity({ rail_density_desktop: 'comfortable' })
+    assert.equal(attributes.has('data-rail-density'), false)
+    // A daemon too old to send either key is the same case again.
+    applyRailDensity({})
+    assert.equal(attributes.has('data-rail-density'), false)
+  })
   // Which only holds if Comfortable's numbers are the bare `:root` ones rather than a
   // fourth block the attribute would have to select.
   assert.doesNotMatch(CSS, /\[data-rail-density="comfortable"\]/)
+})
+
+test('each device class reads its own key, so a phone cannot inherit the desktop step', () => {
+  withFakeRoot(true, attributes => {
+    applyRailDensity({ rail_density_desktop: 'dense', rail_density_mobile: 'compact' })
+    assert.equal(attributes.get('data-rail-density'), 'compact')
+  })
+  withFakeRoot(false, attributes => {
+    applyRailDensity({ rail_density_desktop: 'dense', rail_density_mobile: 'compact' })
+    assert.equal(attributes.get('data-rail-density'), 'dense')
+  })
 })
 
 test('every step defines the whole variable group, on both device classes', () => {

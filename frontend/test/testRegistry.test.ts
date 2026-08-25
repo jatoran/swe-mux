@@ -47,6 +47,31 @@ test('every test file is registered in all.ts', () => {
   assert.deepEqual(missing, [], `add these to test/all.ts: ${missing.join(', ')}`)
 })
 
+/**
+ * Every `*.test.ts` puts its assertions inside a `node:test` `test()` body.
+ *
+ * A file that asserts at module scope instead is the worst failure this suite has: when
+ * such an assertion throws, the runner reports it as "a resource generated asynchronous
+ * activity after the test ended", the import chain in `all.ts` stops there, and every
+ * suite after it is never registered - while the summary still reads `# fail 0`. Measured
+ * 2026-08-24 by breaking one module-scope assertion in `voiceComms.test.ts`: 2042 tests
+ * became 1047, all reported passing. The exit code was 1, so CI would have caught it, but
+ * anything reading the summary - a human, or a `| grep fail` - reads it as green.
+ *
+ * Twelve files were written that way; all twelve were converted, and this keeps the
+ * thirteenth from being written.
+ */
+test('every test file registers its assertions with node:test', () => {
+  const here = new URL('.', import.meta.url)
+  const offenders = readdirSync(here)
+    .filter(name => name.endsWith('.test.ts'))
+    .filter(name => {
+      const source = readFileSync(new URL(name, here), 'utf8')
+      return !/^import .*from 'node:test'$/m.test(source) || !/(^|[^.\w])test\(/m.test(source)
+    })
+  assert.deepEqual(offenders, [], `these assert at module scope - move them into test() bodies: ${offenders.join(', ')}`)
+})
+
 test('nothing is exempted that is actually registered', () => {
   // An exemption left behind after the file was fixed would quietly stop guarding it.
   const registry = readFileSync(new URL('all.ts', new URL('.', import.meta.url)), 'utf8')
