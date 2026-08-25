@@ -17,7 +17,7 @@ import sqlite3
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -122,6 +122,13 @@ AGENT_EXIT_CHECK_INTERVAL_SECONDS = 1.0
 # not create its rollout until the first submitted turn. A short quiet period after
 # live PTY output remains the last-resort signal that its interactive prompt settled.
 AGENT_STARTUP_QUIET_SECONDS = 1.0
+
+# How long an ended session's own loops are given to finish on their own before
+# they are cancelled (`_drain_session_loops`). Long enough for the end-of-output
+# sentinel already queued behind the pane's last bytes to arrive, and for the
+# ticker to notice the terminal state at the top of its one-second loop; short
+# enough that it is never felt on `stop()`, which awaits it.
+SESSION_LOOP_DRAIN_SECONDS = 2.0
 
 # The transcript observer only ever returns by raising; if it does, observation
 # stops and state freezes.  It is supervised and restarted with capped backoff so
@@ -3211,8 +3218,8 @@ class SessionManager:
         session.registration_task = registration_task
         session.tasks.add(registration_task)
         registration_task.add_done_callback(session.tasks.discard)
-        session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
-        session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
+        self._start_session_task(session, self._fanout(session), f"fanout-{sid}")
+        self._start_session_task(session, self._ticker(session), f"ticker-{sid}")
         self._capture_agent_env_baseline(session)
         if has_observable_transcript(backend):
             record.parser_status = "waiting"
@@ -4261,8 +4268,8 @@ class SessionManager:
                     evidence="adoption:identity_repair",
                     force=True,
                 )
-            session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
-            session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
+            self._start_session_task(session, self._fanout(session), f"fanout-{sid}")
+            self._start_session_task(session, self._ticker(session), f"ticker-{sid}")
             if host.isalive():
                 if previous_identity is not None:
                     if not hasattr(self, "identity_repairs"):
@@ -6657,6 +6664,65 @@ class SessionManager:
         """Apply the shared idle-prompt heuristic to this session's scrollback tail."""
         return self._pty_tail_state(session) == "idle"
 
+    def _start_session_task(
+        self, session: Session, coro: Coroutine[Any, Any, None], name: str
+    ) -> asyncio.Task[None]:
+        """Own one of a session's long-lived loops the way every sibling site does.
+
+        The discard callback is not bookkeeping garnish: without it `session.tasks`
+        only ever grows, and — the failure this exists for — a task nothing else
+        holds a reference to is collected while it is still awaiting, which asyncio
+        reports as an unowned `Task was destroyed but it is pending!` with no
+        session id in it. 48 of those came from `fanout-*` between 2026-08-19 and
+        the D3 soak.
+        """
+        task = asyncio.create_task(coro, name=name)
+        session.tasks.add(task)
+        task.add_done_callback(session.tasks.discard)
+        return task
+
+    async def _drain_session_loops(self, session: Session) -> None:
+        """End the fanout and ticker of a session whose PTY is gone.
+
+        Ownership alone does not finish them: the fanout blocks on
+        `output_queue.get()`, and the queue is only ever fed again by a PTY that no
+        longer exists — so on every end that did not arrive as the queue's own
+        end-of-output sentinel (a supervisor that died, an adopted session found
+        dead, a hard `stop()` whose sentinel never came) it waits forever, and the
+        ERROR appears whenever the `Session` is finally collected.
+
+        The wait comes before the cancel because the sentinel is *ordered behind
+        the session's last output*: cancelling immediately would drop the final
+        bytes of a pane out of the scrollback and out of the change record it
+        feeds. `SESSION_LOOP_DRAIN_SECONDS` is how long that ordering is worth
+        waiting for; past it the bytes are not coming.
+
+        Called from `_mark_ended`, which the fanout itself may be running inside —
+        hence the `current_task` exclusion, without which a session ending on its
+        own sentinel would cancel the very task doing the ending.
+        """
+        current = asyncio.current_task()
+        loops = [
+            task
+            for task in tuple(session.tasks)
+            if task is not current
+            and not task.done()
+            and task.get_name().startswith(("fanout-", "ticker-"))
+        ]
+        if not loops:
+            return
+        _, pending = await asyncio.wait(loops, timeout=SESSION_LOOP_DRAIN_SECONDS)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+            log.info(
+                "session_loops_cancelled session=%s tasks=%s grace_s=%g",
+                session.record.id,
+                ",".join(sorted(task.get_name() for task in pending)),
+                SESSION_LOOP_DRAIN_SECONDS,
+            )
+
     async def _fanout(self, session: Session) -> None:
         # unsupervised-loop-ok: scoped to one session, not the daemon. It ends with
         # its PTY, so it has no place in a registry keyed by singleton loop name.
@@ -7232,6 +7298,11 @@ class SessionManager:
                 log.exception(
                     "could not close recovery row for ended session %s", session.record.id
                 )
+        # Last, because everything above is what makes the end durable and the
+        # fanout is what carries the pane's final bytes into it. After this the
+        # session owns no running loop, so no pending task can outlive the
+        # `Session` and be collected mid-await.
+        await self._drain_session_loops(session)
 
     async def stop(self, sid: str, *, reason: str = "killed") -> None:
         """Hard-stop a session and persist how it ended.

@@ -22,7 +22,25 @@ MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
 #: ccusage's diagnostics are read as a head slice for the operator's error message,
 #: so a cap far below the stdout one costs nothing and bounds a chatty failure.
 MAX_USAGE_STDERR_BYTES = 64 * 1024
-USAGE_TIMEOUT_SECONDS = 30.0
+#: What one `ccusage daily --json --by-agent` may take. This is a whole-corpus
+#: read, so it scales with how much the agents on this host have ever written
+#: rather than with anything the daemon controls, and 30s stopped being enough
+#: for it in 2026-08 — every scheduled refresh timed out from 2026-08-21 on.
+#:
+#: Measured 2026-08-24 on the primary host (36,529 Claude transcripts, ~21 GB of
+#: transcript corpus across `~/.claude/projects` and `~/.codex/sessions`), running
+#: the daemon's exact command from a shell: 33.9s cold, 10.3s with the OS file
+#: cache warm, 5.8s warm with `--offline` (so ~4.4s of it is the pricing fetch).
+#: Exit code 0 and an empty stderr in every run — the command was never hung, it
+#: was working, and the bound was simply under the cost.
+#:
+#: 120s is four times the measured cold cost, which is the room a corpus that only
+#: grows needs. It is not felt on the scheduled path (`ccusage_refresh_minutes`
+#: defaults to 180) and bounds the operator-initiated `POST /api/usage/refresh`,
+#: which awaits this inline. `--offline` is deliberately NOT added to the default
+#: command: it would buy back 4s by changing what the dollar figures are computed
+#: from, and a cost basis is not a thing to trade for latency.
+USAGE_TIMEOUT_SECONDS = 120.0
 CACHE_VERSION = 3
 
 logger = logging.getLogger(__name__)
@@ -387,7 +405,7 @@ class UsageManager:
             },
         )
         try:
-            output = await self._invoke(command)
+            output = await self._invoke(command, operation_id=refresh_id)
             payload = json.loads(output)
             provenance = {
                 "adapter": "ccusage-by-agent-json-v1",
@@ -395,7 +413,9 @@ class UsageManager:
             }
             sources = normalize_usage_sources(payload, provenance)
             for source, override in sorted(self.config.usage_commands.items()):
-                focused_payload = json.loads(await self._invoke(override))
+                focused_payload = json.loads(
+                    await self._invoke(override, operation_id=refresh_id)
+                )
                 sources[source] = normalize_usage(
                     focused_payload,
                     source,
@@ -439,13 +459,18 @@ class UsageManager:
                 operation_id=refresh_id,
             )
 
-    async def _invoke(self, command: list[str]) -> str:
+    async def _invoke(self, command: list[str], *, operation_id: str | None = None) -> str:
         """Run ccusage once and return its stdout, or raise a UsageAdapterError.
 
         The 10 MiB limit used to be checked *after* `communicate()` had already
         buffered the whole answer, so it bounded the error message and not the
         daemon's memory. The bounded runner enforces it while reading, which is what
         makes the number mean what it says.
+
+        `operation_id` is the refresh this run belongs to, so the runner's own
+        `bounded_command_timed_out` line joins the adapter's `ccusage refresh
+        failed` line and the `usage_refresh_failed` event instead of being a
+        third, anonymous account of one failure.
         """
         prepared = prepare_usage_command(command)
         try:
@@ -455,6 +480,7 @@ class UsageManager:
                 timeout_seconds=USAGE_TIMEOUT_SECONDS,
                 output_limit=MAX_USAGE_OUTPUT_BYTES,
                 stderr_limit=MAX_USAGE_STDERR_BYTES,
+                operation_id=operation_id,
             )
         except OSError as exc:
             raise UsageAdapterError(
@@ -462,7 +488,15 @@ class UsageManager:
                 f"command: {exc}"
             ) from exc
         if outcome.timed_out:
-            raise UsageAdapterError("ccusage refresh timed out") from None
+            # Name the bound and what was spent against it. "timed out" alone left
+            # a reader unable to tell a hung command from one that is simply
+            # slower than the daemon allows - which is what it turned out to be.
+            raise UsageAdapterError(
+                f"ccusage refresh timed out after {USAGE_TIMEOUT_SECONDS:g}s "
+                f"(ran for {outcome.duration_ms / 1000:.1f}s). Its cost is the size of "
+                "this host's transcript corpus; run the command in a shell to see how "
+                "long it now takes."
+            ) from None
         if outcome.stdout_truncated:
             raise UsageAdapterError("ccusage output exceeded 10 MiB")
         if outcome.exit_code:

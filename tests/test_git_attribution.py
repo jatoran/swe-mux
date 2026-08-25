@@ -19,10 +19,10 @@ from swe_mux.git_monitor import (
     read_commit_range,
 )
 from swe_mux.git_provenance import candidate_writes, resolve_contributors
-from swe_mux.git_provenance_backfill import backfill_git_provenance
 from swe_mux.history import HistoryIndex
 from swe_mux.models import ProjectRecord, SessionRecord
 from swe_mux.tier0_store import Tier0Store
+from swe_mux.tools.git_provenance_backfill import backfill_git_provenance
 
 CONTENT = "first line\nsecond line\n"
 

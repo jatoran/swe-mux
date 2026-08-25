@@ -121,6 +121,20 @@ install-wide, so the tab edits them directly for the focused session.
   **override**, not a pin: blank means the routed cheap model, so it never has to be set.
   It is edited in Settings → Voice → Spoken summary and indexed from
   Settings → Accounts → Models.
+- **The on-device speech closure sits behind the `voice-local` extra** (`pyproject.toml`):
+  onnxruntime, faster-whisper, misaki, spaCy, `en_core_web_sm`, and num2words.
+  Roughly 400 MB of wheels for a capability the OS voice engine and the browser's own speech
+  stack already cover in degraded form, so a plain `uv sync` leaves it out.
+  Every call site imports lazily and answers with a typed diagnostic naming the extra, so an
+  absent closure is an unavailable engine and never an import error
+  (`kokoro_tts._ensure_loaded`, `kokoro_tts._ensure_g2p`, `voice._transcribe_whisper`,
+  `voice.status`).
+  It is optional to install and **mandatory to build from**: `num2words` is LGPL, and the
+  frozen bundle's relink obligation is met only by the spec collecting it as replaceable
+  source, so `build_desktop` and the `redeploy_desktop` preflight both refuse a build whose
+  environment lacks the extra (`design/features/desktop-shell.md`).
+  `.worktree-setup` and the Windows CI job sync it, because the real-G2P tests are
+  `importorskip`-guarded and a bare sync would turn them into silent skips.
 - Engines: `sapi` (the OS voice — offline Windows `System.Speech` through a generated
   PowerShell script; the default, because it speaks with no download and no network call) and
   `kokoro` (Kokoro-82M int8 through a **direct onnxruntime session** — no wrapper library,

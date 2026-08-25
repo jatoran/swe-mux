@@ -92,7 +92,14 @@ continues to own every terminal.
 ## Packaging
 
 - Runtime extra: `uv sync --extra desktop`.
-- Build dependencies: `uv sync --extra desktop --group package`.
+- Build dependencies: `uv sync --extra desktop --extra voice-local --group package`.
+- `voice-local` is optional at install time and mandatory at build time.
+  It carries the on-device speech closure, and with it the LGPL `num2words`, whose
+  relink condition is met only by the spec collecting it as readable source under
+  `_internal/num2words/`.
+  `collect_all` on an absent package collects nothing and does not fail, so
+  `build_desktop.verify_build_extras_installed` refuses the build up front and
+  `redeploy_desktop`'s preflight runs the same check before it stops the app.
 - `packaging/build_desktop.py` builds the frontend in `.runtime/`, publishes hashed assets before
   `index.html`, generates the ICO, and runs PyInstaller. It never empties the live static tree;
   locked content-addressed stale assets may remain harmlessly until a later build.

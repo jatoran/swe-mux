@@ -53,7 +53,10 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-CODE_GRAPH_SCHEMA_VERSION = 1
+#: 2 adds `code_graph_index_state`: which commit each Project's graph reflects,
+#: so a branch that arrived by `git merge` can be detected and re-parsed instead
+#: of being answered from a seed taken before it landed.
+CODE_GRAPH_SCHEMA_VERSION = 2
 
 #: Edge kinds. `defines` is file -> symbol; `imports` is file -> file; `calls`
 #: and `references` are symbol -> symbol (or symbol -> unresolved name).
@@ -666,6 +669,12 @@ CREATE TABLE IF NOT EXISTS code_graph_edges (
   resolved INTEGER NOT NULL DEFAULT 0,
   src_line INTEGER
 );
+CREATE TABLE IF NOT EXISTS code_graph_index_state (
+  project_id TEXT PRIMARY KEY,
+  head TEXT,
+  indexed_at REAL NOT NULL,
+  file_count INTEGER NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_cg_edges_src ON code_graph_edges(project_id, src_path);
 CREATE INDEX IF NOT EXISTS idx_cg_edges_dst ON code_graph_edges(project_id, dst_path, kind);
 CREATE INDEX IF NOT EXISTS idx_cg_edges_name ON code_graph_edges(project_id, dst_name, kind);
@@ -861,8 +870,49 @@ class CodeGraphStore:
         indexed) do not survive as phantom nodes and edges."""
 
         def op() -> None:
-            for table in ("code_graph_edges", "code_graph_symbols", "code_graph_files"):
+            for table in (
+                "code_graph_edges",
+                "code_graph_symbols",
+                "code_graph_files",
+                # A graph with no rows reflects no commit. Leaving the claim behind
+                # would let the next pass conclude "already current" over nothing.
+                "code_graph_index_state",
+            ):
                 self._db.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
+            self._db.commit()
+
+        await self._run(op)
+
+    async def index_state(self, project_id: str) -> tuple[str | None, float] | None:
+        """The commit this Project's graph was built from, and when — or None.
+
+        None means the graph has never been seeded in any process; a row with a
+        `None` head means it was seeded from a directory that is not a git
+        checkout, which is a different fact and must not read as "never indexed".
+        """
+
+        def op() -> tuple[str | None, float] | None:
+            row = self._db.execute(
+                "SELECT head, indexed_at FROM code_graph_index_state WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+            return (row["head"], float(row["indexed_at"])) if row else None
+
+        return await self._run(op)
+
+    async def record_index_state(
+        self, project_id: str, *, head: str | None, file_count: int
+    ) -> None:
+        """Record which commit the graph now reflects."""
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO code_graph_index_state(project_id,head,indexed_at,file_count) "
+                "VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET "
+                "head=excluded.head, indexed_at=excluded.indexed_at, "
+                "file_count=excluded.file_count",
+                (project_id, head, time.time(), int(file_count)),
+            )
             self._db.commit()
 
         await self._run(op)
@@ -1470,6 +1520,148 @@ def _read_and_parse(path: str, project_root: str) -> ParsedFile | None:
     return parse_source(path, source, project_root=project_root)
 
 
+#: Files a trunk move may bring in before a whole-tree re-seed is the cheaper
+#: answer. One file's delta parse costs a read, a tree-sitter parse and one
+#: import-resolution round-trip per import, which is roughly what the seed pays
+#: per file — so past a few hundred there is nothing to win by going one at a
+#: time, and the seed additionally drops rows for files that vanished outside the
+#: delta's view. Below it, a landing touching a dozen files costs a dozen parses
+#: instead of six thousand.
+MAX_TRUNK_DELTA_FILES = 400
+
+#: What `git rev-parse HEAD` looks like when it answered with a commit. An
+#: unborn branch answers with the literal ref name and a nonzero status; this is
+#: what keeps that from being stored as a commit id.
+_COMMIT_OID = re.compile(r"^[0-9a-fA-F]{40,64}$")
+
+
+async def _read_git(project_root: str, *args: str) -> tuple[int, str]:
+    """One bounded, read-only Git query, through the monitor's own runner.
+
+    Imported at call time: `git_monitor` imports `session`, and `code_graph` is
+    imported *from* the consumer that `session` reaches, so a module-level import
+    would close a cycle. Borrowed rather than reimplemented because
+    `--no-optional-locks` is not optional here - a graph refresh that took
+    `.git/index.lock` would contend with the very agents whose landing triggered
+    it (`git_monitor.read_git`).
+    """
+    from .git_monitor import read_git
+
+    return await read_git(project_root, *args)
+
+
+async def repo_head(project_root: str) -> str | None:
+    """The commit `project_root` is on, or None when it is not a git checkout.
+
+    This is the whole trunk-movement signal. It is asked once per turn boundary
+    per Project, which is a ~15ms read-only query beside a turn's transcript
+    parse, and it is deliberately not memoised: a cache with a TTL would answer
+    "unchanged" for a window right after the merge that changed it, which is the
+    exact moment the answer matters.
+    """
+    code, output = await _read_git(project_root, "rev-parse", "HEAD")
+    head = output.strip()
+    if code != 0 or not _COMMIT_OID.match(head):
+        return None
+    return head
+
+
+async def changed_between(project_root: str, previous: str, head: str) -> list[str] | None:
+    """Repository-relative paths differing between two commits, or None.
+
+    None means git could not answer - an unknown commit after a history rewrite, a
+    pruned object, a checkout that is no longer a repository - and the caller must
+    treat it as "unknown", never as "nothing changed". The distinction is the whole
+    point: an empty list is a merge that touched nothing this graph cares about,
+    while None is the case that has to fall back to a full re-seed.
+
+    `--no-renames` so a rename yields both paths: the old one has to leave the
+    graph and the new one has to enter it, and rename detection reports only the
+    new. `-z` because git quotes and escapes non-ASCII paths in its default
+    output, and a mangled path resolves to no file at all. `--relative` because
+    git answers in repository-relative paths while the graph's identities are
+    relative to the Project root, and the two differ for a Project registered at a
+    subdirectory - where it also drops the paths outside that root, which could
+    never have been in the graph anyway.
+    """
+    code, output = await _read_git(
+        project_root,
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--relative",
+        "-z",
+        f"{previous}..{head}",
+    )
+    if code != 0:
+        return None
+    return [path for path in output.split("\0") if path]
+
+
+async def refresh_indexed_project(
+    store: CodeGraphStore,
+    project_id: str,
+    project_root: str,
+    *,
+    limit: int = MAX_INDEX_FILES,
+    delta_limit: int = MAX_TRUNK_DELTA_FILES,
+) -> tuple[str, int]:
+    """Bring an already-seeded Project's graph up to the checkout's commit.
+
+    The gap this closes: the seed runs once per process and incremental
+    maintenance only ever sees files *this daemon's own sessions* wrote, so
+    everything that arrives by `git merge` - which is every landing - was invisible
+    to the graph until some session happened to edit it. After Wave 3 landed, three
+    new modules were absent from `code_context` outright and `logsetup.py` answered
+    with its pre-S7 symbols: a stale-but-plausible answer, which is worse than the
+    empty one the tools already warn about.
+
+    Cheap by construction, because a stale graph is not the only failure mode a
+    reindex-per-request would have: one `rev-parse` when nothing moved, one `diff`
+    plus one parse per changed file when it did, and a whole-tree re-seed only when
+    the delta is unusable or larger than parsing one file at a time is worth.
+
+    Returns `(outcome, files)` where outcome is one of `unversioned` (not a git
+    checkout), `unseeded` (no recorded state - the caller has not seeded it yet),
+    `current` (HEAD has not moved), `delta`, or `reindex`.
+    """
+    head = await repo_head(project_root)
+    if head is None:
+        return ("unversioned", 0)
+    state = await store.index_state(project_id)
+    if state is None:
+        return ("unseeded", 0)
+    previous = state[0]
+    if previous == head:
+        return ("current", 0)
+    paths = await changed_between(project_root, previous, head) if previous else None
+    if paths is None or len(paths) > delta_limit:
+        count = await index_project(store, project_id, project_root, limit=limit)
+        log.info(
+            "code_graph_reindexed project=%s previous_head=%s head=%s files=%d reason=%s",
+            project_id,
+            previous or "",
+            head,
+            count,
+            "delta_unavailable" if paths is None else f"delta_over_limit:{len(paths)}",
+        )
+        return ("reindex", count)
+    updated = await maintain_files(store, project_id, project_root, paths)
+    # Recorded even when `updated` is zero: a merge of documentation alone changes
+    # no node, and not recording it would re-run the same diff on every turn
+    # boundary from here on.
+    await store.record_index_state(project_id, head=head, file_count=updated)
+    log.info(
+        "code_graph_delta_applied project=%s previous_head=%s head=%s changed=%d updated=%d",
+        project_id,
+        previous,
+        head,
+        len(paths),
+        updated,
+    )
+    return ("delta", updated)
+
+
 async def index_project(
     store: CodeGraphStore, project_id: str, project_root: str, *, limit: int = MAX_INDEX_FILES
 ) -> int:
@@ -1479,8 +1671,16 @@ async def index_project(
     reverse-dependency query needs the *importers* in the graph too, and an
     importer a session never edited would otherwise be invisible. This seeds those
     edges once; every later edit refreshes its own file. It is not the rejected
-    full-rebuild-on-every-change watcher — it runs at most once per project.
+    full-rebuild-on-every-change watcher — it runs at most once per project per
+    process, and `refresh_indexed_project` keeps it current after that without
+    walking the tree again unless a delta is too large to be worth parsing one
+    file at a time.
     """
+    # Read before the walk, never after: a commit landing while this parses would
+    # otherwise be recorded as indexed when its files were not, and that staleness
+    # would be permanent, because nothing afterwards would ever see HEAD move.
+    # Recording the older commit costs one delta pass and cannot lose a file.
+    head = await repo_head(project_root)
     # A fresh seed is authoritative for the whole tree, so clear first: a prior
     # build's stale rows (a since-deleted file, or worktree copies the incremental
     # path leaked in before this rule existed) must not survive as phantom nodes.
@@ -1504,6 +1704,13 @@ async def index_project(
             indexed += 1
         except Exception as exc:  # noqa: BLE001 - one bad file must not abort the seed
             log.warning("code-graph: skipped %s during index: %s", parsed.path, exc)
+    await store.record_index_state(project_id, head=head, file_count=indexed)
+    log.info(
+        "code_graph_indexed project=%s files=%d head=%s",
+        project_id,
+        indexed,
+        head or "",
+    )
     return indexed
 
 

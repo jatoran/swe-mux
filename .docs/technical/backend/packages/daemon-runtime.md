@@ -52,6 +52,13 @@ Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, r
 - **`CorrelationFilter` stamps the in-flight request id.** `request_id_var` is a contextvar; `bound_request_id` binds it, and the correlation middleware does that per request.
   The filter goes on the *handlers*, not on the root logger: `Logger.handle` consults only the filters of the logger the call was made on, so one installed on root would look armed and stamp nothing a submodule logs.
   `access.log` keeps the plain formatter (aiohttp's `AccessLogger` passes its whole atom table through `extra=`, which would repeat every line's contents twice over) and gets the id through `ACCESS_LOG_FORMAT` instead.
+- **A background loop mints its own id rather than logging anonymously.**
+  The contextvar's default is empty, which is honest for daemon startup and for anything an external event triggered.
+  A *bounded operation* with nothing above it is not that case, and `git-monitor`'s poll proved it: a Git query that timed out inside one logged with neither a request id (there is no request) nor an operation id (nothing passed one), leaving nothing to join it to the poll it came from.
+  The git monitor's poll and the provider quota poll each `bound_request_id(new_request_id())` around one iteration, which stamps the loop's own lines *and* reaches every subprocess the iteration starts, including those inside its per-session tasks.
+  It is bound rather than threaded through call signatures for that reason; a parameter would have had to be added to every intermediate.
+- **`run_bounded`'s `operation_id` is read from the same contextvar at each call site** (`usage.py` passes the refresh's own id instead, since a refresh is the operation and already stamps its event with it).
+  The parameter existed with no caller until W4.5.3, so every `bounded_command_timed_out` and output-cap line read `operation_id=None` beside a caller line carrying a real one.
 
 **Not:** the supervisor's logging, which is stdlib-inline there to keep its import closure frozen; nor deciding *what* is worth logging, which belongs to the module doing the work.
 
@@ -156,12 +163,14 @@ Shared by the redeploy script's pre-build and pre-stop gates and by the endpoint
 ### `packaging/license_audit.py`
 
 The metadata half of the distribution license gate, and the generator behind `THIRD-PARTY-NOTICES.md`.
-Resolves the *distributed* closure - `uv.lock` walked from the runtime dependencies plus the `desktop` extra, dev groups excluded so build-only `pyinstaller` (GPL-2.0-with-exception) never cries wolf - with dependency markers evaluated against every supported platform rather than the running one, because the Linux artifact carries Linux-only packages whatever host the audit runs on.
+Resolves the *distributed* closure: `uv.lock` walked from the runtime dependencies plus every extra in `DISTRIBUTED_EXTRAS` (`desktop` and `voice-local`), with dev groups excluded so build-only `pyinstaller` (GPL-2.0-with-exception) never cries wolf.
+Dependency markers are evaluated against every supported platform rather than the running one, because the Linux artifact carries Linux-only packages whatever host the audit runs on.
+The walk is defined over that declared set rather than over what is installed, which is what keeps the answer independent of the syncing machine: `num2words` reaches the closure only through `voice-local`, so a walk over a bare `uv sync` would report a copyleft-free bundle that ships it anyway.
 Licenses come from installed `dist-info`, falling back to sniffing the shipped license text when a PEP 639 package declares nothing; an undeterminable license fails the gate rather than passing as permissive.
 `--write` needs the full closure installed and refreshes both the notices file and the machine-readable sidecar `packaging/third_party_licenses.json`; `--check` needs no environment at all and reconciles that sidecar against both lockfiles, so a dependency entering or moving fails on any machine.
 Copyleft ships only with an `ALLOWLIST` entry naming the reason and the relink story - `pystray` and `num2words` today, both LGPL.
 
-**Not:** inspecting the built bundle (`build_desktop.verify_bundle_licenses` owns the artifact half, because declared metadata is exactly what hid the original PyAV defect), and not choosing swe-mux's own license.
+**Not:** inspecting the built bundle (`build_desktop.verify_bundle_licenses` owns the artifact half, because declared metadata is exactly what hid the original PyAV defect), not deciding whether the build environment can produce a compliant bundle (`build_desktop.verify_build_extras_installed`), and not choosing swe-mux's own license.
 
 ## Desktop shell
 

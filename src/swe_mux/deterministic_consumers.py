@@ -1367,6 +1367,16 @@ class DeterministicConsumerService:
                 await cg.index_project(self.code_graph, pid, root)
             except Exception as exc:  # noqa: BLE001 - graph upkeep never kills the loop
                 self.last_error = f"code_graph index: {exc}"[:200]
+        else:
+            # Everything that arrives by `git merge` was written by no session
+            # here, so incremental maintenance never sees it and the seed above
+            # predates it. Detect the trunk moving and re-parse just what moved;
+            # when HEAD has not moved this is one `rev-parse` and nothing else, so
+            # it is emphatically not a reindex per turn.
+            try:
+                await cg.refresh_indexed_project(self.code_graph, pid, root)
+            except Exception as exc:  # noqa: BLE001 - graph upkeep never kills the loop
+                self.last_error = f"code_graph refresh: {exc}"[:200]
 
         edited = self._graph_source_targets(run_facts, root, cg)
         if edited:

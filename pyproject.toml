@@ -13,8 +13,6 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 dependencies = [
   "aiohttp>=3.11",
-  "en-core-web-sm",
-  "faster-whisper>=1.2",
   # The official MCP client, used only by the Agent Environment tool-catalog
   # fetch to dial a Claude-configured server (`mcp_tools.claude_probe`). swe-mux
   # implements the MCP *server* side itself (`mcp.py`); the client is taken as a
@@ -30,16 +28,12 @@ dependencies = [
   # marked win32 only while Windows was the sole host, which then made
   # `project_files` unimportable everywhere else. Its absence is still handled as
   # a degraded capability rather than an import error.
-  "misaki>=0.9.4",
-  "num2words>=0.5.14",
-  "onnxruntime>=1.27.0",
   "pillow>=11.0",
   "psutil>=6.1",
   "pywebpush>=2.0",
   # Genuinely Windows-only: there is no ConPTY anywhere else. The POSIX target
   # uses the stdlib `pty` module, which needs no third-party dependency.
   "pywinpty>=3.0.2; sys_platform == 'win32'",
-  "spacy>=3.8.15",
   "tree-sitter>=0.23",
   "tree-sitter-language-pack>=0.7",
   # Windows ships no IANA timezone database, so `zoneinfo.ZoneInfo("Europe/Oslo")`
@@ -61,6 +55,41 @@ swe-mux = "swe_mux.desktop:main"
 desktop = [
   "pystray>=0.19.5; sys_platform == 'win32'",
   "pywebview>=5.4; sys_platform == 'win32'",
+]
+# On-device speech: Kokoro TTS through onnxruntime and faster-whisper dictation,
+# with the misaki/spaCy English G2P behind them. Roughly 400 MB of wheels and
+# model machinery for a feature the browser's own speech stack and the OS voice
+# engine already cover in degraded form, which is why it is optional at install
+# time - every call site imports lazily and answers with a typed diagnostic
+# naming this extra when it is absent (`kokoro_tts._ensure_loaded`,
+# `kokoro_tts._ensure_g2p`, `voice._transcribe_whisper`, `voice.status`).
+#
+# It is NOT optional at *build* time. The frozen desktop bundle is built from
+# this closure, and `num2words` below is LGPL: compliance rests on the spec's
+# `collect_all` shipping it as replaceable source under `_internal/num2words/`,
+# which a build environment missing the extra silently collects nothing for. So
+# `license_audit.DISTRIBUTED_EXTRAS` includes this extra, `build_desktop` refuses
+# to build without it, and `redeploy_desktop`'s preflight says so before spending
+# minutes on a build that would fail its own license verification.
+voice-local = [
+  # The spaCy English model misaki's G2P resolves through `spacy.load`, taken as
+  # a URL dependency (see `[tool.uv.sources]`) because it is not on PyPI.
+  "en-core-web-sm",
+  "faster-whisper>=1.2",
+  "misaki>=0.9.4",
+  # Direct rather than transitive on purpose. `misaki.en` imports it at module
+  # scope for the Kokoro G2P, so there is no misaki English path without it, and
+  # it is LGPL-2.1: an explicit declaration is what documents the runtime
+  # requirement that the frozen build's `collect_all("num2words")` exists to
+  # satisfy - it must ship as replaceable source under `_internal/num2words/`
+  # for the relink condition, which `build_desktop.verify_bundle_licenses`
+  # proves against the built tree. `packaging/license_audit.py` allowlists it
+  # with that reasoning. Declaring `misaki[en]` instead would resolve the same
+  # closure and change nothing about the compliance mechanism, while hiding the
+  # one dependency the bundle has an obligation about.
+  "num2words>=0.5.14",
+  "onnxruntime>=1.27.0",
+  "spacy>=3.8.15",
 ]
 preview-capture = [
   "playwright>=1.49",

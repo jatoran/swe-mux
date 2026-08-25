@@ -1,3 +1,25 @@
+"""One-shot historical re-attribution of Git provenance rows.
+
+An operator tool, not part of the running daemon: nothing imports it, it is
+invoked as `python -m swe_mux.tools.git_provenance_backfill PROJECT`, and it
+never runs at startup. Read-only by default - it prints the plan and the
+evidence classes it would apply - and `--apply` writes that same plan in one
+bounded, idempotent transaction. `--all-projects` sweeps every Project.
+
+It exists because the attribution rules changed under rows that were already
+recorded: the retired shared-checkout rule downgraded real committers to
+`ambiguous`, and the integrator/branch-author split (Phase 7.11) arrived after
+merges had already been credited to whoever created them. Re-deriving those rows
+means replaying the same parent walk and diff-to-write-fact join the live path
+uses, which is why the passes call `git_provenance`'s own matchers rather than
+reimplementing them - a backfill that drifts from the live answer is worse than
+no backfill.
+
+See `.docs/design/features/git.md` and
+`.docs/technical/backend/packages/git-and-landing.md` for the passes and their
+ordering constraints.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -19,8 +41,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, assert_never
 
-from .config import default_data_dir
-from .git_monitor import (
+from ..config import default_data_dir
+from ..git_monitor import (
     BLOB_DIGEST_MAX_BYTES,
     COMMIT_RANGE_LIMIT,
     GitCommitChange,
@@ -28,7 +50,7 @@ from .git_monitor import (
     parse_combined_changes,
     parse_raw_changes,
 )
-from .git_provenance import (
+from ..git_provenance import (
     BRANCH_AUTHOR_RANK,
     BRANCH_LINE_LIMIT,
     COMMIT_TIME_SLACK_SECONDS,
@@ -41,8 +63,8 @@ from .git_provenance import (
     classify_ref_move,
     resolve_contributors,
 )
-from .harness import transcript_dialect
-from .history import (
+from ..harness import transcript_dialect
+from ..history import (
     AUTHORING_ROLES,
     ROLE_BRANCH_AUTHOR,
     ROLE_COMMITTER,
@@ -1649,7 +1671,7 @@ def _configure_logging(data_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m swe_mux.git_provenance_backfill",
+        prog="python -m swe_mux.tools.git_provenance_backfill",
         description=(
             "Re-derive committer and contributor attribution for recorded commits, "
             "and import historical commits from native transcripts."

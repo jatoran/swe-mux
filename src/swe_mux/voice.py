@@ -2968,8 +2968,9 @@ class VoiceService:
             from faster_whisper import WhisperModel
         except ImportError as exc:
             raise VoiceError(
-                "faster-whisper is not installed; reinstall/sync swe-mux dependencies "
-                "or select Windows Speech Recognition in Settings"
+                "faster-whisper is not installed; local dictation needs the "
+                "voice-local extra (`uv sync --extra voice-local`), or select "
+                "Windows Speech Recognition in Settings"
             ) from exc
         name = self._ensure_whisper_model(WhisperModel, profile)
         # int16 PCM straight from the validated WAV header. `astype` copies, so the
@@ -3146,7 +3147,10 @@ class VoiceService:
                 import faster_whisper  # noqa: F401
             except ImportError:
                 stt_available = False
-                stt_diagnostic = "faster-whisper is missing; reinstall/sync swe-mux"
+                stt_diagnostic = (
+                    "faster-whisper is missing; install the voice-local extra "
+                    "(`uv sync --extra voice-local`)"
+                )
             else:
                 runtime = (
                     ", ".join(

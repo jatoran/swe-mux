@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .bounded_subprocess import run_bounded
+from .logsetup import current_request_id
 from .spawn_contract import base_session_env
 
 log = logging.getLogger(__name__)
@@ -172,6 +173,10 @@ async def run_bounded_command(
             cwd=cwd,
             env=env if env is not None else base_session_env(os.environ, "shell"),
             on_chunk=on_chunk,
+            # The request that asked for this run, where one asked. A land-queue
+            # step has none of its own; the timeout line still names the label and
+            # the cwd, which is what identifies a gate run.
+            operation_id=current_request_id() or None,
         )
     except asyncio.CancelledError:
         raise
