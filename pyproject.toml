@@ -170,7 +170,7 @@ ignore = ["ASYNC240"]
 # A ratchet, not a style rule: the threshold is today's worst function, so nothing
 # has to be refactored to turn it on and nothing may be written worse than the worst
 # thing already here. It steps down as the named offenders come down; the plan and
-# its measurements live in `.docs/development/ROADMAP_V2.md` § S12.
+# its measurements live in `.docs/development/archive/ROADMAP_V2.md` § S12.
 #
 # 2026-08-24: 88, which is `server._build_runtime_handles` - the composition root,
 # and now the maximum. It took over from `config._validate`, which was 170 (twice

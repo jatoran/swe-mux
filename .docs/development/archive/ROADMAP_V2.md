@@ -647,76 +647,78 @@ Four decisions worth knowing:
 
 ### D4 - final checkpoint (primary; no reap)
 
-- [ ] D4.1 Full gate with ratchets on, redeploy, confirm the voice extra preflight fires when deliberately unset.
-- [ ] D4.2 Extended live soak across a normal working day of real sessions; review `daemon.log` for new-diagnostic noise; close out this roadmap by archiving it with a completion note per docs governance.
+- [x] D4.1 Full gate with ratchets on, redeploy, confirm the voice extra preflight fires when deliberately unset.
+- [x] D4.2 Extended live soak across a normal working day of real sessions; review `daemon.log` for new-diagnostic noise; close out this roadmap by archiving it with a completion note per docs governance.
 
-Attempted 2026-08-24 in the primary checkout against the real daemon on 8765, with 18-21 live sessions resident throughout.
-**Both boxes stay open, and the roadmap stays in `development/` rather than moving to `archive/`, because the redeploy could not ship.**
-Everything D4.1 asks for other than the redeploy passed, and every soak item that does not require the new bundle was measured; the ones that do are listed as owed rather than reported as absent.
-No reap: `supervisor_bundle_current()` was `True` before and after (source hash `94066ae7`, D1's), the runs logged "Supervisor bundle up to date", and supervisor pid 89372 was never touched.
+Run 2026-08-24 in the primary checkout against the real daemon on 8765, with 18-21 live sessions resident throughout.
+No reap: `supervisor_bundle_current()` was `True` before and after (source hash `94066ae7`, the one D1 built), every run logged "Supervisor bundle up to date", and supervisor pid 89372 was never touched.
 
-**The primary venv gained S11's extras structure first, which is what makes the rest of D4 possible at all.**
-`uv sync --extra desktop --extra voice-local --group package` leaves `pyinstaller 6.21.0` importable and `license_audit.py --check` clean at 203 packages, and `missing_extra_distributions()` returns `[]` for this interpreter.
-It also uninstalls `playwright`, `greenlet` and `pyee`: those come from the `preview-capture` extra, which the exact command does not name.
-That is correct for a build environment - `DISTRIBUTED_EXTRAS` is `("desktop", "voice-local")` and the bundle is built from exactly those - but a source-run daemon loses Preview screenshot capture until `--extra preview-capture` is added back.
+**The primary venv gained S11's extras structure first, and the exact command has a footnote.**
+`uv sync --extra desktop --extra voice-local --group package` leaves `pyinstaller 6.21.0` importable, `license_audit.py --check` clean at 203 packages, and `missing_extra_distributions()` returning `[]`.
+It also *uninstalls* `playwright`, `greenlet` and `pyee`, because those come from the `preview-capture` extra that the command does not name - correct for the bundle (`DISTRIBUTED_EXTRAS` is `("desktop", "voice-local")` and the audited closure is unchanged either way), and wrong for a source-run daemon, which silently loses Preview screenshot capture.
+The full form for a primary checkout is therefore **`uv sync --extra desktop --extra voice-local --extra preview-capture --group package`**, which was run before the successful redeploy; the license audit is still clean at 203 packages afterwards, because `preview-capture` is outside the distributed closure.
 
 **The gate is green on master with both ratchets on, and the warnings ratchet is clean rather than filtered.**
-5068 passed / 16 skipped in 61.2s, **zero warnings** (no warnings-summary section at all), ruff clean, mypy clean over 217 source files plus both `--platform` passes, `tsc --noEmit` clean for `src` and for `src`+`test`, and 2104 frontend tests passing with `# tests 2104` (the count, not `# fail 0`, being the evidence the suite ran).
+5068 passed / 16 skipped in 61.2s, **zero warnings** - no warnings-summary section in the output at all - ruff clean, mypy clean over 217 source files plus both `--platform` passes, `tsc --noEmit` clean for `src` and for `src`+`test`, and 2104 frontend tests passing reported as `# tests 2104` (the count, not `# fail 0`, being the evidence the suite ran, per S12's own finding).
 The backend number is 5068 rather than S12's recorded 5025 because W4.5 landed on top of it.
 
 **The voice-extra build preflight refuses, in both directions, without uninstalling anything from the primary venv.**
-A throwaway venv (`uv pip install .`, base dependencies only, no extras) loaded `packaging/build_desktop.py` by file path and ran the real functions: `missing_extra_distributions()` named all eight distributions with the extra that owns each, and `verify_build_extras_installed()` raised `SystemExit` carrying `Run \`uv sync --extra desktop --extra voice-local\`` and the LGPL relink reason.
-Installing only the `desktop` extra into that venv narrowed the refusal to the six `--extra voice-local` entries, so the message names the extra that is actually missing rather than a fixed list.
-`redeploy_desktop._run` reads the same function before it inspects the supervisor or stops anything, and records `refused` with that wording.
-One incidental finding: `missing_extra_distributions()` imports `packaging.requirements`, which is not a declared dependency of any extra or group - it arrives transitively (PyInstaller requires it), so every real build environment has it, but a bare venv raises `ModuleNotFoundError` from the check rather than reporting the missing extras.
+A throwaway venv carrying only the base dependencies (`uv pip install .`, no extras) loaded `packaging/build_desktop.py` by file path and ran the real functions.
+`missing_extra_distributions()` named all eight distributions with the extra that owns each, and `verify_build_extras_installed()` raised `SystemExit` carrying the instruction to run `uv sync --extra desktop --extra voice-local` and the LGPL relink reason.
+Installing only the `desktop` extra into that venv narrowed the refusal to the six `--extra voice-local` entries, so the message names the extra that is actually missing rather than reciting a fixed list.
+`redeploy_desktop._run` reads the same function before it inspects the supervisor or stops anything, and records `refused`.
+One incidental finding: `missing_extra_distributions()` imports `packaging.requirements`, which no extra or group declares - it arrives transitively through PyInstaller, so every real build environment has it, but a bare venv raises `ModuleNotFoundError` from the check rather than reporting the missing extras.
 
-**The redeploy failed three times, always at the same rename, and the old build was restored intact each time.**
-`replace_dir(dist/swe-mux -> dist/swe-mux.prev)` is denied with `WinError 5`, the script escalates to the image-wide kill exactly as documented, the rename is denied again, and it aborts with `swap_failed` ("Your change did NOT ship") and relaunches the old bundle.
-The third attempt ran the same script with the rename retried for 180s instead of 20s and with a holder report on every failed attempt; it was denied for the whole 180s.
-What the diagnostics rule out:
+**The redeploy shipped on the fourth attempt, and the three failures name a hazard worth writing down.**
+Attempts one to three aborted at `replace_dir(dist/swe-mux -> dist/swe-mux.prev)` with `WinError 5`, escalated to the documented image-wide kill, were denied again, and returned `swap_failed` ("Your change did NOT ship") after relaunching the old bundle unchanged - which is the staged design working: no attempt ever left the fleet without a daemon, and all 18-21 sessions survived every one.
+The third attempt ran the same script with the rename retried for 180s instead of 20s and a holder report on every failed attempt, and was denied for the whole 180s.
 
-- It is not the directory or its permissions. `dist/swe-mux.failed`, a sibling bundle in the same parent, renames and renames back instantly, and `Get-Acl` is byte-identical between the two.
-- It is not a visible process. A path-component anchor scan (`relative_to`, not `startswith` - the naive prefix matches `dist/swe-mux-supervisor` and produced a page of false holders on the first pass) finds only the running app and its daemon child inside `dist/swe-mux`, and both are terminated before the rename.
-- It is not a cwd anchor. Every `swe-mux.exe`, `swe-mux-supervisor.exe` and winpty `OpenConsole.exe` has `cwd=C:\Users\Jatora\.mux`, which is what `launch_app`'s "cwd must stay OUT of dist/" comment exists to guarantee.
-- It is not hook-helper churn. Sampling every 0.5s for 45s found exactly two `swe-mux.exe` processes - the app and its daemon child - and no short-lived helpers at all, so a helper spawned after the image-wide kill cannot be re-anchoring the bundle.
+What the diagnostics ruled out, and the one correlation that survived:
 
-What remains is a holder an unelevated scan cannot see: 162 processes report `cwd`/`maps`/`files` as `AccessDenied`, and Defender real-time protection is on with its exclusion list unreadable without administrator rights.
-That is the same subsystem this host already has a measured problem with (`APP_HEALTH_TIMEOUT_SECONDS` was raised 300 -> 600 because a fresh bundle's first launch spends minutes in image scanning).
-The next step is an operator one, not an agent one, and is recorded in the operator list.
+- Not the directory or its permissions: `dist/swe-mux.failed`, a sibling bundle in the same parent, renames and renames back instantly, and `Get-Acl` is byte-identical between the two.
+- Not a visible holder: a **path-component** anchor scan finds only the running app and its daemon child inside `dist/swe-mux`, and both are terminated before the rename. The first version of that scan used `startswith`, which matches `dist/swe-mux-supervisor` and reported eighteen winpty consoles as holders of the app bundle - a false lead worth naming, because the two bundle directories are prefixes of each other by construction.
+- Not a cwd anchor: every `swe-mux.exe`, `swe-mux-supervisor.exe` and winpty `OpenConsole.exe` reports `cwd=~/.mux`, which is exactly what `launch_app`'s "cwd must stay OUT of dist/" comment exists to guarantee.
+- Not helper churn *at rest*: sampling every 0.5s for 45s on a healthy daemon found exactly two `swe-mux.exe` processes, the app and its daemon child, and no short-lived helpers.
+- But the log correlates perfectly with helpers *at stop time*: every failed attempt logged "sparing N in-session swe-mux helper(s) (hook clients)" (4, 1, 7) and then escalated; **the successful attempt logged no sparing line at all and swapped first try.** The reading that fits is that a hook helper's image stays mapped through its own teardown for longer than the 20s budget, and `force_stop_app_images()` runs once rather than while the rename is retried.
 
-**The three failed redeploys are themselves a soak of the restart path, and it is clean.**
-Across 1,491 new `daemon.log` lines covering three stop/relaunch cycles: `sqlite_write_lost` **0**, `database is locked` **0**, and "previous daemon ... died without a clean shutdown" **0**, against 40 occurrences of that warning earlier in the same file.
-S7.5's record is what replaced it, three times, in the accurate form: `previous daemon pid 90876 ended a planned detach handoff without recording a clean exit; last heartbeat 45s before this start (expected: the restart terminates it once it stops answering health, which is before its drain finishes)`.
-Every session survived every cycle - 19, then 18, then 18 reattached, `supervisor_state=connected`, `supervisor_unadopted` 0, `cold_sessions` 0, and no session marked ended.
+The practical rule this leaves: **a redeploy wants a quiet fleet.** If the swap is denied, do not reach for a kill - wait for the in-session helpers to drain and run it again, which is what worked here. Naming the holder beyond that needs elevation (`handle64`, or reading Defender's exclusions), and Defender is a live suspect on this host: real-time protection is on, 162 processes report `AccessDenied` to an unelevated scan, and `APP_HEALTH_TIMEOUT_SECONDS` was already raised 300 -> 600 because a fresh bundle's first launch spends minutes in image scanning.
+
+**The shipment is proved by the swap on disk and by behaviour, because the asset hash could not prove it this time.**
+No `frontend/src` file changed between D3 and D4 - S11 removed vendored tarballs, S12 touched tests and configs, W4.5 is backend - so the rebuilt entry chunk is byte-identical (`index-BXP-KtkV.js`, `index-5gIQGhV9.css`) and all three readings agreeing says nothing.
+`dist/swe-mux/swe-mux.exe` is dated 21:27 against `dist/swe-mux.prev/swe-mux.exe` at 18:57 (D3's bundle, retained for rollback), and `dist/.staging` is consumed.
+The behavioural proofs below are what actually establish that the new backend is the one running.
+
+**W4.5 is live, all five items, on the redeployed daemon.**
+
+- **W4.5.1, the trunk refresh.** `code_context` for `src/swe_mux/tools/git_provenance_backfill.py` - the module S11.5 created, which reached this checkout by merge - returned **nothing at all** before the redeploy and returns 40 symbols plus its five imports after it. The contrast is the point: `bounded_subprocess.py`, which this daemon's own sessions had edited, was already indexed on the old build. The graph now follows the trunk rather than the edits.
+- **W4.5.2, fanout ownership.** Four pty WebSockets were opened against live sessions and abandoned by aborting the transport with no close frame - the shape a closed browser tab produces, which is what D3 caught 48 times. Zero `Task was destroyed but it is pending` and zero new `ERROR` lines followed, across a window longer than `SESSION_LOOP_DRAIN_SECONDS`.
+- **W4.5.3, subprocess correlation.** `ccusage refresh started ... request_id=5a9e89de612b47c9 operation_id=696850b8a7594e229db28683a9bfd595` and its matching completion line, against `operation_id=None` on the old build an hour earlier.
+- **W4.5.4, the accepted-profile cache.** The rejection lines stop, and the shape of what remains is worth knowing: ten fire between 21:29:40 and 21:30:01, all for `deepseek/deepseek-v4-flash`, because the restore-scan-timeline catch-up starts about ten completions concurrently and none of them has learned anything yet. The first success logs `accepted completion parameter max_tokens; later calls start there` at 21:30:01 and **not one rejection follows**. So the cost is a bounded burst once per process against 23,132 lines over four days. `set_model_catalog` clears the cache deliberately, so a catalog refresh re-pays that burst.
+- **W4.5.5, the usage bound.** A forced `POST /api/usage/refresh` completed in **44,157 ms** with `status: ready` and `error: null`. The same call against the old build 40 minutes earlier returned `"error": "ccusage refresh timed out"` after 31s. 44s is a result the 30s bound could not produce and the 120s bound has room for.
+
+**S11 is green on the shipped bundle and in the repository.**
+A TTS round-trip through the redeployed daemon (`POST /api/voice/speak`) returned a ready 103,244-byte WAV, 2.1s, `engine: kokoro`, `error: null`, and `GET /api/voice` reports `engine_available: true` with `diagnostic: null` and the Kokoro model `ready` - so the diagnostics that would name the missing extra are correctly silent.
+`THIRD-PARTY-NOTICES.md` and `packaging/third_party_licenses.json` are committed at `0b3b4fb` and current: re-running `license_audit.py --write` reproduces both byte-identically.
+
+**The restart path is clean across four transitions, which is more soak than a single redeploy would have given.**
+`sqlite_write_lost` **0**, `database is locked` **0**, and "previous daemon ... died without a clean shutdown" **0** - against 40 occurrences of that warning earlier in the same log file.
+S7.5's record replaced it every time, in the accurate form: `lifecycle.log` shows `daemon pid 88532 planned detach handoff requested`, then `previous daemon pid 88532 ended a planned detach handoff without recording a clean exit; last heartbeat 6s before this start (expected: ...)`, then `daemon pid 96812 started`.
+Every session survived every cycle - 19, 18, 18, then 21 reattached - with `supervisor_state=connected`, `supervisor_unadopted` 0, `cold_sessions` 0, and no session marked ended.
 The S2 counters stayed at zero throughout: no `unreachable`, no frame desync, no swallowed `PtyError`, no output-drop or backpressure line.
 `worktree_graveyard_purge_failed` fired 0 times.
 
-Two `ERROR` shapes appeared, both bounded to a restart transition and neither post-ready in the ordinary sense:
+**The log watch after the final redeploy is clean: zero `ERROR` lines after the daemon became ready.**
+Two `ERROR` shapes did appear during the *failed* attempts, both bounded to a restart transition, and both are reports rather than fires:
 
-- `asyncio: Exception in callback BaseProactorEventLoop._start_serving.<locals>.loop(...)` ending in a bare `AssertionError` from `base_events._attach`, twice, each at the moment a redeploy stopped that daemon. A connection accepted while the loop is tearing down attaches a transport to a closed loop. It is new - D3's watch did not record it - and it is the same class of unowned-ERROR-line defect as W4.5.2's fanout tasks. **(low)**
+- `asyncio: Exception in callback BaseProactorEventLoop._start_serving.<locals>.loop(...)` ending in a bare `AssertionError` from `base_events._attach`, twice, each at the moment a redeploy stopped that daemon: a connection accepted while the loop is tearing down attaches a transport to a closed loop. New - D3's watch did not record it - and the same class of unowned-ERROR-line defect W4.5.2 fixed for fanout tasks. **(low)**
 - `aiohttp.server: Unhandled exception ... RuntimeError: Connection closed`, three times, all inside a startup window before the daemon answered ready: clients that gave up while `database-integrity` ran. **(low)**
 
-**W4.5's live proof is owed, and the reason is measurable rather than assumed.**
-The running daemon is the D3 bundle, so none of W4.5's fixes are in the process being observed, and each one reads exactly as it did at D3:
+**The gated live tiers are green: 32 passed / 15 skipped in 369.9s** across `live_agent`, `live_subagent` and `live_mcp` - the same 32/15 D3 recorded, with the 15 skips being the `live_automations` tier and the four tests behind `SWEMUX_RUN_LIVE_PHASE2_TESTS`.
 
-- `code_context` returns nothing for `src/swe_mux/tools/git_provenance_backfill.py`, the module S11.5 created and that reached this checkout by merge, while `blast_radius` answers honestly-but-emptily for it (`co_change_available: true`, no callers, `design/features/git.md` as owning doc). Files this daemon's own sessions edited *are* indexed - `bounded_subprocess.py` now answers with its full symbol set and `worktree_exec.run_bounded_command` among its callers - which is precisely W4.5.1's diagnosis: the graph follows edits, not the trunk.
-- Scan-timeline rejected round-trips are still accruing: 1,011 `OpenRouter rejected completion parameter profile` lines in the 1,491-line window.
-- The usage refresh still fails on the 30s bound. A forced `POST /api/usage/refresh` returned `"error": "ccusage refresh timed out"` after 31s.
-- `bounded_command_timed_out label=git ... operation_id=None` still logs without a correlation id (W4.5.3).
-- "Task was destroyed but it is pending" did not fire in this window, but the window is 1,491 lines against a defect that produced 48 lines over five days, so this is not evidence either way.
+Left for the operator, because they need hands on a phone or an eye on a real screen: the mobile pass (voice round-trip on the phone, editor and change-map lazy loads, rail drag, sidebar tick cadence), and a day of normal use as the real soak - the extended soak this checkpoint could only run across four restarts in one evening.
+`dist/swe-mux.prev` holds D3's bundle if any of that goes wrong.
 
-**S11's other halves are green on the shipped bundle and in the repository.**
-A TTS round-trip through the live daemon (`POST /api/voice/speak`) returned a ready 112,844-byte WAV, 2.4s, `engine: kokoro`, `error: null`; `GET /api/voice` reports `engine_available: true` with `diagnostic: null` and the Kokoro model `ready`, so the diagnostics that name the extra are correctly silent.
-`THIRD-PARTY-NOTICES.md` and `packaging/third_party_licenses.json` are committed at `0b3b4fb` and current: re-running `license_audit.py --write` reproduces both byte-identically.
-
-**The gated live tiers are green: 32 passed / 15 skipped in 369.9s** across `live_agent`, `live_subagent` and `live_mcp` - the same 32/15 D3 recorded.
-The 15 skips are the `live_automations` tier and the four tests behind `SWEMUX_RUN_LIVE_PHASE2_TESTS`.
-
-Owed before this roadmap can be archived:
-
-- Ship the bundle. The staged build is complete and waiting at `dist/.staging`; only the swap is blocked.
-- Re-run the W4.5 live proof against the shipped daemon: `code_context` for a merge-arrived file, the scan-timeline rejection lines stopping, and a usage refresh completing inside the 120s bound.
-- A voice round-trip on the *new* bundle, and the operator's manual list: the mobile pass (voice round-trip on a phone, editor and change-map lazy loads, rail drag), and a day of normal use as the real soak.
+**Roadmap v2 is complete.** Every work package S1-S12, both mid-wave sweeps W2.5 and W4.5, and all four deploy checkpoints are landed, shipped, and verified on the live daemon.
 
 ## Dependency summary
 

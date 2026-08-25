@@ -220,7 +220,7 @@ indistinguishable from a broken server.
 The land queue's own refusals - already on the trunk, another request holds the branch, a
 precondition failed - are translated into the same typed error the tool's own refusals use
 (`mcp.py`, `LandRefusal` to `QueueError`), the way both HTTP land routes already answered
-409. Until the wire canary first ran (2026-08-24, `development/ROADMAP_V2.md` W2.5.1) they
+409. Until the wire canary first ran (2026-08-24, `development/archive/ROADMAP_V2.md` W2.5.1) they
 were not, so an agent calling `request_land` on a branch with nothing to land got
 `500 internal server error` and could learn nothing from it. The rule generalizes: a service
 exception that a caller can act on is translated where the tool calls the service, because

@@ -176,8 +176,8 @@ date and a reason and is expected to be removed. Fix your warning; do not add a 
 `C901` caps cyclomatic complexity at **88**, which is today's worst function
 (`server._build_runtime_handles`) - so nothing needs refactoring to satisfy it and nothing may
 be written worse than the worst thing already here. The step-down plan and its measurements are
-in `.docs/development/ROADMAP_V2.md` § S12; lower the number when a function comes down, not to
-force one down.
+in `.docs/development/archive/ROADMAP_V2.md` § S12; lower the number when a function comes
+down, not to force one down.
 
 **The gate runs pytest across the host's cores** (pytest-xdist, a `dev` dependency).
 Measured 2026-08-21 on the 16-physical-core primary host: 241.9s serial against 39.5-47.3s

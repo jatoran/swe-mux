@@ -527,7 +527,14 @@
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion
-  checklist (start at §9): `development/CONTROL_PLANE_ROADMAP.md`
+  checklist (start at §9): `development/CONTROL_PLANE_ROADMAP.md`; the completed
+  audit-remediation programme and the decisions its twelve packages recorded:
+  `development/archive/ROADMAP_V2.md` (source findings:
+  `development/CODE_QUALITY_AUDIT_2026-08-23.md`).
+  Two things there are still forward-looking rather than history: § S12 holds the C901
+  step-down plan that `pyproject.toml` and the root `CLAUDE.md` both point at, and § S12.2
+  names `component-jsx` and `composition-root` as the source-text test debt a renderer
+  harness is the way off.
 - Changing backend package ownership or shared SQLite behavior:
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
 

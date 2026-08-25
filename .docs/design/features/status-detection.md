@@ -491,7 +491,7 @@ Two cross-backend sources complete the set:
   stays readable because a resumed or archived conversation can carry records from either
   era in one file. Reading only the older one is what left every Codex pane running
   subagents with no standing annotation between 2026-08-07 and the repair
-  (`development/ROADMAP_V2.md` W2.5.3). `agent_path` is a slash-joined string in both
+  (`development/archive/ROADMAP_V2.md` W2.5.3). `agent_path` is a slash-joined string in both
   envelopes, so the emitted `depth` counts path segments below `/root` rather than the
   string's length.
 
