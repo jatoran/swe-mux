@@ -50,9 +50,14 @@ async def test_refresh_is_cached_and_failure_keeps_last_known_good(tmp_path: Pat
     manager = UsageManager(config, EventBus())
     calls = 0
 
-    async def invoke(self: UsageManager, command: list[str]) -> str:
+    async def invoke(
+        self: UsageManager, command: list[str], *, operation_id: str | None = None
+    ) -> str:
         nonlocal calls
         calls += 1
+        # The refresh names itself, so the runner's own timeout and cap lines join
+        # the adapter's failure line instead of reading `operation_id=None`.
+        assert operation_id
         if calls > 1:
             return "not-json"
         return (FIXTURES / "ccusage-by-agent-v20.json").read_text(encoding="utf-8")

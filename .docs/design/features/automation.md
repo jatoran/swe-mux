@@ -366,6 +366,10 @@ It prefers `max_completion_tokens` when advertised, falls back to `max_tokens`, 
 Title actions request `reasoning.effort=none` only when the model advertises a non-mandatory reasoning control that permits `none`; non-reasoning and mandatory-reasoning models omit that control.
 
 An exact OpenRouter parameter-compatibility 404 may advance to the next bounded profile, such as omitting an optional reasoning control or changing the token-limit field.
+**The parameter a model actually accepted is then remembered, per endpoint and per model, and tried first from then on.**
+The catalog says what a model *advertises*, and for some models that is wrong in a way that costs a whole HTTP round-trip on every call: `deepseek/deepseek-v4-flash` advertises `max_completion_tokens`, rejects it, and takes `max_tokens` on the retry, which put 23,132 identical "rejected completion parameter profile" lines in `daemon.log` between 2026-08-20 and the D3 soak - one per scan-timeline completion.
+Remembering it makes that a once-per-model cost instead of a per-call one.
+It is a *reordering* and never a filter, so a provider that changes its mind costs the same retry it always did; only a compatibility rejection forgets the remembered answer, because a 429 or a schema error says nothing about which parameter shape a model takes; a refreshed model catalog clears the whole memory, since it is a new statement about the same question; and nothing is persisted, because one rejection per model per daemon start is nothing and a durable copy would need an invalidation story for a provider changing its mind while the daemon is not running.
 No compatibility profile changes the exact model, removes strict `response_format`, removes `provider.require_parameters`, or makes output unbounded.
 Other 404s do not mutate the request: an unknown model remains a terminal configuration fault, while OpenRouter's explicit no-provider-available response is retryable by the title ladder.
 Models absent from a stale catalog use the same bounded profile sequence, so a newly configured exact model is not coupled to catalog refresh timing.

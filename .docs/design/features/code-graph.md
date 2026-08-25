@@ -29,6 +29,14 @@ It powers three surfaces: pull-only agent MCP tools (blast radius, navigation, c
 - A `file_write` fact re-parses that one file and replaces its edges; the parse is skipped when the file's bytes already match the stored content hash.
 - A **one-time bounded seed index** parses a Project's existing source tree once, because a reverse-dependency query needs the importers in the graph and an importer a session never edited would otherwise be invisible.
   This is not the rejected full-rebuild-per-edit watcher: it runs at most once per Project per process, on a worker thread, bounded by file count and wall-clock.
+- **The trunk moving is the third maintenance trigger, beside the write stream and the seed.**
+  A `file_write` fact only ever covers what *this daemon's own sessions* wrote, and the seed predates whatever landed after it - so everything arriving by `git merge`, which is every landing, was invisible to the graph until some session happened to edit it.
+  Measured on the D3 soak (2026-08-24): `errors.py`, `bounded_subprocess.py` and `cli_version.py` were absent from `code_context` outright and `logsetup.py` answered with its pre-S7 symbol set, a stale-but-plausible answer that is worse than the empty one the tools already warn about.
+  So the graph records **which commit it reflects** (`code_graph_index_state`, one row per Project), and each turn boundary compares it against the checkout's `HEAD`.
+  Unmoved is one `rev-parse` and nothing else; moved is one `git diff --name-only --no-renames --relative -z <indexed>..<head>` plus the ordinary per-file re-parse of exactly what changed.
+  Only an *unusable* delta re-seeds the tree: a commit git can no longer resolve (a rewritten history, a pruned object) or one larger than `MAX_TRUNK_DELTA_FILES`, past which parsing one file at a time has nothing left to win.
+  Three distinctions are load-bearing. A delta git cannot answer is `None`, never an empty list, because "nothing changed" and "I cannot tell" must not collapse. `--no-renames` is required, since rename detection reports only the new path while the old one has to *leave* the graph. And the head is read **before** the seed walks the tree, so a commit landing mid-parse is recorded as not-yet-indexed - costing one delta pass - rather than as indexed, which would be permanent staleness because nothing would ever see HEAD move again.
+  What this deliberately does not cover is an *uncommitted* edit made by a tool other than a session in this daemon; that file is refreshed when it is next written or when a commit carries it.
 - The reverse-dependency query is a bounded SQLite recursive CTE over `imports`/`calls` edges, N hops.
 - The **git co-change net** is mined from `git_provenance` contributor rows grouped by commit: files repeatedly committed together are coupled whether or not a static edge exists.
   It is the required recall net for the dynamic edges tree-sitter misses, not decorative.
@@ -165,6 +173,7 @@ automations = { raw_store = true, tier0 = true, code_graph = true }
 ## Key files
 
 - Engine, store, resolution, queries, co-change net: `src/swe_mux/code_graph.py`
+  (`index_project` seeds, `maintain_files` follows the write stream, `refresh_indexed_project`/`repo_head`/`changed_between` follow the trunk)
 - Turn-boundary maintenance and the human-passive detectors: `src/swe_mux/deterministic_consumers.py` (`_code_graph`, `_blast_radius`, `_unexamined_callers`, `_code_structure`)
 - Agent pull tools: `src/swe_mux/mcp.py`, `src/swe_mux/mcp_contract.py`
 - Change-map endpoint: `src/swe_mux/server.py` (`session_change_map`, `_change_map_checkout`, `_SeedAdmission`, `_change_map_scope`)
@@ -173,7 +182,7 @@ automations = { raw_store = true, tier0 = true, code_graph = true }
 - Registry entry: `src/swe_mux/automation_registry.py`
 - Packaging: `packaging/swe_mux.spec`
 - Frontend change map: `frontend/src/ChangeMapPane.tsx`, `frontend/src/changeMap.ts`, `frontend/src/changeMapLayout.worker.ts`
-- Tests: `tests/test_code_graph.py`, `tests/test_code_graph_detectors.py`, `tests/test_mcp_code_graph.py`, `tests/test_change_map_endpoint.py` (which builds **real** git worktrees — a stubbed `git worktree list` proves nothing about a checkout being mistaken for another), `tests/test_git_review.py`
+- Tests: `tests/test_code_graph.py`, `tests/test_code_graph_detectors.py`, `tests/test_mcp_code_graph.py`, `tests/test_change_map_endpoint.py` (which builds **real** git worktrees — a stubbed `git worktree list` proves nothing about a checkout being mistaken for another), `tests/test_code_graph_trunk_refresh.py` (real repositories and real merges, for the same reason), `tests/test_git_review.py`
 
 ## Relates to
 

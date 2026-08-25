@@ -86,6 +86,11 @@ The byte-exact scrollback ring (append, seed, replay cursoring) shared by daemon
 
 The live session registry, immutable root-provider identity, nested promotion and demotion, transcript ownership, spawn and stop, PTY fanout, bounded replay, the interactive versus one-shot exit lifecycle, and supervisor-session adoption and repair.
 
+**A session's two long-lived loops are owned on the way in and drained on the way out.**
+`_start_session_task` registers the fanout and the ticker with the discard callback every sibling site already had, and `_mark_ended` ends them through `_drain_session_loops` before the `Session` can lose its last holder.
+Ownership alone is not enough, which is what the 48 `Task was destroyed but it is pending!` ERRORs between 2026-08-19 and the D3 soak were: the fanout blocks on `output_queue.get()`, and on every end that did not arrive *as* that queue's end-of-output sentinel (a supervisor that died, an adopted session found dead, a hard `stop()` whose sentinel never came) nothing was ever going to feed it again.
+Two ordering rules make the drain safe. It **waits before it cancels** (`SESSION_LOOP_DRAIN_SECONDS`), because the sentinel is queued *behind* the pane's last bytes and cancelling on sight drops them out of the scrollback; and it **excludes the calling task**, because `_mark_ended` runs inside the fanout itself on the ordinary end path.
+
 **Not:** provider transcript parsing, or Project mutation.
 
 ## `session_recovery.py`

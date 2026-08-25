@@ -52,6 +52,13 @@ Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, r
 - **`CorrelationFilter` stamps the in-flight request id.** `request_id_var` is a contextvar; `bound_request_id` binds it, and the correlation middleware does that per request.
   The filter goes on the *handlers*, not on the root logger: `Logger.handle` consults only the filters of the logger the call was made on, so one installed on root would look armed and stamp nothing a submodule logs.
   `access.log` keeps the plain formatter (aiohttp's `AccessLogger` passes its whole atom table through `extra=`, which would repeat every line's contents twice over) and gets the id through `ACCESS_LOG_FORMAT` instead.
+- **A background loop mints its own id rather than logging anonymously.**
+  The contextvar's default is empty, which is honest for daemon startup and for anything an external event triggered.
+  A *bounded operation* with nothing above it is not that case, and `git-monitor`'s poll proved it: a Git query that timed out inside one logged with neither a request id (there is no request) nor an operation id (nothing passed one), leaving nothing to join it to the poll it came from.
+  The git monitor's poll and the provider quota poll each `bound_request_id(new_request_id())` around one iteration, which stamps the loop's own lines *and* reaches every subprocess the iteration starts, including those inside its per-session tasks.
+  It is bound rather than threaded through call signatures for that reason; a parameter would have had to be added to every intermediate.
+- **`run_bounded`'s `operation_id` is read from the same contextvar at each call site** (`usage.py` passes the refresh's own id instead, since a refresh is the operation and already stamps its event with it).
+  The parameter existed with no caller until W4.5.3, so every `bounded_command_timed_out` and output-cap line read `operation_id=None` beside a caller line carrying a real one.
 
 **Not:** the supervisor's logging, which is stdlib-inline there to keep its import closure frozen; nor deciding *what* is worth logging, which belongs to the module doing the work.
 

@@ -399,6 +399,146 @@ async def test_unknown_model_falls_back_between_bounded_token_fields() -> None:
     assert "max_completion_tokens" not in second
 
 
+async def _complete(client: Any, model: str = "vendor/exact", **overrides: Any) -> None:
+    """One structured completion, with the arguments every profile test shares."""
+    await client.complete_json(
+        model=model,
+        messages=[{"role": "user", "content": "title this"}],
+        schema_name="title_v1",
+        schema={"type": "object"},
+        max_tokens=32,
+        **overrides,
+    )
+
+
+async def test_a_models_accepted_parameter_is_remembered_after_one_rejection() -> None:
+    """W4.5.4: the rejected round-trip is paid once per model, not per call.
+
+    `deepseek/deepseek-v4-flash` advertises `max_completion_tokens`, refuses it,
+    and takes `max_tokens` on the retry - which put 23,132 identical rejection
+    lines in `daemon.log` between 2026-08-20 and the D3 soak, one per scan.
+    """
+    incompatible = {
+        "error": {"message": "No endpoints found that can handle the requested parameters."}
+    }
+    session = FakeSession(
+        [
+            FakeResponse(404, incompatible),
+            FakeResponse(200, _completion_payload()),
+            FakeResponse(200, _completion_payload()),
+            FakeResponse(200, _completion_payload()),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    await _complete(client)
+    await _complete(client)
+    await _complete(client)
+
+    # Four requests for three completions: the one rejection, then nothing.
+    assert len(session.requests) == 4
+    assert [body[2]["json"].get("max_tokens") for body in session.requests] == [
+        None,
+        32,
+        32,
+        32,
+    ]
+
+
+async def test_the_remembered_parameter_is_per_model_and_per_endpoint() -> None:
+    """A second model gets its own answer rather than inheriting the first's."""
+    incompatible = {
+        "error": {"message": "No endpoints found that support the requested parameters."}
+    }
+    session = FakeSession(
+        [
+            FakeResponse(404, incompatible),
+            FakeResponse(200, _completion_payload()),
+            FakeResponse(200, _completion_payload("vendor/other")),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    await _complete(client)
+    await _complete(client, model="vendor/other")
+
+    third = session.requests[2][2]["json"]
+    assert third["model"] == "vendor/other"
+    assert third["max_completion_tokens"] == 32  # the catalog default order, unchanged
+
+
+async def test_a_rejected_memory_is_dropped_rather_than_retried_forever() -> None:
+    """A provider that changes its mind costs the retry it always did, once."""
+    incompatible = {
+        "error": {"message": "No endpoints found that can handle the requested parameters."}
+    }
+    session = FakeSession(
+        [
+            FakeResponse(404, incompatible),
+            FakeResponse(200, _completion_payload()),
+            FakeResponse(404, incompatible),
+            FakeResponse(200, _completion_payload()),
+            FakeResponse(200, _completion_payload()),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    await _complete(client)  # learns max_tokens
+    await _complete(client)  # max_tokens now refused, falls back and forgets
+    await _complete(client)  # starts from the catalog order again
+
+    sent = [body[2]["json"] for body in session.requests]
+    assert "max_tokens" in sent[1] and "max_tokens" in sent[2]
+    assert "max_completion_tokens" in sent[3] and "max_completion_tokens" in sent[4]
+
+
+async def test_an_unrelated_failure_does_not_forget_the_accepted_parameter() -> None:
+    """A 429 says nothing about which parameter shape a model takes."""
+    incompatible = {
+        "error": {"message": "No endpoints found that can handle the requested parameters."}
+    }
+    session = FakeSession(
+        [
+            FakeResponse(404, incompatible),
+            FakeResponse(200, _completion_payload()),
+            *[FakeResponse(429, {"error": "rate limited"}) for _ in range(RETRY_ATTEMPTS)],
+            FakeResponse(200, _completion_payload()),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    client.retry_base_seconds = 0
+
+    await _complete(client)
+    with pytest.raises(OpenRouterError, match="429"):
+        await _complete(client)
+    await _complete(client)
+
+    assert session.requests[-1][2]["json"]["max_tokens"] == 32
+
+
+async def test_a_new_model_catalog_clears_what_the_old_one_taught() -> None:
+    """A refreshed catalog is a new statement about what these models take."""
+    incompatible = {
+        "error": {"message": "No endpoints found that can handle the requested parameters."}
+    }
+    session = FakeSession(
+        [
+            FakeResponse(404, incompatible),
+            FakeResponse(200, _completion_payload()),
+            FakeResponse(200, _completion_payload()),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    await _complete(client)
+    client.set_model_catalog(
+        [{"id": "vendor/exact", "supported_parameters": ["max_completion_tokens"]}]
+    )
+    await _complete(client)
+
+    assert session.requests[2][2]["json"]["max_completion_tokens"] == 32
+
+
 async def test_non_parameter_404_does_not_change_the_request_profile() -> None:
     missing = {"error": {"message": "Model vendor/missing was not found"}}
     session = FakeSession([FakeResponse(404, missing)])

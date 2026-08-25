@@ -364,6 +364,18 @@ class OpenRouterClient:
         self._session = session
         self._owned_session = False
         self._model_capabilities: dict[str, _ModelCapabilities] = {}
+        #: Which token-limit parameter one (endpoint, model) has actually accepted,
+        #: learned from the first completion that got through. The catalog says what
+        #: a model *advertises*, and for some models it is wrong in a way that costs
+        #: a whole HTTP round-trip per call: `deepseek/deepseek-v4-flash` advertises
+        #: `max_completion_tokens`, rejects it, and takes `max_tokens` on the retry,
+        #: which put 23,132 identical "rejected completion parameter profile" lines
+        #: in `daemon.log` between 2026-08-20 and the D3 soak - one per scan.
+        #: Remembering the answer makes that a once-per-model cost instead of a
+        #: per-call one. It is deliberately not persisted: one rejection per model
+        #: per daemon start is nothing, and a durable copy would need an
+        #: invalidation story for a provider changing its mind.
+        self._accepted_token_parameter: dict[tuple[str, str, str], str] = {}
         self._endpoint = endpoint
 
     @property
@@ -568,6 +580,35 @@ class OpenRouterClient:
             cost_usd=_number(usage.get("cost")),
         )
 
+    def _remember_accepted_profile(
+        self, key: tuple[str, str, str], profile: dict[str, Any]
+    ) -> None:
+        """Record the token-limit parameter a completion actually got through with."""
+        accepted = _token_parameter_of(profile)
+        if accepted is None or self._accepted_token_parameter.get(key) == accepted:
+            return
+        self._accepted_token_parameter[key] = accepted
+        log.info(
+            "OpenRouter model %s accepted completion parameter %s; later calls start there",
+            key[2],
+            accepted,
+        )
+
+    def _forget_accepted_profile(
+        self, key: tuple[str, str, str], profile: dict[str, Any], error: OpenRouterError
+    ) -> None:
+        """Drop a remembered parameter the provider has now rejected.
+
+        Only a compatibility rejection counts: a 429 or a schema error says
+        nothing about which parameter shape the model takes, and forgetting on
+        those would put the round-trip back on every call after any bad minute.
+        """
+        rejected = _token_parameter_of(profile)
+        if not _is_parameter_compatibility_error(error) or rejected is None:
+            return
+        if self._accepted_token_parameter.get(key) == rejected:
+            del self._accepted_token_parameter[key]
+
     def set_model_catalog(self, models: list[dict[str, Any]]) -> None:
         """Replace the capability cache used to shape completion requests.
 
@@ -582,6 +623,12 @@ class OpenRouterClient:
                 continue
             capabilities[str(item["id"])] = _model_capabilities(item)
         self._model_capabilities = capabilities
+        # A new catalog is a new statement about what these models take, so what a
+        # previous one taught us is no longer the freshest thing known. Cleared
+        # rather than merged: the next call re-learns it at the cost of at most one
+        # rejected round-trip per model, and a merge would keep an answer nobody
+        # can now check.
+        self._accepted_token_parameter.clear()
 
     async def models(self, *, endpoint: LlmEndpoint | None = None) -> list[dict[str, Any]]:
         target = endpoint if endpoint is not None else self.endpoint
@@ -698,10 +745,14 @@ class OpenRouterClient:
         # rejected (a working endpoint that refuses every structured call).
         if endpoint.supports_provider_routing:
             request_body["provider"] = {"require_parameters": True, "allow_fallbacks": True}
-        profiles = _completion_profiles(
-            self._model_capabilities.get(model),
-            max_tokens=max_tokens,
-            reasoning_enabled=reasoning_enabled,
+        profile_key = (endpoint.provider, endpoint.origin, model)
+        profiles = _accepted_profile_first(
+            _completion_profiles(
+                self._model_capabilities.get(model),
+                max_tokens=max_tokens,
+                reasoning_enabled=reasoning_enabled,
+            ),
+            self._accepted_token_parameter.get(profile_key),
         )
         payload: dict[str, Any] | None = None
         for index, profile in enumerate(profiles):
@@ -713,8 +764,10 @@ class OpenRouterClient:
                     json_body=candidate,
                     endpoint=endpoint,
                 )
+                self._remember_accepted_profile(profile_key, profile)
                 break
             except OpenRouterError as exc:
+                self._forget_accepted_profile(profile_key, profile, exc)
                 if index + 1 >= len(profiles) or not _is_parameter_compatibility_error(exc):
                     raise
                 log.info(
@@ -1170,10 +1223,28 @@ def _completion_profiles(
     return profiles
 
 
+def _token_parameter_of(profile: dict[str, Any]) -> str | None:
+    """Which of the two token-limit parameters this request variant carries."""
+    return next((name for name in TOKEN_LIMIT_PARAMETERS if name in profile), None)
+
+
+def _accepted_profile_first(
+    profiles: list[dict[str, Any]], accepted: str | None
+) -> list[dict[str, Any]]:
+    """Start from the parameter this model has already been seen to accept.
+
+    A reordering, never a filter: every profile `_completion_profiles` built is
+    still tried in its original relative order behind the preferred one, so a
+    provider that changes its mind costs the same retry it always did rather than
+    a hard failure. `sorted` is stable, which is what preserves that order.
+    """
+    if accepted is None:
+        return profiles
+    return sorted(profiles, key=lambda profile: 0 if accepted in profile else 1)
+
+
 def _profile_name(profile: dict[str, Any]) -> str:
-    token_parameter = next(
-        (name for name in TOKEN_LIMIT_PARAMETERS if name in profile), "bounded-output"
-    )
+    token_parameter = _token_parameter_of(profile) or "bounded-output"
     reasoning = profile.get("reasoning")
     if not isinstance(reasoning, dict):
         return token_parameter

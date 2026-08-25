@@ -20,6 +20,7 @@ from .background_tasks import background
 from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .harness import descriptor, provider_account_harnesses
+from .logsetup import bound_request_id, current_request_id, new_request_id
 from .models import MuxEvent
 from .shim_paths import which_real
 from .subprocess_flags import background_creation_flags, reap_process_tree
@@ -1587,6 +1588,11 @@ class ProviderAccountManager:
                 timeout_seconds=timeout_seconds,
                 output_limit=MAX_COMMAND_OUTPUT_BYTES,
                 stderr_limit=MAX_COMMAND_OUTPUT_BYTES,
+                # The request that asked for the login or the status read, or the
+                # id the quota poll minted for its own iteration. A login that
+                # times out at 300s is exactly the run somebody has to find in the
+                # log afterwards, and it used to log `operation_id=None`.
+                operation_id=current_request_id() or None,
             )
         except OSError as exc:
             raise ProviderAccountError(f"Could not start {provider}: {exc}") from exc
@@ -1627,7 +1633,11 @@ class ProviderAccountManager:
     async def _loop(self) -> None:
         await asyncio.sleep(2)
         while True:
-            with background.iteration(QUOTA_POLL_LOOP):
+            # One id per poll, for the same reason the git monitor mints one: the
+            # provider CLI runs this iteration starts have no request behind them,
+            # and a timed-out `provider-claude` line with no identifier cannot be
+            # joined to the poll that produced it.
+            with background.iteration(QUOTA_POLL_LOOP), bound_request_id(new_request_id()):
                 await self.refresh()
             await asyncio.sleep(self.poll_seconds)
 
@@ -1636,7 +1646,10 @@ class ProviderAccountManager:
         while True:
             event = await self._event_queue.get()
             try:
-                with background.iteration(QUOTA_TURN_REFRESH_LOOP):
+                with (
+                    background.iteration(QUOTA_TURN_REFRESH_LOOP),
+                    bound_request_id(new_request_id()),
+                ):
                     await self._maybe_refresh_for_turn(event)
             finally:
                 self._event_queue.task_done()

@@ -67,6 +67,13 @@ Money is deliberately absent there, because the Usage dialog is the whole cost p
 - At most one refresh runs at a time.
 - Each command has a timeout and output cap.
 - The default collector command is `ccusage daily --json --by-agent`.
+- **The timeout is 120s because the collector's cost is the size of this host's transcript corpus, not anything the daemon controls.**
+  It was 30s, and every scheduled refresh timed out from 2026-08-21 on.
+  Measured 2026-08-24 on the primary host (36,529 Claude transcripts, ~21 GB across `~/.claude/projects` and `~/.codex/sessions`), running the daemon's exact command from a shell: 33.9s cold, 10.3s with the OS file cache warm, 5.8s warm with `--offline`.
+  Exit code 0 and an empty stderr in every run - the command was never hung, and there is no update check to blame; the bound was simply under the cost, and the corpus only grows.
+  `--offline` is deliberately not added to the default command: it would buy back ~4s of pricing fetch by changing what the dollar figures are computed from, and a cost basis is not a thing to trade for latency.
+  A refresh that does exceed the bound says so with the bound and the time it spent, because "timed out" alone cannot tell a hung command from a slow one.
+- Each run carries the refresh's own operation id, so the bounded runner's timeout or cap line, the adapter's failure line, and the `usage_refresh_failed` event are three readings of one failure rather than three unrelated ones.
 - Settings installs or updates the CLI explicitly with `npm install -g ccusage@latest`.
 - Refresh uses the installed executable and never downloads or updates code.
 - The primary override is the single `usage_command` array.

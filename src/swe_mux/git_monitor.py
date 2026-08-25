@@ -16,6 +16,7 @@ from .background_tasks import background
 from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .git_review import resolve_comparison_ref
+from .logsetup import bound_request_id, current_request_id, new_request_id
 from .models import GitState
 from .session import Session, SessionManager
 
@@ -79,6 +80,11 @@ async def _git(
             timeout_seconds=timeout_seconds,
             output_limit=GIT_OUTPUT_LIMIT_BYTES,
             stderr_limit=GIT_OUTPUT_LIMIT_BYTES,
+            # Whatever caused this query: an HTTP request's id when one is in
+            # flight, the poll's own minted id inside the monitor loop, and empty
+            # only where neither exists — which is the honest answer, not a
+            # missing field.
+            operation_id=current_request_id() or None,
         )
     except OSError:
         return 1, ""
@@ -464,6 +470,7 @@ async def _git_bytes(cwd: str, *args: str, timeout_seconds: float = GIT_TIMEOUT_
             # an empty answer is the only honest one.
             output_limit=BLOB_DIGEST_MAX_BYTES,
             stderr_limit=GIT_OUTPUT_LIMIT_BYTES,
+            operation_id=current_request_id() or None,
         )
     except OSError:
         return b""
@@ -871,7 +878,15 @@ class GitMonitor:
 
     async def _run(self) -> None:
         while True:
-            with background.iteration(GIT_MONITOR_LOOP):
+            # One correlation id per poll, minted here because no request causes
+            # this work. Without it a `bounded_command_timed_out` from a Git query
+            # this loop started carried no identifier at all — not a request id,
+            # because there is no request, and not an operation id, because none
+            # was passed — leaving nothing to join it to the poll it came from.
+            # Bound rather than threaded: the contextvar reaches every `_git` call
+            # this iteration makes, including the ones inside its per-session
+            # tasks, and stamps the loop's own log lines with the same id.
+            with background.iteration(GIT_MONITOR_LOOP), bound_request_id(new_request_id()):
                 await self._poll()
             await asyncio.sleep(self.cadence)
 
