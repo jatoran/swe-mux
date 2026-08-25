@@ -9,6 +9,7 @@ browser carrying a reason rather than merely missing from `enabled`.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
+from swe_mux.llm_endpoint import CapabilityStore
 from swe_mux.openrouter import OpenRouterError, OpenRouterVerification
 from swe_mux.project_files import read_project_config, write_project_config
 from swe_mux.routes.automation import (
@@ -74,10 +76,12 @@ class ProviderStub:
     """Scripted `verify`/`test_key`, recording the endpoint each was handed."""
 
     def __init__(self, *, output: str = "swe-mux endpoint check ok.",
-                 error: str = "") -> None:
+                 error: str = "", catalog: str = "none") -> None:
         self.output = output
         self.error = error
+        self.catalog = catalog
         self.verified: list[str] = []
+        self.probed: list[str] = []
 
     async def verify(self, *, endpoint: Any = None, model: str = "",
                      max_tokens: int = 32) -> OpenRouterVerification:
@@ -96,6 +100,10 @@ class ProviderStub:
             cost_usd=None,
         )
 
+    async def probe_catalog(self, *, endpoint: Any = None) -> str:
+        self.probed.append(endpoint.provider)
+        return self.catalog
+
     async def test_key(self, candidate: str | None = None, *, endpoint: Any = None
                        ) -> dict[str, Any]:
         return {"ok": True, "models": 1}
@@ -112,6 +120,9 @@ def build(tmp_path: Path, config: Config) -> tuple[web.Application, AutomationSt
     app[keys.SECRET_STORE] = SecretsStub()
     app[keys.AUTOMATION_STORE] = store
     app[keys.OPENROUTER] = ProviderStub()
+    # Starts empty, exactly as the daemon's does before anything is verified, so
+    # these tests exercise the unproven path unless a verification fills it in.
+    app[keys.LLM_CAPABILITIES] = CapabilityStore()
     app.router.add_get("/api/automation/provider", automation_provider_status)
     app.router.add_post("/api/automation/provider/key", automation_provider_key)
     app.router.add_post("/api/automation/provider/verify", verify_automation_provider)
@@ -309,6 +320,127 @@ async def test_a_held_back_automation_arrives_with_its_reason(tmp_path: Path) ->
         unlocked = await (await client.get("/api/projects/proj-1/automations")).json()
         assert "scan_timeline" in unlocked["enabled"]
         assert unlocked["unverified"] == []
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_verifying_measures_the_endpoint_and_the_measurement_takes_effect(
+    tmp_path: Path,
+) -> None:
+    """The wire half of capabilities: probed, persisted, and live on the next call.
+
+    The last clause is the one worth a test. Endpoint resolution is synchronous and
+    per-request while the record lives in SQLite behind an async store, so nothing
+    but a live capability store makes a verification land on the very next
+    completion rather than on the next daemon restart - and a restart is exactly
+    what the verify press is meant to make unnecessary.
+    """
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    app[keys.OPENROUTER].catalog = "annotated"
+    client = await client_for(app)
+    try:
+        before = await (await client.get("/api/automation/provider")).json()
+        entry = next(item for item in before["providers"] if item["id"] == "custom")
+        assert entry["verification"]["capabilities"]["catalog"] == "none"
+
+        body = await (await client.post("/api/automation/provider/verify", json={})).json()
+        assert body["ok"] is True
+        assert body["capabilities"] == {
+            "catalog": "annotated",
+            "reports_cost": False,
+            "reports_cache": False,
+        }
+        # Probed only after the completion proved the endpoint answers at all: a
+        # catalog probe against an unreachable host reports `none`, and recording
+        # that as a measurement would durably pin a capable endpoint to the
+        # pessimistic profile over one bad minute.
+        assert app[keys.OPENROUTER].probed == ["custom"]
+
+        # Durable, and durable in the row rather than only in memory.
+        record = await store.provider_verification("custom")
+        assert record is not None
+        assert json.loads(record["capabilities_json"])["catalog"] == "annotated"
+
+        # And live: the store the per-request resolver reads was updated in place.
+        assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "annotated"
+        after = await (await client.get("/api/automation/provider")).json()
+        proven = next(item for item in after["providers"] if item["id"] == "custom")
+        assert proven["verification"]["capabilities"]["catalog"] == "annotated"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_a_failed_verification_measures_nothing(tmp_path: Path) -> None:
+    # Same reasoning as the record itself: an endpoint that is unreachable this
+    # minute has not been disproven, and writing `catalog: none` for it would be a
+    # durable downgrade earned by a network blip.
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    app[keys.OPENROUTER].catalog = "annotated"
+    client = await client_for(app)
+    try:
+        await client.post("/api/automation/provider/verify", json={})
+        assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "annotated"
+        app[keys.OPENROUTER].error = "connection refused"
+        app[keys.OPENROUTER].probed.clear()
+        response = await client.post("/api/automation/provider/verify", json={})
+        assert response.status == 422
+        assert app[keys.OPENROUTER].probed == []
+        assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "annotated"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_the_probe_runs_against_the_endpoint_as_configured_not_as_measured(
+    tmp_path: Path,
+) -> None:
+    """Re-verifying must not be circular, or an endpoint could never be downgraded.
+
+    A previously-annotated endpoint carries a blank `model_override`, so resolving
+    with the stored measurement would send the proving completion off with whatever
+    model a feature happens to name. An endpoint edited down from a router to one
+    local model would then verify against a model the new server has never heard
+    of, and could never be re-proven.
+    """
+    config = custom_config(tmp_path, model="qwen2.5-coder:7b")
+    app, store = build(tmp_path, config)
+    app[keys.OPENROUTER].catalog = "annotated"
+    client = await client_for(app)
+    try:
+        await client.post("/api/automation/provider/verify", json={})
+        assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "annotated"
+        # Now it is a single-model server again.
+        app[keys.OPENROUTER].catalog = "none"
+        body = await (await client.post("/api/automation/provider/verify", json={})).json()
+        assert body["ok"] is True
+        assert body["requested_model"] == "qwen2.5-coder:7b"
+        assert body["capabilities"]["catalog"] == "none"
+        assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "none"
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_clearing_the_key_forgets_the_measurement_with_the_proof(
+    tmp_path: Path,
+) -> None:
+    # Leaving an `annotated` record behind a cleared credential would keep sending
+    # routing directives and cache markers on behalf of an endpoint nobody can now
+    # reach, and would report a picker for a catalog nothing can fetch.
+    config = custom_config(tmp_path)
+    app, store = build(tmp_path, config)
+    app[keys.OPENROUTER].catalog = "annotated"
+    client = await client_for(app)
+    try:
+        await client.post("/api/automation/provider/verify", json={})
+        assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "annotated"
+        await client.post("/api/automation/provider/key", json={"operation": "clear"})
+        assert app[keys.LLM_CAPABILITIES].get("custom").catalog == "none"
+        assert await store.provider_verification("custom") is None
     finally:
         await client.close()
         store.close()

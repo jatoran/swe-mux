@@ -31,6 +31,7 @@ from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config, _validate
 from swe_mux.grants import plan_grant
 from swe_mux.llm_endpoint import (
+    EndpointCapabilities,
     LlmEndpoint,
     base_url_error,
     custom_endpoint,
@@ -42,6 +43,7 @@ from swe_mux.llm_endpoint import (
     verification_state,
 )
 from swe_mux.openrouter import (
+    VERIFY_MAX_TOKENS,
     OpenRouterClient,
     OpenRouterError,
     cache_stable_message,
@@ -51,12 +53,14 @@ from swe_mux.openrouter import (
 from .test_openrouter_phase6 import FakeResponse, FakeSession, MemorySecrets
 
 
-def _completion(content: str = "swe-mux endpoint check ok.") -> dict[str, Any]:
+def _completion(
+    content: str = "swe-mux endpoint check ok.", completion_tokens: int = 7
+) -> dict[str, Any]:
     return {
         "id": "gen-1",
         "model": "qwen2.5-coder:7b",
         "choices": [{"message": {"role": "assistant", "content": content}}],
-        "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+        "usage": {"prompt_tokens": 11, "completion_tokens": completion_tokens},
     }
 
 
@@ -89,13 +93,45 @@ def test_a_trailing_slash_is_trimmed_so_paths_append_cleanly() -> None:
     assert normalize_base_url("  http://host/v1//  ") == "http://host/v1"
 
 
-def test_a_custom_model_is_a_pin_so_blank_is_an_error() -> None:
-    # `modelRouting.ts` vocabulary: an override may be blank and falls through, a pin
-    # may not. There is no routed default a local server could inherit.
-    assert model_error("") is not None
-    assert model_error("   ") is not None
+def test_a_blank_model_is_answered_by_readiness_rather_than_by_validation() -> None:
+    # Whether a blank model can be tolerated depends on whether the endpoint serves a
+    # catalog, which is a measured property in a SQLite row that `_validate` cannot
+    # reach - so refusing blank here hardcoded "no catalog" for every endpoint. The
+    # requirement did not disappear; it moved to `readiness`, which can see the answer.
+    assert model_error("") is None
+    assert model_error("   ") is None
     assert model_error("has space") is not None
     assert model_error("qwen2.5-coder:7b") is None
+
+
+def test_a_single_model_endpoint_still_has_to_name_its_model() -> None:
+    # The other half of the move above. Nothing was relaxed: an endpoint with no
+    # catalog to pick from still cannot run, and now says so in a sentence rather
+    # than as a form error on a field whose necessity depends on a probe.
+    blank = readiness(
+        custom_endpoint(base_url="http://127.0.0.1:11434/v1", model=""),
+        api_key=None,
+        verified_fingerprint=None,
+    )
+    assert blank.code == "no_model"
+
+
+def test_a_catalog_endpoint_needs_no_pinned_model_because_it_has_a_picker() -> None:
+    # The reason the pin stopped being unconditional. An OpenRouter-shaped proxy has
+    # something to choose between, so each feature's own model setting means what it
+    # says instead of all of them collapsing onto one id.
+    endpoint = custom_endpoint(
+        base_url="http://127.0.0.1:8190/openai/v1",
+        model="",
+        capabilities=EndpointCapabilities(catalog="annotated", reports_cost=True),
+    )
+    verdict = readiness(
+        endpoint, api_key="k", verified_fingerprint=endpoint.fingerprint("k")
+    )
+    assert verdict.ready
+    assert endpoint.model_override == ""
+    # And a caller's own model id survives to the wire rather than being redirected.
+    assert endpoint.resolve_model("openai/gpt-5.6-terra") == "openai/gpt-5.6-terra"
 
 
 def _errors(config: Config) -> dict[str, str]:
@@ -115,7 +151,16 @@ def test_the_config_only_validates_the_endpoint_it_is_actually_using() -> None:
     selected = Config(llm_provider="custom", custom_llm_base_url="nonsense", custom_llm_model="")
     errors = _errors(selected)
     assert "custom_llm_base_url" in errors
-    assert "custom_llm_model" in errors
+    # A blank model is no longer a form error - `readiness` states it instead, because
+    # whether it is required depends on a catalog probe this validator cannot run.
+    # A malformed one still is, since that is answerable from the value alone.
+    assert "custom_llm_model" not in errors
+    malformed = Config(
+        llm_provider="custom",
+        custom_llm_base_url="http://127.0.0.1:11434/v1",
+        custom_llm_model="has space",
+    )
+    assert "custom_llm_model" in _errors(malformed)
     assert "llm_provider" in _errors(Config(llm_provider="anthropic-direct"))
 
 
@@ -249,7 +294,30 @@ async def test_a_verification_returns_the_endpoints_own_words() -> None:
     # reasons is not a verify.
     assert "response_format" not in body
     assert "tools" not in body
-    assert body["max_tokens"] == 32
+    assert body["max_tokens"] == VERIFY_MAX_TOKENS
+
+
+async def test_a_reasoning_model_that_thinks_past_the_probe_is_not_called_broken() -> None:
+    # Measured against the real gateway: `openai/gpt-5-nano` spent the whole 32-token
+    # budget reasoning and returned an empty string, which the verify action reports as
+    # the one finding it exists to catch. Reasoning draws from the same budget, so the
+    # empty reply said nothing about the endpoint and everything about the question.
+    session = FakeSession([FakeResponse(200, _completion("", completion_tokens=64))])
+    client = OpenRouterClient(MemorySecrets(""), session=session, endpoint=_custom())
+    result = await client.verify()
+    assert result.output == ""
+    assert result.spent_budget_reasoning is True
+
+
+async def test_an_endpoint_that_truly_answers_with_nothing_is_still_reported() -> None:
+    # The other side of the same discrimination, and the reason it is a token count
+    # rather than a blanket exemption: no output tokens billed means the endpoint
+    # really did answer with nothing, which is the finding a verify must not soften.
+    session = FakeSession([FakeResponse(200, _completion("", completion_tokens=0))])
+    client = OpenRouterClient(MemorySecrets(""), session=session, endpoint=_custom())
+    result = await client.verify()
+    assert result.output == ""
+    assert result.spent_budget_reasoning is False
 
 
 @pytest.mark.parametrize(

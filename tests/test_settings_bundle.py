@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from swe_mux import app_keys as keys
 from swe_mux.config import Config
+from swe_mux.llm_endpoint import CapabilityStore
 from swe_mux.routes.settings import settings_bundle
 
 
@@ -70,6 +71,7 @@ def _request(tmp_path: Path, *, usage_fails: bool = False, cwd: str | None = Non
         keys.PROJECTS: SimpleNamespace(ordered_projects=lambda: []),
         keys.SECRET_STORE: SecretStoreStub(),
         keys.AUTOMATION_STORE: AutomationStoreStub(),
+        keys.LLM_CAPABILITIES: CapabilityStore(),
         keys.USAGE: UsageStub(fail=usage_fails),
     }
     query = {"cwd": cwd} if cwd else {}

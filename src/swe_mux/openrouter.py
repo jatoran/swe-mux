@@ -15,6 +15,7 @@ import aiohttp
 from .llm_endpoint import (
     OPENROUTER_ORIGIN,
     CachePolicy,
+    CatalogShape,
     LlmEndpoint,
     openrouter_endpoint,
 )
@@ -91,6 +92,14 @@ MAX_SESSION_ID_CHARS = 256
 # chat template leaking its scaffolding; not enough to become a place model output
 # accumulates in the database.
 VERIFY_SAMPLE_CHARS = 400
+# The output budget one proving completion gets. It was 32, which is ample for the
+# single sentence this asks for and far too small for a reasoning model: reasoning
+# is drawn from the same budget, so `openai/gpt-5-nano` spent all of it thinking
+# and returned an empty string - a *reachable and usable* endpoint reporting
+# itself as the one thing a verify is meant to catch. Sized to leave room for a
+# short reasoning pass and still be a rounding error against any real call: at
+# GPT-5-class output prices this probe costs well under a tenth of a cent.
+VERIFY_MAX_TOKENS = 2048
 log = logging.getLogger(__name__)
 
 
@@ -318,6 +327,19 @@ class OpenRouterVerification:
     input_tokens: int
     output_tokens: int
     cost_usd: float | None
+    reports_cost: bool = False
+    """Whether the proving call came back carrying its own `usage.cost`."""
+    reports_cache: bool = False
+    """Whether its usage payload carried `prompt_tokens_details` at all."""
+    spent_budget_reasoning: bool = False
+    """Whether an empty reply was a reasoning model thinking past its budget.
+
+    The one reading that separates "this endpoint answers with nothing" - which
+    is a real and damning finding about a chat template or a refusal - from "the
+    probe was too small for this model", which says nothing about the endpoint at
+    all. Without it a perfectly good reasoning model verifies as broken, which is
+    exactly backwards from what a verify is for.
+    """
 
 
 @dataclass(slots=True, frozen=True)
@@ -521,7 +543,7 @@ class OpenRouterClient:
         *,
         endpoint: LlmEndpoint | None = None,
         model: str = "",
-        max_tokens: int = 32,
+        max_tokens: int = VERIFY_MAX_TOKENS,
     ) -> OpenRouterVerification:
         """Prove an endpoint by asking it one tiny question and keeping the answer.
 
@@ -567,18 +589,68 @@ class OpenRouterClient:
             raise OpenRouterError(
                 f"{target.label} returned no assistant message", status=200, retryable=True
             )
-        usage = payload.get("usage") or {}
+        raw_usage = payload.get("usage")
+        usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
+        text = (content if isinstance(content, str) else "").strip()[:VERIFY_SAMPLE_CHARS]
+        output_tokens = int(usage.get("completion_tokens") or 0)
         return OpenRouterVerification(
             provider=target.provider,
             origin=target.origin,
             requested_model=effective,
             resolved_model=str(payload.get("model") or effective),
-            output=(content if isinstance(content, str) else "").strip()[:VERIFY_SAMPLE_CHARS],
+            output=text,
             latency_ms=int((time.monotonic() - started) * 1000),
             input_tokens=int(usage.get("prompt_tokens") or 0),
-            output_tokens=int(usage.get("completion_tokens") or 0),
+            output_tokens=output_tokens,
             cost_usd=_number(usage.get("cost")),
+            # `usage.cost` present at all is the signal. Zero is a real answer
+            # from a local server that bills nothing, and absent is the different
+            # answer of a server that does not say - which is why this is read
+            # off the key rather than off `cost_usd` being truthy.
+            reports_cost=usage.get("cost") is not None,
+            reports_cache=isinstance(usage.get("prompt_tokens_details"), dict),
+            spent_budget_reasoning=not text and output_tokens > 0,
         )
+
+    async def probe_catalog(self, *, endpoint: LlmEndpoint | None = None) -> CatalogShape:
+        """What this endpoint's `/models` is actually worth, asked once.
+
+        Three outcomes rather than a boolean, because the middle one is real and
+        common: an OpenAI-compatible server answers `/models` with a list of bare
+        ids, which is enough to populate a picker and not enough to price
+        anything. Collapsing that into "no catalog" is what made a working
+        LM Studio look like it served one hand-typed model.
+
+        `annotated` demands two fields together - `supported_parameters` beside a
+        `pricing` block - and demands them of a *majority* of entries rather than
+        of any single one. Both halves matter. Together they are a shape nothing
+        but OpenRouter and a faithful relay of it produces, which is what makes
+        this safe to hang provider routing and cache marking off. And the
+        majority rule keeps one malformed or unpriced row - OpenRouter serves a
+        few - from deciding the question for the other six hundred.
+
+        Any failure is `none`. An endpoint that refuses `/models` is the ordinary
+        single-model case, not an error worth surfacing: the verify completion
+        that runs beside this is what decides whether the endpoint works.
+        """
+        target = endpoint if endpoint is not None else self.endpoint
+        try:
+            payload = await self._request("GET", "/models", endpoint=target)
+        except OpenRouterError:
+            return "none"
+        entries = [item for item in (payload.get("data") or []) if isinstance(item, dict)]
+        entries = [item for item in entries if item.get("id")]
+        if not entries:
+            return "none"
+        annotated = sum(
+            1
+            for item in entries
+            if isinstance(item.get("supported_parameters"), list)
+            and item["supported_parameters"]
+            and isinstance(item.get("pricing"), dict)
+            and item["pricing"]
+        )
+        return "annotated" if annotated * 2 > len(entries) else "bare"
 
     def _remember_accepted_profile(
         self, key: tuple[str, str, str], profile: dict[str, Any]
@@ -1412,8 +1484,15 @@ def apply_session_routing(
     endpoints. Cost is reported without it; `cache_write_tokens` and the signed
     `cache_discount` are not, and those two are what say whether a breakpoint is
     earning the premium a write is billed at.
+
+    The gate is `supports_provider_routing` rather than `is_openrouter`, and the
+    difference is the whole point of measuring: a proxy that relays OpenRouter
+    faithfully has exactly the routing layer this steers and exactly the usage
+    payload this asks for, and identity-gating meant such an endpoint silently
+    lost prompt-cache affinity between turns - the shape of which is a ledger
+    where every first call of a turn reports zero cached tokens.
     """
-    if not endpoint.is_openrouter:
+    if not endpoint.supports_provider_routing:
         return body
     key = str(session_id or "").strip()[:MAX_SESSION_ID_CHARS]
     if key:

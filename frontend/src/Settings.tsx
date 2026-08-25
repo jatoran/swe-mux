@@ -47,7 +47,7 @@ import {
 } from './settingsTabs'
 import {
   forgetLlmProvider, verifyLlmProvider,
-  type LlmProviderEntry, type LlmReadiness, type VerifyResult,
+  capabilitySummary, type LlmProviderEntry, type LlmReadiness, type VerifyResult,
 } from './llmProvider'
 import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './promptTemplates'
@@ -1176,7 +1176,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       // transport failure lands here, and it has no endpoint text to show.
       setVerifyResult({ok:false,provider:target,error:(error as Error).message,
         verification:{provider:target,verified:false,stale:false,verified_at:null,base_url:'',
-          model:'',resolved_model:'',sample:'',latency_ms:0},
+          model:'',resolved_model:'',sample:'',latency_ms:0,
+          // A transport failure measured nothing, so this is the unproven profile
+          // rather than a claim that the endpoint has no catalog.
+          capabilities:{catalog:'none',reports_cost:false,reports_cache:false}},
         llm:{ready:false,provider:target,code:'unverified',reason:(error as Error).message}})
     }finally{setVerifying('')}
   }
@@ -1681,6 +1684,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                 <p class="project-automation-deps">{entry.origin||'no base URL yet'}{entry.model?` · ${entry.model}`:''}{entry.requires_verification?'':' · configuring the key verifies it'}</p>
                 {entry.verification.verified&&<p class="project-automation-deps">Replied “{entry.verification.sample||'(nothing)'}” in {entry.verification.latency_ms} ms{entry.verification.verified_at?`, ${new Date(entry.verification.verified_at*1000).toLocaleString()}`:''}.</p>}
                 {entry.verification.stale&&<p class="project-automation-deps"><strong>Edited since it was verified.</strong> The stored proof covers {entry.verification.base_url||'a different URL'}{entry.verification.model?` · ${entry.verification.model}`:''}, so it no longer applies.</p>}
+                {/* What the endpoint turned out to be, so an absent picker or absent
+                    prices is explainable rather than only visible. Silent until proven:
+                    "no catalog" before anyone looked is a guess, not a finding. */}
+                {capabilitySummary(entry.verification.capabilities,entry.verification.verified)&&<p class="project-automation-deps">{capabilitySummary(entry.verification.capabilities,entry.verification.verified)}</p>}
                 <button disabled={verifying===entry.id} onClick={()=>void verifyProvider(entry.id)}>{verifying===entry.id?'Verifying…':`Verify ${entry.label}`}</button>
               </li>)}
             </ul>
@@ -1688,7 +1695,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               {verifyResult.ok
                 ? <Fragment>
                     <p><strong>{verifyResult.provider} answered</strong> in {verifyResult.latency_ms} ms as <code>{verifyResult.resolved_model}</code>.</p>
-                    <blockquote>{verifyResult.output||'(the endpoint replied with no text)'}</blockquote>
+                    <blockquote>{verifyResult.output||(verifyResult.spent_budget_reasoning?'(this model spent the whole probe budget reasoning, so there was no text left — the endpoint is fine)':'(the endpoint replied with no text)')}</blockquote>
                   </Fragment>
                 : <p><strong>{verifyResult.provider} did not answer.</strong> {verifyResult.error}</p>}
             </div>}

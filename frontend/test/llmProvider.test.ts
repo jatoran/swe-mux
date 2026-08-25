@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
-import { llmGateHeading, type LlmReadiness } from '../src/llmProvider.ts'
+import { capabilitySummary, llmGateHeading, type EndpointCapabilities, type LlmReadiness } from '../src/llmProvider.ts'
 import { customProviderOverride, MODEL_ROUTES, resolveRoute, resolveRoutes, type ModelRoutingConfig } from '../src/modelRouting.ts'
 import { SETTING_TARGETS } from '../src/settingTargets.ts'
 
@@ -124,4 +124,57 @@ test('the Accounts panel marks the controls the links reveal', () => {
     assert.ok(settings.includes(`data-setting="${setting}"`),
       `Settings.tsx does not mark ${setting}`)
   }
+})
+
+// --- capabilities: what the endpoint turned out to be ------------------------
+
+const capabilities = (
+  overrides: Partial<EndpointCapabilities> = {},
+): EndpointCapabilities => ({
+  catalog: 'none', reports_cost: false, reports_cache: false, ...overrides,
+})
+
+// Silence before anyone has looked is the whole point. The fixed provider table this
+// replaced stated "no catalog" about every custom endpoint as though it were a finding,
+// and that claim is exactly what was wrong for an OpenRouter-shaped proxy.
+test('an unproven endpoint claims nothing about what it can do', () => {
+  assert.equal(capabilitySummary(capabilities({ catalog: 'annotated' }), false), '')
+  assert.equal(capabilitySummary(undefined, true), '')
+})
+
+test('each catalog shape gets its own sentence, because each means a different UI', () => {
+  const summaries = (['none', 'bare', 'annotated'] as const)
+    .map(catalog => capabilitySummary(capabilities({ catalog }), true))
+  assert.equal(new Set(summaries).size, 3)
+  assert.match(summaries[2], /pricing/)
+  // The `none` case has to say what the reader gets instead of a picker, or an absent
+  // control reads as a bug rather than as the single-model endpoint it describes.
+  assert.match(summaries[0], /the one model named above/)
+})
+
+test('cost reporting is stated either way rather than only when present', () => {
+  // A dollar budget cannot bind against an endpoint that reports nothing, so the
+  // absence is a fact the reader needs, not merely a missing line.
+  assert.match(capabilitySummary(capabilities({ reports_cost: false }), true), /reports no cost/)
+  assert.match(capabilitySummary(capabilities({ reports_cost: true }), true), /reports cost per call/)
+})
+
+test('cache reporting appears only when it was actually observed', () => {
+  // Unlike cost, a zero here is ambiguous by construction - "no hit" and "this provider
+  // does not report caching" are the same number - so the summary says it or says nothing.
+  assert.doesNotMatch(capabilitySummary(capabilities(), true), /caching/)
+  assert.match(capabilitySummary(capabilities({ reports_cache: true }), true), /caching/)
+})
+
+test('the daemon and the browser agree on the catalog vocabulary', () => {
+  // Three values, spelled the same on both sides. A fourth added in Python and not here
+  // would fall through to the `none` branch and quietly report a capable endpoint as a
+  // single-model one, which is the direction that hides a working picker.
+  const python = daemon('llm_endpoint.py')
+  const shapes = python.match(/CatalogShape = Literal\[([^\]]+)\]/)
+  assert.ok(shapes, 'llm_endpoint.py must declare CatalogShape')
+  const declared = [...shapes[1].matchAll(/"([a-z]+)"/g)].map(match => match[1]).sort()
+  assert.deepEqual(declared, ['annotated', 'bare', 'none'])
+  const rendered = source('llmProvider.ts')
+  for (const value of declared) assert.match(rendered, new RegExp(`'${value}'`))
 })

@@ -181,11 +181,17 @@ CREATE TABLE IF NOT EXISTS automation_model_cache (
 -- including an edit made by hand in config.toml while the daemon was not running.
 -- `sample` is the model's own reply, bounded, because the point of verifying is
 -- that a person read what came back.
+-- `capabilities_json` is what the proving call *measured* about the endpoint,
+-- kept beside the proof rather than in its own table because the two have
+-- exactly one lifetime: an edit that invalidates the fingerprint invalidates the
+-- measurement with it, since the thing measured is no longer the thing
+-- configured. Empty string means an endpoint proven before this was recorded,
+-- which reads as the pessimistic default rather than as a measurement of zero.
 CREATE TABLE IF NOT EXISTS llm_provider_verification (
   provider TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, base_url TEXT NOT NULL,
   model TEXT NOT NULL, resolved_model TEXT NOT NULL DEFAULT '',
   sample TEXT NOT NULL DEFAULT '', latency_ms INTEGER NOT NULL DEFAULT 0,
-  verified_at REAL NOT NULL
+  verified_at REAL NOT NULL, capabilities_json TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS project_cards (
   project_id TEXT PRIMARY KEY, project_root TEXT NOT NULL,
@@ -521,6 +527,18 @@ class AutomationStore:
             self._db.execute(
                 "ALTER TABLE automation_budget_ledger "
                 "ADD COLUMN cost_known INTEGER NOT NULL DEFAULT 1"
+            )
+        verification = self._columns("llm_provider_verification")
+        if verification and "capabilities_json" not in verification:
+            # Empty rather than a guessed profile, and the distinction is the
+            # same one the record itself makes: a row written before capabilities
+            # were measured proves the endpoint *works*, and says nothing about
+            # what it can do. Reading that silence as the pessimistic default is
+            # correct - it is exactly how such an endpoint already behaved - and
+            # re-verifying is the one act that replaces it with a measurement.
+            self._db.execute(
+                "ALTER TABLE llm_provider_verification "
+                "ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT ''"
             )
 
     async def _run(self, fn: Callable[[], T]) -> T:
@@ -2189,6 +2207,7 @@ class AutomationStore:
         resolved_model: str,
         sample: str,
         latency_ms: int,
+        capabilities: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist the completion that proved one provider, replacing any earlier one.
 
@@ -2198,16 +2217,18 @@ class AutomationStore:
         stays recoverable from the daemon log and the spend ledger.
         """
         verified_at = time.time()
+        capabilities_json = json.dumps(capabilities, sort_keys=True) if capabilities else ""
 
         def op() -> dict[str, Any]:
             self._db.execute(
                 "INSERT INTO llm_provider_verification"
                 "(provider,fingerprint,base_url,model,resolved_model,sample,latency_ms,"
-                "verified_at) VALUES(?,?,?,?,?,?,?,?) "
+                "verified_at,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(provider) DO UPDATE SET fingerprint=excluded.fingerprint,"
                 "base_url=excluded.base_url,model=excluded.model,"
                 "resolved_model=excluded.resolved_model,sample=excluded.sample,"
-                "latency_ms=excluded.latency_ms,verified_at=excluded.verified_at",
+                "latency_ms=excluded.latency_ms,verified_at=excluded.verified_at,"
+                "capabilities_json=excluded.capabilities_json",
                 (
                     provider,
                     fingerprint,
@@ -2217,6 +2238,7 @@ class AutomationStore:
                     sample[:1000],
                     int(latency_ms),
                     verified_at,
+                    capabilities_json,
                 ),
             )
             self._db.commit()
@@ -2229,6 +2251,7 @@ class AutomationStore:
                 "sample": sample[:1000],
                 "latency_ms": int(latency_ms),
                 "verified_at": verified_at,
+                "capabilities_json": capabilities_json,
             }
 
         return await self._run(op)

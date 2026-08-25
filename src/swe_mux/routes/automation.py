@@ -32,7 +32,13 @@ from ..behavioral_consumers import ADAPTIVE_TITLE_RULE_ID
 from ..config import Config
 from ..errors import NotFound
 from ..http_support import json_response
-from ..llm_endpoint import LLM_PROVIDERS, LlmEndpoint, LlmReadiness
+from ..llm_endpoint import (
+    LLM_PROVIDERS,
+    EndpointCapabilities,
+    LlmEndpoint,
+    LlmReadiness,
+)
+from ..llm_endpoint import capabilities_of_record as llm_capabilities_of_record
 from ..llm_endpoint import readiness as llm_readiness
 from ..llm_endpoint import resolve_endpoint as resolve_llm_endpoint
 from ..llm_endpoint import verification_state as llm_verification_state
@@ -547,8 +553,13 @@ async def _llm_readiness(request: web.Request) -> LlmReadiness:
         return LlmReadiness(
             True, "openrouter", "unknown", "No model provider is wired into this daemon."
         )
-    endpoint = resolve_llm_endpoint(config)
-    record = await automation_store.provider_verification(endpoint.provider)
+    record = await automation_store.provider_verification(
+        str(getattr(config, "llm_provider", "openrouter") or "openrouter")
+    )
+    # Read straight off the row rather than from the live store, because this is
+    # the fallback path for an app that has no `llm_ready` and may equally have no
+    # capability store. The durable record is the same answer either way.
+    endpoint = resolve_llm_endpoint(config, llm_capabilities_of_record(record))
     return llm_readiness(
         endpoint,
         api_key=store.get(endpoint.secret_name),
@@ -568,13 +579,14 @@ async def _provider_status(request: web.Request) -> dict[str, Any]:
     config: Config = request.app[keys.CONFIG]
     store: PlatformSecretStore = request.app[keys.SECRET_STORE]
     automation_store: AutomationStore = request.app[keys.AUTOMATION_STORE]
-    active = resolve_llm_endpoint(config)
+    capabilities = request.app[keys.LLM_CAPABILITIES]
+    active = resolve_llm_endpoint(config, capabilities)
     providers: list[dict[str, Any]] = []
     for name in LLM_PROVIDERS:
         endpoint = (
             active
             if name == active.provider
-            else resolve_llm_endpoint(replace(config, llm_provider=name))
+            else resolve_llm_endpoint(replace(config, llm_provider=name), capabilities)
         )
         api_key = store.get(endpoint.secret_name)
         record = await automation_store.provider_verification(name)
@@ -617,13 +629,32 @@ async def automation_provider_status(request: web.Request) -> web.Response:
 def _requested_endpoint(request: web.Request, body: dict[str, Any]) -> LlmEndpoint:
     """The endpoint a provider request names, defaulting to the active one."""
     config: Config = request.app[keys.CONFIG]
+    capabilities = request.app[keys.LLM_CAPABILITIES]
     name = str(body.get("provider") or "").strip()
     if not name:
-        return resolve_llm_endpoint(config)
+        return resolve_llm_endpoint(config, capabilities)
     if name not in LLM_PROVIDERS:
         raise ValueError("provider must be " + " or ".join(LLM_PROVIDERS))
     if name == config.llm_provider:
-        return resolve_llm_endpoint(config)
+        return resolve_llm_endpoint(config, capabilities)
+    return resolve_llm_endpoint(replace(config, llm_provider=name), capabilities)
+
+
+def _unproven_endpoint(request: web.Request, body: dict[str, Any]) -> LlmEndpoint:
+    """The same endpoint, shaped as though nothing had ever been measured about it.
+
+    What a verification must run against. Resolving with the *stored* capabilities
+    would make the probe circular: a previously-annotated endpoint keeps a blank
+    `model_override`, so the proving completion would carry whatever model id a
+    feature happens to be configured with rather than the one the operator typed
+    into the endpoint form - and an endpoint edited down from a router to a single
+    local model could never be re-proven, because it would keep asking for models
+    the new server has never heard of.
+    """
+    config: Config = request.app[keys.CONFIG]
+    name = str(body.get("provider") or "").strip() or config.llm_provider
+    if name not in LLM_PROVIDERS:
+        raise ValueError("provider must be " + " or ".join(LLM_PROVIDERS))
     return resolve_llm_endpoint(replace(config, llm_provider=name))
 
 
@@ -653,11 +684,13 @@ async def automation_provider_key(request: web.Request) -> web.Response:
             # the surface from showing a sample reply that a different credential
             # produced, which reads as reassurance for a state nobody proved.
             await automation_store.clear_provider_verification(endpoint.provider)
+            request.app[keys.LLM_CAPABILITIES].clear(endpoint.provider)
             forget_llm_readiness(request.app)
             return json_response({"ok": True, "status": store.status(secret_name)})
         if operation == "clear":
             store.clear(secret_name)
             await automation_store.clear_provider_verification(endpoint.provider)
+            request.app[keys.LLM_CAPABILITIES].clear(endpoint.provider)
             forget_llm_readiness(request.app)
             return json_response({"ok": True, "status": store.status(secret_name)})
         raise ValueError("operation must be test, set, replace, or clear")
@@ -684,7 +717,8 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
     provider: OpenRouterClient = request.app[keys.OPENROUTER]
     store: PlatformSecretStore = request.app[keys.SECRET_STORE]
     automation_store: AutomationStore = request.app[keys.AUTOMATION_STORE]
-    endpoint = _requested_endpoint(request, body)
+    capability_store = request.app[keys.LLM_CAPABILITIES]
+    endpoint = _unproven_endpoint(request, body)
     try:
         result = await provider.verify(endpoint=endpoint)
     except (OpenRouterError, ValueError) as exc:
@@ -701,6 +735,16 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
             },
             422,
         )
+    # Measured only once the completion has proved the endpoint answers at all.
+    # A catalog probe against an unreachable host would report `none`, and
+    # recording that as a *measurement* would durably pin a capable endpoint to
+    # the pessimistic profile because of one bad minute - the same reasoning that
+    # makes a failed verification record nothing.
+    capabilities = EndpointCapabilities(
+        catalog=await provider.probe_catalog(endpoint=endpoint),
+        reports_cost=result.reports_cost,
+        reports_cache=result.reports_cache,
+    )
     stored = await automation_store.record_provider_verification(
         provider=endpoint.provider,
         fingerprint=endpoint.fingerprint(store.get(endpoint.secret_name)),
@@ -709,7 +753,13 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
         resolved_model=result.resolved_model,
         sample=result.output,
         latency_ms=result.latency_ms,
+        capabilities=capabilities.as_dict(),
     )
+    capability_store.set(endpoint.provider, capabilities)
+    # Re-resolved so everything below reports the endpoint as it is *now*
+    # permitted to behave, rather than as the deliberately unproven shape the
+    # probe itself had to run against.
+    endpoint = _requested_endpoint(request, body)
     forget_llm_readiness(request.app)
     await request.app[keys.EVENTS].emit(
         "llm_provider_verified",
@@ -735,6 +785,13 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
             "cost_usd": result.cost_usd,
+            "capabilities": capabilities.as_dict(),
+            # An empty reply is normally the finding a verify exists to surface.
+            # This one case is not: a reasoning model can spend the probe's whole
+            # output budget thinking, and reporting that as "the endpoint answered
+            # with nothing" would condemn a working endpoint for the size of the
+            # question rather than for anything it did.
+            "spent_budget_reasoning": result.spent_budget_reasoning,
             "verification": llm_verification_state(
                 endpoint, api_key=store.get(endpoint.secret_name), record=stored
             ),

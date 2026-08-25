@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from .history_scan import HistoryScanManager
     from .land_queue import LandQueueService
     from .land_store import LandStore
-    from .llm_endpoint import LlmReadiness
+    from .llm_endpoint import CapabilityStore, LlmReadiness
     from .loop_lag import LoopLagMonitor
     from .mcp import McpService
     from .mcp_tools import LiveSnapshotStore
@@ -208,6 +208,11 @@ LLM_READY: web.AppKey[Callable[[], Awaitable[LlmReadiness]]] = web.AppKey("llm_r
 LLM_READINESS_CACHE: web.AppKey[dict[str, tuple[float, LlmReadiness]]] = web.AppKey(
     "llm_readiness_cache"
 )
+#: What each provider's endpoint was measured to be capable of, hydrated at start
+#: from the durable verification row and refreshed by the verify route. Read
+#: synchronously by the per-request endpoint resolver, which is why it is a live
+#: object here rather than a value threaded through `Config`.
+LLM_CAPABILITIES: web.AppKey[CapabilityStore] = web.AppKey("llm_capabilities")
 
 # --- task sets owned by the composition root ---------------------------------
 

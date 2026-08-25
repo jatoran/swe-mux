@@ -16,7 +16,7 @@ Two endpoints exist today and the shape covers both:
   (`base_url`, `api_key`, `model`). It advertises none of the above, and this
   module is where saying so lives instead of each caller guessing.
 
-Three properties are deliberately *not* inferred from a custom endpoint:
+Three properties are never *assumed* about a custom endpoint:
 
 - **Cost.** A local server bills nothing and reports nothing; a paid proxy bills
   and may still report nothing. `usage.cost` absent means unknown, never zero.
@@ -25,10 +25,21 @@ Three properties are deliberately *not* inferred from a custom endpoint:
 - **Caching.** This is the one that would fail silently. `marks_cache_breakpoints`
   answers from the endpoint rather than the model, because OpenRouter translates
   a cache marker into whatever the routed provider understands and a custom
-  server has nothing in front of it doing that. A custom endpoint's cache
+  server has nothing in front of it doing that. An unproven endpoint's cache
   behaviour is `unknown`: no breakpoint is sent (an OpenAI-compatible server has
   no reason to accept Anthropic's content-part extension) and no implicit hit is assumed, so a
   zero in the ledger reads as "not reported" rather than as a regression.
+
+They are **measured instead of guessed.** The pessimistic profile above is right
+for Ollama and wrong for an OpenRouter-shaped proxy - LiteLLM, or a personal
+gateway - which can serve the annotated catalog and report cost per call. Held as
+a fixed per-provider table, that profile cost a capable endpoint its model picker,
+all of its pricing, and its whole cache ledger, for no reason other than sharing a
+provider id with llama.cpp. So `EndpointCapabilities` records what the endpoint
+actually *did* during verification, and the flags below are read from that record
+rather than from a constant. What was never probed keeps the pessimistic answer,
+which is the only safe direction for a guess: an unmeasured endpoint behaves
+exactly as every custom endpoint did before this existed.
 
 **Verification** is the other half. An OpenRouter key is tested at the moment it
 is stored, against an origin swe-mux ships; there is nothing further to prove and
@@ -50,6 +61,7 @@ is the boundary that keeps the distinction real.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -57,11 +69,17 @@ from urllib.parse import urlsplit
 __all__ = [
     "LLM_PROVIDERS",
     "MAX_BASE_URL_CHARS",
+    "OPENROUTER_CAPABILITIES",
     "OPENROUTER_ORIGIN",
+    "UNPROVEN_CAPABILITIES",
     "CachePolicy",
+    "CapabilityStore",
+    "CatalogShape",
+    "EndpointCapabilities",
     "LlmEndpoint",
     "LlmReadiness",
     "base_url_error",
+    "capabilities_of_record",
     "normalize_base_url",
     "openrouter_endpoint",
     "readiness",
@@ -82,6 +100,18 @@ MAX_MODEL_CHARS = 200
 #:   hit, and report a zero as unmeasured rather than as a miss.
 CachePolicy = Literal["by_model", "unknown"]
 
+#: What an endpoint's `/models` turned out to be worth.
+#:
+#: - ``annotated`` - OpenRouter's own catalog shape: every entry carries
+#:   ``supported_parameters``, ``architecture``, and a ``pricing`` block. Enough
+#:   to drive the model picker, to price a call, and to shape a request from a
+#:   model's advertised capabilities.
+#: - ``bare`` - an OpenAI-compatible ``/models``: a list of ids and nothing else.
+#:   A picker can list them; nothing can price them.
+#: - ``none`` - no usable ``/models`` at all. The endpoint serves whatever single
+#:   model its operator loaded, and that has to be typed in by hand.
+CatalogShape = Literal["none", "bare", "annotated"]
+
 #: The secret-store names holding each provider's bearer token. A custom endpoint
 #: frequently has none - llama.cpp and Ollama accept any string or no header at
 #: all - so an absent key is a configuration, not an error.
@@ -89,6 +119,139 @@ SECRET_NAMES: dict[str, str] = {
     "openrouter": "openrouter_api_key",
     "custom": "custom_llm_api_key",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointCapabilities:
+    """What one endpoint proved it could do, measured rather than assumed.
+
+    Every field is the answer to a question that was previously hardcoded per
+    provider, and every one of them was wrong for at least one legitimate
+    endpoint. The record is written by the verify action - the one place that
+    already makes a real call to the configured URL with the configured
+    credential - and is fingerprinted alongside it, so editing the endpoint
+    discards the measurement exactly as it discards the proof.
+
+    The defaults are the pessimistic answer on purpose. An endpoint nobody has
+    probed must behave as though it can do nothing special, because every
+    optimistic default here fails *silently*: a cache marker sent to a server
+    that ignores it reports zero cached tokens, which reads as a caching
+    regression rather than as an unanswered question.
+    """
+
+    catalog: CatalogShape = "none"
+
+    reports_cost: bool = False
+    """Whether a completion's `usage.cost` came back populated.
+
+    Distinct from `LlmEndpoint.supports_generation_cost`, which is about
+    OpenRouter's separate `/generation` accounting API. A proxy can report cost
+    per call and have no `/generation` at all, and conflating the two made the
+    budget controls tell such an endpoint it could not bind a dollar cap.
+    """
+
+    reports_cache: bool = False
+    """Whether the usage payload carried `prompt_tokens_details` at all.
+
+    The presence of the *key* is the signal, never its value: a zero
+    `cached_tokens` from a provider that reports caching is a real miss, and a
+    zero from one that does not report it is silence. Those two readings are
+    indistinguishable downstream unless this is recorded here.
+    """
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "catalog": self.catalog,
+            "reports_cost": self.reports_cost,
+            "reports_cache": self.reports_cache,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Any) -> EndpointCapabilities:
+        """Rebuild a record from storage, falling back to unproven on anything odd.
+
+        Deliberately total: this parses a JSON column that a previous version of
+        swe-mux never wrote and a future one may have extended, and the honest
+        recovery from either is the pessimistic default rather than a daemon that
+        will not answer.
+        """
+        if not isinstance(value, dict):
+            return UNPROVEN_CAPABILITIES
+        catalog = value.get("catalog")
+        return cls(
+            catalog=catalog if catalog in ("none", "bare", "annotated") else "none",
+            reports_cost=value.get("reports_cost") is True,
+            reports_cache=value.get("reports_cache") is True,
+        )
+
+
+#: What is assumed about an endpoint nobody has proven. Identical to the fixed
+#: profile every custom endpoint carried before capabilities existed, which is
+#: what makes this change inert for an install that never re-verifies.
+UNPROVEN_CAPABILITIES = EndpointCapabilities()
+
+#: OpenRouter's own, known rather than probed. It is the origin swe-mux ships
+#: against, its catalog shape is the one every other endpoint is compared to, and
+#: spending a verify round-trip to rediscover that would only add a way for the
+#: default provider to appear broken.
+OPENROUTER_CAPABILITIES = EndpointCapabilities(
+    catalog="annotated", reports_cost=True, reports_cache=True
+)
+
+
+def capabilities_of_record(record: Any) -> EndpointCapabilities:
+    """The measurement stored on one verification row, or the unproven default.
+
+    Total on purpose, the same way `EndpointCapabilities.from_dict` is: the
+    column is empty for every row written before capabilities existed, absent
+    entirely on a database this daemon has not migrated yet, and could hold
+    anything at all if hand-edited. Every one of those is answered with the
+    profile that endpoint already behaved as, rather than with an exception on
+    the readiness path.
+    """
+    if not isinstance(record, dict):
+        return UNPROVEN_CAPABILITIES
+    raw = record.get("capabilities_json")
+    if not isinstance(raw, str) or not raw.strip():
+        return UNPROVEN_CAPABILITIES
+    try:
+        return EndpointCapabilities.from_dict(json.loads(raw))
+    except (TypeError, ValueError):
+        return UNPROVEN_CAPABILITIES
+
+
+class CapabilityStore:
+    """The capability records the per-request endpoint resolver reads.
+
+    A cache with a specific job. `LlmEndpoint` is rebuilt from `Config` on every
+    request - that is what lets a corrected base URL take effect on the call that
+    tests it - and that resolution is synchronous, while the durable record lives
+    in SQLite behind an async store. Rather than make endpoint resolution async
+    everywhere it is used, the daemon hydrates this at startup and refreshes it
+    at the three moments that can change the answer: a verification, a key write,
+    and an endpoint edit.
+
+    Empty is not an error state. A miss yields `UNPROVEN_CAPABILITIES`, so a
+    daemon that has not hydrated yet behaves exactly like one talking to an
+    endpoint nobody proved.
+    """
+
+    __slots__ = ("_by_provider",)
+
+    def __init__(self) -> None:
+        self._by_provider: dict[str, EndpointCapabilities] = {}
+
+    def get(self, provider: str) -> EndpointCapabilities:
+        return self._by_provider.get(provider, UNPROVEN_CAPABILITIES)
+
+    def set(self, provider: str, capabilities: EndpointCapabilities) -> None:
+        self._by_provider[provider] = capabilities
+
+    def clear(self, provider: str | None = None) -> None:
+        if provider is None:
+            self._by_provider.clear()
+        else:
+            self._by_provider.pop(provider, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,16 +290,50 @@ class LlmEndpoint:
     """Whether `/models` returns OpenRouter's annotated catalog (pricing, capabilities)."""
 
     supports_generation_cost: bool
-    """Whether `/generation` can be asked what a completion actually cost."""
+    """Whether `/generation` can be asked what a completion actually cost.
+
+    OpenRouter's own accounting API, not part of the OpenAI-compatible surface,
+    so this stays true only for OpenRouter itself. Whether an endpoint reports
+    cost *at all* is the separate and more commonly interesting question, and it
+    is `reports_cost` below.
+    """
 
     requires_verification: bool
     """Whether a durable verified record gates the features that depend on this."""
 
     label: str
 
+    reports_cost: bool = True
+    """Whether a completion here comes back with its own `usage.cost`.
+
+    Split from `supports_generation_cost` because a proxy can do one without the
+    other, and the surfaces that care are the budget controls: a dollar-only cap
+    cannot bind against an endpoint that reports nothing, so the control says so
+    and offers the token axis instead (`budget.py`).
+    """
+
+    capabilities: EndpointCapabilities = UNPROVEN_CAPABILITIES
+    """The measurement the four flags above were derived from.
+
+    Carried rather than discarded so a surface can say *why* an endpoint has no
+    picker or no prices - "its `/models` returned a bare id list" is actionable
+    where "no catalog" is not.
+    """
+
     @property
     def is_openrouter(self) -> bool:
         return self.provider == "openrouter"
+
+    @property
+    def pins_one_model(self) -> bool:
+        """Whether every caller's model id is redirected to this endpoint's own.
+
+        True for the single-model case a custom endpoint usually is, and false
+        once a catalog proves there is something to choose between - which is
+        what lets the per-feature model settings mean what they say against a
+        capable proxy instead of all collapsing onto one pin.
+        """
+        return bool(self.model_override)
 
     def resolve_model(self, requested: str) -> str:
         """The model id to actually send, given what a caller asked for."""
@@ -175,21 +372,54 @@ def openrouter_endpoint() -> LlmEndpoint:
         # they had already proven.
         requires_verification=False,
         label="OpenRouter",
+        reports_cost=True,
+        capabilities=OPENROUTER_CAPABILITIES,
     )
 
 
-def custom_endpoint(*, base_url: str, model: str) -> LlmEndpoint:
+def custom_endpoint(
+    *,
+    base_url: str,
+    model: str,
+    capabilities: EndpointCapabilities = UNPROVEN_CAPABILITIES,
+) -> LlmEndpoint:
+    """A bring-your-own endpoint, shaped by whatever it proved it could do.
+
+    The three OpenRouter-specific behaviours all hang off one signal: an endpoint
+    whose `/models` came back in OpenRouter's *annotated* shape is OpenRouter, or
+    is relaying it faithfully enough to be treated as such. Nothing else serves
+    `supported_parameters` beside `pricing.input_cache_read` - Ollama, llama.cpp,
+    vLLM, and LM Studio all answer with bare ids - so the inference cannot
+    mistake a local server for a router, which is the direction that would hurt.
+
+    Caching is gated on the same signal rather than on `reports_cache`, and the
+    distinction is worth keeping straight: reporting cache numbers says the usage
+    payload is OpenRouter-shaped, while *translating* a `cache_control` marker to
+    whatever the routed provider wants is a thing only OpenRouter (or a
+    passthrough to it) does. An endpoint could plausibly do the first and not the
+    second, and marking a prefix nobody honours writes no cache while reporting
+    zero hits - the silent failure this whole record exists to avoid.
+    """
+    annotated = capabilities.catalog == "annotated"
     return LlmEndpoint(
         provider="custom",
         origin=normalize_base_url(base_url),
         secret_name=SECRET_NAMES["custom"],
-        model_override=str(model or "").strip(),
-        cache_policy="unknown",
-        supports_provider_routing=False,
-        supports_model_catalog=False,
+        # A catalog is a set of models to choose between, so the per-feature
+        # model settings stop being ids this server never heard of and start
+        # meaning what they say. Without one there is nothing to pick from and
+        # the single configured model is the only thing that can be requested.
+        model_override="" if annotated else str(model or "").strip(),
+        cache_policy="by_model" if annotated else "unknown",
+        supports_provider_routing=annotated,
+        supports_model_catalog=annotated,
+        # `/generation` stays OpenRouter's alone. A proxy that reports cost in
+        # `usage` still has no such endpoint, and asking would 404 every call.
         supports_generation_cost=False,
         requires_verification=True,
         label="Custom OpenAI-compatible endpoint",
+        reports_cost=capabilities.reports_cost,
+        capabilities=capabilities,
     )
 
 
@@ -240,16 +470,25 @@ def base_url_error(value: str) -> str | None:
 
 
 def model_error(value: str) -> str | None:
-    """Why this model id cannot be used, or `None`.
+    """Why this model id is malformed, or `None`.
 
-    A *pin* rather than an override, in `modelRouting.ts` vocabulary: blank is a
-    validation error, not a fall-through, because there is no routed default a
-    custom endpoint could inherit. Every model setting in the app names an
-    OpenRouter id, and none of them mean anything to a local server.
+    Blank is **not** an error here, and that is a deliberate move rather than a
+    relaxation. Whether a blank model can be tolerated depends on whether the
+    endpoint serves a catalog to choose from, and that is a measured property
+    living in a SQLite row - which `validate_config` cannot see, being both
+    synchronous and config-only. Refusing blank here meant the answer was
+    hardcoded to "no catalog", which is the wrong answer for every OpenRouter-
+    shaped proxy.
+
+    So the requirement moved to `readiness`, which *does* have the capability
+    record, and states it as `no_model` with prose a surface can render. A
+    validation error and a not-ready reason are two ways of saying the same
+    thing, and only one of them can be conditional on something the validator
+    cannot reach.
     """
     raw = str(value or "").strip()
     if not raw:
-        return "a model id is required"
+        return None
     if len(raw) > MAX_MODEL_CHARS:
         return f"must be at most {MAX_MODEL_CHARS} characters"
     if any(character.isspace() for character in raw):
@@ -257,20 +496,33 @@ def model_error(value: str) -> str | None:
     return None
 
 
-def resolve_endpoint(config: Any) -> LlmEndpoint:
+def resolve_endpoint(
+    config: Any, capabilities: EndpointCapabilities | CapabilityStore | None = None
+) -> LlmEndpoint:
     """The endpoint this install's configuration selects.
 
     Falls back to OpenRouter for an unrecognised provider id rather than raising:
     `validate_config` refuses to save one, so reaching here with a bad value means
     a hand-edited file, and the honest recovery is the default everyone else has
     rather than a daemon that will not answer.
+
+    `capabilities` may be a record or the store to look one up in, because the
+    callers differ in what they hold: the daemon owns a store and resolves per
+    request, while a test or a one-off wants to state a record outright. Omitting
+    it yields the unproven profile, which is what every caller had before
+    capabilities existed.
     """
     provider = str(getattr(config, "llm_provider", "openrouter") or "openrouter")
     if provider != "custom":
         return openrouter_endpoint()
+    if isinstance(capabilities, CapabilityStore):
+        measured = capabilities.get(provider)
+    else:
+        measured = capabilities or UNPROVEN_CAPABILITIES
     return custom_endpoint(
         base_url=str(getattr(config, "custom_llm_base_url", "") or ""),
         model=str(getattr(config, "custom_llm_model", "") or ""),
+        capabilities=measured,
     )
 
 
@@ -324,7 +576,7 @@ def readiness(
     "you changed it since you proved it" distinguished from "you never proved
     it" because they are different sentences and only one of them is a surprise.
     """
-    reports_cost = endpoint.supports_generation_cost
+    reports_cost = endpoint.reports_cost
     if endpoint.provider == "openrouter":
         if not api_key:
             return LlmReadiness(
@@ -346,7 +598,13 @@ def readiness(
             "The custom model endpoint has no base URL yet.",
             reports_cost,
         )
-    if not endpoint.model_override:
+    # Asked only where there is nothing to choose from. An endpoint serving the
+    # annotated catalog has a picker behind it and each feature's own model
+    # setting means what it says, so demanding a single pinned id as well would
+    # refuse a perfectly configured install for the sake of a field it stopped
+    # needing. This is the requirement `model_error` cannot state, because
+    # whether it applies is a measured property rather than a config one.
+    if not endpoint.supports_model_catalog and not endpoint.model_override:
         return LlmReadiness(
             False,
             endpoint.provider,
@@ -399,6 +657,11 @@ def verification_state(
     return {
         "provider": endpoint.provider,
         "verified": bool(stored) and stored == current,
+        # What the proving call measured, so a surface can explain an absent
+        # picker or absent prices instead of only showing their absence. Read off
+        # the endpoint rather than the row: for OpenRouter there is no row at all
+        # and the answer is still known.
+        "capabilities": endpoint.capabilities.as_dict(),
         # A row that no longer matches is more useful than no row: "you changed
         # it" and "you never did it" are different problems.
         "stale": bool(stored) and stored != current,

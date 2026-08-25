@@ -87,7 +87,8 @@ from .lifecycle import (
     heartbeat,
     ledger,
 )
-from .llm_endpoint import LlmReadiness
+from .llm_endpoint import LLM_PROVIDERS, CapabilityStore, LlmReadiness
+from .llm_endpoint import capabilities_of_record as llm_capabilities_of_record
 from .llm_endpoint import readiness as llm_readiness
 from .llm_endpoint import resolve_endpoint as resolve_llm_endpoint
 from .logsetup import bound_request_id, new_request_id, valid_request_id
@@ -697,6 +698,25 @@ async def _build_runtime(app: web.Application, timeline: StartupTimeline) -> Non
         raise
 
 
+async def _hydrate_llm_capabilities(
+    capabilities: CapabilityStore, store: AutomationStore
+) -> None:
+    """Load what each provider's endpoint was last measured to be capable of.
+
+    Runs before the first completion can, so nothing observes the store in its
+    empty state. Extracted from the composition root rather than inlined there
+    for a reason the linter noticed and is right about: `_build_runtime_handles`
+    already sits exactly on the complexity ceiling, and this is a self-contained
+    unit of work rather than another phase of assembly.
+
+    A provider with no row keeps the unproven default, which is both the honest
+    reading and the one that changes nothing for an install that never verified.
+    """
+    for provider in LLM_PROVIDERS:
+        if row := await store.provider_verification(provider):
+            capabilities.set(provider, llm_capabilities_of_record(row))
+
+
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline
 ) -> None:
@@ -950,6 +970,11 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     automation_store = AutomationStore(config.database_path)
     secret_store = PlatformSecretStore(config.data_dir / "automation.secrets.json")
+    # Hydrated from the durable verification row below, before anything can call.
+    # Empty here is the honest starting state and not a hazard: a miss yields the
+    # unproven profile, which is how every custom endpoint behaved before it was
+    # possible to measure one.
+    llm_capabilities = CapabilityStore()
     openrouter = OpenRouterClient(
         secret_store,
         timeout_seconds=config.openrouter_request_timeout_seconds,
@@ -957,8 +982,12 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         # write and by the file watcher, so re-resolving per request is what lets
         # a corrected base URL take effect on the very next call - which is the
         # verify press itself, and would otherwise need a daemon restart to test.
-        endpoint=lambda: resolve_llm_endpoint(config),
+        # The capability store is read through the same closure and for the same
+        # reason: a verification changes what the endpoint is allowed to do, and
+        # that must land on the next call rather than the next restart.
+        endpoint=lambda: resolve_llm_endpoint(config, llm_capabilities),
     )
+    await _hydrate_llm_capabilities(llm_capabilities, automation_store)
     openrouter.set_model_catalog((await automation_store.model_cache())["models"])
     automation = AutomationEngine(
         config.data_dir / "rules.toml",
@@ -1053,6 +1082,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # cheap but not free, and `_enabled_automations` runs on every Tier 0 write.
     llm_readiness_cache: dict[str, tuple[float, LlmReadiness]] = {}
     publish(app, {keys.LLM_READINESS_CACHE: llm_readiness_cache})
+    publish(app, {keys.LLM_CAPABILITIES: llm_capabilities})
 
     async def _llm_ready() -> LlmReadiness:
         """Whether a proven model provider exists, and the sentence saying why not.
@@ -1066,7 +1096,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         cached = llm_readiness_cache.get("current")
         if cached and now - cached[0] < 5.0:
             return cached[1]
-        endpoint = resolve_llm_endpoint(config)
+        endpoint = resolve_llm_endpoint(config, llm_capabilities)
         record = (
             await automation_store.provider_verification(endpoint.provider)
             if endpoint.requires_verification

@@ -51,7 +51,7 @@ and the declared minimum observation capability.
   vLLM, LM Studio with one shape - described by `{base_url, api_key, model}` (`ui.md` for the
   surface). The endpoint is re-resolved per request rather than fixed at daemon start, so a
   corrected base URL takes effect on the next call, which is the verify press itself.
-- Three things are deliberately **not** inferred for a custom endpoint, because each would be a
+- Three things are never **assumed** for a custom endpoint, because each would be a
   silent wrong answer rather than a loud failure:
   - **Cost.** `usage.cost` absent means unknown, never zero, and `/generation` is not asked at
     all - it is an OpenRouter accounting API, not part of the OpenAI-compatible surface.
@@ -66,11 +66,39 @@ and the declared minimum observation capability.
     is sent (an unknown field is exactly what a strict local server refuses), and no implicit hit
     is assumed either, so a zero in the ledger reads as unmeasured rather than as a caching
     regression somebody should investigate.
-- A custom endpoint serves **one** model, and every model setting in the app names an OpenRouter
-  id it has never heard of, so the client redirects all of them to `custom_llm_model` at the seam.
+- They are **measured rather than guessed** (`EndpointCapabilities`, `llm_endpoint.py`).
+  The pessimistic profile above is right for Ollama and wrong for an OpenRouter-shaped proxy -
+  LiteLLM, or a personal gateway - which serves the annotated catalog and reports cost per call.
+  Held as a fixed table keyed by provider id, it cost such an endpoint its model picker, all of
+  its pricing, and its whole cache ledger, for no reason but sharing a provider id with
+  llama.cpp.
+  So the verify action - the one place that already makes a real call to the configured URL with
+  the configured credential - also probes `/models` and reads the proving completion's own usage
+  payload, and the flags are derived from that record instead of from a constant.
+  Three findings are stored: the catalog shape (`annotated`, `bare`, or `none`), whether
+  `usage.cost` came back, and whether `prompt_tokens_details` was present at all.
+  What was never probed keeps the pessimistic answer, so an install that never re-verifies
+  behaves exactly as it did before this existed.
+- **One signal drives every OpenRouter-specific behaviour**: an `annotated` catalog, meaning a
+  majority of entries carry `supported_parameters` beside a `pricing` block.
+  Nothing but OpenRouter or a faithful relay of it serves that shape - Ollama, llama.cpp, vLLM,
+  and LM Studio all answer with bare ids - so the inference cannot mistake a local server for a
+  router, which is the direction that would hurt.
+  A single annotated row among bare ones is deliberately not enough.
+  Caching is gated on the same signal rather than on "reports cache numbers", because reporting
+  is not translating: marking a prefix nobody honours writes no cache and reports zero hits.
+- A custom endpoint **with no catalog** serves one model, and every model setting in the app
+  names an OpenRouter id it has never heard of, so the client redirects all of them to
+  `custom_llm_model` at the seam.
   That is what lets the assistant, the scan timeline, and the titler work against a local model
   without any of them learning about providers; Settings → Accounts says so above the index rather
   than letting it list ids nothing will request.
+  Once a catalog is proven the redirect stops, because there is now something to choose between
+  and each feature's own model setting means what it says.
+  That is also why a blank `custom_llm_model` is no longer a validation error: whether it is
+  required depends on a measurement `_validate` cannot reach, so the requirement moved to
+  `readiness` (code `no_model`), which can see it.
+  A *malformed* model id is still a form error, being answerable from the value alone.
 - A custom endpoint with no key sends no `Authorization` header at all: llama.cpp and Ollama serve
   unauthenticated, and demanding a placeholder would make the commonest local setup fail with a
   message about a credential the server does not want. OpenRouter still refuses without one.
@@ -87,6 +115,24 @@ and the declared minimum observation capability.
   OpenRouter requires no separate verification - storing its key already tests it against an
   origin swe-mux ships, so configuring it *is* verifying it, and demanding a second act would
   switch off every existing install's model-backed automations on upgrade.
+  Its capabilities are likewise known rather than probed: it is the origin swe-mux ships
+  against, and spending a round-trip to rediscover that would only add a way for the default
+  provider to appear broken.
+  The measurement is stored on the verification row (`capabilities_json`) because the two have
+  exactly one lifetime - an edit that invalidates the fingerprint invalidates the measurement
+  with it, since the thing measured is no longer the thing configured.
+  An endpoint edit therefore drops the record outright rather than re-probing, which is the one
+  way this could do harm rather than merely fail to help: a base URL changed from a proxy to a
+  local Ollama, keeping its `annotated` record, would send a routing block and a cache
+  breakpoint to a server that has never heard of either.
+  A failed verification measures nothing, for the same reason it records nothing.
+- The proving completion is deliberately generous with output tokens (`VERIFY_MAX_TOKENS`).
+  It was 32, which is ample for the single sentence it asks for and far too small for a
+  reasoning model, whose reasoning is drawn from the same budget: measured against a real
+  gateway, `openai/gpt-5-nano` spent all of it thinking and returned an empty string - a
+  reachable and usable endpoint reporting itself as the one thing a verify exists to catch.
+  An empty reply that billed output tokens is now reported as exactly that, and an empty reply
+  that billed none is still the damning finding it always was.
 - What an unverified provider gates, and how it is stated rather than failing downstream:
   `automation-enablement.md`.
 - Requests are non-streaming, strict JSON-schema, parameter-required, bounded, timed out,

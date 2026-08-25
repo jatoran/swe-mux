@@ -28,6 +28,23 @@ export type { LlmReadiness }
 
 export const LLM_PROVIDER_CHANGED = 'mux:llm-provider-changed'
 
+/**
+ * What the proving call measured about an endpoint, rather than assumed from its id.
+ *
+ * The three OpenRouter-specific behaviours - a model catalog, provider routing, and cache
+ * markers - used to be a fixed table keyed by provider, which was right for Ollama and
+ * wrong for every OpenRouter-shaped proxy. This is why a surface can now say *which* of
+ * them an endpoint has, and why "no picker" is explainable instead of merely visible.
+ */
+export type EndpointCapabilities = {
+  /** `annotated` carries pricing and parameters; `bare` is ids only; `none` is no catalog. */
+  catalog: 'none' | 'bare' | 'annotated'
+  /** Whether a completion here comes back with its own `usage.cost`. */
+  reports_cost: boolean
+  /** Whether its usage payload carries `prompt_tokens_details` at all. */
+  reports_cache: boolean
+}
+
 /** One configured provider, whether or not it is the active one. */
 export type LlmProviderEntry = {
   id: string
@@ -51,8 +68,31 @@ export type LlmProviderEntry = {
     resolved_model: string
     sample: string
     latency_ms: number
+    capabilities: EndpointCapabilities
   }
   readiness: LlmReadiness
+}
+
+/**
+ * The one-line summary of what an endpoint turned out to be.
+ *
+ * Written from the reader's side rather than the record's: what matters is whether there
+ * is a model picker and whether spending will be visible, not which JSON keys came back.
+ * An unproven endpoint says nothing at all, because "no catalog" before anyone has looked
+ * is a guess rather than a finding, and rendering it as one would be the same mistake the
+ * fixed provider table made.
+ */
+export function capabilitySummary(
+  capabilities: EndpointCapabilities | undefined, verified: boolean,
+): string {
+  if (!capabilities || !verified) return ''
+  const parts: string[] = []
+  if (capabilities.catalog === 'annotated') parts.push('full model catalog with pricing')
+  else if (capabilities.catalog === 'bare') parts.push('model list without pricing')
+  else parts.push('no model list, so it serves the one model named above')
+  parts.push(capabilities.reports_cost ? 'reports cost per call' : 'reports no cost')
+  if (capabilities.reports_cache) parts.push('reports prompt caching')
+  return `Measured: ${parts.join(' · ')}.`
 }
 
 export type ProviderStatusPayload = {
@@ -78,6 +118,15 @@ export type VerifyResult = {
   output_tokens?: number
   cost_usd?: number | null
   error?: string
+  capabilities?: EndpointCapabilities
+  /**
+   * Whether an empty reply was a reasoning model thinking past the probe's budget.
+   *
+   * The surface must not report that as "the endpoint answered with nothing", which is
+   * otherwise the single most damning thing a verify can say - and here would be a
+   * statement about the size of the question rather than about the endpoint.
+   */
+  spent_budget_reasoning?: boolean
   verification: LlmProviderEntry['verification']
   llm: LlmReadiness
 }

@@ -119,6 +119,16 @@ def apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     config: Config = app[keys.CONFIG]
     if changed & LLM_ENDPOINT_FIELDS:
         forget_llm_readiness(app)
+        # The measurement described the endpoint that *was* configured. Keeping
+        # it across an edit is the one way this feature could do harm rather than
+        # merely fail to help: a base URL changed from an OpenRouter-shaped proxy
+        # to a local Ollama would otherwise keep its `annotated` record, and the
+        # next call would carry a `provider` routing block and a cache breakpoint
+        # to a server that has never heard of either. Dropped rather than
+        # re-probed, because re-proving an endpoint is the verify press's job and
+        # doing it implicitly here would spend a completion nobody asked for.
+        if capabilities := app.get(keys.LLM_CAPABILITIES):
+            capabilities.clear()
     if "log_level" in changed:
         with suppress(ValueError):  # _validate already constrains the value
             set_log_level(config.log_level)

@@ -107,6 +107,11 @@ Rate limits and per-call ceilings are deliberately *not* budgets: they count act
 Which language-model endpoint the install talks to, and whether it is proven.
 
 - The `LlmEndpoint` descriptor: origin, secret name, single-model override, cache policy, and what OpenRouter-specific behaviour does or does not apply.
+- `EndpointCapabilities`, the measured record those flags are derived from - catalog shape, whether cost is reported, whether cache detail is reported.
+- `CapabilityStore`, the live cache the per-request endpoint resolver reads.
+  It exists because resolution is synchronous while the durable record is in SQLite behind an async store, and a verification has to take effect on the next call rather than the next restart.
+- `capabilities_of_record`, which parses the stored column and is total.
+  An absent, empty, or unparseable value is the unproven default, never an exception on the readiness path.
 - Base-URL and model validation.
 - The fingerprint over the whole `{base_url, model, api_key}` triple, which makes an edit un-verify the endpoint by construction.
 - The `readiness` verdict, with the sentence a surface renders verbatim.

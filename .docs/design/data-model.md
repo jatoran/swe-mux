@@ -249,7 +249,7 @@
   completion, so its zero means free.
 - `llm_provider_verification` (schema 10): one row per configured model provider, holding the
   completion that proved it — `fingerprint`, `base_url`, `model`, `resolved_model`, a bounded
-  `sample` of the reply, `latency_ms`, and `verified_at`.
+  `sample` of the reply, `latency_ms`, `verified_at`, and `capabilities_json`.
   `fingerprint` is a digest of the whole endpoint triple (base URL, model, key) and is never
   compared as a string by a caller: readers recompute the live fingerprint and compare, which is
   what makes editing the endpoint un-verify it *by construction* rather than by every write path
@@ -258,6 +258,14 @@
   `sample` is kept because the point of verifying is that a person reads what came back: an
   endpoint answering with an empty string or a chat template's own scaffolding is reachable and
   unusable at once.
+  `capabilities_json` is what the proving call *measured* about the endpoint - its catalog
+  shape, whether it reported cost, whether it reported cache detail - and lives here rather
+  than in its own table because the two have exactly one lifetime: an edit that invalidates
+  the fingerprint invalidates the measurement with it, since the thing measured is no longer
+  the thing configured.
+  Empty string means a row written before this was recorded, which reads as the pessimistic
+  default rather than as a measurement of zero — an old row proves the endpoint *works* and
+  says nothing about what it can do.
   One row per provider rather than a history — the question is whether the endpoint *as it
   stands* is proven, and a log of superseded fingerprints would only make that harder to read.
 - `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
