@@ -22,7 +22,7 @@ from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.llm_endpoint import CapabilityStore
-from swe_mux.openrouter import OpenRouterError, OpenRouterVerification
+from swe_mux.openrouter import CatalogProbe, OpenRouterError, OpenRouterVerification
 from swe_mux.project_files import read_project_config, write_project_config
 from swe_mux.routes.automation import (
     automation_provider_key,
@@ -76,10 +76,12 @@ class ProviderStub:
     """Scripted `verify`/`test_key`, recording the endpoint each was handed."""
 
     def __init__(self, *, output: str = "swe-mux endpoint check ok.",
-                 error: str = "", catalog: str = "none") -> None:
+                 error: str = "", catalog: str = "none",
+                 catalog_error: str = "") -> None:
         self.output = output
         self.error = error
         self.catalog = catalog
+        self.catalog_error = catalog_error
         self.verified: list[str] = []
         self.probed: list[str] = []
         self.listed: list[str] = []
@@ -107,9 +109,10 @@ class ProviderStub:
             cost_usd=None,
         )
 
-    async def catalog_probe(self, *, endpoint: Any = None) -> tuple[str, list[str]]:
+    async def catalog_probe(self, *, endpoint: Any = None) -> CatalogProbe:
         self.probed.append(endpoint.provider)
-        return self.catalog, (["qwen2.5-coder:7b"] if self.catalog != "none" else [])
+        ids = ["qwen2.5-coder:7b"] if self.catalog != "none" else []
+        return CatalogProbe(self.catalog, ids, self.catalog_error)
 
     async def models(self, *, endpoint: Any = None) -> list[dict[str, Any]]:
         self.listed.append(endpoint.provider)
@@ -517,7 +520,38 @@ async def test_a_catalog_less_endpoint_still_needs_its_one_model_named(
     try:
         response = await client.post("/api/automation/provider/verify", json={})
         assert response.status == 422
-        assert "model id is required" in (await response.json())["error"]
+        assert "publishes no model catalog" in (await response.json())["error"]
+    finally:
+        await client.close()
+        store.close()
+
+
+async def test_a_refused_catalog_is_not_reported_as_a_missing_model(
+    tmp_path: Path,
+) -> None:
+    """The two states under one empty catalog, and why they cannot share a message.
+
+    An endpoint whose catalog fetch is *refused* - the common case being one that
+    wants a credential nobody has stored - looks identical from outside to one
+    that genuinely publishes none. Reporting the first as "an exact model id is
+    required" points at the single field that is correctly blank, and says nothing
+    about the key or the URL that actually needs attention. Measured on the real
+    install: a 401 from the gateway's catalog route surfaced exactly that way.
+    """
+    config = custom_config(tmp_path, model="")
+    app, store = build(tmp_path, config)
+    app[keys.OPENROUTER].catalog = "none"
+    app[keys.OPENROUTER].catalog_error = "request failed with HTTP 401"
+    client = await client_for(app)
+    try:
+        response = await client.post("/api/automation/provider/verify", json={})
+        assert response.status == 422
+        error = (await response.json())["error"]
+        assert "HTTP 401" in error
+        # It names the URL it could not read and the two controls that fix it.
+        assert "/models" in error
+        assert "API key" in error
+        assert "model id is required" not in error
     finally:
         await client.close()
         store.close()

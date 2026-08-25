@@ -45,7 +45,12 @@ from ..llm_endpoint import verification_state as llm_verification_state
 from ..models import (
     MuxEvent,
 )
-from ..openrouter import OpenRouterClient, OpenRouterError, cache_saving_usd
+from ..openrouter import (
+    CatalogProbe,
+    OpenRouterClient,
+    OpenRouterError,
+    cache_saving_usd,
+)
 from ..project_card import PROJECT_CARD_RULE_ID
 from ..project_context import ProjectContext
 from ..project_files import (
@@ -726,6 +731,27 @@ def _verification_model(
     return catalog_ids[0] if catalog_ids else ""
 
 
+def _no_model_reason(endpoint: LlmEndpoint, probe: CatalogProbe) -> str:
+    """Why there was no model to send a proving completion to.
+
+    Two states hide under one empty catalog and they want opposite fixes, so this
+    says which one happened. A fetch that was *refused* - the common case being an
+    endpoint that wants a credential nobody has stored - is a problem with the URL
+    or the key, and reporting it as "an exact model id is required" points at the
+    one field that is correctly blank.
+    """
+    if probe.error:
+        return (
+            f"Could not read a model catalog at {endpoint.catalog_url}: {probe.error}. "
+            "Fix the catalog URL or the API key above, or name the one model this "
+            "endpoint serves."
+        )
+    return (
+        "This endpoint publishes no model catalog, so it needs the one model it "
+        "serves named above before it can be verified."
+    )
+
+
 async def verify_automation_provider(request: web.Request) -> web.Response:
     """Prove one configured endpoint with a single completion, and record it.
 
@@ -757,12 +783,16 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
     # pinning a capable endpoint to the pessimistic profile over one bad minute
     # is the thing that would matter - the same reasoning that makes a failed
     # verification record nothing at all.
-    catalog, catalog_ids = await provider.catalog_probe(endpoint=endpoint)
+    probe = await provider.catalog_probe(endpoint=endpoint)
     try:
-        result = await provider.verify(
-            endpoint=endpoint,
-            model=_verification_model(endpoint, catalog_ids, config),
-        )
+        model = _verification_model(endpoint, probe.ids, config)
+        if not model:
+            # Said here rather than left to `verify`, which can only report that a
+            # model is required and cannot know that the reason none was available
+            # is a catalog fetch the endpoint refused. Pointing at the model field
+            # over a 401 sends the reader to the wrong control entirely.
+            raise OpenRouterError(_no_model_reason(endpoint, probe))
+        result = await provider.verify(endpoint=endpoint, model=model)
     except (OpenRouterError, ValueError) as exc:
         record = await automation_store.provider_verification(endpoint.provider)
         return json_response(
@@ -779,7 +809,7 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
         )
     # Recorded only now the completion has proved the endpoint answers at all.
     capabilities = EndpointCapabilities(
-        catalog=catalog,
+        catalog=probe.shape,
         reports_cost=result.reports_cost,
         reports_cache=result.reports_cache,
     )

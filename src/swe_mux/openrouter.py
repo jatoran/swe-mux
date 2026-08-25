@@ -27,6 +27,7 @@ __all__ = [
     "OpenRouterClient",
     "OpenRouterError",
     "OpenRouterResult",
+    "CatalogProbe",
     "OpenRouterToolTurn",
     "OpenRouterVerification",
     "apply_session_routing",
@@ -339,6 +340,21 @@ class OpenRouterVerification:
     probe was too small for this model", which says nothing about the endpoint at
     all. Without it a perfectly good reasoning model verifies as broken, which is
     exactly backwards from what a verify is for.
+    """
+
+
+@dataclass(slots=True, frozen=True)
+class CatalogProbe:
+    """One look at an endpoint's model catalog."""
+
+    shape: CatalogShape
+    ids: list[str]
+    error: str
+    """The fetch's own failure, or `""` when it succeeded and simply held nothing.
+
+    An empty catalog and a refused one are the same `none` to everything that only
+    wants the shape, and want opposite fixes from a person: name the one model this
+    server serves, or supply the credential it asked for.
     """
 
 
@@ -681,12 +697,12 @@ class OpenRouterClient:
         single-model case, not an error worth surfacing: the verify completion
         that runs beside this is what decides whether the endpoint works.
         """
-        return (await self.catalog_probe(endpoint=endpoint))[0]
+        return (await self.catalog_probe(endpoint=endpoint)).shape
 
     async def catalog_probe(
         self, *, endpoint: LlmEndpoint | None = None
-    ) -> tuple[CatalogShape, list[str]]:
-        """The catalog's shape and the ids in it, from one fetch.
+    ) -> CatalogProbe:
+        """The catalog's shape, the ids in it, and why there were none.
 
         The ids matter because of a bootstrap the shape alone cannot solve: an
         endpoint that publishes a catalog does not need its single-model field
@@ -694,14 +710,21 @@ class OpenRouterClient:
         to. Asking the operator to type an id they will never use again, into a
         field the very act of verifying makes unnecessary, is a dead end - so the
         verify action picks one from here instead.
+
+        `error` is the third field because the two failures underneath `none` need
+        different fixes and look identical from outside: a server that genuinely
+        publishes no catalog wants its one model named, and a catalog fetch that
+        was *refused* wants a credential or a corrected URL. Collapsing them
+        reported a 401 as "an exact model id is required", which sends the reader
+        to the wrong field entirely.
         """
         target = endpoint if endpoint is not None else self.endpoint
         try:
             entries = await self._catalog_entries(target)
-        except OpenRouterError:
-            return "none", []
+        except OpenRouterError as exc:
+            return CatalogProbe("none", [], str(exc))
         if not entries:
-            return "none", []
+            return CatalogProbe("none", [], "")
         ids = [str(item["id"]) for item in entries]
         annotated = sum(
             1
@@ -711,7 +734,9 @@ class OpenRouterClient:
             and isinstance(item.get("pricing"), dict)
             and item["pricing"]
         )
-        return ("annotated" if annotated * 2 > len(entries) else "bare"), ids
+        return CatalogProbe(
+            "annotated" if annotated * 2 > len(entries) else "bare", ids, ""
+        )
 
     def _remember_accepted_profile(
         self, key: tuple[str, str, str], profile: dict[str, Any]
