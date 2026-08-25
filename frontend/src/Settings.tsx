@@ -1674,6 +1674,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               {value:'custom',label:'Custom OpenAI-compatible endpoint'},
             ]}/><small>Everything model-backed follows this: automation observers, the scan timeline, spoken summaries, attention narration, the titler, the Project context card, and the Mux assistant.</small></label>
             <ProviderReadiness readiness={provider?.llm}/>
+            {/* The one bound on the transport rather than on a feature, and it applies
+                to whichever endpoint is selected - so it lives with the provider choice
+                rather than inside a section that disappears when you switch away. */}
+            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))} /><small>How long any model-backed call waits for an answer, on OpenRouter and on a custom endpoint alike. A local server generating on CPU is the case that needs it raised. <strong>Takes effect on the next daemon restart</strong> — the HTTP client is built once at start.</small></label>
             {draft.llm_provider==='custom'&&<Fragment>
               <label data-setting="custom_llm_base_url">Base URL<input type="url" autocomplete="off" spellcheck={false} value={draft.custom_llm_base_url} placeholder="http://127.0.0.1:11434/v1" onInput={event=>change('custom_llm_base_url',event.currentTarget.value)} /><small>Everything up to but not including <code>/chat/completions</code>. Ollama serves <code>http://127.0.0.1:11434/v1</code>, llama.cpp and LM Studio <code>http://127.0.0.1:8080/v1</code> and <code>:1234/v1</code>, vLLM whatever host you started it on.</small></label>
               <label data-setting="custom_llm_model">Model<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_model} placeholder="qwen2.5-coder:7b" onInput={event=>change('custom_llm_model',event.currentTarget.value)} /><small>Only used when this endpoint publishes no model catalog, in which case it serves one model and every setting under <strong>Models</strong> resolves to it. Leave it blank if there is a catalog — then each feature's own model reaches the wire exactly as written.</small></label>
@@ -1715,17 +1719,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                 : <p><strong>{verifyResult.provider} did not answer.</strong> {verifyResult.error}</p>}
             </div>}
           </section>
-          <section><h3>OpenRouter</h3>
+          {/* Only while it is the provider in play. A key section for an endpoint
+              nothing is routing through is a control that cannot do anything, and it
+              was the largest thing standing between the provider choice and the models
+              it decides. Switching the dropdown above brings it straight back - the
+              draft updates without a save - so nothing is unreachable, only hidden
+              while it would be inert. */}
+          {draft.llm_provider==='openrouter'&&<section><h3>OpenRouter</h3>
             <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
             <p class="profile-hint">One OpenRouter key unlocks every model-backed feature: automation observers, the scan timeline, spoken TTS summaries, attention narration, the conversation titler and summarizer, and the Project context card. Without it these features stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
-            {draft.llm_provider!=='openrouter'&&<p class="settings-warning">A custom endpoint is selected, so this key is stored but unused. Switch the provider above back to OpenRouter to route through it again.</p>}
             <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
             <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
             <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
-            {/* The one bound on the transport rather than on a feature, so it belongs
-                with the endpoint rather than duplicated into each feature's section. */}
-            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))} /><small>How long any model-backed call waits for an answer, on this provider and on a custom endpoint alike. A local server generating on CPU is the case that needs it raised. <strong>Takes effect on the next daemon restart</strong> — the HTTP client is built once at start.</small></label>
-          </section>
+          </section>}
 
           <section><h3>Models</h3>
             <p>Every model this install calls, edited in one place. Two of them are <em>routed</em> defaults that the rest draw from: a feature wanting something cheaper or better <em>overrides</em> one, and a feature needing a capability the routed pair cannot guarantee <em>pins</em> its own. They are together rather than beside the features they configure because switching endpoint changes all of them at once, and checking seven settings across four tabs afterwards is how a broken one goes unnoticed.</p>
