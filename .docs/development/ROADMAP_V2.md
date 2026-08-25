@@ -413,8 +413,98 @@ The dynamic grammar specifiers are mirrored into `optimizeDeps.include` because 
 
 ### D3 - deploy checkpoint (primary; no reap)
 
-- [ ] D3.1 Full gate, redeploy, full Playwright renderer suite on a free port.
-- [ ] D3.2 Live soak: settings save/reset from two devices (revision conflict path); a full agent session lifecycle checking the new request-IDs correlate across `daemon.log` and `access.log`; MCP tool sweep against live sessions; editor and change-map lazy loads on desktop and mobile.
+- [x] D3.1 Full gate, redeploy, full Playwright renderer suite on a free port.
+- [x] D3.2 Live soak: settings save/reset from two devices (revision conflict path); a full agent session lifecycle checking the new request-IDs correlate across `daemon.log` and `access.log`; MCP tool sweep against live sessions; editor and change-map lazy loads on desktop and mobile.
+
+Run 2026-08-24 in the primary checkout against the real daemon on 8765, with 20-23 live sessions resident throughout.
+No reap: `supervisor_bundle_current()` was `True` before and after, the redeploy logged "Supervisor bundle up to date", and supervisor pid 89372 (started 13:18) was never touched.
+Scope covers all of Wave 3 plus the operator's project-config fix (`d196a90`), which is on master and shipped in the same bundle.
+
+The gate is green on master: 4907 passed / 16 skipped in 52.8s, ruff clean, mypy clean over 216 files plus both `--platform` passes, `tsc --noEmit` clean for `src` and for the renderer harnesses, and 2042 frontend tests passing.
+No frontend dependency landed this wave - `frontend/package.json` last moved at `f710c14` on 2026-08-22, already installed at D2 - so the `npm ci` trap did not apply, and S10's `vite.config.ts` change is picked up by the build the redeploy runs anyway.
+The same 7 `@pytest.mark.asyncio` warnings in `test_assistant.py` are the only warnings left, unchanged from D2 and still S12.4's scope.
+
+**The redeploy shipped, and three independent readings of the entry chunk prove it.**
+The live daemon, `src/swe_mux/static/index.html`, and `dist/swe-mux/_internal/swe_mux/static/index.html` all serve `index-BXP-KtkV.js` and `index-5gIQGhV9.css`; before the run all three served D2's `index-DQBLUWjn.css`.
+The shipped entry is 2,170,976 bytes raw / 654,935 gzip, against the 3.42 MB / 1.08 MB the S10 table records as "before" - so the 36.7% split is in the bundle a browser actually loads, not only in a build log.
+`CodeEditor-CdaXUKvk.js` (361,627) and `ChangeMapPane-C_BstNQW.js` (176,280) are separate files in the bundle, and the served `index.html` contains exactly two asset references and no `modulepreload` at all.
+The running process is the frozen app (`dist\swe-mux\swe-mux.exe --daemon-child`), which is why a plain `npm run build` would again have shipped nothing.
+The swap hit the documented `WinError 5` straggler and escalated to an image-wide kill of 5 in-session hook helpers, exactly as the script says it will; no session was affected.
+
+The renderer suite is 336/336 in 2.4 minutes on `RENDERER_PORT=4231` (`netstat` showed 4174, 4231, 4232 and 4233 all free; 4231 was chosen so a worktree run could not collide).
+`rail-overflow.spec.ts` passed first time, so its known flake did not appear and no isolated re-run was needed.
+
+What the soak proved:
+
+- **A session-preserving restart no longer lies about how the last daemon ended, and no longer loses its last writes.**
+  The redeploy's own successor still logged "previous daemon pid 78876 died without a clean shutdown", because *that* predecessor was the D2 bundle and S7.5's record is written by the process being replaced - the first restart after S7.5 lands cannot benefit from it.
+  A `POST /api/daemon/restart` afterwards, with the new code on both sides, is the real test and it is clean: `lifecycle.log` shows `daemon pid 15952 planned detach handoff requested`, then `daemon pid 16028 started`, then `daemon pid 15952 clean exit (intent=detach)`, and `daemon.log` carries no crash warning at all for that transition.
+  S7.4's ordering fix is visible beside it: the successor logged `waiting for predecessor daemon pid 15952 to finish its shutdown drain`, warned at the 20s bound and started anyway rather than refusing, and the predecessor finished 5s later.
+  `sqlite_write_lost` has never fired - not once in 47,310 lines - and `database is locked` appears zero times after either transition, against five occurrences during D2's restart at 17:01 (`git-monitor`, `session_recovery`, and the loop faults they caused).
+  Both transitions preserved every session: 22 live before the redeploy and 22 reattached, 21 reattached after the restart with the fleet back to 22 as agents spawned, supervisor `connected`, `supervisor_unadopted` 0, `cold_sessions` 0, and no session marked ended.
+- **S7's correlation and typed errors, measured on the wire.**
+  A plain `GET /api/health` comes back with a minted `X-Request-ID`; a well-formed inbound one is adopted rather than replaced.
+  A bogus session id on `GET /api/sessions/{sid}/diagnostic-bundle` answers `404 {"error":"no such session","code":"not_found","kind":"session"}` - it names the kind and the key the caller sent appears nowhere in the body.
+  A `PATCH /api/config` with a list body answers `500 {"error":"internal server error"}` and logs `unhandled request error method=PATCH path=/api/config request_id=d3soak-500-0001` with the traceback naming `routes/settings.py:95` and `TypeError: pop expected at most 1 argument, got 2` - the deliberate/accidental split doing exactly what S7.3 describes.
+  All three request ids appear in `access.log` and `daemon.log` alike, and the daemon's own background lines carry them too (a transcript relocation and the observation warning it caused share one id).
+- **S8's consolidation is invisible in the way it was meant to be.**
+  Zero `exit_code=125` in the whole log and zero output-cap warnings, so nothing tripped the 16 MiB bound.
+  `git-monitor` ran 25 iterations with 0 faults and 0 restarts, and `GET /api/git/graph` and `/api/git/worktrees` return real data for the live repository including this afternoon's commits - the `stdin=DEVNULL` change is as invisible as predicted.
+  `worktree_graveyard_purge_failed` fired 0 times since the redeploy against 1,165 before S8.4; the last occurrence in the log is 14:31, on the old build.
+  Provider-quota polling produces fresh rows (`sampled_at` 19:03, `status: ready`, `freshness: fresh`) for four of five accounts, and the provider-account audit trail is current.
+- **S9's consumers answer honestly against live data.**
+  `blast_radius` on `src/swe_mux/git_monitor.py` returns `co_change_available: true` with 21 hop-ordered callers, a 41-file co-change net and two owning docs, and no `co_change_unavailable_reason` - the silent-empty-list failure is gone in the direction that matters.
+  `status()` carries `transcript_parses {in_flight: 0, timeouts: 0, refusals: 0}` after 12 tool calls including six from other agents' sessions.
+  `list_sessions` fitted 20 sessions across 8 Projects into one page with `has_more: false`, and `deterministic_consumers` reports `running: true`, `findings: 0`, `last_error: null` - the doc-debt and scan consumers are quiet rather than broken.
+- **S10's transaction and its split, on the shipped daemon.**
+  `POST /api/settings/apply` with the current revision answers `200` with `committed: ["config"]` and moves the revision 154 -> 155.
+  Replaying the now-stale `_revision`, with a *different* keybindings document attached, answers `409 {"error":"configuration changed externally","revision":155}` and commits nothing: `keybindings.json` is byte-identical with an unchanged mtime, the config revision and field are unchanged, and no `keybindings.json.tmp` is left behind.
+  Driving the shipped page with Playwright, the initial load fetches three assets (entry JS, entry CSS, the note editor's wasm) and not one grammar, `CodeEditor` or `ChangeMapPane` chunk; importing the two the way the lazy wrappers do fetches them at that moment and nothing sooner.
+  A machine-speed typing burst against the real `CodeEditor` (two 61-character bursts with no inter-key delay, run against the renderer harness) loses no characters in either the document or the parent's stored value - the condition that wedged the page before `pendingEchoes`.
+- **The project-config fix ends the false conflict without weakening the real guard.**
+  Three field-scoped writes in quick succession from two different drawer sections - the defaults form, then the automation opt-ins, then the defaults form again on its *original* cached read - all answer `200`.
+  A whole-document write with a deliberately stale revision still answers `409 revision_conflict`.
+  The file is byte-identical afterwards and its values are unchanged, so the guard was exercised rather than the content.
+- **The gated live tiers are green.**
+  32 passed / 15 skipped in 225s across `live_agent`, `live_subagent` and `live_mcp`: observer conformance for claude, codex, omp and pi, the opencode store canary, the subagent canaries, and the six MCP-wire control tests (`request_spawn`, `end_session`, `interrupt`) driven through a real agent's `/mcp` on an isolated daemon.
+  The 15 skips are the `live_automations` tier (11) and four tests behind `SWEMUX_RUN_LIVE_PHASE2_TESTS` or absent per-provider system credentials - none of them in D3's scope.
+- **The log watch is clean.**
+  Across 6,653 post-redeploy requests the only 5xx is this checkpoint's own deliberate probe, and the 4xx are its own too (four `PUT /api/project/config` 400s from a first attempt with an unregistered project id, four 404s) plus seven `409`s from other agents' queue head-of-line contention.
+  The 1,091 `503`s are the two startup windows answering "starting, phase X" as designed; the hook posts refused in that window are covered by the shim's disk spool, and no spool residue from today exists.
+  Exactly two `ERROR` lines fired after readiness - the deliberate 500, and one pre-existing `asyncio: Task was destroyed but it is pending!`.
+  The S2 counters stayed at zero: no `unreachable`, no frame desync, no swallowed `PtyError`, no output-drop or backpressure line.
+  Retention swept on schedule (`automation_retention_swept tables=14 rows_removed=0 elapsed_ms=12.9`).
+
+Five defects, none of them Wave 3's and none blocking Wave 4:
+
+- **The code-structure graph has not re-indexed since Wave 3 landed, and answers stale rather than empty.** (medium)
+  `code_context` returns nothing at all for `src/swe_mux/errors.py`, `src/swe_mux/bounded_subprocess.py` and `src/swe_mux/cli_version.py` - the three modules S7 and S8 created - and returns `logsetup.py`'s *pre-S7* symbol set, missing `request_id_var`, `bound_request_id`, `new_request_id` and the structured formatter.
+  `git_monitor.py`'s indexed imports likewise omit `bounded_subprocess`.
+  The cause is in `deterministic_consumers._code_graph`: `index_project` runs "at most once per project per process" and only when a session in that Project produces a turn with source writes, while `maintain_files` only covers files this daemon's own sessions edited.
+  A branch that arrives by `git merge` - which is every landing - is therefore invisible until some session happens to edit a source file in that Project.
+  This is pre-existing behaviour rather than S9's doing, but it is what S9's tools read, and stale-but-plausible is worse than the empty result the tools' own notes warn about.
+- **`ccusage` refreshes have been timing out at 30s since 2026-08-21.** (low)
+  A forced `POST /api/usage/refresh` during the soak failed the same way; the usage cache's last successful refresh was 2026-08-24 00:40.
+  Pre-existing and outside this wave, and S8.1 made it *more* legible rather than less - the failure now logs `bounded_command_timed_out label=ccusage timeout_s=30` beside the adapter's own line, both carrying the request id.
+- **`run_bounded`'s `operation_id` parameter has no caller.** (low)
+  All three migrated sites - `usage.py`, `git_monitor.py`, `provider_accounts.py` - omit it, so every `bounded_command_timed_out` and cap line reads `operation_id=None` while the sibling line from the caller carries a real one.
+  S7's request-id contextvar covers the request-driven paths, but `git-monitor`'s poll has no request id either, so a timeout there would log with neither identifier.
+- **`SessionManager._fanout` tasks are garbage-collected while pending.** (low)
+  48 `ERROR asyncio: Task was destroyed but it is pending!` since 2026-08-19, one of them during this soak at the exact moment the Playwright browser closed.
+  A disconnecting WebSocket client leaves its fanout task uncancelled; the consequence is an unowned ERROR line rather than lost output.
+- **Every scan-timeline completion pays a rejected round-trip first.** (low)
+  `OpenRouter rejected completion parameter profile ... (max_completion_tokens -> max_tokens)` appears 23,132 times since 2026-08-20.
+  `OpenRouterClient` picks its profile order from `_model_capabilities` on every call and never remembers which one the model accepted, so the same rejection repeats forever for `deepseek/deepseek-v4-flash`.
+  Natural S12 material: one cached per-model profile removes an HTTP round-trip from every scan and 23k lines from the log.
+
+Also noted, not defects: one supervisor-side `KeyError: 'unknown session'` at 18:51 from a resize for a session the supervisor did not know - the `supervisor.py:655` raise site S7.3 deliberately left alone, and pre-redeploy; the scan-timeline `OpenRouter structured response must be an object` behavior-repair path firing twice and repairing both times; the `session_claimed_infrastructure` ownership diagnostic, which fires for every redeploy run from inside a session; and six hook-spool files from 2026-08-10 to 2026-08-17 belonging to sessions that ended before their spool drained.
+
+Not exercised here, deliberately: `POST /api/config/reset` ("Restore defaults") was not run against the live daemon, because it would discard the operator's real settings to prove a confirmation dialog that `settings-save.spec.ts` already covers.
+Left for the operator: the mobile pass (editor and change-map lazy loads on a phone, and how the placeholder reads over a slower link), a genuine two-device settings save, and the voice round-trip.
+One thing to watch there: a 409 from another device renders as "invalid · nothing was changed" plus the daemon's "configuration changed externally" in the errors block.
+"Nothing was changed" is true, but the shared `_revision_conflict` answer carries no `committed` array, so `saveFailureStatus` falls through to the same wording an invalid field gets.
+
+**Wave 4 is unblocked.**
 
 ## Wave 4 - hygiene, dependencies, gates (S11, S12 in parallel, then D4)
 
