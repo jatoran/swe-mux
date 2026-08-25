@@ -300,7 +300,10 @@ class KokoroEngine:
         try:
             import onnxruntime
         except ImportError as exc:  # pragma: no cover - dependency of the package
-            raise KokoroError("onnxruntime is not installed; run `uv sync`") from exc
+            raise KokoroError(
+                "onnxruntime is not installed; local speech synthesis needs the "
+                "voice-local extra (`uv sync --extra voice-local`)"
+            ) from exc
         if not self.paths.model.exists() or not self.paths.tokenizer.exists():
             raise KokoroError(
                 "the Kokoro model is not downloaded; download it in Settings → Voice"
@@ -343,7 +346,10 @@ class KokoroEngine:
             try:
                 from misaki import en
             except ImportError as exc:
-                raise KokoroError("the misaki G2P package is not installed; run `uv sync`") from exc
+                raise KokoroError(
+                    "the misaki G2P package is not installed; local speech synthesis "
+                    "needs the voice-local extra (`uv sync --extra voice-local`)"
+                ) from exc
             # fallback=None is the espeak-free constraint: unknown words come
             # back as the unknown token and are repaired here instead of being
             # handed to a GPL phonemizer.

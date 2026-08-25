@@ -29,6 +29,14 @@ hiddenimports = []
 # three surfaces only in the frozen app ("Can't find model 'en_core_web_sm'"),
 # never in a source run.
 #
+# These four - the three above plus `num2words` - reach the environment through
+# the `voice-local` extra, which is optional to install and mandatory to build
+# from. `collect_all` on an absent package returns empty lists without failing,
+# so a build from an environment without the extra would produce a bundle with
+# no TTS and no `_internal/num2words/`. `build_desktop.verify_build_extras_installed`
+# refuses that build up front rather than letting the license verification catch
+# it minutes later.
+#
 # `pystray` and `num2words` are the two LGPL packages in the shipped closure
 # (`packaging/license_audit.py` allowlists both). `collect_all` defaults to
 # `include_py_files=True`, so each lands as readable source under

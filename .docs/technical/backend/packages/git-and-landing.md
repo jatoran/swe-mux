@@ -64,9 +64,11 @@ Content-free event correlation that answers "who made this commit".
 **Not:** shell interpretation, repository mutation, Git author identity, injected commit identity, or browser presentation.
 It must never claim authorship of a commit that merely arrived, credit a merge's creator with the branch content it carries, or put a branch author's paths on a merge they did not write.
 
-## `git_provenance_backfill.py`
+## `tools/git_provenance_backfill.py`
 
 Explicit read-only planning and idempotent batch import from provider-native tool calls and results, with fixed Git object inspection.
+It lives under `swe_mux/tools/` because nothing imports it: it is run by hand as `python -m swe_mux.tools.git_provenance_backfill`, and a module with no callers sitting beside the daemon's own reads as dead code.
+Inside the package rather than the repository's top-level `tools/`, so it keeps its relative imports, mypy's strict pass, ruff, and its tests.
 
 - Ancestry re-attribution of rows the retired shared-checkout rule downgraded.
 - Bounded historical contributor derivation through `git_provenance`'s own matchers.

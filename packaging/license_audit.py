@@ -17,16 +17,20 @@ Why membership and licenses come from different places
 ------------------------------------------------------
 `uv.lock` is authoritative for *which* packages are in the distributed closure
 and is readable with no environment at all. It does not record licenses. The
-installed `dist-info` records licenses but is only complete when every extra is
-installed, and a bare `uv sync` (what `.worktree-setup` runs) deliberately skips
-the `desktop` extra, so `pystray` is absent from a normal dev venv.
+installed `dist-info` records licenses but is only complete when every
+distributed extra is installed, and a bare `uv sync` installs no extras at all,
+so `pystray` and the `voice-local` closure behind it are absent from such a venv.
+
+That asymmetry is why the closure walk is defined over `DISTRIBUTED_EXTRAS`
+rather than over whatever is installed: the answer must not depend on which
+extras the machine running the audit happened to sync.
 
 So the split is:
 
-- ``--write`` needs the full closure installed (``uv sync --all-extras``). It
-  reads licenses from `dist-info`, writes the human-readable
-  `THIRD-PARTY-NOTICES.md`, and writes the machine-readable sidecar
-  `packaging/third_party_licenses.json`.
+- ``--write`` needs the full distributed closure installed
+  (``uv sync --extra desktop --extra voice-local``). It reads licenses from
+  `dist-info`, writes the human-readable `THIRD-PARTY-NOTICES.md`, and writes
+  the machine-readable sidecar `packaging/third_party_licenses.json`.
 - ``--check`` needs nothing installed. It reconciles the sidecar against
   `uv.lock` plus `frontend/package-lock.json` and fails on a membership
   difference or an unallowlisted copyleft entry.
@@ -55,10 +59,18 @@ SIDECAR = Path(__file__).resolve().parent / "third_party_licenses.json"
 NOTICES = ROOT / "THIRD-PARTY-NOTICES.md"
 
 # Extras whose packages are redistributed in the desktop bundle. `desktop` ships
-# (tray icon + webview). `preview-capture` does NOT: Playwright is an optional
-# local install the user opts into, never bundled, which is the known gap
-# CONTROL_PLANE_ROADMAP.md §9 records against Phase 11.
-DISTRIBUTED_EXTRAS = ("desktop",)
+# (tray icon + webview) and so does `voice-local` (on-device Kokoro TTS and
+# faster-whisper dictation): both are built into the bundle, so both are part of
+# the distributed closure whatever a given developer happens to have synced.
+# That distinction is the whole point of defining the walk over a declared set of
+# extras rather than over the installed environment - `voice-local` carries the
+# LGPL `num2words`, and a closure walked over a bare `uv sync` would report a
+# clean, copyleft-free bundle that ships it anyway.
+#
+# `preview-capture` does NOT ship: Playwright is an optional local install the
+# user opts into, never bundled, which is the known gap CONTROL_PLANE_ROADMAP.md
+# §9 records against Phase 11.
+DISTRIBUTED_EXTRAS = ("desktop", "voice-local")
 
 # The environments swe-mux is distributed for. A dependency counts as shipped if
 # it is reachable on ANY of them, because the Linux artifact carries Linux-only
@@ -95,6 +107,28 @@ ALLOWLIST: dict[str, str] = {
         "the espeak-free TTS replacement, which is why the gate exists."
     ),
 }
+
+
+def owning_extra(name: str, lock_path: Path = UV_LOCK) -> str | None:
+    """The distributed extra a package is reached through, if it is optional.
+
+    Only used to tell a reader of the notices how to install a replacement:
+    `pystray` arrives with `--extra desktop` and `num2words` with
+    `--extra voice-local`, so a single hard-coded `uv sync` line would be wrong
+    for both once the voice closure moved behind an extra.
+    """
+    data = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+    root = next(
+        (entry for entry in data.get("package", []) if entry["name"] == "swe-mux"),
+        None,
+    )
+    if root is None:
+        return None
+    for extra in DISTRIBUTED_EXTRAS:
+        for dep in root.get("optional-dependencies", {}).get(extra, []):
+            if dep["name"] == name:
+                return extra
+    return None
 
 # Packages whose declared license is known to be false about what their wheel
 # actually ships. This is the audit's central finding encoded, and it is the one
@@ -507,11 +541,22 @@ def membership_drift(recorded: list[Package]) -> list[str]:
                     "the lockfile."
                 )
     if problems:
+        extras = " ".join(f"--extra {extra}" for extra in DISTRIBUTED_EXTRAS)
         problems.append(
-            "Regenerate with `uv sync --all-extras` then "
+            f"Regenerate with `uv sync {extras}` then "
             "`uv run python packaging/license_audit.py --write`."
         )
     return problems
+
+
+def _source_replacement_lines(name: str) -> list[str]:
+    """How a source install substitutes its own build of an allowlisted package."""
+    extra = owning_extra(name)
+    install = f"uv sync --extra {extra}" if extra else "uv sync"
+    return [
+        f"Running from source (`{install} && uv run muxd`) replaces it the",
+        f"usual way, with `pip install {name}==<your build>`.",
+    ]
 
 
 def render_notices(packages: list[Package]) -> str:
@@ -549,8 +594,7 @@ def render_notices(packages: list[Package]) -> str:
             f"Python source under `swe-mux/_internal/{name}/`, not compiled into the",
             "executable archive. Overwrite those files with your own build of the same",
             "version and relaunch; the application imports them from disk at startup.",
-            "Running from source (`uv sync && uv run muxd`) replaces it the usual way,",
-            f"with `pip install {name}==<your build>`.",
+            *_source_replacement_lines(name),
             "",
         ]
     lines += [
@@ -647,7 +691,12 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument(
         "--write",
         action="store_true",
-        help="Regenerate THIRD-PARTY-NOTICES.md and the sidecar. Needs --all-extras.",
+        help=(
+            "Regenerate THIRD-PARTY-NOTICES.md and the sidecar. Needs every "
+            "distributed extra installed: "
+            + " ".join(f"--extra {extra}" for extra in DISTRIBUTED_EXTRAS)
+            + "."
+        ),
     )
     args = parser.parse_args(argv)
 

@@ -739,6 +739,66 @@ def test_an_unclassified_exit_still_records_something(tmp_path: Path) -> None:
         assert payload["detail"]
 
 
+def test_a_build_environment_without_the_voice_extra_is_refused_first(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The preflight fires before anything is inspected, stopped, or built.
+
+    `voice-local` is optional to install and mandatory to build from: num2words
+    is LGPL and the bundle's relink obligation is met only by the spec collecting
+    it as readable source, which `collect_all` silently declines to do for a
+    package that is not installed. Catching that here rather than in
+    `verify_bundle_licenses` saves a multi-minute build, and - because a UI
+    redeploy shows only the recorded outcome - is the difference between "install
+    the extra" and a generic build failure.
+    """
+    module = _redeploy_module()
+    monkeypatch.setattr(
+        module.build_desktop,
+        "missing_extra_distributions",
+        lambda *a, **k: ["num2words (--extra voice-local)"],
+    )
+
+    def _must_not_run(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the preflight must refuse before inspecting anything")
+
+    monkeypatch.setattr(module, "supervisor_process", _must_not_run)
+    monkeypatch.setattr(module, "processes_by_image", _must_not_run)
+
+    config = SimpleNamespace(data_dir=tmp_path)
+    outcome = module.Outcome(config, 1.0)
+    assert module._run(module.parse_args([]), config, outcome) == 2
+
+    payload = json.loads((tmp_path / "redeploy-result.json").read_text(encoding="utf-8"))
+    assert payload["outcome"] == "refused"
+    assert "voice-local" in payload["detail"]
+    assert "Nothing was changed" in payload["detail"]
+
+
+def test_the_extra_preflight_is_skipped_when_no_build_will_run(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """`--skip-build` swaps an already-staged bundle, so the build env is irrelevant."""
+    module = _redeploy_module()
+    monkeypatch.setattr(
+        module.build_desktop,
+        "missing_extra_distributions",
+        lambda *a, **k: ["num2words (--extra voice-local)"],
+    )
+    reached: list[str] = []
+
+    def _supervisor(_config: Any) -> None:
+        reached.append("supervisor")
+        return None
+
+    monkeypatch.setattr(module, "supervisor_process", _supervisor)
+    config = SimpleNamespace(data_dir=tmp_path)
+    outcome = module.Outcome(config, 1.0)
+    # Refused for the *supervisor* reason, having got past the extra check.
+    assert module._run(module.parse_args(["--skip-build"]), config, outcome) == 2
+    assert reached == ["supervisor"]
+
+
 def test_the_lock_held_flag_is_understood(tmp_path: Path) -> None:
     module = _redeploy_module()
     assert module.parse_args(["--restore-visibility", "--lock-held"]).lock_held is True

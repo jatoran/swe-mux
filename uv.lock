@@ -2689,17 +2689,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
-    { name = "en-core-web-sm" },
-    { name = "faster-whisper" },
     { name = "mcp" },
-    { name = "misaki" },
-    { name = "num2words" },
-    { name = "onnxruntime" },
     { name = "pillow" },
     { name = "psutil" },
     { name = "pywebpush" },
     { name = "pywinpty", marker = "sys_platform == 'win32'" },
-    { name = "spacy" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
@@ -2713,6 +2707,14 @@ desktop = [
 ]
 preview-capture = [
     { name = "playwright" },
+]
+voice-local = [
+    { name = "en-core-web-sm" },
+    { name = "faster-whisper" },
+    { name = "misaki" },
+    { name = "num2words" },
+    { name = "onnxruntime" },
+    { name = "spacy" },
 ]
 
 [package.dev-dependencies]
@@ -2730,12 +2732,12 @@ package = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.11" },
-    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
-    { name = "faster-whisper", specifier = ">=1.2" },
+    { name = "en-core-web-sm", marker = "extra == 'voice-local'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
+    { name = "faster-whisper", marker = "extra == 'voice-local'", specifier = ">=1.2" },
     { name = "mcp", specifier = ">=2.0.0" },
-    { name = "misaki", specifier = ">=0.9.4" },
-    { name = "num2words", specifier = ">=0.5.14" },
-    { name = "onnxruntime", specifier = ">=1.27.0" },
+    { name = "misaki", marker = "extra == 'voice-local'", specifier = ">=0.9.4" },
+    { name = "num2words", marker = "extra == 'voice-local'", specifier = ">=0.5.14" },
+    { name = "onnxruntime", marker = "extra == 'voice-local'", specifier = ">=1.27.0" },
     { name = "pillow", specifier = ">=11.0" },
     { name = "playwright", marker = "extra == 'preview-capture'", specifier = ">=1.49" },
     { name = "psutil", specifier = ">=6.1" },
@@ -2743,13 +2745,13 @@ requires-dist = [
     { name = "pywebpush", specifier = ">=2.0" },
     { name = "pywebview", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=5.4" },
     { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=3.0.2" },
-    { name = "spacy", specifier = ">=3.8.15" },
+    { name = "spacy", marker = "extra == 'voice-local'", specifier = ">=3.8.15" },
     { name = "tree-sitter", specifier = ">=0.23" },
     { name = "tree-sitter-language-pack", specifier = ">=0.7" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["desktop", "preview-capture"]
+provides-extras = ["desktop", "voice-local", "preview-capture"]
 
 [package.metadata.requires-dev]
 dev = [

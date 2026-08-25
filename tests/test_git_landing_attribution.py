@@ -28,10 +28,10 @@ from swe_mux.git_monitor import (
     read_excluded_range,
     read_merge_resolution_changes,
 )
-from swe_mux.git_provenance_backfill import backfill_git_provenance
 from swe_mux.history import HistoryIndex
 from swe_mux.models import ProjectRecord, SessionRecord
 from swe_mux.tier0_store import Tier0Store
+from swe_mux.tools.git_provenance_backfill import backfill_git_provenance
 
 #: What B typed into the conflicted file. Nothing else in the merge is B's.
 RESOLUTION = "written by A\nwritten on master\n"

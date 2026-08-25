@@ -1,13 +1,36 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 from pathlib import Path
 
 from swe_mux import git_provenance
-from swe_mux.git_provenance_backfill import backfill_git_provenance
 from swe_mux.history import HistoryIndex
 from swe_mux.models import ProjectRecord, SessionRecord
+from swe_mux.tools.git_provenance_backfill import backfill_git_provenance
+
+
+def test_nothing_in_the_running_daemon_imports_an_operator_tool() -> None:
+    """`swe_mux/tools/` is one-directional, which is what the layout claims.
+
+    The backfill moved there because a module with no callers beside the
+    daemon's own reads as dead code (F28). That signal only stays reliable while
+    the direction holds: tools import the package, never the reverse. A daemon
+    module importing one would also drag a one-shot migration into every startup
+    import graph.
+    """
+    package = pathlib.Path(__file__).resolve().parents[1] / "src" / "swe_mux"
+    offenders = [
+        path.name
+        for path in sorted(package.glob("*.py"))
+        if "swe_mux.tools" in path.read_text(encoding="utf-8", errors="replace")
+        or "from .tools" in path.read_text(encoding="utf-8", errors="replace")
+    ]
+    assert offenders == [], (
+        "these daemon modules reference swe_mux.tools, which inverts the "
+        f"dependency the directory exists to express: {offenders}"
+    )
 
 
 def _git(root: Path, *args: str) -> str:
