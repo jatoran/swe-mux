@@ -3522,8 +3522,13 @@ planned.
 Update distribution (next subsection) also needs no server, so nothing on the launch path
 requires one; crash telemetry or license infrastructure would, and both are out of scope.
 
-- [ ] Host the static site on GitHub Pages or Cloudflare Pages with the `swemux.dev` custom
-  domain and HTTPS; Cloudflare Pages preferred for its free analytics.
+- [ ] The site lives in this repository under `site/` and deploys from it - no separate
+  website repo.
+  GitHub Pages via the Actions source (`actions/upload-pages-artifact` over `site/` +
+  `actions/deploy-pages` on push), so site updates ship with ordinary commits and no
+  `gh-pages` branch holds build output; the `swemux.dev` custom domain with enforced HTTPS.
+  Cloudflare Pages is the alternative if its free analytics are wanted - the same
+  one-repo layout works there unchanged.
 - [ ] Pages: the drafted homepage, install/quickstart, a documentation section, a changelog,
   a public roadmap page (a curated projection of this file, not a copy), and an
   acknowledgements page thanking the libraries and projects swe-mux builds on.
