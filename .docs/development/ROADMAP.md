@@ -3215,7 +3215,7 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
   (`en_core_web_sm` is pinned as an explicit dependency so the frozen bundle never pip-installs at import time.)
 - [x] Add the compound splitter and a project lexicon for the vocabulary the measurement found unresolved, with an unambiguous last resort (spell the word) so an unknown token is never silently dropped from speech.
   (Replacements are re-verified recursively — the audit's own "pyproject" respelling produced "py", itself unresolvable.)
-- [x] Synthesize sentence by sentence and begin playback on the first clip, so perceived latency is the first sentence rather than the whole summary at RTF 0.5.
+- [x] Synthesize bounded natural segments and begin playback on the first clip, so perceived latency is the opening thought rather than the whole summary at RTF 0.5.
   (The existing segmented-clip stream already provides this; kokoro synthesizes per segment.)
 - [x] Remove `edge-tts` from the dependency set once `kokoro` and `sapi` cover both quality tiers, and migrate an existing `tts_engine: "edge"` config forward rather than failing on it (schema 26).
   (Current correction, 2026-08-25: schema 33 reintroduces Edge only as an explicit experimental
@@ -3857,7 +3857,7 @@ exact-content approval model, and Tier 0 fact capture.
 
 ## Phase 15 - Voice assistant follow-through: caching, patience, budgets, and reach
 
-The assistant now speaks sentence by sentence, announces a card exactly once, reports its round
+The assistant now streams speech progressively in daemon-batched natural clips, announces a card exactly once, reports its round
 budget honestly, and can stage a prompt into a new session without sending it.
 This phase is the set of follow-on items the 2026-08-20 voice sessions surfaced, scoped with the
 operator on 2026-08-20.

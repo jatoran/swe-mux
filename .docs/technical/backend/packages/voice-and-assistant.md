@@ -10,7 +10,10 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 
 Completed-reply, manual, and application-text TTS streams with a coherent sentence-first clip and tracked segment-tail tasks.
 Each stream owns one immutable `TtsProfile`; provider switches and option edits apply to the next stream, and the profile's `synthesis_key` is part of anchored clip reuse.
-Open application-speech streams are `SpeechStream`, one worker per stream so clip indices stay monotonic, with a tighter opening clip because that clip *is* time-to-first-sound.
+Open application-speech streams are `SpeechStream`, one worker per stream so clip indices stay monotonic.
+An empty acknowledgement-only open lets later assistant sentences reach the daemon before segment zero finishes synthesis.
+`pending_text` is the raw-fragment buffer, `sealed` is the audio-segment FIFO, and only the stream worker calls `application_speech_segments` or the 420-character follow-up batcher.
+The opening prefers a natural boundary around 120 characters, has a 200-character hard word-boundary ceiling, and never treats an `assistant_sentence` event as an audio-file boundary.
 Also one-shot summary and verbatim overrides, bounded Whisper STT with GPU-to-CPU fallback, temporary audio lifecycle, compatibility voice-submit idempotency, and one-use approval challenges bound to the current screen fingerprint.
 
 A clip is a *stream*, not a row.

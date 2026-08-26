@@ -3,7 +3,7 @@
 ## What it is
 
 Optional per-session reply synthesis (TTS, "read aloud") plus a workspace-level, browser-captured Conversation mode (STT, "hands-free"), isolated from history, Project, and transcript correctness.
-Two independent halves share one `VoiceService`, one `voice_clips` store, and one browser playback element:
+Two independent halves share one `VoiceService`, one `voice_clips` store, one active browser playback element, and one standby preload element:
 
 - **Read aloud (TTS):** agent replies → spoken audio clips the browser plays.
 - **Conversation (STT):** microphone speech → buffered draft → the named Agent or text-surface sink, driven by spoken `Mux` wake-word commands.
@@ -66,18 +66,20 @@ install-wide, so the tab edits them directly for the focused session.
   boundary. A synthetic provider acknowledgement is classified out before it can become the
   "latest reply". Verbatim speaks the segment; a summary is given the prompt alongside it, since
   a spoken update that opens by restating the wrong question is worse than a long one.
-  Every automatic, manual, and trusted application response uses the same segmented stream.
+  Automatic and manual agent read-aloud uses the same segmented stream.
   `streaming_segments` keeps any ordinary reply of at most 420 characters in one coherent clip.
   Longer replies emit one complete opening sentence first whenever it fits the 420-character clip bound, then continue in clips of at most 420 characters.
   Only a single sentence longer than that bound falls back to a word boundary.
   This keeps streaming from cutting a normal Voice Comms answer in the middle of a thought, which otherwise makes the continuation sound like a second generated answer.
   The first clip is emitted and returned before tracked background work synthesizes the remaining clips, so playback begins while the rest is still encoding.
   A per-session lock drops overlapping `auto` preparation requests, and two engine slots bound synthesis concurrency (`_engine_semaphore`).
-- **Application speech opens on a much tighter clip** (`APPLICATION_FIRST_SEGMENT_CHARS`, the
-  `first_max_chars` argument to `streaming_segments`), because the opening clip *is*
-  time-to-first-sound. Only the first cut moves; the tail keeps the wide bound. Agent read-aloud
-  deliberately keeps the wide opener too - the coherence of somebody else's prose matters more
-  there than the first second, which is the trade this split exists to make separately for each.
+- **Trusted application speech has one turn-level batching authority** (`application_speech_segments`, `SpeechStream`).
+  The opening prefers a sentence or clause boundary around `APPLICATION_FIRST_TARGET_CHARS` (120), permits a natural sentence through `APPLICATION_FIRST_MAX_CHARS` (200), and only then falls back to a word boundary.
+  Later prose combines complete sentences up to `APPLICATION_FOLLOWUP_MAX_CHARS` (420).
+  A forced 60-character cut is prohibited because it turns a grammatical sentence into two independently synthesized utterances with a pause and reset prosody between them.
+  Open streams accept raw text fragments rather than pre-segmented clips, so `assistant_sentence` remains a display and delivery unit rather than an audio-file boundary.
+  The daemon waits for 120 ms of append quiet, capped at 240 ms total, before sealing accumulated text.
+  Fragments arriving while the preceding clip synthesizes therefore become one larger continuation without delaying the opening.
 - **A clip has a floor as well as a ceiling, and the floor is what stops playback stalling.**
   Measured on the primary host (Kokoro, two passes, natural prose):
 
@@ -103,10 +105,9 @@ install-wide, so the tab edits them directly for the focused session.
   coalesces leading sentences so a reply that begins "Yes." is not released as its own 200 ms clip
   with a guaranteed gap behind it. It costs a little more silence before the first word and
   removes the stall right after it - the operator reaches the content no later either way.
-  These numbers also corrected the constant they replaced: `APPLICATION_FIRST_SEGMENT_CHARS` was
-  140 on the strength of a comment claiming 140 characters spoke "in about a second", which
-  measures 4.1 s. It is 60 (2.0 s), and **~580 ms is the floor for any sound at all** - beating
-  that is a different voice model, not a chunking change.
+  These numbers also rule out treating a character target as a mandatory cut: 60 characters synthesizes in about 2.0 s, but splitting a complete 80-character sentence there adds another engine startup and media handoff for no time-to-first-sound benefit worth the audible break.
+  The application opener therefore treats 120 as a preferred natural boundary and 200 as the hard word-boundary ceiling.
+  **~580 ms is the floor for any sound at all** - beating that is a different voice model, not a chunking change.
   None of this was measurable before: `voice clip synthesized` now logs `chars`, `synth_ms`,
   `audio_ms`, and `covers` (audio ÷ synth) per clip, which is how a bound drifts four-fold from
   reality without anyone noticing.
@@ -318,11 +319,15 @@ install-wide, so the tab edits them directly for the focused session.
   reconstruction, and those catch-up events are flagged `replay` so the client refreshes the
   clip list without re-playing old audio.
 - Playback policy is per browser, not per session (`frontend/src/voice.ts`): one unlocked
-  singleton audio element is reused so mobile browsers allow programmatic playback after any
+  active audio element is reused so mobile browsers allow programmatic playback after any
   voice-UI gesture (`unlockPlayback` plays a silent WAV inside the gesture), and a
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
   The silent unlock is transport setup, never public playback state, because capture uses that
   state to decide whether a new utterance could be speaker echo.
+  A second, inaudible `HTMLAudioElement` preloads the next queued segment URL while the active element plays.
+  The active element remains the sole source of playback state and capture sidechain decisions.
+  Each in-stream transition posts `POST /api/voice/playback-diagnostic` with the measured end-to-next-play gap, whether the next clip was already queued when the prior clip ended, and whether preload had been requested.
+  `queued_at_end=false` identifies synthesis starvation; `queued_at_end=true` with a large gap identifies browser fetch, decode, or media-element handoff delay.
 - **Within a device, playback is focus-driven and global: the focused session speaks, every
   other session holds its clip.** Three panes on `auto` used to talk over each other and over
   whatever the operator was actually reading. The app reports the focused agent session
@@ -348,7 +353,8 @@ install-wide, so the tab edits them directly for the focused session.
   turned off, alongside the autoplay and session-mode restore.
 - Every segmented response shares a stream ID across its clips.
   A browser claims manual and application streams before making the request, so the first live readiness event can start playback without waiting for the HTTP response.
-  The response remains a fallback if that event was delayed or lost.
+  Inline manual and one-shot application requests retain the opening-clip response as a fallback if that event was delayed or lost.
+  An acknowledgement-only assistant stream has no clip response and therefore depends on the live readiness event for immediate playback; its completed audio remains durable and replayable from the TTS surface if the event connection was absent.
   **Every path that asks for a reply claims its stream**, including the ones that used to
   pass no `stream_id` at all (the pane's palette entry, the voice `read reply` query, the
   transcript's per-message button): without a claim the daemon's later segments arrive on a
@@ -370,10 +376,12 @@ install-wide, so the tab edits them directly for the focused session.
   unplayed the moment that happens.
 - **An application-speech stream can stay open and be appended to** (`SpeechStream`,
   `VoiceService.speak(continue_stream=…, final=…)`, `close_speech_stream`).
-  The Mux assistant produces its reply over several seconds, so the stream's length is unknown
-  while it runs: open segments carry `segment_count: 0` (unknown) in their *events* until the
-  closing one carries the real total, and `voice_stream_closed` marks the end for the case
-  where a stream finishes with no final clip.
+  The client opens an empty stream before the first sentence and receives an acknowledgement without waiting for synthesis.
+  Each later request appends raw normalized text and also returns after queueing, so the browser can send sentence two while segment zero is still encoding.
+  `SpeechStream.pending_text` accumulates those fragments, and the stream's single worker alone converts accumulated text into audio segments.
+  This removes the former double segmentation in `_SentenceStreamer` and `streaming_segments` while preserving sentence events for display and fallback clients.
+  The Mux assistant produces its reply over several seconds, so the stream's segment count is unknown while it runs.
+  Open segments carry `segment_count: 0` (unknown) in their *events* until the closing one carries the real total, and `voice_stream_closed` marks the end when a stream finishes with no final clip.
   The clip *record* states the same fact as NULL rather than 0, and closing the stream writes
   the number of segments actually emitted - including a failing one, which is a row and
   carries the error - so a clip settles instead of waiting forever for segments nobody is
@@ -398,10 +406,8 @@ install-wide, so the tab edits them directly for the focused session.
   (barge-in, read aloud switched off), the client now **closes** the stream instead of abandoning
   it - a stream is only joined when it closes, so an abandoned one leaves the sentences it did
   synthesize scattered across loose segments rather than as one clip the operator can replay.
-  Ordering is the invariant the type exists to hold - exactly one worker task drains one FIFO
-  per stream, so clip indices are monotonic however the appends arrive. Two appends synthesizing
-  concurrently would emit out of order whenever the shorter finished first, and the browser plays
-  clips in arrival order, so the reply's second sentence would speak before its first.
+  Ordering is the invariant the type exists to hold - exactly one worker task drains one raw-text buffer and one sealed-segment FIFO per stream, so clip indices are monotonic however the appends arrive.
+  Two segments synthesizing concurrently would emit out of order whenever the shorter finished first, and the browser plays clips in arrival order, so the reply's second part would speak before its first.
   A segment that fails to synthesize ends its stream rather than skipping the gap, because
   speaking sentence three after sentence one failed reads the reply out of order.
   Client side, a non-positive `segment_count` means "still open" and a segment is queued whenever
@@ -1114,6 +1120,7 @@ and never touches the daemon or an LLM.
 - `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,
   record one browser-measured sample, start a fresh run.
 - `POST /api/voice/barge-in-diagnostic` - bounded confirmed/rejected playback probe diagnostics written to `daemon.log`.
+- `POST /api/voice/playback-diagnostic` - one bounded in-stream audio handoff measurement: previous/next clip, end-to-play gap, whether the next clip was queued at the prior end, and whether preload had been requested; written to `daemon.log`.
 - `POST /api/voice/capture-diagnostic` - bounded stalled/recovered capture watchdog reports; a stall is written to `daemon.log` at WARNING because it is the durable evidence a dead microphone leaves.
 - `POST /api/voice/deferral-diagnostic` - one resolved unfinished-utterance deferral: the trigger token, its kind, the word count, how long it was held, and the outcome (`merged`, `submitted`, `held`, `discarded`) that judges it. Written to `daemon.log`, because the completeness heuristic is a word list and a word list is only tunable against a measured false-positive rate.
 - `POST /api/sessions/{sid}/voice/prepare-submit` - side-effect-free safety validation before Talk uses the mounted terminal path.
@@ -1122,11 +1129,12 @@ and never touches the daemon or an LLM.
 - `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
 - `POST /api/sessions/{sid}/voice/generate` - start segmented last-reply synthesis; optional `{content_mode: summary|verbatim, stream_id: UUID}` values are one-shot and do not change the session preference.
 - `POST /api/voice/speak` - start, extend, or close one segmented trusted application-speech
-  stream without a model call. `{text, stream_id?, continue_stream?, final?}`: the default form
-  opens a stream and returns its opening clip, `continue_stream` appends to an open one and
-  returns an acknowledgement rather than a clip, and empty text with `final` closes it.
-  `final: false` leaves the stream open, which is what lets an assistant turn speak sentence by
-  sentence; `voice_stream_closed` reports the end.
+  stream without a model call.
+  `{text: "", stream_id, final: false}` opens an acknowledgement-only asynchronous stream before text arrives.
+  `{text, stream_id, continue_stream: true, final: false}` appends one raw fragment and acknowledges queueing without waiting for synthesis.
+  The non-streaming default still opens a stream and returns its opening clip as an event-loss fallback.
+  Empty text with `final: true` closes an open stream.
+  `voice_stream_closed` reports the end.
 - `GET  /api/sessions/{sid}/last-reply` — the newest assistant segment, cut at its tool boundary and identical to the Transcript tab's last agent message (no terminal OSC 52).
 - `GET  /api/voice/clips` — one item per *stream*, newest reply first, each carrying its
   segments as `parts` (in spoken order) plus the summed text, duration, bytes and tokens and

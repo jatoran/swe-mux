@@ -44,6 +44,8 @@ const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAI
 type QueueItem = { clipId: string; streamId: string | null; sessionId: string | null; origin: PlaybackOrigin }
 
 let audioElement: HTMLAudioElement | null = null
+let preloadElement: HTMLAudioElement | null = null
+let preloadedClipId: string | null = null
 let currentClipId: string | null = null
 let currentStreamId: string | null = null
 let currentSessionId: string | null = null
@@ -59,6 +61,14 @@ const suppressedStreams = new Set<string>()
 const requestedStreams = new Map<string,{sessionId:string|null;origin:PlaybackOrigin}>()
 let state: PlaybackState = { clipId: null, playing: false, position: 0, duration: 0, origin: null }
 const listeners = new Set<() => void>()
+type PendingHandoff = {
+  streamId: string
+  previousClipId: string
+  endedAt: number
+  queuedAtEnd: boolean
+  preloaded: boolean
+}
+let pendingHandoff: PendingHandoff | null = null
 
 // ------------------------------------------------------------ playback focus
 //
@@ -88,13 +98,62 @@ function setState(next: Partial<PlaybackState>) {
   notify()
 }
 
+function monotonicNow(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+function primeNextClip(): void {
+  const next = queue[0]
+  if (!next || next.clipId === currentClipId) {
+    preloadedClipId = null
+    const clear = (preloadElement as (HTMLAudioElement & {
+      removeAttribute?: (name: string) => void
+    }) | null)?.removeAttribute
+    if (preloadElement && typeof clear === 'function') clear.call(preloadElement, 'src')
+    return
+  }
+  if (!preloadElement) {
+    preloadElement = new Audio()
+    preloadElement.preload = 'auto'
+  }
+  if (preloadedClipId === next.clipId) return
+  preloadedClipId = next.clipId
+  preloadElement.src = clipAudioUrl(next.clipId)
+  const load = (preloadElement as HTMLAudioElement & { load?: () => void }).load
+  if (typeof load === 'function') load.call(preloadElement)
+}
+
+function reportHandoff(nextClipId: string): void {
+  const handoff = pendingHandoff
+  pendingHandoff = null
+  if (!handoff || currentStreamId !== handoff.streamId) return
+  const body = {
+    event: 'handoff',
+    streamId: handoff.streamId,
+    previousClipId: handoff.previousClipId,
+    nextClipId,
+    handoffMs: Math.max(0, monotonicNow() - handoff.endedAt),
+    queuedAtEnd: handoff.queuedAtEnd,
+    preloaded: handoff.preloaded,
+  }
+  void fetch('/api/voice/playback-diagnostic', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }).catch(() => { /* playback diagnostics never affect playback */ })
+}
+
 function ensureAudio(): HTMLAudioElement {
   if (audioElement) return audioElement
   const audio = new Audio()
   audio.preload = 'auto'
   audio.addEventListener('timeupdate', () => { if (!unlocking) setState({ position: audio.currentTime, duration: Number.isFinite(audio.duration) ? audio.duration : state.duration }) })
   audio.addEventListener('durationchange', () => { if (!unlocking && Number.isFinite(audio.duration)) setState({ duration: audio.duration }) })
-  audio.addEventListener('play', () => { if (!unlocking) setState({ playing: true }) })
+  audio.addEventListener('play', () => {
+    if (unlocking) return
+    if (currentClipId) reportHandoff(currentClipId)
+    setState({ playing: true })
+  })
   audio.addEventListener('pause', () => { if (!unlocking) setState({ playing: false }) })
   audio.addEventListener('ended', () => {
     if (unlocking) { unlocking = false; return }
@@ -109,9 +168,21 @@ function ensureAudio(): HTMLAudioElement {
     if (currentStreamId && !queue.some(item => item.streamId === currentStreamId)) {
       remember(playedStreams, currentStreamId)
     }
+    const previousClipId = currentClipId
+    const previousStreamId = currentStreamId
     setState({ playing: false })
     const next = queue.shift()
+    if (previousClipId && previousStreamId) {
+      pendingHandoff = {
+        streamId: previousStreamId,
+        previousClipId,
+        endedAt: monotonicNow(),
+        queuedAtEnd: Boolean(next),
+        preloaded: Boolean(next && preloadedClipId === next.clipId),
+      }
+    }
     if (next) void playQueuedClip(next).catch(() => { /* autoplay chain stops on error */ })
+    else primeNextClip()
   })
   audioElement = audio
   return audio
@@ -228,6 +299,7 @@ export function newVoiceStreamId():string{
 export function beginRequestedStream(streamId:string,sessionId:string|null,origin:PlaybackOrigin):void{
   suppressCurrentStream()
   queue=[]
+  primeNextClip()
   haltCurrentClip()
   requestedStreams.set(streamId,{sessionId,origin})
 }
@@ -278,7 +350,7 @@ export function enqueueRequestedStreamClip(clipId:string,streamId:string,index:n
   // the element is very much occupied, and a clip started there would replace
   // the one about to speak. A stream's segments arrive close together, so that
   // window is hit often enough to swallow whole sentences.
-  if(playbackBusy())queue.push(item)
+  if(playbackBusy()){queue.push(item);primeNextClip()}
   else void playQueuedClip(item).catch(()=>{})
   release()
 }
@@ -356,6 +428,7 @@ async function playClipAudio(clipId:string,origin:PlaybackOrigin,startAt=0):Prom
   audio.muted = playbackDucked
   state = { clipId, playing: false, position: startAt, duration: 0, origin }
   notify()
+  primeNextClip()
   // Deferred to metadata: `currentTime` is not writable on a source whose duration
   // the element has not read yet, and a silently dropped seek restarts the segment
   // the operator was scrubbing inside.
@@ -533,9 +606,10 @@ export function playHeldClips(sessionId: string): void {
     .flatMap(item => item.partIds.map(clipId =>
       ({ clipId, streamId: item.streamId, sessionId, origin: 'agent' as const })))
   if (!playable.length) return
-  if (playbackBusy()) { queue.push(...playable); return }
+  if (playbackBusy()) { queue.push(...playable); primeNextClip(); return }
   const first = playable.shift() as QueueItem
   queue.push(...playable)
+  primeNextClip()
   void playQueuedClip(first).catch(() => { /* blocked until a gesture unlocks the element */ })
 }
 
@@ -561,8 +635,9 @@ export function enqueueAutoplay(clipId: string, streamId: string | null = null, 
   // are watching speaks, and the rest have something ready for you".
   if (sessionId && !sessionPlaysHere(sessionId)) { holdClip(sessionId, clipId, streamId); return }
   const item:QueueItem={clipId,streamId,sessionId,origin:'agent'}
-  if (state.playing && currentClipId && currentClipId !== clipId) { queue.push(item); return }
+  if (state.playing && currentClipId && currentClipId !== clipId) { queue.push(item); primeNextClip(); return }
   queue = []
+  primeNextClip()
   void playQueuedClip(item).catch(() => { /* blocked until a gesture unlocks the element */ })
 }
 
@@ -606,6 +681,7 @@ export function bargeInPlayback():void{
   suppressCurrentStream()
   suppressClaimedStreams()
   queue=[]
+  primeNextClip()
   haltCurrentClip()
 }
 
@@ -631,6 +707,7 @@ function haltCurrentClip():void{
   currentClipId=null
   currentStreamId=null
   currentSessionId=null
+  pendingHandoff=null
   state={clipId:null,playing:false,position:0,duration:0,origin:null}
   notify()
 }
@@ -645,6 +722,7 @@ export function stopSessionPlayback(sessionId: string): void {
   const hitCurrent = currentSessionId === sessionId
   if (hitCurrent) suppressCurrentStream()
   queue = queue.filter(item => item.sessionId !== sessionId)
+  primeNextClip()
   if (!hitCurrent) return
   haltCurrentClip()
   const next = queue.shift()
@@ -663,5 +741,6 @@ export function stopAllPlayback(): void {
   // that fallback re-claims the stream it is about to play.
   suppressClaimedStreams()
   queue = []
+  primeNextClip()
   haltCurrentClip()
 }

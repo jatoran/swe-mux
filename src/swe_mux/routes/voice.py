@@ -287,6 +287,16 @@ async def voice_barge_in_diagnostic(request: web.Request) -> web.Response:
     return json_response(sample)
 
 
+async def voice_playback_diagnostic(request: web.Request) -> web.Response:
+    """Record one browser audio-file handoff and whether the next clip was ready."""
+    voice: VoiceService = request.app[keys.VOICE]
+    try:
+        sample = voice.record_playback_diagnostic(await request.json())
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(sample)
+
+
 async def voice_capture_diagnostic(request: web.Request) -> web.Response:
     """Record a browser-side capture stall or recovery from the frame watchdog."""
     voice: VoiceService = request.app[keys.VOICE]
@@ -605,6 +615,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/voice/stt-latency", voice_latency),
     web.delete("/api/voice/stt-latency", voice_latency),
     web.post("/api/voice/barge-in-diagnostic", voice_barge_in_diagnostic),
+    web.post("/api/voice/playback-diagnostic", voice_playback_diagnostic),
     web.post("/api/voice/capture-diagnostic", voice_capture_diagnostic),
     web.post("/api/voice/deferral-diagnostic", voice_deferral_diagnostic),
     web.post("/api/sessions/{sid}/voice/prepare-submit", voice_prepare_submit),

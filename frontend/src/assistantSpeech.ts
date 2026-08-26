@@ -5,8 +5,10 @@
  * `assistant_turn_done`. Speaking only at the end meant the operator waited for
  * the model to stop *and* for the whole reply to be synthesized — measured at
  * three to fourteen seconds of silence — before hearing a word. Here each
- * sentence is posted into one open speech stream as it lands, so the first
- * sentence is already playing while the model writes the second.
+ * sentence is appended to one open speech stream as it lands. The daemon
+ * acknowledges appends before synthesis and batches the accumulated prose while
+ * the preceding clip is encoding, so sentence events do not become audio-file
+ * boundaries.
  *
  * Two invariants hold the design together:
  *
@@ -15,9 +17,9 @@
  *   turn says can cut off something else the same turn said. Starting a stream
  *   halts the previous turn's audio, which is correct: a new turn supersedes
  *   the reply the operator has moved on from.
- * - **Posts are serialized.** Segment order on the daemon is the order its
- *   `speak` calls arrive, so two concurrent posts could invert two sentences.
- *   Every append is chained behind the previous one.
+ * - **Posts are serialized only to acknowledgement.** The daemon owns the one
+ *   synthesis worker and its fragment FIFO. A browser never waits for a clip to
+ *   encode before it can send the next sentence.
  */
 import { api } from './api.ts'
 import {
@@ -31,14 +33,14 @@ type Speech = {
   /** The turn this stream belongs to, or null for speech outside any turn. */
   turnId: string | null
   streamId: string
-  /** Serializes appends; also the handle a caller awaits to know speech landed. */
+  /** Serializes append acknowledgements; synthesis continues behind them. */
   chain: Promise<void>
-  /** False until the opening `speak` has succeeded, which decides `continue_stream`. */
+  /** True once the stream-open request has been queued into `chain`. */
   opened: boolean
   /**
    * Whether this turn has text on the way. Set when an append is *queued*, not
-   * when its synthesis returns, because its only reader (`endTurnSpeech`) asks
-   * the moment the turn ends - seconds before a Kokoro post comes back.
+   * when its append acknowledgement returns, because its only reader
+   * (`endTurnSpeech`) can ask in the same tick as the final sentence event.
    */
   spoke: boolean
   closed: boolean
@@ -71,6 +73,7 @@ export function beginTurnSpeech(turnId: string): void {
   // they moved on from stops.
   beginRequestedStream(streamId, 'system', 'system')
   active = open(turnId, streamId)
+  openStream(active)
 }
 
 function open(turnId: string | null, streamId: string): Speech {
@@ -78,6 +81,21 @@ function open(turnId: string | null, streamId: string): Speech {
     turnId, streamId, chain: Promise.resolve(),
     opened: false, spoke: false, closed: false, idle: null,
   }
+}
+
+/**
+ * Open an empty stream before text arrives.
+ *
+ * The old first `speak` call waited several seconds for its clip before the
+ * browser could post sentence two. Opening is now an acknowledgement-only
+ * operation, which lets the daemon receive and batch the rest of the turn while
+ * segment zero synthesizes.
+ */
+function openStream(turn: Speech): void {
+  turn.opened = true
+  turn.chain = api('POST', '/api/voice/speak', {
+    text: '', stream_id: turn.streamId, final: false,
+  }).then(() => undefined).catch(() => undefined)
 }
 
 /**
@@ -102,7 +120,7 @@ function retire(): void {
   if (!previous || previous.closed) return
   previous.closed = true
   if (previous.idle) clearTimeout(previous.idle)
-  if (previous.opened) void closeStream(previous.streamId)
+  if (previous.opened) void previous.chain.then(() => closeStream(previous.streamId))
   else cancelRequestedStream(previous.streamId)
 }
 
@@ -139,6 +157,7 @@ export function speakAnnouncement(text: string): Promise<void> {
   unlockPlayback()
   claimRequestedStream(streamId, 'system', 'system')
   active = open(null, streamId)
+  openStream(active)
   return append(active, speech)
 }
 
@@ -218,13 +237,13 @@ function append(turn: Speech, speech: string): Promise<void> {
   // read by `endTurnSpeech` to decide whether the completion fallback is still
   // needed, and that decision is made the moment the turn ends - which for a
   // one-sentence reply is milliseconds after the sentence was queued and
-  // seconds before its synthesis comes back. Setting it after the await made
+  // before its queue acknowledgement comes back. Setting it after the await made
   // the guard read state the operation it guards against had not written yet,
   // and the turn said the whole reply twice (measured 2026-08-23: one sentence,
   // no card, two segments, 11.8s of audio for a 95-character sentence).
   //
   // "Has text on the way" is also what the flag means to its only reader. A
-  // queued segment that never synthesizes is not a reason to speak the fallback:
+  // queued fragment that never synthesizes is not a reason to speak the fallback:
   // if the stream died, the fallback would be dropped with it.
   turn.spoke = true
   const next = turn.chain.then(async () => {
@@ -244,17 +263,6 @@ function append(turn: Speech, speech: string): Promise<void> {
       // segments". Fire-and-forget: `closeStream` swallows its own failures, and
       // nothing here is waiting on the answer.
       if (turn.opened) void closeStream(turn.streamId)
-      return
-    }
-    if (!turn.opened) {
-      const clip = await api<VoiceClip>('POST', '/api/voice/speak', {
-        text: speech, stream_id: turn.streamId, final: false,
-      })
-      turn.opened = true
-      // The response is the fallback for a `voice_clip_ready` that was lost or
-      // delayed; the live event usually starts playback first and this dedupes.
-      await playRequestedStreamFirst(clip.id, clip.stream_id || turn.streamId, 'system', 'system')
-      scheduleIdleClose(turn)
       return
     }
     await api('POST', '/api/voice/speak', {

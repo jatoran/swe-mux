@@ -299,15 +299,19 @@ The assistant is text-first and voice-attached, not voice-only:
 - **The mode toggle is the microphone's addressee switch.**
   While chat mode is open with Talk active, every plain utterance is a conversation turn and the dictation draft is deliberately deaf — the two modes never both hear the same speech.
   A wake-word utterance keeps its normal meaning in either mode ("Mux, stop" still kills playback mid-dialog), and the chat header shows `mic→assistant` while the routing holds.
-- **With Talk active, a turn speaks sentence by sentence into one stream** (`assistantSpeech.ts`).
-  The turn claims a stream at `assistant_turn_started` — which halts the previous turn's audio, since a new question supersedes the answer the operator moved on from — and each `assistant_sentence` with speech is appended to it; `assistant_turn_done` only closes it.
+- **With Talk active, a turn sends progressive text into one speech stream** (`assistantSpeech.ts`).
+  The turn claims and opens an empty acknowledgement-only stream at `assistant_turn_started` - which halts the previous turn's audio, since a new question supersedes the answer the operator moved on from - and each `assistant_sentence` with speech appends one raw fragment.
+  Append requests serialize only until the daemon acknowledges queueing, not until synthesis completes.
+  The daemon receives later sentences while the opening clip encodes, then combines accumulated complete sentences into larger provider-neutral audio segments.
+  `assistant_turn_done` closes the stream and seals its remaining text.
   Two invariants hold the design together.
   Everything one turn says shares one stream, including any card it opens, so nothing a turn says can cut off something else the same turn said: starting a second stream hard-stops the first, which is what used to truncate the card's line mid-word and follow it with several seconds of silence while the next clip synthesized.
-  And the appends are serialized, because segment order on the daemon is the order its `speak` calls arrive.
-  A third rule follows from the first two: `spoke` - the flag deciding whether `assistant_turn_done`'s text still needs saying - is set when an append is **queued**, never when its synthesis returns.
+  And append acknowledgements are serialized, because fragment order on the daemon is the order its `speak` calls arrive.
+  The daemon's single stream worker owns audio segmentation and synthesis order; the assistant's sentence boundary is not an audio-file boundary.
+  A third rule follows from the first two: `spoke` - the flag deciding whether `assistant_turn_done`'s text still needs saying - is set when an append is **queued**, never when its acknowledgement returns.
   The daemon is right to put the whole reply on the completion event, because a client consuming no sentence events needs it; not duplicating it is the client's half of that contract.
   Reading the flag after the post made the guard consult state the operation it guards against had not written yet, and a one-sentence reply said itself twice: the sentence, then the identical fallback, measured 2026-08-23 as two segments and 11.8 s of audio for 95 characters.
-  It only ever missed on a short reply, because synthesis takes seconds while a one-sentence turn ends within milliseconds of its only sentence.
+  It only ever missed on a short reply, because a one-sentence turn can end in the same tick as its sentence event.
 - A **follow-up window** (~8 s after a spoken reply) routes the next wake-word-free utterance back to the assistant in dictation mode too — one addressee removes the ambiguity the wake word exists to resolve.
 - **Starting a fresh conversation is a deterministic registry alias, not a model turn.**
   `assistant.newConversation` puts "new conversation", "clear context", and their variants (`NEW_CONVERSATION_PHRASES` in `assistant.ts`) on the ordinary command registry, so clearing context costs no model call and cannot be paraphrased into something adjacent.

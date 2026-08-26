@@ -58,38 +58,48 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 
 // Module state is a singleton, so each test starts from a closed stream and a
 // silent element; the close each retirement posts is dropped with the log.
-const reset = () => { speech.cancelAssistantSpeech(); voice.stopAllPlayback(); calls = [] }
+const reset = async () => {
+  speech.cancelAssistantSpeech()
+  voice.stopAllPlayback()
+  // Retiring an eagerly opened stream closes it after its open acknowledgement.
+  // Let that previous-test cleanup land before clearing the call ledger.
+  await new Promise(resolve => setTimeout(resolve, 0))
+  calls = []
+}
 const openedStreams = () => new Set(calls.map(call => call.stream_id))
 
 test('a card announcement joins the turn already speaking', async () => {
   // The card and the sentences before it are one utterance. A second stream for
   // the card would take the floor and cut the sentence mid-word.
-  reset()
+  await reset()
   speech.beginTurnSpeech('turn-1')
   await speech.speakTurnText('turn-1', 'Working on it.')
   await speech.speakAnnouncement('Spawn a claude session in swe-mux. Say cancel to stop it.')
   assert.equal(openedStreams().size, 1, 'one stream carries the whole turn')
-  assert.deepEqual(calls.map(call => !!call.continue_stream), [false, true])
-  assert.deepEqual(calls.map(call => call.final), [false, false])
+  assert.deepEqual(calls.map(call => !!call.continue_stream), [false, true, true])
+  assert.deepEqual(calls.map(call => call.final), [false, false, false])
+  assert.deepEqual(calls.map(call => call.text), [
+    '', 'Working on it.', 'Spawn a claude session in swe-mux. Say cancel to stop it.',
+  ])
 })
 
 test('a second announcement joins the first instead of restarting it', async () => {
   // The regression this pins: an announcement that opened its own interrupting
   // stream made every repeat cut the previous one, so the operator heard the
   // same sentence begin over and over rather than once.
-  reset()
+  await reset()
   await speech.speakAnnouncement('First card. Confirm or cancel?')
   const playing = voice.getPlayback().clipId
   await speech.speakAnnouncement('Second card. Confirm or cancel?')
   assert.equal(openedStreams().size, 1, 'both announcements share one stream')
-  assert.deepEqual(calls.map(call => !!call.continue_stream), [false, true])
+  assert.deepEqual(calls.map(call => !!call.continue_stream), [false, true, true])
   assert.equal(voice.getPlayback().clipId, playing, 'the first must still be speaking')
 })
 
 test('the spoken verdict does take the floor', async () => {
   // Opposite intent, deliberately: the operator has just answered the card being
   // read out, so finishing the question is worse than cutting it.
-  reset()
+  await reset()
   await speech.speakAnnouncement('Spawn a claude session in swe-mux. Say cancel to stop it.')
   const announcement = voice.getPlayback().clipId
   await speech.speakOnce('Cancelled: spawn a claude session in swe-mux.')
@@ -102,7 +112,7 @@ test('barge-in stops the turn from posting any more of itself', async () => {
   // Playback is the authority on whether a stream still matters. Posting text
   // into a stream nobody will play only spends synthesis on silence — and it is
   // what let a backlog keep talking after the microphone was closed.
-  reset()
+  await reset()
   speech.beginTurnSpeech('turn-2')
   await speech.speakTurnText('turn-2', 'First sentence.')
   const spoken = () => calls.filter(call => call.text.trim()).length
@@ -122,60 +132,58 @@ test('barge-in stops the turn from posting any more of itself', async () => {
 })
 
 test('a new turn supersedes the reply the operator moved on from', async () => {
-  reset()
+  await reset()
   speech.beginTurnSpeech('turn-3')
   await speech.speakTurnText('turn-3', 'An answer nobody waited for.')
-  const stale = voice.getPlayback().clipId
   speech.beginTurnSpeech('turn-4')
   assert.equal(voice.getPlayback().clipId, null, 'the previous turn is cut')
   await speech.speakTurnText('turn-4', 'The answer to the new question.')
-  assert.notEqual(voice.getPlayback().clipId, stale)
   assert.equal(openedStreams().size, 2)
 })
 
 test('a turn that never spoke says its completion fallback once', async () => {
-  reset()
+  await reset()
   speech.beginTurnSpeech('turn-5')
   await speech.endTurnSpeech('turn-5', 'Done.')
-  assert.deepEqual(calls.map(call => call.text), ['Done.', ''])
-  assert.equal(calls[1].final, true, 'and closes the stream it opened')
+  assert.deepEqual(calls.map(call => call.text), ['', 'Done.', ''])
+  assert.equal(calls[2].final, true, 'and closes the stream it opened')
 })
 
 test('a turn that already spoke does not repeat itself at the end', async () => {
-  reset()
+  await reset()
   speech.beginTurnSpeech('turn-6')
   await speech.speakTurnText('turn-6', 'Three sessions are working.')
   await speech.endTurnSpeech('turn-6', 'Three sessions are working.')
-  assert.deepEqual(calls.map(call => call.text), ['Three sessions are working.', ''])
+  assert.deepEqual(calls.map(call => call.text), ['', 'Three sessions are working.', ''])
 })
 
-test('a sentence still being synthesized already counts as spoken', async () => {
+test('a sentence waiting for its append acknowledgement already counts as spoken', async () => {
   // The awaited version above is not how the client calls this. `AssistantPanel`
   // fires `void speakTurnText(...)` and the completion event arrives on its own,
   // so for a one-sentence reply `endTurnSpeech` runs milliseconds later while the
-  // post is still in flight - and seconds before synthesis returns. Reading
+  // append acknowledgement is still in flight. Reading
   // `spoke` after the await made the guard miss, and the turn said the whole
   // reply twice: measured 2026-08-23, one sentence, no card, two segments, 11.8s
   // of audio for a 95-character sentence.
-  reset()
+  await reset()
   speech.beginTurnSpeech('turn-7')
   const sentence = speech.speakTurnText('turn-7', 'The top note is swe-mux Notes.')
   await speech.endTurnSpeech('turn-7', 'The top note is swe-mux Notes.')
   await sentence
   assert.deepEqual(
     calls.map(call => call.text),
-    ['The top note is swe-mux Notes.', ''],
-    'the fallback must not repeat a sentence that was queued but not yet synthesized',
+    ['', 'The top note is swe-mux Notes.', ''],
+    'the fallback must not repeat a sentence that was queued but not yet acknowledged',
   )
 })
 
 test('a turn that queued nothing still says its fallback', async () => {
   // The other side of the same flag: making it eager must not silence the terse
   // completion line for a turn that was all tool calls.
-  reset()
+  await reset()
   speech.beginTurnSpeech('turn-8')
   await speech.endTurnSpeech('turn-8', 'Done.')
-  assert.deepEqual(calls.map(call => call.text), ['Done.', ''])
+  assert.deepEqual(calls.map(call => call.text), ['', 'Done.', ''])
 })
 
 test.after(() => { globalThis.fetch = realFetch })
