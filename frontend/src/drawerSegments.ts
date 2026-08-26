@@ -2,7 +2,7 @@
 // one thing.
 //
 // Three surfaces grew segmented controls independently — Insight's Timeline/Findings,
-// Git's Map/Log/Provenance, and the Actions tab's collapsible sections — each with its
+// Git's Map/Log/Provenance, and the Actions tab's named views - each with its
 // own local `useState` and none of them addressable. That cost more than duplication:
 //
 //  * A segment reached only by clicking has no palette entry and no voice phrase, so

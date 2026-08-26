@@ -39,7 +39,7 @@ the overwhelm this ordering exists to end.
 3. **This device** (the browser's autoplay toggle, plus the focus rule below). Answers *does
    this browser speak, and for which session*.
 
-The three are presented as one numbered block in Settings -> Voice -> Read aloud (TTS), each layer naming where its
+The three are presented as one numbered block in Settings -> Voice -> Read aloud, each layer naming where its
 per-item control lives. The block is the source of truth for the wording; the `tts` tab and the
 pane strip say the same thing in one line each.
 
@@ -1037,22 +1037,23 @@ into mobile-voice setup instead.
 ## Settings surface (Settings → Voice)
 
 Voice is the largest tab in the panel, and it configures two independent halves plus the assistant that sits behind one of them.
-It is therefore **one `<section>` per concern**, in reading order, rather than one long scroll of headings - which is what it was, and what made every control in it equally hard to find.
-The tab's `<h3>`s are what the panel's section rail is derived from (`features/ui.md`), so the section list *is* the index:
+It is therefore five separate capability pages rather than one long scroll of headings.
+The expandable Settings sidebar exposes those pages on desktop and mobile:
 
-| Section | What it owns |
+| Page | What it owns |
 |---|---|
-| Read aloud (TTS) | Engine/clip/spend status, and the three-layer policy block above |
-| TTS provider | `tts_engine` and exactly one provider panel: SAPI voice/rate, Kokoro model/voice/speed, or Edge disclosure/integration/catalog/voice/prosody |
-| Pronunciation | Rendered only for Kokoro: `tts_kokoro_lexicon` and `kokoro_spelled_words` with one-tap respell |
-| Spoken summary | `tts_content`, the summary model and budgets, the verbatim cap |
-| Clip storage | The provider-independent `tts_cache_mb` bound and live cache usage |
-| Microphone and wake words | `stt_enabled`, the decoders and language, the STT status readout, `voice_wake_words` |
-| Command phrases | `voice_commands` - one row per fixed action |
-| Command reference | The complete live catalog (folded) |
-| Mux assistant | `assistant_*` and `voice_chat_patience_ms` (`assistant.md`) |
-| Testing and latency | The wake-word tester and the stage readout (folded) |
-| Mobile voice | Tailscale Serve setup and the phone DNS checklist (folded) |
+| Read aloud | Reply synthesis and playback: the three-layer policy, TTS provider, Kokoro pronunciation, spoken-summary policy, and clip storage |
+| Talk & dictation | Microphone capture and transcription: `stt_enabled`, decoders, language, STT status, and wake words |
+| Voice commands | Talk-owned command phrases and the complete live command catalog |
+| Mux assistant | The independent assistant chat capability: `assistant_*` and `voice_chat_patience_ms` (`assistant.md`) |
+| Diagnostics | Wake-word testing, stage latency, mobile setup, and phone DNS |
+
+**Read aloud** means text flowing out of swe-mux as speech.
+**Talk & dictation** means microphone audio flowing into swe-mux as text.
+The UI does not use “Speak” as a third capability name because it can be read in either direction.
+Voice commands require Talk because they are recognized from microphone input.
+When Talk is off, the Voice commands page collapses its phrase table and command reference into one compact enablement flag.
+Mux assistant is independent: it may remain enabled for text chat while Talk is off, and its page states that condition instead of implying the assistant is unavailable.
 
 Three rules hold this shape, and each answers a way the previous single section went wrong:
 
@@ -1065,10 +1066,12 @@ Three rules hold this shape, and each answers a way the previous single section 
 - **Pronunciation renders only for Kokoro.** SAPI owns its system dictionary and Edge owns its
   service pronunciation, so neither renders or interprets Kokoro respellings or observed
   spelled-word history.
-- **Reference folds; controls do not - and so does a control that is long rather than rarely read.** The command catalog, the two measuring instruments, and the one-time mobile setup are read rarely and are long, so each keeps its heading (and therefore its rail entry) and collapses its body behind a `<details class="settings-disclosure">`. Two Kokoro-only controls fold for the other reason: the voice picker's fifty-odd chips and the pronunciation editor with its spelled-word history each buried everything below them, so both collapse by default, the voice picker naming the current selection on its summary so the closed state still answers which voice is selected. A `data-setting` mark deliberately stays outside every collapsed one: `revealSetting` does open the disclosures above its target, but a switch a gate just promised should be on screen when the panel lands.
+- **Reference folds; controls do not.** The command catalog, measuring instruments, and one-time mobile setup fold within their owning page.
+  The Kokoro voice picker and pronunciation editor also collapse by default because their long lists otherwise dominate Read aloud.
+  A `data-setting` mark stays outside every collapsed disclosure so a deep link always lands on a visible control.
 - **The budget control is a row of chips, at every width.** `.settings-content label:not(.check)` re-grids every label in the panel into a two-column form row and out-specifies the `.budget-control` scoping that was meant to exempt these, so the tokens/dollars mode radios rendered as tall two-column rows and each axis stranded its one-word label in a 165px (38% on a phone) column. The rules are scoped one class deeper instead - no `!important`, because the fix is to be more specific than the panel's own label rule rather than to shout over it - and `voice-settings.spec.ts` measures it at phone width.
 
-`frontend/test/renderer/voice-settings.spec.ts` pins all four: the section list and its rail, the policy block, the lexicon's own section under both engines, and that nothing deep-linkable folds away.
+`frontend/test/renderer/voice-settings.spec.ts` pins the five-page navigation, the Read aloud policy block, provider persistence, Kokoro pronunciation, Talk-owned commands, Assistant independence, and the rule that nothing deep-linkable folds away.
 
 ## Session sounds (unrelated audio path)
 

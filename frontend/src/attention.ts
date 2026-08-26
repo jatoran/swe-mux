@@ -48,15 +48,15 @@ export type AttentionInbox = {
 export const CHANNEL_ORDER: AttentionChannel[] = ['interrupt_now', 'next_breakpoint', 'inbox', 'digest']
 
 export const CHANNEL_LABELS: Record<AttentionChannel, string> = {
-  interrupt_now: 'Interrupt now',
-  next_breakpoint: 'At your next breakpoint',
-  inbox: 'Inbox',
+  interrupt_now: 'Needs attention now',
+  next_breakpoint: 'Review at your next pause',
+  inbox: 'Review when convenient',
   digest: 'Digest only',
 }
 
 export const CHANNEL_HINTS: Record<AttentionChannel, string> = {
   interrupt_now: 'Worsening, actionable, and confident enough to spend a slot of today’s budget.',
-  next_breakpoint: 'Waits until you finish what you are doing. Cheap to resolve, so it never spends budget.',
+  next_breakpoint: 'Relevant but not urgent. Waits until you naturally pause or change tasks.',
   inbox: 'Schedulable. Read it when you choose to.',
   digest: 'Kept as a record. No action implied.',
 }

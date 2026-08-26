@@ -40,10 +40,9 @@ Everything here is that pattern generalised.
   The switch's own key is *derived* from the target rather than restated (`grantKey`).
 - **Scope**: how wide the change reaches - `install` (all projects), `project` (this Project),
   `device` (this device). A grant states its scope and where the change is written, every time.
-- **Surface** (of a target): `settings` (install-wide configuration, including the global
-  automation switches) or `project` (the Projects registry, the only per-Project editor).
-  The Automation dashboard owns no switch: it shows the state of the global automation
-  switches and links to them in Settings → Automation, so one switch has one owner.
+- **Surface** (of a target): `settings` for ordinary install-wide configuration,
+  `automation` for global automation policy, or `project` for the revision-checked per-Project editor.
+  Settings → Automation is only a portal to the Automation workspace, so a global automation switch still has one owner.
 - **Reveal**: `frontend/src/settingReveal.ts`. Opens any `<details>` above the marked control,
   waits for it to exist and to have a layout box, centres it in its scroller, flashes it, and
   focuses it. The disclosures are opened *before* the layout test, not on the way to the scroll:
@@ -51,9 +50,8 @@ Everything here is that pattern generalised.
   `content-visibility`, which still reports client rects; a `display:none` implementation reports
   none), and under the second the wait would observe a control already in the DOM until its
   deadline expired.
-- **Gate notice**: the standard shape a gated surface renders - `GrantGate`
-  (`frontend/src/GrantGate.tsx`) for a surface that cannot function, or `GrantButton` for
-  prose on a working surface that names a switch in passing.
+- **Gate notice**: `CompactGrantFlag` for a surface blocked by one switch, `GrantGate` for a compound dependency or permission closure, and `GrantButton` for prose on a working surface that names a switch in passing.
+  A compact flag states what is off, the immediate consequence, one enable action, and a Details link without turning a single switch into a full-page explanation.
 
 ## Invariants
 
@@ -112,7 +110,7 @@ Everything here is that pattern generalised.
 - **A target points at a control that exists.** `frontend/test/settingTargets.test.ts` checks
   every target against the source that must carry its `data-setting`, every `automation:`
   target against the daemon's registry, and every *grantable* Project field against a control
-  in the Projects registry - so a field the daemon enforces can never again ship with no way
+  in its owning Automation or Projects surface - so a field the daemon enforces can never again ship with no way
   to set it.
 - **And every `Config` field has a control or a stated reason it has none.**
   The test above walks from a *link* to its control, which catches a control renamed or moved
@@ -163,18 +161,18 @@ only route to the owning overlay.
 
 | Surface | Switch | Level | Offers |
 |---|---|---|---|
-| Clipboard section (Actions tab) | `clipboard_history_enabled` | install | grant |
-| Queue pane | `auto_delivery_enabled` | install | grant |
+| Clipboard view (Actions tab) | `clipboard_history_enabled` | install | compact grant |
+| Queue pane | `auto_delivery_enabled` | install | compact grant |
 | Queue pane (grant lapsed for idleness) | `auto_delivery_session_ttl_minutes` | install | link (a value, not a switch) |
 | Fleet Queue | `auto_delivery_enabled` | install | grant (inline) |
 | Approval chip menu | `approval_auto_enabled` | install | grant (inline) |
-| Schedule tab (list) | `scheduled_runs_enabled` | install | grant |
+| Schedule tab (list) | `scheduled_runs_enabled` | install | compact grant |
 | Schedule tab (row, `install_disabled`) | `scheduled_runs_enabled` | install | grant (inline) |
 | Schedule tab (row, `automation_disabled`) | `scheduled_runs` | Project | grant (inline) |
 | Scan timeline (either switch off) | `scan_timeline_enabled` + `scan_timeline` | install + Project | grant, both in one act |
 | Scan timeline (unarmed run) | `scan_timeline_auto_enable` | Project | grant (inline) |
-| Automation dashboard (global switches) | `automation_enabled`, `scan_timeline_enabled` | install | link (it owns no switch) |
-| Project settings (spending-limits prose) | `automation_daily_budget` | install | link (a value, not a switch) |
+| Automation workspace (Global policy) | `automation_enabled`, `scan_timeline_enabled` | install | owner |
+| Project settings (spending-limits prose) | `automation_daily_budget` | install | link to Automation policy (a value, not a switch) |
 | Change map | `code_graph` | Project | grant |
 | Findings pane (no detectors) | the four detectors | Project | grant, all four in one act |
 | Findings pane (no observer notes) | `automation_enabled` | install | grant (inline) |
@@ -183,13 +181,13 @@ only route to the owning overlay.
 | Git → Map landing strip (agent authority) | `land_queue`, `land_grant` | Project | grant |
 | Git → Map row, landing blocked | the two above | install + Project | opens the strip that holds them |
 | Alerts tab (ranked inbox empty) | `attention_ranking` | Project | grant |
-| Alerts tab (delivery muted) | device alert master | device | grant (local write) |
+| Alerts tab (delivery muted) | device alert master | device | compact grant (local write) |
 | Usage dashboard | `ccusage_enabled` | install | grant |
-| Read-aloud chip | `tts_enabled` | install | link (a pane-bar chip, not a gate) |
+| Read-aloud operational view | `tts_enabled` | install | compact grant |
 | Talk toggle | `stt_enabled` | install | link |
 | Claude width notice | `claude_max_columns` | install | link (a value, not a switch) |
 | Files tab header (`ignores`) | `project_ignore_patterns` | install | link (a header control, not a gate; a value, not a switch) |
-| Projects registry (model-backed row, provider unproven) | `llm_provider` | install | link (a value, not a switch) |
+| Automation Project policy (model-backed row, provider unproven) | `llm_provider` | install | link (a value, not a switch) |
 | Any gate over a `needs_llm` switch | `llm_provider` | install | link, disclosed beside `spends` |
 
 ## First use
@@ -272,7 +270,7 @@ POST /api/grants     {install?: {key: true}, project_id?, automations?: [id],
 - `src/swe_mux/automation_registry.py` — `spends`, `enabling_closure`, the recommended set.
 - `frontend/src/settingTargets.ts` — the catalogue, the `mux:open-setting` channel.
 - `frontend/src/grants.ts` — which targets are grantable, and the one applier.
-- `frontend/src/GrantGate.tsx` — the gate block and the inline `GrantButton`.
+- `frontend/src/GrantGate.tsx` — the compound gate, compact single-switch flag, and inline `GrantButton`.
 - `frontend/src/settingReveal.ts` — wait, scroll, flash, focus.
 - `frontend/src/SettingLink.tsx` — the deep link, now the secondary control on a gate.
 - `frontend/src/projectAutomations.ts`, `frontend/src/installSwitches.ts` — the two cached
@@ -280,9 +278,9 @@ POST /api/grants     {install?: {key: true}, project_id?, automations?: [id],
   `project_configuration_changed` / `configuration_changed` and by a local grant.
 - `frontend/src/App.tsx` — `openSettingTarget`, the only place that decides which overlay
   opens and which others close.
-- `frontend/src/Settings.tsx`, `ProjectsManager.tsx` — the two destinations; each takes
-  `initialSetting` plus a `revealToken` that changes per request so the same link works
-  twice. `ProjectsManager`'s `AgentAuthority` owns the four authority fields.
+- `frontend/src/Settings.tsx`, `AutomationPolicyView.tsx`, and `ProjectsManager.tsx` are the destinations.
+  Each takes a setting target or reveal token appropriate to its host so the same link works twice.
+  `ProjectsManager`'s `AgentAuthority` owns the four authority fields.
 - `frontend/test/grants.test.ts`, `frontend/test/renderer/grant-gate.spec.ts`,
   `tests/test_grants.py` — the contract, the browser behaviour, and the refusals.
 - `frontend/test/settingsCoverage.test.ts` — field → control, the `CONFIG_ONLY` reasons, and

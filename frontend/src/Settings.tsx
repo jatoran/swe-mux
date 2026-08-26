@@ -39,10 +39,10 @@ import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
-import { flashSetting, revealSetting } from './settingReveal'
+import { flashSetting, revealSetting, settingSelector } from './settingReveal'
 import {
   railSectionIds, rememberedSections, rememberedTab, rememberSection, rememberTab,
-  sameRailSections, SECTION_RAIL_MIN, settingsTabGroups, settingsTabs, tabForSection,
+  sameRailSections, SECTION_RAIL_MIN, settingsSubpageId, settingsSubpages, settingsTabGroups, settingsTabs, tabForSection,
   type SettingsRailSection, type SettingsTab,
 } from './settingsTabs'
 import {
@@ -381,6 +381,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [narrow,setNarrow] = useState(()=>window.matchMedia(SETTINGS_NARROW_QUERY).matches)
   const [railSections,setRailSections] = useState<SettingsRailSection[]>([])
   const [activeSection,setActiveSection] = useState('')
+  const [selectedSubpages,setSelectedSubpages] = useState<Record<string,string>>(()=>rememberedSections())
+  const [expandedTabs,setExpandedTabs] = useState<Set<SettingsTab>>(()=>new Set([initialSection?tabForSection(initialSection):rememberedTab()]))
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
   const [noteChordQuery,setNoteChordQuery] = useState('')
   const [closeIntent,setCloseIntent] = useState<CloseIntent|null>(null)
@@ -392,6 +394,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [highlight,setHighlight] = useState(0)
   const [jump,setJump] = useState<{entry:SettingsSearchEntry}|null>(null)
   const [themePickerOpen,setThemePickerOpen] = useState(false)
+  const declaredSubpages=settingsSubpages[activeTab]||[]
+  const pagedSubpages=declaredSubpages.length>1
+  const selectedSubpage=selectedSubpages[activeTab]||declaredSubpages[0]?.id||''
   const panel = useRef<HTMLElement>(null)
   const tabNavRef = useRef<HTMLElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
@@ -401,6 +406,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const resetPanel = useRef<HTMLElement>(null)
   const themeFile = useRef<HTMLInputElement>(null)
   const restoreFocus = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null)
+
+  const selectPageForSetting=(root:ParentNode,setting:string)=>{
+    if(!pagedSubpages)return
+    const page=root.querySelector<HTMLElement>(settingSelector(setting))?.closest<HTMLElement>('section[data-settings-subpage]')?.dataset.settingsSubpage
+    if(page)setSelectedSubpages(current=>({...current,[activeTab]:page}))
+  }
 
   // One place that takes a config as newly authoritative. Three paths do it — the panel
   // opening, a save returning, and Restore defaults — and each used to spell the chain
@@ -510,11 +521,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const read=()=>{
       frame=0
       const headings=[...content.querySelectorAll<HTMLElement>('h3')]
-      const sections=railSectionIds(headings.map(heading=>heading.textContent||''))
+      const sections=pagedSubpages?declaredSubpages:railSectionIds(headings.map(heading=>heading.textContent||''))
       let at=0
       for(const heading of headings){
-        if(!(heading.textContent||'').trim())continue
-        heading.dataset.settingsSection=sections[at]?.id||''
+        const label=(heading.textContent||'').trim()
+        if(!label)continue
+        const id=pagedSubpages?settingsSubpageId(activeTab,label):(sections[at]?.id||'')
+        heading.dataset.settingsSection=id
+        const owner=heading.closest<HTMLElement>('section')
+        if(owner&&id)owner.dataset.settingsSubpage=id
         at+=1
       }
       setRailSections(current=>sameRailSections(current,sections)?current:sections)
@@ -523,13 +538,29 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const observer=new MutationObserver(()=>{ if(!frame)frame=requestAnimationFrame(read) })
     observer.observe(content,{childList:true,subtree:true})
     return()=>{observer.disconnect();if(frame)window.cancelAnimationFrame(frame)}
-  },[activeTab,draft!==null])
+  },[activeTab,draft!==null,pagedSubpages,declaredSubpages])
+
+  // A declared subpage is a page, not a scroll anchor. The Settings form remains one
+  // atomic draft, but only the selected top-level section participates in layout. This
+  // DOM annotation is derived from the same headings the search index and deep links use,
+  // so adding or renaming a section cannot create a second navigation vocabulary.
+  useEffect(()=>{
+    const content=contentEl()
+    if(!content)return
+    const sections=[...content.querySelectorAll<HTMLElement>('section[data-settings-subpage]')]
+    if(!pagedSubpages){for(const section of sections)section.hidden=false;return}
+    const valid=railSections.some(section=>section.id===selectedSubpage)
+    const next=valid?selectedSubpage:(rememberedSections()[activeTab]||railSections[0]?.id||declaredSubpages[0]?.id||'')
+    if(next&&next!==selectedSubpage){setSelectedSubpages(current=>({...current,[activeTab]:next}));return}
+    for(const section of sections)section.hidden=section.dataset.settingsSubpage!==next
+    content.scrollTop=0
+  },[activeTab,declaredSubpages,pagedSubpages,railSections,selectedSubpage])
 
   // Scroll-spy. Skipped entirely on a tab too short to render a rail, so no tab
   // pays for a listener that has nothing to highlight.
   useEffect(()=>{
     const content=contentEl()
-    if(!content||railSections.length<SECTION_RAIL_MIN)return
+    if(!content||pagedSubpages||railSections.length<SECTION_RAIL_MIN)return
     let frame=0
     const measure=()=>{
       frame=0
@@ -550,7 +581,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const onScroll=()=>{ if(!frame)frame=requestAnimationFrame(measure) }
     content.addEventListener('scroll',onScroll,{passive:true})
     return()=>{content.removeEventListener('scroll',onScroll);if(frame)window.cancelAnimationFrame(frame)}
-  },[activeTab,railSections])
+  },[activeTab,pagedSubpages,railSections])
 
   // Restore the remembered section once the rail for this tab exists. A pending
   // search jump always wins: that caller named an exact control, not a section.
@@ -558,14 +589,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   useEffect(()=>{
     if(!railSections.length||restoredFor.current===activeTab)return
     restoredFor.current=activeTab
-    if(jump||railSections.length<SECTION_RAIL_MIN)return
+    if(jump)return
     const remembered=rememberedSections()[activeTab]
-    if(remembered&&remembered!==railSections[0].id&&railSections.some(section=>section.id===remembered)){
+    if(pagedSubpages){
+      const next=remembered&&railSections.some(section=>section.id===remembered)?remembered:railSections[0]?.id
+      if(next)setSelectedSubpages(current=>({...current,[activeTab]:next}))
+    }else if(remembered&&remembered!==railSections[0].id&&railSections.some(section=>section.id===remembered)){
       scrollToSection(remembered,'auto')
     }
-  },[activeTab,railSections,jump,scrollToSection])
+  },[activeTab,pagedSubpages,railSections,jump,scrollToSection])
 
-  useEffect(()=>{ if(activeSection)rememberSection(activeTab,activeSection) },[activeTab,activeSection])
+  useEffect(()=>{ const section=pagedSubpages?selectedSubpage:activeSection;if(section)rememberSection(activeTab,section) },[activeTab,activeSection,pagedSubpages,selectedSubpage])
 
   // Native-history scan status: fetch once when the Harnesses tab opens, then poll
   // while a scan is running so its progress and completion land without a refresh.
@@ -609,6 +643,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   /** Every route to a different tab, so none of them leaves the drawer standing open
    *  over the tab it just switched to: the rail, a search result, a deep link. */
   const selectTab=useCallback((tab:SettingsTab)=>{setActiveTab(tab);setNavOpen(false)},[setNavOpen])
+  const toggleTabExpanded=(tab:SettingsTab)=>setExpandedTabs(current=>{
+    const next=new Set(current)
+    if(next.has(tab))next.delete(tab);else next.add(tab)
+    return next
+  })
+  const selectSubpage=(tab:SettingsTab,id:string)=>{
+    setSelectedSubpages(current=>({...current,[tab]:id}))
+    setExpandedTabs(current=>new Set(current).add(tab))
+    selectTab(tab)
+  }
   /**
    * Switch tab and arrive at one named control, for a link *inside* the panel.
    *
@@ -823,12 +867,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const index=matchIndex(candidates.map(item=>item.textContent||''),jump.entry.key,jump.entry.occurrence)
     const target=index>=0?candidates[index]:null
     if(!target)return
-    for(let node=target.parentElement;node;node=node.parentElement)if(node instanceof HTMLDetailsElement)node.open=true
-    target.scrollIntoView({block:'center'})
-    // The same arrival cue a deep link paints, so "we brought you here" looks identical
-    // whichever way you arrived (`settingReveal.ts`).
-    return flashSetting(target)
-  },[jump])
+    const arrive=()=>{
+      for(let node=target.parentElement;node;node=node.parentElement)if(node instanceof HTMLDetailsElement)node.open=true
+      target.scrollIntoView({block:'center'})
+      return flashSetting(target)
+    }
+    const page=target.closest<HTMLElement>('section[data-settings-subpage]')?.dataset.settingsSubpage
+    if(pagedSubpages&&page&&page!==selectedSubpage){
+      setSelectedSubpages(current=>({...current,[activeTab]:page}))
+      const timer=window.setTimeout(arrive,0)
+      return()=>window.clearTimeout(timer)
+    }
+    return arrive()
+  },[jump,pagedSubpages,selectedSubpage,activeTab])
 
   // Reveal a control a gated surface deep-linked to (`settingTargets.ts`). Unlike the search
   // jump above, this can arrive before the panel has anything to show: the bundle is still in
@@ -839,8 +890,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(!initialSetting)return
     const root=panel.current
     if(!root)return
+    selectPageForSetting(root,initialSetting)
     return revealSetting(root,initialSetting)
-  },[initialSetting,revealToken,activeTab,draft!==null])
+  },[initialSetting,revealToken,activeTab,draft!==null,pagedSubpages])
 
   // The same arrival for an in-panel link (`goToSetting`). Separate from the deep-link
   // effect rather than folded into it so an incoming `initialSetting` and a click inside
@@ -849,8 +901,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(!pendingReveal)return
     const root=panel.current
     if(!root)return
+    selectPageForSetting(root,pendingReveal.setting)
     return revealSetting(root,pendingReveal.setting)
-  },[pendingReveal,activeTab,draft!==null])
+  },[pendingReveal,activeTab,draft!==null,pagedSubpages])
 
   useEffect(() => {
     if (!capturingCommand) return
@@ -1235,7 +1288,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // The panel's chrome, shared by the loading shell and the loaded one so the two
   // cannot drift apart — the placeholder is the same header, the same section list,
   // and the same footer, with only the content area standing in.
-  const activeTabLabel = settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'
+  const tabLabel=settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'
+  const pageLabel=declaredSubpages.find(page=>page.id===selectedSubpage)?.label
+  const activeTabLabel = pagedSubpages&&pageLabel?`${tabLabel} · ${pageLabel}`:tabLabel
   const toggleNav = () => setNavOpen(!navOpen)
   // Narrow, the header names where you are rather than what the panel is: the panel
   // fills the screen, so "Settings" is the one thing already obvious, and the tab is
@@ -1262,7 +1317,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     <nav ref={tabNavRef} id="settings-tab-nav" class={`settings-tabs${narrow?' settings-tabs-drawer':''}${narrow&&navOpen?' open':''}`} role="tablist" aria-label="Settings sections">
       {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
         <span aria-hidden="true">{group.group}</span>
-        {group.tabs.map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>)}
+        {group.tabs.map(tab=>{
+          const pages=settingsSubpages[tab.id]||[]
+          const expanded=expandedTabs.has(tab.id)&&pages.length>0
+          return <Fragment key={tab.id}>
+            <div class="settings-tab-row" role="presentation">
+              <button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>
+              {!!pages.length&&<button type="button" class="settings-tab-expand" aria-label={`${expanded?'Collapse':'Expand'} ${tab.label} pages`} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded?'▾':'▸'}</button>}
+            </div>
+            {expanded&&<div class="settings-subtabs" role="group" aria-label={`${tab.label} pages`}>
+              {pages.map(page=><button key={page.id} type="button" class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>)}
+            </div>}
+          </Fragment>
+        })}
       </div>)}
     </nav>
     {narrow&&navOpen&&<button type="button" class="settings-nav-scrim" aria-label="Close settings sections" onClick={()=>setNavOpen(false)} />}
@@ -1325,7 +1392,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               tab implied a per-tab scope they never had — and on a phone they pushed
               Cancel/Save into a horizontally scrolling footer. */}
           <section><h3>Configuration file</h3>
-            <div class="settings-config-actions"><div><p>Stored in <code>{draft.data_dir}</code>. The export is sanitized of credentials. Restoring defaults rewrites the saved configuration at once — it is not staged behind <em>Save changes</em>, and it discards unsaved edits.</p></div>
+          <div class="settings-config-actions"><div><p>Stored in <code>{draft.data_dir}</code>. Exports omit credentials. Restore defaults saves immediately and discards this draft.</p></div>
               <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button class="danger" onClick={()=>setResetIntent(true)}>Restore defaults</button></div>
             </div>
           </section>
@@ -1372,14 +1439,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section><h3>Project resources</h3>
             <p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p>
-            <p>Everything scoped to one Project — its root, default backend and profile, worktree command, prompt-library scope, and automation opt-in — lives in <strong>Manage projects</strong> rather than here.</p>
+          <p>Project roots, launch defaults, worktree commands, and prompt scope live in <strong>Manage projects</strong>. Automation opt-ins live in the Automation workspace.</p>
           </section>
         </Fragment>}
 
         {activeTab==='terminals'&&<Fragment>
           <section><h3>Rendering</h3>
             <label>Renderer<Dropdown value={draft.terminal_renderer} onChange={value=>change('terminal_renderer',value as Config['terminal_renderer'])} options={[{value:'auto',label:'Auto (WebGL with DOM fallback)'},{value:'webgl',label:'Prefer WebGL'},{value:'dom',label:'DOM compatibility mode'}]}/></label>
-            <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback. A harness's width limit lives with the harness, under Harnesses.</p>
+          <p>Mobile and Claude use the DOM renderer. Auto also selects it for terminals that repaint scrollback. Harness width limits are under Harnesses.</p>
           </section>
 
           {/* Retention, first replay, and crash checkpoint are three different byte
@@ -1393,16 +1460,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <p>How much output a session keeps for replay when a client attaches. Larger keeps more history reachable after a reconnect and costs memory per live session.</p>
             <label data-setting="attach_replay_bytes">Replay bytes on a fresh attach<input type="number" min="1024" max="1073741824" value={draft.attach_replay_bytes} onInput={e=>change('attach_replay_bytes',Number(e.currentTarget.value))} /><small>What a client is handed when it attaches with no position of its own, as opposed to what the daemon retains above. Every replayed byte is parsed before anything renders, so this is reconnect latency; scrolling further back is a later request.</small></label>
             <h4>Crash recovery</h4>
-            <p>The PTY supervisor already carries live sessions across a daemon restart. These bound the layer beneath it, for when the daemon <em>and</em> its PTY owner die together: sessions come back as readable dead panes rather than vanishing.</p>
+          <p>These limits cover a full daemon and PTY-supervisor failure. Recovered sessions return as readable ended panes.</p>
             <label data-setting="session_recovery_checkpoint_bytes">Recovery checkpoint bytes<input type="number" min="0" max="67108864" value={draft.session_recovery_checkpoint_bytes} onInput={e=>change('session_recovery_checkpoint_bytes',Number(e.currentTarget.value))} /><small>Terminal bytes kept per session so a recovered pane shows what it printed. 0 keeps the registry that brings sessions back and stores no output at all. Deliberately far below the retention above: a cold pane is a post-mortem, not a session.</small></label>
             <label data-setting="session_recovery_retention_days">Recovery retention days<input type="number" min="0" max="365" value={draft.session_recovery_retention_days} onInput={e=>change('session_recovery_retention_days',Number(e.currentTarget.value))} /><small>How long recovery data for an <em>ended</em> session is kept. Cold sessions themselves are bounded by the count below instead.</small></label>
             <label data-setting="session_recovery_max_sessions">Recoverable sessions kept<input type="number" min="0" max="1000" value={draft.session_recovery_max_sessions} onInput={e=>change('session_recovery_max_sessions',Number(e.currentTarget.value))} /><small>Newest first. Without a ceiling a machine that crashes repeatedly accumulates cold rows forever.</small></label>
-            <p><code>session_recovery_enabled</code> in the configuration file controls unexpected-shutdown recovery and checkpoint capture. The durable registry remains available for sessions you explicitly stand down.</p>
+          <p><code>session_recovery_enabled</code> controls crash recovery and checkpoint capture. Ended sessions remain in the durable registry.</p>
           </section>
 
           <section><h3>Default profile</h3>
             <label>Global default terminal profile<Dropdown value={draft.default_shell_profile} onChange={value=>change('default_shell_profile',value)} options={draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))}/></label>
-            <p>A launch profile names an executable, arguments, and environment for one backend. A <strong>shell</strong> profile is a terminal. An <strong>agent</strong> profile starts a harness with extra arguments, so one Project can offer Claude and Claude (plan) side by side; pick which one a Project starts by default in Projects → Options.</p>
+          <p>A profile names an executable, arguments, and environment. Shell profiles open terminals; agent profiles start a harness variant. Project defaults are under Projects → Options.</p>
           </section>
 
           <section class="profile-settings"><h3>Launch profiles</h3>
@@ -1460,7 +1527,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               other evidence windows rather than under Usage: it is the per-session record
               an incident is reconstructed from, not a spend or quota figure. */}
           <section><h3>Detection timeline</h3>
-          <p>Every status-detection reading is written to a durable per-session timeline, which is what makes “why did this session read as working for an hour” answerable after the fact. It is chattier than the other telemetry — a busy turn writes every ledger entry — so it ages out on its own window rather than sharing one.</p>
+          <p>Keeps the evidence behind past session states. Detection data has its own shorter retention because active turns write frequently.</p>
           <label data-setting="status_timeline_retention_days">Status timeline retention days<input type="number" min="1" max="3650" value={draft.status_timeline_retention_days} onInput={e=>change('status_timeline_retention_days',Number(e.currentTarget.value))}/><small>Long enough to investigate an incident from last week; short enough that a busy fleet does not carry a year of per-transition detail.</small></label>
           </section>
         </Fragment>}
@@ -1524,13 +1591,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               is about the set rather than about a member of it, and reading it after
               five harness cards would make it look like a property of the last one. */}
           <section><h3>Default harness</h3>
-          <p>Which agent swe-mux launches when something needs an agent and nobody named one — the configurator button, and anything else that has to pick. This is a different question from the Run menu's default, which may legitimately be a shell; a shell cannot receive a starting prompt, so it is not an answer here.</p>
+          <p>Used when a tool needs an agent and none was named. This is separate from the Run menu default, which may be a shell.</p>
           <label data-setting="default_harness">Default harness<Dropdown value={draft.default_harness} onChange={value=>change('default_harness',value)} options={[{value:'',label:'Follow detection'},...allHarnessesIncludingDisabled().map(harness=>({value:harness.name,label:harness.display_name}))]}/></label>
-          <p class="profile-hint">Follow detection is right for a machine with one agent installed: there is no choice to make, and a CLI installed later is picked up without touching this. Set it explicitly when several are available and you have a preference.</p>
+          <p class="profile-hint">Follow detection tracks the available agent automatically. Choose explicitly when several are installed.</p>
           </section>
 
           <section class="settings-harnesses"><h3>Harnesses</h3>
-          <p>Which harnesses appear in the launchers, and how each one starts. Enabling follows detection until you choose otherwise: turn a detected harness off to hide it, or turn one on before it is installed. A disabled harness still opens from an existing session, the command line, or the API, and its past conversations stay searchable in History.</p>
+          <p>Controls which harnesses appear in launchers and how they start. Disabled harnesses keep existing sessions and searchable history.</p>
           {allHarnessesIncludingDisabled().map(harness=><div class="settings-harness" key={harness.name}>
             <div class="settings-harness-head">
               <label class="check"><span>{harness.display_name}</span><input type="checkbox" checked={harnessEnabledDraft(harness.name)} onChange={e=>setHarnessEnabledChoice(harness.name,e.currentTarget.checked)} /></label>
@@ -1558,7 +1625,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               it: the scan is scoped to exactly the harnesses enabled above, so the two
               are read together or not at all. */}
           <section><h3>Conversation history</h3>
-          <p>swe-mux can index conversations a CLI wrote on its own, so they are searchable and resumable alongside the sessions it launched. The startup scan is scoped to the enabled harnesses. A real machine can hold tens of thousands of transcripts, so a first import is opt-in and interruptible rather than a silent startup stall.</p>
+          <p>Indexes conversations created outside swe-mux so they can be searched and resumed. Large first imports are explicit and cancellable.</p>
           <label class="check"><span>Reconcile native history on startup</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
           <label>History page size<input type="number" min="1" max="10000" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
           <p>How many conversations one page of the history browser asks for. It bounds a request, not what is stored.</p>
@@ -1585,8 +1652,18 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {/* Delivery policy, not harness configuration: these bound how a queued
             message reaches an agent, whichever harness that agent is running. */}
         {activeTab==='queue'&&<Fragment>
+          <section><h3>Overview</h3>
+          <p>Effective install-wide queue policy. Conversation and Project grants can narrow it further.</p>
+          <div class="settings-status-grid">
+            <article><strong>Auto-delivery</strong><span>{draft.auto_delivery_enabled?`On · ${draft.auto_delivery_stable_seconds}s stability`:'Off · manual Send now only'}</span></article>
+            <article><strong>Approvals</strong><span>{draft.approval_auto_enabled?'Available with a conversation grant':'Human answers every request'}</span></article>
+            <article><strong>Agent messaging</strong><span>{draft.agent_messaging_enabled?'On · bounded threads':'Off'}</span></article>
+            <article><strong>Agent actuation</strong><span>{draft.session_control_enabled?'Interrupt and end enabled':'Interrupt and end disabled'}</span></article>
+          </div>
+          <p class="settings-policy-floor"><strong>Safety floor:</strong> send-now, interrupts, session ends, forced Git operations, publishing, uploads, and credential access still require explicit authority or confirmation.</p>
+          </section>
           <section><h3>Auto-delivery</h3>
-          <p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant lapses on its own once nobody has used that conversation for a while.</p>
+          <p>When enabled, armed messages may deliver after the target remains safe for the stability window. Each conversation can still opt out.</p>
           <label class="check" data-setting="auto_delivery_enabled"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>
           <label>Consecutive automatic sends before the grant disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
@@ -1594,15 +1671,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label data-setting="auto_delivery_reply_window_minutes">Minutes a session keeps its grant while awaiting a reply<input type="number" min="0" max="1440" value={draft.auto_delivery_reply_window_minutes} onInput={e=>change('auto_delivery_reply_window_minutes',Number(e.currentTarget.value))} /></label>
           <label>Back-off seconds after a refused attempt<input type="number" min="0" max="3600" step="0.5" value={draft.auto_delivery_refusal_backoff_seconds} onInput={e=>change('auto_delivery_refusal_backoff_seconds',Number(e.currentTarget.value))} /></label>
           <div class="quiet-hours"><label>Quiet from<input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /></label><label>Until<input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /></label></div>
-          <p>These are the bounds every conversation grant runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
-          <p>The grant is measured against idleness, not against the conversation's age: a session you are still using keeps it, and one nobody has touched for the window above loses it and gets it back when the conversation is in use again. An opt-out, an exhausted send budget, and a failed delivery are decisions rather than lapses, so those stay off until you clear them. Lengthen the idle window if peers keep finding each other unreachable; every lapse is recorded with how long the conversation had been idle and how many messages it left waiting, and the queue pane shows that beside the reason.</p>
-          <p>The reply window is the one thing that holds a lapse off, and it holds off nothing else. A session whose own message has just been <em>delivered</em> to a peer is mid-exchange and owed an answer, so it keeps its grant for the minutes above instead of going quiet while it waits — which is what stranded the answer before. It is capped by the exchange itself: once that thread has spent its message budget no window opens, and the master switch, the pause, quiet hours, the stability window, and the send cap all still decide every delivery. Set it to 0 to switch it off entirely.</p>
+          <p>Manual sends reset the consecutive count. Quiet hours pause automatic delivery only. The queue pane owns the immediate global pause.</p>
 
           {/* Mid-turn delivery belongs under auto-delivery rather than beside the
               messaging bounds: it is a *delivery* mode with its own strictly narrower
               readiness predicate, not a kind of message. */}
           <h4>Mid-turn delivery</h4>
-          <p>Ordinarily a message waits for a turn boundary. An interject hands the text to a CLI that is already mid-turn, which buys latency rather than preemption: the CLI buffers it and takes it at the boundary anyway. It is authorized by its own narrower predicate — the lifecycle evidence and the CLI's own screen must agree that a turn is running and nothing else is true. Every Project permits it by default; one that should not be written to mid-turn sets <code>interject_grant = "off"</code> in Manage projects. Off here refuses it everywhere.</p>
+          <p>Mid-turn delivery hands text to a busy CLI for its next boundary. The target Project may disable it.</p>
           <label class="check" data-setting="agent_interject_enabled"><span>Allow mid-turn delivery</span><input type="checkbox" checked={draft.agent_interject_enabled} onChange={e=>change('agent_interject_enabled',e.currentTarget.checked)} /></label>
           <label data-setting="agent_interject_hourly_budget">Mid-turn deliveries one session may ask for per hour<input type="number" min="0" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} /><small>Far tighter than the ordinary message budget: a message that waits costs the receiver nothing until it is read, and one that lands mid-turn costs attention immediately. Bound by the messaging rate-limit switch above; with limits off it runs at a backstop of 120 an hour.</small></label>
           <label data-setting="agent_interject_min_interval_seconds">Seconds between mid-turn deliveries into one session<input type="number" min="0" max="3600" step="1" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} /><small>The floor that stops a peer machine-gunning a session that is trying to work. With rate limits off it runs at a 5-second backstop.</small></label>
@@ -1612,7 +1687,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               does swe-mux do on my behalf", and both are one install switch over
               bounded per-conversation grants. */}
           <section><h3>Approvals</h3>
-          <p>With this off, every permission request an agent raises waits for you, exactly as before. With it on, a conversation can be switched to answer matching requests itself from the <code>appr:</code> chip in its pane bar — never here, and never for a whole install at once. Only Claude sessions can hold a mode; the other harnesses report permission requests but cannot be told the answer.</p>
+          <p>Makes conversation-scoped approval modes available for Claude. Off leaves every request to the operator.</p>
           <label class="check" data-setting="approval_auto_enabled"><span>Allow swe-mux to answer approvals</span><input type="checkbox" checked={draft.approval_auto_enabled} onChange={e=>change('approval_auto_enabled',e.currentTarget.checked)} /></label>
           <label class="check"><span>Offer the “allow all” mode</span><input type="checkbox" checked={draft.approval_allow_all_permitted} onChange={e=>change('approval_allow_all_permitted',e.currentTarget.checked)} /></label>
           <label>Grant expires after this many minutes<input type="number" min="1" max="480" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /></label>
@@ -1620,10 +1695,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Seconds the CLI waits for an answer<input type="number" min="1" max="60" step="0.5" value={draft.approval_hook_timeout_seconds} onInput={e=>change('approval_hook_timeout_seconds',Number(e.currentTarget.value))} /></label>
           <label class="check"><span>Deliver approvals by keypress when the CLI ignores the answer</span><input type="checkbox" checked={draft.approval_keystroke_delivery} onChange={e=>change('approval_keystroke_delivery',e.currentTarget.checked)} /></label>
           <label>Seconds to wait for the dialog before giving up<input type="number" min="1" max="300" step="1" value={draft.approval_keystroke_window_seconds} onInput={e=>change('approval_keystroke_window_seconds',Number(e.currentTarget.value))} /></label>
-          <p>Measured on Claude Code 2.1.234: the CLI runs swe-mux's permission hook, swe-mux answers in a quarter of a second, and the prompt still appears — the documented answer channel exists but does nothing. With the setting above on, an approval swe-mux has <em>already decided</em> from the structured request is delivered as a keypress once that session's own screen is showing the dialog it decided. It cannot decide anything: a trust dialog, a <code>/clear</code> confirmation, or a login raises no permission request, so none of them can be answered this way. If the keypress never lands, the approval becomes an ordinary visible prompt on its usual five-second boundary — the same as leaving this off.</p>
-          <p>Every grant is bound twice, by the clock and by the count above, and belongs to one conversation: <code>/clear</code>, resume, Branch, and any conversation rollover drop it back to waiting. Leaving both bounds in place is what keeps this from becoming standing authority you forget you granted.</p>
-          <p><strong>Some requests are never answered automatically, in any mode.</strong> Pushes and forced Git operations, recursive or forced deletes, <code>sudo</code>, piping a download into a shell, outbound uploads, package publishes, GitHub and infrastructure writes, and anything touching a credential path all still come to you. swe-mux also never <em>denies</em> on your behalf — the only two answers it gives are “approved” and “ask the human”.</p>
-          <p>Which requests count as routine is a per-Project decision, in that Project's <code>.swe-mux/config.toml</code> (<code>approval_allow</code>), along with <code>approval_ceiling</code>, which caps the strongest mode any session there may hold. Unset means swe-mux's defaults: reads, search, and inert local writes such as editor task files. The CLI wait above only bounds a stall; if swe-mux does not answer in time the ordinary prompt appears, so a wedged daemon costs you seconds rather than a hung agent.</p>
+          <p><strong>Never automatic:</strong> forced Git operations, recursive deletes, sudo, uploads, publishing, infrastructure writes, and credential paths. Project policy defines which routine requests qualify.</p>
           </section>
 
           <section><h3>Agent messaging</h3>
@@ -1635,7 +1707,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Messages one session may originate per hour<input type="number" min="1" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /></label>
           <label>Pending messages allowed per target<input type="number" min="1" max="100" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /></label>
           <label data-setting="agent_message_max_chars">Characters one message may carry<input type="number" min="1" max="100000" value={draft.agent_message_max_chars} onInput={e=>change('agent_message_max_chars',Number(e.currentTarget.value))} /><small>A message over this is refused rather than truncated, so a hand-off is never silently cut in half. Applies whether or not the rate limits are enforced.</small></label>
-          <p>Hops bound how far a hand-off propagates: each new session a thread reaches counts one, and reaching back to a session already upstream is refused outright as a ring. A relay that needs to go further is a fresh thread a human starts, not a limit to raise until it disappears.</p>
+          <p>Ring detection and the message-size cap always apply, even when rate limits are off.</p>
           </section>
 
           {/* Its own section rather than more rows under messaging, and a deliberate
@@ -1645,7 +1717,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               to share nothing at all - every field here was enforced with no control
               anywhere, reachable only by hand-editing the daemon's config file. */}
           <section><h3>Agent actuation</h3>
-          <p>Beyond messages, an agent can ask swe-mux to start a session, interrupt or end one, or watch one until it settles. Each is layered: the switch here is the install-wide emergency stop, the Project's own opt-in decides whether the capability exists there, and the Project's grant decides whether a human still approves each act. Off here refuses the tool everywhere, whatever any Project granted.</p>
+          <p>Install-wide limits for spawn, interrupt, end-session, and watch requests. Project policy decides availability and authority.</p>
           <label class="check" data-setting="request_spawn_enabled"><span>Let agents request spawns</span><input type="checkbox" checked={draft.request_spawn_enabled} onChange={e=>change('request_spawn_enabled',e.currentTarget.checked)} /><small>By default a Project's <code>spawn_grant</code> is granted, so the request creates the session directly inside the budget below; a Project lowered to draft gets an inert Fleet Queue request a human approves.</small></label>
           <label data-setting="agent_spawn_hourly_budget">Spawns one session may make per hour<input type="number" min="0" max="1000" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} /><small>Applies on the granted path. A spawn's blast radius is one injection into fan-out, so this is what bounds that fan-out and is smaller than the interrupt budget below.</small></label>
           <label class="check" data-setting="session_control_enabled"><span>Let agents interrupt and end sessions</span><input type="checkbox" checked={draft.session_control_enabled} onChange={e=>change('session_control_enabled',e.currentTarget.checked)} /></label>
@@ -1654,7 +1726,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check" data-setting="session_watch_enabled"><span>Let agents watch a session until it settles</span><input type="checkbox" checked={draft.session_watch_enabled} onChange={e=>change('session_watch_enabled',e.currentTarget.checked)} /><small>A watch is a read that matures into one queue message addressed to the watcher itself, so it needs no Project opt-in and no grant — only the two bounds below.</small></label>
           <label data-setting="session_watch_max_per_session">Watches one session may hold at once<input type="number" min="1" max="100" value={draft.session_watch_max_per_session} onInput={e=>change('session_watch_max_per_session',Number(e.currentTarget.value))} /><small>Sized for an orchestrator watching a handful of workers. A session that wants to watch everything should be listing sessions instead, which costs one call rather than N notices.</small></label>
           <label data-setting="session_watch_max_minutes">Longest a single watch may run<input type="number" min="1" max="1440" value={draft.session_watch_max_minutes} onInput={e=>change('session_watch_max_minutes',Number(e.currentTarget.value))} /><small>Minutes. Watches live in daemon memory, so a window longer than a working session is a promise this service cannot keep across the restarts that happen inside it.</small></label>
-          <p>Which Projects may be acted on at all, and whether each act is drafted for you or granted outright, is in <strong>Manage projects</strong> beside the other authority fields.</p>
+          <p>Project authority is edited in the Automation workspace.</p>
           </section>
 
           <section><h3>Queue history</h3>
@@ -1674,7 +1746,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               a reader who set it to "custom" should not have to scroll past a key section
               that no longer applies to find out why. */}
           <section><h3>Model provider</h3>
-            <p>Speech recognition and speech synthesis already run on this machine. This is where the language model is chosen: OpenRouter's hosted catalog, or any OpenAI-compatible <code>/chat/completions</code> endpoint you run yourself, which covers llama.cpp, Ollama, vLLM, and LM Studio.</p>
+          <p>Choose OpenRouter or a self-hosted OpenAI-compatible <code>/chat/completions</code> endpoint. Speech recognition and synthesis remain local.</p>
             <label for="llm-provider-select" data-setting="llm_provider">Provider<Dropdown id="llm-provider-select" value={draft.llm_provider} onChange={value=>change('llm_provider',value)} options={[
               {value:'openrouter',label:'OpenRouter (hosted)'},
               {value:'custom',label:'Custom OpenAI-compatible endpoint'},
@@ -1699,7 +1771,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                 everything over to it, and a verify that only worked on the live provider
                 would force exactly the risky ordering. */}
             <h4>Verification</h4>
-            <p>Verifying sends one tiny completion and shows you what came back. Reachable and usable are different findings — an endpoint that answers with an empty string or a chat template's own scaffolding passes every check a yes/no could make — so the reply is printed rather than reduced to a tick.</p>
+          <p>Verification sends one small completion and shows the reply, because a reachable endpoint can still return unusable output.</p>
             <ul class="provider-verification-list">
               {(provider?.providers||[]).map(entry=><li key={entry.id}>
                 <div class="provider-verification-head">
@@ -1740,7 +1812,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>}
 
           <section><h3>Models</h3>
-            <p>Every model this install calls, edited in one place. Two of them are <em>routed</em> defaults that the rest draw from: a feature wanting something cheaper or better <em>overrides</em> one, and a feature needing a capability the routed pair cannot guarantee <em>pins</em> its own. They are together rather than beside the features they configure because switching endpoint changes all of them at once, and checking seven settings across four tabs afterwards is how a broken one goes unnoticed.</p>
+          <p>All model routes are edited here. Routed defaults are inherited; overrides may fall back; pinned models do not.</p>
             {/* Only truthful while the endpoint is doing no routing of its own. A server
                 with no catalog serves one model, so every row resolves to it; one that
                 serves a catalog collapses nothing, and saying otherwise would report the
@@ -1768,23 +1840,23 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section class="input-settings"><h3>Clipboard history</h3>
-          <p>Every copy made <em>inside</em> swe-mux is kept in a shared ring you can insert from on any device (panel: <code>clipboard.open</code>, by default a two-finger swipe left on touch). The OS clipboard is never read or polled, so copies from other applications do not appear. The ring lives in memory only unless you save it to disk — a durable list of copied text accumulates credentials, and it is readable by anyone who can reach this daemon.</p>
+          <p>Keeps copies made inside swe-mux. The OS clipboard is never read. Disk persistence may retain sensitive text.</p>
           <label class="check" data-setting="clipboard_history_enabled"><span>Keep clipboard history</span><input type="checkbox" checked={draft.clipboard_history_enabled} onChange={e=>change('clipboard_history_enabled',e.currentTarget.checked)}/></label>
           <label class="check"><span>Save history to disk (survives daemon restarts)</span><input type="checkbox" checked={draft.clipboard_history_persist} onChange={e=>change('clipboard_history_persist',e.currentTarget.checked)}/></label>
           <label class="check"><span>Skip secret-shaped copies (API keys, tokens, JWTs, private keys)</span><input type="checkbox" checked={draft.clipboard_history_redact_secrets} onChange={e=>change('clipboard_history_redact_secrets',e.currentTarget.checked)}/></label>
           <label>Entries kept<input type="number" min="1" max="2000" value={draft.clipboard_history_limit} onInput={e=>change('clipboard_history_limit',Number(e.currentTarget.value))}/></label>
           <label>Retention hours (0 keeps until evicted)<input type="number" min="0" max="8760" value={draft.clipboard_history_retention_hours} onInput={e=>change('clipboard_history_retention_hours',Number(e.currentTarget.value))}/></label>
           <label>Maximum characters per entry<input type="number" min="256" max="1000000" value={draft.clipboard_history_entry_max_chars} onInput={e=>change('clipboard_history_entry_max_chars',Number(e.currentTarget.value))}/></label>
-          <p>Longer copies are skipped rather than stored truncated, so a history entry never pastes a silently partial payload. Turning history off clears the ring; turning saving off deletes what was already written. Pinned entries survive eviction, retention, and Clear.</p>
+          <p>Oversized copies are skipped, never truncated. Pinned entries survive retention and Clear.</p>
           </section>
 
           <section class="input-settings">
-          <div class="keybinding-heading"><div><h3>Touch gestures</h3><p>Map mobile swipe and multi-finger gestures to commands. Vertical <em>single</em>-finger drags stay reserved for terminal scrolling, but two-finger vertical swipes are mappable; edge swipes are left to the OS (back / home). The last slot is the exception, and it is scoped to one strip: a single-finger swipe up that <em>starts on the command rail</em> under a terminal, which scrolls sideways but never up.</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
+          <div class="keybinding-heading"><div><h3>Touch gestures</h3><p>Map multi-finger and workspace swipes. Single-finger vertical drags remain terminal scrolling; OS edge gestures remain reserved.</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
           {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<Dropdown value={draft.mobile_gestures?.[slot]??''} onChange={value=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:value})} options={[{value:'',label:'Disabled'},...bindingCommands.map(command=>({value:command.id,label:command.label}))]}/></label>)}
-          <label class="check"><span>Swipe-away closes an open panel: either horizontal direction closes the left sidebar; swiping right closes the right side panel instead of running that swipe's binding</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
-          <label class="check"><span>Swipe back closes an open overlay: while a dialog is open, swiping right closes one level (the transcript inside session history returns to the results). Off restores the older behaviour where a dialog ignored every swipe; the Android back gesture keeps working either way</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
-          <label class="check"><span>Surface swipes: a drag that starts on one piece of chrome works that chrome, which on a 44px row of small targets is far more forgiving than a tap. The whole mobile top bar answers to one — a quota chip opens Accounts and Run opens the launcher (drag down); the microphone reveals the voice panel (down) and puts it away (up); the Project name steps Projects (left/right) or opens the Project menu (up/down); the two edge toggles open their panel on a drag in <em>any</em> direction. Elsewhere: the voice panel's header steps its size (up/down) and its mode (left/right), a tab on the tab rail opens its menu (up/down), and the note editor's command rail opens the heading outline (up). There is nothing to rebind — one action per direction is the only thing that means anything on those surfaces — so this switch turns them all off together</span><input type="checkbox" checked={draft.mobile_surface_gestures!==false} onChange={e=>change('mobile_surface_gestures',e.currentTarget.checked)}/></label>
-          <label class="check"><span>Back steps through recent tabs: with nothing open, the system back gesture returns to the tabs and Projects you were last looking at (up to ten on this device) before it leaves the app. Off restores the older behaviour, where back on a session closed swe-mux outright</span><input type="checkbox" checked={draft.mobile_back_view_history!==false} onChange={e=>change('mobile_back_view_history',e.currentTarget.checked)}/></label>
+          <label class="check"><span>Horizontal swipe closes the open edge panel</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
+          <label class="check"><span>Swipe right closes one overlay level</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
+          <label class="check"><span>Contextual swipes on toolbars, tabs, voice, and editor rails</span><input type="checkbox" checked={draft.mobile_surface_gestures!==false} onChange={e=>change('mobile_surface_gestures',e.currentTarget.checked)}/></label>
+          <label class="check"><span>System back visits recent tabs before leaving the app</span><input type="checkbox" checked={draft.mobile_back_view_history!==false} onChange={e=>change('mobile_back_view_history',e.currentTarget.checked)}/></label>
           </section>
 
           <section class="input-settings">
@@ -1800,85 +1872,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
         {activeTab==='usage'&&<Fragment><section><h3>Operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p></section><section><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check" data-setting="ccusage_enabled"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. One refresh discovers every historical source supported by the installed ccusage version.</p><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section></Fragment>}
 
-        {activeTab==='automation'&&<Fragment>
-          <section><h3>Automation engine</h3>
-          <p>Settings owns every install-wide automation switch and bound. The Automation dashboard owns the rule corpus and the runtime: rule definitions and live/shadow state, where automations run per Project, spend, and diagnostics. The OpenRouter key and the models every observer routes to are under <strong>Accounts</strong>; which automations run on a given Project is that Project's own opt-in, in Manage projects.</p>
-          <label class="settings-toggle" data-setting="automation_enabled"><input type="checkbox" checked={draft.automation_enabled} onChange={event=>change('automation_enabled',event.currentTarget.checked)}/>Run automation<small>The master switch over system observers and custom rules. Off, nothing fires and nothing is billed.</small></label>
-          <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation dashboard</button></div>
-          <p class="settings-warning">Privacy boundary: each enabled observer sends only its selected bounded transcript slice to OpenRouter and the routed model provider. swe-mux does not crawl project files.</p>
-          <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
-          </section>
-
-          <section><h3>Budgets and execution</h3>
-          <p>Every cap below takes tokens, dollars, or first hit - the same three choices everywhere, because which unit describes a cost is a property of the provider, not of the feature. A limit the mode does not enforce is kept rather than cleared, so trying the other axis is reversible.</p>
-          <BudgetControl name="automation_daily_budget" label="All automation, daily" value={draft.automation_daily_budget} onChange={value=>change('automation_daily_budget',value)} maxTokens={100000000} maxUsd={10000} reportsCost={provider?.llm?.reports_cost} hint="The shared ceiling over every automation, reset daily (UTC)."/>
-          <BudgetControl name="automation_rule_daily_budget" label="Per automation rule, daily" value={draft.automation_rule_daily_budget} onChange={value=>change('automation_rule_daily_budget',value)} maxTokens={100000000} maxUsd={10000} reportsCost={provider?.llm?.reports_cost} hint="What any one rule may spend, so a single misbehaving observer cannot consume the shared ceiling."/>
-          <BudgetControl name="project_card_daily_budget" label="Project context card, daily" value={draft.project_card_daily_budget} onChange={value=>change('project_card_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} hint="Bounds rebuilding a Project's context card. Each Project opts in separately; its model and per-build token ceilings are below."/>
-          <label>Hourly call cap<input type="number" value={draft.automation_hourly_call_cap} onInput={event=>change('automation_hourly_call_cap',Number(event.currentTarget.value))}/></label>
-          <label>Per-rule hourly calls<input type="number" value={draft.automation_rule_hourly_call_cap} onInput={event=>change('automation_rule_hourly_call_cap',Number(event.currentTarget.value))}/></label>
-          <label>Concurrent observers<input type="number" min="1" max="16" value={draft.automation_concurrency} onInput={event=>change('automation_concurrency',Number(event.currentTarget.value))}/></label>
-          <label data-setting="automation_queue_size">Queued observations<input type="number" min="16" max="4096" value={draft.automation_queue_size} onInput={event=>change('automation_queue_size',Number(event.currentTarget.value))}/><small>How many pending observations the engine holds before it drops the oldest; the drop count is on the status line above. <strong>Takes effect on the next daemon restart</strong> — the queue is allocated once at start.</small></label>
-          <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
-          <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
-          <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
-          {/* The card build's own three bounds, beside the budget that already lived
-              here. Its model is an override rather than a routed default, so it belongs
-              with its feature like every other feature model, and Accounts indexes it
-              rather than editing it (`modelRouting.ts`). Before this the model had no
-              control anywhere, and two places in the app sent the reader looking for
-              one: the budget hint above pointed at Accounts, and the routing index told
-              them to edit the config file. */}
-          <h4>Project context card</h4>
-          <p>What building a Project's context card may cost, beside the daily budget above. Each Project opts in separately, and a Project's own card content is edited in its <strong>Scan timeline</strong> tab rather than here.</p>
-          <div class="model-routing-elsewhere" data-setting="project_card_model"><span>Project card model</span><code>{routedModel('project_card_model')}</code><button type="button" onClick={()=>goToSetting('accounts','project_card_model')}>Edit in Accounts → Models</button></div><small>An override. Left blank it follows the cheap model, and with neither set there is simply no card.</small>
-          <label data-setting="project_card_max_input_tokens">Card maximum input tokens<input type="number" min="512" max="128000" value={draft.project_card_max_input_tokens} onInput={event=>change('project_card_max_input_tokens',Number(event.currentTarget.value))}/></label>
-          <label data-setting="project_card_max_output_tokens">Card maximum output tokens<input type="number" min="128" max="4096" value={draft.project_card_max_output_tokens} onInput={event=>change('project_card_max_output_tokens',Number(event.currentTarget.value))}/><small>The card is a brief rather than a document; too low truncates it mid-sentence.</small></label>
-          </section>
-
-          <section><h3>Scheduled runs</h3>
-          <p>Schedules themselves live in a Project's <strong>Schedule</strong> tab and are stored on this machine, never in the repository. These are the install-wide limits over all of them: what a scheduled fleet may do to this computer is not a per-repository decision. A Project also has to opt into <strong>Scheduled runs</strong> before any of its schedules can fire.</p>
-          <label class="settings-toggle" data-setting="scheduled_runs_enabled"><input type="checkbox" checked={draft.scheduled_runs_enabled} onChange={event=>change('scheduled_runs_enabled',event.currentTarget.checked)}/>Let schedules start sessions<small>The emergency stop. Off means nothing fires anywhere, whatever any Project opted into.</small></label>
-          <label>Concurrent scheduled sessions<input type="number" min="0" max="50" value={draft.scheduled_runs_max_concurrent} onInput={event=>change('scheduled_runs_max_concurrent',Number(event.currentTarget.value))}/><small>Nothing ends an agent session automatically, so this is what stops nightly runs accumulating into a fleet of forgotten panes.</small></label>
-          <label>Sweep seconds<input type="number" min="1" max="300" step="1" value={draft.scheduled_runs_poll_seconds} onInput={event=>change('scheduled_runs_poll_seconds',Number(event.currentTarget.value))}/><small>Schedules resolve to the minute; this only decides how promptly a due minute is noticed.</small></label>
-          <label>Run history days<input type="number" min="1" max="3650" value={draft.scheduled_run_retention_days} onInput={event=>change('scheduled_run_retention_days',Number(event.currentTarget.value))}/><small>Long enough to answer "has this been failing all week".</small></label>
-          </section>
-
-          {/* The land queue's install-wide stop. It has always been enforced - the sweep
-              checks it before reading anything else - and has never had a control, so the
-              only way to reach it was to hand-edit the daemon's config file, and a queue
-              stopped by it looked exactly like a busy one. */}
-          <section><h3>Land queue</h3>
-          <p>Landing a branch is reconcile, verify, then a fast-forward onto the trunk - the same two commands a person would run, serialized so two branches never race. Which branches are queued lives in a Project's <strong>Git → Land</strong> segment, and each Project opts in separately before an <em>agent</em> may ask for one.</p>
-          <label class="settings-toggle" data-setting="land_queue_enabled"><input type="checkbox" checked={draft.land_queue_enabled} onChange={event=>change('land_queue_enabled',event.currentTarget.checked)}/>Let the land queue move trunks<small>The emergency stop. Off, requests still queue and the sweep never runs one, so nothing moves anywhere.</small></label>
-          <label>Agent requests per session per hour<input type="number" min="0" max="1000" value={draft.land_hourly_budget} onInput={event=>change('land_hourly_budget',Number(event.currentTarget.value))}/><small>Bounds a session that has been granted direct landing. Your own Land button is not counted against it.</small></label>
-          <label data-setting="land_hold_timeout_seconds">Hold seconds for a busy worktree<input type="number" min="60" max="86400" step="1" value={draft.land_hold_timeout_seconds} onInput={event=>change('land_hold_timeout_seconds',Number(event.currentTarget.value))}/><small>How long a request waits for a worktree whose session is still working before it gives up and hands back. Long enough that an ordinary agent turn finishes inside it; short enough that a request against an abandoned worktree does not sit in the queue forever.</small></label>
-          <label class="check" data-setting="land_retry_verification"><span>Retry a failed verification once</span><input type="checkbox" checked={draft.land_retry_verification} onChange={event=>change('land_retry_verification',event.currentTarget.checked)}/><small>Off by default and never silent: a flaky gate that loops is worse than one that stops, and a retry that fails differently from the first attempt stops rather than retrying again.</small></label>
-          <label data-setting="land_verify_memo_seconds">Seconds a green gate result stands<input type="number" min="0" max="604800" step="1" value={draft.land_verify_memo_seconds} onInput={event=>change('land_verify_memo_seconds',Number(event.currentTarget.value))}/><small>A verify-only run and the land that follows it should not spend the same minutes twice, so a pass is kept against the exact git tree and command it ran over. Bounded rather than forever because a tree hash says nothing about the machine underneath it drifting. 0 disables reuse; a moved trunk re-verifies either way.</small></label>
-          </section>
-
-          <section><h3>Scan timeline</h3>
-          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Each Project still permits it separately, and each conversation is armed from its Timeline tab.</p>
-          <label class="settings-toggle" data-setting="scan_timeline_enabled"><input type="checkbox" checked={draft.scan_timeline_enabled} onChange={event=>change('scan_timeline_enabled',event.currentTarget.checked)}/>Allow scan timeline<small>The install-wide gate. Off, nothing is scanned anywhere, whatever any Project permitted.</small></label>
-          <div class="model-routing-elsewhere" data-setting="scan_timeline_model"><span>Scan timeline model</span><code>{routedModel('scan_timeline_model')}</code><button type="button" onClick={()=>goToSetting('accounts','scan_timeline_model')}>Edit in Accounts → Models</button></div><small>Pinned rather than routed: scanning runs continuously over long transcript slices, so it needs a model that is both cheap at volume and reliable at structured output. Defaults to the DeepSeek V4 Flash latest alias.</small>
-          <BudgetControl name="scan_timeline_daily_budget" label="Scan timeline, daily" value={draft.scan_timeline_daily_budget} onChange={value=>change('scan_timeline_daily_budget',value)} maxTokens={100000000} minTokens={512} maxUsd={1000} usdStep={0.25} reportsCost={provider?.llm?.reports_cost} hint="Across every Project and session, reset daily (UTC)."/>
-          <BudgetControl name="scan_timeline_run_budget" label="Scan timeline, per conversation" value={draft.scan_timeline_run_budget} onChange={value=>change('scan_timeline_run_budget',value)} maxTokens={20000000} minTokens={512} maxUsd={1000} usdStep={0.25} reportsCost={provider?.llm?.reports_cost} hint="What one conversation may spend before its timeline stops. Resets when the conversation does."/>
-          <label>Hourly scan cap<input type="number" min="1" max="100000" value={draft.scan_timeline_hourly_call_cap} onInput={event=>change('scan_timeline_hourly_call_cap',Number(event.currentTarget.value))}/></label>
-          <label>Maximum output tokens<input type="number" min="256" max="8192" value={draft.scan_timeline_max_output_tokens} onInput={event=>change('scan_timeline_max_output_tokens',Number(event.currentTarget.value))}/><small>The record schema allows about 2,600 characters; too low truncates the response and loses the record.</small></label>
-          </section>
-
-          <section><h3>Attention</h3>
-          <p>Ranking decides which findings are worth interrupting you for. The daily budget is a hard bound counted per incident, so several detectors describing one event spend one slot. Cheap-to-resolve work never spends any. Ranked items appear in Alerts and are never pushed to a device.</p>
-          <label>Daily interrupts<input type="number" min="0" max="100" value={draft.attention_daily_interrupt_budget} onInput={event=>change('attention_daily_interrupt_budget',Number(event.currentTarget.value))}/></label>
-          <label>Hourly burst cap<input type="number" min="0" max="100" value={draft.attention_hourly_interrupt_cap} onInput={event=>change('attention_hourly_interrupt_cap',Number(event.currentTarget.value))}/></label>
-          <label>Incident window seconds<input type="number" min="60" max="86400" value={draft.attention_incident_window_seconds} onInput={event=>change('attention_incident_window_seconds',Number(event.currentTarget.value))}/></label>
-          <label class="check"><span>Report shell breakpoints (OSC 133)</span><input type="checkbox" checked={draft.attention_breakpoint_markers} onChange={event=>change('attention_breakpoint_markers',event.currentTarget.checked)}/></label>
-          <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
-          <div class="model-routing-elsewhere" data-setting="attention_narration_model"><span>Narration model</span><code>{routedModel('attention_narration_model')}</code><button type="button" onClick={()=>goToSetting('accounts','attention_narration_model')}>Edit in Accounts → Models</button></div><small>An override. Left blank it follows the cheap model.</small>
-          <BudgetControl name="attention_narration_daily_budget" label="Attention narration, daily" value={draft.attention_narration_daily_budget} onChange={value=>change('attention_narration_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost}/>
-          <label data-setting="attention_narration_max_output_tokens">Narration maximum output tokens<input type="number" min="32" max="2048" value={draft.attention_narration_max_output_tokens} onInput={event=>change('attention_narration_max_output_tokens',Number(event.currentTarget.value))}/><small>A narration is a sentence or two explaining why an item is worth your attention, so this is a ceiling on one line rather than on a document.</small></label>
-          </section>
-
-        </Fragment>}
+        {activeTab==='automation'&&<section><h3>Automation workspace</h3>
+          <p>Graph definitions, rules, Project policy, global limits, spend, learned fixes, and diagnostics now share one Automation workspace.</p>
+          <div class="settings-status-grid"><article><strong>Engine</strong><span>{draft.automation_enabled?'On':'Off'}</span></article><article><strong>Rules</strong><span>{automation?.rules.length||0} custom</span></article><article><strong>Queue</strong><span>{automation?.queue.size||0}/{automation?.queue.capacity||0}</span></article><article><strong>Runtime</strong><span>{automation?.diagnostic?'Needs review':'Healthy'}</span></article></div>
+          <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation workspace</button></div>
+        </section>}
 
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
@@ -1888,17 +1886,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             latency readout, the tester, and mobile setup, in one unbroken column. That
             is a reference manual and a control panel stacked on top of each other, and
             the only way to find anything in it was to scroll past everything else.
-            It is one `<section>` per heading now, like Automation and Remote, so the
-            section rail (four headings or more) actually indexes it and the borders
-            between concerns are visible. Three of them are reference rather than daily
-            controls — the command catalog, the tester and latency readout, and the
-            one-time mobile setup — and those collapse behind a disclosure. Nothing
+            It is five separate capability pages now: Read aloud, Talk & dictation,
+            Voice commands, Mux assistant, and Diagnostics. The expandable sidebar exposes
+            the same pages on desktop and mobile. Reference material inside a page still
+            collapses behind a disclosure. Nothing
             moved tabs and nothing gained a second owner: every install-wide switch is
             still edited in exactly one place, and every `data-setting` mark travelled
             with its control (`settingTargets.ts`, `test/settingTargets.test.ts`).
             A marked control deliberately never sits inside a *collapsed* disclosure. */}
         {activeTab==='voice'&&<Fragment>
-          <section><h3>Read aloud (TTS)</h3>
+          <section><h3>Read aloud</h3>
           <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
           {/* Three switches decide whether a word is ever spoken, and they used to sit in
               three unrelated places — a checkbox here, a pane chip there, a button on a
@@ -1912,21 +1909,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               <span class="policy-step">1</span>
               <div class="policy-body">
                 <label class="check" data-setting="tts_enabled"><span>Read aloud is on (master)</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
-                <small>Off means no session generates audio and nothing plays, on any device. Everything below is inert while it is off.</small>
+                <small>Global: off stops audio generation and playback everywhere.</small>
               </div>
             </div>
             <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
               <span class="policy-step">2</span>
               <div class="policy-body">
                 <label data-setting="tts_default_mode">Each session: does it generate?<Dropdown value={draft.tts_default_mode} onChange={value=>change('tts_default_mode',value as Config['tts_default_mode'])} options={[{value:'off',label:'Off until marked'},{value:'on_demand',label:'On demand (speak button)'},{value:'auto',label:'Auto on every reply'}]}/></label>
-                <small>The default for agent sessions. The voice panel's <code>tts</code> tab overrides it for the focused session, so a session that should never speak can be set off on its own.</small>
+                <small>Per session: the Read aloud panel can override this default.</small>
               </div>
             </div>
             <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
               <span class="policy-step">3</span>
               <div class="policy-body">
                 <label class="check"><span>Autoplay on this device (browser)</span><input type="checkbox" checked={deviceAutoplay} onChange={e=>{const next=e.currentTarget.checked;setAutoplayEnabled(next);setDeviceAutoplay(next)}} /></label>
-                <small>Stored in this browser, not in the config, so each device answers for itself. When it is on, only the session you are focused on plays here; every other session finishes its clip, keeps it, and offers it as <strong>▶ n held</strong> on that pane's player strip.</small>
+                <small>Per device: only the focused session plays; other clips are held.</small>
               </div>
             </div>
           </div>
@@ -1935,7 +1932,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {/* Provider-specific panels are mutually exclusive in the DOM, while their
               values remain independent fields in the complete Settings draft. */}
           <section><h3>TTS provider</h3>
-          <p>Choose the synthesizer for the next speech stream. A stream already being made keeps the provider, voice, and options it started with.</p>
+          <p>Provider and voice used for the next speech stream.</p>
           <label data-setting="tts_engine">Provider<Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',label:'OS voice (offline, no download)'},{value:'kokoro',label:'Kokoro-82M (local neural, one-time download)'},{value:'edge',label:'Edge TTS (experimental external, online)'}]}/></label>
           {draft.tts_engine==='sapi'&&<>
             <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
@@ -1967,7 +1964,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {draft.tts_engine==='kokoro'&&<section><h3>Pronunciation</h3>
             <details class="settings-disclosure">
               <summary>Respellings and spelled-word history <em>· {Object.keys(draft.tts_kokoro_lexicon||{}).length} entr{Object.keys(draft.tts_kokoro_lexicon||{}).length===1?'y':'ies'}</em></summary>
-              <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Spell the sound with plain letters — if it isn't a real word (<code>swee</code>), tap ✨ and the exact phonemes are built for you; you never have to write them by hand. Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix — ✨ there with an empty box pronounces the word the way it reads.</p>
+          <p>Teach Kokoro project names and jargon as <code>word → pronunciation</code>. Use ✨ for phonemes, ♪ to preview, and the recent-words list to fix spelled-out terms.</p>
               <TtsLexiconEditor lexicon={draft.tts_kokoro_lexicon||{}} spelled={voiceInfo?.kokoro_spelled_words||[]} onChange={next=>change('tts_kokoro_lexicon',next)}/>
             </details>
           </section>}
@@ -1975,7 +1972,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {/* What gets spoken, and what it costs. `tts_content` chooses between the two
               halves, so it leads them rather than sitting a heading above. */}
           <section><h3>Spoken summary</h3>
-          <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts. Verbatim never touches a model.</p>
+          <p>Summary uses the configured model and daily budget. Verbatim uses no model.</p>
           <label>Content<Dropdown value={draft.tts_content} onChange={value=>change('tts_content',value as Config['tts_content'])} options={[{value:'summary',label:'Spoken summary (LLM)'},{value:'verbatim',label:'Verbatim reply (markdown stripped)'}]}/><small>The default for every session. The voice panel's <code>tts</code> tab and the pane's player strip both override it for that session alone.</small></label>
           <div class="model-routing-elsewhere" data-setting="tts_summary_model"><span>Summary model</span><code>{routedModel('tts_summary_model')}</code><button type="button" onClick={()=>goToSetting('accounts','tts_summary_model')}>Edit in Accounts → Models</button></div><small>An override. Left blank it follows the cheap model.</small>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
@@ -1990,27 +1987,27 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {/* The whole capture half in one place: the switch, the decoders it runs, and
               the trigger word they are listening for. The wake words used to sit four
               headings below the microphone switch that makes them do anything. */}
-          <section><h3>Microphone and wake words</h3>
-          <label class="check" data-setting="stt_enabled"><span>Enable microphone input and hands-free Conversation mode</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
+          <section><h3>Talk &amp; dictation</h3>
+          <p><strong>Talk means you speak to swe-mux.</strong> It owns microphone capture, dictation, wake words, and voice commands.</p>
+          <label class="check" data-setting="stt_enabled"><span>Enable Talk &amp; dictation</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
           {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">The first Talk downloads the local Whisper speech model (several hundred MB) plus the browser voice-activity runtime. It runs once, then transcription is offline.</p>}
           <label>Daemon transcription engine<Dropdown value={draft.stt_engine} onChange={value=>change('stt_engine',value as Config['stt_engine'])} options={[{value:'whisper',label:'Whisper Turbo (local, recommended)'},{value:'sapi',label:'Windows Speech Recognition (legacy)'}]}/></label>
           <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /><small>Whisper's <code>turbo</code> dictation model is English-first and large. Set a language and model that match how you speak; this is a first-use choice, not a fixed assumption.</small></label>
           {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
-          <p>Conversation mode captures microphone audio in swe-mux, sends bounded speech-only WAV utterances to muxd, and keeps listening across pauses. It acts only when an utterance ends with a wake word followed by a command phrase; everything before that is buffered as your message. Raw audio is deleted after transcription.</p>
+          <p>Talk keeps listening across pauses. Wake-word commands act immediately; other speech becomes dictation. Raw audio is deleted after transcription.</p>
           <h4>Wake words</h4>
-          <p>Add every spelling your recognizer actually produces (comma separated) — the matcher does not invent variants. A good trigger is two or three syllables, distinctive, rare in ordinary speech, and not the start of a common word; <strong>Testing and latency</strong> below measures which one your recognizer really hears.</p>
+          <p>Comma-separated spellings the recognizer may produce. Test them under Diagnostics.</p>
           <label>Wake words<input value={(draft.voice_wake_words||[]).join(', ')} placeholder="mux, mucks, max" onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /></label>
           </section>
 
           {/* The phrase table, on its own. Seventeen rows is the largest single control in
               the tab, and it used to share a heading with the wake words that trigger it
               and with two paragraphs about built-in queries it does not configure. */}
-          <section><h3>Command phrases</h3>
-          <p>What to say after the wake word, per action. Leave a row blank to disable that voice trigger. <code>Standby</code> keeps the mic on but ignores speech until you say a <code>resume</code> command; <code>stop</code> turns Conversation mode off and releases the mic.</p>
-          <p>Fleet and reading queries are built in and deterministic — they are not configured here: list active or pending sessions overall or in a Project, list Projects, ask for session or Project status, open numbered results, and read a named or numbered session’s last reply in the current, summary, or verbatim mode. Say <code>list voice commands</code> to hear the full groups and examples.</p>
-          <div class="voice-commands">
+          <section><h3>Voice commands</h3>
+          <p>Commands run through Talk after a wake word. Leave a phrase blank to disable it.</p>
+          {draft.stt_enabled?<div class="voice-commands">
             {VOICE_ACTION_ORDER.map(action=>{
               const meta=VOICE_ACTION_META[action]
               const phrases=(draft.voice_commands||[]).find(command=>command.action===action)?.phrases||[]
@@ -2021,7 +2018,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                 change('voice_commands',VOICE_ACTION_ORDER.map(name=>({action:name,phrases:byAction.get(name)||[]})))
               }} /></label>
             })}
-          </div>
+          </div>:<div class="settings-capability-flag"><span aria-hidden="true">⚑</span><div><strong>Talk is off.</strong><small>Command phrases are hidden until microphone input is enabled.</small></div><button type="button" onClick={()=>change('stt_enabled',true)}>Enable Talk &amp; dictation</button></div>}
           </section>
 
           {/* Reference, not a control: the complete live catalog, read once and then rarely.
@@ -2031,9 +2028,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               a marked control behind a fold is one a search result and a deep link both
               reach through an extra state change, so the marks stay above it. */}
           <section><h3>Command reference</h3>
-          <details class="settings-disclosure">
+          {draft.stt_enabled?<details class="settings-disclosure">
           <summary>Every spoken command, as currently configured</summary>
-          <p>Say a configured wake word before every command. <code>Project N</code> uses the visible sidebar order. <code>Session N</code> uses the selected Project. Braced values such as <code>{'{text}'}</code> are spoken content, not literal words.</p>
+          <p>Start commands with a wake word. Project numbers follow the sidebar; session numbers use the selected Project. Braces mark spoken values.</p>
           <div class="voice-command-reference">
             {completeVoiceCatalog.map((section,index)=><details open={index===0} key={section.id}>
               <summary>{section.title} <span>{section.phrases.length+section.commands.length}</span></summary>
@@ -2045,20 +2042,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               </article>)}</div>}
             </details>)}
           </div>
-          </details>
+          </details>:<p class="settings-muted-reference">Command reference hidden while Talk &amp; dictation is off.</p>}
           </section>
 
           <section><h3>Mux assistant</h3>
-          <p>The conversational operator behind the chat view and the voice grammar's fallback: an unmatched wake-word utterance becomes an assistant turn instead of a refusal. It reads the fleet, queues and rewords messages, spawns sessions, and navigates — through the same command registry and queue every other surface uses. Reads run silently; reversible actions follow the trust setting; interrupts, sends, and session ends always confirm. Calls go to OpenRouter under its own daily budget.</p>
+          <p><strong>Mux Assistant is independent from Talk.</strong> Text chat works whenever the assistant is on. Unmatched spoken requests reach it only when Talk &amp; dictation is also on.</p>
           <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
+          {draft.assistant_enabled&&!draft.stt_enabled&&<div class="settings-capability-status"><strong>Text chat available · spoken fallback unavailable</strong><span>Enable Talk &amp; dictation to speak to the assistant.</span></div>}
           <div class="model-routing-elsewhere" data-setting="assistant_model"><span>Assistant model</span><code>{routedModel('assistant_model')}</code><button type="button" onClick={()=>goToSetting('accounts','assistant_model')}>Edit in Accounts → Models</button></div><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small>
           <BudgetControl name="assistant_daily_budget" label="Assistant, daily" value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
           <label>Reversible-action trust<Dropdown value={draft.assistant_trust_reversible} onChange={value=>change('assistant_trust_reversible',value as Config['assistant_trust_reversible'])} options={[{value:'cancel_window',label:'Announce with a cancel window (default)'},{value:'confirm',label:'Always confirm'},{value:'auto',label:'Run silently'}]}/><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
           <label class="check" data-setting="assistant_stream_replies"><span>Stream the reply as it is written</span><input type="checkbox" checked={draft.assistant_stream_replies} onChange={e=>change('assistant_stream_replies',e.currentTarget.checked)} /></label>
-          <p>Streaming lets the first sentence be spoken while the rest is still generating, which is the whole of the difference: correctness does not depend on it either way. Off buffers the turn whole — the pre-streaming behaviour, and the escape hatch if a configured model's provider streams tool calls badly.</p>
+          <p>Streaming releases the first sentence while the rest is generated. Off buffers the full reply.</p>
           <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
           <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
-          <label>Chat patience (ms)<input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} /><small>Extra pause allowed before plain chat-mode speech becomes an assistant turn, so thinking out loud is not answered at every breath. Wake-word commands stay fast regardless. For long brainstorms say <code>hold on</code> (or a wake-worded <code>listen</code>): speech buffers until you say <code>go ahead</code>.</small></label>
+          <label>Spoken-chat patience (ms)<input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} disabled={!draft.stt_enabled} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} /><small>{draft.stt_enabled?'Extra pause before plain Talk speech becomes an assistant turn.':'Inactive while Talk & dictation is off.'}</small></label>
           </section>
 
           {/* The two measuring instruments, together and folded away. Neither is a setting:
@@ -2070,7 +2068,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <details class="settings-disclosure">
           <summary>Measure what the recognizer hears, and how fast it acts</summary>
           <h4>Wake-word tester</h4>
-          <p>Speak the wake word and a command a few times. Each utterance goes through the same transcription and the same matcher the command path uses, so this reports what would really have happened. Choose a trigger word from this, not from how it looks: a good one is two or three syllables, distinctive, rare in ordinary speech, and not the start of a common word. Save any pending changes above first — the test scores against the saved configuration.</p>
+          <p>Tests the real transcription and command matcher. Try each wake word several times and save changes before testing.</p>
           <WakeWordTester
             wakeWords={voiceInfo?.wake_words||draft.voice_wake_words||[]}
             commands={voiceInfo?.commands||draft.voice_commands||[]}
@@ -2089,7 +2087,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Mobile voice</h3>
           <details class="settings-disclosure">
           <summary>Set up microphone access from a phone (HTTPS)</summary>
-          <p>Regular mobile access works over the direct 100.x Tailscale address. Browser microphone capture additionally requires HTTPS. swe-mux configures a private Tailscale Serve address (<code>https://&lt;device&gt;.ts.net/</code>) automatically at startup; use the button below if it needs a one-time Tailscale approval or repair.</p>
+          <p>Mobile microphone capture requires HTTPS. Use the private Tailscale Serve address below; setup may need one approval.</p>
           <TailscaleConnection status={remote} />
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
@@ -2164,7 +2162,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               Each is session-preserving: none of them reaps a live agent or terminal. */}
           <section><h3>Rebuild and reload</h3>
           <p>Every one of these keeps live sessions: the PTY supervisor owns them and outlives the daemon and the app. None of them is a way to stop swe-mux.</p>
-          <div class="settings-config-actions"><div><p><strong>Reload UI</strong> re-fetches this page only. <strong>Reload daemon</strong> restarts the backend in place. <strong>Rebuild + redeploy</strong> rebuilds the desktop app from source and swaps it in, which takes several minutes and is the only one that ships a change into the frozen app.</p></div>
+          <div class="settings-config-actions"><div><p><strong>Reload UI</strong> refreshes the page. <strong>Reload daemon</strong> restarts the backend. <strong>Rebuild + redeploy</strong> updates the frozen desktop app.</p></div>
             <div>
               <button disabled={!appCommand('ui.reload')} onClick={()=>runAppCommand('ui.reload')}>Reload UI</button>
               <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
@@ -2176,7 +2174,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {/* Beside the bundle rather than under Processes: this is what decides how
               much the log that ends up in that bundle actually says. */}
           <section><h3>Logging</h3>
-          <p>The level the daemon's rotating <code>daemon.log</code> and its console start at. Applied as soon as this is saved — nothing needs restarting — and it is what the diagnostics bundle below carries, so <code>DEBUG</code> is the setting to reach for before reproducing a problem you intend to report.</p>
+          <p>Sets the daemon log and console level immediately. Use <code>DEBUG</code> before reproducing a problem for export.</p>
           <label data-setting="log_level">Daemon log level<Dropdown value={draft.log_level} onChange={value=>change('log_level',value as Config['log_level'])} options={[
             {value:'DEBUG',label:'DEBUG · everything, including per-request detail'},
             {value:'INFO',label:'INFO · the default'},
@@ -2189,13 +2187,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               earlier: "collect a bundle" is what you do when you are going to ask
               somebody, and this is asking somebody. */}
           {onLaunchConfigurator&&<section><h3>Ask an agent about this install</h3>
-          <p>Starts an agent session pointed at swe-mux itself, in whichever harness this install defaults to. It can read the generated inventory of every setting and its real constraints, the automation dependency graph, and the health report, and it can change install-wide settings once you have said yes to a specific change. It explains what a control does and where it is rather than only changing it for you.</p>
+          <p>Starts the default agent against swe-mux with access to its settings inventory, automation graph, and health report. Changes still require specific approval.</p>
           <div class="theme-actions"><button class="primary" onClick={()=>{onClose();onLaunchConfigurator()}}>Launch the configurator</button></div>
           <p class="profile-hint">It runs as an ordinary session in the current Project, so it appears in the sidebar, can be interrupted, and can be closed like any other. Set which agent it uses under Harnesses → Default harness.</p>
           </section>}
 
           <section><h3>Export diagnostics</h3>
-          <p>Export a single copyable bundle of connection state, firewall status, network counters, sanitized config (no secrets), and recent daemon logs. Share it when reporting a connection problem.</p>
+          <p>Exports connection state, firewall status, counters, sanitized config, and recent logs. Secrets are omitted.</p>
           <div class="theme-actions"><button class="primary" disabled={diagnosticsBusy} onClick={()=>void exportDiagnostics()}>{diagnosticsBusy?'Collecting…':'Export diagnostics'}</button></div>
           {diagnosticsMessage&&<p aria-live="polite">{diagnosticsMessage}</p>}
           {diagnosticsText&&<label>Diagnostics bundle<textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /></label>}
@@ -2226,7 +2224,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             </label>
           })}</div>
           <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>Show all panels</button></div>
-          <p>Unchecking a panel removes it from the side panel's tab strips and from the desktop rail. It changes nothing else: the panel keeps its place in your arrangement, and opening it by name — from the command palette, a voice command, or a menu row that names it — still shows it for as long as it stays selected. The same list is on the right-click menu of any panel tab, which is where you will be when you want it. This is one setting for every Project, kept on this device alongside the arrangement itself.</p>
+          <p>Hides panels from tab strips and the desktop rail without changing their arrangement. Commands and menus can still open them. Stored on this device.</p>
           <h3>Interface scale</h3>
           <label>Desktop interface scale<Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
@@ -2296,9 +2294,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     <main class="settings-body">
       {tabNav}
       <div class="settings-content">
-        {railSections.length>=SECTION_RAIL_MIN&&<nav class="settings-section-rail" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} sections`}>
-          {railSections.map(section=><button type="button" key={section.id} class={activeSection===section.id?'active':''} aria-current={activeSection===section.id?'true':undefined} onClick={()=>scrollToSection(section.id)}>{section.label}</button>)}
-        </nav>}
+        {pagedSubpages
+          ?<header class="settings-subpage-heading"><strong>{declaredSubpages.find(page=>page.id===selectedSubpage)?.label||declaredSubpages[0]?.label}</strong><span>Separate page · changes save together</span></header>
+          :railSections.length>=SECTION_RAIL_MIN&&<nav class="settings-section-rail" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} sections`}>
+            {railSections.map(section=><button type="button" key={section.id} class={activeSection===section.id?'active':''} aria-current={activeSection===section.id?'true':undefined} onClick={()=>scrollToSection(section.id)}>{section.label}</button>)}
+          </nav>}
         {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3>Validation errors</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
 
         {tabContent(activeTab)}

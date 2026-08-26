@@ -8,6 +8,8 @@ import {
   sectionSlug,
   sameRailSections,
   settingsTabGroups,
+  settingsSubpageId,
+  settingsSubpages,
   settingsTabs,
   tabForSection,
 } from '../src/settingsTabs.ts'
@@ -91,4 +93,21 @@ test('rail comparison is by content, not identity', () => {
 
 test('a rail of one entry is never drawn as navigation', () => {
   assert.ok(SECTION_RAIL_MIN>=2,'a rail of one entry is never navigation')
+})
+
+test('declared subpages are unique and belong to live tabs', () => {
+  for(const [tab,pages] of Object.entries(settingsSubpages)){
+    assert.ok(ids.includes(tab),`${tab} is not a live Settings tab`)
+    assert.ok(pages?.length,`${tab} declares an empty page list`)
+    assert.equal(new Set(pages?.map(page=>page.id)).size,pages?.length,`${tab} page ids must be unique`)
+  }
+})
+
+test('Voice groups implementation headings under user-facing capability pages', () => {
+  assert.equal(settingsSubpageId('voice','Read aloud'),'read-aloud')
+  assert.equal(settingsSubpageId('voice','TTS provider'),'read-aloud')
+  assert.equal(settingsSubpageId('voice','Talk & dictation'),'talk-dictation')
+  assert.equal(settingsSubpageId('voice','Voice commands'),'voice-commands')
+  assert.equal(settingsSubpageId('voice','Command reference'),'voice-commands')
+  assert.equal(settingsSubpageId('voice','Mobile voice'),'diagnostics')
 })

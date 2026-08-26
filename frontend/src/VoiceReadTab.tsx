@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
-import { GrantGate } from './GrantGate'
+import { CompactGrantFlag } from './GrantGate'
 import { SettingLink } from './SettingLink'
 import { sessionDisplayName } from './sessionNames'
 import type { Session, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
@@ -170,15 +170,10 @@ export function VoiceReadTab({
 
   if (!enabled) {
     return <div class="voice-read">
-      <GrantGate
-        ids={['voice.tts']}
-        heading="Read aloud is off, so nothing is generated and nothing plays."
-        onGranted={onStatusChanged}
-      >
-        Turning it on lets agent sessions turn their completed replies into audio. Each
-        session still decides whether it participates, and this device still decides
-        whether it speaks - the two controls below.
-      </GrantGate>
+      <CompactGrantFlag id="voice.tts"
+        heading="Read aloud is off."
+        consequence="No audio is generated or played."
+        onGranted={onStatusChanged}/>
     </div>
   }
 

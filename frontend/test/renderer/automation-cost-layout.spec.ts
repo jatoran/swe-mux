@@ -120,7 +120,7 @@ test('no figures table overflows its panel at desktop width', async ({ page }) =
 /** The status line used to be drawn over the first section heading in exactly this view. */
 test('the panel frame holds every view', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  for (const tab of ['cost breakdown', 'rules & observers', 'projects', 'learned fixes', 'diagnostics'] as const) {
+  for (const tab of ['overview','control graph','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'] as const) {
     await openTab(page, tab)
     const [progress] = await boxes(page, '.usage-progress')
     const [main] = await boxes(page, '.automation-panel > main')
@@ -136,7 +136,7 @@ test('the panel frame holds every view', async ({ page }) => {
  *  six labels, then stretched to the height of the section beside it. */
 test('the summary strip spans the columns it heads', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'rules & observers')
+  await openTab(page, 'rules')
 
   const [summary] = await boxes(page, '.usage-tables > .usage-summary')
   const [tables] = await boxes(page, '.usage-tables')
@@ -183,15 +183,31 @@ test('the projects view answers what runs where, including "nothing"', async ({ 
   // An opted-out Project is a row saying so, never a missing row: silence must read
   // as "off", not as "covered".
   await expect(rows.nth(1)).toContainText('nothing')
-  // Read-only: the only control is the link into that Project's own editor.
-  await expect(rows.nth(1).locator('.setting-link')).toHaveText('Project settings')
+  await rows.nth(1).getByRole('button',{name:'Edit policy'}).click()
+  await expect(page.locator('.automation-project-policy h3')).toHaveText('orca policy')
+  await expect(page.locator('.automation-project-policy .project-automation-list').first()).toBeVisible()
+})
+
+test('global policy stays a compact page selector on a phone', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await openTab(page, 'global policy')
+  await expect(page.locator('.automation-policy-cards > button')).toHaveText([
+    /Engine/,/Budgets/,/Schedules & landing/,/Scan timeline/,/Attention/,
+  ])
+  await page.locator('.automation-policy-cards > button',{hasText:'Scan timeline'}).click()
+  await expect(page.locator('.automation-policy-view > .usage-table h3')).toHaveText('Scan timeline')
+  const geometry=await page.locator('.automation-policy-view').evaluate(node=>({
+    width:node.getBoundingClientRect().width,
+    scrollWidth:node.scrollWidth,
+  }))
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(Math.ceil(geometry.width)+1)
 })
 
 test('the dashboard keeps no second copy of the surfaces that moved out', async ({ page }) => {
   await page.goto('/automation-cost-harness.html')
   await page.waitForSelector('.automation-tabs button')
   const tabs = await page.locator('.automation-tabs button').allInnerTexts()
-  expect(tabs).toEqual(['rules & observers', 'projects', 'cost breakdown', 'learned fixes', 'diagnostics'])
+  expect(tabs).toEqual(['overview','control graph','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'])
   await expect(page.locator('.automation-subtabs')).toHaveCount(0)
   // The way back to the two inboxes this dashboard used to duplicate is a permanent row,
   // not an empty-state hint: "where did the attention inbox go" is asked by someone

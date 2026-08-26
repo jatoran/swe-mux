@@ -14,50 +14,41 @@ import { chooseDropdown } from './dropdown'
 // lands.
 
 const DESKTOP = { width: 1280, height: 900 }
+const voicePages = (page:Page) => page.locator('.settings-subtabs').filter({has:page.getByText('Talk & dictation',{exact:true})})
 
-const open = async (page: Page) => {
+const open = async (page: Page, subpage = 'Read aloud') => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')
   await page.locator('.settings-tabs button').first().waitFor({ state: 'attached' })
-  await page.locator('.settings-tabs button', { hasText: /^Voice$/ }).click()
-  await expect(page.locator('.settings-tabs button.active')).toHaveText('Voice')
+  const row=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:/^Voice$/})})
+  await row.locator('[role="tab"]').click()
+  await expect(page.locator('.settings-tab-row>[role="tab"].active')).toHaveText('Voice')
+  if(await row.locator('.settings-tab-expand[aria-expanded="false"]').count())await row.locator('.settings-tab-expand').click()
+  await voicePages(page).locator('button',{hasText:new RegExp(`^${subpage}$`)}).click()
 }
 
-// The order the tab reads in: what speaks, how it sounds, how it says a word, what it says
-// and costs, then the whole capture half, then reference.
-const SECTIONS = [
-  'Read aloud (TTS)',
-  'TTS provider',
-  'Spoken summary',
-  'Clip storage',
-  'Microphone and wake words',
-  'Command phrases',
-  'Command reference',
-  'Mux assistant',
-  'Testing and latency',
-  'Mobile voice',
-]
+const PAGES=['Read aloud','Talk & dictation','Voice commands','Mux assistant','Diagnostics']
 
-test('the tab is one section per concern, and the rail indexes all of them', async ({ page }) => {
+test('Voice exposes capability pages and renders only the selected page', async ({ page }) => {
   await open(page)
-
-  // The headings themselves are the source of truth; the rail is derived from them
-  // (`settingsTabs.ts`), so asserting both is what catches a heading that renders but never
-  // reaches the rail — the failure mode of a heading nested somewhere the reader is not.
-  await expect(page.locator('.settings-content > section > h3')).toHaveText(SECTIONS)
-  await expect(page.locator('.settings-section-rail button')).toHaveText(SECTIONS)
-
-  // One `<section>` per heading, like Automation and Remote. A tab that renders one section
-  // with ten headings inside it passes the heading check above and still reads as a sprawl,
-  // because the borders between concerns come from the section boxes.
-  await expect(page.locator('.settings-content > section')).toHaveCount(SECTIONS.length)
+  await expect(voicePages(page).locator('button')).toHaveText(PAGES)
+  await expect(page.locator('.settings-subpage-heading strong')).toHaveText('Read aloud')
+  await expect(page.locator('.settings-content > section:visible > h3')).toHaveText(['Read aloud','TTS provider','Spoken summary','Clip storage'])
+  await voicePages(page).locator('button',{hasText:'Talk & dictation'}).click()
+  await expect(page.locator('.settings-content > section:visible > h3')).toHaveText(['Talk & dictation'])
+  await voicePages(page).locator('button',{hasText:'Voice commands'}).click()
+  await expect(page.locator('.settings-content > section:visible > h3')).toHaveText(['Voice commands','Command reference'])
+  await voicePages(page).locator('button',{hasText:'Mux assistant'}).click()
+  await expect(page.locator('.settings-content > section:visible > h3')).toHaveText(['Mux assistant'])
+  await voicePages(page).locator('button',{hasText:'Diagnostics'}).click()
+  await expect(page.locator('.settings-content > section:visible > h3')).toHaveText(['Testing and latency','Mobile voice'])
 })
 
 test('the read-aloud policy stays one numbered block under the first heading', async ({ page }) => {
   await open(page)
 
-  const first = page.locator('.settings-content > section').first()
-  await expect(first.locator('h3')).toHaveText('Read aloud (TTS)')
+  const first = page.locator('.settings-content > section:visible').first()
+  await expect(first.locator('h3')).toHaveText('Read aloud')
 
   // Three layers, in order, in one box. They answer "why is it talking / why is it silent"
   // and are only useful read together, so splitting them across sections would undo the
@@ -85,8 +76,8 @@ test('the pronunciation section exists only for Kokoro', async ({ page }) => {
   const pronunciation = page.locator('.settings-content > section', { has: page.locator('h3', { hasText: 'Pronunciation' }) })
   await expect(pronunciation.locator('.tts-lexicon')).toHaveCount(1)
   await expect(page.locator('.settings-content .tts-lexicon')).toHaveCount(1)
-  await expect(page.locator('.settings-content > section > h3')).toHaveText([
-    ...SECTIONS.slice(0,2),'Pronunciation',...SECTIONS.slice(2),
+  await expect(page.locator('.settings-content > section:visible > h3')).toHaveText([
+    'Read aloud','TTS provider','Pronunciation','Spoken summary','Clip storage',
   ])
 
   // Edge owns no local G2P. Hiding Kokoro's controls does not clear their draft values.
@@ -98,30 +89,24 @@ test('the pronunciation section exists only for Kokoro', async ({ page }) => {
   await expect(page.locator('.settings-content .tts-lexicon')).toHaveCount(1)
 })
 
-test('reference sections fold away, and no deep-linkable control folds with them', async ({ page }) => {
-  await open(page)
+test('Talk owns commands, while Mux Assistant remains independent', async ({ page }) => {
+  await open(page,'Voice commands')
+  await expect(page.locator('.settings-capability-flag')).toContainText('Talk is off')
+  await expect(page.locator('.voice-commands')).toHaveCount(0)
+  await expect(page.locator('.settings-muted-reference')).toBeVisible()
 
-  // Three sections are reference rather than daily controls: the command catalog, the two
-  // measuring instruments, and the one-time mobile setup. Each keeps its heading — so the
-  // rail still lists it and the reader still knows it exists — and folds only its body.
-  const folds = page.locator('.settings-content details.settings-disclosure')
-  await expect(folds).toHaveCount(3)
-  expect(await folds.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)))
-    .toEqual([false, false, false])
+  await page.getByRole('button',{name:'Enable Talk & dictation'}).click()
+  await expect(page.locator('.voice-commands')).toBeVisible()
+  await expect(page.locator('.settings-content > section:visible details.settings-disclosure')).toHaveCount(1)
 
-  // `revealSetting` does open a disclosure above its target (`setting-reveal.spec.ts`), so
-  // this is a convention rather than a hard requirement — but a switch a gated surface just
-  // promised should be on screen when the panel lands, not behind one more state change.
-  const folded = await page.locator('.settings-content [data-setting]').evaluateAll(nodes =>
-    nodes.filter(node => node.closest('details.settings-disclosure:not([open])'))
-      .map(node => node.getAttribute('data-setting')))
-  expect(folded).toEqual([])
-
-  // And the marks a deep link and the models index actually aim at are all still here
-  // (`settingTargets.ts`, `modelRouting.ts`).
-  for (const setting of ['tts_enabled', 'stt_enabled', 'tts_summary_model', 'assistant_model', 'assistant_enabled']) {
-    await expect(page.locator(`[data-setting="${setting}"]`)).toBeVisible()
-  }
+  await voicePages(page).locator('button',{hasText:'Mux assistant'}).click()
+  await expect(page.locator('[data-setting="assistant_enabled"]')).toBeVisible()
+  await expect(page.locator('.settings-capability-status')).toHaveCount(0)
+  await page.locator('[data-setting="assistant_enabled"] input').check()
+  await voicePages(page).locator('button',{hasText:'Talk & dictation'}).click()
+  await page.locator('[data-setting="stt_enabled"] input').uncheck()
+  await voicePages(page).locator('button',{hasText:'Mux assistant'}).click()
+  await expect(page.locator('.settings-capability-status')).toContainText('Text chat available')
 })
 
 

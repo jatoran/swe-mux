@@ -1,6 +1,6 @@
 /**
  * The Settings panel's navigation model: which tabs exist, how they group, how a
- * deep link names one, and how a tab's in-page section rail is numbered.
+ * deep link names one, and which tabs expose separate pages.
  *
  * It lives apart from `Settings.tsx` because none of it needs a renderer. The
  * panel is one very large component, and the rules that decide *where a setting
@@ -10,9 +10,8 @@
 /**
  * Every tab names one subsystem, and `group` is what lets seventeen of them stay
  * navigable. This array is the single source of truth for both layouts: the
- * desktop sidebar draws a heading wherever the group changes, and the mobile rail
- * renders the same order flat with the headings suppressed. Tabs of one group
- * must therefore stay contiguous — a group is its run, not its members.
+ * desktop and mobile sidebars draw a heading wherever the group changes. Tabs of
+ * one group must therefore stay contiguous - a group is its run, not its members.
  */
 export const settingsTabs = [
   {id:'general',label:'General',group:'Workspace'},
@@ -36,6 +35,52 @@ export const settingsTabs = [
 
 export type SettingsTab = typeof settingsTabs[number]['id']
 export type SettingsTabEntry = typeof settingsTabs[number]
+
+export type SettingsSubpage = { id:string; label:string }
+
+/**
+ * Long Settings tabs are real page collections, not anchors into one document.
+ *
+ * IDs match `sectionSlug(label)`, which is also stamped onto the rendered `<h3>`. The
+ * explicit registry lets the sidebar expose a tab's pages before that tab has mounted,
+ * while the renderer audit below still catches a heading that drifts from its declaration.
+ */
+function subpageSlug(label:string):string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'section'
+}
+const subpages = (...labels:string[]):SettingsSubpage[] => labels.map(label=>({id:subpageSlug(label),label}))
+
+export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
+  general:subpages('Defaults','Getting started tutorial','Configuration file'),
+  projects:subpages('New project location','Project setup commands','Global project ignores','Project resources'),
+  terminals:subpages('Rendering','Scrollback','Default profile','Launch profiles'),
+  processes:subpages('Process evidence','Ghost windows','Detection timeline'),
+  harnesses:subpages('Default harness','Harnesses','Conversation history'),
+  accounts:subpages('Provider accounts','Model provider','Models'),
+  queue:subpages('Overview','Auto-delivery','Approvals','Agent messaging','Agent actuation','Queue history'),
+  automation:subpages('Automation workspace'),
+  appearance:subpages('Theme','Session rows','Side panel tabs','Visible panels','Interface scale','Rail density'),
+  input:subpages('Pointer','Mobile terminal','Clipboard history','Touch gestures','Keyboard shortcuts'),
+  notes:subpages('Note editor','Typography','Touch command rail','Editor shortcuts'),
+  voice:subpages('Read aloud','Talk & dictation','Voice commands','Mux assistant','Diagnostics'),
+  remote:subpages('Tailnet listener','Connect a phone','Firewall','WSL bridge','Secure HTTPS access','Phone DNS'),
+  diagnostics:subpages('System prerequisites','Rebuild and reload','Logging','Ask an agent about this install','Export diagnostics'),
+}
+
+const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
+  voice:{
+    'Read aloud (TTS)':'read-aloud','Read aloud':'read-aloud','Voice and engine':'read-aloud','TTS provider':'read-aloud',Pronunciation:'read-aloud','Spoken summary':'read-aloud','Clip storage':'read-aloud',
+    'Microphone and wake words':'talk-dictation','Talk & dictation':'talk-dictation',
+    'Command phrases':'voice-commands','Voice commands':'voice-commands','Command reference':'voice-commands',
+    'Mux assistant':'mux-assistant',
+    'Testing and latency':'diagnostics','Mobile voice':'diagnostics',
+  },
+}
+
+/** The declared page that owns one rendered heading. */
+export function settingsSubpageId(tab:SettingsTab,heading:string):string {
+  return groupedHeadings[tab]?.[heading.trim()]||subpageSlug(heading)
+}
 
 /**
  * Commands that work the narrow layout's section drawer — the slide-in twin of the
@@ -76,7 +121,7 @@ export const SECTION_ALIASES:Record<string,SettingsTab> = {
   'remote and security':'remote',
   'auto-delivery':'queue','agent messaging':'queue','prompt queue':'queue',
   // The schedules themselves live in the drawer's Schedule tab; only the install-wide
-  // limits are here, under Automation.
+  // limits are in the Automation workspace; Settings links there.
   'scheduled runs':'automation',schedules:'automation',
   'read aloud (tts)':'voice',
 }
@@ -101,7 +146,7 @@ export const LEGACY_TAB_IDS:Record<string,SettingsTab> = {workspace:'git',agents
 // scanned, and closed dozens of times a session, and landing on General every time
 // re-costs the navigation that brought you to the tab you actually live in. An
 // explicit `initialSection` (Voice from the TTS chip, Accounts from the switcher,
-// …) always wins: that caller knows where the user needs to be.
+// and so on) always wins: that caller knows where the user needs to be.
 export const SETTINGS_TAB_KEY='mux.settings.tab.v1'
 
 export const rememberedTab = ():SettingsTab => {
@@ -118,9 +163,8 @@ export const rememberTab = (tab:SettingsTab):void => {
   try { localStorage.setItem(SETTINGS_TAB_KEY,tab) } catch { /* private mode */ }
 }
 
-// The in-tab half of remembering the tab. Landing at the top of a seven-section
-// tab re-costs the scroll that got you to the control you came back for, so each
-// tab reopens at the section it was left on.
+// The in-tab half of remembering the tab. Long tabs expose one separate page at a
+// time, so each tab reopens the page it was left on.
 export const SETTINGS_SECTION_KEY='mux.settings.section.v1'
 
 export const rememberedSections = ():Record<string,string> => {

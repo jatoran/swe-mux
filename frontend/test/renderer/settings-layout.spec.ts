@@ -218,13 +218,13 @@ test('every tab renders, and every marked control is really in its DOM', async (
   await page.goto('/settings-harness.html')
   await page.waitForSelector('.settings-tabs button', { state: 'attached' })
 
-  const tabs = await page.locator('.settings-tabs button').allTextContents()
+  const tabs = await page.locator('.settings-tabs [role="tab"]').allTextContents()
   expect(tabs.length).toBe(17)
 
   const marked = new Set<string>()
   for (const label of tabs) {
     visiting = label
-    await page.locator('.settings-tabs button', { hasText: label }).first().click()
+    await page.locator('.settings-tabs [role="tab"]', { hasText: label }).first().click()
     // Every tab renders at least one section heading; a tab that threw renders none.
     await expect(page.locator('.settings-content h3').first()).toBeVisible()
     for (const value of await page.locator('.settings-content [data-setting]').evaluateAll(
@@ -239,8 +239,7 @@ test('every tab renders, and every marked control is really in its DOM', async (
     'attach_replay_bytes', 'session_recovery_checkpoint_bytes', 'ghost_window_sweep_enabled',
     'status_timeline_retention_days', 'agent_interject_enabled', 'agent_message_max_chars',
     'request_spawn_enabled', 'session_watch_max_minutes', 'prompt_queue_retention_days',
-    'openrouter_request_timeout_seconds', 'automation_queue_size', 'project_card_model',
-    'land_verify_memo_seconds', 'attention_narration_max_output_tokens',
+    'openrouter_request_timeout_seconds',
     'assistant_stream_replies', 'log_level',
   ]) expect(marked, `${setting} is marked in the source but never rendered`).toContain(setting)
 })

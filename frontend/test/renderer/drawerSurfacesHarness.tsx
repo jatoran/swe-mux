@@ -24,7 +24,11 @@ const SESSION = {
 } as Session
 
 const SKILLS = {
+  backend: 'claude',
   cwd: PROJECT.root,
+  generated_at: NOW,
+  agent_loaded_at: NOW - 7200,
+  agent_run_started_at: NOW - 7200,
   roots: ['.claude/skills', '~/.claude/skills'],
   skills: [
     { name: 'documentation', invocation: '/documentation', kind: 'skill', scope: 'project', origin: '.claude/skills', path: 'a', implicit: true, short_description: 'Create or update project documentation', description: '' },
@@ -32,6 +36,8 @@ const SKILLS = {
     { name: 'code-review', invocation: '/code-review', kind: 'command', scope: 'user', origin: '~/.claude/skills', path: 'c', implicit: false, short_description: 'Review the current diff', description: '' },
   ],
   errors: [],
+  truncated: false,
+  skipped_plugins: [],
 }
 
 const CLIPBOARD = {
@@ -78,6 +84,7 @@ const SOURCES = [
 
 const ROUTES: Array<[string, unknown]> = [
   ['/api/sessions/s1/skills', SKILLS],
+  ['/api/prompts', { items: [], projects: [] }],
   ['/api/clipboard', CLIPBOARD],
   ['/api/projects/p1/agent-context', AGENT_CONTEXT],
 ]
@@ -121,7 +128,6 @@ render(
             project={PROJECT}
             backend="claude"
             onDone={() => {}}
-            onConfigureActions={() => {}}
             onInsert={() => 'terminal'}
             onManage={() => {}}
             sessions={[SESSION]}

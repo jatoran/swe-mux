@@ -38,12 +38,12 @@ replaced.
 
 | Config field | Bounds it enforces | Default mode | Edited in |
 | --- | --- | --- | --- |
-| `automation_daily_budget` | every automation, per UTC day | `either` | Settings → Automation |
-| `automation_rule_daily_budget` | one automation rule, per UTC day | `either` | Settings → Automation |
-| `project_card_daily_budget` | Project context card rebuilds | `usd` | Settings → Automation |
-| `scan_timeline_daily_budget` | scan timeline, per UTC day | `either` | Settings → Automation |
-| `scan_timeline_run_budget` | scan timeline, per conversation | `tokens` | Settings → Automation |
-| `attention_narration_daily_budget` | model narration on ranked items | `usd` | Settings → Automation |
+| `automation_daily_budget` | every automation, per UTC day | `either` | Automation → Global policy |
+| `automation_rule_daily_budget` | one automation rule, per UTC day | `either` | Automation → Global policy |
+| `project_card_daily_budget` | Project context card rebuilds | `usd` | Automation → Global policy |
+| `scan_timeline_daily_budget` | scan timeline, per UTC day | `either` | Automation → Global policy |
+| `scan_timeline_run_budget` | scan timeline, per conversation | `tokens` | Automation → Global policy |
+| `attention_narration_daily_budget` | model narration on ranked items | `usd` | Automation → Global policy |
 | `tts_daily_budget` | read-aloud summaries | `usd` | Settings → Voice |
 | `assistant_daily_budget` | the Mux assistant | `usd` | Settings → Assistant |
 

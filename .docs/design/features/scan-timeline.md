@@ -11,7 +11,7 @@ It is the Tier 1 substrate for dead-end memory and later cross-session semantic 
 Three independent gates must all be open before a scan can call OpenRouter:
 
 1. The global `scan_timeline_enabled` master switch is on.
-   It is in **Settings → Automation**, beside the scan budgets; the Automation dashboard
+   It is in **Automation → Global policy**, beside the scan budgets; the Automation workspace
    shows its state and links there.
 2. The Project enables `scan_timeline` and its `raw_store` and `tier0` dependencies.
 3. The current `agent_run_id` is enabled from that session's Timeline drawer tab.
@@ -147,7 +147,7 @@ A bounded page therefore means "rows returned" rather than "rows scanned": a `bl
 The default ordering stays oldest-first because the derivations in `scan_consumers.py` require it; `newest_first` is what a bounded read asks for.
 
 No scan or backfill trigger is exposed through MCP.
-Reads cost nothing; a scan spends the human's gated budget against caps set in Settings → Automation → Scan timeline.
+Reads cost nothing; a scan spends the human's gated budget against caps set in Automation → Global policy → Scan timeline.
 
 ## Budgets and visibility
 
@@ -165,7 +165,7 @@ The caps that do apply are:
 - `automation_daily_budget`, the global emergency ceiling over every automation.
 
 The three budgets carry the shared `{tokens?, usd?, mode}` shape and can each be denominated in tokens, dollars, or first-hit; `design/features/budgets.md` owns that contract and the migration that gave each of these the mode matching the unit it already enforced.
-All four caps are **global**, edited in Settings → Automation → Scan timeline, and apply to every Project.
+All four caps are **global**, edited in Automation → Global policy → Scan timeline, and apply to every Project.
 `scan_timeline_model` is edited in the same section, beside the caps it is priced against, so which model a given budget is being spent on is answerable without leaving the section.
 The OpenRouter key that unlocks it stays in Settings → Accounts, with the other provider credentials.
 The dollar ceiling used to be a per-Project field in the committed `.swe-mux/config.toml`.

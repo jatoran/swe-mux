@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import type { ComponentChildren } from 'preact'
 import type { RailBackend } from './commandRail'
 import { api } from './api'
 import {
@@ -10,25 +9,18 @@ import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { PromptsTab, type PromptsTabProps } from './PromptsTab'
 import { ClipboardTab } from './ClipboardPanel'
-import { drawerSectionTarget } from './drawerSegments'
 
 // The Actions drawer combines three catalogs that can act on the focused session:
 // the live skill inventory, reusable prompt templates, and clipboard history.
-// They share a destination, not an
-// identity, so each remains an independently collapsible section.
-//
-// Clipboard was its own tab until the drawer consolidation. It belongs here by verb —
-// every section on this tab ends in text reaching the focused agent, and Clipboard used
-// the same `onInsert`/`onDone` contract before it moved. It is a *section* rather than a
-// segment for the one reason that decides between the two: sections are co-visible, so
-// folding in the surface people reach for fastest cost no extra click. A segment would
-// have made "insert the thing I just copied" a three-step navigation.
+// They share a destination, not an identity, so each is one named view under a persistent
+// tab row. Rendering one catalog at a time keeps three potentially long inventories from
+// becoming one overwhelming scroller.
 //
 // The command rail owns placed shortcuts and its permanent drawer popover exposes
 // the complete configured row. This tab owns the discovered catalogs instead: the skills the focused
 // session's CLI can actually see, read off disk by the daemon from the same
 // directories Claude and Codex read. Those are not rail items and are never
-// configured here — the list is a window onto the CLI's own state, so it is
+// configured here - the list is a window onto the CLI's own state, so it is
 // grouped by where each skill comes from and refetched rather than stored.
 //
 // This tab is session-scoped but renders outside the terminal pane, so it cannot
@@ -38,68 +30,36 @@ import { drawerSectionTarget } from './drawerSegments'
 type Props = Pick<PromptsTabProps, 'project' | 'backend' | 'onInsert' | 'onManage' | 'sessions' | 'onSend' | 'preselect'> & {
   session: Session | null
   onDone: () => void
-  onConfigureActions: () => void
   /** Clipboard's own insert path. Distinct from `onInsert` (prompt templates are
    *  terminals-only) because a copied line may legitimately land in the note the drawer
    *  is hosting, and the host needs to know which happened. */
   onClipboardInsert: (text: string) => 'terminal' | 'editor' | 'none'
   onClipboardDone: () => void
   onOpenSettings: (section: string) => void
-  /** One-shot arrival from a palette entry, voice phrase, or Action button that named a
-   *  section. Expands it; the host does the scrolling and the flash. */
+  /** One-shot arrival from a palette entry, voice phrase, or Action button that named a view. */
   reveal?: { section: string; token: number }
 }
+const ACTION_VIEWS = ['skills', 'prompts', 'clipboard'] as const
+type ActionView = typeof ACTION_VIEWS[number]
+const ACTION_VIEW_KEY = 'mux.actions.view.v1'
 
-/** The tab's sections, in draw order. Mirrored by the `actions` rows in `drawerSegments.ts`. */
-const ACTION_SECTION_IDS = ['skills', 'prompts', 'clipboard'] as const
-type ActionSectionId = typeof ACTION_SECTION_IDS[number]
-const ACTION_SECTION_KEY = 'mux.actions.sections.v1'
-
-function initialSectionState(): Record<ActionSectionId, boolean> {
-  let stored: Record<string, unknown> = {}
-  try { stored = JSON.parse(localStorage.getItem(ACTION_SECTION_KEY) || '{}') as Record<string, unknown> }
-  catch { stored = {} }
-  return Object.fromEntries(ACTION_SECTION_IDS.map(id => [id, stored[id] !== false])) as Record<ActionSectionId, boolean>
-}
-
-function ActionSection({ id, title, detail, expanded, onExpanded, action, children }: {
-  id: ActionSectionId
-  title: string
-  detail?: string
-  expanded: boolean
-  onExpanded: (id: ActionSectionId, expanded: boolean) => void
-  action?: { label: string; title: string; run: () => void }
-  children: ComponentChildren
-}) {
-  const bodyId = `actions-section-${id}`
-  // `data-setting` on the section itself rather than on its body: the body is unmounted
-  // while collapsed, and the reveal has to have something to scroll to and flash even
-  // in the frame before the expansion lands.
-  return <section
-    class={`actions-section actions-section-${id}${expanded ? ' expanded' : ''}`}
-    data-setting={drawerSectionTarget('actions', id)}
-  >
-    <header class="actions-section-header">
-      <button type="button" class="actions-section-toggle" aria-expanded={expanded} aria-controls={bodyId} onClick={() => onExpanded(id, !expanded)}>
-        <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
-        <strong>{title}</strong>
-        {detail && <small>{detail}</small>}
-      </button>
-      {action && <button type="button" class="actions-section-action" title={action.title} onClick={action.run}>{action.label}</button>}
-    </header>
-    {expanded && <div id={bodyId} class="actions-section-body">{children}</div>}
-  </section>
+function initialView(): ActionView {
+  try {
+    const stored=localStorage.getItem(ACTION_VIEW_KEY)
+    return ACTION_VIEWS.find(view=>view===stored)||'skills'
+  } catch { return 'skills' }
 }
 
 function dispatch(sessionId: string, action: string, detail: Record<string, unknown> = {}) {
   window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId, action, ...detail } }))
 }
 
-export function ActionsTab({ session, onDone, onConfigureActions, project, backend: promptBackend, onInsert, onManage, sessions, onSend, preselect, onClipboardInsert, onClipboardDone, onOpenSettings, reveal }: Props) {
+export function ActionsTab({ session, onDone, project, backend: promptBackend, onInsert, onManage, sessions, onSend, preselect, onClipboardInsert, onClipboardDone, onOpenSettings, reveal }: Props) {
   const [inventory, setInventory] = useState<SkillInventory | null>(null)
   const [skillsError, setSkillsError] = useState('')
   const [query, setQuery] = useState('')
-  const [sections, setSections] = useState<Record<ActionSectionId, boolean>>(initialSectionState)
+  const [view,setViewState]=useState<ActionView>(initialView)
+  const [selectedSkill,setSelectedSkill]=useState('')
   const backend = (session?.backend || 'shell') as RailBackend
   const isAgent = isAgentBackend(backend)
 
@@ -132,7 +92,7 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   }, [session?.id, isAgent, session?.runtime_cwd, session?.run_cwd])
   useEffect(() => {
     if (!preselect?.key) return
-    setSections(current => current.prompts ? current : { ...current, prompts: true })
+    setViewState('prompts')
   }, [preselect])
   // Arriving at a named section expands it if it was collapsed. Expanding is all this does;
   // the drawer host owns the scroll and the flash (`settingReveal.ts`), so a section reached
@@ -142,21 +102,18 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   const [clipboardAutoFocus, setClipboardAutoFocus] = useState(0)
   useEffect(() => {
     if (!revealSection) return
-    const id = ACTION_SECTION_IDS.find(item => item === revealSection)
+    const id = ACTION_VIEWS.find(item => item === revealSection)
     if (!id) return
-    setSections(current => current[id] ? current : { ...current, [id]: true })
+    setViewState(id)
     // Only the clipboard filter is autofocused, and only on a deliberate arrival: it is the
     // one section whose first action is typing. Doing it on every render of the tab would
     // steal focus from the terminal the drawer opened beside.
     setClipboardAutoFocus(id === 'clipboard' ? (revealToken ?? 0) : 0)
   }, [revealToken, revealSection])
 
-  const setSectionExpanded = (id: ActionSectionId, expanded: boolean) => {
-    setSections(current => {
-      const next = { ...current, [id]: expanded }
-      try { localStorage.setItem(ACTION_SECTION_KEY, JSON.stringify(next)) } catch { /* device preference is best effort */ }
-      return next
-    })
+  const setView=(next:ActionView)=>{
+    try{localStorage.setItem(ACTION_VIEW_KEY,next)}catch{/* device preference is best effort */}
+    setViewState(next)
   }
 
   const insertSkill = (skill: AgentSkill) => {
@@ -171,102 +128,42 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   const groups = groupSkills(matched)
   const disclosure = inventoryNote(inventory)
 
-  // No session line. The pane heading above this tab already names the focused session
-  // and says so in more words ("Session: <name>"), and the harness this tab is resolved
-  // against is stated where it decides anything - the Skills section's own header.
   return <div class="actions-tab">
-    <div class="actions-tab-toolbar">
-      <button type="button" title="Choose command rail actions, order, rows, and button appearance" onClick={onConfigureActions}>Configure command rail</button>
+    <div class="actions-view-tabs" role="tablist" aria-label="Actions catalog">
+      <button type="button" role="tab" aria-selected={view==='skills'} class={view==='skills'?'active':''} onClick={()=>setView('skills')}>
+        Skills{inventory?` ${inventory.skills.length}`:''}
+      </button>
+      <button type="button" role="tab" aria-selected={view==='prompts'} class={view==='prompts'?'active':''} onClick={()=>setView('prompts')}>Prompts</button>
+      <button type="button" role="tab" aria-selected={view==='clipboard'} class={view==='clipboard'?'active':''} onClick={()=>setView('clipboard')}>Clipboard</button>
     </div>
-    <ActionSection
-      id="skills"
-      title="Skills"
-      detail={session && isAgent && inventory ? `${inventory.skills.length} discovered` : undefined}
-      expanded={sections.skills}
-      onExpanded={setSectionExpanded}
-    >
-    {!session && <p class="drawer-empty">Focus an agent session to read its skill inventory.</p>}
-    {session && !isAgent && <p class="drawer-empty">Shell sessions do not expose agent skills.</p>}
-    {session && isAgent && <section class="drawer-skills">
-      <header>
-        <h4>{harnessDisplayName(backend)} skills</h4>
-        <span>{inventory ? `${matched.length}${query ? ` / ${inventory.skills.length}` : ''}` : ''}</span>
-        <button title="Rescan the skill directories now" onClick={() => { if (session) void loadSkills(session.id, true) }}>Rescan</button>
-      </header>
-      {inventory && inventory.skills.length > 8 && <input
-        type="search"
-        placeholder="Filter skills"
-        aria-label="Filter skills"
-        value={query}
-        onInput={event => setQuery((event.target as HTMLInputElement).value)}
-      />}
-      {/* The list is the tab's one unbounded region, so it owns the scroll — the
-          header and filter stay put the way every other drawer tab's do. */}
-      <div class="drawer-skill-list">
-        {!inventory && !skillsError && <p class="drawer-empty">Reading skill directories…</p>}
-        {skillsError && <p class="drawer-empty">Skills could not be read: {skillsError}</p>}
-        {inventory && !inventory.skills.length && <p class="drawer-empty">No skills on disk for this session. Scanned {inventory.roots.length} directories under {inventory.cwd}.</p>}
-        {inventory && !!inventory.skills.length && !matched.length && <p class="drawer-empty">No skill matches “{query}”.</p>}
-        {groups.map(group => <div key={group.scope} class="drawer-skill-group">
-          <h5>{group.label}</h5>
-          {group.skills.map(skill => <div class="drawer-skill-row" key={skill.path}>
-              <button
-                class={skill.shadowed_by ? 'shadowed' : undefined}
-                title={skillTitle(skill)}
-                onClick={() => insertSkill(skill)}
-              >
-                <span>
-                  <code>{skill.invocation}</code>
-                  {skillLabel(skill) !== skill.name && <em>{skillLabel(skill)}</em>}
-                  {skill.added_after_start && <b class="skill-flag warn" title="Added after this agent loaded">new</b>}
-                  {!skill.implicit && <b class="skill-flag" title="Explicit-only: the agent never invokes this on its own">explicit</b>}
-                </span>
-                <small>{skill.short_description || skill.description || skill.origin}</small>
-              </button>
-            </div>
-          )}
-        </div>)}
-        {disclosure && <p class="drawer-skill-note">{disclosure}</p>}
-      </div>
-    </section>}
-    </ActionSection>
-    <ActionSection
-      id="prompts"
-      title="Prompt templates"
-      detail="saved reusable messages"
-      expanded={sections.prompts}
-      onExpanded={setSectionExpanded}
-      action={{ label: 'Manage', title: 'Open the full prompt template editor', run: onManage }}
-    >
-      <PromptsTab
-        project={project}
-        backend={promptBackend}
-        onInsert={onInsert}
-        onDone={onDone}
-        onManage={onManage}
-        showManage={false}
-        sessions={sessions}
-        onSend={onSend}
-        preselect={preselect}
-      />
-    </ActionSection>
-    {/* Last, and the only section that is not a *catalog*: the others are things you keep,
-        this is things that happened. Its actions are the same verb as everything above it,
-        which is why it lives on this tab at all. */}
-    <ActionSection
-      id="clipboard"
-      title="Clipboard"
-      detail="recent copies"
-      expanded={sections.clipboard}
-      onExpanded={setSectionExpanded}
-      action={{ label: 'Settings', title: 'Clipboard history capture and retention settings', run: () => onOpenSettings('Input') }}
-    >
-      <ClipboardTab
-        onInsert={onClipboardInsert}
-        onDone={onClipboardDone}
-        onOpenSettings={() => onOpenSettings('Input')}
-        autoFocusToken={clipboardAutoFocus}
-      />
-    </ActionSection>
+    {view==='skills'&&<div class="actions-view actions-skills-view" data-setting="drawer.actions.skills">
+      {!session&&<p class="drawer-empty">Focus an agent session to read its skill inventory.</p>}
+      {session&&!isAgent&&<p class="drawer-empty">Shell sessions do not expose agent skills.</p>}
+      {session&&isAgent&&<section class="drawer-skills">
+        <header><h4>{harnessDisplayName(backend)} skills</h4><span>{inventory?`${matched.length}${query?` / ${inventory.skills.length}`:''}`:''}</span><button title="Rescan the skill directories now" onClick={()=>{if(session)void loadSkills(session.id,true)}}>Rescan</button></header>
+        {inventory&&inventory.skills.length>8&&<input type="search" placeholder="Filter skills" aria-label="Filter skills" value={query} onInput={event=>setQuery((event.target as HTMLInputElement).value)}/>}
+        <div class="drawer-skill-list">
+          {!inventory&&!skillsError&&<p class="drawer-empty">Reading skill directories…</p>}
+          {skillsError&&<p class="drawer-empty">Skills could not be read: {skillsError}</p>}
+          {inventory&&!inventory.skills.length&&<p class="drawer-empty">No skills on disk for this session. Scanned {inventory.roots.length} directories under {inventory.cwd}.</p>}
+          {inventory&&!!inventory.skills.length&&!matched.length&&<p class="drawer-empty">No skill matches “{query}”.</p>}
+          {groups.map(group=><div key={group.scope} class="drawer-skill-group"><h5>{group.label}</h5>
+            {group.skills.map(skill=>{
+              const selected=selectedSkill===skill.path
+              return <div class={`drawer-skill-row compact${selected?' selected':''}`} key={skill.path}>
+                <button class={skill.shadowed_by?'shadowed':undefined} title={skillTitle(skill)} aria-expanded={selected} onClick={()=>setSelectedSkill(current=>current===skill.path?'':skill.path)}>
+                  <span><code>{skill.invocation}</code>{skillLabel(skill)!==skill.name&&<em>{skillLabel(skill)}</em>}{skill.added_after_start&&<b class="skill-flag warn">new</b>}{!skill.implicit&&<b class="skill-flag">explicit</b>}</span>
+                  <small>{skill.short_description||skill.description||skill.origin}</small>
+                </button>
+                {selected&&<div class="drawer-skill-detail"><p>{skill.description||skill.short_description||'No description provided.'}</p><small>{skill.origin}</small><button class="primary" disabled={!!skill.shadowed_by||skill.added_after_start} onClick={()=>insertSkill(skill)}>Insert {skill.invocation}</button></div>}
+              </div>
+            })}
+          </div>)}
+          {disclosure&&<p class="drawer-skill-note">{disclosure}</p>}
+        </div>
+      </section>}
+    </div>}
+    {view==='prompts'&&<div class="actions-view" data-setting="drawer.actions.prompts"><PromptsTab project={project} backend={promptBackend} onInsert={onInsert} onDone={onDone} onManage={onManage} sessions={sessions} onSend={onSend} preselect={preselect}/></div>}
+    {view==='clipboard'&&<div class="actions-view" data-setting="drawer.actions.clipboard"><ClipboardTab onInsert={onClipboardInsert} onDone={onClipboardDone} onOpenSettings={()=>onOpenSettings('Input')} autoFocusToken={clipboardAutoFocus}/></div>}
   </div>
 }

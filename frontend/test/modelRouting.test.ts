@@ -87,7 +87,7 @@ test('every linked control carries the data-setting the link reveals', () => {
   // linking back, so the reader standing on Voice can still find out what it calls.
   // The two routed defaults are exempt because they never lived on a feature tab -
   // they have always been the thing the others fall back to, edited here.
-  const settings = source('Settings.tsx')
+  const settings = source('Settings.tsx')+source('AutomationPolicyView.tsx')
   const relocated = MODEL_ROUTES.filter(route => route.kind !== 'routed')
   assert.equal(relocated.length, 5)
   for (const route of relocated) {

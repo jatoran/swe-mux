@@ -18,53 +18,24 @@ import { expect, test } from 'playwright/test'
  * geometry, and the components themselves are unchanged.
  */
 
-test('each Actions section is bounded by more than a row rule', async ({ page }) => {
+test('Actions exposes three named views and one body at a time', async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 1000 })
   await page.goto('/drawer-surfaces-harness.html')
-  await page.waitForSelector('.actions-section')
-
-  const sections = await page.evaluate(() => [...document.querySelectorAll('.actions-section')].map(section => {
-    const header = section.querySelector<HTMLElement>('.actions-section-header')!
-    const style = getComputedStyle(header)
-    return {
-      id: section.className.match(/actions-section-([a-z]+)/)![1],
-      borderTop: Number.parseFloat(getComputedStyle(section).borderTopWidth),
-      headerBackground: style.backgroundImage,
-      headerEdge: style.boxShadow,
-      headerBottom: style.borderBottomWidth,
-      // Resolved, not declared: `--section-hue` is what the rules are written against, and a
-      // computed colour is the only thing that says whether two of them landed on the same
-      // one. `getPropertyValue` would answer `var(--green)` and prove nothing.
-      hue: getComputedStyle(section.querySelector<HTMLElement>('.actions-section-toggle>span')!).color,
-      spine: style.boxShadow,
-    }
-  }))
-
-  expect(sections.map(item => item.id)).toEqual(['skills', 'prompts', 'clipboard'])
-  // The first section needs no rule above it — the pane heading is there. Every later one
-  // is separated by a rule thicker than any row rule inside a section.
-  expect(sections[0].borderTop).toBe(0)
-  for (const section of sections.slice(1)) expect(section.borderTop, section.id).toBeGreaterThanOrEqual(2)
-  // And the header is a bar rather than another row: its own ground and a leading edge.
-  for (const section of sections) {
-    expect(section.headerBackground, section.id).toContain('gradient')
-    expect(section.headerEdge, section.id).toContain('inset')
-  }
-
-  // One hue per section, and three that are actually different. The headers are sticky, so a
-  // reader mid-scroll sees a header without the boundary it belongs to; the hue is what
-  // answers "which of the three am I in" without reading the word. A scheme that silently
-  // collapsed - two sections pointed at one token, or a fourth added with no hue inheriting
-  // a neighbour's - is invisible in every other test, which is why this asserts distinctness
-  // rather than exact colours: the values are a theme's to choose, the spread is not.
-  expect(new Set(sections.map(item => item.hue)).size).toBe(3)
-  expect(new Set(sections.map(item => item.spine)).size).toBe(3)
+  await page.waitForSelector('.actions-view-tabs')
+  await expect(page.locator('.actions-view-tabs [role="tab"]')).toHaveText([/Skills/, 'Prompts', 'Clipboard'])
+  await expect(page.locator('.actions-view')).toHaveCount(1)
+  await page.locator('.actions-view-tabs [role="tab"]',{hasText:'Prompts'}).click()
+  await expect(page.locator('.actions-view-tabs [role="tab"]',{hasText:'Prompts'})).toHaveAttribute('aria-selected','true')
+  await expect(page.locator('[data-setting="drawer.actions.prompts"]')).toBeVisible()
+  await expect(page.locator('[data-setting="drawer.actions.skills"]')).toHaveCount(0)
+  await page.locator('.actions-view-tabs [role="tab"]',{hasText:'Clipboard'}).click()
+  await expect(page.locator('[data-setting="drawer.actions.clipboard"]')).toBeVisible()
 })
 
 test('the Actions tab names the session no more often than the pane heading does', async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 1000 })
   await page.goto('/drawer-surfaces-harness.html')
-  await page.waitForSelector('.actions-section')
+  await page.waitForSelector('.actions-view-tabs')
 
   // The heading immediately above this tab already says which session it is scoped to, in
   // more words. A second line saying it again pushed every section down by a row and made
@@ -74,10 +45,7 @@ test('the Actions tab names the session no more often than the pane heading does
     [...document.querySelectorAll('.utility-drawer *')]
       .filter(el => !el.children.length && /Schedule Session Resume/.test(el.textContent || '')).length)
   expect(mentions).toBe(1)
-  // Sticky section headers therefore pin to the top of the scroller rather than below a
-  // line that is no longer there.
-  expect(await page.evaluate(() =>
-    getComputedStyle(document.querySelector('.actions-section-header')!).top)).toBe('0px')
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('.actions-view-tabs')!).top)).toBe('0px')
 })
 
 test('the instruction viewer is a labelled region, selected or not', async ({ page }) => {

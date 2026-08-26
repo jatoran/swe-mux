@@ -320,7 +320,7 @@ It passes every precondition unchanged.
 
 All three are reported by `GET /api/land` (`installed_enabled`, `project_enabled`, `agent_grant`), because none of them could be told apart from an ordinary quiet queue.
 The install stop is the sharpest case: it is checked by the sweep before anything else, so with it off a request enqueues and then sits at `queued` forever - identical, on screen, to a pipeline working through a backlog.
-It also had no control in any overlay until it gained one in Settings → Automation → Land queue.
+It also had no control in any overlay until it gained one in Automation → Global policy → Schedules and landing.
 
 **All three are Project-wide or wider, so all three are drawn once, in the landing strip.**
 A control that answers "for every branch in this repository" copied into each expanded row is a standing fixture in a per-checkout pane, which is exactly what `setting-links.md` forbids - and it is the same repetition that sent the verification block up here.
@@ -574,7 +574,7 @@ Two tools make the safe call the short one and let the grant say different thing
 | `land_grant` | `<project>/.swe-mux/config.toml` | `off` / `draft` / `granted`, default `draft`. |
 | `[worktree] verify_command` | `<project>/.swe-mux/config.toml` | Explicit override of the `.worktree-verify` convention. |
 
-Every `global` row above is edited in Settings → Automation → **Land queue**.
+Every `global` row above is edited in Automation → Global policy → **Schedules and landing**.
 The install stop had a control from the start and the other four did not, which is the shape
 this feature's own prose already names for the verification command: a bound that only a
 config-file edit can reach is a bound nobody adjusts and nobody can see.

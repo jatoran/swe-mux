@@ -67,8 +67,9 @@ Nothing calls it on its own - it is reached only from the fork scope's "Reattach
   Appearance uses the live icon registry and supports a visible-label override plus Automatic, Icon only, Label only, and Icon + label modes where an icon exists.
   Built-in behavior fields remain locked while built-in presentation and backend visibility persist through catalog normalization.
   In a project scope its chips carry the hide control and the ghost chips for what is hidden; in a fork scope its toolbar carries the reattach plan.
-- `ActionsTab.tsx` renders the unified Actions drawer with device-local disclosure state for discovered Skills, Prompt templates, and Clipboard.
-  A compact Configure command rail button above the sections opens the standalone editor.
+- `ActionsTab.tsx` renders the unified Actions drawer as three named views: Skills, Prompts, and Clipboard.
+  Only one catalog is mounted at a time and the selected view is remembered on the device.
+  Command-rail configuration stays in the standalone editor and has no button in this usage surface.
   Skills and template rows insert or edit; they do not create a second pinning state.
 
 ### Arrow-key repeat

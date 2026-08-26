@@ -22,7 +22,7 @@ const BUDGETS = [
 ]
 
 test('every spending cap is edited through the one shared control', () => {
-  const settings = source('Settings.tsx')
+  const settings = source('Settings.tsx')+source('AutomationPolicyView.tsx')
   for (const name of BUDGETS) {
     assert.ok(
       settings.includes(`<BudgetControl name="${name}"`),
@@ -32,7 +32,7 @@ test('every spending cap is edited through the one shared control', () => {
 })
 
 test('no cap is still edited as a bare number box', () => {
-  const settings = source('Settings.tsx')
+  const settings = source('Settings.tsx')+source('AutomationPolicyView.tsx')
   // The pre-`Budget` field names. Any of them reappearing means a second, older
   // editor for a cap that already has one - the exact split the shape removed.
   for (const legacy of [

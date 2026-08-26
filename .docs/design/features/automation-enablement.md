@@ -147,8 +147,8 @@ enabled-and-working:
   this editor, because both are Project-wide and the per-run toggle in the drawer is not.
 - An automation that spends is chipped as such. Marked rather than unmarked: most of the list
   is free, and a chip on every row would say nothing.
-- Spending limits are **not** per-project. Scan timeline's budgets are global settings
-  (Settings → Automation → Scan timeline); this editor is opt-in only. A `scan_timeline_daily_budget_usd`
+- Spending limits are **not** per-project. Scan timeline's budgets are global policy
+  (Automation → Global policy → Scan timeline); this editor is opt-in only. A `scan_timeline_daily_budget_usd`
   left in an existing Project file parses, is ignored, and is dropped on the next write.
   Project permission never enables a run; the current conversation must still be enabled from
   its Timeline tab.
@@ -240,11 +240,11 @@ Opting out of `scan_timeline` still clears `scan_timeline_auto_enable`, whicheve
 used: a permission the Project gave up must not silently re-arm every run when it is granted
 again. The typed project config endpoints (`GET|PUT /api/project/config`) still carry the
 same table.
-`GET /api/automation/projects` is the read-only fleet aggregation of the same per-Project
+`GET /api/automation/projects` is the fleet aggregation of the same per-Project
 resolution — one row per registered Project, including Projects that opted into nothing —
-drawn by the Automation dashboard's `projects` view so "what runs where" is answerable from
-the surface named Automation. It has no write half: the revision-checked per-Project route
-stays the only editor.
+drawn by the Automation workspace's `projects` view so "what runs where" is answerable from
+the surface named Automation.
+Selecting a row renders the revision-checked per-Project policy editor below the matrix; the general Projects registry links here instead of drawing a second editor.
 
 ## Key files
 

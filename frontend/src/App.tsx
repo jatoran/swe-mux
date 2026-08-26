@@ -114,7 +114,7 @@ import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subsc
 import type { InsertTarget } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
-import { AutomationDashboard } from './AutomationDashboard'
+import { AutomationDashboard, type AutomationView } from './AutomationDashboard'
 import { useConversation, VoiceControl, VoiceDock } from './ConversationControl'
 import {
   canCollapseVoiceDock, canExpandVoiceDock, effectiveVoicePanelMode, isVoicePanelMode,
@@ -715,7 +715,8 @@ export function App() {
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
   const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
-  const [automationOpen,setAutomationOpen]=useState(false)
+  const [automationOpen,setAutomationOpen]=useState<{view:AutomationView;projectId?:string;setting?:string;revealToken:number}|null>(null)
+  const openAutomation=(view:AutomationView,projectId?:string,setting?:string)=>setAutomationOpen({view,projectId,setting,revealToken:Date.now()})
   const [projectGroups,setProjectGroups]=useState<ProjectGroup[]>([])
   // False until the first `/api/project-groups` response lands. Nothing may prune
   // device-local sidebar state against the empty mount-time arrays: they mean "not
@@ -3630,14 +3631,21 @@ export function App() {
     const target=settingTarget(id)
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setMainMenuOpen(false)
     if(mobileWorkspace)setClipboardOpen(false)
+    if(target.surface==='automation'){
+      const owner=id.startsWith('project.')?projects.find(project=>project.id===(requestedProject||projectId)):undefined
+      if(id.startsWith('project.')&&!owner){setError('Select a Project first - that policy belongs to one Project.');return}
+      setSettingsOpen(false);setResourcesOpen(null);setProjectsManagerOpen(false)
+      openAutomation(id.startsWith('project.')?'projects':'policy',owner?.id,target.setting)
+      return
+    }
     if(target.surface==='project'){
       const owner=projects.find(project=>project.id===(requestedProject||projectId))
       if(!owner){setError('Select a Project first — that switch belongs to one Project.');return}
-      setSettingsOpen(false);setResourcesOpen(null);setAutomationOpen(false)
+      setSettingsOpen(false);setResourcesOpen(null);setAutomationOpen(null)
       openProjectsManager({project:owner,setting:target.setting})
       return
     }
-    setResourcesOpen(null);setAutomationOpen(false);setProjectsManagerOpen(false)
+    setResourcesOpen(null);setAutomationOpen(null);setProjectsManagerOpen(false)
     openSettings(target.section,target.setting)
   }
 
@@ -5424,7 +5432,7 @@ export function App() {
     { id: 'fleetActivity.open', label: 'Open fleet activity telemetry', category: 'view', available: true, run: () => openResources('fleet') },
     { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => openResources('network') },
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
-    { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
+    { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('overview');setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
     { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
@@ -7412,7 +7420,6 @@ export function App() {
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
         onOpenHistoryEntry={historyId=>{if(mobileWorkspace)setClipboardOpen(false);showHistoryEntry(historyId)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
-        onConfigureActions={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);openActionEditor()}}
         onManagePrompts={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryCreating(false);setPromptLibraryOpen(true)}}
         onOpenFile={path=>{
           // The drag ghost's pointer-up also fires a click on the row it started from.
@@ -7449,7 +7456,7 @@ export function App() {
         onPreviewAttached={(preview,project)=>attachPreview(preview,project,true)}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
-        onOpenAutomationDashboard={()=>setAutomationOpen(true)}
+        onOpenAutomationDashboard={()=>openAutomation('overview')}
         queuePending={queuePendingTotal}
         onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}
@@ -7989,7 +7996,7 @@ export function App() {
           <small>Scan timeline (armed for every new session), adaptive session titles,
           and model narration, plus the detectors they rank over. These call your
           configured model and can cost money; the budgets are install-wide, in
-          Settings → Automation.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}</small></span>
+          Automation → Global policy.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}</small></span>
         </label>
         <label class="check project-create-automations">
           <input type="checkbox" checked={projectCreate.autonomy} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
@@ -8021,7 +8028,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
@@ -8045,20 +8052,20 @@ export function App() {
     {usageOpen&&<UsageModal
       initial={usageOpen}
       onConfigure={()=>{setUsageOpen(null);openSettings('Usage analytics')}}
-      onOpenAutomation={()=>{setUsageOpen(null);setAutomationOpen(true)}}
+      onOpenAutomation={()=>{setUsageOpen(null);openAutomation('cost')}}
       onClose={()=>setUsageOpen(null)}
     />}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
-    {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}}
+    {automationOpen&&<AutomationDashboard projects={projects} initialView={automationOpen.view} initialProjectId={automationOpen.projectId} initialSetting={automationOpen.setting} revealToken={automationOpen.revealToken} onClose={()=>setAutomationOpen(null)}
       // The two surfaces this dashboard used to draw second copies of. Both close it on the
       // way out: they are drawer tabs, and the dialog covers the drawer.
-      onOpenAlerts={()=>{setAutomationOpen(false);openDrawerTab('notifications')}}
-      onOpenFindings={()=>{setAutomationOpen(false);openDrawerTab('activity',projectId,'findings')}}
+      onOpenAlerts={()=>{setAutomationOpen(null);openDrawerTab('notifications')}}
+      onOpenFindings={()=>{setAutomationOpen(null);openDrawerTab('activity',projectId,'findings')}}
       // Lands on the spend table's own segment, not on the Overview: someone crossing from
       // the rules is already asking about automation, and wants the other two pots beside
       // it rather than instead of it.
-      onOpenUsage={()=>{setAutomationOpen(false);openUsage('automation')}}
-      onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
+      onOpenUsage={()=>{setAutomationOpen(null);openUsage('automation')}}
+      onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(null);void selectSession(session)}}/>}
 
 
 

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { SETTING_TARGETS, automationSetting, settingTarget, type SettingTargetId } from '../src/settingTargets.ts'
 import { settingsTabs, tabForSection } from '../src/settingsTabs.ts'
+import { MODEL_ROUTES } from '../src/modelRouting.ts'
 
 const root = join(import.meta.dirname, '..')
 const source = (name: string) => readFileSync(join(root, 'src', name), 'utf8')
@@ -18,6 +19,7 @@ test('every settings target names a control that exists in the panel it points a
   const settingsSources = [
     source('Settings.tsx'),
     source('NotificationPushSettings.tsx'),
+    source('ModelRoutingSummary.tsx'),
   ].join('\n')
   for (const id of ids) {
     const target = settingTarget(id)
@@ -28,6 +30,8 @@ test('every settings target names a control that exists in the panel it points a
     // and only the second one is greppable from the panel's source.
     const marked = settingsSources.includes(`data-setting="${target.setting}"`)
       || settingsSources.includes(`<BudgetControl name="${target.setting}"`)
+      || settingsSources.includes('data-setting={route.key}')
+        && MODEL_ROUTES.some(route=>route.key===target.setting)
     assert.ok(
       marked,
       `${id} points at a control the Settings panel does not mark: ${target.setting}`,
@@ -50,26 +54,25 @@ test('every settings target lands on a real tab', () => {
   }
 })
 
-test('the Automation dashboard owns no switch — its global controls are links to Settings', () => {
+test('the Automation workspace owns global and per-Project automation controls', () => {
   const dashboard = source('AutomationDashboard.tsx')
-  // The global switches moved to Settings → Automation with every other install-wide
-  // switch. The dashboard shows their state and links there; a `data-setting` mark
-  // reappearing here would mean a second owner for one switch.
-  assert.ok(!dashboard.includes('data-setting='), 'the dashboard must mark no deep-linkable switch')
-  assert.ok(dashboard.includes('target="automation.engine"'))
-  assert.ok(dashboard.includes('target="automation.scanTimeline"'))
-  assert.equal(settingTarget('automation.engine').surface, 'settings')
-  assert.equal(settingTarget('automation.scanTimeline').surface, 'settings')
+  const policy = source('AutomationPolicyView.tsx')
+  assert.ok(dashboard.includes('<AutomationPolicyView'))
+  assert.ok(dashboard.includes('<AutomationOptIns'))
+  assert.ok(policy.includes('data-setting="automation_enabled"'))
+  assert.ok(policy.includes('data-setting="scan_timeline_enabled"'))
+  assert.equal(settingTarget('automation.engine').surface, 'automation')
+  assert.equal(settingTarget('automation.scanTimeline').surface, 'automation')
 })
 
-test('project targets name a marked control or a real automation id', () => {
+test('Project targets name a marked control or a real automation id', () => {
   const manager = source('ProjectsManager.tsx')
   // The opt-in rows are marked from the registry entry itself, so every implemented
   // automation is addressable without a per-automation attribute in the source.
   assert.ok(manager.includes('data-setting={automationSetting(item.id)}'))
   for (const id of ids) {
     const target = settingTarget(id)
-    if (target.surface !== 'project' || !target.setting) continue
+    if (!['project','automation'].includes(target.surface) || !target.setting || !id.startsWith('project.')) continue
     if (target.setting.startsWith('automation:')) {
       const automation = target.setting.slice('automation:'.length)
       assert.ok(
@@ -106,7 +109,7 @@ test('every grantable Project authority field has an owner in the Projects regis
   for (const field of fields) {
     const owned = ids.some(id => {
       const target = settingTarget(id)
-      return target.surface === 'project' && target.setting === field
+      return ['project','automation'].includes(target.surface) && target.setting === field
     })
     assert.ok(owned, `${field} can be granted but has no setting target that owns it`)
     assert.ok(

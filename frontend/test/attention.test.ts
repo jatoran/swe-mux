@@ -31,7 +31,7 @@ test('interrupt-now leads and the digest trails, so cheap and expensive work nev
 
 test('the inbox draws channels as groups and always shows what it held back', () => {
   const inbox = source('AttentionInbox.tsx')
-  assert.ok(inbox.includes('CHANNEL_ORDER.filter'))
+  assert.ok(inbox.includes('(visibleChannels||CHANNEL_ORDER).filter'))
   assert.ok(inbox.includes('class="attention-channel-hint"'))
   assert.ok(inbox.includes('attention-suppressed'))
   assert.ok(inbox.includes('nothing held back'))
@@ -54,7 +54,9 @@ test('ranked attention leads the Alerts tab and reaches no device', () => {
   const inbox = source('AttentionInbox.tsx')
   // The inbox is fleet-wide; the Project rides along only so an empty inbox can say
   // whether that Project permitted ranking at all.
-  assert.ok(notifications.includes('<AttentionInbox onOpenSession={onOpenSession} project={project} />'))
+  assert.ok(notifications.includes("visibleChannels={['interrupt_now']}"))
+  assert.ok(notifications.includes("visibleChannels={['next_breakpoint','inbox','digest']}"))
+  assert.ok(notifications.includes('>Review next</button>'))
   assert.ok(notifications.indexOf('AttentionInbox onOpenSession') < notifications.indexOf('notification-list'))
   // The daemon states the boundary rather than leaving it implied, and nothing
   // on this surface subscribes a device or posts to the push routes.

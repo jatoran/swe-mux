@@ -219,3 +219,45 @@ export function GrantButton({ id, projectId, children, onGranted, applyDevice, t
     {error && <span class="grant-gate-error" role="alert"> {error}</span>}
   </>
 }
+
+/**
+ * One unavailable surface, blocked by one switch.
+ *
+ * A full `GrantGate` is necessary when enabling has a dependency closure, a provider
+ * prerequisite, Project scope, or spend to disclose. A single switch needs none of that
+ * vertical ceremony: state, consequence, action, and the owning settings page fit in one
+ * compact flag. The same grant path still performs the write, so compactness changes only
+ * presentation.
+ */
+export function CompactGrantFlag({ id, heading, consequence, projectId, confirmLabel,
+  onGranted, applyDevice }: {
+  id: GrantId
+  heading: string
+  consequence?: string
+  projectId?: string
+  confirmLabel?: string
+  onGranted?: () => void | Promise<void>
+  applyDevice?: (id: GrantId) => void | Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const needsProject = GRANTS[id].scope === 'project' && !projectId
+  const grant = async () => {
+    setBusy(true); setError('')
+    try {
+      await applyGrants({ ids: [id], projectId, applyDevice })
+      await onGranted?.()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally { setBusy(false) }
+  }
+  return <div class="compact-grant-flag">
+    <span class="compact-grant-mark" aria-hidden="true">⚑</span>
+    <div class="compact-grant-copy"><strong>{heading}</strong>{consequence&&<small>{consequence}</small>}</div>
+    <button type="button" class="compact-grant-confirm" disabled={busy||needsProject}
+      onClick={()=>void grant()}>{busy?'Turning on…':confirmLabel||`Turn on ${SETTING_TARGETS[id].label}`}</button>
+    <SettingLink variant="link" target={id} projectId={projectId}>Details</SettingLink>
+    {needsProject&&<span class="compact-grant-error">Select a Project first.</span>}
+    {error&&<span class="compact-grant-error" role="alert">{error}</span>}
+  </div>
+}

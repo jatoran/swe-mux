@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
-import { GrantButton, GrantGate } from './GrantGate'
+import { CompactGrantFlag, GrantButton } from './GrantGate'
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import {
   branchModeFor, branchPointEligible, branchPointPreview, branchPointsEmptyMessage,
@@ -192,13 +192,10 @@ export function ScheduleTab({
     {/* The install stop is not a row-level condition — it silences every schedule in every
         Project at once — so it is stated once above the list rather than repeated on each
         row that happens to be loaded. */}
-    {status && !status.enabled && <GrantGate ids={['schedules.install']}
-      heading="Scheduled runs are switched off for this install."
-      onGranted={load}>
-      <p>Nothing below can fire, whatever any Project opted into. Turning it on starts
-      nothing by itself: each Project still permits scheduled runs separately, and the
-      schedules themselves stay exactly as they are.</p>
-    </GrantGate>}
+    {status && !status.enabled && <CompactGrantFlag id="schedules.install"
+      heading="Scheduled runs are off."
+      consequence="Configured schedules cannot fire."
+      onGranted={load}/>}
     <div class="schedule-body">
       {loading && !ordered.length && <p class="schedule-empty">Reading schedules…</p>}
       {error && <p class="schedule-error" role="alert">{error}</p>}

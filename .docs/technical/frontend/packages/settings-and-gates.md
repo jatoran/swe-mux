@@ -6,10 +6,11 @@ Design: `../../../design/features/setting-links.md`, `../../../design/features/b
 ## Settings
 
 `Settings.tsx`, `settingsTabs.ts`, `settingsDraft.ts`, `settingsSave.ts`, `settingsSearch.ts`,
-`fuzzyText.ts`, `HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
+`fuzzyText.ts`, `AutomationPolicyView.tsx`, `HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
 
-Global options only, including the machine-wide worktree root.
-Per-Project options belong to `ProjectsManager.tsx`.
+Global non-automation options only, including the machine-wide worktree root.
+Global and per-Project automation policy belongs to the Automation workspace.
+Other per-Project options belong to `ProjectsManager.tsx`.
 The lifecycle is an explicit draft, save, and discard.
 
 ### One save, one request, one apply
@@ -35,16 +36,18 @@ Ranking is not local to it.
 
 ### `settingsTabs.ts` - the navigation model
 
-Browser-free: the tabs and their four contiguous groups, deep-link name resolution, legacy id migration, the remembered tab and per-tab remembered section, and the section-rail id numbering.
+Browser-free: the tabs and their four contiguous groups, declared subpages, deep-link name resolution, legacy id migration, and the remembered tab and per-tab remembered page.
 It is split out of the component because none of it needs a renderer, and the rules that decide *where a setting is* are worth asserting without mounting a panel of this size.
 A group is a run of the array rather than a declared membership, and `tabForSection` matches a tab's own label before consulting its alias table, so neither can drift the way a hand-maintained heading-to-tab map does.
 
-### Section rails
+### Separate pages and expandable navigation
 
-The in-tab section rail is derived from the `<h3>`s a tab rendered, watched by a `MutationObserver` so child panels that paint after their fetch still appear.
-It is scroll anchors rather than sub-tabs precisely so nothing unmounts, which is what keeps the search index, `Ctrl`+`F`, and the single Save transaction whole.
-A long tab draws one `<section>` per `<h3>` rather than one section holding all of them - the rail is satisfied either way, but the borders between concerns come from the boxes.
-A section whose body is *reference* rather than a control folds that body behind a `<details class="settings-disclosure">` with the heading left outside, so the rail entry, the index, and the scroll-spy all survive the fold.
+`settingsSubpages` declares the pages of long tabs before those tabs mount.
+`settingsSubpageId` maps related implementation headings to the user-facing page that owns them.
+The desktop column and mobile slide-in sidebar both render an expansion button beside a paged tab and its nested page links below it.
+Clicking the tab navigates to its remembered page; clicking the expansion button changes only the sidebar tree.
+Only the selected page is visible, but search and deep links select its owner before calling `revealSetting`, so hidden pages remain addressable.
+Reference bodies may still fold inside a page behind `<details class="settings-disclosure">`.
 Settings → Voice is the worked case, pinned by `test/renderer/voice-settings.spec.ts`.
 
 ### Harnesses and the WSL bridge
@@ -68,9 +71,9 @@ The path from a surface that cannot work to the switch that would make it work.
 
 ### Links
 
-`settingTargets.ts` is the browser-free catalogue: which of the two switch-owning overlays a target lives in, the Settings section, and the `data-setting` id of the control.
-The two overlays are Settings, for everything install-wide including the global automation switches, and the Projects registry, for per-Project opt-ins.
-The Automation dashboard owns no switch and is a link source only.
+`settingTargets.ts` is the browser-free catalogue: which owning surface a target lives in, the Settings section when relevant, and the `data-setting` id of the control.
+The destinations are Settings for ordinary install configuration, Automation for global and per-Project control-plane policy, and the Projects registry for other Project policy.
+`App.openSettingTarget` converts Automation targets into the correct workspace view, Project overlay, and reveal id.
 
 `settingReveal.ts` is the arrival.
 It opens any `<details>` above the control, then waits for the control to exist *and* to have a layout box, because both destinations render theirs behind a fetch and some behind two.
@@ -86,7 +89,9 @@ It dispatches `mux:open-setting` rather than taking a navigation prop, because t
 A link alone is not enough: following one opens an overlay and leaves the reader to find the control, flip it, save a staged draft, close, reopen the drawer and reselect the tab - twice for the scan timeline, whose Project permission is a second gate behind the install switch.
 
 `grants.ts` is the catalogue of which targets a surface may *switch on* in place, keyed by the same ids so one gate renders both the button and the owner's link, with the switch's key **derived** from the target (`grantKey`) rather than restated.
-`GrantGate.tsx` is the block a surface that cannot function draws - statement, consequence, one row per scope naming where the change is written, the dependency closure it drags in, whether it can cost money, then one button.
+`GrantGate.tsx` is the block a surface with a compound dependency draws - statement, consequence, one row per scope naming where the change is written, the dependency closure it drags in, whether it can cost money, then one button.
+`CompactGrantFlag` is the smaller one-switch shape used by Alerts, Clipboard, Queue, Schedule, and Read aloud.
+It keeps the disabled state, immediate consequence, enable action, and Details link in one status row.
 `GrantButton` is its inline form for prose on a working surface that names a switch in passing.
 A gate renders only while the surface is inert and disappears when it is not, which keeps a Project-wide control from becoming a standing fixture in a session-scoped pane.
 
@@ -102,7 +107,7 @@ Three properties carry the safety argument for a write reachable from a drawer p
 `installSwitches.ts` is the install counterpart - same cache, same three-valued answer, because rendering an unreadable switch as "off" is the same lie one layer down.
 
 `llmProvider.ts` is the third read of that shape, for the switch that is a **value** and therefore never grantable: which model endpoint the install talks to and whether it is proven.
-Its `readiness.reason` is the daemon's own sentence and is rendered verbatim wherever a model-backed switch goes inert - the Projects registry, and any `GrantGate` over a `needs_llm` switch, which discloses it beside `spends` and links to Settings → Accounts rather than offering a button.
+Its `readiness.reason` is the daemon's own sentence and is rendered verbatim wherever a model-backed switch goes inert - Automation Project policy, and any `GrantGate` over a `needs_llm` switch, which discloses it beside `spends` and links to Settings → Accounts rather than offering a button.
 Four not-ready states (`no_key`, `no_endpoint`/`no_model`, `unverified`, `endpoint_changed`) need four different next actions, so a surface that paraphrased into "not configured" would misdirect three times out of four.
 
 ## Budget controls
