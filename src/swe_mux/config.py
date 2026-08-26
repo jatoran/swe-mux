@@ -78,7 +78,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -1218,10 +1218,11 @@ class Config:
     tts_default_mode: str = "off"
     tts_content: str = "summary"
     # The OS voice is the default because it speaks with no download and no
-    # network call; `kokoro` is the quality tier, selectable once its pinned
-    # model has been downloaded (Phase 10.5). The network `edge` engine is gone:
-    # it redistributed LGPL code and made unauthorized calls to a Microsoft
-    # endpoint from every install. A config carrying `edge` migrates to `sapi`.
+    # network call; `kokoro` is the bundled quality tier. `edge` is an explicit
+    # external integration: the frozen app never carries the LGPL package, and
+    # synthesis is refused until the operator acknowledges the online-service
+    # disclosure. A pre-schema-26 `edge` config still migrates to `sapi`; schema
+    # 33 does not silently reconnect an install that was moved offline.
     tts_engine: str = "sapi"
     # Kokoro-82M through onnxruntime. The voice must be one of the downloaded
     # English voice vectors; existence is enforced at synthesis time so config
@@ -1232,9 +1233,20 @@ class Config:
     # (word -> how to say it, e.g. "vaultspaces" -> "vault spaces"). Merged over
     # the built-in project lexicon in the repair ladder, so one entry stops a
     # recurring name from being spelled out letter by letter.
-    tts_lexicon: dict[str, str] = field(default_factory=dict)
+    tts_kokoro_lexicon: dict[str, str] = field(default_factory=dict)
     tts_sapi_voice: str = ""
     tts_sapi_rate: int = 0
+    # The Python interpreter that owns the optional `edge-tts` installation.
+    # Blank means this interpreter in source mode; a frozen build requires an
+    # explicit external interpreter because LGPL code is never bundled.
+    tts_edge_python: str = ""
+    tts_edge_voice: str = "en-US-JennyNeural"
+    tts_edge_rate_percent: int = 0
+    tts_edge_volume_percent: int = 0
+    tts_edge_pitch_hz: int = 0
+    # Versioned acknowledgement of the disclosure rendered in Settings. This is
+    # awareness, not a claim that Microsoft has authorized the integration.
+    tts_edge_risk_ack_version: int = 0
     tts_summary_model: str = ""
     tts_summary_max_tokens: int = 500
     tts_verbatim_max_chars: int = 6000
@@ -1612,6 +1624,10 @@ _RANGE_RULES: tuple[_Range, ...] = (
     _Range("assistant_context_messages", 2, 200, "must be between 2 and 200"),
     _Range("tts_kokoro_speed", 0.5, 2.0, "must be between 0.5 and 2.0"),
     _Range("tts_sapi_rate", -10, 10, "must be between -10 and 10"),
+    _Range("tts_edge_rate_percent", -100, 100, "must be between -100 and 100"),
+    _Range("tts_edge_volume_percent", -100, 100, "must be between -100 and 100"),
+    _Range("tts_edge_pitch_hz", -100, 100, "must be between -100 and 100"),
+    _Range("tts_edge_risk_ack_version", 0, 1, "must be 0 or 1"),
     _Range("tts_summary_max_tokens", 64, 2000, "must be between 64 and 2000"),
     _Range("tts_verbatim_max_chars", 200, 40000, "must be between 200 and 40000"),
     _Range("tts_cache_mb", 10, 5000, "must be between 10 and 5000"),
@@ -1649,7 +1665,11 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
     ),
     _Choice("tts_default_mode", ("off", "on_demand", "auto"), "must be off, on_demand, or auto"),
     _Choice("tts_content", ("summary", "verbatim"), "must be summary or verbatim"),
-    _Choice("tts_engine", ("sapi", "kokoro"), "must be sapi (the OS voice) or kokoro"),
+    _Choice(
+        "tts_engine",
+        ("sapi", "kokoro", "edge"),
+        "must be sapi (the OS voice), kokoro, or edge",
+    ),
     _Choice("stt_engine", ("sapi", "whisper"), "must be sapi or whisper"),
     _Choice("drawer_tab_display", ("icon", "title"), "must be icon or title"),
     _Choice("utility_rail_display", ("icon", "title"), "must be icon or title"),
@@ -1683,6 +1703,17 @@ _TEXT_RULES: tuple[_Text, ...] = (
         "stt_routing_model",
         120,
         "must name a Whisper model in 120 characters or fewer, or be blank",
+    ),
+    _Text(
+        "tts_edge_python",
+        1000,
+        "must name an external Python interpreter in 1000 characters or fewer, or be blank",
+    ),
+    _Text(
+        "tts_edge_voice",
+        160,
+        "must name an Edge voice in 160 characters or fewer",
+        required=True,
     ),
 )
 
@@ -1875,10 +1906,10 @@ def _validate(config: Config) -> None:
             errors["custom_llm_model"] = error
         if error := llm_catalog_url_error(config.custom_llm_catalog_url):
             errors["custom_llm_catalog_url"] = error
-    if not isinstance(config.tts_lexicon, dict) or len(config.tts_lexicon) > 500:
-        errors["tts_lexicon"] = "must be a map of at most 500 respellings"
+    if not isinstance(config.tts_kokoro_lexicon, dict) or len(config.tts_kokoro_lexicon) > 500:
+        errors["tts_kokoro_lexicon"] = "must be a map of at most 500 respellings"
     else:
-        for lexicon_word, lexicon_spoken in config.tts_lexicon.items():
+        for lexicon_word, lexicon_spoken in config.tts_kokoro_lexicon.items():
             # Keys must be single tokens in the exact shape kokoro_tts._WORD
             # matches, or the ladder's casefolded whole-word lookup can never
             # hit them; values are what gets spoken in the word's place.
@@ -1889,7 +1920,7 @@ def _validate(config: Config) -> None:
                 or not lexicon_spoken.strip()
                 or len(lexicon_spoken) > 200
             ):
-                errors["tts_lexicon"] = (
+                errors["tts_kokoro_lexicon"] = (
                     "keys must be single words of at most 60 characters and values "
                     "non-empty respellings of at most 200 characters"
                 )
@@ -2350,6 +2381,14 @@ def load_config(path: Path | None = None) -> Config:
             # always works with no download, so an `edge` config lands there;
             # Kokoro stays a deliberate choice once its model is downloaded.
             cfg.tts_engine = "sapi"
+        if source_schema < 33 and "tts_kokoro_lexicon" not in raw:
+            # Schema 33 names the dictionary by its actual owner. It contains
+            # Kokoro respellings and exact phoneme forms that no other provider
+            # may interpret. Copy every entry before the old key is dropped by
+            # canonical serialization.
+            legacy_lexicon = raw.get("tts_lexicon")
+            if isinstance(legacy_lexicon, dict):
+                cfg.tts_kokoro_lexicon = dict(legacy_lexicon)
         if source_schema < 31 and "attention_observers_enabled" not in raw:
             # `phase7_observers_enabled` was renamed to `attention_observers_enabled`:
             # the old name leaked this project's roadmap numbering into `/api/config`

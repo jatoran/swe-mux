@@ -138,6 +138,13 @@ continues to own every terminal.
   check reads the built tree rather than package metadata because declared metadata is
   exactly what hid the original defect - PyAV declares BSD-3-Clause and links GPL
   x264/x265, sherpa-onnx declares Apache-2.0 and statically links espeak-ng.
+- **The optional Edge TTS client is external-only.**
+  `voice-edge` is a source-install convenience extra and is not a member of
+  `license_audit.DISTRIBUTED_EXTRAS`.
+  `swe_mux.spec` excludes `edge_tts` even when the build environment installed that extra, and
+  `verify_bundle_licenses` rejects `_internal/edge_tts/` as a distribution-boundary regression.
+  The bundle carries only `assets/integrations/edge_tts_bridge.py`, which is swe-mux Apache code;
+  a frozen install names a separate user-managed Python containing the LGPL client.
 - **`pystray` and `num2words` are in the spec's `collect_all` loop for a licensing
   reason, not a packaging one.** Both are LGPL. `collect_all` defaults to
   `include_py_files=True`, so each lands as plain source under `_internal/<pkg>/`

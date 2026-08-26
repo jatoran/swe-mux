@@ -13,6 +13,12 @@ Design: `../../../design/features/voice.md`, `../../../design/features/assistant
 `VoiceLatencyReport.tsx`, `WakeWordTester.tsx`, `VoiceReadTab.tsx`, `voiceDock.ts`, `voiceMode.ts`,
 `voice.ts`, `mobileVoice.ts`, `smartTurnFeatures.ts`, `smartTurn.ts`, `smartTurnLab.tsx`
 
+`EdgeTtsSettings.tsx` owns the selected Edge provider panel: versioned disclosure,
+external-interpreter status/probe, explicit cached-catalog refresh, searchable locale-aware voice
+selection, preview, and rate/volume/pitch controls.
+Only the selected provider panel is mounted; its config fields remain in the parent Settings draft,
+so hiding a panel never resets it.
+
 Scope: app-owned capture, draft, and history; one app-level dock holding every voice surface, with no pane-attached view; follow and pin targets; registry-backed commands; typed fleet, help, and reply queries; guarded approvals; confirmed-speech barge-in; segmented playback; session-scoped Voice Comms; mobile HTTPS.
 
 ### Pure policy

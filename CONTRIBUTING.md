@@ -87,6 +87,10 @@ rather than by review:
 - **No espeak-ng, in any form.** This rejected three otherwise-reasonable
   phonemizer libraries. It is a dependency-review rule, not a preference.
   `.docs/development/ROADMAP.md` Phase 10.5 records the measurements behind it.
+- **External-only means absent from the artifact.** The `voice-edge` extra is a source-install
+  convenience for a user-managed Python and is not in `DISTRIBUTED_EXTRAS`.
+  `packaging/swe_mux.spec` excludes `edge_tts`, and the bundle verifier fails if the LGPL client
+  appears under `_internal/`; only swe-mux's Apache bridge ships.
 
 After changing any dependency, regenerate the notices:
 

@@ -515,6 +515,11 @@
 - Changing read aloud or hands-free conversation: `design/features/voice.md`;
   completed voice-interaction phases and their decisions:
   `development/archive/VOICE_INTERACTION_ROADMAP.md`
+- Changing a TTS provider, provider package boundary, voice discovery, or synthesis output:
+  `design/features/voice.md`, `design/interfaces.md`,
+  `technical/backend/packages/voice-and-assistant.md`,
+  `technical/frontend/packages/voice-and-assistant.md`, `design/features/desktop-shell.md`, and
+  the dependency/license routing entry in this file.
 - Changing the Mux assistant (the chat surface, the tool bridge, the trust policy, the
   voice fallback tiers, or its dialogs/actions): `design/features/assistant.md`,
   `design/features/voice.md`, `design/interfaces.md`, `technical/backend/packages.md`,
@@ -556,12 +561,18 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
 
 - **Read aloud (TTS):** `turn_ended` (auto, 1s debounce) or manual → last-turn slice →
   `summary` (OpenRouter cheap model, budgeted under `builtin:voice-summary`) or `verbatim`
-  (`speechify`, no LLM) → OS-voice (SAPI) or local Kokoro-82M (onnxruntime; pinned
-  hash-verified download, espeak-free misaki G2P) WAV clips in `<data_dir>/voice/` +
-  `voice_clips` SQLite.
+  (`speechify`, no LLM) → OS voice (SAPI), local Kokoro-82M, or explicit experimental
+  external Edge TTS → WAV/MP3 clips in `<data_dir>/voice/` + `voice_clips` SQLite.
+  Edge is never bundled: `edge_tts_provider.py` runs the shipped Apache bridge under a
+  user-managed Python containing the LGPL client, requires a versioned service/privacy
+  acknowledgement before text leaves the machine, and exposes only explicit probe/catalog-refresh
+  network operations.
+  One immutable `TtsProfile` owns every segment in a stream, and provider-aware
+  `synthesis_key` reuse prevents an old provider, voice, prosody, model, or lexicon from
+  satisfying a newly configured request.
   Words the Kokoro repair ladder can only spell out letter by letter are fixable with a
-  `tts_lexicon` respelling (Settings → Voice; hot-applied), and each spell-out is recorded
-  durably (`spelled_words.json`, surfaced by `GET /api/voice`) with a one-tap respell there.
+  `tts_kokoro_lexicon` respelling (Settings → Voice; hot-applied), and each spell-out is recorded
+  durably (`spelled_words.json`, surfaced as `kokoro_spelled_words` by `GET /api/voice`) with a one-tap respell there.
   A respelling must itself be pronounceable (the editor checks each row via
   `POST /api/voice/lexicon/check` and auditions via `GET /api/voice/lexicon/preview`);
   exact sounds use misaki's `[word](/phonemes/)` form, atomic in the ladder.

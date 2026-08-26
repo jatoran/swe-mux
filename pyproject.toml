@@ -94,6 +94,12 @@ voice-local = [
 preview-capture = [
   "playwright>=1.49",
 ]
+voice-edge = [
+  # Source-install convenience only. The runtime still calls it through the
+  # external bridge, and the frozen desktop spec excludes the LGPL package even
+  # when the build environment happens to have this extra installed.
+  "edge-tts==7.2.8",
+]
 [dependency-groups]
 dev = [
   "mypy>=1.15",
@@ -127,6 +133,7 @@ markers = [
   "live_quota: non-mutating authenticated provider quota schema canary",
   "live_automations: runs a real agent whose facts drive Tier 0 -> detectors -> mux memory tools in-process",
   "live_mcp: drives an isolated daemon on an ephemeral port and a real agent's session through the /mcp wire",
+  "live_edge_tts: sends a fixed non-sensitive sentence to the unofficial Microsoft Edge TTS service",
   "conpty: real Windows ConPTY integration test; spawns a live shell (Windows-only)",
 ]
 

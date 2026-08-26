@@ -9,6 +9,7 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 ## `voice.py`
 
 Completed-reply, manual, and application-text TTS streams with a coherent sentence-first clip and tracked segment-tail tasks.
+Each stream owns one immutable `TtsProfile`; provider switches and option edits apply to the next stream, and the profile's `synthesis_key` is part of anchored clip reuse.
 Open application-speech streams are `SpeechStream`, one worker per stream so clip indices stay monotonic, with a tighter opening clip because that clip *is* time-to-first-sound.
 Also one-shot summary and verbatim overrides, bounded Whisper STT with GPU-to-CPU fallback, temporary audio lifecycle, compatibility voice-submit idempotency, and one-use approval challenges bound to the current screen fingerprint.
 
@@ -28,6 +29,27 @@ The optional legacy SAPI recognizer deletes its bounded temporary WAV and text f
 Failures are typed `VoiceError` and never touch the PTY, history, or transcripts.
 
 **Not:** browser microphone permission, mounted-composer state, PTY ownership, or approval-state classification.
+
+## `tts_profiles.py`
+
+Provider-neutral immutable synthesis profiles for SAPI, Kokoro, and Edge: provider, voice, output format, provider options, duration-rate hint, and a stable hash over everything that can change audio.
+
+**Not:** availability probes, synthesis, catalog state, or mutable configuration.
+
+## `edge_tts_provider.py`
+
+The external-only Edge provider: source/frozen interpreter resolution, bounded structured bridge invocation, classified service failures and automatic backoff, MP3 duration from the fixed bitrate, and the atomic last-good service voice catalog under `<data_dir>/voice/providers/edge/voices.json`.
+GET/status methods read cached state only; probe, refresh, preview, and synthesis are explicit operations.
+Spoken text reaches the bridge through a bounded temporary file and never through argv or logs.
+
+**Not:** redistributing or importing `edge-tts` in the daemon, arbitrary SSML, Microsoft authorization, silent fallback, or Kokoro pronunciation handling.
+
+## `assets/integrations/edge_tts_bridge.py`
+
+Apache-licensed subprocess bridge run by the user-managed Python that owns `edge-tts`.
+Returns bounded JSON for status and voice discovery and writes the service's MP3 output for synthesis.
+
+**Not:** daemon state, config persistence, retries beyond the upstream client's own protocol handling, or logs containing speech text.
 
 ## `voice_audio.py`
 

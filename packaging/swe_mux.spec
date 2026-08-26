@@ -86,7 +86,10 @@ analysis = Analysis(
     # real package is excluded below; see rthook_av_stub.py for why the real
     # one may never ship (GPL FFmpeg linkage inside the wheel).
     runtime_hooks=[str(ROOT / "rthook_av_stub.py")],
-    excludes=["av"],
+    # Edge TTS is an external integration even when the build environment has
+    # the source-install convenience extra. Its Apache bridge is package data;
+    # the LGPL client stays in the user's separate Python environment.
+    excludes=["av", "edge_tts"],
     noarchive=False,
     optimize=0,
 )

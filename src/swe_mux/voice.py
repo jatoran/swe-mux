@@ -2,12 +2,12 @@
 
 This is deliberately not an automation observer. Observers are restricted to
 annotate/notify through the fixed OpenRouter origin; audio synthesis uses a
-separate engine boundary (the offline OS voice, or local Kokoro-82M through
-onnxruntime once its pinned model is downloaded) and per-session interactive
-state. No synthesis path reaches a network service. The only OpenRouter
-traffic here is the optional spoken-summary call, which records its call and
-spend in the shared automation ledger under the ``builtin:voice-summary`` rule
-id so budgets stay visible in one place.
+separate provider boundary (the offline OS voice, local Kokoro-82M, or the
+explicit external Edge TTS integration) and per-session interactive state.
+The only network synthesis path is Edge, and it is refused until the operator
+acknowledges the service and privacy disclosure. The optional spoken-summary
+call records its call and spend in the shared automation ledger under the
+``builtin:voice-summary`` rule id so budgets stay visible in one place.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from . import budget
 from .background_tasks import background
 from .config import Config
+from .edge_tts_provider import EdgeTtsError, EdgeTtsProvider
 from .event_bus import EventBus
 from .harness import has_observable_transcript
 from .kokoro_tts import KokoroEngine, KokoroError, KokoroPaths, SpelledWordLog
@@ -51,6 +52,7 @@ from .sqlite_store import (
 )
 from .subprocess_flags import background_creation_flags
 from .transcript_view import SpokenExchange, final_exchange_record, message_exchange
+from .tts_profiles import TtsProfile, resolve_tts_profile
 from .voice_audio import join_wav_files
 from .voice_models import ENGLISH_VOICES, KokoroModelStore
 
@@ -180,7 +182,7 @@ SUMMARY_PROMPT = (
     "the assistant in first person."
 )
 
-VOICE_SCHEMA_VERSION = 3
+VOICE_SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS voice_clips (
@@ -192,6 +194,7 @@ CREATE TABLE IF NOT EXISTS voice_clips (
     content_mode TEXT NOT NULL,
     engine TEXT NOT NULL,
     voice TEXT NOT NULL,
+    synthesis_key TEXT NOT NULL DEFAULT '',
     text TEXT NOT NULL,
     file_path TEXT NOT NULL,
     format TEXT NOT NULL,
@@ -221,6 +224,8 @@ CREATE INDEX IF NOT EXISTS idx_voice_clips_session ON voice_clips(session_id, cr
 CREATE INDEX IF NOT EXISTS idx_voice_clips_run ON voice_clips(agent_run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_voice_clips_anchor
     ON voice_clips(agent_run_id, message_anchor, content_mode);
+CREATE INDEX IF NOT EXISTS idx_voice_clips_synthesis_anchor
+    ON voice_clips(agent_run_id, message_anchor, content_mode, synthesis_key);
 CREATE INDEX IF NOT EXISTS idx_voice_clips_stream
     ON voice_clips(stream_id, segment_index);
 """
@@ -395,6 +400,7 @@ class SpeechStream:
     session_id: str
     trigger: str
     content_mode: str
+    profile: TtsProfile
     agent_run_id: str | None = None
     model: str | None = None
     # The message every clip in this stream speaks, when there is one. Application
@@ -729,6 +735,13 @@ class VoiceStore:
             self._db.execute("ALTER TABLE voice_clips ADD COLUMN source_ts REAL")
         if columns and "message_anchor" not in columns:
             self._db.execute("ALTER TABLE voice_clips ADD COLUMN message_anchor TEXT")
+        if columns and "synthesis_key" not in columns:
+            # Old clips remain playable but do not satisfy provider-aware reuse.
+            # An empty key is evidence that their complete synthesis profile was
+            # never recorded, not permission to guess it from engine and voice.
+            self._db.execute(
+                "ALTER TABLE voice_clips ADD COLUMN synthesis_key TEXT NOT NULL DEFAULT ''"
+            )
         ungrouped = bool(columns) and "stream_id" not in columns
         if ungrouped:
             self._db.execute("ALTER TABLE voice_clips ADD COLUMN stream_id TEXT")
@@ -798,17 +811,19 @@ class VoiceStore:
         play makes a slow summary look like nothing happening at all.
         """
 
+        row.setdefault("synthesis_key", "")
+
         def op() -> None:
             self._db.execute(
                 # Named columns, not positional: adding a column would otherwise
                 # break every insert made by a rolled-back previous bundle.
                 "INSERT INTO voice_clips"
-                "(id,session_id,agent_run_id,created_at,trigger,content_mode,engine,voice,"
+                "(id,session_id,agent_run_id,created_at,trigger,content_mode,engine,voice,synthesis_key,"
                 "text,file_path,format,size_bytes,duration_hint_s,status,error,model,"
                 "input_tokens,output_tokens,cost_usd,source_ts,message_anchor,"
                 "stream_id,segment_index,segment_count,superseded_at) VALUES("
                 ":id,:session_id,:agent_run_id,:created_at,:trigger,:content_mode,"
-                ":engine,:voice,:text,:file_path,:format,:size_bytes,:duration_hint_s,"
+                ":engine,:voice,:synthesis_key,:text,:file_path,:format,:size_bytes,:duration_hint_s,"
                 ":status,:error,:model,:input_tokens,:output_tokens,:cost_usd,"
                 ":source_ts,:message_anchor,:stream_id,:segment_index,:segment_count,"
                 ":superseded_at)",
@@ -1032,7 +1047,12 @@ class VoiceStore:
         return await self._run(op)
 
     async def anchored_group(
-        self, *, agent_run_id: str, message_anchor: str, content_mode: str
+        self,
+        *,
+        agent_run_id: str,
+        message_anchor: str,
+        content_mode: str,
+        synthesis_key: str = "",
     ) -> list[dict[str, Any]] | None:
         """The newest complete stream already speaking this message in this mode.
 
@@ -1054,9 +1074,9 @@ class VoiceStore:
                 dict(row)
                 for row in self._db.execute(
                     "SELECT * FROM voice_clips WHERE agent_run_id=? AND message_anchor=? "
-                    "AND content_mode=? AND superseded_at IS NULL "
+                    "AND content_mode=? AND synthesis_key=? AND superseded_at IS NULL "
                     "ORDER BY created_at DESC",
-                    (agent_run_id, message_anchor, content_mode),
+                    (agent_run_id, message_anchor, content_mode, synthesis_key),
                 ).fetchall()
             ]
             if not rows:
@@ -1326,6 +1346,7 @@ class VoiceService:
         self.automation_store = automation_store
         self.provider = provider
         self.kokoro_models = kokoro_models or KokoroModelStore(config.data_dir)
+        self.edge_tts = EdgeTtsProvider(config)
         self._kokoro_engine: KokoroEngine | None = None
         # Voice-audition samples, per voice for the daemon's lifetime: the whole
         # English set caches at a few megabytes, and a picker that re-synthesizes
@@ -1335,12 +1356,18 @@ class VoiceService:
         # across restarts so Settings → Voice can offer a one-tap respelling.
         self.spelled_words = SpelledWordLog(config.data_dir / "voice" / "spelled_words.json")
         self.diagnostic: str | None = None
+        self._provider_diagnostics: dict[str, str] = {}
         self._task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[Any] | None = None
         self._debounce: dict[str, asyncio.Task[None]] = {}
         self._segment_tasks: set[asyncio.Task[None]] = set()
         self._locks: dict[str, asyncio.Lock] = {}
         self._engine_semaphore = asyncio.Semaphore(2)
+        self._tts_synthesizers = {
+            "sapi": self._synthesize_sapi,
+            "kokoro": self._synthesize_kokoro,
+            "edge": self._synthesize_edge,
+        }
         self._sapi_script_path: Path | None = None
         self._sapi_stt_script_path: Path | None = None
         # One lock per decode profile, not one for transcription: a speculative
@@ -1690,6 +1717,7 @@ class VoiceService:
             return {}  # a clip for this session is already being generated
         async with lock:
             stream_id = self._stream_id(stream_id)
+            profile = resolve_tts_profile(self.config)
             if content_mode is not None and content_mode not in {"summary", "verbatim"}:
                 raise VoiceError("content mode must be summary or verbatim")
             selected_content = content_mode or self.effective_content(record)
@@ -1702,13 +1730,19 @@ class VoiceService:
                     agent_run_id=record.agent_run_id,
                     message_anchor=message_id,
                     content_mode=selected_content,
+                    synthesis_key=profile.synthesis_key,
                 )
                 if existing is not None:
                     reused = group_snapshot(existing)
                     reused["reused"] = True
                     return reused
             row = self._new_clip_row(
-                session_id, trigger, record.agent_run_id, selected_content, stream_id=stream_id
+                session_id,
+                trigger,
+                record.agent_run_id,
+                selected_content,
+                profile=profile,
+                stream_id=stream_id,
             )
             await self.store.add_clip(row)
             try:
@@ -1750,7 +1784,8 @@ class VoiceService:
             # state the total and the browser knows how much is still coming.
             row["segment_count"] = len(segments)
             await self._synthesize_stream_segment(
-                row, segments[0], session_id=session_id, agent_run_id=record.agent_run_id,
+                row, segments[0], profile=profile, session_id=session_id,
+                agent_run_id=record.agent_run_id,
                 trigger=trigger, stream_id=stream_id, index=0, count=len(segments),
             )
             # The group as it stands: one ready segment of however many. `status`
@@ -1764,7 +1799,7 @@ class VoiceService:
                     trigger=trigger, content_mode=selected_content, model=row["model"],
                     stream_id=stream_id, segments=segments[1:], total=len(segments),
                     source_ts=row["source_ts"], message_anchor=row["message_anchor"],
-                    head_clip_id=row["id"],
+                    head_clip_id=row["id"], profile=profile,
                 )
             else:
                 await self._prune()
@@ -1819,9 +1854,11 @@ class VoiceService:
                 raise VoiceError("continuing a speech stream needs its stream_id")
             return self._append_stream(self._stream_id(stream_id), segments, final=final)
         stream_id = self._stream_id(stream_id)
-        stream = await self._open_stream(stream_id)
+        profile = resolve_tts_profile(self.config)
+        stream = await self._open_stream(stream_id, profile)
         row = self._new_clip_row(
             "system", "system", None, "verbatim",
+            profile=profile,
             stream_id=stream_id, segment_index=0,
             # NULL while the stream is open: an assistant turn does not know how
             # many sentences it will speak until the model stops, and claiming a
@@ -1839,7 +1876,7 @@ class VoiceService:
             stream.total = len(segments)
         try:
             await self._synthesize_stream_segment(
-                row, segments[0], session_id="system", agent_run_id=None,
+                row, segments[0], profile=profile, session_id="system", agent_run_id=None,
                 trigger="system", stream_id=stream_id, index=0,
                 count=len(segments) if final else 0,
             )
@@ -1886,13 +1923,14 @@ class VoiceService:
 
     # ------------------------------------------------------- speech streams
 
-    async def _open_stream(self, stream_id: str) -> SpeechStream:
+    async def _open_stream(self, stream_id: str, profile: TtsProfile) -> SpeechStream:
         await self._expire_streams()
         stream = SpeechStream(
             stream_id=stream_id,
             session_id="system",
             trigger="system",
             content_mode="verbatim",
+            profile=profile,
             created_at=time.time(),
         )
         self._streams[stream_id] = stream
@@ -1959,6 +1997,7 @@ class VoiceService:
             last = total is not None and index >= total - 1
             row = self._new_clip_row(
                 stream.session_id, stream.trigger, stream.agent_run_id, stream.content_mode,
+                profile=stream.profile,
                 stream_id=stream.stream_id, segment_index=index,
             )
             row["model"] = stream.model
@@ -1967,7 +2006,7 @@ class VoiceService:
             await self.store.add_clip(row)
             try:
                 await self._synthesize_stream_segment(
-                    row, segment, session_id=stream.session_id,
+                    row, segment, profile=stream.profile, session_id=stream.session_id,
                     agent_run_id=stream.agent_run_id, trigger=stream.trigger,
                     stream_id=stream.stream_id, index=index,
                     count=total if last and total is not None else 0,
@@ -2050,6 +2089,8 @@ class VoiceService:
         joined["created_at"] = head["created_at"]
         joined["engine"] = head["engine"]
         joined["voice"] = head["voice"]
+        joined["synthesis_key"] = head["synthesis_key"]
+        joined["format"] = "wav"
         joined["model"] = head["model"]
         joined["source_ts"] = head["source_ts"]
         joined["message_anchor"] = head["message_anchor"]
@@ -2290,6 +2331,7 @@ class VoiceService:
         row: dict[str, Any],
         spoken: str,
         *,
+        profile: TtsProfile,
         session_id: str,
         agent_run_id: str | None,
         trigger: str,
@@ -2298,12 +2340,13 @@ class VoiceService:
         count: int,
     ) -> None:
         try:
-            await self._synthesize_clip(row, spoken)
+            await self._synthesize_clip(row, spoken, profile)
         except (VoiceError, TimeoutError, OSError) as exc:
             message = str(exc)[:500] or exc.__class__.__name__
             row["status"] = "failed"
             row["error"] = message
             self.diagnostic = message
+            self._provider_diagnostics[profile.provider] = message
             await self.store.update_clip(row)
             await self.events.emit(
                 "voice_clip_failed", session_id=session_id, source="daemon",
@@ -2337,13 +2380,14 @@ class VoiceService:
         source_ts: float | None = None,
         message_anchor: str | None = None,
         head_clip_id: str,
+        profile: TtsProfile,
     ) -> None:
         task = asyncio.create_task(
             self._generate_segment_tail(
                 session_id=session_id, agent_run_id=agent_run_id, trigger=trigger,
                 content_mode=content_mode, model=model, stream_id=stream_id,
                 segments=segments, total=total, source_ts=source_ts,
-                message_anchor=message_anchor, head_clip_id=head_clip_id,
+                message_anchor=message_anchor, head_clip_id=head_clip_id, profile=profile,
             ),
             name=f"voice-segments-{stream_id}",
         )
@@ -2372,10 +2416,12 @@ class VoiceService:
         source_ts: float | None = None,
         message_anchor: str | None = None,
         head_clip_id: str,
+        profile: TtsProfile,
     ) -> None:
         for offset, segment in enumerate(segments, start=1):
             row = self._new_clip_row(
                 session_id, trigger, agent_run_id, content_mode,
+                profile=profile,
                 stream_id=stream_id, segment_index=offset,
             )
             row["model"] = model
@@ -2387,7 +2433,8 @@ class VoiceService:
             await self.store.add_clip(row)
             try:
                 await self._synthesize_stream_segment(
-                    row, segment, session_id=session_id, agent_run_id=agent_run_id,
+                    row, segment, profile=profile, session_id=session_id,
+                    agent_run_id=agent_run_id,
                     trigger=trigger, stream_id=stream_id, index=offset, count=total,
                 )
             except VoiceError:
@@ -2415,10 +2462,12 @@ class VoiceService:
         agent_run_id: str | None,
         content_mode: str,
         *,
+        profile: TtsProfile | None = None,
         stream_id: str | None = None,
         segment_index: int = 0,
         segment_count: int | None = None,
     ) -> dict[str, Any]:
+        selected = profile or resolve_tts_profile(self.config)
         return {
             "id": str(uuid.uuid4()),
             "session_id": session_id,
@@ -2426,13 +2475,12 @@ class VoiceService:
             "created_at": time.time(),
             "trigger": trigger,
             "content_mode": content_mode,
-            "engine": self.config.tts_engine,
-            "voice": self._voice_label(),
+            "engine": selected.provider,
+            "voice": selected.voice,
+            "synthesis_key": selected.synthesis_key,
             "text": "",
             "file_path": "",
-            # Both engines write WAV now; MP3 rows from removed edge-tts clips
-            # remain readable because format is stored per row.
-            "format": "wav",
+            "format": selected.format,
             "size_bytes": 0,
             "duration_hint_s": None,
             # Inserted in this state and updated by the synthesis that follows, so a
@@ -2464,15 +2512,21 @@ class VoiceService:
             "superseded_at": None,
         }
 
-    async def _synthesize_clip(self, row: dict[str, Any], spoken: str) -> None:
+    async def _synthesize_clip(
+        self, row: dict[str, Any], spoken: str, profile: TtsProfile
+    ) -> None:
         row["text"] = spoken
         destination = self.clip_directory / f"{row['id']}.{row['format']}"
         destination.parent.mkdir(parents=True, exist_ok=True)
         started = time.perf_counter()
+        measured_duration: float | None = None
         try:
             async with self._engine_semaphore:
-                await asyncio.wait_for(
-                    self._synthesize(spoken, destination), timeout=ENGINE_TIMEOUT_SECONDS
+                measured_duration = await asyncio.wait_for(
+                    self._synthesize(
+                        profile, spoken, destination, automatic=row["trigger"] == "auto"
+                    ),
+                    timeout=ENGINE_TIMEOUT_SECONDS,
                 )
         except BaseException:
             # The failed row is stored with file_path="", so a partial file left
@@ -2484,7 +2538,9 @@ class VoiceService:
         row["file_path"] = str(destination)
         row["size_bytes"] = destination.stat().st_size
         row["duration_hint_s"] = (
-            wav_duration_seconds(destination) or estimate_duration_seconds(spoken, "+0%")
+            measured_duration
+            or wav_duration_seconds(destination)
+            or estimate_duration_seconds(spoken, profile.duration_rate)
         )
         row["status"] = "ready"
         # The one measurement that makes chunk pacing tunable from evidence.
@@ -2497,11 +2553,14 @@ class VoiceService:
         synth_ms = (time.perf_counter() - started) * 1000
         audio_ms = float(row["duration_hint_s"] or 0.0) * 1000
         log.info(
-            "voice clip synthesized clip=%s chars=%d synth_ms=%.0f audio_ms=%.0f covers=%.2f",
-            row["id"], len(spoken), synth_ms, audio_ms,
+            "voice clip synthesized clip=%s provider=%s voice=%s format=%s chars=%d "
+            "synth_ms=%.0f audio_ms=%.0f covers=%.2f",
+            row["id"], profile.provider, profile.voice, profile.format,
+            len(spoken), synth_ms, audio_ms,
             (audio_ms / synth_ms) if synth_ms > 0 else 0.0,
         )
         self.diagnostic = None
+        self._provider_diagnostics.pop(profile.provider, None)
 
     async def _spoken_text(
         self,
@@ -2615,15 +2674,20 @@ class VoiceService:
         return speech
 
     def _voice_label(self) -> str:
-        if self.config.tts_engine == "kokoro":
-            return self.config.tts_kokoro_voice
-        return self.config.tts_sapi_voice or "system default"
+        return resolve_tts_profile(self.config).voice
 
-    async def _synthesize(self, text: str, destination: Path) -> None:
-        if self.config.tts_engine == "kokoro":
-            await self._synthesize_kokoro(text, destination)
-        else:
-            await self._synthesize_sapi(text, destination)
+    async def _synthesize(
+        self,
+        profile: TtsProfile,
+        text: str,
+        destination: Path,
+        *,
+        automatic: bool,
+    ) -> float | None:
+        synthesizer = self._tts_synthesizers.get(profile.provider)
+        if synthesizer is None:
+            raise VoiceError(f"unknown TTS provider {profile.provider}")
+        return await synthesizer(profile, text, destination, automatic=automatic)
 
     def _ensure_kokoro(self) -> KokoroEngine:
         """The loaded Kokoro session, constructed once per daemon.
@@ -2646,7 +2710,7 @@ class VoiceService:
                         tokenizer=install.tokenizer,
                         voices_dir=install.voices_dir,
                     ),
-                    lexicon=dict(self.config.tts_lexicon),
+                    lexicon=dict(self.config.tts_kokoro_lexicon),
                     on_spell_out=self._record_spelled_word,
                 )
             except KokoroError as exc:
@@ -2663,26 +2727,34 @@ class VoiceService:
         )
 
     def apply_lexicon(self) -> None:
-        """Hot-apply a `tts_lexicon` change without a daemon restart.
+        """Hot-apply a `tts_kokoro_lexicon` change without a daemon restart.
 
         Three caches would otherwise silently serve pre-change resolutions: the
         engine's per-word cache, the per-voice audition previews, and the
         spelled-word telemetry entries the new lexicon now covers.
         """
         if self._kokoro_engine is not None:
-            self._kokoro_engine.set_lexicon(dict(self.config.tts_lexicon))
+            self._kokoro_engine.set_lexicon(dict(self.config.tts_kokoro_lexicon))
         self.invalidate_kokoro_previews()
-        self.spelled_words.discard(self.config.tts_lexicon)
+        self.spelled_words.discard(self.config.tts_kokoro_lexicon)
 
     def invalidate_kokoro_previews(self) -> None:
         self._kokoro_previews.clear()
 
-    async def _synthesize_kokoro(self, text: str, destination: Path) -> None:
+    async def _synthesize_kokoro(
+        self,
+        profile: TtsProfile,
+        text: str,
+        destination: Path,
+        *,
+        automatic: bool,
+    ) -> None:
+        del automatic
         engine = self._ensure_kokoro()
         if not text.strip():
             raise VoiceError("nothing speakable remained after preprocessing")
-        voice = self.config.tts_kokoro_voice
-        speed = max(0.5, min(2.0, self.config.tts_kokoro_speed))
+        voice = profile.voice
+        speed = max(0.5, min(2.0, float(profile.option("speed", 1.0))))
         try:
             await asyncio.to_thread(
                 engine.synthesize_wav, text, destination, voice_id=voice, speed=speed
@@ -2690,7 +2762,32 @@ class VoiceService:
         except KokoroError as exc:
             raise VoiceError(f"Kokoro synthesis failed: {str(exc)[:300]}") from exc
 
-    async def _synthesize_sapi(self, text: str, destination: Path) -> None:
+    async def _synthesize_edge(
+        self,
+        profile: TtsProfile,
+        text: str,
+        destination: Path,
+        *,
+        automatic: bool,
+    ) -> float:
+        if not text.strip():
+            raise VoiceError("nothing speakable remained after preprocessing")
+        try:
+            return await self.edge_tts.synthesize(
+                profile, text, destination, automatic=automatic
+            )
+        except EdgeTtsError as exc:
+            raise VoiceError(f"Edge TTS failed ({exc.code}): {str(exc)[:300]}") from exc
+
+    async def _synthesize_sapi(
+        self,
+        profile: TtsProfile,
+        text: str,
+        destination: Path,
+        *,
+        automatic: bool,
+    ) -> None:
+        del automatic
         script = self._ensure_sapi_script()
         text_path = destination.with_suffix(".txt")
         text_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2708,10 +2805,10 @@ class VoiceService:
             "-OutPath",
             str(destination),
             "-Rate",
-            str(self.config.tts_sapi_rate),
+            str(int(profile.option("rate", 0))),
         ]
-        if self.config.tts_sapi_voice:
-            command += ["-Voice", self.config.tts_sapi_voice]
+        if profile.voice != "system default":
+            command += ["-Voice", profile.voice]
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
@@ -3120,20 +3217,56 @@ class VoiceService:
                 item.unlink(missing_ok=True)
 
     async def status(self) -> dict[str, Any]:
-        engine_available = True
-        engine_diagnostic: str | None = None
         kokoro_model = self.kokoro_models.status()
-        if self.config.tts_engine == "kokoro" and kokoro_model["status"] != "ready":
-            engine_available = False
-            engine_diagnostic = (
-                "the Kokoro voice model is not downloaded; download it in "
-                "Settings → Voice, or switch the engine to the OS voice"
-            )
-        elif self.config.tts_engine == "sapi" and (
-            os.name != "nt" or not shutil.which("powershell.exe")
-        ):
-            engine_available = False
-            engine_diagnostic = "the OS voice engine requires Windows PowerShell"
+        sapi_available = os.name == "nt" and bool(shutil.which("powershell.exe"))
+        providers = {
+            "sapi": {
+                "id": "sapi",
+                "available": sapi_available,
+                "diagnostic": None
+                if sapi_available
+                else "the OS voice engine requires Windows PowerShell",
+                "capabilities": {
+                    "offline": True,
+                    "voice_catalog": False,
+                    "preview": False,
+                    "pronunciation": False,
+                    "model_download": False,
+                },
+            },
+            "kokoro": {
+                "id": "kokoro",
+                "available": kokoro_model["status"] == "ready",
+                "diagnostic": None
+                if kokoro_model["status"] == "ready"
+                else (
+                    "the Kokoro voice model is not downloaded; download it in "
+                    "Settings → Voice, or switch the engine to the OS voice"
+                ),
+                "capabilities": {
+                    "offline": True,
+                    "voice_catalog": True,
+                    "preview": True,
+                    "pronunciation": True,
+                    "model_download": True,
+                },
+            },
+            "edge": {
+                **self.edge_tts.status(),
+                "capabilities": {
+                    "offline": False,
+                    "voice_catalog": True,
+                    "preview": True,
+                    "pronunciation": False,
+                    "model_download": False,
+                },
+            },
+        }
+        active = providers[self.config.tts_engine]
+        engine_available = bool(active["available"])
+        engine_diagnostic = self._provider_diagnostics.get(
+            self.config.tts_engine
+        ) or active.get("diagnostic")
         stats = await self.store.cache_stats()
         spend = await self.automation_store.spend(rule_id=VOICE_RULE_ID)
         stt_available = True
@@ -3169,6 +3302,7 @@ class VoiceService:
             "engine": self.config.tts_engine,
             "engine_available": engine_available,
             "diagnostic": engine_diagnostic or self.diagnostic,
+            "providers": providers,
             "content": self.config.tts_content,
             "default_mode": self.config.tts_default_mode,
             "voice": self._voice_label(),
@@ -3183,7 +3317,7 @@ class VoiceService:
             "clip_count": stats["count"],
             "kokoro_model": kokoro_model,
             "kokoro_voice": self.config.tts_kokoro_voice,
-            "spelled_words": self.spelled_words.entries(),
+            "kokoro_spelled_words": self.spelled_words.entries(),
             "stt_enabled": self.config.stt_enabled,
             "stt_engine": self.config.stt_engine,
             "stt_available": stt_available,

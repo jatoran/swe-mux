@@ -209,7 +209,7 @@ def apply_runtime_config(app: web.Application, changed: set[str]) -> None:
         clipboard.apply_config(config)
     voice: VoiceService | None = app.get(keys.VOICE)
     if voice:
-        if "tts_lexicon" in changed:
+        if "tts_kokoro_lexicon" in changed:
             # Rebuilds the engine's merged lexicon and drops the per-word and
             # preview caches — without this the change silently waits for a
             # daemon restart.
@@ -217,6 +217,8 @@ def apply_runtime_config(app: web.Application, changed: set[str]) -> None:
         elif "tts_kokoro_speed" in changed:
             # Audition previews cache per voice at synthesis-time speed.
             voice.invalidate_kokoro_previews()
+        if "tts_edge_python" in changed:
+            voice.edge_tts.configuration_changed()
     telemetry: OperationalTelemetryStore | None = app.get(keys.TELEMETRY)
     if telemetry and "operational_telemetry_retention_days" in changed:
         telemetry.retention_days = config.operational_telemetry_retention_days

@@ -1595,7 +1595,22 @@ It returns a one-use 20-second confirmation id plus the bounded operation text a
 `cancel` invalidates only the challenge.
 There is no bulk form.
 
-`/voice/speak` validates and synthesizes bounded application-authored text through the configured TTS engine without transcript reading, summarization, or a model call.
+`GET /voice` carries the selected TTS provider plus a provider map whose entries separate local
+availability, diagnostic, and capability flags (`offline`, `voice_catalog`, `preview`,
+`pronunciation`, `model_download`).
+The Edge entry includes only cached integration and voice-catalog state; the GET starts no process
+and makes no network request.
+
+`GET /voice/providers/edge` returns that cached Edge entry.
+`POST /voice/providers/edge/probe` explicitly starts the configured external Python and checks that
+its `edge-tts` package loads.
+`GET /voice/providers/edge/voices` returns the last-good cached catalog.
+`POST /voice/providers/edge/voices/refresh` explicitly asks the Microsoft consumer service for its
+structured catalog; a refusal is `503 {error, code}` and does not discard cached voices.
+`GET /voice/providers/edge/preview?voice=` sends one fixed non-sensitive sentence and returns MP3;
+it requires the saved risk acknowledgement and a working external integration.
+
+`/voice/speak` validates and synthesizes bounded application-authored text through the configured TTS provider without transcript reading, summarization, or a model call.
 The optional client-generated stream ID lets the requesting tab claim live segment events before the first synthesis finishes.
 
 It has three shapes, because the assistant produces its reply over several seconds and the operator should not wait for the last sentence to hear the first:
@@ -1607,6 +1622,8 @@ It has three shapes, because the assistant produces its reply over several secon
 `final: false` leaves the stream open.
 Its segments carry `segment_count: 0`, meaning unknown, until the closing one carries the real total; a client must treat a non-positive count as "still open" rather than as the last segment.
 Ordering is the invariant: one worker drains one FIFO per stream, so clip indices are monotonic however the appends arrive.
+The same immutable provider profile drains the entire FIFO.
+A Settings switch or provider-option edit affects the next stream only.
 `voice_stream_closed` (`stream_id`, `segment_count`, `failed`) marks the end, including the case where a stream ends without a final clip - a failed segment ends its stream rather than speaking the rest out of order.
 
 `/sessions/{id}/voice/generate` reads the latest assistant reply using the session/global effective content mode unless `content_mode` is supplied.
@@ -1620,6 +1637,8 @@ Application speech opens at a much tighter bound instead, because that opening c
 The wide bound stays for agent replies, where the coherence of somebody else's prose matters more than the first second.
 Each ready segment is independently playable, and later segments continue in tracked background tasks after the HTTP response.
 Summary/verbatim selection remains the existing session/global contract.
+Anchored clip reuse also requires the provider profile's `synthesis_key`; changing provider, voice,
+prosody, Kokoro model revision, speed, or Kokoro lexicon cannot return older audio.
 
 ## Delivery diagnostics
 

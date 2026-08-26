@@ -283,6 +283,18 @@ def test_bundle_verification_rejects_a_forbidden_payload(tmp_path: Path) -> None
         build_desktop.verify_bundle_licenses(tmp_path / "swe-mux")
 
 
+def test_edge_tts_is_external_to_the_distributed_closure_and_bundle(tmp_path: Path) -> None:
+    assert "voice-edge" not in license_audit.DISTRIBUTED_EXTRAS
+    assert "edge-tts" not in license_audit.python_closure()
+    internal = tmp_path / "swe-mux" / "_internal"
+    for name in build_desktop.RELINKABLE_LGPL:
+        (internal / name).mkdir(parents=True, exist_ok=True)
+        (internal / name / "__init__.py").write_text("", encoding="utf-8")
+    (internal / "edge_tts").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="External integration regression"):
+        build_desktop.verify_bundle_licenses(tmp_path / "swe-mux")
+
+
 def test_bundle_verification_rejects_a_gpl_shared_library(tmp_path: Path) -> None:
     internal = tmp_path / "swe-mux" / "_internal"
     for name in build_desktop.RELINKABLE_LGPL:

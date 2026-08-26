@@ -53,6 +53,18 @@ const PROVIDER = {
   origin: 'https://openrouter.ai/api/v1',
   cheap_model: 'deepseek/deepseek-v4-flash',
   standard_model: 'anthropic/claude-sonnet-5',
+  provider: 'openrouter',
+  providers: [{
+    id:'openrouter',label:'OpenRouter',active:true,origin:'https://openrouter.ai/api/v1',
+    model:'deepseek/deepseek-v4-flash',requires_verification:false,cache_policy:'by_model',
+    secret:{configured:true,source:'stored',persistent:true},
+    verification:{provider:'openrouter',verified:true,stale:false,verified_at:1_770_000_000,
+      base_url:'https://openrouter.ai/api/v1',model:'deepseek/deepseek-v4-flash',
+      resolved_model:'deepseek/deepseek-v4-flash',sample:'ok',latency_ms:100,
+      capabilities:{catalog:'annotated',reports_cost:true,reports_cache:true}},
+    readiness:{ready:true,provider:'openrouter',code:'ready',reason:'Ready.',reports_cost:true},
+  }],
+  llm:{ready:true,provider:'openrouter',code:'ready',reason:'Ready.',reports_cost:true},
 }
 
 const BUNDLE = {
@@ -99,6 +111,16 @@ const RESPONSES: Record<string, unknown> = {
   '/api/wsl/bridge': WSL,
   '/api/diagnostics/prerequisites': { prerequisites: [] },
   '/api/voice': null,
+  '/api/voice/providers/edge': {
+    id:'edge',available:false,integration:'unknown',diagnostic:'check integration',python:'',
+    package_version:null,tested_version:false,last_probe_at:null,risk_acknowledged:false,
+    retry_after:null,catalog:{status:'ready',fetched_at:1_770_000_000,error:null,
+      package_version:'7.2.8',stale:false,selected:'en-US-JennyNeural',selected_present:true,
+      voices:[
+        {id:'en-GB-SoniaNeural',locale:'en-GB',gender:'Female',name:'Sonia',status:'GA',codec:'audio/mpeg',categories:['General'],personalities:['Friendly']},
+        {id:'en-US-JennyNeural',locale:'en-US',gender:'Female',name:'Jenny',status:'GA',codec:'audio/mpeg',categories:['General'],personalities:['Friendly']},
+      ]},
+  },
   '/api/voice/stt-latency': null,
   // Save is one request now, and its answer carries both halves plus what committed.
   '/api/settings/apply': {
@@ -133,7 +155,7 @@ const FAILURES: Record<string, { path: string; status: number; body: unknown }> 
 declare global {
   interface Window {
     /** Every request the panel made, in order, for asserting what a click did not send. */
-    settingsCalls: Array<{ method: string; path: string }>
+    settingsCalls: Array<{ method: string; path: string; body?:unknown }>
   }
 }
 window.settingsCalls = []
@@ -141,7 +163,9 @@ window.settingsCalls = []
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
   const path = raw.split('?')[0]
-  window.settingsCalls.push({ method: (init?.method || 'GET').toUpperCase(), path })
+  let requestBody:unknown
+  if(typeof init?.body==='string')try{requestBody=JSON.parse(init.body)}catch{requestBody=init.body}
+  window.settingsCalls.push({ method: (init?.method || 'GET').toUpperCase(), path, body:requestBody })
   const failure = FAILURES[new URLSearchParams(location.search).get('fail') || '']
   if (failure && failure.path === path) {
     return new Response(JSON.stringify(failure.body), {

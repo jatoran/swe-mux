@@ -3218,6 +3218,13 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
 - [x] Synthesize sentence by sentence and begin playback on the first clip, so perceived latency is the first sentence rather than the whole summary at RTF 0.5.
   (The existing segmented-clip stream already provides this; kokoro synthesizes per segment.)
 - [x] Remove `edge-tts` from the dependency set once `kokoro` and `sapi` cover both quality tiers, and migrate an existing `tts_engine: "edge"` config forward rather than failing on it (schema 26).
+  (Current correction, 2026-08-25: schema 33 reintroduces Edge only as an explicit experimental
+  external provider.
+  The frozen artifact still excludes `edge_tts`; source users may install the `voice-edge` extra,
+  and frozen users name a separate Python.
+  The schema-26 migration remains, so an old install is never silently reconnected to Microsoft.
+  A versioned service/privacy acknowledgement, explicit probe and catalog refresh, no silent
+  fallback, and provider backoff keep the unsupported endpoint non-load-bearing.)
 - [x] Change the default `tts_engine` to the OS voice, and make `kokoro` selectable only once its model is present.
 
 ### Model acquisition
@@ -3249,7 +3256,7 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
   (New "Scope and terms" section. The framing is only credible because the boundaries are structural rather than promised, so each is stated as the design constraint it is: one live system login per provider with no concurrent multi-account execution; **no code path selects an account in response to a quota reading or an exhausted limit**, verified against the source - every "rotate" in `provider_accounts.py` is OAuth *token* refresh, not account rotation; no pooling or sharing; credentials sent only to the provider that issued them. The same section records that quota polling reaches the endpoints the provider CLIs themselves use rather than a documented public API, and that the shipped stale-retention failure mode is what keeps that dependency from being load-bearing.)
 - [x] Record that OpenRouter and HuggingFace access run on the user's own key and quota under the user's own agreement with those services.
   (In the `README.md` licensing section, beside the vendor disclaimer, with "swe-mux proxies nothing and resells nothing".)
-- [ ] **Open, and larger than this phase: the provider-endpoint question is a diligence exposure, not a licensing one.** Quota polling calls `api.anthropic.com/api/oauth/usage`, `/api/oauth/profile`, and `chatgpt.com/backend-api/wham/usage` (`provider_accounts.py`). Those are the CLIs' own internal OAuth endpoints reached with the user's token, not documented public APIs - structurally the same shape as the `edge-tts` problem this phase deleted, where an undocumented endpoint was reached with a credential not issued for that purpose. It is not a license question and nothing here blocks publication, but for an investor or a vendor it is a sharper question than any dependency's license, because a vendor can withdraw the endpoint or object to the use. Prefer a documented endpoint wherever one exists; keep the degraded-reading failure mode so the feature never becomes load-bearing on it.
+- [ ] **Open, and larger than this phase: the provider-endpoint question is a diligence exposure, not a licensing one.** Quota polling calls `api.anthropic.com/api/oauth/usage`, `/api/oauth/profile`, and `chatgpt.com/backend-api/wham/usage` (`provider_accounts.py`). Those are the CLIs' own internal OAuth endpoints reached with the user's token, not documented public APIs - structurally the same shape as the optional external `edge-tts` integration, where an undocumented consumer endpoint is reached with an embedded client token. It is not a dependency-license question and nothing here blocks publication, but for an investor or a vendor it is sharper than any package license, because a vendor can withdraw the endpoint or object to the use. Prefer a documented endpoint wherever one exists; keep both integrations explicitly degraded and never load-bearing.
 
 ### Docs, tests, and ship
 
@@ -3265,8 +3272,11 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
 
 - [x] A built bundle contains no GPL or unallowlisted LGPL component, proven by a test over the resolved closure rather than by inspection, and `av.libs` is absent.
   (Both halves. The closure test is `tests/test_license_audit.py` over `packaging/third_party_licenses.json`, reconciled against `uv.lock` and `package-lock.json` with nothing installed; the artifact test is `build_desktop.verify_bundle_licenses` on every build. **Scope, stated precisely:** the criterion is met for the *bundle*. `av` remains in the *install* closure because `faster-whisper` hard-requires it, which is recorded rather than hidden and is a Phase 11 precondition.)
-- [x] Read aloud works with `edge-tts` absent from the environment, and no swe-mux code path reaches a Microsoft endpoint.
-  (`edge-tts` is absent from `pyproject.toml`, from the resolved closure, and from the frozen executable's bytes.)
+- [x] Default read aloud works with `edge-tts` absent, and the frozen artifact carries no Edge
+  client or automatic Microsoft call.
+  (`edge-tts` is absent from the distributed closure and frozen bytes.
+  Schema 33 later added a source-only optional extra and an explicitly selected external bridge;
+  opening Settings and every status GET remain network-free.)
 - [x] No espeak-ng binary, data directory, or Python wrapper exists anywhere in the closure, and the G2P fails loudly rather than silently falling back if one appears.
   (`espeakng-loader` and `phonemizer-fork` are both absent from the closure; the bundle carries no espeak shared library. `misaki/espeak.py` does ship and is inert - the G2P is built with `fallback=None` and asserts at construction that no espeak module is importable - so `verify_bundle_licenses` matches espeak *shared libraries* rather than the bare name, which a test pins, because a broader glob would fail every build over that one harmless file.)
 - [x] `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, and a generated `THIRD-PARTY-NOTICES.md` exist, and the notices file regenerates from the lockfiles with no manual edit.

@@ -374,7 +374,7 @@ def test_av_runtime_stub_satisfies_import_and_refuses_use() -> None:
 def test_spec_excludes_av_and_installs_the_stub() -> None:
     """The bundle gate's static half; build_desktop.verify_no_gpl_av is the dynamic half."""
     spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
-    assert 'excludes=["av"]' in spec
+    assert 'excludes=["av", "edge_tts"]' in spec
     assert "rthook_av_stub.py" in spec
 
 

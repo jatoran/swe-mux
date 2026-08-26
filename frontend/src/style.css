@@ -3433,6 +3433,13 @@ body {
 .tts-lexicon-hint code{margin:0 2px}
 .tts-lexicon-spelled{display:grid;gap:4px;margin-top:6px}
 .tts-lexicon-spelled h5{margin:0;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.edge-tts-settings{display:grid;gap:10px;margin-top:8px}
+.provider-disclosure{display:grid;gap:6px;padding:10px;border:1px solid color-mix(in srgb,var(--warning,#d8a657) 55%,var(--line));border-radius:6px;background:color-mix(in srgb,var(--warning,#d8a657) 8%,var(--panel))}
+.provider-disclosure p{margin:0;color:var(--muted)}
+.edge-voice-filters,.edge-prosody-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.edge-voice-filters{grid-template-columns:minmax(0,2fr) minmax(120px,1fr)}
+.edge-tts-settings select[size]{width:100%;min-height:calc(120px*var(--ui-scale));padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+@media(max-width:640px){.edge-voice-filters,.edge-prosody-grid{grid-template-columns:1fr}}
 .voice-command-dialog-backdrop{position:fixed;inset:0;z-index:220;display:grid;place-items:center;padding:16px;background:#0009;pointer-events:auto}
 .voice-command-dialog{width:min(760px,calc(100vw - 24px));max-height:min(82dvh,720px);display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #000a;color:var(--text);font:11px/1.45 'JetBrains Mono';overflow:hidden}
 .voice-command-dialog>header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--line)}

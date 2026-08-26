@@ -56,6 +56,7 @@ import { formatCommandLine, launchPreview, parseCommandLine } from './commandLin
 import { Dropdown } from './Dropdown'
 import { includeSelectedModel, type ModelOption } from './modelFilter'
 import { ModelRoutingSummary } from './ModelRoutingSummary'
+import { EdgeTtsSettings, type EdgeProviderStatus } from './EdgeTtsSettings'
 import {
   customProviderOverride, MODEL_ROUTES, resolveRoute, type ModelRoutingConfig,
 } from './modelRouting'
@@ -158,9 +159,11 @@ type Config = {
   observer_titler_enabled:boolean
   attention_observers_enabled:boolean
   tts_enabled:boolean;tts_default_mode:'off'|'on_demand'|'auto';tts_content:'summary'|'verbatim'
-  tts_engine:'sapi'|'kokoro';tts_kokoro_voice:string;tts_kokoro_speed:number
-  tts_lexicon:Record<string,string>
+  tts_engine:'sapi'|'kokoro'|'edge';tts_kokoro_voice:string;tts_kokoro_speed:number
+  tts_kokoro_lexicon:Record<string,string>
   tts_sapi_voice:string;tts_sapi_rate:number
+  tts_edge_python:string;tts_edge_voice:string;tts_edge_rate_percent:number
+  tts_edge_volume_percent:number;tts_edge_pitch_hz:number;tts_edge_risk_ack_version:number
   tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
   tts_daily_budget:Budget;tts_cache_mb:number;stt_enabled:boolean
   stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string;stt_routing_model:string
@@ -182,7 +185,8 @@ type VoiceStatusInfo = {
   daily_budget:Budget
   cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
   kokoro_model?:KokoroModelInfo;kokoro_voice?:string
-  spelled_words?:{word:string;count:number;first_seen:number;last_seen:number}[]
+  kokoro_spelled_words?:{word:string;count:number;first_seen:number;last_seen:number}[]
+  providers?:{sapi?:{available:boolean;diagnostic?:string|null};kokoro?:{available:boolean;diagnostic?:string|null};edge?:EdgeProviderStatus}
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]
@@ -976,7 +980,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns),
       // A row mid-edit can hold an empty respelling; the daemon rejects those,
       // so an unfinished row is dropped rather than blocking the whole save.
-      tts_lexicon:Object.fromEntries(Object.entries(draft.tts_lexicon||{})
+      tts_kokoro_lexicon:Object.fromEntries(Object.entries(draft.tts_kokoro_lexicon||{})
         .map(([word,spoken])=>[word.trim().toLowerCase(),spoken.trim()])
         .filter(([word,spoken])=>word&&spoken)),
     }
@@ -1928,12 +1932,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </div>
           </section>
 
-          {/* How it sounds, separated from whether it speaks. The engine decides which of
-              the two voice blocks below applies, so it leads; the model download panel is
-              beside the engine that needs it rather than three headings away. */}
-          <section><h3>Voice and engine</h3>
-          <p>Which synthesizer speaks, and how it sounds. The OS voice needs no download and no network call; Kokoro is a local neural voice that downloads once and then runs offline.</p>
-          <label data-setting="tts_engine">Engine<Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',label:'OS voice (offline, no download)'},{value:'kokoro',label:'Kokoro-82M (local neural, one-time download)'}]}/></label>
+          {/* Provider-specific panels are mutually exclusive in the DOM, while their
+              values remain independent fields in the complete Settings draft. */}
+          <section><h3>TTS provider</h3>
+          <p>Choose the synthesizer for the next speech stream. A stream already being made keeps the provider, voice, and options it started with.</p>
+          <label data-setting="tts_engine">Provider<Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',label:'OS voice (offline, no download)'},{value:'kokoro',label:'Kokoro-82M (local neural, one-time download)'},{value:'edge',label:'Edge TTS (experimental external, online)'}]}/></label>
           {draft.tts_engine==='sapi'&&<>
             <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
@@ -1954,28 +1957,20 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               />
             </details>
             <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
+            <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
           </>}
-          <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
-          <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /><small>Generated clips are files under the data directory; the oldest are dropped past this. The live figure is on the status line above.</small></label>
+          {draft.tts_engine==='edge'&&<EdgeTtsSettings value={draft} onChange={(field,value)=>change(field,value as never)}/>}
           </section>
 
-          {/* The lexicon was a `<h4>` buried inside the Kokoro branch of the engine block,
-              which is the one place nobody scrolls to when a name comes out spelled letter
-              by letter. It is a section of its own now. It stays a Kokoro repair — the OS
-              voice has its own dictionary and never consults `tts_lexicon` — so under SAPI
-              the section says so and offers the engine control rather than going quiet. */}
-          <section><h3>Pronunciation</h3>
-          {draft.tts_engine==='kokoro'
-            ?<details class="settings-disclosure">
-              <summary>Respellings and spelled-word history <em>· {Object.keys(draft.tts_lexicon||{}).length} entr{Object.keys(draft.tts_lexicon||{}).length===1?'y':'ies'}</em></summary>
+          {/* Kokoro owns the G2P, respellings, and observed unknown-word history.
+              Other providers never render or interpret those controls. */}
+          {draft.tts_engine==='kokoro'&&<section><h3>Pronunciation</h3>
+            <details class="settings-disclosure">
+              <summary>Respellings and spelled-word history <em>· {Object.keys(draft.tts_kokoro_lexicon||{}).length} entr{Object.keys(draft.tts_kokoro_lexicon||{}).length===1?'y':'ies'}</em></summary>
               <p>Kokoro's dictionary-only pronouncer spells an unknown word letter by letter rather than dropping it. Teach it project names and jargon here: one word, then how to say it (<code>vaultspaces</code> → <code>vault spaces</code>). Spell the sound with plain letters — if it isn't a real word (<code>swee</code>), tap ✨ and the exact phonemes are built for you; you never have to write them by hand. Each row shows ✓ when it will speak as written and ♪ plays it. Words the voice recently had to spell appear below with a one-tap fix — ✨ there with an empty box pronounces the word the way it reads.</p>
-              <TtsLexiconEditor lexicon={draft.tts_lexicon||{}} spelled={voiceInfo?.spelled_words||[]} onChange={next=>change('tts_lexicon',next)}/>
+              <TtsLexiconEditor lexicon={draft.tts_kokoro_lexicon||{}} spelled={voiceInfo?.kokoro_spelled_words||[]} onChange={next=>change('tts_kokoro_lexicon',next)}/>
             </details>
-            :<>
-              <p>Respellings repair <strong>Kokoro's</strong> pronouncer, which spells a word it does not know letter by letter. The OS voice uses the system's own dictionary and never reads this list, so there is nothing to teach it here. Any entries you have already saved are kept and apply again the moment Kokoro is selected.</p>
-              <div class="theme-actions"><button onClick={()=>goToSetting('voice','tts_engine')}>Go to the engine setting</button></div>
-            </>}
-          </section>
+          </section>}
 
           {/* What gets spoken, and what it costs. `tts_content` chooses between the two
               halves, so it leads them rather than sitting a heading above. */}
@@ -1986,6 +1981,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
           <BudgetControl name="tts_daily_budget" label="Read-aloud summaries, daily" value={draft.tts_daily_budget} onChange={value=>change('tts_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} unpricedCalls={voiceInfo?.spend_today?.unpriced_calls}/>
           <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /><small>Applies to the verbatim mode only, where no model is involved to shorten anything.</small></label>
+          </section>
+
+          <section><h3>Clip storage</h3>
+          <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /><small>Shared by every provider. Generated clips are files under the data directory; the oldest complete streams are dropped past this limit.</small></label>
           </section>
 
           {/* The whole capture half in one place: the switch, the decoders it runs, and
@@ -2397,7 +2396,13 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
 function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   const [model,setModel]=useState<KokoroModelInfo|null>(initial)
   const [starting,setStarting]=useState(false)
-  useEffect(()=>{setModel(initial)},[initial])
+  // The panel is unmounted while another provider is selected. Re-read on each
+  // mount so a download that progressed or finished while hidden returns with
+  // its real state instead of the stale `/api/voice` snapshot from Settings open.
+  useEffect(()=>{
+    setModel(initial)
+    void api<KokoroModelInfo>('GET','/api/voice/models/kokoro').then(setModel).catch(()=>{})
+  },[initial])
   useEffect(()=>{
     const handler=(raw:Event)=>{
       const detail=(raw as CustomEvent).detail as Partial<KokoroModelInfo>&{model?:string}

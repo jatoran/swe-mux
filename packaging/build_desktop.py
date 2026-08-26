@@ -213,6 +213,14 @@ def verify_build_extras_installed() -> None:
 # sync with `license_audit.ALLOWLIST` by `tests/test_license_audit.py`.
 RELINKABLE_LGPL = ("pystray", "num2words")
 
+# Optional integrations whose client code deliberately remains outside the
+# frozen artifact. Edge TTS runs through the shipped Apache bridge under a
+# user-managed Python, so finding the LGPL package here means the distribution
+# boundary regressed even when relinking would have been technically possible.
+EXTERNAL_ONLY_ARTIFACTS = (
+    ("edge_tts", "the optional LGPL Edge TTS client must remain external"),
+)
+
 # Payloads the audit found hiding inside wheels that declare a permissive
 # license. Each is checked by artifact name because the declaration lies: PyAV
 # declares BSD-3-Clause and links GPL x264/x265, and the espeak-ng family enters
@@ -252,9 +260,21 @@ def verify_bundle_licenses(bundle_root: Path) -> None:
        would leave the notices file promising something untrue.
     3. `misaki`'s espeak module never acquires a working backend, checked by the
        absence of the loader above rather than by importing anything.
+    4. External-only integrations do not enter the frozen artifact.
     """
     verify_no_gpl_av(bundle_root)
     internal = bundle_root / "_internal"
+
+    external = [
+        f"{internal / name} ({why})"
+        for name, why in EXTERNAL_ONLY_ARTIFACTS
+        if (internal / name).exists()
+    ]
+    if external:
+        raise SystemExit(
+            "External integration regression: a user-managed payload entered the bundle:\n  "
+            + "\n  ".join(external)
+        )
 
     offenders = [
         f"{internal / name} ({why})"

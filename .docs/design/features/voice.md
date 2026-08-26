@@ -135,17 +135,40 @@ install-wide, so the tab edits them directly for the focused session.
   environment lacks the extra (`design/features/desktop-shell.md`).
   `.worktree-setup` and the Windows CI job sync it, because the real-G2P tests are
   `importorskip`-guarded and a bare sync would turn them into silent skips.
-- Engines: `sapi` (the OS voice — offline Windows `System.Speech` through a generated
-  PowerShell script; the default, because it speaks with no download and no network call) and
-  `kokoro` (Kokoro-82M int8 through a **direct onnxruntime session** — no wrapper library,
-  because every published Kokoro wrapper pulls a GPL espeak-ng payload). Both write WAV.
-  The network `edge` engine is removed (Phase 10.5): it redistributed LGPL code and made
-  unauthorized calls to a Microsoft endpoint; a config carrying `tts_engine = "edge"`
-  migrates to `sapi`.
+- Providers: `sapi` (the default offline Windows `System.Speech` engine), `kokoro`
+  (Kokoro-82M int8 through a direct onnxruntime session), and `edge` (an explicit external,
+  online, experimental integration).
+  SAPI and Kokoro write WAV.
+  Edge writes the service's fixed 24 kHz, 48 kbit/s mono MP3 and never enters the WAV joiner.
+  `tts_profiles.py` snapshots the provider, voice, format, and provider options once per speech
+  stream, so a Settings switch applies to the next stream and cannot change a reply halfway.
+  Each profile carries a `synthesis_key`; anchored clip reuse requires the same key, so a Kokoro
+  clip cannot satisfy an Edge request and a voice, speed, prosody, model, or lexicon change
+  regenerates audio.
+- **Edge TTS stays outside the frozen artifact** (`edge_tts_provider.py`).
+  The shipped Apache-licensed bridge runs under a user-managed Python containing
+  `edge-tts==7.2.8`; source installs may use the `voice-edge` convenience extra, while a frozen
+  install must name that external interpreter.
+  The bridge reads speech from a bounded temporary file, never from argv, returns bounded JSON,
+  and is run by `bounded_subprocess.run_bounded` so timeout and cancellation reap the process.
+  Synthesis is refused until `tts_edge_risk_ack_version` matches the disclosure rendered in
+  Settings: spoken text is sent to an undocumented Microsoft consumer endpoint with no SLA or
+  published third-party commercial-use grant.
+  The acknowledgement records awareness and grants no Microsoft permission.
+  No failure silently falls back to another provider; automatic Edge failures enter bounded
+  provider backoff and leave every saved provider setting intact.
+- **Edge voice discovery is explicit and last-good** (`EdgeVoiceCatalog`).
+  Opening Settings and every GET are network-free.
+  `POST /api/voice/providers/edge/voices/refresh` invokes the external bridge, normalizes and
+  bounds the service's structured catalog, and atomically stores it under
+  `<data_dir>/voice/providers/edge/voices.json`.
+  A failed refresh retains the prior voices and records the error.
+  A selected `ShortName` absent from the newest catalog remains configured and renders as
+  missing instead of being replaced.
 - **Kokoro's model is downloaded, never bundled** (`voice_models.py`): a pinned immutable
   Hugging Face revision, per-file SHA-256 verified while streaming, with explicit
   `not_downloaded → downloading → ready → error` state — a partial download can never be
-  loaded. Settings → Voice → Voice and engine owns the download with visible progress
+  loaded. Settings → Voice → TTS provider owns the download with visible progress
   (`voice_model_progress` events); `kokoro` is selectable but reports itself unavailable
   until the model is `ready`. English voices only, because the phonemizer is English-only.
 - **Phonemization is lexicon-only misaki with `fallback=None`, and no espeak-ng package may
@@ -158,7 +181,7 @@ install-wide, so the tab edits them directly for the focused session.
   Engine problems surface as typed unavailable/error status; terminals are unaffected.
 - **The ladder's lexicon rung is user-extensible, and its spelling floor is telemetered**
   (the fix for glued or invented names like `vaultspaces` being spelled letter by letter).
-  `tts_lexicon` (word → respelling) merges over the built-in `PROJECT_LEXICON` with
+  `tts_kokoro_lexicon` (word → respelling) merges over the built-in `PROJECT_LEXICON` with
   casefolded whole-word keys; a change hot-applies through `VoiceService.apply_lexicon`,
   which rebuilds the engine's merged map, drops the per-word resolution cache and the
   per-voice audition previews (both would otherwise serve pre-change speech until a daemon
@@ -167,7 +190,7 @@ install-wide, so the tab edits them directly for the focused session.
   word — the token an operator would actually respell — into `SpelledWordLog`, a bounded
   (200), deduplicated, counted JSON store at `<data_dir>/voice/spelled_words.json` that
   survives restarts, plus a `daemon.log` line. `GET /api/voice` surfaces the entries as
-  `spelled_words`; Settings → Voice → Pronunciation lists them under the lexicon editor with a one-tap
+  `kokoro_spelled_words`; Settings → Voice → Pronunciation lists them under the lexicon editor with a one-tap
   respell input that writes the lexicon entry. Telemetry is fail-safe: a reporter error is
   logged and speech proceeds.
 - **A respelling must itself be pronounceable, and the editor tells the user before Save.**
@@ -1013,9 +1036,10 @@ The tab's `<h3>`s are what the panel's section rail is derived from (`features/u
 | Section | What it owns |
 |---|---|
 | Read aloud (TTS) | Engine/clip/spend status, and the three-layer policy block above |
-| Voice and engine | `tts_engine` and whichever of the SAPI or Kokoro voice controls it selects, the Kokoro model download, the clip cache limit |
-| Pronunciation | `tts_lexicon` and the spelled-word telemetry with its one-tap respell |
+| TTS provider | `tts_engine` and exactly one provider panel: SAPI voice/rate, Kokoro model/voice/speed, or Edge disclosure/integration/catalog/voice/prosody |
+| Pronunciation | Rendered only for Kokoro: `tts_kokoro_lexicon` and `kokoro_spelled_words` with one-tap respell |
 | Spoken summary | `tts_content`, the summary model and budgets, the verbatim cap |
+| Clip storage | The provider-independent `tts_cache_mb` bound and live cache usage |
 | Microphone and wake words | `stt_enabled`, the decoders and language, the STT status readout, `voice_wake_words` |
 | Command phrases | `voice_commands` - one row per fixed action |
 | Command reference | The complete live catalog (folded) |
@@ -1026,7 +1050,14 @@ The tab's `<h3>`s are what the panel's section rail is derived from (`features/u
 Three rules hold this shape, and each answers a way the previous single section went wrong:
 
 - **The read-aloud policy is one unit.** The three layers are only useful read together, so they stay one numbered block under the first heading and are never split across sections. This is the same rule as the ordering in *One policy, three layers* above, stated for the surface.
-- **The pronunciation lexicon owns a section.** It used to be an `<h4>` inside the Kokoro branch of the engine block, which is the one place nobody looks when a project name comes out spelled letter by letter. It stays a Kokoro repair - the OS voice has its own dictionary and never reads `tts_lexicon` - so under SAPI the section says so and offers the engine control rather than rendering empty.
+- **Provider fields persist independently.** The Settings draft and canonical TOML retain every
+  `tts_sapi_*`, `tts_kokoro_*`, and `tts_edge_*` value while only the selected provider panel is
+  rendered.
+  Switching providers mutates only `tts_engine`; returning restores the saved or still-draft
+  voice and options unchanged.
+- **Pronunciation renders only for Kokoro.** SAPI owns its system dictionary and Edge owns its
+  service pronunciation, so neither renders or interprets Kokoro respellings or observed
+  spelled-word history.
 - **Reference folds; controls do not - and so does a control that is long rather than rarely read.** The command catalog, the two measuring instruments, and the one-time mobile setup are read rarely and are long, so each keeps its heading (and therefore its rail entry) and collapses its body behind a `<details class="settings-disclosure">`. Two Kokoro-only controls fold for the other reason: the voice picker's fifty-odd chips and the pronunciation editor with its spelled-word history each buried everything below them, so both collapse by default, the voice picker naming the current selection on its summary so the closed state still answers which voice is selected. A `data-setting` mark deliberately stays outside every collapsed one: `revealSetting` does open the disclosures above its target, but a switch a gate just promised should be on screen when the panel lands.
 - **The budget control is a row of chips, at every width.** `.settings-content label:not(.check)` re-grids every label in the panel into a two-column form row and out-specifies the `.budget-control` scoping that was meant to exempt these, so the tokens/dollars mode radios rendered as tall two-column rows and each axis stranded its one-word label in a 165px (38% on a phone) column. The rules are scoped one class deeper instead - no `!important`, because the fix is to be more specific than the panel's own label rule rather than to shout over it - and `voice-settings.spec.ts` measures it at phone width.
 
@@ -1042,15 +1073,24 @@ and never touches the daemon or an LLM.
 
 ## HTTP surface
 
-- `GET  /api/voice` — engine/STT availability, content/mode defaults, spend, cache stats,
-  and the Kokoro model state.
+- `GET  /api/voice` — active provider/STT availability, every provider's local cached status
+  and capabilities, content/mode defaults, spend, cache stats, and Kokoro model state.
+- `GET /api/voice/providers/edge` — cached external-integration and catalog status; no process
+  or network probe.
+- `POST /api/voice/providers/edge/probe` — explicitly starts the configured external Python and
+  verifies that the tested `edge-tts` package can load.
+- `GET /api/voice/providers/edge/voices` — last-good cached catalog only.
+- `POST /api/voice/providers/edge/voices/refresh` — explicit Microsoft voice-list request through
+  the bridge; refresh failure leaves the cached list intact.
+- `GET /api/voice/providers/edge/preview?voice=` — fixed non-sensitive audition sentence as MP3;
+  requires the saved disclosure acknowledgement and working integration.
 - `GET|POST /api/voice/models/kokoro[/download]` — the pinned Kokoro download's state, and
   starting it (idempotent while running; progress rides `voice_model_progress` events).
 - `GET /api/voice/models/kokoro/preview?voice=` — one audition WAV, synthesized with the
   requested voice regardless of the configured engine and cached per voice on the daemon.
   A GET a media element points at directly, because the document CSP has no `media-src`:
   `default-src 'self'` governs media, so a `blob:` source is refused while this URL plays.
-  Settings → Voice → Voice and engine renders the voices as a tap-to-audition picker (theme-picker style: a tap
+  Settings → Voice → TTS provider renders the voices as a tap-to-audition picker (theme-picker style: a tap
   plays the sample and sets the draft selection; nothing commits until Save).
 - `POST /api/voice/lexicon/check` — advisory per-entry pronunciation verdicts for the
   lexicon editor (`{entries: {word: respelling}}` → per-word `ok`/`phonemes`/`spoken_as`/
@@ -1089,9 +1129,11 @@ and never touches the daemon or an LLM.
 
 ## Config knobs (`config.py`)
 
-`tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine` (`sapi`/`kokoro`),
-`tts_kokoro_voice`/`_speed`, `tts_lexicon` (user pronunciation respellings, merged over the
-built-in project lexicon; hot-applied with cache invalidation), `tts_sapi_voice`/`_rate`, `tts_summary_model`,
+`tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine` (`sapi`/`kokoro`/`edge`),
+`tts_kokoro_voice`/`_speed`/`_lexicon` (user pronunciation respellings, merged over the
+built-in project lexicon; hot-applied with cache invalidation), `tts_sapi_voice`/`_rate`,
+`tts_edge_python`/`_voice`/`_rate_percent`/`_volume_percent`/`_pitch_hz` plus the versioned
+`tts_edge_risk_ack_version`, `tts_summary_model`,
 `tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget` (tokens, dollars, or
 first-hit; `usd` by default, which is the unit it enforced before the shape existed),
 `tts_cache_mb`;
@@ -1113,6 +1155,13 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `src/swe_mux/kokoro_tts.py` — the direct-onnxruntime Kokoro engine, the espeak-free G2P
   constraint, and the out-of-vocabulary repair ladder.
 - `src/swe_mux/voice_models.py` — the pinned, hash-verified Kokoro model download state machine.
+- `src/swe_mux/tts_profiles.py` — immutable provider snapshots and provider-option synthesis keys.
+- `src/swe_mux/edge_tts_provider.py` — external interpreter resolution, structured bridge calls,
+  classified errors/backoff, and the last-good voice catalog.
+- `src/swe_mux/assets/integrations/edge_tts_bridge.py` — the shipped Apache bridge imported by the
+  user-managed Python that owns the LGPL client.
+- `frontend/src/EdgeTtsSettings.tsx` — Edge disclosure, integration probe, catalog refresh/search,
+  voice selection/preview, and prosody controls.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in, open-stream queueing, and

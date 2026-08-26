@@ -70,6 +70,9 @@ NOTICES = ROOT / "THIRD-PARTY-NOTICES.md"
 # `preview-capture` does NOT ship: Playwright is an optional local install the
 # user opts into, never bundled, which is the known gap CONTROL_PLANE_ROADMAP.md
 # §9 records against Phase 11.
+# `voice-edge` does NOT ship either: it is a convenience extra for source users
+# and the same LGPL client is external to a frozen install. The spec excludes it
+# explicitly and the artifact half rejects it if it appears under `_internal/`.
 DISTRIBUTED_EXTRAS = ("desktop", "voice-local")
 
 # The environments swe-mux is distributed for. A dependency counts as shipped if

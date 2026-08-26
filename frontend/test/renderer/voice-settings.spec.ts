@@ -27,9 +27,9 @@ const open = async (page: Page) => {
 // and costs, then the whole capture half, then reference.
 const SECTIONS = [
   'Read aloud (TTS)',
-  'Voice and engine',
-  'Pronunciation',
+  'TTS provider',
   'Spoken summary',
+  'Clip storage',
   'Microphone and wake words',
   'Command phrases',
   'Command reference',
@@ -74,25 +74,28 @@ test('the read-aloud policy stays one numbered block under the first heading', a
   await expect(page.locator('.settings-content [data-setting="tts_enabled"]')).toHaveCount(1)
 })
 
-test('the pronunciation lexicon is its own section, not a heading inside the engine block', async ({ page }) => {
+test('the pronunciation section exists only for Kokoro', async ({ page }) => {
   await open(page)
 
-  const pronunciation = page.locator('.settings-content > section', { has: page.locator('h3', { hasText: 'Pronunciation' }) })
-  await expect(pronunciation).toHaveCount(1)
-
-  // The fixture ships the OS voice, where the lexicon does not apply. That is the case the
-  // section has to survive without going quiet: it says why, and offers the control that
-  // changes it rather than naming a setting and leaving the reader to find it.
-  await expect(pronunciation.locator('.tts-lexicon')).toHaveCount(0)
-  await pronunciation.locator('button', { hasText: 'Go to the engine setting' }).click()
+  await expect(page.locator('.settings-content > section', { has: page.locator('h3', { hasText: 'Pronunciation' }) })).toHaveCount(0)
   const engine = page.locator('[data-setting="tts_engine"]')
-  await expect(engine).toHaveClass(/setting-flash/)
 
-  // Selecting Kokoro puts the editor in the Pronunciation section — and nowhere else.
+  // Selecting Kokoro adds one provider-owned section and puts the editor there only.
   await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'kokoro')
+  const pronunciation = page.locator('.settings-content > section', { has: page.locator('h3', { hasText: 'Pronunciation' }) })
   await expect(pronunciation.locator('.tts-lexicon')).toHaveCount(1)
   await expect(page.locator('.settings-content .tts-lexicon')).toHaveCount(1)
-  await expect(page.locator('.settings-content > section > h3')).toHaveText(SECTIONS)
+  await expect(page.locator('.settings-content > section > h3')).toHaveText([
+    ...SECTIONS.slice(0,2),'Pronunciation',...SECTIONS.slice(2),
+  ])
+
+  // Edge owns no local G2P. Hiding Kokoro's controls does not clear their draft values.
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'edge')
+  await expect(page.locator('.settings-content .tts-lexicon')).toHaveCount(0)
+  await expect(page.locator('.kokoro-model-panel')).toHaveCount(0)
+  await expect(page.locator('.kokoro-voice-disclosure')).toHaveCount(0)
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'kokoro')
+  await expect(page.locator('.settings-content .tts-lexicon')).toHaveCount(1)
 })
 
 test('reference sections fold away, and no deep-linkable control folds with them', async ({ page }) => {
@@ -161,6 +164,40 @@ test('Kokoro\'s long bodies fold, and folding one never hides a deep link', asyn
     nodes.filter(node => node.closest('details.settings-disclosure:not([open])'))
       .map(node => node.getAttribute('data-setting')))
   expect(folded).toEqual([])
+})
+
+test('provider-specific draft settings survive switching in both directions', async ({ page }) => {
+  await open(page)
+  const engine = page.locator('[data-setting="tts_engine"]')
+
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'kokoro')
+  const speed = page.getByLabel('Speed (0.5–2.0)')
+  await speed.fill('1.35')
+
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'edge')
+  await expect(page.locator('.edge-tts-settings')).toHaveCount(1)
+  await page.getByLabel('Edge voice').selectOption('en-GB-SoniaNeural')
+  await page.getByLabel('Rate (%)').fill('22')
+  await page.getByLabel('Pitch (Hz)').fill('-8')
+  await page.getByLabel('I understand the service, privacy, reliability, and commercial-use uncertainty').check()
+  await expect(page.locator('.kokoro-model-panel')).toHaveCount(0)
+
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'kokoro')
+  await expect(speed).toHaveValue('1.35')
+  await expect(page.locator('.edge-tts-settings')).toHaveCount(0)
+
+  await chooseDropdown(page, engine.locator('.dropdown-trigger'), 'edge')
+  await expect(page.getByLabel('Edge voice')).toHaveValue('en-GB-SoniaNeural')
+  await expect(page.getByLabel('Rate (%)')).toHaveValue('22')
+  await expect(page.getByLabel('Pitch (Hz)')).toHaveValue('-8')
+  await expect(page.getByLabel('I understand the service, privacy, reliability, and commercial-use uncertainty')).toBeChecked()
+
+  await page.getByRole('button',{name:'Save changes'}).click()
+  const submitted=await page.evaluate(()=>window.settingsCalls.filter(call=>call.path==='/api/settings/apply').at(-1)?.body as {config?:Record<string,unknown>})
+  expect(submitted.config).toMatchObject({
+    tts_engine:'edge',tts_kokoro_speed:1.35,tts_edge_voice:'en-GB-SoniaNeural',
+    tts_edge_rate_percent:22,tts_edge_pitch_hz:-8,tts_edge_risk_ack_version:1,
+  })
 })
 
 test('the budget control is a row of chips on a phone, not a stack of form rows', async ({ page }) => {

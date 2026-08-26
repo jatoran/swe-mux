@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import time
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
+from ..edge_tts_provider import EdgeTtsError
 from ..event_bus import EventBus
 from ..harness import (
     delivers_prompts_through_pty,
@@ -31,6 +33,7 @@ from ..session import (
     pty_tail_state,
     session_cli_state_status,
 )
+from ..tts_profiles import resolve_tts_profile
 from ..voice import (
     DICTATION_PROFILE,
     VoiceError,
@@ -47,6 +50,58 @@ log = logging.getLogger(__name__)
 async def voice_status(request: web.Request) -> web.Response:
     voice: VoiceService = request.app[keys.VOICE]
     return json_response(await voice.status())
+
+
+async def edge_provider_status(request: web.Request) -> web.Response:
+    """Cached local state only. Starting the external integration is explicit."""
+
+    voice: VoiceService = request.app[keys.VOICE]
+    return json_response(voice.edge_tts.status())
+
+
+async def edge_provider_probe(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app[keys.VOICE]
+    return json_response(await voice.edge_tts.probe())
+
+
+async def edge_voice_catalog(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app[keys.VOICE]
+    return json_response(
+        voice.edge_tts.catalog.snapshot(selected=voice.config.tts_edge_voice)
+    )
+
+
+async def edge_voice_refresh(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app[keys.VOICE]
+    try:
+        return json_response(await voice.edge_tts.refresh_voices())
+    except EdgeTtsError as exc:
+        return json_response({"error": str(exc), "code": exc.code}, 503)
+
+
+async def edge_voice_preview(request: web.Request) -> web.Response:
+    """Explicitly synthesize a fixed, non-sensitive audition sentence."""
+
+    voice: VoiceService = request.app[keys.VOICE]
+    voice_id = str(request.query.get("voice") or "")
+    if not voice_id or len(voice_id) > 160 or not voice_id.endswith("Neural"):
+        return json_response({"error": "invalid Edge voice id"}, 400)
+    profile = resolve_tts_profile(voice.config, provider="edge", voice_override=voice_id)
+    destination = voice.clip_directory / f"edge-preview-{uuid.uuid4().hex}.mp3"
+    try:
+        await voice.edge_tts.synthesize(
+            profile,
+            "This is a preview of the selected Edge voice.",
+            destination,
+            automatic=False,
+        )
+        data = destination.read_bytes()
+    except EdgeTtsError as exc:
+        return json_response({"error": str(exc), "code": exc.code}, 503)
+    finally:
+        with suppress(OSError):
+            destination.unlink(missing_ok=True)
+    return web.Response(body=data, content_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 
 async def kokoro_model_status(request: web.Request) -> web.Response:
@@ -517,6 +572,11 @@ async def delete_voice_clip(request: web.Request) -> web.Response:
 
 ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/voice", voice_status),
+    web.get("/api/voice/providers/edge", edge_provider_status),
+    web.post("/api/voice/providers/edge/probe", edge_provider_probe),
+    web.get("/api/voice/providers/edge/voices", edge_voice_catalog),
+    web.post("/api/voice/providers/edge/voices/refresh", edge_voice_refresh),
+    web.get("/api/voice/providers/edge/preview", edge_voice_preview),
     web.get("/api/voice/models/kokoro", kokoro_model_status),
     web.post("/api/voice/models/kokoro/download", kokoro_model_download),
     web.get("/api/voice/models/kokoro/preview", kokoro_voice_preview),

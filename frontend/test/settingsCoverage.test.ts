@@ -42,6 +42,7 @@ export const configFields = (): string[] => {
 const settingsSources = [
   'Settings.tsx', 'NotificationPushSettings.tsx', 'SessionRowSettings.tsx',
   'ProviderAccounts.tsx', 'remoteConnection.tsx', 'WslBridgePanel.tsx',
+  'EdgeTtsSettings.tsx',
   // The seven model settings live here now rather than beside the features they
   // configure, because switching endpoint changes all of them at once.
   'ModelRoutingSummary.tsx',

@@ -211,7 +211,10 @@ def write_transcript(service: VoiceService, events: list[dict[str, Any]]) -> Non
 def patch_engine(service: VoiceService, *, fail: str | None = None) -> list[str]:
     spoken: list[str] = []
 
-    async def synthesize(text: str, destination: Path) -> None:
+    async def synthesize(
+        _profile: Any, text: str, destination: Path, *, automatic: bool
+    ) -> None:
+        del automatic
         if fail:
             raise VoiceError(fail)
         spoken.append(text)
@@ -240,7 +243,10 @@ def patch_wav_engine(service: VoiceService, *, fail_on: str | None = None) -> li
     """
     spoken: list[str] = []
 
-    async def synthesize(text: str, destination: Path) -> None:
+    async def synthesize(
+        _profile: Any, text: str, destination: Path, *, automatic: bool
+    ) -> None:
+        del automatic
         if fail_on and fail_on in text:
             raise VoiceError("engine failed")
         spoken.append(text)
@@ -273,22 +279,24 @@ def test_voice_config_fields_validate_and_hot_apply(tmp_path: Path) -> None:
         update_config(config, {"voice_chat_patience_ms": 9000})
 
 
-def test_tts_lexicon_validates_and_hot_applies(tmp_path: Path) -> None:
+def test_tts_kokoro_lexicon_validates_and_hot_applies(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
-    hot, restart = update_config(config, {"tts_lexicon": {"vaultspaces": "vault spaces"}})
-    assert "tts_lexicon" in hot and restart == set()
+    hot, restart = update_config(
+        config, {"tts_kokoro_lexicon": {"vaultspaces": "vault spaces"}}
+    )
+    assert "tts_kokoro_lexicon" in hot and restart == set()
     # Round-trips through the TOML file like every other field.
-    assert load_config(config.config_path or tmp_path / "config.toml").tts_lexicon == {
-        "vaultspaces": "vault spaces"
-    }
-    with pytest.raises(ValueError, match="tts_lexicon"):
-        update_config(config, {"tts_lexicon": {"two words": "nope"}})
-    with pytest.raises(ValueError, match="tts_lexicon"):
-        update_config(config, {"tts_lexicon": {"vaultspaces": "  "}})
-    with pytest.raises(ValueError, match="tts_lexicon"):
-        update_config(config, {"tts_lexicon": {"x" * 61: "too long a word"}})
-    with pytest.raises(ValueError, match="tts_lexicon"):
-        update_config(config, {"tts_lexicon": "vaultspaces"})
+    assert load_config(
+        config.config_path or tmp_path / "config.toml"
+    ).tts_kokoro_lexicon == {"vaultspaces": "vault spaces"}
+    with pytest.raises(ValueError, match="tts_kokoro_lexicon"):
+        update_config(config, {"tts_kokoro_lexicon": {"two words": "nope"}})
+    with pytest.raises(ValueError, match="tts_kokoro_lexicon"):
+        update_config(config, {"tts_kokoro_lexicon": {"vaultspaces": "  "}})
+    with pytest.raises(ValueError, match="tts_kokoro_lexicon"):
+        update_config(config, {"tts_kokoro_lexicon": {"x" * 61: "too long a word"}})
+    with pytest.raises(ValueError, match="tts_kokoro_lexicon"):
+        update_config(config, {"tts_kokoro_lexicon": "vaultspaces"})
 
 
 async def test_lexicon_check_and_preview_guard_their_inputs(tmp_path: Path) -> None:
@@ -323,7 +331,9 @@ def test_apply_lexicon_invalidates_every_kokoro_cache(tmp_path: Path) -> None:
     service._kokoro_previews["af_heart"] = b"stale"
     service.spelled_words.record("vaultspaces")
     service.spelled_words.record("govspend")
-    update_config(service.config, {"tts_lexicon": {"Vaultspaces": "vault spaces"}})
+    update_config(
+        service.config, {"tts_kokoro_lexicon": {"Vaultspaces": "vault spaces"}}
+    )
     service.apply_lexicon()
     assert applied == [{"Vaultspaces": "vault spaces"}]
     assert service._kokoro_previews == {}
@@ -1770,7 +1780,10 @@ async def test_a_clip_is_visible_while_it_is_still_being_made(tmp_path: Path) ->
     write_transcript(service, REPLY_EVENTS)
     seen: list[str] = []
 
-    async def synthesize(text: str, destination: Path) -> None:
+    async def synthesize(
+        _profile: Any, text: str, destination: Path, *, automatic: bool
+    ) -> None:
+        del automatic
         rows = await service.store.clips(session_id="s1")
         seen.extend(str(row["status"]) for row in rows)
         destination.write_bytes(b"ID3" + text.encode()[:64])
@@ -1890,6 +1903,73 @@ async def segmented_service(
 async def drain_segments(service: VoiceService) -> None:
     while service._segment_tasks:
         await asyncio.gather(*tuple(service._segment_tasks))
+
+
+async def test_provider_switch_applies_to_the_next_stream_not_its_tail(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(
+        tmp_path, content="summary", provider=ProviderStub(speech=SEGMENTED_SPEECH)
+    )
+    write_transcript(service, REPLY_EVENTS)
+    providers: list[str] = []
+
+    async def synthesize(
+        profile: Any, text: str, destination: Path, *, automatic: bool
+    ) -> None:
+        del automatic
+        providers.append(profile.provider)
+        destination.write_bytes(b"ID3" + text.encode()[:64])
+
+    service._synthesize = synthesize  # type: ignore[method-assign]
+    try:
+        first = await service.generate("s1", trigger="manual", reuse=False)
+        assert first["engine"] == "sapi"
+        update_config(
+            service.config,
+            {
+                "tts_engine": "edge",
+                "tts_edge_risk_ack_version": 1,
+            },
+        )
+        await drain_segments(service)
+        assert len(providers) >= 2
+        assert set(providers) == {"sapi"}
+
+        await service.generate("s1", trigger="manual", reuse=False)
+        assert providers[-1] == "edge"
+    finally:
+        service.store.close()
+
+
+async def test_clip_reuse_requires_the_same_provider_profile(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path, content="verbatim")
+    write_transcript(service, REPLY_EVENTS)
+    providers: list[str] = []
+
+    async def synthesize(
+        profile: Any, text: str, destination: Path, *, automatic: bool
+    ) -> None:
+        del automatic
+        providers.append(profile.provider)
+        destination.write_bytes(b"ID3" + text.encode()[:64])
+
+    service._synthesize = synthesize  # type: ignore[method-assign]
+    try:
+        message_id = last_assistant_message(service)["message_id"]
+        first = await service.generate("s1", trigger="manual", message_id=message_id)
+        same = await service.generate("s1", trigger="manual", message_id=message_id)
+        assert same["reused"] is True
+        assert len(providers) == 1
+
+        update_config(
+            service.config,
+            {"tts_engine": "edge", "tts_edge_risk_ack_version": 1},
+        )
+        edge = await service.generate("s1", trigger="manual", message_id=message_id)
+        assert edge["engine"] == "edge"
+        assert edge["id"] != first["id"]
+        assert providers == ["sapi", "edge"]
+    finally:
+        service.store.close()
 
 
 async def test_a_segmented_reply_is_one_clip_in_the_list(tmp_path: Path) -> None:
