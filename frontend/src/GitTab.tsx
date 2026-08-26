@@ -796,7 +796,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         const removing=isRemoving(pendingRemovals,tree.path)
         const assessment=assessments.get(normalizePath(tree.path))
         const blocks=assessment?.blocks||[]
-        return <article class={`git-map-row${removing?' removing':''}`} key={tree.path} aria-busy={removing?'true':undefined}>
+        return <article class={`git-map-row${activeLand?` land-active land-${activeLand.state}`:''}${removing?' removing':''}`} key={tree.path} aria-busy={removing?'true':undefined}>
           {/* The live count is a sibling of the expand button, not a span inside it: it is
               its own affordance now, and interactive content nested in a button is neither
               valid nor reliably clickable. */}

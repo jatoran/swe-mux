@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { GrantGate } from './GrantGate'
+import { CompactGrantFlag } from './GrantGate'
 import {
   CLIPBOARD_CHANGED_EVENT,
   clearClipboardHistory,
@@ -201,13 +201,10 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
   const retention = history?.retention_hours ? `${history.retention_hours}h` : 'until evicted'
   return <>
       <p class="drawer-status">{history ? `${history.count} kept · ${history.persist ? 'saved to disk' : 'memory only'} · ${retention}` : 'loading…'}</p>
-      {history && !history.enabled && <GrantGate ids={['clipboard.history']}
+      {history && !history.enabled && <CompactGrantFlag id="clipboard.history"
         heading="Clipboard history is off."
-        onGranted={load}>
-        <p>Nothing copied inside swe-mux is being kept, so this panel stays empty however
-        much you copy. Turning it on starts keeping copies from now on; it cannot recover
-        anything copied before.</p>
-      </GrantGate>}
+        consequence="New copies are not being kept."
+        onGranted={load}/>}
       <div class="clipboard-search">
         <input ref={search} value={query} onInput={event => setQuery(event.currentTarget.value)} onKeyDown={onSearchKey} placeholder="Filter copied text…" aria-label="Filter clipboard history" />
       </div>

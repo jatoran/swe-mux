@@ -18,7 +18,7 @@ import { SETTINGS_CONFIG_FIXTURE } from './renderer/settingsConfigFixture.ts'
  * exist.
  *
  * So this walks the other way: from every field the daemon's `Config` dataclass declares,
- * to a control in the Settings panel, or to an explicit line below saying why there is
+ * to a control in the Settings or Automation policy UI, or to an explicit line below saying why there is
  * none. Adding a field to `config.py` and forgetting the control now fails here, and the
  * escape hatch costs one sentence of justification rather than silence.
  */
@@ -42,7 +42,7 @@ export const configFields = (): string[] => {
 const settingsSources = [
   'Settings.tsx', 'NotificationPushSettings.tsx', 'SessionRowSettings.tsx',
   'ProviderAccounts.tsx', 'remoteConnection.tsx', 'WslBridgePanel.tsx',
-  'EdgeTtsSettings.tsx',
+  'EdgeTtsSettings.tsx', 'AutomationPolicyView.tsx',
   // The seven model settings live here now rather than beside the features they
   // configure, because switching endpoint changes all of them at once.
   'ModelRoutingSummary.tsx',

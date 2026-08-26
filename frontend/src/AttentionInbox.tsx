@@ -24,14 +24,16 @@ import {
   CHANNEL_HINTS, CHANNEL_LABELS, CHANNEL_ORDER,
   budgetLine, decideAttentionRule, fanoutHeadline, fetchAttentionInbox,
   sendAttentionFeedback, suppressedLabel,
-  type AttentionInbox as InboxData, type AttentionItem,
+  type AttentionChannel, type AttentionInbox as InboxData, type AttentionItem,
 } from './attention'
 
-export function AttentionInbox({onOpenSession,project}:{
+export function AttentionInbox({onOpenSession,project,visibleChannels}:{
   onOpenSession:(sessionId:string)=>void
   /** The Project whose opt-in is reported when nothing is ranked. The inbox itself is
    *  fleet-wide; ranking is permitted per Project, so the empty state can only name one. */
   project?:Project
+  /** The Alerts tab separates interrupt-worthy work from work that can wait. */
+  visibleChannels?:AttentionChannel[]
 }) {
   const [data,setData]=useState<InboxData|null>(null)
   const [error,setError]=useState('')
@@ -70,7 +72,7 @@ export function AttentionInbox({onOpenSession,project}:{
   }
 
   if(!data)return <p class="drawer-status">{error||'Ranking has produced nothing yet.'}</p>
-  const channels=CHANNEL_ORDER.filter(channel=>channel!=='digest'||showDigest)
+  const channels=(visibleChannels||CHANNEL_ORDER).filter(channel=>channel!=='digest'||showDigest)
   const total=CHANNEL_ORDER.reduce((count,channel)=>count+(data.channels[channel]?.length||0),0)
 
   return <section class="attention-inbox">
@@ -137,7 +139,7 @@ function AttentionRow({item,busy,onOpenSession,onFeedback}:{
     </div>
     <div class="notification-row-actions">
       {item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>Open session</button>}
-      <button disabled={busy} onClick={()=>onFeedback('acted')}>acted</button>
+      <button disabled={busy} onClick={()=>onFeedback('acted')}>Mark handled</button>
       <button disabled={busy} onClick={()=>onFeedback('dismissed')}>dismiss</button>
     </div>
   </article>

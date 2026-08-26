@@ -316,7 +316,7 @@ pair one level up: search broadly across runs, then read one run's spine deeply.
   on the human surface.
 - **No write surface, deliberately.** Neither `POST /api/sessions/{sid}/scan-timeline/scan`
   nor the backfill endpoint is reachable through MCP. Reads cost nothing, but a scan spends
-  the human's gated budget against caps set in Settings → Automation → Scan timeline, and an
+  the human's gated budget against caps set in Automation → Global policy → Scan timeline, and an
   agent that could trigger scans could exhaust `scan_timeline_daily_budget` for every
   Project on the host. Source rehydration stays behind
   `GET /api/sessions/{sid}/scan-timeline/{record_id}?rehydrate=1` for the same reason at

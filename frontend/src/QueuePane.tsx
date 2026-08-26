@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
 import { hasSoftKeyboard } from './deviceSettings'
 import { Dropdown } from './Dropdown'
-import { GrantGate } from './GrantGate'
+import { CompactGrantFlag } from './GrantGate'
 import { SettingLink } from './SettingLink'
 import { StateIndicator } from './StateIndicator'
 import { useSessionRowConfig } from './sessionRowPrefs'
@@ -767,14 +767,10 @@ export function QueuePane({
             </p>
           )}
           {auto && !auto.master_enabled && (
-            <GrantGate ids={['queue.autoDelivery']}
-              heading="Auto-delivery is off for this install."
-              onGranted={() => void run('auto', async () => setAuto(await fetchAutoStatus()))}>
-              <p>Armed messages stay in the queue until you send them by hand, on every
-              session. Turning it on delivers nothing by itself: each conversation still
-              opts in, the stability window still has to be satisfied, and the emergency
-              pause below still stops everything at once.</p>
-            </GrantGate>
+            <CompactGrantFlag id="queue.autoDelivery"
+              heading="Auto-delivery is off."
+              consequence="Armed messages wait for manual Send now."
+              onGranted={() => void run('auto', async () => setAuto(await fetchAutoStatus()))}/>
           )}
           {/* The two install-wide brakes. They are not per-session, and they are here
               rather than in the fleet overlay because a stop reachable only by opening

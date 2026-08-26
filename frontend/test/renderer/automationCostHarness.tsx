@@ -7,6 +7,8 @@
 import { render } from 'preact'
 import { AutomationDashboard } from '../../src/AutomationDashboard'
 import '../../src/style.css'
+import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
+import type { Project } from '../../src/types'
 
 const NOW = 1_770_000_000
 
@@ -83,6 +85,10 @@ const MATRIX = {
 }
 
 const ROUTES: Array<[string, unknown]> = [
+  ['/api/projects/p1/automations', { revision: 'r1', requested: MATRIX.projects[0].requested, enabled: MATRIX.projects[0].enabled, blocked: {}, unverified: [], automations: MATRIX.automations, scan_timeline_auto_enable: false }],
+  ['/api/projects/p2/automations', { revision: 'r2', requested: {}, enabled: [], blocked: {}, unverified: [], automations: MATRIX.automations, scan_timeline_auto_enable: false }],
+  ['/api/project/config', { revision: 'repo-1', values: { automations: {}, scan_timeline_auto_enable: false } }],
+  ['/api/config', SETTINGS_CONFIG_FIXTURE],
   ['/api/automation/dashboard', DASHBOARD],
   ['/api/automation/projects', MATRIX],
   ['/api/automation/rules', { version: 1, text: 'version = 1\n', rules: [], diagnostic: null }],
@@ -103,6 +109,9 @@ window.fetch = (async (input: RequestInfo | URL) => {
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
-  <AutomationDashboard onClose={() => {}} onConfigure={() => {}} onOpenSession={() => {}} onOpenAlerts={() => {}} onOpenFindings={() => {}} onOpenUsage={() => {}} />,
+  <AutomationDashboard projects={[
+    { id: 'p1', name: 'swe-mux', root: 'D:/PROJECTS/swe-mux' } as Project,
+    { id: 'p2', name: 'orca', root: 'D:/PROJECTS/orca' } as Project,
+  ]} onClose={() => {}} onOpenSession={() => {}} onOpenAlerts={() => {}} onOpenFindings={() => {}} onOpenUsage={() => {}} />,
   document.querySelector('#root')!,
 )

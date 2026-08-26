@@ -248,7 +248,7 @@ Three rules keep that from becoming the per-row gate the strip retired.
 Only `unapproved` (a `not_configured` refusal has no bytes to show and no approval to give).
 Only a refusal that still stands, by the same supersession rule the attention row uses - a branch that has since landed or verified is not blocked on approving anything.
 And only a checkout other than the Project root, whose copy is the block the strip already draws.
-The blocks are bounded to three and are transient by construction, and the collapsed summary line names the count, because this is precisely the case where the Project gate reads approved and a land is refused anyway.
+The blocks are bounded to three and are transient by construction, and the collapsed gate cell names the count, because this is precisely the case where the Project gate reads approved and a land is refused anyway.
 
 The digest-scoped store above is what makes the control safe rather than a loop: before it, approving this copy withdrew the primary's, so a control here would have automated the very oscillation it exists to end.
 
@@ -320,7 +320,7 @@ It passes every precondition unchanged.
 
 All three are reported by `GET /api/land` (`installed_enabled`, `project_enabled`, `agent_grant`), because none of them could be told apart from an ordinary quiet queue.
 The install stop is the sharpest case: it is checked by the sweep before anything else, so with it off a request enqueues and then sits at `queued` forever - identical, on screen, to a pipeline working through a backlog.
-It also had no control in any overlay until it gained one in Settings → Automation → Land queue.
+It also had no control in any overlay until it gained one in Automation → Global policy → Schedules and landing.
 
 **All three are Project-wide or wider, so all three are drawn once, in the landing strip.**
 A control that answers "for every branch in this repository" copied into each expanded row is a standing fixture in a per-checkout pane, which is exactly what `setting-links.md` forbids - and it is the same repetition that sent the verification block up here.
@@ -467,6 +467,7 @@ So the map holds both halves, split by **what each part is a property of**:
 
 - **The row owns the act**, and only the act.
   A collapsed worktree with an active request shows the request's state plus the useful detail available for that state: its queue position, observed verification step, skipped-gate note, or daemon-supplied reason.
+  Its full-height leading rail takes the state's colour, and its operational reading gets a third line rather than competing with branch identity or Git metrics.
   Expanding the worktree shows that branch's Land button, the same live land state, a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths or a refusal's reason, which are facts about *this* branch.
   It sits **above** the expansion's change groups (operator decision 2026-08-22).
   Those groups are unbounded - a branch with sixty changed files is ordinary - so below them the row's one action, and the live state it reports, were reachable only by scrolling past the thing they act on.
@@ -482,7 +483,8 @@ So the map holds both halves, split by **what each part is a property of**:
   The main tree and a detached HEAD are named as unable to land rather than enqueued and refused, for the same reason the row states them.
   A bulk press starts ordinary lands only, for the same reason a single row does: there is no operator button for a verify-only run.
 - **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
-  Its expanded reading leads with a three-part pipeline: gate standing, the active branch and observed step, and the count waiting behind it.
+  Its disclosure control is the three-part pipeline: gate standing, the active branch and observed step, and the count waiting behind it.
+  All three cells remain visible while folded, so an idle Project teaches the same operating model as a busy one and a queued branch does not require expansion to find.
   Verification configuration follows in a `Verification settings` disclosure, because configuration serves the operation rather than being the operation.
   An approved repository script keeps that disclosure closed and offers the compact `Use a different command` override action only after it is opened.
   An unapproved or unconfigured gate opens the settings disclosure when the operator reaches the expanded strip, so moving configuration out of the lead position never hides the act that clears a gate.
@@ -491,17 +493,17 @@ Nothing Project-wide is drawn on a row, and that is the whole point of the split
 A fact that is true of the Project is drawn N times if it lives on a row, and the verification block shipped that way once: the same paragraph about approved bytes under each of eight expansions, burying the diff the expansion was opened for.
 
 **The strip stays a strip, so the tab still reads as a map.**
-It is one summary line - the gate's standing, and what the queue is doing right now, including a running gate's step - with everything else behind a disclosure.
+It is one compact heading plus three bounded status cells, with configuration, authority, queue detail, and history behind the disclosure.
 It **opens itself when a land is stuck on a human**, which is three states - the install stop is off, a verification command exists but its bytes are not approved, or a worktree's own copy of the gate refused a land - and in all three the act that clears it is inside; a surface that cannot work must not render as merely quiet (`setting-links.md`).
 **A repository with no verification command at all is deliberately not one of them** (operator decision 2026-08-22).
 It used to be, on the reading that nothing can land there so the surface must announce itself.
 But that reading fires on the resting state of every repository that never opted into the land queue, and unfolding a landing panel over the map on each of them reports an emergency that does not exist.
 Nothing is stuck: the queue was never set up.
 The rule is about a surface someone is *trying to use*, which is why the half-finished case - bytes written, nobody has read them - still opens.
-An explicit collapse wins after either default and nothing re-opens under the reader, which stays honest because the summary line goes on stating the gate's standing in warn tone while closed, and the setup is one click behind it.
+An explicit collapse wins after either default and nothing re-opens under the reader, which stays honest because the gate cell goes on stating the warning while closed, and the setup is one click behind it.
 
 **A bounced request stops speaking for the queue once its branch gets another answer.**
-The summary line picks the most interesting row, and a handed-back or refused request is terminal *and* unresolved, so it outranks a quiet queue.
+The collapsed headline picks the most interesting row, and a handed-back or refused request is terminal *and* unresolved, so it outranks a quiet queue.
 Nothing ever closed one: an agent's redo is a **new** request with a new id, so the bounced row sits in the history for good and the summary resurrects it forever.
 Observed 2026-08-21 - the collapsed strip read `worktree-watch-session-settle · returned to agent` for hours after that very branch's redo had landed, through several unrelated landings, which is the queue reporting a state it had already left.
 
@@ -574,7 +576,7 @@ Two tools make the safe call the short one and let the grant say different thing
 | `land_grant` | `<project>/.swe-mux/config.toml` | `off` / `draft` / `granted`, default `draft`. |
 | `[worktree] verify_command` | `<project>/.swe-mux/config.toml` | Explicit override of the `.worktree-verify` convention. |
 
-Every `global` row above is edited in Settings → Automation → **Land queue**.
+Every `global` row above is edited in Automation → Global policy → **Schedules and landing**.
 The install stop had a control from the start and the other four did not, which is the shape
 this feature's own prose already names for the verification command: a bound that only a
 config-file edit can reach is a bound nobody adjusts and nobody can see.
@@ -592,7 +594,7 @@ config-file edit can reach is a bound nobody adjusts and nobody can see.
 - The act, on the Map row: `frontend/src/GitLandRow.tsx`
 - The strip at the head of the map (queue, verification command, agent authority): `frontend/src/GitLandBar.tsx`
 - The retired segment and its migration: `frontend/src/drawerSegments.ts`, `frontend/src/drawerLayout.ts`, `src/swe_mux/keybindings.py`
-- Shared queue/gate reads: `frontend/src/landState.ts`; parsing, labels, supersession, and the strip's summary line: `frontend/src/gitLand.ts`
+- Shared queue/gate reads: `frontend/src/landState.ts`; parsing, labels, supersession, and the strip's folded status model: `frontend/src/gitLand.ts`
 - The copyable setup prompt for another repository: `frontend/src/landSetupPrompt.ts`
 - Tests: `tests/test_land_queue.py`, `tests/test_land_api.py`, `tests/test_verify_progress.py`,
   `tests/test_land_classify.py`,

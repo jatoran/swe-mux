@@ -113,12 +113,11 @@ export function UsageOverview({ onOpen }: { onOpen: (segment: UsageSegment) => v
           </>}
       </button>
     </div>
-    <p class="telemetry-caveat usage-pots-caveat">
-      These three are never added together. Agent spend is a subscription read back out of
-      transcripts and is an estimate; automation spend is a metered key billed by the call;
-      quota is a share of a provider window and is not money. A total across them would be a
-      number that is true of nothing.
-    </p>
+    <details class="usage-pots-rule">
+      <summary>Different units, shown side by side and never totaled. <span>Why?</span></summary>
+      <p>Agents is a transcript-based estimate, Automation is metered call spend, and Quota
+      is provider-window capacity rather than money.</p>
+    </details>
     <p class="usage-overview-freshness">
       {usage?.cache?.updated_at
         ? `ccusage cache updated ${new Date(usage.cache.updated_at * 1000).toLocaleString()}`

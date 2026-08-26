@@ -204,7 +204,7 @@ test('read aloud is a third body in the panel, mounted once and hidden rather th
   // The master switch keeps exactly one owner. The tab may turn it on through the
   // standard gate - a grant only ever turns something on - and links to Settings for
   // turning it off, rather than carrying a second copy of the switch.
-  assert.match(readTab, /<GrantGate\n\s*ids=\{\['voice\.tts'\]\}/)
+  assert.match(readTab, /<CompactGrantFlag id="voice\.tts"/)
   assert.match(readTab, /<SettingLink target="voice\.tts"/)
   assert.doesNotMatch(readTab, /type="checkbox"/)
   // And the per-session control left the pane bar, so it is answered once rather than

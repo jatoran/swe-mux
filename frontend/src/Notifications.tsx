@@ -27,7 +27,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { AttentionInbox } from './AttentionInbox'
-import { GrantGate } from './GrantGate'
+import { CompactGrantFlag } from './GrantGate'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { currentProfile } from './deviceSettings'
 import type { Project } from './types'
@@ -93,6 +93,7 @@ export function NotificationsTab({data,onOpenSession,onChanged,project}:{
   project?:Project
 }) {
   const [showRead,setShowRead]=useState(false)
+  const [view,setView]=useState<'now'|'review'|'history'>('now')
   const [alertsMuted,setAlertsMuted]=useState(()=>!alertPreferences().enabled)
   // The bell in the sidebar footer and the Alerts settings write the same store, so this
   // follows the one event that store emits rather than polling or re-reading on render.
@@ -125,17 +126,25 @@ export function NotificationsTab({data,onOpenSession,onChanged,project}:{
         delivery channel — so the mute is stated here rather than silently explaining why
         nothing made a sound. The bell in the sidebar footer is the same switch; this link
         is for the device-class settings behind it. */}
-    {alertsMuted&&<GrantGate ids={['alerts.master']}
-      heading="Alerts are muted on this device."
+    {alertsMuted&&<CompactGrantFlag id="alerts.master"
+      heading="Notifications are off on this device."
+      consequence="Alerts are still recorded."
       confirmLabel="Unmute alerts on this device"
       applyDevice={unmuteAlerts}
-      onGranted={()=>setAlertsMuted(!alertPreferences().enabled)}>
-      <p>Everything below is still recorded; sounds and push notifications are not
-      delivered. Unmuting restores the per-channel and per-event choices already saved
-      for this device class — none of them were cleared by the mute.</p>
-    </GrantGate>}
-    <AttentionInbox onOpenSession={onOpenSession} project={project} />
-    <AwayReport />
+      onGranted={()=>setAlertsMuted(!alertPreferences().enabled)}/>}
+    <div class="alerts-view-tabs" role="tablist" aria-label="Alert urgency">
+      <button role="tab" aria-selected={view==='now'} class={view==='now'?'active':''}
+        title="Interrupt-worthy: actionable, worsening, and confident enough to spend attention budget"
+        onClick={()=>setView('now')}>Now</button>
+      <button role="tab" aria-selected={view==='review'} class={view==='review'?'active':''}
+        title="Relevant but not urgent: wait until the next natural pause or task change"
+        onClick={()=>setView('review')}>Review next</button>
+      <button role="tab" aria-selected={view==='history'} class={view==='history'?'active':''}
+        onClick={()=>setView('history')}>History</button>
+    </div>
+    {view==='now'&&<AttentionInbox onOpenSession={onOpenSession} project={project} visibleChannels={['interrupt_now']} />}
+    {view==='review'&&<AttentionInbox onOpenSession={onOpenSession} project={project} visibleChannels={['next_breakpoint','inbox','digest']} />}
+    {view==='history'&&<><AwayReport />
     <h4 class="attention-raw-heading">Every record</h4>
     <p class="drawer-status">{error||`${open.length} open · ${records.length-open.length} dismissed · ${items.length} delivered`}</p>
     <div class="notification-list">
@@ -159,6 +168,6 @@ export function NotificationsTab({data,onOpenSession,onChanged,project}:{
     <div class="drawer-actions">
       <button disabled={busy||!open.length} onClick={dismissAll}>dismiss all</button>
       <button aria-pressed={showRead} onClick={()=>setShowRead(value=>!value)}>{showRead?'hide dismissed':'show dismissed'}</button>
-    </div>
+    </div></>}
   </>
 }

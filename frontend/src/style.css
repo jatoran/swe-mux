@@ -1441,6 +1441,13 @@ body {
 .automation-panel{display:flex;flex-direction:column}
 .automation-panel>header,.automation-panel>.usage-actions,.automation-panel>.usage-progress,.automation-panel>footer{flex:none}
 .automation-panel>main{flex:1 1 auto;min-height:0}
+.automation-policy-view{display:flex;min-height:0;flex-direction:column;gap:10px}.automation-policy-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px}.automation-policy-cards>button{display:grid;gap:4px;min-height:58px;padding:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);text-align:left}.automation-policy-cards>button strong{color:var(--text)}.automation-policy-cards>button.active{border-color:var(--green);background:color-mix(in srgb,var(--green) 8%,var(--panel2))}.automation-policy-view>.usage-table{margin:0}.automation-policy-view>.usage-table>label{display:grid;grid-template-columns:minmax(180px,32%) minmax(0,1fr);align-items:start;gap:9px;margin:0;padding:8px 10px;border-bottom:1px solid var(--line);color:var(--muted)}.automation-policy-view>.usage-table>label>input{grid-column:2;margin:0}.automation-policy-view>.usage-table>label.check,.automation-policy-view>.usage-table>label.settings-toggle{grid-template-columns:minmax(0,1fr) auto}.automation-policy-view>.usage-table>label.check>input,.automation-policy-view>.usage-table>label.settings-toggle>input{grid-column:2;grid-row:1}.automation-policy-view>.usage-table>label.settings-toggle>small{grid-column:1;display:block}.automation-policy-view>.usage-table>h4{margin:0;padding:10px;border-bottom:1px solid var(--line);color:var(--text)}.automation-policy-view>.usage-table>.budget-control,.automation-policy-view>.usage-table>.model-routing-elsewhere{margin:8px 10px}.automation-policy-footer{position:sticky;bottom:0;display:flex;align-items:center;gap:7px;padding:8px;border-top:1px solid var(--line);background:var(--panel)}.automation-policy-footer>span{margin-right:auto;color:var(--muted)}
+@media(max-width:760px){.automation-policy-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.automation-policy-view>.usage-table>label{grid-template-columns:minmax(120px,38%) minmax(0,1fr)}}
+.automation-overview-links{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:9px}.automation-overview-links>button{min-height:42px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}
+.automation-graph-view{display:flex;min-height:0;flex-direction:column;gap:8px}.automation-graph-toolbar{display:flex;align-items:center;gap:9px;padding:8px;border:1px solid var(--line);background:var(--panel)}.automation-graph-toolbar label{display:flex!important;min-width:280px;align-items:center!important;padding:0!important}.automation-graph-toolbar>span{margin-left:auto;color:var(--muted)}.automation-graph-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.automation-graph-group{border:1px solid var(--line);background:var(--panel)}.automation-graph-group h3{margin:0;padding:8px;border-bottom:1px solid var(--line);color:var(--accent)}.automation-graph-group article{display:grid;gap:3px;padding:8px;border-bottom:1px solid var(--line)}.automation-graph-group article:last-child{border-bottom:0}.automation-graph-group article>div{display:flex;align-items:center;gap:6px}.automation-graph-group article small,.automation-graph-group article>span{color:var(--muted)}.automation-graph-group article.enabled{box-shadow:inset 3px 0 var(--green);background:color-mix(in srgb,var(--green) 5%,transparent)}.automation-graph-group article.blocked{box-shadow:inset 3px 0 var(--warn);background:color-mix(in srgb,var(--warn) 6%,transparent)}.automation-pill.spends{border-color:var(--warn);color:var(--warn)}
+.automation-knowledge-search{width:calc(100% - 16px);min-height:32px;margin:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:6px 8px}.automation-knowledge-browser{display:grid;grid-template-columns:minmax(170px,32%) minmax(0,1fr);min-height:260px;border-top:1px solid var(--line)}.automation-knowledge-list{min-height:0;overflow:auto;border-right:1px solid var(--line)}.automation-knowledge-list>button{display:grid;gap:3px;width:100%;padding:8px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--muted);text-align:left}.automation-knowledge-list>button strong{color:var(--text)}.automation-knowledge-list>button.active{background:var(--panel2);box-shadow:inset 3px 0 var(--green)}.automation-knowledge-detail{padding:10px}.automation-knowledge-detail h4{margin:0 0 7px!important}.automation-knowledge-detail p{color:var(--muted)}
+@media(max-width:760px){.automation-overview-links,.automation-graph-groups{grid-template-columns:1fr}.automation-graph-toolbar{align-items:stretch;flex-direction:column}.automation-graph-toolbar label{min-width:0}.automation-graph-toolbar>span{margin-left:0}}
+@media(max-width:760px){.automation-knowledge-browser{grid-template-columns:1fr}.automation-knowledge-list{max-height:190px;border-right:0;border-bottom:1px solid var(--line)}}
 
 .usage-header-actions button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
 .observations-layer>.usage-panel>main{grid-row:6}.observations-layer>.usage-panel>footer{grid-row:7}
@@ -1513,7 +1520,7 @@ body {
 .usage-pot>span{color:var(--text)}
 .usage-pot>small{color:var(--muted)}
 .usage-pot>small.warn{color:var(--amber)}
-.usage-pots-caveat{margin:0}
+.usage-pots-rule{margin:0;border:1px solid var(--line);background:var(--panel2);color:var(--muted)}.usage-pots-rule>summary{display:flex;align-items:center;gap:8px;padding:7px 9px;cursor:pointer;list-style:none}.usage-pots-rule>summary::-webkit-details-marker{display:none}.usage-pots-rule>summary span{margin-left:auto;color:var(--accent)}.usage-pots-rule>p{margin:0;padding:0 9px 8px;line-height:1.45}
 .usage-overview-freshness{margin:0;color:var(--muted)}
 /* Collection health: collapsed, and visibly subordinate to the two tables it qualifies.
    It says whether those figures were collectable, which is only ever asked after they
@@ -1879,6 +1886,14 @@ body {
 .grant-gate-confirm{min-height:30px;padding:0 12px;border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--text)}
 .grant-gate-confirm:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 30%,transparent)}
 .grant-gate-confirm:disabled{opacity:.55}
+.compact-grant-flag{display:flex;align-items:center;gap:8px;margin:8px 0;padding:7px 8px;border:1px solid color-mix(in srgb,var(--warn) 55%,var(--line));border-left:3px solid var(--warn);background:color-mix(in srgb,var(--warn) 8%,var(--panel));font-size:9px}
+.compact-grant-mark{flex:none;color:var(--warn);font-size:12px}.compact-grant-copy{display:flex;min-width:0;flex:1 1 auto;align-items:baseline;gap:7px}.compact-grant-copy strong{color:var(--text);white-space:nowrap}.compact-grant-copy small{min-width:0;overflow:hidden;color:var(--muted);text-overflow:ellipsis;white-space:nowrap}
+.compact-grant-confirm{flex:none;min-height:28px;padding:2px 9px;border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--text)}.compact-grant-flag>.setting-link{flex:none}.compact-grant-error{flex-basis:100%;color:var(--danger)}
+@media(max-width:760px){.compact-grant-flag{flex-wrap:wrap}.compact-grant-copy{flex-basis:calc(100% - 24px);display:block}.compact-grant-copy strong,.compact-grant-copy small{display:block;white-space:normal}.compact-grant-confirm{margin-left:20px}}
+.settings-capability-flag{display:flex;align-items:center;gap:9px;padding:9px;border:1px solid color-mix(in srgb,var(--warn) 55%,var(--line));border-left:3px solid var(--warn);background:color-mix(in srgb,var(--warn) 8%,var(--panel2))}.settings-capability-flag>span{color:var(--warn)}.settings-capability-flag>div{min-width:0;flex:1}.settings-capability-flag strong,.settings-capability-flag small{display:block}.settings-capability-flag small,.settings-muted-reference{color:var(--muted)}.settings-capability-flag>button{flex:none;min-height:29px;padding:3px 9px;border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.settings-capability-status{display:flex;align-items:baseline;gap:8px;margin:8px 0;padding:8px;border-left:3px solid var(--blue);background:color-mix(in srgb,var(--blue) 7%,var(--panel2))}.settings-capability-status span{color:var(--muted)}
+.settings-status-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.settings-status-grid>article{padding:9px;border:1px solid var(--line);background:var(--panel2)}.settings-status-grid strong,.settings-status-grid span{display:block}.settings-status-grid span{margin-top:3px;color:var(--muted)}.settings-policy-floor{padding:8px;border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 6%,var(--panel2))}
+@media(max-width:760px){.settings-status-grid{grid-template-columns:1fr}}
 .findings-gate-alt{margin:0;color:var(--muted)}
 /* The `spends` chip on a Project opt-in row. Marked rather than unmarked, because most
    of that list is free and a chip on every row would say nothing. */
@@ -1924,10 +1939,11 @@ body {
   color:var(--text);text-transform:uppercase
 }
 .settings-tab-group:first-child>span{margin-top:0;border-top:0}
-/* In-tab section rail: sticky at the top of the scroller on every device. These are
-   scroll anchors, never sub-tabs — every section of a tab stays mounted, which is
-   what keeps the search index able to see the whole tab, keeps Ctrl+F working, and
-   keeps the one Save transaction from hiding a dirty field behind a hidden pane. */
+.settings-tab-row{display:grid;grid-template-columns:minmax(0,1fr) 28px;min-width:0}.settings-tab-row>button[role=tab]{min-width:0}.settings-tab-row>.settings-tab-expand{display:grid;place-items:center;min-height:33px;padding:0!important;border-left:1px solid transparent!important;color:var(--muted);text-align:center}.settings-tab-row>.settings-tab-expand:before{content:none}.settings-tab-row>.settings-tab-expand:hover{border-left-color:var(--line)!important;color:var(--text)}
+.settings-subtabs{display:grid;padding:0 0 5px 28px}.settings-subtabs>button{min-height:27px;padding:3px 6px 3px 9px!important;border-left:1px solid var(--line)!important;color:var(--muted);font-size:8px;text-align:left}.settings-subtabs>button:before{content:none}.settings-subtabs>button.active{border-left-color:var(--green)!important;background:color-mix(in srgb,var(--green) 7%,transparent)!important;color:var(--green);box-shadow:none}
+.settings-subpage-heading{position:sticky;top:0;z-index:2;display:flex;align-items:baseline;gap:10px;padding:9px 16px;border-bottom:1px solid var(--line);background:var(--panel)}.settings-subpage-heading strong{color:var(--text)}.settings-subpage-heading span{margin-left:auto;color:var(--muted);font-size:8px}
+/* Short tabs still use scroll anchors. Long tabs render one declared subpage at a time;
+   their nested pages live in the Settings sidebar. */
 .settings-section-rail{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:3px;padding:7px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
 .settings-section-rail button{min-height:26px;padding:0 8px;border:1px solid transparent!important;background:transparent!important;color:var(--muted)}
 .settings-section-rail button:hover{color:var(--text);background:var(--panel2)!important}
@@ -4308,6 +4324,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .skill-flag.warn{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));color:var(--amber)}
 .drawer-skill-note{margin:0;padding:8px 9px;color:var(--muted);font-size:8px;line-height:1.45}
 .actions-tab{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.actions-view-tabs{position:sticky;top:0;z-index:7;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--bg)}
+.actions-view-tabs>button{min-height:34px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.actions-view-tabs>button:hover{color:var(--text);background:var(--panel2)}.actions-view-tabs>button.active{border-bottom-color:var(--green);color:var(--text);background:color-mix(in srgb,var(--green) 7%,var(--panel))}
+.actions-view{min-height:0}.actions-skills-view{height:calc(100% - 35px)}.actions-skills-view>.drawer-skills{height:100%;border-top:0}.drawer-skill-row.compact{display:block;border-bottom:1px solid var(--line)}.drawer-skill-row.compact>button:first-child{width:100%;padding:7px 9px;border:0;background:transparent;text-align:left}.drawer-skill-row.compact.selected>button:first-child{background:var(--panel2);box-shadow:inset 2px 0 var(--green)}
+.drawer-skill-detail{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 8px;padding:8px 9px;border-top:1px solid var(--line);background:color-mix(in srgb,var(--green) 5%,var(--bg))}.drawer-skill-detail p{grid-column:1/-1;margin:0;color:var(--muted);line-height:1.4}.drawer-skill-detail small{align-self:center;color:var(--muted)}.drawer-skill-detail>button{min-height:28px;padding:2px 8px}
 .actions-tab-toolbar{display:flex;justify-content:flex-end;padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--line)}
 .actions-tab-toolbar>button{min-height:calc(28px*var(--ui-scale));padding:3px 9px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 @media(hover:hover){.actions-tab-toolbar>button:hover{border-color:var(--accent)}}
@@ -4444,6 +4464,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    score-sorted list: a permission prompt and a wrong plan are not the same kind
    of interruption and must never look like one. */
 .attention-inbox{flex:none;display:grid;gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
+.alerts-view-tabs{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--bg)}.alerts-view-tabs>button{min-height:34px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace}.alerts-view-tabs>button:hover{background:var(--panel2);color:var(--text)}.alerts-view-tabs>button.active{border-bottom-color:var(--green);background:color-mix(in srgb,var(--green) 7%,var(--panel));color:var(--text)}
 .attention-fanout{margin:0;color:var(--text);line-height:1.4}
 .attention-budget,.attention-rule-active{margin:0;color:var(--muted);font-size:9px;line-height:1.4}
 .attention-rule-active button{margin-left:6px;min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
@@ -4496,12 +4517,18 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-tab-body{flex:1 1 auto;min-height:0;overflow:auto;background:var(--bg)}
 .git-state{margin:0;padding:14px 10px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
 .git-state.error{color:var(--red);text-align:left;overflow-wrap:anywhere}
-.git-map-row{border-bottom:1px solid var(--line);background:var(--panel)}
+.git-map-row{--git-land-row-accent:transparent;border-bottom:1px solid var(--line);background:var(--panel);box-shadow:inset 2px 0 var(--git-land-row-accent)}
+.git-map-row.land-active{background:color-mix(in srgb,var(--git-land-row-accent) 3%,var(--panel))}
+.git-map-row.land-queued{--git-land-row-accent:var(--accent)}
+/* Waiting is a normal hold, so its rail is quiet rather than amber. */
+.git-map-row.land-waiting{--git-land-row-accent:var(--muted)}
+.git-map-row.land-reconciling,.git-map-row.land-verifying{--git-land-row-accent:var(--accent)}
+.git-map-row.land-landing{--git-land-row-accent:#c58af9}
 .git-map-row.expanded{box-shadow:inset 2px 0 var(--accent)}
 .git-map-rail{width:31px;color:var(--muted);font-size:11px;white-space:pre}
 .git-map-rail.main{color:var(--accent)}
 .git-map-identity{min-width:0;display:flex;align-items:baseline;gap:6px}
-.git-map-identity strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400}
+.git-map-identity strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:550}
 .git-map-identity strong.detached{color:var(--amber)}
 .git-map-identity small{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
 .git-map-metrics{min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-start;gap:2px 7px}
@@ -4801,15 +4828,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select,.git-compare .dropdown-trigger{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}
 .git-compare small{color:var(--muted);font-size:8px;overflow-wrap:anywhere}
-.git-review-tab .git-map-summary{width:100%;min-height:48px;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-rows:auto auto;align-content:center;column-gap:5px;row-gap:3px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.git-review-tab .git-map-summary{width:100%;min-height:52px;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-rows:auto auto;align-content:center;column-gap:7px;row-gap:3px;padding:8px 9px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .git-review-tab .git-map-summary:hover{background:var(--panel2)}
+.git-review-tab .git-map-row.land-active .git-map-summary:hover{background:color-mix(in srgb,var(--git-land-row-accent) 8%,var(--panel2))}
 .git-review-tab .git-map-rail{grid-column:1;grid-row:1;width:12px;align-self:baseline}
 .git-review-tab .git-map-identity{grid-column:2;grid-row:1;align-self:baseline}
 .git-review-tab .git-map-chevron{grid-column:1;grid-row:2;align-self:baseline;text-align:left}
 .git-review-tab .git-map-metrics{grid-column:2;grid-row:2;align-self:baseline}
-.git-review-tab .git-map-summary.has-land-status{grid-template-rows:auto auto auto;min-height:60px}
+.git-review-tab .git-map-summary.has-land-status{grid-template-rows:auto auto auto;min-height:64px}
 .git-review-tab .git-map-summary.has-land-status .git-map-chevron{grid-row:2 / span 2}
-.git-map-land-status{grid-column:2;grid-row:3;min-width:0;display:flex;align-items:center;gap:5px;color:var(--accent);font-size:8px}
+.git-map-land-status{grid-column:2;grid-row:3;min-width:0;display:flex;align-items:center;gap:5px;color:var(--git-land-row-accent,var(--accent));font-size:8px}
 .git-map-land-status i{flex:none;width:6px;height:6px;border:1px solid currentColor;border-radius:50%}
 .git-map-land-status strong{flex:none;font-size:8px;font-weight:600}
 .git-map-land-status small{min-width:0;overflow:hidden;color:currentColor;opacity:.78;font-size:8px;text-overflow:ellipsis;white-space:nowrap}
@@ -4824,7 +4852,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    the trailing edge, so the two never compete for the same tap. */
 .git-map-head,.git-commit-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center}
 .git-map-live,.git-commit-links,.git-session-open{border:1px solid transparent;background:transparent;color:var(--green);font:inherit;font-size:8px;white-space:nowrap;cursor:pointer}
-.git-map-live,.git-commit-links{align-self:center;min-height:24px;padding:0 7px;margin-right:7px;border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.git-map-live,.git-commit-links{align-self:center;min-height:24px;padding:0 7px;margin-right:7px}
+.git-map-live{border:0;color:var(--green);text-decoration:underline dotted color-mix(in srgb,var(--green) 60%,transparent);text-underline-offset:3px}
 .git-commit-links{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 .git-map-live:hover,.git-commit-links:hover{border-color:currentColor;background:var(--panel2)}
 /* The session's name in a provenance row *is* the link to it, so it keeps the name's
@@ -4904,27 +4933,20 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-ref-move-kind{color:var(--muted);font-size:8px}
 .git-ref-move-kind.merged,.git-ref-move-kind.created{color:var(--accent)}
 .git-ref-move-kind.rebased,.git-ref-move-kind.reset,.git-ref-move-kind.unknown{color:var(--amber)}
-/* Landing, as one strip at the head of the worktree map. It reads as a band rather than
-   as a panel because a map with a panel bolted on top stops being a map: one summary
-   line, and the Project-wide detail only when it is opened or when the gate blocks. */
+/* Landing is an operational strip rather than a prose summary. Its three cells remain
+   visible while folded, so the resting state teaches the same pipeline as a running one. */
 .git-landing{display:grid;gap:8px;padding:6px 10px 8px;border-bottom:1px solid var(--line);min-width:0}
-.git-landing-summary{display:flex;align-items:center;gap:8px;width:100%;padding:5px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel,transparent);color:var(--fg);font:inherit;text-align:left;cursor:pointer;min-width:0}
-.git-landing-summary.busy{border-color:var(--accent)}
-.git-landing-summary.warn{border-color:var(--amber)}
-.git-landing-title{color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.08em}
-/* Both halves wrap rather than truncate: a gate's standing and a running step are the
-   two facts this line exists for, and eliding either makes the line worth less than the
-   space it takes. */
-.git-landing-facts{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;flex:1;min-width:0;font-size:9px;overflow-wrap:anywhere}
-.git-landing-facts em{font-style:normal}
-.git-landing-facts em.ok{color:var(--accent)}
-.git-landing-facts em.warn{color:var(--amber)}
-.git-landing-facts em.idle{color:var(--muted)}
-.git-landing-facts span{color:var(--muted);font-variant-numeric:tabular-nums}
+.git-landing-summary{display:grid;gap:5px;width:100%;min-width:0;padding:0;border:0;background:transparent;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.git-landing-summary-head{display:flex;align-items:baseline;gap:7px;min-width:0;padding:0 1px}
+.git-landing-title{flex:none;color:var(--text);font-size:8px;font-weight:700;letter-spacing:.08em}
+.git-landing-headline{min-width:0;overflow:hidden;color:var(--muted);font-size:8px;letter-spacing:.045em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
 .git-landing-chevron{margin-left:auto;color:var(--muted)}
 .git-landing-body{display:grid;gap:8px;min-width:0}
 .git-land-pipeline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:hidden;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
-.git-land-pipeline-step{display:grid;gap:2px;min-width:0;padding:7px 8px;border-right:1px solid var(--line)}
+.git-landing-summary:hover .git-land-pipeline{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+.git-landing-summary.busy .git-land-pipeline{border-color:color-mix(in srgb,var(--accent) 70%,var(--line))}
+.git-landing-summary.warn .git-land-pipeline{border-color:var(--amber)}
+.git-land-pipeline-step{display:grid;gap:2px;min-width:0;min-height:40px;align-content:center;padding:7px 8px;border-right:1px solid var(--line)}
 .git-land-pipeline-step:last-child{border-right:0}
 .git-land-pipeline-step strong{overflow:hidden;color:var(--text);font-size:8px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .git-land-pipeline-step small{overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}
@@ -4932,9 +4954,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-pipeline-step.warn strong{color:var(--amber)}
 .git-land-pipeline-step.active{background:color-mix(in srgb,var(--accent) 7%,var(--panel));box-shadow:inset 0 -2px var(--accent)}
 .git-land-pipeline-step.idle strong{color:var(--muted)}
-.git-land-gate{display:grid;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px}
-.git-land-gate.warn{border-color:var(--amber)}
-.git-land-gate.ok{border-color:var(--line)}
+.git-land-gate{display:grid;gap:6px;padding:0 2px;border:0;background:transparent}
+.git-land-gate[open]{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.git-land-gate.warn[open]{border-color:var(--amber)}
 .git-land-gate-summary{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;align-items:center;gap:7px;min-width:0;color:var(--muted);font-size:8px;cursor:pointer;list-style:none}
 .git-land-gate-summary::-webkit-details-marker{display:none}
 .git-land-gate-summary::after{content:'+';grid-column:3;grid-row:1;color:var(--muted)}

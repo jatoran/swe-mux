@@ -12,15 +12,11 @@
  * checks every target's `data-setting` against the source that must carry it, so renaming a
  * control fails a test rather than quietly stranding the links that point at it.
  *
- * Two overlays own switches, and the split is scope:
- *  - `settings` — install-wide configuration (the Settings panel, tab named by `section`).
- *                 Every global switch and bound lives here, including the automation
- *                 master switches; the Automation dashboard shows their state and links
- *                 back rather than owning a second copy.
- *  - `project`  — one Project's own opt-ins (the Projects registry, the only per-Project editor).
+ * Three destinations own controls: ordinary install Settings, the unified Automation
+ * workspace, and the Projects registry for non-automation Project policy.
  */
 
-export type SettingSurface = 'settings' | 'project'
+export type SettingSurface = 'settings' | 'project' | 'automation'
 
 export type SettingTarget = {
   surface: SettingSurface
@@ -97,8 +93,8 @@ export const SETTING_TARGETS = {
     label: 'Ignore patterns', where: 'Settings → Projects',
   },
   'schedules.install': {
-    surface: 'settings', section: 'Automation', setting: 'scheduled_runs_enabled',
-    label: 'Let schedules start sessions', where: 'Settings → Automation',
+    surface: 'automation', setting: 'scheduled_runs_enabled',
+    label: 'Let schedules start sessions', where: 'Automation → Global policy',
   },
   'alerts.master': {
     surface: 'settings', section: 'Alerts', setting: 'alerts_enabled',
@@ -112,83 +108,94 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Accounts', setting: 'llm_provider',
     label: 'Model provider', where: 'Settings → Accounts',
   },
-  // The global automation switches live in Settings with every other install-wide
-  // switch; the Automation dashboard reads their state and links here.
+  // Global automation controls and the graph they govern share one workspace.
   'automation.engine': {
-    surface: 'settings', section: 'Automation', setting: 'automation_enabled',
-    label: 'Automation engine', where: 'Settings → Automation',
+    surface: 'automation', setting: 'automation_enabled',
+    label: 'Automation engine', where: 'Automation → Global policy',
   },
   'automation.scanTimeline': {
-    surface: 'settings', section: 'Automation', setting: 'scan_timeline_enabled',
-    label: 'Scan timeline', where: 'Settings → Automation',
+    surface: 'automation', setting: 'scan_timeline_enabled',
+    label: 'Scan timeline', where: 'Automation → Global policy',
+  },
+  'automation.scanTimelineModel': {
+    surface: 'settings', section: 'Accounts', setting: 'scan_timeline_model',
+    label: 'Scan timeline model', where: 'Settings → Accounts → Models',
+  },
+  'automation.attentionNarrationModel': {
+    surface: 'settings', section: 'Accounts', setting: 'attention_narration_model',
+    label: 'Attention narration model', where: 'Settings → Accounts → Models',
+  },
+  'automation.projectCardModel': {
+    surface: 'settings', section: 'Accounts', setting: 'project_card_model',
+    label: 'Project context card model', where: 'Settings → Accounts → Models',
   },
   'automation.budgets': {
-    surface: 'settings', section: 'Automation', setting: 'automation_daily_budget',
-    label: 'Automation budgets', where: 'Settings → Automation',
+    surface: 'automation', setting: 'automation_daily_budget',
+    label: 'Automation budgets', where: 'Automation → Global policy',
   },
   // The land queue's install-wide emergency stop. Its own switch rather than a facet of
   // the automation engine: the sweep that moves a trunk checks this and nothing else, so
   // a queue with it off accepts requests and then silently never advances one.
   'automation.landQueue': {
-    surface: 'settings', section: 'Automation', setting: 'land_queue_enabled',
-    label: 'Let the land queue move trunks', where: 'Settings → Automation',
+    surface: 'automation', setting: 'land_queue_enabled',
+    label: 'Let the land queue move trunks', where: 'Automation → Global policy',
   },
   // Per-Project opt-ins. Every one of these is off until a human turns it on for that
   // Project, so a surface reading from one is inert rather than empty until then.
   'project.automations': {
-    surface: 'project', setting: 'automations',
-    label: 'Automations', where: 'Project settings',
+    surface: 'automation', setting: 'automations',
+    label: 'Automations', where: 'Automation → Projects',
   },
   'project.scanTimeline': {
-    surface: 'project', setting: 'automation:scan_timeline',
-    label: 'Scan timeline permitted for this Project', where: 'Project settings',
+    surface: 'automation', setting: 'automation:scan_timeline',
+    label: 'Scan timeline permitted for this Project', where: 'Automation → Projects',
   },
   'project.scanTimelineAutoArm': {
-    surface: 'project', setting: 'scan_timeline_auto_enable',
-    label: 'Arm every new conversation', where: 'Project settings',
+    surface: 'automation', setting: 'scan_timeline_auto_enable',
+    label: 'Arm every new conversation', where: 'Automation → Projects',
   },
   'project.codeGraph': {
-    surface: 'project', setting: 'automation:code_graph',
-    label: 'Code-structure graph', where: 'Project settings',
+    surface: 'automation', setting: 'automation:code_graph',
+    label: 'Code-structure graph', where: 'Automation → Projects',
   },
   'project.scheduledRuns': {
-    surface: 'project', setting: 'automation:scheduled_runs',
-    label: 'Scheduled runs', where: 'Project settings',
+    surface: 'automation', setting: 'automation:scheduled_runs',
+    label: 'Scheduled runs', where: 'Automation → Projects',
   },
   'project.attentionRanking': {
-    surface: 'project', setting: 'automation:attention_ranking',
-    label: 'Attention ranking', where: 'Project settings',
+    surface: 'automation', setting: 'automation:attention_ranking',
+    label: 'Attention ranking', where: 'Automation → Projects',
   },
   'project.spawnReview': {
-    surface: 'project', setting: 'automation:observation_inbox',
-    label: 'Spawn request review', where: 'Project settings',
+    surface: 'automation', setting: 'automation:observation_inbox',
+    label: 'Spawn request review', where: 'Automation → Projects',
   },
   // The four model-free detectors the Findings pane reads. Named individually rather
   // than behind `project.automations`, because that target is an *area*: it reveals the
   // heading above twenty checkboxes and leaves the reader to find four of them by name.
   'project.provenanceGraph': {
-    surface: 'project', setting: 'automation:provenance_graph',
-    label: 'Provenance graph', where: 'Project settings',
+    surface: 'automation', setting: 'automation:provenance_graph',
+    label: 'Provenance graph', where: 'Automation → Projects',
   },
   'project.loopDetection': {
-    surface: 'project', setting: 'automation:loop_detection',
-    label: 'Loop / stall detection', where: 'Project settings',
+    surface: 'automation', setting: 'automation:loop_detection',
+    label: 'Loop / stall detection', where: 'Automation → Projects',
   },
   'project.declaredVsVerified': {
-    surface: 'project', setting: 'automation:declared_vs_verified',
-    label: 'Declared vs verified', where: 'Project settings',
+    surface: 'automation', setting: 'automation:declared_vs_verified',
+    label: 'Declared vs verified', where: 'Automation → Projects',
   },
   'project.docDebt': {
-    surface: 'project', setting: 'automation:doc_debt',
-    label: 'Doc-debt ledger', where: 'Project settings',
+    surface: 'automation', setting: 'automation:doc_debt',
+    label: 'Doc-debt ledger', where: 'Automation → Projects',
   },
   'project.landQueue': {
-    surface: 'project', setting: 'automation:land_queue',
-    label: 'Land queue', where: 'Project settings',
+    surface: 'automation', setting: 'automation:land_queue',
+    label: 'Land queue', where: 'Automation → Projects',
   },
   'project.sessionControl': {
-    surface: 'project', setting: 'automation:session_control',
-    label: 'Agent session control', where: 'Project settings',
+    surface: 'automation', setting: 'automation:session_control',
+    label: 'Agent session control', where: 'Automation → Projects',
   },
   // The authority fields. Each is an opt-in's second half: the automation decides
   // whether an agent may ask, and these decide whether a human still approves each

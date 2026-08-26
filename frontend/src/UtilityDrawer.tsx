@@ -94,7 +94,6 @@ type Props = {
   /** Open one conversation in the History overlay, for a session that has ended. */
   onOpenHistoryEntry: (historyId: string) => void
   onOpenSettings: (section: string) => void
-  onConfigureActions: () => void
   onManagePrompts: () => void
   /** Files: open a Project-relative path as a pane tab. */
   onOpenFile: (path: string) => void
@@ -341,7 +340,6 @@ export function UtilityDrawer(props: Props) {
           project={project}
           backend={props.backend}
           onDone={onDone}
-          onConfigureActions={props.onConfigureActions}
           onInsert={props.onInsertPrompt}
           onManage={props.onManagePrompts}
           preselect={props.promptPreselect}

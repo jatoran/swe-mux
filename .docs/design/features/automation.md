@@ -150,41 +150,49 @@ and the declared minimum observation capability.
   cancellable, retried for transient transport failures, and locally validated.
 - Routing may fall back between providers for the exact requested model when the provider
   supports the required schema parameters.
-- Settings owns every install-wide switch and bound: the `automation_enabled` master switch and the `scan_timeline_enabled` gate (Settings → Automation, beside the budgets they govern), the global, per-rule, scan-timeline, and Project-card spending budgets, hourly caps, concurrency, the queue depth, input/output limits, and retention. Each spending budget carries the shared `{tokens?, usd?, mode}` shape and is edited through one control; `design/features/budgets.md` owns that contract. The OpenRouter key controls, exact cheap/standard model IDs, and model refresh are on Accounts.
-  `automation_queue_size` is restart-scoped and says so on its own control, because the queue is allocated once at daemon start; the Project context card's model and its two per-build token ceilings sit under the same heading as the budget that bounds it, since a feature is configured in one pass (`design/features/project-card.md`).
-- The Automation dashboard owns the rule corpus and the runtime: per-rule enable and shadow/live state for the built-in titler, the shared attention-observer group, and custom rules, plus the canonical `rules.toml` editor beside them. It shows the two global switches as read-only state with links into Settings, and never owns a second copy of a switch. The turn summarizer was retired in Phase 7.7; the scan timeline is the single behavioral-summary producer.
+- The Automation workspace owns every install-wide automation switch and bound: the `automation_enabled` master switch, `scan_timeline_enabled`, spending budgets, hourly caps, concurrency, queue depth, input/output limits, schedule and land-queue stops, attention policy, and retention.
+  Global policy is split into Engine, Budgets, Schedules and landing, Scan timeline, and Attention pages.
+  Each spending budget carries the shared `{tokens?, usd?, mode}` shape and is edited through one control; `design/features/budgets.md` owns that contract.
+  `automation_queue_size` is restart-scoped and says so on its control.
+  Provider credentials and routed model editing remain on Accounts, with read-only resolved-model rows linking there from Global policy.
+- The same workspace owns the rule corpus and runtime: built-in and custom rule state, the canonical `rules.toml` editor, firings, cost, learned fixes, and diagnostics.
+  Settings → Automation is a status portal into this workspace and renders no second copy of its policy controls.
+  The turn summarizer was retired in Phase 7.7; the scan timeline is the single behavioral-summary producer.
 - Cheap and standard model controls are searchable comboboxes whose result popovers have a
   bounded scroll height on desktop and mobile.
 - Windows persistent keys use current-user DPAPI in `automation.secrets.json`;
   `OPENROUTER_API_KEY` is the headless override, and `SWE_MUX_CUSTOM_LLM_API_KEY` is the same
   override for a custom endpoint. Neither key is ever returned.
-- The Automation dashboard exposes rules/shadow state, firings, traces, action/call results,
-  annotations, provenance, cost, queue/degradation state, inbox, and no-side-effect dry-run.
+- The Automation workspace exposes the control graph, effective Project overlays, rules and shadow state, firings, traces, action and call results, cost, queue and degradation state, learned fixes, and no-side-effect dry-run.
 
 ## Control-plane presentation
 
-- The modal draws five flat views — **rules & observers**, **projects**, **cost breakdown**,
-  **learned fixes**, **diagnostics** — with no group rail above them. A `?` in the header opens
+- The modal draws eight flat views: **overview**, **control graph**, **rules**, **projects**, **global policy**, **cost breakdown**, **learned fixes**, and **diagnostics**.
+  A `?` in the header opens
   a nested help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer to it
   while open.
   The panel's own frame is a column flex rather than a fixed grid template, because its child
   count varies by view: hard-coded row numbers fitted exactly one case and drew the status line
   over the first heading in the others.
-- **The three surfaces split by charter**: Settings → Automation is global policy (every
-  install-wide switch and bound), the Projects registry is participation (which automations one
-  Project opted into), and this dashboard is rules and runtime. The previous line — enablement
-  on the dashboard, configuration in Settings — was invisible to a user and inconsistent with
-  itself (the scheduled-runs emergency stop already lived in Settings), so the two global
-  switches moved to Settings → Automation and the dashboard's `Global switches` section is
-  read-only state with a `SettingLink` per switch.
-- **The `projects` view answers what runs where.** Nothing runs on a Project that did not opt
+- **Automation is one workspace with several object types, not several destinations.**
+  Graph definitions, executable rules, global policy, Project policy, spend, learned fixes, and diagnostics stay distinct views because they answer different questions, but they share one top-level destination.
+  Settings → Automation reports engine, rule, queue, and runtime status and opens Global policy.
+  It does not edit automation.
+- **Overview is a status and routing page.**
+  It reports engine state, the selected Project's effective graph coverage, enabled system rules, participating Projects, today's cost, and active runtime issues.
+  It links directly to each editing or review view rather than repeating their controls.
+- **Control graph is the global definition map with a Project overlay.**
+  Registry entries are grouped into Foundations, Deterministic intelligence, Timeline and attention, Derived consumers, and Capabilities.
+  Selecting a Project overlays requested, dependency-enabled, effective, blocked, spending, and off states without changing the global graph definition.
+- **The `projects` view answers and edits what runs where.** Nothing runs on a Project that did not opt
   in, and before this view that fact was invisible from the one surface named "Automation": a
   green dashboard with zero activity had no path to the explanation. It reads
   `GET /api/automation/projects` (one row per registered Project — enabled count, enabled
   labels, blocked count, and "nothing" for an opted-out Project, which is listed rather than
   omitted so silence reads as off, never as covered) and links each row to that Project's own
-  settings. Read-only by design: the revision-checked per-Project editor stays the only write
-  path, so this view can never race one that is open.
+  policy editor below the matrix.
+  Selecting a row keeps the fleet comparison visible and opens that Project's dependency-aware, revision-checked repository policy in the same view.
+  The general Projects registry links here instead of rendering a second automation editor.
 - **The `rules.toml` editor is the dashboard's, not Settings'.** A rule's definition, its
   live/shadow state, and the firings it produces are one object; the previous arrangement put
   the text in the Settings save transaction, where a stale copy held open could silently
@@ -294,7 +302,7 @@ and the declared minimum observation capability.
 - The status strip's `calls today` reads the ledger, like the two spend tiles beside it. It
   previously summed the lifetime observer-call status counts, which was neither today's figure
   nor a count of anything the reader had asked for.
-- Rules & observers is the complete effective inventory: the read-only global-switch status row, built-in system observers, and canonical `rules.toml` rules with their editor, with an at-a-glance status strip for automation state, observer counts, and daily spend.
+- Rules is the complete effective inventory: the global-switch status row, built-in system observers, and canonical `rules.toml` rules with their editor, with an at-a-glance status strip for automation state, observer counts, and daily spend.
   Disabled controls and built-ins remain visible.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
   owning config setting. The titler toggles on `observer_titler_enabled`; stall, approval, and
@@ -312,7 +320,7 @@ and the declared minimum observation capability.
   nothing, so the history stays readable and retention still owns removal. Records survive
   90 days (`automation_retention_days`), which is far longer than a surface with no clear
   can stay useful.
-- Diagnostics is the last of the four views, and only that: it carried a header toggle *as
+- Diagnostics is the last view, and only that: it carried a header toggle *as
   well* while it was the one view outside the tab row, which left one of four choices with
   two controls and no way to tell which was authoritative. Provider traces, event dry-run,
   queue state, firings/observer-call traces, and research-only injection evidence are

@@ -727,10 +727,10 @@ Its rules, and what each one is defending:
   - **The daemon log level** is on Diagnostics, beside the bundle it decides the contents of.
     It applies on save with no restart, which is what makes "set DEBUG, reproduce, export" a
     single pass.
-- Global automation policy is not duplicated across overlays, and Settings is its one home.
-  Settings → Automation owns every install-wide automation switch and bound: the `automation_enabled` master switch, the `scan_timeline_enabled` gate, budgets, execution bounds, and retention; the credential and models are on Accounts.
-  The Automation dashboard owns rules and runtime — per-rule enable and shadow/live state, the `rules.toml` editor, the per-Project enablement matrix, spend, and diagnostics — and shows the global switches only as read-only state linking into Settings.
-  The line users can state: Settings decides policy, the Projects registry decides participation, the dashboard shows rules and what ran.
+- Automation has one workspace and one navigation model.
+  The Automation workspace owns the control graph, rules, per-Project participation, install-wide policy, spend, learned fixes, and diagnostics.
+  Settings → Automation is a status portal into that workspace and does not render a second copy of its controls.
+  Accounts still owns provider credentials and routed model defaults because those are shared by non-automation features.
 - Every spending cap is edited through one control, wherever the setting lives, the way every model setting is edited through one picker.
   A cap is `{tokens?, usd?, mode}` and the control draws the mode first, because the mode decides whether the two figures under it mean anything (`features/budgets.md`).
   An axis the mode does not enforce stays editable and is labelled unenforced rather than disabled or cleared: it is a number the operator is keeping, not one that is unavailable, and discarding it would make trying the other unit a one-way door.
@@ -755,23 +755,14 @@ Its rules, and what each one is defending:
   device that last used `workspace` reopens on Git instead of reading as the panel forgetting.
   The panel is opened, scanned, and closed many times in a session, and landing on General
   every time re-charges the navigation that reached the tab someone actually lives in.
-- A tab of four or more sections carries a **sticky section rail** at the top of its scroller, on
-  desktop and mobile alike. It is scroll anchors, never sub-tabs, and that distinction is load-bearing:
-  every section of a tab stays mounted, so the search index can still see the whole tab, `Ctrl`+`F`
-  still works, and the single Save transaction can never hide a dirty field behind a pane the user
-  cannot see while a validation error at the top names it.
-  The rail is derived from the `<h3>` elements the tab actually rendered — a `MutationObserver`
-  keeps it correct as child panels (Accounts, Alerts, the WSL bridge) paint after their fetches —
-  so a new section joins the rail the moment it renders and there is no declared list to update.
-  Repeated headings are numbered (`railSectionIds`) because a remembered section id has to survive
-  a reload. Scroll-spy selects the last heading above the rail's underside, and hitting the bottom
-  of the scroller selects the final section, whose heading is usually too close to the end to
-  cross that line. A rail click holds the selection for the length of the scroll: without that
-  hold the late sections of a short tab are unpickable, because scrolling to one lands at the
-  bottom and the bottom rule immediately re-selects the last section.
-  On mobile the rail is one non-wrapping row that scrolls sideways, so it costs a fixed strip
-  rather than growing into the content. It stays a rail on both layouts — it is per-tab and
-  short, unlike the seventeen-entry section list that became a drawer beside it.
+- Long Settings tabs are **collections of separate pages**, not one document with scroll anchors.
+  Only the selected page is visible, which prevents unrelated controls from competing for attention and removes the need to scroll through an entire subsystem.
+  `settingsSubpages` declares the pages before their tab mounts, and `settingsSubpageId` maps related implementation headings to one user-facing capability page.
+  Search and deep links select the owning page before revealing a control, so hidden pages remain fully addressable.
+  The Settings sidebar renders an expansion button beside every paged tab.
+  Clicking the tab opens its remembered page, while clicking the expansion button reveals or hides that tab's page links in place without navigating.
+  The same expandable hierarchy is used in the mobile slide-in sidebar, so phones expose the same information architecture as desktop instead of replacing it with a horizontal strip.
+  Short or dynamically composed tabs may still render as one page.
 - **A section is one `<section>`, and a section that is reference may fold its body.** The rail
   is built from headings, so a tab can satisfy it while still rendering as one unbroken column;
   the borders between concerns come from the section boxes, and Automation, Remote, and Voice all
@@ -930,7 +921,8 @@ Its rules, and what each one is defending:
   cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones.
   Per-section resets that genuinely are scoped, such as gesture defaults and shortcut defaults, stay with their own section.
 - Action layout is not a Settings section.
-  **Configure Actions** opens as a standalone modal from the main menu, command palette, every rail-row popover, or the Configure command rail control in the Actions drawer.
+  **Configure Actions** opens as a standalone modal from the main menu, command palette, or a rail-row popover.
+  The Actions drawer does not link to configuration because its job is using actions, not arranging the command rail.
   This surface owns the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
 - Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
@@ -2027,7 +2019,7 @@ Its rules, and what each one is defending:
   A row that survives none of that is redone with every id floated, which always reproduces it at the cost of no longer tracking global changes to that row.
   It is user-invoked and never automatic: a fork is somebody's arrangement, and a migration that happens to you is one you could not review first.
 - The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) is the only rail editor.
-  It opens from the main menu, command palette, every row popover, and the Configure command rail control at the top of Actions rather than replacing the live rail inline or living inside Settings.
+  It opens from the main menu, command palette, and every row popover rather than replacing the live rail inline or living inside Settings.
   It discloses progressively: one device's rail layout first (defaulting to the device this browser is, with a Desktop/Mobile switch at every width), custom-action creation collapsed below it, and the complete catalog collapsed at the bottom behind a filterable "All actions" disclosure.
   The former permanent two-column device view is gone: it doubled the visual load for the rare cross-device drag that the catalog's placement checkboxes already cover.
   A dismissible first-open callout carries the orientation (per-device rails, the drawer popover, and the catalog) instead of a standing paragraph.
@@ -2063,9 +2055,9 @@ Its rules, and what each one is defending:
 - The expanded catalog panel also holds per-action appearance, backend checkboxes under their harness display names ("Shown in these sessions"), custom-action editing (label, payload, submit-on-insert), and delete.
   The catalog head previews the live button presentation in the elastic column, with the type or payload summary beneath it and placement on the right.
   Phones drop the placement summary under the preview.
-- The **Actions** tab is session-scoped and contains three independently collapsible sections that start expanded: **Skills**, **Prompt templates**, and **Clipboard**.
-  Disclosure state is device-local and persists independently from the Action layout.
-  A compact **Configure command rail** control above the sections opens the standalone editor.
+- The **Actions** tab is session-scoped and contains three named views: **Skills**, **Prompts**, and **Clipboard**.
+  One catalog is rendered at a time and the selected view is remembered on the device independently from the Action layout.
+  The tab contains no command-rail configuration control.
   Skills and prompt templates are browsable inventories here; adding either as a dedicated rail button happens only in that editor.
   A transient visit opened from the Action rail closes after an action completes on desktop as well as mobile; a prompt with unresolved fields remains open until those fields are completed, and an ordinary visit retains the existing repeated-action behavior.
   The Manage control in the Prompt templates header opens the full prompt-template editor.
@@ -2260,7 +2252,7 @@ Its rules, and what each one is defending:
 - Only Change Map is kept mounted while another segment is selected.
   Everything else unmounts, because a hidden body that polls or refetches costs network for a surface nobody is looking at; the map is the exception because its layout worker's settled positions are the expensive part and remounting re-runs the simulation on every return.
 - **Git** is registered the same way, so the drawer has one mechanism for this idea rather than two: Map, Log, and Provenance are segments, drawn by the shared control above the tab's toolbar rather than by a toggle of its own, and each has its own palette entry and voice phrase.
-  Landing is deliberately **not** a fourth one. It was, and the split it rested on - Map answers what is *in* a worktree, Land what is *happening to* it - did not hold: the act belongs on the row showing the diff behind it, and once it moved there the segment held a single Project-wide block. It is now a compact strip at the head of Map, one summary line with an operational pipeline first and verification configuration under its own disclosure, while active request state is visible on the collapsed worktree row (`land-queue.md`).
+  Landing is deliberately **not** a fourth one. It was, and the split it rested on - Map answers what is *in* a worktree, Land what is *happening to* it - did not hold: the act belongs on the row showing the diff behind it, and once it moved there the segment held a single Project-wide block. It is now a compact strip at the head of Map whose folded control is the operational pipeline and whose verification configuration is under its own disclosure, while active request state is a third line and leading rail on the collapsed worktree row (`land-queue.md`).
   It is a tab rather than a modal because the decisions it offers - pause this, run it now, is last night's session still open - are judgements about live sessions, which are legible in the workspace behind the drawer.
   Like Processes it carries its own Project/all-Projects scope instead of a companion modal, since "what fires tonight" spans Projects even though every schedule belongs to exactly one.
   Notifications is neither and sits last.
@@ -2599,6 +2591,11 @@ Its rules, and what each one is defending:
   because a second app-wide icon would compete with the one that already exists for exactly
   this subject, and the phone rail has no room for it.
   Ranked items surface here and nowhere else — no sound, no push.
+  Three urgency tabs make the delivery decision explicit.
+  **Now** contains only items classified as interrupt-worthy now.
+  **Review next** contains items held until the next natural pause, plus convenient inbox and digest items.
+  **History** contains the away report, raw delivery records, open attention records, and dismissed records on request.
+  The labels describe when to look rather than exposing internal channel names such as `interrupt_now` and `next_breakpoint`.
   Below the ranked view, Alerts shows open attention records first and dismissed ones only on request. Each row
   dismisses (or restores) and the footer clears the lot; both write `read_at` server-side, so
   the state follows the user to every device and to the dashboard inbox rather than being a
@@ -2630,26 +2627,12 @@ Its rules, and what each one is defending:
   the heading cancels the indent so it sits as the box's lid rather than as its first
   indented child. A folded Group drops the indent and the rule under its heading, because it
   has no body left to contain. None of it costs vertical space.
-- **The Actions tab's three sections are separated by their headers, not by a line between
-  them.** A 1px rule between sections is the same rule every row *inside* a section already
-  carries, so the boundary read as one more row. Each header is a full-bleed bar with its own
-  ground and a leading edge, and a rule above it twice the weight of any row rule; the
-  bodies sit on the panel ground beneath, so a header reads as a lid over its section.
-- **Each of the three carries its own hue** — Skills green, Prompt templates blue, Clipboard
-  amber — on the header's leading edge, a 7% tint of its ground, the rule above it, and its
-  caret (operator decision 2026-08-22).
-  The separators above were the right fix for a boundary drawn too faintly, but they solve
-  the wrong half of the problem on a *sticky* header: a reader halfway down a catalog sees a
-  header with no boundary on screen at all, and "which of the three am I in" was answerable
-  only by reading the word.
-  This supersedes the earlier rule that the edge stay muted rather than accent. That rule was
-  about **sameness**, not about green: every green edge in this app means *this one is
-  active* (the selected Project, the active pane tab, the live segment), and three identical
-  green bars on three permanent headers would have read as three active things and spent that
-  meaning on decoration. Three *different* hues cannot be read that way, because activity is
-  never encoded here as a set of unlike colours — and one of the three has to be green, since
-  green, blue, and amber is the widest spread this palette offers once `--red` is excluded as
-  the one token in it that already means something.
+- **The Actions tab has three named views: Skills, Prompts, and Clipboard.**
+  One view is rendered at a time under a persistent tab row, and the selected view is remembered on the device.
+  The old stacked disclosures made three unrelated catalogs compete in one long scroller and forced their headers to carry excessive visual weight.
+  Skill rows now lead with the invocation and short description.
+  Selecting one row reveals its full description and Insert action inline, so the catalog stays scannable without losing detail.
+  Command-rail configuration is deliberately absent from this usage surface.
   Amber is safe for the same reason: this tab has no warn or error vocabulary of its own for a
   3px spine to be confused with.
   The hue is carried on a `--section-hue` variable rather than written three times, so a

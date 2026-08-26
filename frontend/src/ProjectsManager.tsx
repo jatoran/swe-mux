@@ -24,13 +24,9 @@ import { allBackendNames, harnessDisplayName } from './harnessRegistry'
 import { useDismissLevel } from './modalFocus'
 import { ProjectPicker, type ProjectPickerOption } from './ProjectPicker'
 
-// The Projects registry is the ONLY per-Project editor. Settings holds global
-// options exclusively; anything scoped to one Project — its record and its
-// defaults — is edited here, reached from this modal or from a Project's context
-// menu. Two doors to two overlapping surfaces was the previous arrangement and it
-// left users hunting for which modal owned which field. The record fields and the
-// defaults share one scrolling settings surface — there is no Details/Settings
-// split, because it is all settings for the same Project.
+// The Projects registry owns a Project's record, defaults, resources, and agent
+// authority. Control-plane opt-ins live in the Automation workspace with the graph
+// and global policy they modify, and this panel links there instead of duplicating them.
 
 // A Project default can live in either of two layers, and users care about the
 // difference: `device` is a database override private to this machine, `repo` is
@@ -78,7 +74,7 @@ type AutomationState = {
  * here is what makes it run at all — nothing in this layer touches a project
  * that did not opt in.
  */
-function AutomationOptIns({ project, busy, onError, store }: {
+export function AutomationOptIns({ project, busy, onError, store }: {
   project: Project
   busy: boolean
   onError: (message: string) => void
@@ -232,7 +228,7 @@ function AutomationOptIns({ project, busy, onError, store }: {
   const scanBlocked = state.blocked.scan_timeline || []
   return <div class="project-automations">
     <h4 data-setting="automations">Automations<em class="project-setting-chip">repo</em></h4>
-    <p>Per-project opt-in. Substrate records facts and never acts. Nothing here runs on a project that did not opt in. Spending limits are global, in <SettingLink target="automation.budgets" variant="link">Settings → Automation</SettingLink>.</p>
+    <p>Per-project opt-in. Substrate records facts and never acts. Nothing here runs on a project that did not opt in. Spending limits are global, in <SettingLink target="automation.budgets" variant="link">Automation → Global policy</SettingLink>.</p>
     <ul class="project-automation-list">{substrate.map(row)}</ul>
     <ul class="project-automation-list">{consumers.map(row)}</ul>
 
@@ -656,7 +652,10 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
                 <p>Runs only after Run creates a new worktree and before its session starts. Blank uses an executable <code>.worktree-setup</code> in the new checkout. The command is committed in <code>.swe-mux/config.toml</code>, so review changes like other repository code.</p>
               </section>
               <div><button disabled={busy||!config} onClick={resetRepoOptions}>Reset repo options to inherited</button></div>
-              <AutomationOptIns project={selected} busy={busy} onError={setError} store={configStore} />
+              <section class="project-setting"><h4>Automation policy<em class="project-setting-chip">repo</em></h4>
+                <p>Control-plane opt-ins are edited with the global graph and policy in the Automation workspace.</p>
+                <SettingLink target="project.automations" projectId={selected.id}>Open this Project's automation policy</SettingLink>
+              </section>
               <AgentAuthority busy={busy} onError={setError} store={configStore} />
             </div>
           </div>

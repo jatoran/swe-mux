@@ -3438,6 +3438,12 @@ regenerating `THIRD-PARTY-NOTICES.md` in the same commit.
 The packaging and external-trial readiness gaps, and the CI matrices, are inventoried in
 `CROSS_PLATFORM_FINDINGS.md`.
 
+Widened 2026-08-26 from artifacts alone to the whole launch: repository publication, the
+website, the update channel, demo assets, the onboarding final pass, external trials, and
+marketing.
+Phase 16 (first-run usability: tour, help surface, first-run blockers) is a precondition for
+the onboarding and launch subsections and is not restated here.
+
 ### Artifacts and installation
 
 - [ ] **Precondition inherited from Phase 10.5: get `av` out of the wheel's install closure.**
@@ -3488,6 +3494,145 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
   publishing uses Trusted Publishing and no long-lived repository token.
 - [ ] Validate tag, source, frontend bundle, wheel/sdist metadata, migrations, documented
   commands, and capability/version diagnostics as one release unit.
+- [ ] Decide Windows code signing before the first public binary: Azure Trusted Signing
+  (cheapest), an OV certificate, or unsigned with the SmartScreen warning documented on the
+  download page.
+  Unsigned PyInstaller executables are the top source of "is this malware" reports at launch;
+  whichever option is chosen, the download page addresses the warning explicitly.
+
+### Repository publication and history hygiene
+
+- [ ] Audit the full git history for PII, credentials, machine paths, and account identifiers
+  before the repository goes public.
+  A fresh single-commit Apache-2.0 history is the accepted fallback if scrubbing is
+  impractical; decide from the audit result, not by default.
+  History rewriting is an operator act, never an agent one (the git policy forbids it to
+  agents deliberately).
+- [ ] Publish the repository well before any announcement (target: two-plus weeks) so CI runs
+  green publicly and the repository shows real activity - an empty history created the day of
+  a Show HN post reads worse than a young repository with visible motion.
+- [ ] README leads with the positioning line and hero GIF, carries a quickstart verified on a
+  clean machine, states the supported-platform matrix honestly, and the repository
+  description/topics are set for discovery.
+
+### Website and hosting (swemux.dev)
+
+The decision, recorded so it is not re-derived: the site is static and no server exists or is
+planned.
+Update distribution (next subsection) also needs no server, so nothing on the launch path
+requires one; crash telemetry or license infrastructure would, and both are out of scope.
+
+- [ ] Host the static site on GitHub Pages or Cloudflare Pages with the `swemux.dev` custom
+  domain and HTTPS; Cloudflare Pages preferred for its free analytics.
+- [ ] Pages: the drafted homepage, install/quickstart, a documentation section, a changelog,
+  a public roadmap page (a curated projection of this file, not a copy), and an
+  acknowledgements page thanking the libraries and projects swe-mux builds on.
+- [ ] The acknowledgements page's dependency inventory is generated from
+  `packaging/third_party_licenses.json` / `THIRD-PARTY-NOTICES.md`, never hand-written - the
+  same generated-not-transcribed rule the notices themselves follow; hand-written prose is
+  reserved for the projects that shaped the design rather than merely appear in the closure.
+- [ ] The documentation section is built from the existing feature docs (or a curated subset)
+  rather than written fresh, and the in-app help modals link to it - this is the deferred
+  "website-docs half" Phase 16 explicitly hands to this phase.
+- [ ] Release CI writes a `version.json` (latest version, artifact URLs and hashes, changelog
+  pointer) into the static site on every release; this file is the update-check endpoint.
+
+### Update propagation
+
+No update server: static manifest plus GitHub Releases covers the whole loop.
+
+- [ ] Two channels, both exercised before launch: PyPI for developers
+  (`uv tool upgrade swe-mux` / `pipx upgrade`), and the frozen desktop app as GitHub Releases
+  artifacts (free hosting, download counts via API).
+- [ ] In-app update check: poll the site's `version.json` (fallback: the GitHub Releases API,
+  whose 60/hr unauthenticated limit is ample for a daily check), semver-compare against the
+  running version, and show a non-blocking banner with the changelog.
+  Nothing downloads or installs without an explicit user act.
+- [ ] The frozen-app updater reuses the redeploy machinery's staged swap
+  (`packaging/redeploy_desktop.py`): download the release artifact, verify its SHA-256 against
+  the manifest, stage, healthcheck, swap, roll back on failure - sessions preserved through
+  the supervisor exactly as redeploy preserves them today, with the download replacing the
+  local PyInstaller build.
+  A release that requires a supervisor update keeps its reap-everything semantics and says so
+  in its release notes rather than hiding it in the updater.
+
+### Demo environment and launch assets
+
+- [ ] A PII-free capture environment needs no VM: a second daemon with its own `data_dir` and
+  port (the isolated-daemon pattern already proven on 8799) plus a few synthetic projects
+  gives clean screenshots and recordings on this machine.
+- [ ] Clean-install testing does need real isolation: Windows Sandbox or a Hyper-V VM.
+  Docker Desktop cannot host a GUI Windows session, and macOS cannot be licensed onto
+  non-Apple hardware - macOS coverage comes from CI runners and borrowed hardware, not a
+  local VM.
+- [ ] Produce the launch assets from the demo environment: one 60-90 second hero video, and
+  short feature GIFs - an orchestrator spawning parallel worktree sessions, the land queue
+  landing branches serially, phone control and voice, the scan timeline, and a
+  session-preserving redeploy.
+- [ ] Keep the capture scripts and scene notes beside the assets so they are re-recorded
+  after UI changes instead of reconstructed from memory.
+
+### Onboarding final pass
+
+Phase 16 lands first; these are the release-facing additions on top of it.
+
+- [ ] The tutorial splits desktop and mobile paths, and the first run stays minimal:
+  optionally set up the LLM provider and session titling, Tier 0 deterministic capture on by
+  default, every other automation opt-in and discoverable later rather than presented up
+  front.
+- [ ] Adding a harness offers a recency-ordered project checklist prepopulated from that
+  CLI's own session history, and the first enabled harness becomes `default_harness`.
+- [ ] The Queue exposes inline enable controls, with the reason, for the approval and config
+  gates that block a new user - instead of requiring a trip into Settings to discover why
+  nothing delivers.
+- [ ] One hard usability pass over every major UI surface (automation dashboard, git and
+  landing surfaces, scan timeline, settings) for overwhelm and intuitiveness, grounded in a
+  short research pass on first-use overwhelm and progressive disclosure.
+  Method: agents evaluate each surface and propose changes as standalone HTML preview files
+  with multiple options, so proposals are compared visually before any code changes.
+
+### External trials and final testing
+
+- [ ] A true second-machine trial (the CMR laptop): install from published artifacts only,
+  set up Tailscale, install the PWA, and record every gap another user would hit; each gap
+  becomes an item here rather than a mental note.
+- [ ] The Tailscale setup flow surfaces the phone URL itself - the `.ts.net` link with a copy
+  button and the PWA install instruction - rather than assuming the operator derives it.
+- [ ] A browser pass: Chrome/Edge as primary, Firefox, and iOS/Android mobile browsers;
+  record what is supported versus known-broken and say so in the docs instead of implying
+  universality.
+- [ ] A Linux check via the WSL dev loop (`tools/wsl_dev_setup.sh`, port 8770) against the
+  release artifacts.
+  The platform statement stays honest: Windows-first frozen app, wheel elsewhere.
+  Linux/macOS desktop-shell wrappers are out of launch scope; the recorded risks for whoever
+  picks them up: pywebview lands on WebKitGTK/WKWebView rather than Chromium (xterm.js WebGL,
+  AudioWorklet capture, and the ONNX/WASM assets are all "works in WebView2" assumptions),
+  tray needs AppIndicator/native, single-instance needs a lockfile or abstract socket in
+  place of the named mutex, and packaging means AppImage/.deb and a signed, notarized .app
+  with .desktop/launchd autostart in place of the registry Run key.
+
+### Marketing and launch sequencing
+
+The highest-leverage asset is the 90-second demo; every channel points at it.
+Fix one positioning line and use it verbatim everywhere.
+
+- [ ] Soft launch first, in the niche communities that forgive rough onboarding and surface
+  clean-machine failures: r/ClaudeAI, r/ChatGPTCoding, r/LocalLLaMA, the Claude Developers
+  Discord.
+  Fix what they hit before widening.
+- [ ] Show HN once install is smooth: one shot, Tuesday-Thursday morning ET,
+  "Show HN: swe-mux - <positioning line>", present in the comments all day.
+  A good run compounds through GitHub Trending for about a week.
+- [ ] Product Hunt and X after: short clips of specific moments outperform announcement
+  posts, and the multi-agent-orchestration audience on X is the target demographic.
+- [ ] Ongoing multipliers, none time-critical: newsletter submissions (Console.dev has a
+  submission form and features exactly this kind of tool; TLDR AI; Changelog News),
+  awesome-list PRs (awesome-claude-code and agent-tooling lists), story-driven engineering
+  posts (session-preserving reloads, the land queue, status detection) cross-posted from the
+  site, and outreach to small and mid-size AI-tooling YouTube channels.
+- [ ] Name the adjacent tools (claude-squad, Vibe Kanban, Conductor, omnara) and state the
+  differentiation - session-preserving supervisor, phone and voice control, the land queue,
+  provenance - in the launch material rather than leaving readers to infer it.
 
 ### Phase 11 exit criteria
 
@@ -3496,6 +3641,13 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
   process leakage or message duplication.
 - [ ] Artifacts upgrade/uninstall cleanly and public documentation matches the exact tag,
   supported platforms, security boundaries, and optional capabilities.
+- [ ] swemux.dev is live with install, docs, changelog, roadmap, and acknowledgements pages,
+  and a released build's update check detects a newer published release end to end.
+- [ ] The hero video and feature GIFs exist, captured from the PII-free demo environment,
+  and the README leads with them.
+- [ ] The second-machine trial passed with every found gap fixed or documented, and the
+  soft-launch, Show HN, and Product Hunt posts are drafted against the final artifacts.
+- [ ] The public history contains no PII or credentials - audited, or fresh-started.
 
 ## Phase 12 - Harness expansion
 

@@ -5,7 +5,7 @@ import test from 'node:test'
 
 const source = (name: string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
 
-test('the drawer exposes one Actions tab with three independently collapsible sections', () => {
+test('the drawer exposes one Actions tab with three named catalog views', () => {
   const tabs = source('drawerTabs.ts')
   const drawer = source('UtilityDrawer.tsx')
   const actions = source('ActionsTab.tsx')
@@ -15,11 +15,12 @@ test('the drawer exposes one Actions tab with three independently collapsible se
   assert.doesNotMatch(tabs, /id: 'commands'|id: 'prompts'/)
   assert.ok(drawer.includes("case 'actions':"))
   assert.doesNotMatch(drawer, /case 'commands':|case 'prompts':/)
-  for (const section of ['skills', 'prompts', 'clipboard']) {
-    assert.ok(actions.includes(`id="${section}"`), `${section} must remain a first-class Actions section`)
-  }
-  assert.ok(actions.includes('showManage={false}'))
-  assert.ok(actions.includes("label: 'Manage'"))
+  assert.ok(actions.includes("const ACTION_VIEWS = ['skills', 'prompts', 'clipboard']"))
+  assert.ok(actions.includes('class="actions-view-tabs"'))
+  assert.ok(actions.includes("view==='skills'"))
+  assert.ok(actions.includes("view==='prompts'"))
+  assert.ok(actions.includes("view==='clipboard'"))
+  assert.ok(actions.includes('drawer-skill-detail'), 'skills use compact recognition rows with inline detail')
 })
 
 test('Configure Actions is a standalone modal reachable from every intended entry point', () => {
@@ -45,7 +46,7 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   assert.ok(terminal.includes('onConfigure={()=>onConfigureRail?.()}'))
   assert.doesNotMatch(terminal, /RailInlineEditor|railEditOpen/)
   assert.ok(source('RailEditor.tsx').includes('Detach {contextProjectName} to edit directly'))
-  assert.ok(actions.includes('onClick={onConfigureActions}'), 'Actions must expose Configure directly')
+  assert.doesNotMatch(actions, /onConfigureActions|Configure command rail/, 'Actions no longer duplicates command-rail configuration')
   assert.doesNotMatch(actions, /id="quick"|Quick actions/)
   assert.doesNotMatch(settings, /RailEditor|commandrail:/)
 })

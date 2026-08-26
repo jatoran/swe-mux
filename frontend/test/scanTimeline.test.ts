@@ -15,7 +15,7 @@ test('scan timeline is explicitly gated per current run and resets at conversati
 
 test('scan timeline shows every cap and names whichever one is closest to binding', () => {
   const timeline = source('ScanTimelineTab.tsx')
-  const settings = source('Settings.tsx')
+  const policy = source('AutomationPolicyView.tsx')
   const app = source('App.tsx')
   // The reported failure was a timeline that stopped for three hours while the
   // drawer showed only budgets that had headroom. The cap doing the stopping
@@ -30,12 +30,10 @@ test('scan timeline shows every cap and names whichever one is closest to bindin
   // holding the caps. The *control* moved to Accounts - switching endpoint changes
   // all seven models at once, and checking them across four tabs is how a broken
   // one goes unnoticed - so what stays here is the resolved value and a link.
-  assert.ok(settings.includes('data-setting="scan_timeline_model"'))
-  assert.match(settings, /model-routing-elsewhere[\s\S]{0,400}?scan_timeline_model/)
-  assert.match(settings, /routedModel\('scan_timeline_model'\)/)
-  assert.match(settings, /goToSetting\('accounts','scan_timeline_model'\)/)
-  assert.ok(settings.indexOf('data-setting="scan_timeline_model"')
-    > settings.indexOf("activeTab==='automation'"))
+  assert.ok(policy.includes('data-setting="scan_timeline_model"'))
+  assert.match(policy, /model-routing-elsewhere[\s\S]{0,400}?scan_timeline_model/)
+  assert.ok(policy.includes('draft.scan_timeline_model'))
+  assert.ok(policy.includes('target="automation.scanTimelineModel"'))
   assert.ok(!app.includes('ScanSpendStatus'))
 })
 
@@ -57,17 +55,17 @@ test('a record admits when it was written behind the transcript or repaired', ()
 })
 
 test('scan spending limits are global settings, never per-project', () => {
-  const settings = source('Settings.tsx')
+  const policy = source('AutomationPolicyView.tsx')
   const projects = source('ProjectsManager.tsx')
   // The dollar ceiling lived in each Project's committed .swe-mux/config.toml,
   // so the cap most likely to stop scanning sat in a file nobody opens and had
   // to be raised once per checkout.
-  assert.ok(settings.includes('scan_timeline_daily_budget'))
-  assert.ok(settings.includes('scan_timeline_run_budget'))
-  assert.ok(settings.includes('scan_timeline_hourly_call_cap'))
-  assert.ok(settings.includes('scan_timeline_max_output_tokens'))
+  assert.ok(policy.includes('scan_timeline_daily_budget'))
+  assert.ok(policy.includes('scan_timeline_run_budget'))
+  assert.ok(policy.includes('scan_timeline_hourly_call_cap'))
+  assert.ok(policy.includes('scan_timeline_max_output_tokens'))
   assert.ok(!projects.includes('scan_timeline_daily_budget'))
-  assert.ok(projects.includes('Settings → Automation'))
+  assert.ok(projects.includes('Automation → Global policy'))
 })
 
 test('Project-wide scan settings live in Project settings, not the drawer tab', () => {

@@ -178,3 +178,17 @@ test('the device grant is wired to a local write', () => {
   assert.ok(notifications.includes('applyDevice={unmuteAlerts}'))
   assert.ok(notifications.includes('setAlertPreferencesFor'))
 })
+
+test('single-switch disabled surfaces use the compact flag', () => {
+  const compact = ['Notifications.tsx', 'ClipboardPanel.tsx', 'QueuePane.tsx', 'ScheduleTab.tsx', 'VoiceReadTab.tsx']
+  for (const file of compact) {
+    assert.ok(source(file).includes('<CompactGrantFlag'), `${file} must use the compact flag`)
+  }
+
+  // Compound gates explain and enable several dependent capabilities at once, so they
+  // retain the full gate instead of squeezing a dependency graph into a status row.
+  for (const file of ['FindingsPane.tsx', 'ChangeMapPane.tsx', 'ScanTimelineTab.tsx']) {
+    assert.ok(source(file).includes('<GrantGate'), `${file} must retain the compound gate`)
+    assert.ok(!source(file).includes('<CompactGrantFlag'), `${file} must not imply one switch`)
+  }
+})

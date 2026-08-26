@@ -87,12 +87,8 @@ test('section targets are namespaced so they cannot collide with Settings', () =
   // `[data-setting]` values share that namespace and must be prefixed.
   assert.equal(drawerSectionTarget('actions', 'clipboard'), 'drawer.actions.clipboard')
   const actions = source('ActionsTab.tsx')
-  assert.ok(actions.includes("data-setting={drawerSectionTarget('actions', id)}"))
-  // On the section element, not its body: the body is unmounted while collapsed, and the
-  // reveal has to have something to scroll to in the frame before the expansion lands.
-  const marked = actions.slice(actions.indexOf('class={`actions-section actions-section-'))
-  assert.ok(marked.slice(0, 160).includes("data-setting={drawerSectionTarget('actions', id)}"))
-  assert.ok(!actions.includes('class="actions-section-body" data-setting'), 'the body is unmounted while collapsed')
+  for(const section of ['skills','prompts','clipboard'])assert.ok(actions.includes(`data-setting="drawer.actions.${section}"`))
+  assert.ok(actions.includes('class="actions-view-tabs"'), 'named tabs replace the retired disclosure stack')
 })
 
 test('every segment and section gets a palette entry and a voice phrase', () => {
