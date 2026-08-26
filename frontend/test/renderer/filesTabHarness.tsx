@@ -37,8 +37,48 @@ const RECENT = {
   ],
 }
 
-window.fetch = (async (input: RequestInfo | URL) => {
+type SearchRequestRecord = { query: string; aborted: boolean }
+const searchRequests: SearchRequestRecord[] = []
+Object.assign(globalThis, { __fileSearchRequests: searchRequests })
+
+function delayedSearch(query: string, signal?: AbortSignal | null): Promise<Response> {
+  const record = { query, aborted: false }
+  searchRequests.push(record)
+  const delay = query === 'road' ? 800 : query === 'roadmap' ? 400 : 0
+  const items = query === 'r'
+    ? [
+        { name: 'README.md', path: 'README.md', match: 'name', line: null, snippet: null },
+        { name: 'runtime.ts', path: 'frontend/src/runtime.ts', match: 'name', line: null, snippet: null },
+      ]
+    : query === 'roadmap'
+      ? [{ name: 'ROADMAP.md', path: '.docs/development/ROADMAP.md', match: 'name', line: null, snippet: null }]
+      : query === 'road'
+        ? [{ name: 'old-road.txt', path: 'old-road.txt', match: 'name', line: null, snippet: null }]
+        : []
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      record.aborted = true
+      clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve(new Response(JSON.stringify({ items, truncated: false, truncated_reason: null, stopped_at: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    }, delay)
+    if (signal?.aborted) abort()
+    else signal?.addEventListener('abort', abort, { once: true })
+  })
+}
+
+window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = String(typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url)
+  if (path.includes('/search')) {
+    const query = new URL(path, location.href).searchParams.get('q') || ''
+    return delayedSearch(query, init?.signal)
+  }
   const body = path.includes('/files/recent') ? RECENT
     : path.includes('/files/tree') ? { directories: { '': ROOT } }
       : path.includes('/files') ? ROOT

@@ -359,7 +359,7 @@ GET     /projects/{project_id}/files?path=RELATIVE
 GET     /projects/{project_id}/files/tree?path=RELATIVE&path=…   the root plus each expanded folder
 GET     /projects/{project_id}/files/recent   {items[{name,path,kind,origin,status,committed_at}], available, reason?}
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
-GET     /projects/{project_id}/search?q=&mode=names|contents|both   {items[…], truncated, truncated_reason: results|files|null, stopped_at}
+GET     /projects/{project_id}/search?q=&mode=names|contents|both   {items[…], truncated, truncated_reason: results|files|null, stopped_at, scanned_files, scanned_bytes}
 GET     /projects/{project_id}/file?path=RELATIVE[&worktree=ABSOLUTE]
 GET     /projects/{project_id}/file/content?path=RELATIVE&revision=REVISION[&worktree=ABSOLUTE]
 PUT     /projects/{project_id}/file   {path, text, revision, worktree?}
@@ -528,11 +528,10 @@ Before the first save it returns an editable `missing` payload with empty Markdo
 Other global note IDs are rejected; Scratchpad has no create, rename, or delete route.
 
 `GET /search` recursively finds files by name and/or UTF-8 content beneath the canonical root,
-reusing the same ignore rules as the browser and running off the event loop. `mode` selects
-`names`, `contents`, or `both` (invalid values fall back to `names`); content matching skips
-binary and oversized files. It returns `{items: [{path, name, match: name|content, line, snippet}],
-truncated}`, name matches sorted before content matches, bounded on files visited, bytes read,
-per-file size, and result count.
+reusing the same ignore rules as the browser and running off the event loop.
+`mode` selects `names`, `contents`, or `both` (invalid values fall back to `names`); content matching skips binary and oversized files.
+It returns `{items: [{path, name, match: name|content, line, snippet}], truncated, truncated_reason, stopped_at, scanned_files, scanned_bytes}`, with name matches sorted before content matches and bounds on files visited, bytes read, per-file size, and result count.
+The work counters support diagnostics without recording the query text.
 
 Paths are relative to the canonical root and may not escape it. Note writes, renames, and deletes
 are revision checked. `POST /resources` creates exactly one empty file or directory in an

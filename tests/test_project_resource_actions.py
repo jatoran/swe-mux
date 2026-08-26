@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from types import SimpleNamespace
 
 from aiohttp import web
@@ -17,6 +18,7 @@ from swe_mux.routes.project_files import (
     ignore_project_resource,
     post_project_resource,
     reveal_project_resource,
+    search_project_files_route,
 )
 from swe_mux.server import error_middleware
 
@@ -143,3 +145,40 @@ async def test_project_resource_create_route_is_exclusive_and_reports_ignored_it
     assert collision_payload["code"] == "resource_exists"
     assert invalid.status == 400
     assert not (root / "escape").exists()
+
+
+async def test_project_search_route_reports_bounded_work_without_query_text(
+    tmp_path,
+    caplog,  # type: ignore[no-untyped-def]
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "private-roadmap.md").write_text("plan", encoding="utf-8")
+    config = load_config(tmp_path / "config.toml")
+    project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
+    app = web.Application(middlewares=[error_middleware])
+    app[keys.CONFIG] = config
+    app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
+    app.router.add_get("/projects/{project_id}/search", search_project_files_route)
+    caplog.set_level(logging.INFO, logger="swe_mux.routes.project_files")
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get(
+            "/projects/project-one/search",
+            params={"q": "private-roadmap", "mode": "names"},
+        )
+        payload = await response.json()
+
+    assert response.status == 200
+    assert [item["path"] for item in payload["items"]] == ["private-roadmap.md"]
+    assert payload["scanned_files"] == 1
+    assert payload["scanned_bytes"] == 0
+    message = next(
+        record.getMessage()
+        for record in caplog.records
+        if "project_file_search_completed" in record.getMessage()
+    )
+    assert "project_id=project-one" in message
+    assert "query_chars=15" in message
+    assert "scanned_files=1" in message
+    assert "private-roadmap" not in message

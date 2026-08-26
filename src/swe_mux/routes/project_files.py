@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from aiohttp import web
@@ -131,6 +132,7 @@ async def list_recent_project_files(request: web.Request) -> web.Response:
 
 
 async def search_project_files_route(request: web.Request) -> web.Response:
+    started = time.monotonic()
     project = _request_project(request)
     mode = request.query.get("mode", "names")
     if mode not in ("names", "contents", "both"):
@@ -148,6 +150,20 @@ async def search_project_files_route(request: web.Request) -> web.Response:
             mode=mode,
             ignore_patterns=effective_project_ignores(project.root, configured),
         ),
+    )
+    log.info(
+        "project_file_search_completed project_id=%s mode=%s query_chars=%d results=%d "
+        "scanned_files=%d scanned_bytes=%d truncated=%s reason=%s stopped_at=%s duration_ms=%.1f",
+        project.id,
+        mode,
+        len(query.strip()),
+        len(result["items"]),
+        result["scanned_files"],
+        result["scanned_bytes"],
+        result["truncated"],
+        result["truncated_reason"],
+        result["stopped_at"],
+        (time.monotonic() - started) * 1000,
     )
     return json_response(result)
 

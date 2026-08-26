@@ -101,3 +101,38 @@ test('the header offers the ignore patterns that decide what the tree contains',
   expect(await page.evaluate(() => (globalThis as { __settingRequests?: string[] }).__settingRequests))
     .toEqual(['projects.ignorePatterns'])
 })
+
+test('a new query replaces stale rows with visible progress until its own results arrive', async ({ page }) => {
+  await page.goto('/files-tab-harness.html')
+  const search = page.getByLabel('Search files')
+
+  await search.fill('r')
+  await expect(page.locator('.file-result-row')).toHaveCount(2)
+  await expect(page.locator('.file-results')).toContainText('README.md')
+
+  await search.fill('roadmap')
+  await expect(page.locator('.file-result-row')).toHaveCount(0)
+  await expect(page.getByRole('status')).toHaveText('Searching for “roadmap”…')
+
+  await expect(page.locator('.file-result-row')).toHaveCount(1)
+  await expect(page.locator('.file-results')).toContainText('.docs/development/ROADMAP.md')
+})
+
+test('a superseded search is aborted and cannot overwrite the current query', async ({ page }) => {
+  await page.goto('/files-tab-harness.html')
+  const search = page.getByLabel('Search files')
+
+  await search.fill('road')
+  await expect.poll(async () => page.evaluate(() => (
+    globalThis as { __fileSearchRequests?: Array<{ query: string }> }
+  ).__fileSearchRequests?.some(request => request.query === 'road'))).toBe(true)
+  await search.fill('roadmap')
+
+  await expect(page.locator('.file-result-row')).toHaveCount(1)
+  await expect(page.locator('.file-results')).toContainText('.docs/development/ROADMAP.md')
+  await expect.poll(async () => page.evaluate(() => (
+    globalThis as { __fileSearchRequests?: Array<{ query: string; aborted: boolean }> }
+  ).__fileSearchRequests?.find(request => request.query === 'road')?.aborted)).toBe(true)
+  await page.waitForTimeout(850)
+  await expect(page.locator('.file-results')).not.toContainText('old-road.txt')
+})

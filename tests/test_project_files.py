@@ -378,6 +378,8 @@ def test_project_search_matches_names_contents_and_respects_ignores(tmp_path: Pa
 
     names = search_project_files(tmp_path, "widget", mode="names", ignore_patterns=patterns)
     assert [item["path"] for item in names["items"]] == ["src/widget.ts"]
+    assert names["scanned_files"] == 4
+    assert names["scanned_bytes"] == 0
 
     contents = search_project_files(tmp_path, "widget", mode="contents", ignore_patterns=patterns)
     hit = next(item for item in contents["items"] if item["path"] == "src/helper.ts")
@@ -385,11 +387,16 @@ def test_project_search_matches_names_contents_and_respects_ignores(tmp_path: Pa
     assert hit["snippet"] == "// uses the widget value"
     # The binary file contains the needle but must never surface as a content match.
     assert all(item["path"] != "blob.bin" for item in contents["items"])
+    assert contents["scanned_files"] == 4
+    assert contents["scanned_bytes"] > 0
 
     both = search_project_files(tmp_path, "widget", mode="both", ignore_patterns=patterns)
     paths = [item["path"] for item in both["items"]]
     assert paths == ["src/widget.ts", "src/helper.ts"]  # name match sorts before content match
-    assert not search_project_files(tmp_path, "", mode="both", ignore_patterns=patterns)["items"]
+    empty = search_project_files(tmp_path, "", mode="both", ignore_patterns=patterns)
+    assert not empty["items"]
+    assert empty["scanned_files"] == 0
+    assert empty["scanned_bytes"] == 0
 
 
 def test_conventional_worktree_roots_are_hidden_without_hiding_agent_config(

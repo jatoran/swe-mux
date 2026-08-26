@@ -1158,7 +1158,14 @@ def search_project_files(
     project_root = Path(root).resolve()
     needle = query.strip().casefold()
     if not needle:
-        return {"items": [], "truncated": False, "truncated_reason": None, "stopped_at": None}
+        return {
+            "items": [],
+            "truncated": False,
+            "truncated_reason": None,
+            "stopped_at": None,
+            "scanned_files": 0,
+            "scanned_bytes": 0,
+        }
     ignore = ignore_patterns or [".git"]
     pruned = resolve_pruned_paths(project_root, pruned_paths)
     want_names = mode in ("names", "both")
@@ -1225,6 +1232,8 @@ def search_project_files(
         "truncated": truncated_reason is not None,
         "truncated_reason": truncated_reason,
         "stopped_at": stopped_at,
+        "scanned_files": scanned_files,
+        "scanned_bytes": scanned_bytes,
     }
 
 
