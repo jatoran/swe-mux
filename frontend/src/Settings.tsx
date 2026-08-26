@@ -2200,7 +2200,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
         </Fragment>}
 
-        {activeTab==='appearance'&&<section><h3>Theme</h3>
+        {activeTab==='appearance'&&<Fragment><section><h3>Theme</h3>
           <div class="theme-field">
             <span>Theme</span>
             <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} onPreview={previewTheme} />
@@ -2209,12 +2209,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
           <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
-          <SessionRowSettings />
+          </section><section><SessionRowSettings /></section><section>
           <h3>Side panel tabs</h3>
           <label>Drawer tabs<Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
           <label>Right rail<Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
           <p>The drawer's tab strips and the always-visible desktop rail keep independent icon or title modes.</p>
-          <h3>Visible panels</h3>
+          </section><section><h3>Visible panels</h3>
           <div class="drawer-tab-visibility" role="group" aria-label="Visible side panels">{DRAWER_TABS.map(tab=>{
             const shown=!drawerHiddenTabs.includes(tab.id)
             const blocked=shown&&!canHideDrawerTab(drawerHiddenTabs,tab.id)
@@ -2225,17 +2225,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           })}</div>
           <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>Show all panels</button></div>
           <p>Hides panels from tab strips and the desktop rail without changing their arrangement. Commands and menus can still open them. Stored on this device.</p>
-          <h3>Interface scale</h3>
+          </section><section><h3>Interface scale</h3>
           <label>Desktop interface scale<Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
           <p>The desktop browser and the phone keep separate scales, because they rarely want the same density. Both are editable from either device, so you can size the phone from here rather than on the phone. A window picks its value by width, at the same point the mobile layout takes over, so a desktop window dragged narrow adopts the mobile scale.</p>
           <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Text editor</strong>.</p>
-          <h3>Rail density</h3>
+          </section><section><h3>Rail density</h3>
           <label data-setting="rail_density_desktop">Desktop rail density<Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <label data-setting="rail_density_mobile">Mobile rail density<Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <p>How tightly the Action rail under each terminal packs its buttons: the gap between them, their height, and the padding inside and around them. It is the one strip that is on screen under every pane at once, so on a desktop showing four terminals a tighter rail is four rows of output back. Comfortable is the spacing that has always shipped, and both devices start there — this only ever takes space away, never adds it.</p>
-          <p>Split desktop/mobile like the scale above, and for a sharper reason: below Comfortable a phone's buttons fall under the 44-pixel touch target that makes them reliable to hit with a thumb. That is the trade the setting is offering rather than an oversight, and it is why the desktop is where it pays off.</p></section>}
+          <p>Split desktop/mobile like the scale above, and for a sharper reason: below Comfortable a phone's buttons fall under the 44-pixel touch target that makes them reliable to hit with a thumb. That is the trade the setting is offering rather than an oversight, and it is why the desktop is where it pays off.</p></section></Fragment>}
   </Fragment>
 
   // Rebuilt on the first keystroke of a search and then reused until the search
@@ -2295,7 +2295,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       {tabNav}
       <div class="settings-content">
         {pagedSubpages
-          ?<header class="settings-subpage-heading"><strong>{declaredSubpages.find(page=>page.id===selectedSubpage)?.label||declaredSubpages[0]?.label}</strong><span>Separate page · changes save together</span></header>
+          ?<nav class="settings-subpage-nav" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} pages`}>
+            {declaredSubpages.map(page=><button type="button" key={page.id} class={selectedSubpage===page.id?'active':''} aria-current={selectedSubpage===page.id?'page':undefined} onClick={()=>selectSubpage(activeTab,page.id)}>{page.label}</button>)}
+          </nav>
           :railSections.length>=SECTION_RAIL_MIN&&<nav class="settings-section-rail" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} sections`}>
             {railSections.map(section=><button type="button" key={section.id} class={activeSection===section.id?'active':''} aria-current={activeSection===section.id?'true':undefined} onClick={()=>scrollToSection(section.id)}>{section.label}</button>)}
           </nav>}
