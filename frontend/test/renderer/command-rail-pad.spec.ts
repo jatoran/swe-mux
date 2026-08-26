@@ -361,11 +361,33 @@ test('a pad drag delivers no mouse events, which is why it cannot rely on the us
   expect(events).not.toContain('mousedown')
 })
 
+test('a held pad refuses the Android focus default before its dial appears', async ({ page }) => {
+  await withField(page)
+  await page.evaluate(() => {
+    const pad = document.querySelector<HTMLElement>('.rail-pad-w3')!
+    pad.addEventListener('pointerdown', event => {
+      pad.dataset.defaultPrevented = String(event.defaultPrevented)
+    })
+  })
+  const finger = await touch(page)
+  const centre = await keyPoint(page, PAD)
+  await finger.down(centre.x, centre.y)
+  await expect.poll(() => page.locator(PAD).getAttribute('data-default-prevented')).toBe('true')
+  await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
+  await expect(page.locator('.rail-pad-dial-shown')).toHaveCount(1)
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe('keeper')
+
+  const up = intoWedge(NEAR_PX, 1, 3)
+  await dragBy(finger, centre, up.dx, up.dy)
+  await expect.poll(() => sends(page)).toEqual(['\x1b[A'])
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe('keeper')
+  await finger.up()
+})
+
 test('a pad drag hands the soft keyboard back after focus is taken mid-gesture', async ({ page }) => {
-  // The blur is the point. Desktop Chromium never drops focus during a pad drag, so a test
-  // that merely dragged and checked would pass with the fix removed - checked, it does. What
-  // Android actually does is take focus away *because* nothing refused it, so that is what
-  // is reproduced here: blur mid-drag, and assert the gesture puts it back on the lift.
+  // The refusal above is the primary path. Keep the explicit blur because desktop Chromium
+  // cannot reproduce every Android focus move, and the end-of-gesture repair remains the
+  // defensive backstop for a platform move that escapes the cancelled pointer default.
   await withField(page)
   const finger = await touch(page)
   const centre = await keyPoint(page, PAD)
@@ -545,22 +567,22 @@ test('nothing in the dial takes pointer events', async ({ page }) => {
   expect(inert).toBe(true)
 })
 
-test('the dial draws a wash over the workspace', async ({ page }) => {
+test('the dial leaves the workspace visually unchanged', async ({ page }) => {
   const { finger } = await flick(page, PAD, intoWedge(NEAR_PX, 1, 3))
   await page.waitForTimeout(RAIL_PAD_DIAL_DELAY_MS + 140)
-  const scrim = await page.evaluate(() => {
-    const node = document.querySelector<HTMLElement>('.rail-pad-dial-scrim')
-    if (!node) return null
-    const box = node.getBoundingClientRect()
-    return { background: getComputedStyle(node).backgroundColor, width: box.width, height: box.height }
+  const surface = await page.evaluate(() => {
+    const dial = document.querySelector<HTMLElement>('.rail-pad-dial')!
+    const style = getComputedStyle(dial)
+    return {
+      scrims: dial.querySelectorAll('.rail-pad-dial-scrim').length,
+      background: style.backgroundColor,
+      backdrop: style.getPropertyValue('backdrop-filter') || style.getPropertyValue('-webkit-backdrop-filter'),
+    }
   })
   await finger.up()
-  expect(scrim).not.toBeNull()
-  expect(scrim!.width).toBeGreaterThan(0)
-  // Semi-transparent rather than opaque: the terminal has to stay legible underneath.
-  // Matched on the fractional alpha alone, because `color-mix` resolves to `color(srgb …)`
-  // in Chrome and to `rgba(…)` elsewhere, and the assertion is about neither spelling.
-  expect(scrim!.background).toMatch(/0\.\d+/)
+  expect(surface.scrims).toBe(0)
+  expect(surface.background).toBe('rgba(0, 0, 0, 0)')
+  expect(surface.backdrop).toBe('none')
 })
 
 test('a squeezed pad shrinks its dial and its ring together', async ({ page }) => {
