@@ -45,11 +45,13 @@ The worklet, resampler and framer, Silero, and the frame-counted gate remain sep
 
 ### Playback
 
-`voice.ts` owns requested-stream claims, ordered segment queues, autoplay, sidechain muting, and whole-stream suppression.
+`voice.ts` owns requested-stream claims, ordered segment queues, autoplay, sidechain muting, whole-stream suppression, next-segment preload, and measured segment handoffs.
 
 - A claim survives a non-positive `segment_count` - an open stream whose length is not yet known - until its closing segment or `voice_stream_closed`.
 - A new segment queues whenever a clip is loaded and unfinished, rather than only while audio is audible.
 - Every stop switch suppresses the whole claim map rather than the audible stream alone, **because a claim outlives its clip**.
+- The unlocked active `HTMLAudioElement` is the only playback-state and sidechain authority.
+  A second inaudible element preloads the next queued URL, and each same-stream transition reports its measured gap plus `queuedAtEnd` and `preloaded` to `/api/voice/playback-diagnostic`.
 - Autoplay is additionally focus-driven and global (`setPlaybackFocus`/`sessionPlaysHere`): the focused session plays here, and every other session's clip is **held** (bounded, newest kept), surfaced as ready-to-play by `VoiceReadTab.tsx` and the command palette.
   A held clip is never started by a focus move, is dropped by every stop switch, and is overridden only by a Voice Comms pin (`setPinnedPlaybackSession`).
 - `voice.ts` also keeps the **per-device** half of a clip's state - held, playing, played (heard to the end, never merely started), dismissed - bounded and unpersisted, because a clip played on the phone is unplayed on the desktop and the daemon's row must not claim either. `VoiceReadTab.tsx` renders it over the daemon's `synthesizing`/`ready`/`failed`.
@@ -99,7 +101,13 @@ The weights are fetched by `tools/fetch_smart_turn.py` into `frontend/models/` -
 It unremembers the dialog id, creates the next one, and announces `mux:assistant-dialog-reset` so the panel - the only holder of the view being cleared - reacts rather than clearing itself, which keeps the two surfaces from growing two notions of "the current dialog".
 The dispatch is `typeof window` guarded because the module is imported by DOM-free tests.
 
-`assistantSpeech.ts` owns **one speech stream per turn**: sentence appends serialized behind one another, the card announcement joining the open stream (or a loose non-interrupting one, closed on idle) rather than a second one that would hard-stop it, the spoken verdict deliberately taking the floor instead, and an append that stops the moment playback drops the stream's claim.
+`assistantSpeech.ts` owns **one speech stream per turn**.
+It opens an empty acknowledgement-only stream at turn start.
+Raw sentence-fragment appends serialize only through their queue acknowledgements.
+A card announcement joins the open stream, or a loose non-interrupting stream closed on idle, instead of hard-stopping speech with a second stream.
+A spoken verdict deliberately takes the floor.
+Appending stops the moment playback drops the stream's claim.
+The daemon owns audio batching and synthesis order, so the client never waits for one clip to encode before sending the next sentence.
 
 `AssistantPanel.tsx` renders the daemon-owned dialog inside the voice panel's `chat` mode and drives that speech from the sentence events as they land: typed pending and scheduled action cards with the cancel-window countdown, interrupt, and new-dialog.
 An `assistant_notice` - the assistant speaking outside any turn, today a Project Action's outcome arriving after its steps finish - renders as a finished message and is spoken on the announcement path, so an outcome landing mid-sentence joins the stream instead of cutting it.

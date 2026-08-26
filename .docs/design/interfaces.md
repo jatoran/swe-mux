@@ -1434,6 +1434,7 @@ GET    /voice/stt-latency
 POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
 POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback probe
+POST   /voice/playback-diagnostic        bounded audio-file handoff measurement
 POST   /voice/capture-diagnostic         bounded stalled/recovered capture watchdog report
 POST   /voice/deferral-diagnostic        one resolved unfinished-utterance deferral
 GET    /voice/clips[?session=&run=&anchor=&kind=summary|verbatim&limit=]
@@ -1553,6 +1554,12 @@ a restart.
 It accepts a confirmed/rejected outcome, Silero/energy detector, optional agent/system origin, peak probability, and peak RMS.
 The daemon validates and clamps the browser-supplied values before writing the record to `daemon.log`.
 
+`/voice/playback-diagnostic` records one transition between two segment files in the same speech stream.
+It accepts `{event: "handoff", streamId, previousClipId, nextClipId, handoffMs, queuedAtEnd, preloaded}`.
+`queuedAtEnd` says whether synthesis had produced the next clip before the prior clip ended.
+`preloaded` says whether the standby browser media element had requested that next URL.
+The daemon bounds identifiers and the measured gap before writing the record to `daemon.log`.
+
 `/voice/capture-diagnostic` records the client frame watchdog's stalled/recovered reports:
 event, detector, silent milliseconds, `AudioContext` state, track state and muted flag, and
 the recovery-attempt count, each clamped on arrival.
@@ -1619,15 +1626,20 @@ it requires the saved risk acknowledgement and a working external integration.
 `/voice/speak` validates and synthesizes bounded application-authored text through the configured TTS provider without transcript reading, summarization, or a model call.
 The optional client-generated stream ID lets the requesting tab claim live segment events before the first synthesis finishes.
 
-It has three shapes, because the assistant produces its reply over several seconds and the operator should not wait for the last sentence to hear the first:
+It has four shapes, because the assistant produces its reply over several seconds and the operator should not wait for the last sentence to hear the first:
 
+- Asynchronous open (`text: ""`, `final: false`, `continue_stream` absent): creates an empty stream and returns `{stream_id, queued: 0, stream_open: true}` without synthesis.
+  The assistant uses this before its first sentence so all later requests are acknowledgement-only appends.
 - Default (`continue_stream` absent): opens a stream and synthesizes its opening clip inline, returning it so a lost `voice_clip_ready` still has the HTTP response as a playback fallback.
-- `continue_stream: true`: appends to an already-open stream. Synthesis runs on that stream's single worker and the response is an acknowledgement (`{stream_id, queued, segment_index, stream_open}`), not a clip - the browser is already playing the stream and picks the continuation up from its events. Appending to an unknown or completed stream is a `409`.
+- `continue_stream: true`: appends raw normalized text to an already-open stream.
+  The response is a queue acknowledgement (`{stream_id, queued, segment_index, stream_open}`), not a clip.
+  Synthesis runs on that stream's single worker after a bounded append-coalescing window, and accumulated fragments are segmented once at natural boundaries.
+  Appending to an unknown or completed stream is a `409`.
 - Empty `text` with `final: true` and a `stream_id`: closes the stream with nothing more to say, which is what a turn that ended on a tool result needs.
 
 `final: false` leaves the stream open.
 Its segments carry `segment_count: 0`, meaning unknown, until the closing one carries the real total; a client must treat a non-positive count as "still open" rather than as the last segment.
-Ordering is the invariant: one worker drains one FIFO per stream, so clip indices are monotonic however the appends arrive.
+Ordering is the invariant: one worker drains one raw-text buffer and one sealed-segment FIFO per stream, so clip indices are monotonic however the appends arrive.
 The same immutable provider profile drains the entire FIFO.
 A Settings switch or provider-option edit affects the next stream only.
 `voice_stream_closed` (`stream_id`, `segment_count`, `failed`) marks the end, including the case where a stream ends without a final clip - a failed segment ends its stream rather than speaking the rest out of order.
@@ -1637,9 +1649,11 @@ The request override is validated, applies to one clip only, and never mutates t
 The optional stream ID has the same claim-before-request role as `/voice/speak`.
 Both it and `/voice/speak` refuse with `409 read aloud is off` while the `tts_enabled` master is off: the master gates generation everywhere, not only on the automatic `turn_ended` path.
 
-Automatic, manual, and application-text synthesis returns the first coherent clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
+Automatic, manual, and one-shot application-text synthesis returns the first coherent clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
+Acknowledgement-only application streams emit the same ordered events but return no clip from their open or append requests.
 Agent replies of at most 420 characters stay in that one clip; longer replies prefer a complete opening sentence before continuing.
-Application speech opens at a much tighter bound instead, because that opening clip is time-to-first-sound: synthesis is roughly linear in characters, and a 420-character opener measures 11-14 s of silence on Kokoro against about a second for a short one.
+Application speech prefers a natural opening around 120 characters and permits a complete sentence through 200 characters before a word-boundary cut.
+Its later fragments combine into complete-sentence batches up to 420 characters while the previous clip synthesizes or plays.
 The wide bound stays for agent replies, where the coherence of somebody else's prose matters more than the first second.
 Each ready segment is independently playable, and later segments continue in tracked background tasks after the HTTP response.
 Summary/verbatim selection remains the existing session/global contract.

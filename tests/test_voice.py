@@ -29,6 +29,7 @@ from swe_mux.voice import (
     VoiceError,
     VoiceService,
     VoiceStore,
+    application_speech_segments,
     approval_prompt,
     clip_snapshot,
     estimate_duration_seconds,
@@ -938,12 +939,11 @@ async def test_an_open_speech_stream_appends_in_order_and_closes(tmp_path: Path)
     spoken = patch_engine(service)
     stream = "11111111-1111-4111-8111-111111111111"
     try:
-        first = await service.speak("Opening sentence.", stream_id=stream, final=False)
-        assert first["stream_open"] is True
-        # Unknown, not zero: the clip record says how many segments the producer
-        # promised, and an open stream has promised nothing yet. The *events* keep
-        # carrying 0 for "still open", which is what the browser's queue reads.
-        assert first["segment_count"] is None
+        opened = await service.speak("", stream_id=stream, final=False)
+        assert opened == {"stream_id": stream, "queued": 0, "stream_open": True}
+        await service.speak(
+            "Opening sentence.", stream_id=stream, continue_stream=True, final=False
+        )
         await service.speak(
             "Second sentence.", stream_id=stream, continue_stream=True, final=False
         )
@@ -951,15 +951,63 @@ async def test_an_open_speech_stream_appends_in_order_and_closes(tmp_path: Path)
             "Third sentence.", stream_id=stream, continue_stream=True, final=True
         )
         await stream_reaches(emitted, stream, "voice_stream_closed")
-        assert spoken == ["Opening sentence.", "Second sentence.", "Third sentence."]
+        assert spoken == ["Opening sentence. Second sentence. Third sentence."]
         events = stream_events(emitted, stream)
         clips = [event for event in events if event.type == "voice_clip_ready"]
-        assert [event.payload["segment_index"] for event in clips] == [0, 1, 2]
-        # Only the closing clip names a count; anything earlier would tell the
-        # browser the stream had ended and drop every later sentence.
-        assert [event.payload["segment_count"] for event in clips] == [0, 0, 3]
+        assert [event.payload["segment_index"] for event in clips] == [0]
+        assert [event.payload["segment_count"] for event in clips] == [1]
         assert events[-1].type == "voice_stream_closed"
-        assert events[-1].payload["segment_count"] == 3
+        assert events[-1].payload["segment_count"] == 1
+    finally:
+        service.store.close()
+
+
+async def test_open_stream_accepts_and_batches_tail_while_opening_synthesizes(
+    tmp_path: Path,
+) -> None:
+    service, _events, emitted, _record = make_service(tmp_path)
+    stream = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    started = asyncio.Event()
+    release = asyncio.Event()
+    spoken: list[str] = []
+
+    async def synthesize(
+        _profile: Any, text: str, destination: Path, *, automatic: bool
+    ) -> None:
+        del automatic
+        spoken.append(text)
+        if len(spoken) == 1:
+            started.set()
+            await release.wait()
+        destination.write_bytes(b"ID3" + text.encode()[:64])
+
+    service._synthesize = synthesize  # type: ignore[method-assign]
+    try:
+        await service.speak("", stream_id=stream, final=False)
+        await service.speak(
+            "The opening sentence begins playback.",
+            stream_id=stream,
+            continue_stream=True,
+            final=False,
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        # These acknowledgements must not wait for the blocked opening engine.
+        await service.speak(
+            "The second sentence reaches the daemon while that audio is encoding.",
+            stream_id=stream,
+            continue_stream=True,
+            final=False,
+        )
+        await service.speak(
+            "Done.", stream_id=stream, continue_stream=True, final=True
+        )
+        assert spoken == ["The opening sentence begins playback."]
+        release.set()
+        await stream_reaches(emitted, stream, "voice_stream_closed")
+        assert spoken == [
+            "The opening sentence begins playback.",
+            "The second sentence reaches the daemon while that audio is encoding. Done.",
+        ]
     finally:
         service.store.close()
 
@@ -1394,6 +1442,39 @@ def test_service_validates_and_logs_barge_in_diagnostics(
         assert '"outcome": "confirmed"' in caplog.text
         with pytest.raises(VoiceError, match="outcome"):
             service.record_barge_in_diagnostic({"outcome": "maybe"})
+    finally:
+        service.store.close()
+
+
+def test_service_validates_and_logs_playback_handoffs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        with caplog.at_level(logging.INFO, logger="swe_mux.voice"):
+            sample = service.record_playback_diagnostic(
+                {
+                    "event": "handoff",
+                    "streamId": "stream-1",
+                    "previousClipId": "clip-1",
+                    "nextClipId": "clip-2",
+                    "handoffMs": 82.34,
+                    "queuedAtEnd": True,
+                    "preloaded": True,
+                }
+            )
+        assert sample == {
+            "event": "handoff",
+            "stream_id": "stream-1",
+            "previous_clip_id": "clip-1",
+            "next_clip_id": "clip-2",
+            "handoff_ms": 82.3,
+            "queued_at_end": True,
+            "preloaded": True,
+        }
+        assert '"queued_at_end": true' in caplog.text
+        with pytest.raises(VoiceError, match="event"):
+            service.record_playback_diagnostic({"event": "started"})
     finally:
         service.store.close()
 
@@ -2382,17 +2463,26 @@ def test_merging_a_runt_tail_may_exceed_the_bound_on_purpose() -> None:
     assert _merge_runt_tail([]) == []
 
 
-def test_the_opening_clip_halved_its_silence_without_going_under_the_floor() -> None:
-    """140 characters measured 4.1 s to first sound; 60 measures 2.0 s.
+def test_application_speech_uses_a_natural_opening_not_a_sixty_character_cut() -> None:
+    from swe_mux.voice import (
+        APPLICATION_FIRST_MAX_CHARS,
+        APPLICATION_FIRST_TARGET_CHARS,
+        MIN_SEGMENT_CHARS,
+    )
 
-    The floor matters as much as the ceiling: at 60 characters the opening clip
-    buys ~4.0 s of audio against the ~2 s its successor needs, so nothing stalls
-    behind it. Dropping it further would start the reply sooner and then stall.
-    """
-    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
-
-    assert APPLICATION_FIRST_SEGMENT_CHARS == 60
-    assert APPLICATION_FIRST_SEGMENT_CHARS >= MIN_SEGMENT_CHARS
+    assert APPLICATION_FIRST_TARGET_CHARS == 120
+    assert APPLICATION_FIRST_MAX_CHARS == 200
+    assert APPLICATION_FIRST_TARGET_CHARS >= MIN_SEGMENT_CHARS
+    text = (
+        "The first complete sentence is intentionally longer than sixty characters, "
+        "but it remains one coherent thought. The continuation is also complete, and "
+        "it includes enough additional detail that the whole response exceeds the "
+        "opening hard limit without forcing a cut inside the first thought."
+    )
+    chunks = application_speech_segments(text)
+    assert chunks[0].endswith("thought.")
+    assert len(chunks[0]) > 60
+    assert " ".join(chunks).split() == text.split()
 
 
 def test_a_reply_opening_on_a_short_sentence_does_not_get_a_runt_lead() -> None:
@@ -2406,27 +2496,27 @@ def test_a_reply_opening_on_a_short_sentence_does_not_get_a_runt_lead() -> None:
 
     A floor on one side of that handoff is not a floor.
     """
-    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+    from swe_mux.voice import APPLICATION_FIRST_MAX_CHARS, MIN_SEGMENT_CHARS
 
     text = (
         "Yes. The supervisor liveness race is the first recommendation, because a "
         "transient socket failure can make live sessions look exited and then record "
         "them that way. The second is timeouts on the fleet refresh. ok"
     )
-    chunks = streaming_segments(text, first_max_chars=APPLICATION_FIRST_SEGMENT_CHARS)
+    chunks = application_speech_segments(text)
     assert len(chunks) >= 2
     assert chunks[0].startswith("Yes. The supervisor"), chunks[0]
     assert all(len(chunk) >= MIN_SEGMENT_CHARS for chunk in chunks), [len(c) for c in chunks]
     # And the opening clip still respects the bound that IS time-to-first-sound.
     # Merging the runt into the next segment instead would have produced a
     # 190-character opener and traded a 2 s wait for a 5.4 s one.
-    assert len(chunks[0]) <= APPLICATION_FIRST_SEGMENT_CHARS
+    assert len(chunks[0]) <= APPLICATION_FIRST_MAX_CHARS
     assert " ".join(chunks).split() == text.split()
 
 
 def test_every_edge_holds_the_floor_across_shapes() -> None:
     """One clip may be short only when it is the entire reply."""
-    from swe_mux.voice import APPLICATION_FIRST_SEGMENT_CHARS, MIN_SEGMENT_CHARS
+    from swe_mux.voice import MIN_SEGMENT_CHARS
 
     shapes = [
         "Done.",
@@ -2437,7 +2527,7 @@ def test_every_edge_holds_the_floor_across_shapes() -> None:
         "Ok. " + ("filler words here " * 40).strip() + " end",
     ]
     for text in shapes:
-        chunks = streaming_segments(text, first_max_chars=APPLICATION_FIRST_SEGMENT_CHARS)
+        chunks = application_speech_segments(text)
         assert chunks, text
         assert " ".join(chunks).split() == text.split(), text
         if len(chunks) > 1:

@@ -527,7 +527,7 @@
   The rule the design enforces: the model proposes names, deterministic code resolves and
   executes through existing paths, and the consequential-action confirmation floor is not
   configurable.
-  A second rule governs what is *said*: a turn is one speech stream spoken sentence by sentence
+  A second rule governs what is *said*: a turn is one speech stream fed progressively as the model writes and batched into natural audio segments by the daemon,
   as the model writes it, a confirmation card is announced once by the daemon-built line and
   everything the model says afterwards is display-only, and an identical proposal is answered
   with the existing action rather than a second card - because a confirmation is never a turn,
@@ -579,10 +579,11 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   A respelling must itself be pronounceable (the editor checks each row via
   `POST /api/voice/lexicon/check` and auditions via `GET /api/voice/lexicon/preview`);
   exact sounds use misaki's `[word](/phonemes/)` form, atomic in the ladder.
-  Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
+  Automatic and manual read-aloud keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining clips.
+  Trusted application speech opens around a natural 120-character boundary with a 200-character hard ceiling, then combines later complete sentences up to 420 characters.
   Those segments are **rows, not clips**: `stream_id`/`segment_index`/`segment_count` (schema 3) make one reply one entry everywhere a person looks (`clip_groups`/`group_snapshot`, growing live as its segments land), a completed stream is joined into a single file under a new id with the segments kept servable for ten minutes, eviction and deletion take whole streams, and pre-schema-3 rows are discarded by the migration because they cannot be reassembled.
-  Application speech opens on a much tighter clip (`APPLICATION_FIRST_SEGMENT_CHARS`, 60) because that clip *is* time-to-first-sound, and no clip may fall under `MIN_SEGMENT_CHARS` because a clip shorter than ~12 characters finishes playing before its successor can be synthesized (measured curve in `design/features/voice.md`; `voice clip synthesized` logs `covers` per clip), and can leave its stream open (`continue_stream`/`final` on `POST /api/voice/speak`) so the assistant speaks a turn sentence by sentence; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
-  Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
+  The assistant opens an empty acknowledgement-only application stream, appends raw sentence fragments without waiting for synthesis, and lets the daemon batch accumulated text once while the preceding clip encodes; one worker per stream keeps clip indices monotonic, and `voice_stream_closed` marks the end.
+  Browser playback uses one active singleton audio element plus one standby preload element; measured handoff diagnostics distinguish synthesis starvation from browser media delay, and confirmed speech hard-stops and suppresses the whole current stream.
   Read aloud is **one policy in three ordered layers**: the `tts_enabled` master (off = nothing generates *or* plays, enforced on the auto path, `generate`, and `speak` alike), per-session `voice_mode` (does *this session* generate), and the device autoplay toggle plus a global focus rule — the focused session plays here and every other session **holds** its clip, surfaced as `▶ n held` on that pane's strip and in the command palette rather than spoken over the operator. Settings → Voice renders the three as one numbered block and owns the master; the voice panel's `tts` tab is the operational surface for layers 2 and 3 and for the global clip list, ordered by the *source message's* arrival (`voice_clips.source_ts`/`message_anchor`) rather than by synthesis time.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →

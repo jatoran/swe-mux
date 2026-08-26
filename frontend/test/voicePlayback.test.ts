@@ -25,6 +25,7 @@ class FakeAudio {
   }
   emit(type: string) { for (const handler of this.handlers[type] || []) handler() }
   async play() { this.paused = false; this.emit('play') }
+  load() { /* setting src is enough for the fake; existence proves preload was requested */ }
   pause() { this.paused = true; this.emit('pause') }
   finish() { this.ended = true; this.paused = true; this.emit('ended') }
 }
@@ -146,11 +147,45 @@ test('requested segmented speech starts at the first clip and continues in order
   assert.equal(voice.getPlayback().clipId,'segment-1')
   assert.equal(voice.getPlayback().origin,'system')
   voice.enqueueRequestedStreamClip('segment-2',stream,1,2)
+  assert.equal(
+    FakeAudio.instances[1]?.src,
+    voice.clipAudioUrl('segment-2'),
+    'the next segment must be fetched before the current one ends',
+  )
   element().finish()
   await settle()
   assert.equal(voice.getPlayback().clipId,'segment-2')
   voice.bargeInPlayback()
   assert.deepEqual(voice.getPlayback(),{clipId:null,playing:false,position:0,duration:0,origin:null})
+})
+
+test('an in-stream handoff reports readiness and preload separately', async () => {
+  const reports: Array<Record<string, unknown>> = []
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    reports.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>)
+    return new Response('{}', { status: 200 })
+  }) as typeof fetch
+  try {
+    const stream='12121212-1212-4212-8212-121212121212'
+    voice.beginRequestedStream(stream,'system','system')
+    voice.enqueueRequestedStreamClip('handoff-1',stream,0,0)
+    await settle()
+    voice.enqueueRequestedStreamClip('handoff-2',stream,1,2)
+    element().finish()
+    await settle()
+    assert.equal(reports.length,1)
+    assert.deepEqual(
+      { ...reports[0], handoffMs: 0 },
+      {
+        event:'handoff',streamId:stream,previousClipId:'handoff-1',nextClipId:'handoff-2',
+        handoffMs:0,queuedAtEnd:true,preloaded:true,
+      },
+    )
+  } finally {
+    voice.bargeInPlayback()
+    globalThis.fetch = previousFetch
+  }
 })
 
 test('an open stream keeps accepting segments until its count is known',async()=>{
