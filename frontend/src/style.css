@@ -2666,10 +2666,10 @@ body {
    a button may be a drag) and cleared on animationend (see TerminalPane). */
 @media(hover:hover){.terminal-action-rail button:hover:not(:disabled){border-color:var(--green);color:var(--green)}}
 .overflow-rail-edge{position:absolute;z-index:29;top:0;bottom:0;width:18px;pointer-events:none}
-.overflow-rail-edge::before{content:'';position:absolute;top:50%;width:12px;height:20px;transform:translateY(-50%);border-radius:50%;background:color-mix(in srgb,var(--text) 9%,transparent);filter:blur(6px)}
-.overflow-rail-edge::after{content:'';position:absolute;top:50%;transform:translateY(-50%);width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;filter:drop-shadow(0 0 4px color-mix(in srgb,var(--text) 82%,transparent))}
-.overflow-rail-left{left:0}.overflow-rail-left::before{left:-5px}.overflow-rail-left::after{left:3px;border-right:5px solid color-mix(in srgb,var(--text) 82%,var(--muted))}
-.overflow-rail-right{right:0}.overflow-rail-right::before{right:-5px}.overflow-rail-right::after{right:3px;border-left:5px solid color-mix(in srgb,var(--text) 82%,var(--muted))}
+.overflow-rail-edge::before{content:'';position:absolute;top:50%;width:12px;height:20px;transform:translateY(-50%);border-radius:50%;background:color-mix(in srgb,var(--green) 12%,transparent);filter:blur(6px)}
+.overflow-rail-edge::after{content:'';position:absolute;top:50%;transform:translateY(-50%);width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;filter:drop-shadow(0 0 4px color-mix(in srgb,var(--green) 82%,transparent))}
+.overflow-rail-left{left:0}.overflow-rail-left::before{left:-5px}.overflow-rail-left::after{left:3px;border-right:5px solid var(--green)}
+.overflow-rail-right{right:0}.overflow-rail-right::before{right:-5px}.overflow-rail-right::after{right:3px;border-left:5px solid var(--green)}
 /* Both insets are now the strip's own, the wrapper above being its box. The left one clears
    the strip's padding so the glow sits on the first chip rather than in the gutter; the
    right one keeps the 1px the old row-relative `calc` worked out to, so the row that always
@@ -2720,11 +2720,11 @@ body {
    pad with any number of wedges marks itself correctly without a rule per direction. */
 .rail-pad-mark{position:absolute;width:3px;height:3px;border-top:1px solid currentColor;border-left:1px solid currentColor}
 .rail-pad-pressed .rail-pad-marks{opacity:1}
-/* The dial: real wedges, at thumb size, over a wash.
+/* The dial: real wedges at thumb size over an invisible viewport interaction plane.
    Above the drop-ups (96), because a pad can be pressed from inside the row popover and has
-   to be readable over whatever is already open. Nothing here takes pointer events - the
-   gesture is resolved from coordinates, and a dial that could intercept its own drag would
-   be the one way to break it. */
+   to be readable over whatever is already open. A transient dial takes no pointer events -
+   the gesture is resolved from coordinates, and a dial that could intercept its own drag
+   would be the one way to break it. */
 .rail-pad-dial{position:fixed;inset:0;z-index:98;pointer-events:none;opacity:0;transition:opacity .1s ease-out}
 /* A dial left standing by a tap is a control rather than a picture of a gesture, so it takes
    the pointer. Only the root does: every press on it is routed to the gesture as coordinates,
@@ -2734,7 +2734,6 @@ body {
 .rail-pad-dial-standing{pointer-events:auto;touch-action:none}
 .rail-pad-dial-shown{opacity:1}
 @media(prefers-reduced-motion:reduce){.rail-pad-dial{transition:none}}
-.rail-pad-dial-scrim{position:absolute;inset:0;background:color-mix(in srgb,#000 38%,transparent);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
 /* Centred on the press point by its own translate, so the SVG's own origin is the finger
    and every radius in it is the radius the gesture uses. */
 .rail-pad-dial-svg{position:absolute;transform:translate(-50%,-50%);overflow:visible}

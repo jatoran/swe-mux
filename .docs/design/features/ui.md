@@ -542,8 +542,10 @@ Its rules, and what each one is defending:
   registry header, so `+ Add project` rendered but could not be tapped.
 - Add project is one form with an `Existing folder` / `Create new folder` mode strip. Create
   mode asks for a parent plus a folder name (prefilled from the Project name until edited) and
-  shows the exact canonical root it will register. Optional setup commands sit in a collapsed
-  `<details>` and start unchecked, so the common path stays name, folder, Enter.
+  shows the exact canonical root it will register. Three starting-set checkboxes follow (only
+  the free analysis set ticked; the model-backed and agent-authority sets start off and carry
+  their disclosures - `setting-links.md` § First use), and optional setup commands sit in a
+  collapsed `<details>` and start unchecked, so the common path stays name, folder, Enter.
 - Backdrop clicks close Settings. Dirty settings first open an in-app Save/Discard decision;
   interaction with that confirmation is inside the modal boundary and cannot also trigger the
   Settings backdrop.
@@ -1752,7 +1754,7 @@ Its rules, and what each one is defending:
   Every row instead keeps one fixed drawer control outside its scroller, including empty rows and rows whose buttons all fit.
 - **Every row answers overflow twice: it scrolls end to end, and its permanent drawer opens the complete row.**
   Every configured chip remains in the scroller for direct pan, wheel, touch-drag, and focus reveal.
-  Passive left and right glow wedges appear only while content exists in that direction.
+  Passive green left and right glow wedges appear only while content exists in that direction.
   The wedges consume no layout space, accept no input, and sit on the edges of **their own strip**.
   A wedge is a claim about where this row's content is cut, so it is positioned from the strip rather than from the row: a row's trailing furniture is not one width, and one aligned across rows from the row's edge stood off the end of the strip on any row whose furniture was wider, drawing its glow over the flat panel and marking a spot no tap could reach.
   Every row's furniture is now the drawer control alone, so rows do line up - but by construction rather than by arithmetic, which is the point of positioning from the strip.
@@ -1859,7 +1861,9 @@ Its rules, and what each one is defending:
 - **The dial is a real radial control, at thumb size.**
   Each wedge is drawn as an annulus sector with its own outline and fill, from the same radii and angles the gesture resolves against, so the drawing *is* the hitbox and cannot describe a boundary the gesture does not have.
   The wedge under the finger highlights; an unbound or filtered one is dimmed but still drawn, because a target you can see is dead is better than a gap you have to remember.
-  It is drawn over a semi-transparent wash of the workspace, and nothing in it takes pointer events — a dial that could intercept its own drag would be the one way to break the gesture.
+  The workspace keeps its original opacity and sharpness while the dial is visible.
+  The wedges carry their own fill, outline, and text stroke, while the viewport-wide overlay paints nothing.
+  Nothing inside a transient dial takes pointer events; a dial that could intercept its own drag would be the one way to break the gesture.
   The whole thing is portalled to `document.body`: the rail's scroller sits between the pane's transform and the chip, and a transformed ancestor makes an intervening `overflow` clip even `position:fixed` descendants, so a dial rendered inside the chip would be sliced off at the edge of the strip.
 - **A pad costs no width.** Its populated directions are marked by thin arrows drawn inside the chip's own border rather than laid out, so the chip is exactly the size the same chip would be without them.
   A far-ring direction's mark sits inboard of its near one, which is the only thing on the chip that says a wedge has two depths.
@@ -1889,11 +1893,13 @@ Its rules, and what each one is defending:
   The standing dial is announced as the menu `aria-haspopup` promises and is deliberately not focus-managed — the number keys already run every wedge, so a roving tabindex would be a second navigation route to the same slots.
 - **A chip that both taps and pads keeps its tap**, decided by distance rather than a timer: reaching a wedge is a pad gesture and the trailing click is suppressed, while a release without travel is an ordinary tap.
   What counts as travel is a **tap slop** of its own (14 px, measured from the press), not hub membership — the lift moved the hub out from under the finger, so "am I in the hub" stopped answering "did this press move at all", and a drift that reaches no wedge is still an abandoned gesture rather than a tap.
-- **A pad drag preserves the soft keyboard by capture-and-restore, because it has no event left to refuse.**
+- **A pad touch preserves the soft keyboard by refusing the initial pointer default, with capture-and-restore as a backstop.**
   Every other rail chip acts on `click`, so the `mousedown` focus refusal every one of them relies on has necessarily already run.
-  A pad acts on `pointermove`, and a touch that becomes a drag delivers **no mouse events at all** — measured through CDP: a tap gives `pointerdown, touchstart, touchend, mousedown, mouseup, click`, a drag gives only the first three.
-  So on the one gesture a pad exists for, nothing refuses focus and Android takes the keyboard away.
-  The pad instead records which field held the keyboard when the press opened and hands it back a frame after the gesture ends, which is the same shape the rail's own pan uses for the identical problem.
+  A pad acts on its pointer gesture directly, and a touch that becomes a drag delivers **no mouse events at all**.
+  Measured through CDP, a tap gives `pointerdown, touchstart, touchend, mousedown, mouseup, click`, while a drag gives only the first three.
+  The pad therefore cancels `pointerdown` when an IME field is active, before Android can move focus and collapse the keyboard.
+  Suppressing compatibility mouse events is safe here because the pad gesture itself resolves both drags and the tap that opens a standing dial.
+  The pad also records which field held the keyboard and restores it a frame after the gesture if a platform focus move still escapes the refusal.
   A *deliberate* dismissal during the gesture still wins, because the restore is gated on the dismissal counter.
 - Haptics carry the state a finger is covering: a tick on entering a wedge, a distinct double-bump when a `release` slot arms, and a near-silent tick per repetition.
 - **Sticky Ctrl / Alt / Shift chips** apply to the rail's key Actions: tap arms one key, tap again locks, tap a locked one clears it.
