@@ -3,6 +3,7 @@ import { api } from './api'
 import { GrantButton, GrantGate } from './GrantGate'
 import {
   formatDuration,
+  landAttentionRow,
   landGateNote,
   landHistoryOrder,
   landKindNote,
@@ -16,6 +17,7 @@ import {
   verifyProgressLabel,
   type LandQueue,
   type LandRequest,
+  type LandingSummary,
   type LandVerifyCommand,
 } from './gitLand'
 import { landErrorText, useVerifyCommand } from './landState'
@@ -34,8 +36,8 @@ import type { Project } from './types'
 //
 // So it is neither. Landing is **one strip above the map**, and the map is still a map:
 //
-//  * A summary line that is always readable without opening anything - what the gate's
-//    standing is, and what the queue is doing right now.
+//  * A summary control that is always readable without opening anything: gate, active
+//    operation, and queue, in the same three cells whether idle or running.
 //  * Everything Project-wide, once: the verification command with its source, approval,
 //    recorded plan, and editor; who besides the operator may start a land; the queue in
 //    the order the pipeline will reach it; and what finished.
@@ -44,7 +46,7 @@ import type { Project } from './types'
 // surface that cannot work must not render as merely quiet (`setting-links.md`), and
 // stays closed otherwise so the tab still opens on a map. A repository with no
 // verification command at all is deliberately *not* stuck - the queue was never set up
-// there - so it stays folded and says so on its one line. An explicit toggle wins over
+// there - so it stays folded and says so in its gate cell. An explicit toggle wins over
 // either default for the rest of the visit; nothing re-collapses under the reader.
 //
 // Read-mostly like the rest of the Git tab. The writes are a *request*'s cancellation,
@@ -97,22 +99,23 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
   const history = landHistoryOrder(queue?.requests || [])
   const shown = error || localError
   const summary = landingSummary(queue, gate, undefined, project?.root || '')
+  const activeHeadline = landingHeadline(queue, summary.queue)
   // Something a human started here is stuck - the install stop is off, written gate bytes
   // are unapproved, or a worktree's own copy refused a land. That is the setting-links
   // "inert surface" case, and the act that clears it is inside this strip, so it opens
   // itself. A repository that simply has no verification command is not that case and
-  // stays folded; the summary line says so where it stands (`gitLand.ts`).
+  // stays folded; the pipeline's gate cell says so where it stands (`gitLand.ts`).
   const isOpen = open ?? summary.opensByDefault
 
   return <section class="git-landing" aria-label="Landing">
     <button class={`git-landing-summary ${summary.tone}`} aria-expanded={isOpen}
       onClick={() => onOpen(!isOpen)}>
-      <span class="git-landing-title">LANDING</span>
-      <span class="git-landing-facts">
-        <em class={summary.gateTone}>{summary.gate}</em>
-        <span>{summary.queue}</span>
+      <span class="git-landing-summary-head">
+        <span class="git-landing-title">LANDING</span>
+        <span class="git-landing-headline">{activeHeadline}</span>
+        <span class="git-landing-chevron" aria-hidden="true">{isOpen ? '−' : '+'}</span>
       </span>
-      <span class="git-landing-chevron" aria-hidden="true">{isOpen ? '−' : '+'}</span>
+      <LandPipeline queue={queue} gate={gate} summary={summary} />
     </button>
 
     {shown && <p class="git-state error" role="alert">{shown}</p>}
@@ -131,8 +134,6 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
     </GrantGate>}
 
     {isOpen && <div class="git-landing-body">
-      <LandPipeline queue={queue} gate={gate} />
-
       <VerifyCommandEditor project={project} gate={gate} busy={busy} setBusy={setBusy}
         onError={setLocalError} onGate={setGate} onRefresh={refreshGate} />
 
@@ -203,48 +204,66 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
   </section>
 }
 
+/** The short sentence beside LANDING; the cells carry the detail. */
+function landingHeadline(queue: LandQueue | null, fallback: string): string {
+  if (queue !== null && !queue.installedEnabled) return 'sweep stopped'
+  const ordered = landQueueOrder(queue?.requests || [])
+  const lead = ordered.find(request => landStateTone(request.state) === 'busy') || ordered[0]
+  return lead ? `${lead.branch} · ${landStateLabel(lead.state)}` : fallback
+}
+
 /**
  * The queue as an operation rather than a configuration form.
  *
- * The strip opens over a worktree map, so the first expanded reading answers what the
- * pipeline is doing now: whether its gate is usable, which branch owns the active step,
- * and how many branches wait behind it. The gate editor remains reachable from the
- * settings disclosure that follows, but it no longer outweighs the operation it serves.
+ * Always visible in the strip's summary control, folded or open. That is what makes the
+ * resting state look like the operating model rather than making the pipeline appear
+ * only after the operator already knows to expand Landing.
  */
-function LandPipeline({ queue, gate }: {
+function LandPipeline({ queue, gate, summary }: {
   queue: LandQueue | null
   gate: LandVerifyCommand | null
+  summary: LandingSummary
 }) {
   const ordered = landQueueOrder(queue?.requests || [])
   const lead = ordered.find(request => landStateTone(request.state) === 'busy') || ordered[0] || null
   const behind = lead ? ordered.filter(request => request.id !== lead.id) : ordered
   const waiting = behind.length
   const progress = lead ? verifyProgressLabel(lead.verifyProgress) : ''
+  const gateNote = lead ? landGateNote(lead) : ''
+  const kindNote = lead ? landKindNote(lead) : ''
+  const attention = lead ? null : landAttentionRow(queue?.requests || [])
+  const blocked = summary.blockedWorktrees.length
   const gateLabel = gate === null ? 'Reading gate'
     : !gate.configured ? 'Not configured'
-      : gate.approved ? 'Gate ready' : 'Needs approval'
-  const gateDetail = gate?.configured ? gate.display : gate?.scriptName || '.worktree-verify'
-  const activeLabel = lead ? landStateLabel(lead.state) : 'Idle'
+      : !gate.approved || blocked ? 'Needs approval' : 'Gate ready'
+  const gateDetail = blocked
+    ? `${blocked} worktree${blocked === 1 ? '' : 's'} awaiting approval`
+    : gate?.configured ? gate.display : gate?.scriptName || '.worktree-verify'
+  const activeLabel = lead ? landStateLabel(lead.state)
+    : attention ? landStateLabel(attention.state) : 'Idle'
   const activeDetail = lead
-    ? `${lead.branch}${progress ? ` · ${progress}` : ''}`
-    : 'No branch is running'
+    ? `${lead.branch}`
+      + (kindNote ? ` · ${kindNote}` : '')
+      + (progress ? ` · ${progress}` : '')
+      + (gateNote ? ` · ${gateNote}` : '')
+    : attention ? attention.branch : 'No branch is running'
   const queueLabel = waiting ? `${waiting} waiting` : 'Queue clear'
   const queueDetail = waiting ? `next ${behind[0].branch}` : 'Nothing behind the active branch'
 
-  return <div class="git-land-pipeline" aria-label="Landing pipeline">
-    <div class={`git-land-pipeline-step ${gate?.configured && gate.approved ? 'complete' : 'warn'}`}>
+  return <span class="git-land-pipeline" aria-label="Landing pipeline">
+    <span class={`git-land-pipeline-step gate ${gate === null ? 'idle' : summary.gateTone === 'ok' ? 'complete' : 'warn'}`}>
       <strong>{gateLabel}</strong>
       <small>{gateDetail}</small>
-    </div>
-    <div class={`git-land-pipeline-step ${lead ? 'active' : 'idle'}`}>
+    </span>
+    <span class={`git-land-pipeline-step run ${lead ? 'active' : attention ? 'warn' : 'idle'}`}>
       <strong>{activeLabel}</strong>
       <small>{activeDetail}</small>
-    </div>
-    <div class={`git-land-pipeline-step ${waiting ? 'active' : 'idle'}`}>
+    </span>
+    <span class={`git-land-pipeline-step queue ${waiting ? 'active' : 'idle'}`}>
       <strong>{queueLabel}</strong>
       <small>{queueDetail}</small>
-    </div>
-  </div>
+    </span>
+  </span>
 }
 
 /**

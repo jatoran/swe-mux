@@ -31,6 +31,8 @@ Provenance is carried into commit review packets.
 
 Width-safe Map rows use one deduplicated identity line, a separate wrapping metric line, and a third operational line only while that worktree has an active land request.
 The operational line is derived from the shared `landQueueOrder` projection and carries the state plus its queue position or observed verification detail without requiring expansion.
+The row receives a state-specific `land-*` class at the same projection point; CSS turns it into the full-height leading rail and the faint active-row wash, while ordinary rows retain the same two-line geometry.
+Branch identity is the strongest line, metrics remain unboxed, and the sibling live-session button is deliberately text-weight rather than a competing badge.
 Activity ordering is `sortWorktreesByActivity`, sorted once in `GitTab.tsx` and the tab's only list of checkouts.
 It is keyed on the branch tip's committer date rather than the checkout's `st_mtime`, which Windows freezes on a worktree a live session is holding open.
 The main tree is pinned first as the anchor the rest are measured against, undated trees last, with path order as the tie-break so a refresh cannot shuffle the list under the pointer.
@@ -92,8 +94,8 @@ It offers **only** Land: a verify-only run is an agent surface (`request_verify`
 It draws **nothing Project-wide at all**, because a row is repeated once per worktree and a Project-wide fact drawn there is drawn N times.
 A row that cannot land names the blocker and *opens the strip* instead of drawing a second copy of its control.
 
-`GitLandBar.tsx` is that strip, at the head of the map: one always-readable summary line (`landingSummary`) plus a disclosure holding everything Project-wide.
-The expanded disclosure leads with `LandPipeline`: gate standing, the active branch and observed step, then the number waiting behind it.
+`GitLandBar.tsx` is that strip, at the head of the map: `landingSummary` still decides tone and automatic disclosure, while the disclosure control itself contains `LandPipeline`.
+`LandPipeline` always renders gate standing, the active branch and observed step, then the number waiting behind it; opening the disclosure never creates a second copy.
 The Project's verification source, approval, recorded plan, and in-place editor follow under `Verification settings`; an approved convention script keeps the settings closed and exposes `Use a different command` as the secondary override path.
 Unapproved and unconfigured gates open the settings when the operator reaches the expanded strip, preserving the rule that the act clearing a gate cannot be hidden.
 Agent authority and the queue in pipeline order follow the settings.
@@ -105,7 +107,7 @@ Its install-stop `GrantGate` renders *outside* the disclosure, because a gate hi
 `BlockedWorktreeGate` is the third of those: one compact block per checkout whose *own* gate copy refused a land, drawn only for an `unapproved` refusal that still stands, only for a root other than the Project's, and capped at three (`blockedVerifyWorktrees`, `MAX_BLOCKED_GATES`).
 It exists because the strip draws the Project-resolved gate - the primary's - so such a refusal rendered as "verification approved" over a refusal for an unapproved command with nothing anywhere to approve.
 It reuses the existing per-worktree read and approve routes, both of which already took `worktree_root`; what is new is that a human can reach them.
-The collapsed summary line names the count for the same reason, because this is exactly the case where the gate reads approved and a land is refused anyway.
+The collapsed gate cell names the count for the same reason, because this is exactly the case where the gate reads approved and a land is refused anyway.
 
 `landState.ts` owns the two daemon reads both parts share, mounted once by `GitTab.tsx` so the row and the strip cannot disagree about one request and so Log and Provenance pay for no poll.
 
@@ -116,7 +118,7 @@ The collapsed summary line names the count for the same reason, because this is 
 - A step total that is absent, malformed, or below the step already reached becomes `null` rather than a number, because a wrong total is the one failure that makes a progress reading worse than none.
 - `verifyProgressLabel` has exactly three forms (`step k of N · name · elapsed`, `step k · name · elapsed`, `elapsed · N lines`) and **never a percentage**, asserted rather than trusted in `test/gitLand.test.ts` and `test/renderer/git-land.spec.ts`.
 - A `waiting` row takes the idle tone rather than the warn one, so a normal hold does not train the operator to intervene.
-- `landGateNote` draws **only** a skipped gate, on the row, in the strip's queue and history, and on the summary line while it runs.
+- `landGateNote` draws **only** a skipped gate, on the row, in the strip's queue and history, and in the pipeline's run cell while it runs.
   A full gate gets no note, because the states already narrate it and a chip on every row would bury the one that matters; neither a documentation-only land nor a reusing one has such a state, going from merging the trunk straight to fast-forwarding.
   The two skips read differently on purpose: one means nobody has ever run this content through the suite, the other means this queue ran exactly it, and a reader deciding whether to trust the row needs them apart.
 - An unrecognised `verify_gate` parses to `''` rather than to a gate that ran, so no value this build does not know can render as "nothing verified this".

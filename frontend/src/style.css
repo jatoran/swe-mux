@@ -4517,12 +4517,18 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-tab-body{flex:1 1 auto;min-height:0;overflow:auto;background:var(--bg)}
 .git-state{margin:0;padding:14px 10px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
 .git-state.error{color:var(--red);text-align:left;overflow-wrap:anywhere}
-.git-map-row{border-bottom:1px solid var(--line);background:var(--panel)}
+.git-map-row{--git-land-row-accent:transparent;border-bottom:1px solid var(--line);background:var(--panel);box-shadow:inset 2px 0 var(--git-land-row-accent)}
+.git-map-row.land-active{background:color-mix(in srgb,var(--git-land-row-accent) 3%,var(--panel))}
+.git-map-row.land-queued{--git-land-row-accent:var(--accent)}
+/* Waiting is a normal hold, so its rail is quiet rather than amber. */
+.git-map-row.land-waiting{--git-land-row-accent:var(--muted)}
+.git-map-row.land-reconciling,.git-map-row.land-verifying{--git-land-row-accent:var(--accent)}
+.git-map-row.land-landing{--git-land-row-accent:#c58af9}
 .git-map-row.expanded{box-shadow:inset 2px 0 var(--accent)}
 .git-map-rail{width:31px;color:var(--muted);font-size:11px;white-space:pre}
 .git-map-rail.main{color:var(--accent)}
 .git-map-identity{min-width:0;display:flex;align-items:baseline;gap:6px}
-.git-map-identity strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400}
+.git-map-identity strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:550}
 .git-map-identity strong.detached{color:var(--amber)}
 .git-map-identity small{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
 .git-map-metrics{min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-start;gap:2px 7px}
@@ -4822,15 +4828,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select,.git-compare .dropdown-trigger{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}
 .git-compare small{color:var(--muted);font-size:8px;overflow-wrap:anywhere}
-.git-review-tab .git-map-summary{width:100%;min-height:48px;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-rows:auto auto;align-content:center;column-gap:5px;row-gap:3px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.git-review-tab .git-map-summary{width:100%;min-height:52px;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-rows:auto auto;align-content:center;column-gap:7px;row-gap:3px;padding:8px 9px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .git-review-tab .git-map-summary:hover{background:var(--panel2)}
+.git-review-tab .git-map-row.land-active .git-map-summary:hover{background:color-mix(in srgb,var(--git-land-row-accent) 8%,var(--panel2))}
 .git-review-tab .git-map-rail{grid-column:1;grid-row:1;width:12px;align-self:baseline}
 .git-review-tab .git-map-identity{grid-column:2;grid-row:1;align-self:baseline}
 .git-review-tab .git-map-chevron{grid-column:1;grid-row:2;align-self:baseline;text-align:left}
 .git-review-tab .git-map-metrics{grid-column:2;grid-row:2;align-self:baseline}
-.git-review-tab .git-map-summary.has-land-status{grid-template-rows:auto auto auto;min-height:60px}
+.git-review-tab .git-map-summary.has-land-status{grid-template-rows:auto auto auto;min-height:64px}
 .git-review-tab .git-map-summary.has-land-status .git-map-chevron{grid-row:2 / span 2}
-.git-map-land-status{grid-column:2;grid-row:3;min-width:0;display:flex;align-items:center;gap:5px;color:var(--accent);font-size:8px}
+.git-map-land-status{grid-column:2;grid-row:3;min-width:0;display:flex;align-items:center;gap:5px;color:var(--git-land-row-accent,var(--accent));font-size:8px}
 .git-map-land-status i{flex:none;width:6px;height:6px;border:1px solid currentColor;border-radius:50%}
 .git-map-land-status strong{flex:none;font-size:8px;font-weight:600}
 .git-map-land-status small{min-width:0;overflow:hidden;color:currentColor;opacity:.78;font-size:8px;text-overflow:ellipsis;white-space:nowrap}
@@ -4845,7 +4852,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    the trailing edge, so the two never compete for the same tap. */
 .git-map-head,.git-commit-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center}
 .git-map-live,.git-commit-links,.git-session-open{border:1px solid transparent;background:transparent;color:var(--green);font:inherit;font-size:8px;white-space:nowrap;cursor:pointer}
-.git-map-live,.git-commit-links{align-self:center;min-height:24px;padding:0 7px;margin-right:7px;border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.git-map-live,.git-commit-links{align-self:center;min-height:24px;padding:0 7px;margin-right:7px}
+.git-map-live{border:0;color:var(--green);text-decoration:underline dotted color-mix(in srgb,var(--green) 60%,transparent);text-underline-offset:3px}
 .git-commit-links{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 .git-map-live:hover,.git-commit-links:hover{border-color:currentColor;background:var(--panel2)}
 /* The session's name in a provenance row *is* the link to it, so it keeps the name's
@@ -4925,27 +4933,20 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-ref-move-kind{color:var(--muted);font-size:8px}
 .git-ref-move-kind.merged,.git-ref-move-kind.created{color:var(--accent)}
 .git-ref-move-kind.rebased,.git-ref-move-kind.reset,.git-ref-move-kind.unknown{color:var(--amber)}
-/* Landing, as one strip at the head of the worktree map. It reads as a band rather than
-   as a panel because a map with a panel bolted on top stops being a map: one summary
-   line, and the Project-wide detail only when it is opened or when the gate blocks. */
+/* Landing is an operational strip rather than a prose summary. Its three cells remain
+   visible while folded, so the resting state teaches the same pipeline as a running one. */
 .git-landing{display:grid;gap:8px;padding:6px 10px 8px;border-bottom:1px solid var(--line);min-width:0}
-.git-landing-summary{display:flex;align-items:center;gap:8px;width:100%;padding:5px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel,transparent);color:var(--fg);font:inherit;text-align:left;cursor:pointer;min-width:0}
-.git-landing-summary.busy{border-color:var(--accent)}
-.git-landing-summary.warn{border-color:var(--amber)}
-.git-landing-title{color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.08em}
-/* Both halves wrap rather than truncate: a gate's standing and a running step are the
-   two facts this line exists for, and eliding either makes the line worth less than the
-   space it takes. */
-.git-landing-facts{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;flex:1;min-width:0;font-size:9px;overflow-wrap:anywhere}
-.git-landing-facts em{font-style:normal}
-.git-landing-facts em.ok{color:var(--accent)}
-.git-landing-facts em.warn{color:var(--amber)}
-.git-landing-facts em.idle{color:var(--muted)}
-.git-landing-facts span{color:var(--muted);font-variant-numeric:tabular-nums}
+.git-landing-summary{display:grid;gap:5px;width:100%;min-width:0;padding:0;border:0;background:transparent;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.git-landing-summary-head{display:flex;align-items:baseline;gap:7px;min-width:0;padding:0 1px}
+.git-landing-title{flex:none;color:var(--text);font-size:8px;font-weight:700;letter-spacing:.08em}
+.git-landing-headline{min-width:0;overflow:hidden;color:var(--muted);font-size:8px;letter-spacing:.045em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
 .git-landing-chevron{margin-left:auto;color:var(--muted)}
 .git-landing-body{display:grid;gap:8px;min-width:0}
 .git-land-pipeline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:hidden;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
-.git-land-pipeline-step{display:grid;gap:2px;min-width:0;padding:7px 8px;border-right:1px solid var(--line)}
+.git-landing-summary:hover .git-land-pipeline{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+.git-landing-summary.busy .git-land-pipeline{border-color:color-mix(in srgb,var(--accent) 70%,var(--line))}
+.git-landing-summary.warn .git-land-pipeline{border-color:var(--amber)}
+.git-land-pipeline-step{display:grid;gap:2px;min-width:0;min-height:40px;align-content:center;padding:7px 8px;border-right:1px solid var(--line)}
 .git-land-pipeline-step:last-child{border-right:0}
 .git-land-pipeline-step strong{overflow:hidden;color:var(--text);font-size:8px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .git-land-pipeline-step small{overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}
@@ -4953,9 +4954,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-pipeline-step.warn strong{color:var(--amber)}
 .git-land-pipeline-step.active{background:color-mix(in srgb,var(--accent) 7%,var(--panel));box-shadow:inset 0 -2px var(--accent)}
 .git-land-pipeline-step.idle strong{color:var(--muted)}
-.git-land-gate{display:grid;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px}
-.git-land-gate.warn{border-color:var(--amber)}
-.git-land-gate.ok{border-color:var(--line)}
+.git-land-gate{display:grid;gap:6px;padding:0 2px;border:0;background:transparent}
+.git-land-gate[open]{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.git-land-gate.warn[open]{border-color:var(--amber)}
 .git-land-gate-summary{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;align-items:center;gap:7px;min-width:0;color:var(--muted);font-size:8px;cursor:pointer;list-style:none}
 .git-land-gate-summary::-webkit-details-marker{display:none}
 .git-land-gate-summary::after{content:'+';grid-column:3;grid-row:1;color:var(--muted)}
