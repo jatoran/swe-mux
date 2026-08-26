@@ -371,14 +371,16 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     // necessarily already run. A pad acts on `pointermove`, and a touch that turns into a
     // drag delivers *no mouse events at all* - measured through CDP: a tap gives
     // `pointerdown, touchstart, touchend, mousedown, mouseup, click`, a drag gives only
-    // `pointerdown, touchstart, touchend`. So on the one gesture the pad exists for, the
-    // guard every other chip relies on never fires, nothing refuses focus, and Android drops
-    // the keyboard.
+    // `pointerdown, touchstart, touchend`. The ordinary mouse guard therefore cannot protect
+    // the gesture the pad exists for.
     //
-    // Capture-and-restore rather than refusal, because there is no event left to refuse:
-    // the same shape `RailScroller` uses for its pan, which has the identical problem. The
-    // dismissal count comes along so a *deliberate* dismissal during the gesture still wins.
-    keyboardRef.current = { holder: softKeyboardHolder(), dismissals: softKeyboardDismissals() }
+    // A pad is the exception to the ordinary rail rule that `pointerdown` cannot be
+    // cancelled: its touch path is the gesture itself, including the tap that opens a
+    // standing dial, so it does not need the compatibility mouse events cancellation
+    // suppresses. Refuse the focus-changing default before Android can lower the keyboard.
+    // Capture-and-restore remains the backstop for a platform focus move that escapes that
+    // refusal, with the dismissal count ensuring an intentional close still wins.
+    const keyboard = { holder: softKeyboardHolder(), dismissals: softKeyboardDismissals() }
     const { roomAbove, scale } = fitAbove(event.clientY)
     const opened = controller.gesture.press(event.pointerId, event.clientX, event.clientY, {
       wedges,
@@ -388,6 +390,8 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       adoptStanding,
     })
     if (!opened) return
+    keyboardRef.current = keyboard
+    if (keyboard.holder) event.preventDefault()
     controller.begin(padHandlers())
     // A press that adopted the standing dial leaves the dial exactly where it is: its origin,
     // scale and visibility are the ones already on screen, and re-seeding them from this
@@ -564,9 +568,6 @@ export function RailPad({ controller, item, slots, className, content, modifierP
       onMouseDown={dial.standing ? (event: Event) => event.preventDefault() : undefined}
       onContextMenu={dial.standing ? (event: Event) => event.preventDefault() : undefined}
     >
-      {/* A wash over the workspace, so the wedges read as one surface rather than as
-          translucent shapes competing with whatever the terminal happens to be drawing. */}
-      <div class="rail-pad-dial-scrim"/>
       <svg
         class="rail-pad-dial-svg"
         style={{ left: `${Math.round(dial.x)}px`, top: `${Math.round(dial.y)}px` }}

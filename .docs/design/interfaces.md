@@ -2317,7 +2317,9 @@ automation state, and emits one `grant_applied` audit event listing every scope-
 with an unproven provider — the opt-in is a real permission and withholding it would mean
 granting twice — and reporting only success would hand back exactly the enabled-and-does-nothing
 state the enablement design exists to prevent. `GET /api/grants` returns the same allowlists
-plus the registry, `recommended_project_automations`, and `llm`, and is the contract
+plus the registry, `recommended_project_automations`, `project_starting_sets` (the three named
+creation-form sets — `recommended`, `llm`, `autonomy` — each `{automations, values}`, rendered
+by the create dialog straight from this payload), and `llm`, and is the contract
 `frontend/test/grants.test.ts` holds the browser's catalogue against.
 
 `GET /api/annotations` is the human Findings read over the deterministic consumers' output (Phase 7.10).

@@ -21,6 +21,14 @@ export type ProjectCreateDraft = {
    *  choice that fixes that, asked once, where a new user is already deciding things
    *  about the Project - rather than left to be discovered one empty pane at a time. */
   automations:boolean
+  /** Whether to also opt into the model-backed set (scan timeline armed per run,
+   *  adaptive titles, model narration, plus their dependency closure). Never
+   *  defaulted on: it can bill. */
+  llm:boolean
+  /** Whether to grant agents in this Project acting authority (spawn and land
+   *  without per-request approval, with spawn-request review on for what still
+   *  drafts). Never defaulted on: it hands agents real authority. */
+  autonomy:boolean
 }
 
 export const emptyProjectCreateDraft = ():ProjectCreateDraft => ({
@@ -30,7 +38,35 @@ export const emptyProjectCreateDraft = ():ProjectCreateDraft => ({
   // already captures; the daemon's `_validate_recommended` refuses to let a spending
   // automation into it, so that stays true.
   automations:true,
+  // The other two start off: one spends money, the other grants authority, and
+  // each is a deliberate choice rather than part of the name-folder-Enter path.
+  llm:false,
+  autonomy:false,
 })
+
+/** One named starting set as `GET /api/grants` serves it: the automations to opt in
+ *  and the typed Project fields to set. The ids live daemon-side so the form cannot
+ *  offer a set the daemon refuses. */
+export type StartingSet = { automations:string[]; values:Record<string,unknown> }
+export type StartingSetCatalog = { recommended:StartingSet; llm:StartingSet; autonomy:StartingSet }
+
+/** The union of the sets this draft ticked, as one grant request. One request rather
+ *  than one per checkbox: the daemon computes the dependency closure and writes the
+ *  Project file once, so there is one revision, one audit record, and no half-applied
+ *  state a second call could leave behind. */
+export function selectedStartingSets(draft:ProjectCreateDraft, catalog:StartingSetCatalog):StartingSet {
+  const picked:StartingSet[]=[]
+  if(draft.automations)picked.push(catalog.recommended)
+  if(draft.llm)picked.push(catalog.llm)
+  if(draft.autonomy)picked.push(catalog.autonomy)
+  const automations:string[]=[]
+  const values:Record<string,unknown>={}
+  for(const set of picked){
+    for(const id of set.automations)if(!automations.includes(id))automations.push(id)
+    Object.assign(values,set.values)
+  }
+  return {automations,values}
+}
 
 // Windows is the primary platform and its separator is also the one a drive-letter
 // path implies, so it is the fallback when the parent carries no separator of its own.

@@ -11,12 +11,18 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
-from ..automation_registry import RECOMMENDED_PROJECT_AUTOMATIONS
+from ..automation_registry import (
+    AUTONOMY_PROJECT_AUTOMATIONS,
+    LLM_PROJECT_AUTOMATIONS,
+    RECOMMENDED_PROJECT_AUTOMATIONS,
+)
 from ..automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from ..config import Config, update_config
 from ..grants import (
+    AUTONOMY_PROJECT_VALUES,
     GRANTABLE_INSTALL_KEYS,
     GRANTABLE_PROJECT_VALUES,
+    LLM_PROJECT_VALUES,
     GrantRefusal,
     plan_grant,
     project_values_after,
@@ -51,6 +57,24 @@ async def describe_grants(request: web.Request) -> web.Response:
             },
             "automations": automation._automation_registry_payload(),
             "recommended_project_automations": list(RECOMMENDED_PROJECT_AUTOMATIONS),
+            # The named starting sets the create form offers as checkboxes. Served
+            # rather than restated in the browser so the form and the daemon cannot
+            # drift; each applies through the ordinary POST above, dependency closure
+            # and audit record included.
+            "project_starting_sets": {
+                "recommended": {
+                    "automations": list(RECOMMENDED_PROJECT_AUTOMATIONS),
+                    "values": {},
+                },
+                "llm": {
+                    "automations": list(LLM_PROJECT_AUTOMATIONS),
+                    "values": dict(LLM_PROJECT_VALUES),
+                },
+                "autonomy": {
+                    "automations": list(AUTONOMY_PROJECT_AUTOMATIONS),
+                    "values": dict(AUTONOMY_PROJECT_VALUES),
+                },
+            },
             # So a gate can disclose "and this needs a model provider you have not
             # proven yet" before the press, from the same read that tells it what
             # it may grant at all.

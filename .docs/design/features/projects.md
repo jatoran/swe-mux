@@ -157,6 +157,14 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   The new folder's leaf is validated server-side under the shared Windows-safe leaf rules
   (`leaf_names.py`), because the dialog's folder field is free text and not every create path
   has a dialog; adopting an existing folder skips the leaf check.
+- Add project also offers three named starting sets as checkboxes - the free analysis
+  automations (defaulted on), the model-backed automations, and agent acting authority
+  (spawn/land without per-request approval). The sets are served by `GET /api/grants`
+  (`project_starting_sets`) and whatever is ticked is applied after registration as one
+  ordinary `POST /api/grants`, dependency closure and audit record included; a failure is
+  reported and never unwinds the Project. Contents, defaults, and the disclosures each
+  checkbox owes: `setting-links.md` § First use, `automation-enablement.md` § First-use
+  starting sets.
 - **A successful creation lands in the new Project's workspace** (operator decision 2026-08-22).
   It selects the Project, closes the create form, closes Manage projects, and closes the mobile
   sidebar. The sidebar's `+` opens Manage projects only as a backdrop for the form, so submitting

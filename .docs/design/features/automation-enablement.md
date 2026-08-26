@@ -184,14 +184,31 @@ editor here remains the single owner of withdrawal. The dependency closure is co
 daemon rather than sent by the caller, and the whole grant lands or none of it does.
 The contract, the disclosures, and the refusals: `setting-links.md`.
 
-## First-use starting set
+## First-use starting sets
 
-`RECOMMENDED_PROJECT_AUTOMATIONS` is the model-free set offered as one checkbox when a Project
-is created: the four detectors plus `code_graph`, with `raw_store` and `tier0` under them.
-It is applied through the ordinary grant path, and it is **not** an inherited default template
-- it is written into that Project's own file, so "nothing runs on a Project that did not opt
-in" stays literally true and no existing Project changes behaviour because the constant did.
-`_validate_recommended` refuses at import to let a spending automation into it.
+Three named sets are offered as checkboxes when a Project is created, served by
+`GET /api/grants` (`project_starting_sets`) so the form and the daemon cannot drift.
+Each is applied through the ordinary grant path as one POST for whatever was ticked, and none
+is an inherited default template - each is written into that Project's own file, so "nothing
+runs on a Project that did not opt in" stays literally true and no existing Project changes
+behaviour because a constant did.
+
+- `RECOMMENDED_PROJECT_AUTOMATIONS` (defaulted on): the model-free set - the four detectors
+  plus `code_graph`, with `raw_store` and `tier0` under them.
+  `_validate_recommended` refuses at import to let a spending automation into it.
+- `LLM_PROJECT_AUTOMATIONS` (off): the model tier - `scan_timeline`, `continuous_title`,
+  `model_narration` - whose closure drags in `attention_ranking` and the detectors under it;
+  its values half (`grants.LLM_PROJECT_VALUES`) sets `scan_timeline_auto_enable` so the
+  timeline arms per run. `_validate_llm_set` holds every member to `needs_llm` and the
+  closure to `implemented`.
+- `AUTONOMY_PROJECT_AUTOMATIONS` (off): `session_control`, `land_queue`, and - deliberately -
+  `observation_inbox`, so whatever still drafts under the raised authority gets its review
+  surface; its values half (`grants.AUTONOMY_PROJECT_VALUES`) raises `spawn_grant` and
+  `land_grant` to `granted` and deliberately leaves `session_control_grant` and
+  `interject_grant` at their inert defaults. `_validate_autonomy_set` holds it free to run.
+
+The disclosures each checkbox owes, and why the exclusions are what they are:
+`setting-links.md` § First use.
 
 ## Configuration
 

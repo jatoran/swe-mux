@@ -33,8 +33,8 @@ import { agentTargetName } from './agentTargets'
 import { runDisplayName, sessionDisplayName } from './sessionNames'
 import {
   defaultInitScriptSelection, emptyProjectCreateDraft, projectCreateFolder, projectCreateReady,
-  projectCreateRoot, suggestFolderName, toggleInitScript,
-  type InitScript, type ProjectCreateDraft,
+  projectCreateRoot, selectedStartingSets, suggestFolderName, toggleInitScript,
+  type InitScript, type ProjectCreateDraft, type StartingSetCatalog,
 } from './projectCreate'
 import { isStaticPreview, previewLabel, type FleetSnapshot, type Preview } from './processFleet'
 import { isPreviewableDocument } from './staticPreview'
@@ -388,6 +388,9 @@ type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | nu
 type StaticPreviewContext = { previewId:string;projectId:string;label:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
+/** What the create dialog needs from `GET /api/grants`: the named starting sets its
+ *  checkboxes apply, and the provider verdict the model-backed one discloses. */
+type GrantsCatalogue={project_starting_sets:StartingSetCatalog;llm:{ready:boolean;reason:string}}
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
@@ -622,6 +625,9 @@ export function App() {
   // User-authored setup commands, read fresh when the dialog opens. They live in the
   // daemon config (Settings → General), never in a repository.
   const [initScripts,setInitScripts]=useState<InitScript[]>([])
+  // The grants catalogue, read when the create dialog opens: the named starting sets
+  // its checkboxes apply, and the provider verdict the model-backed one discloses.
+  const [grantsCatalogue,setGrantsCatalogue]=useState<GrantsCatalogue|null>(null)
   const [projectsManagerOpen,setProjectsManagerOpen]=useState(false)
   // Which Project the registry should land on, and whether on its record or its
   // settings. Projects is the only per-Project editor, so every "project settings"
@@ -3587,6 +3593,7 @@ export function App() {
   const createProject = async () => {
     setProjectCreate(emptyProjectCreateDraft())
     setInitScripts([])
+    setGrantsCatalogue(null)
     setProjectCreateOpen(true)
     try{
       const config=await api<{project_init_scripts?:InitScript[]}>('GET','/api/config')
@@ -3594,6 +3601,9 @@ export function App() {
       setInitScripts(scripts)
       setProjectCreate(value=>({...value,scripts:defaultInitScriptSelection(scripts)}))
     }catch{/* the dialog still registers a Project without its optional setup commands */}
+    try{
+      setGrantsCatalogue(await api<GrantsCatalogue>('GET','/api/grants'))
+    }catch{/* the checkboxes still render; submit refetches the catalogue it needs */}
   }
 
   const openProjectsManager=(focus?:{project:Project;setting?:string})=>{
@@ -3693,25 +3703,30 @@ export function App() {
     // behind a panel covering the workspace it just switched to.
     setProjectsManagerOpen(false);setProjectsManagerFocus(null);setSidebarOpen(false)
     emitTutorialAction({action:'project-created'})
-    // The starting set, through the ordinary grant path so it leaves the same audit
-    // record as one pressed from a gate. After the registration and never before it: a
-    // Project that exists with nothing opted in is a normal state, and one that failed
-    // to register has nothing to opt in. `restored` is skipped because that Project
-    // already has whatever table it was registered with.
-    if(projectCreate.automations&&!(next as Project&{restored?:boolean}).restored){
+    // The ticked starting sets, through the ordinary grant path so they leave the same
+    // audit record as a gate press. One POST for the union rather than one per
+    // checkbox: the daemon computes the dependency closure and writes the Project file
+    // once, so there is one revision and no half-applied state. After the registration
+    // and never before it: a Project that exists with nothing opted in is a normal
+    // state, and one that failed to register has nothing to opt in. `restored` is
+    // skipped because that Project already has whatever table it was registered with.
+    const wantsStartingSets=projectCreate.automations||projectCreate.llm||projectCreate.autonomy
+    if(wantsStartingSets&&!(next as Project&{restored?:boolean}).restored){
       try{
-        const catalogue=await api<{recommended_project_automations:string[]}>('GET','/api/grants')
-        if(catalogue.recommended_project_automations.length){
+        const catalogue=grantsCatalogue??await api<GrantsCatalogue>('GET','/api/grants')
+        const selection=selectedStartingSets(projectCreate,catalogue.project_starting_sets)
+        if(selection.automations.length||Object.keys(selection.values).length){
           await api('POST','/api/grants',{
             project_id:next.id,
-            automations:catalogue.recommended_project_automations,
+            automations:selection.automations,
+            values:selection.values,
           })
           forgetProjectAutomations(next.id)
         }
       }catch(cause){
         // Reported, never unwound: the Project is registered and usable, and every one
         // of these switches is reachable from the surface that needs it.
-        setError(`The Project was created; its analysis automations were not turned on (${cause instanceof Error?cause.message:String(cause)}). Turn them on from any Activity tab.`)
+        setError(`The Project was created; its starting features were not turned on (${cause instanceof Error?cause.message:String(cause)}). Turn them on from the Projects registry or any Activity tab.`)
       }
     }
     // The registration is already durable, so a setup command that fails to launch is
@@ -7929,6 +7944,27 @@ export function App() {
           <small>Change map, findings detectors, and commit provenance, for this Project.
           Free — they read what swe-mux already captures and never call a model. Recorded
           in the Project’s <code>.swe-mux/config.toml</code>, and changeable any time.</small></span>
+        </label>
+        {/* The two optional sets. Never defaulted on: one can bill and the other hands
+            agents real authority, so each is a deliberate choice rather than part of
+            the common name-folder-Enter path. Both apply through the same grant path
+            as the free set, dependency closure and audit record included. */}
+        <label class="check project-create-automations">
+          <input type="checkbox" checked={projectCreate.llm} onChange={event=>setProjectCreate(value=>({...value,llm:event.currentTarget.checked}))} />
+          <span><strong>Turn on the model-backed automations</strong>
+          <small>Scan timeline (armed for every new session), adaptive session titles,
+          and model narration, plus the detectors they rank over. These call your
+          configured model and can cost money; the budgets are install-wide, in
+          Settings → Automation.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}</small></span>
+        </label>
+        <label class="check project-create-automations">
+          <input type="checkbox" checked={projectCreate.autonomy} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
+          <span><strong>Let agents act without per-request approval</strong>
+          <small>Agents working in this Project can spawn sessions and start landings
+          directly, each still under its hourly budget, with spawn-request review on for
+          anything that still arrives as a draft. Interrupting or messaging into live
+          sessions stays behind its own approval. Recorded in the Project’s
+          <code>.swe-mux/config.toml</code>; lower it any time in the Projects registry.</small></span>
         </label>
         {!!initScripts.length&&<details class="project-init-scripts">
           <summary>Setup commands · {projectCreate.scripts.length} selected</summary>

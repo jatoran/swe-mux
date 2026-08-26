@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   commonestParent, defaultInitScriptSelection, emptyProjectCreateDraft, joinPath, parentPath,
-  projectCreateReady, projectCreateRoot, suggestFolderName, toggleInitScript,
+  projectCreateReady, projectCreateRoot, selectedStartingSets, suggestFolderName,
+  toggleInitScript, type StartingSetCatalog,
 } from '../src/projectCreate.ts'
 
 test('a parent and a folder name join with the separator the parent already uses', () => {
@@ -53,6 +54,40 @@ test('the commonest parent of the registered roots is the settings placeholder',
   assert.equal(commonestParent(['/home/j/code/a', '/home/j/code/b']), '/home/j/code')
   assert.equal(commonestParent([]), '')
   assert.equal(commonestParent(['loose']), '')
+})
+
+test('only the free starting set is ticked by default', () => {
+  // The free set reads what swe-mux already captures; the model-backed set can bill
+  // and the autonomy set hands agents real authority, so each of those is a
+  // deliberate choice and never part of the name-folder-Enter path.
+  const draft = emptyProjectCreateDraft()
+  assert.equal(draft.automations, true)
+  assert.equal(draft.llm, false)
+  assert.equal(draft.autonomy, false)
+})
+
+const CATALOG: StartingSetCatalog = {
+  recommended: {automations: ['doc_debt', 'code_graph'], values: {}},
+  llm: {automations: ['scan_timeline', 'continuous_title'], values: {scan_timeline_auto_enable: true}},
+  autonomy: {automations: ['session_control', 'land_queue', 'observation_inbox'],
+    values: {spawn_grant: 'granted', land_grant: 'granted'}},
+}
+
+test('the ticked starting sets union into one grant request', () => {
+  const draft = {...emptyProjectCreateDraft(), llm: true, autonomy: true}
+  assert.deepEqual(selectedStartingSets(draft, CATALOG), {
+    automations: ['doc_debt', 'code_graph', 'scan_timeline', 'continuous_title',
+      'session_control', 'land_queue', 'observation_inbox'],
+    values: {scan_timeline_auto_enable: true, spawn_grant: 'granted', land_grant: 'granted'},
+  })
+  assert.deepEqual(selectedStartingSets({...draft, automations: false, llm: false, autonomy: false}, CATALOG),
+    {automations: [], values: {}})
+})
+
+test('an id two ticked sets share is requested once', () => {
+  const overlapping = {...CATALOG, autonomy: {automations: ['doc_debt'], values: {}}}
+  const draft = {...emptyProjectCreateDraft(), autonomy: true}
+  assert.deepEqual(selectedStartingSets(draft, overlapping).automations, ['doc_debt', 'code_graph'])
 })
 
 test('init scripts start unchecked unless their definition opts in', () => {

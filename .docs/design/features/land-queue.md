@@ -465,7 +465,9 @@ Moving the act onto the row fixed that and exposed the other half: what was left
 
 So the map holds both halves, split by **what each part is a property of**:
 
-- **The row owns the act**, and only the act. Expanding a worktree shows that branch's Land button, its live land state (including the running gate's own reading of itself), a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths, a refusal's reason, which are facts about *this* branch.
+- **The row owns the act**, and only the act.
+  A collapsed worktree with an active request shows the request's state plus the useful detail available for that state: its queue position, observed verification step, skipped-gate note, or daemon-supplied reason.
+  Expanding the worktree shows that branch's Land button, the same live land state, a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths or a refusal's reason, which are facts about *this* branch.
   It sits **above** the expansion's change groups (operator decision 2026-08-22).
   Those groups are unbounded - a branch with sixty changed files is ordinary - so below them the row's one action, and the live state it reports, were reachable only by scrolling past the thing they act on.
   The destructive control keeps the bottom: "remove worktree" is not what should be under the cursor when a row opens.
@@ -480,6 +482,10 @@ So the map holds both halves, split by **what each part is a property of**:
   The main tree and a detached HEAD are named as unable to land rather than enqueued and refused, for the same reason the row states them.
   A bulk press starts ordinary lands only, for the same reason a single row does: there is no operator button for a verify-only run.
 - **A compact strip at the head of the map owns everything Project-wide**: the verification command with its source, approval, recorded plan and editor; who besides the operator may start a land; the queue in the order the pipeline will reach it; and what finished.
+  Its expanded reading leads with a three-part pipeline: gate standing, the active branch and observed step, and the count waiting behind it.
+  Verification configuration follows in a `Verification settings` disclosure, because configuration serves the operation rather than being the operation.
+  An approved repository script keeps that disclosure closed and offers the compact `Use a different command` override action only after it is opened.
+  An unapproved or unconfigured gate opens the settings disclosure when the operator reaches the expanded strip, so moving configuration out of the lead position never hides the act that clears a gate.
 
 Nothing Project-wide is drawn on a row, and that is the whole point of the split rather than a detail of it.
 A fact that is true of the Project is drawn N times if it lives on a row, and the verification block shipped that way once: the same paragraph about approved bytes under each of eight expansions, burying the diff the expansion was opened for.

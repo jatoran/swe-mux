@@ -88,6 +88,16 @@ test('a running gate reports the step it is on, and never a percentage', async (
   await expect(page.locator('.git-landing-facts span'))
     .toHaveText('worktree-land-ui-rework · verifying · step 3 of 7 · mypy · 3m 10s · 1 behind')
 
+  // The map itself is now the live index. No expansion is required to find the branch
+  // currently running or the one queued behind it.
+  const runningRow = page.locator('.git-map-row').filter({ hasText: 'worktree-land-ui-rework' })
+  await expect(runningRow.locator('.git-map-land-status strong')).toHaveText('Verifying')
+  await expect(runningRow.locator('.git-map-land-status small'))
+    .toHaveText('step 3 of 7 · mypy · 3m 10s')
+  const queuedRow = page.locator('.git-map-row').filter({ hasText: 'worktree-beta' })
+  await expect(queuedRow.locator('.git-map-land-status strong')).toHaveText('Queued')
+  await expect(queuedRow.locator('.git-map-land-status small')).toHaveText('#2 in queue')
+
   // And the branch's own row says it too, because that is the row being landed.
   await page.locator('.git-map-summary').filter({ hasText: 'worktree-land-ui-rework' }).click()
   await expect(page.locator('.git-land-row-section .git-land-progress-detail'))
@@ -103,6 +113,16 @@ test('the queue reads in the order the pipeline will reach it', async ({ page })
   await page.setViewportSize({ width: 420, height: 900 })
   await page.goto('/git-land-harness.html')
   await page.locator('.git-landing-summary').click()
+  // The expanded strip leads with the operation, not with its configuration form.
+  const pipeline = page.locator('.git-land-pipeline')
+  await expect(pipeline.locator('.git-land-pipeline-step strong'))
+    .toHaveText(['Gate ready', 'Verifying', '1 waiting'])
+  await expect(pipeline.locator('.git-land-pipeline-step small'))
+    .toHaveText([
+      '.worktree-verify',
+      'worktree-land-ui-rework · step 3 of 7 · mypy · 3m 10s',
+      'next worktree-beta',
+    ])
   const branches = page.locator('.git-land-list .git-land-row strong')
   await expect(branches).toHaveText(['worktree-land-ui-rework', 'worktree-beta'])
   await expect(page.locator('.git-land-list .git-land-position')).toHaveText(['1', '2'])
@@ -136,6 +156,9 @@ test('the verification command shows what resolved, and edits without approving'
   await page.locator('.git-landing-summary').click()
 
   const gate = page.locator('.git-land-gate')
+  // Approved configuration stays secondary to the pipeline until requested.
+  await expect(gate).not.toHaveAttribute('open', '')
+  await gate.locator('.git-land-gate-summary').click()
   await expect(gate).toContainText('Verification approved')
   // Which of the two mechanisms is in force, and that it answers for every worktree -
   // the fact that had no home on screen, and the reason it is not drawn per row.
@@ -143,7 +166,7 @@ test('the verification command shows what resolved, and edits without approving'
   // A statement about a past run, phrased as one.
   await expect(gate.locator('.git-land-plan')).toContainText('Last passing run of these exact bytes: 7 steps in 3m 32s')
 
-  await gate.getByRole('button', { name: 'Set a command…' }).click()
+  await gate.getByRole('button', { name: 'Use a different command…' }).click()
   await gate.locator('.git-land-command-editor input').fill('./verify.sh')
   await gate.getByRole('button', { name: 'Save', exact: true }).click()
 
@@ -168,6 +191,7 @@ test('the setup prompt is offered beside the gate, and hands over no authority',
   await page.setViewportSize({ width: 420, height: 900 })
   await page.goto('/git-land-harness.html')
   await page.locator('.git-landing-summary').click()
+  await page.locator('.git-land-gate-summary').click()
 
   // Collapsed by default: it answers a question about *another* repository, so it must
   // not push this Project's own gate down the pane.
@@ -197,6 +221,7 @@ test('a blocked gate opens the strip by itself, and a deliberate collapse still 
   await expect(page.locator('.git-landing-body')).toHaveCount(1)
   await expect(page.locator('.git-landing-summary')).toHaveAttribute('aria-expanded', 'true')
   await expect(page.locator('.git-land-gate')).toContainText('Verification not approved')
+  await expect(page.locator('.git-land-gate')).toHaveAttribute('open', '')
 
   // A collapse the reader asked for is honoured — nothing re-opens under them. What
   // keeps that safe is that the summary line goes on stating the block, so the surface
