@@ -1613,7 +1613,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false)&&<p class="profile-hint">Instrumentation changes take effect on the next daemon restart (live sessions are preserved).</p>}
             {appliesWidthEnvelope(harness.name)&&<Fragment>
               <label data-setting="claude_max_columns">Width limit<Dropdown value={String(draft.claude_max_columns)} onChange={value=>change('claude_max_columns',Number(value) as ClaudeMaxColumns)} options={CLAUDE_MAX_COLUMN_STEPS.map(step=>({value:String(step),label:claudeMaxColumnsLabel(step)}))}/></label>
-              <p class="profile-hint">Past this many columns a pane adds margin instead of resizing, because {harness.display_name}'s renderer can corrupt cells on large width changes. Raise it for wide diffs; compact panes are never limited.</p>
+              <p class="profile-hint">Past this many columns a pane adds margin instead of resizing, because {harness.display_name}'s renderer can corrupt cells on large width changes. Raise it for wide diffs, or choose No limit; compact panes are never limited.</p>
             </Fragment>}
             <p class="profile-hint">Applies to every {harness.display_name} session; a named alternative is a launch profile under Terminals. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
           </div>)}
