@@ -37,7 +37,7 @@ def test_usage_dialog_separates_the_three_pots_and_never_sums_them() -> None:
     assert "subscription · estimated" in overview
     assert "metered · billed" in overview
     assert "% of window" in overview
-    assert "never added together" in overview
+    assert "never totaled" in overview
     # Every segment's footer restates it, because a reader who deep-linked to one pot never
     # saw the Overview that explains why there is no total.
     assert segments.count("The three pots are never summed") >= 1

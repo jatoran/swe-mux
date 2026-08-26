@@ -74,6 +74,7 @@ export function AutomationPolicyView({initialSetting,revealToken=0}:{initialSett
   return <div class="automation-policy-view" ref={root}>
     <div class="automation-policy-cards">{cards.map(card=><button class={page===card.id?'active':''} onClick={()=>setPage(card.id)}><strong>{card.label}</strong><span>{card.summary}</span></button>)}</div>
     {page==='engine'&&<section class="usage-table"><h3>Engine and execution</h3>
+      <p class="settings-warning">Model observers receive only their bounded transcript slice. They do not crawl Project files.</p>
       <label class="settings-toggle" data-setting="automation_enabled"><input type="checkbox" checked={draft.automation_enabled} onChange={event=>change('automation_enabled',event.currentTarget.checked)}/>Run automation<small>Master switch for system observers and custom rules.</small></label>
       <label>Concurrent observers<input type="number" min="1" max="16" value={draft.automation_concurrency} onInput={event=>change('automation_concurrency',Number(event.currentTarget.value))}/></label>
       <label>Queue capacity<input type="number" min="16" max="4096" value={draft.automation_queue_size} onInput={event=>change('automation_queue_size',Number(event.currentTarget.value))}/><small>Takes effect after daemon restart.</small></label>

@@ -51,10 +51,7 @@ def test_a_lapse_is_explained_where_the_reader_is_already_asking_why() -> None:
 def test_settings_explain_that_agent_conversations_default_on() -> None:
     settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
 
-    assert (
-        "every new observed agent conversation starts with bounded auto-delivery enabled"
-        in settings
-    )
+    assert "New observed agent conversations start enabled with these bounds" in settings
     assert "Allow auto-delivery for agent conversations" in settings
 
 
@@ -71,8 +68,8 @@ def test_the_two_grant_windows_are_editable_and_marked_for_deep_links() -> None:
     assert 'data-setting="auto_delivery_session_ttl_minutes"' in settings
     assert 'data-setting="auto_delivery_reply_window_minutes"' in settings
     assert "Minutes a session keeps its grant while awaiting a reply" in settings
-    assert "capped by the exchange itself" in settings
-    assert "Set it to 0 to switch it off entirely." in settings
+    assert "Extends only the current request-response exchange" in settings
+    assert "Set 0 to disable." in settings
 
 
 def test_scheduling_is_a_property_of_the_queued_item() -> None:

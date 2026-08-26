@@ -70,15 +70,17 @@ def test_cross_vendor_review_has_no_frontend_surface() -> None:
 
 def test_automation_settings_keep_key_write_only_and_show_privacy_boundary() -> None:
     settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
+    policy = (ROOT / "AutomationPolicyView.tsx").read_text(encoding="utf-8")
 
     assert 'type="password"' in settings
     assert "The key is write-only" in settings
-    assert "bounded transcript slice" in settings
+    assert "bounded transcript slice" in policy
+    assert "do not crawl Project files" in policy
     assert "Test + set/replace" in settings
     assert "Test entered key" in settings
     assert "Clear stored key" in settings
     # Spending caps are edited through the shared `{tokens?, usd?, mode}` control rather
     # than as separate token and dollar boxes, so the contract is the control being wired
     # to each cap. `frontend/test/budgetControl.test.ts` owns the full inventory.
-    assert '<BudgetControl name="automation_daily_budget"' in settings
-    assert '<BudgetControl name="automation_rule_daily_budget"' in settings
+    assert '<BudgetControl name="automation_daily_budget"' in policy
+    assert '<BudgetControl name="automation_rule_daily_budget"' in policy
