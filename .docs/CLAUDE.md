@@ -321,7 +321,7 @@
   its control. Retiring the Land segment did not delete its palette command, its voice
   phrases, a stored selection, or a keybinding - all four migrate onto Map and the rows
   stay forever (`drawerSegments.ts`, `drawerLayout.ts`, `keybindings.py`).
-  Two consequences of that strip being one line. The summary picks the most interesting
+  Two consequences of that strip always speaking while folded. Its headline picks the most interesting
   row, so a bounced request must stop speaking once a *later* request for its branch got
   an answer - nothing closes the old row and the redo is a new id, so without the rule the
   strip reports a branch as returned-to-agent forever; and it is derived at the reading

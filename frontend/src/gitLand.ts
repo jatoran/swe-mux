@@ -675,11 +675,11 @@ export type LandingSummary = {
 }
 
 /**
- * The one line the landing strip shows without being opened.
+ * The status model the landing strip shows without being opened.
  *
- * It exists because the strip sits above a map and must not turn the map into a panel:
- * a reader who is not landing anything should be able to ignore it after reading one
- * line, and a reader who *is* should not have to open it to see that a gate is running.
+ * It exists because the folded strip must carry gate, operation, and queue state without
+ * turning the map into a configuration panel. `GitLandBar` projects these facts into the
+ * headline and three bounded pipeline cells.
  *
  * Both halves are stated even when they are boring. "Nothing queued" is a fact worth
  * reading; leaving it blank would make a quiet queue and an unread one look the same,
