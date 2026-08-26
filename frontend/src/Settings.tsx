@@ -477,17 +477,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   useEffect(()=>rememberTab(activeTab),[activeTab])
 
+  // Arriving on a tab by any route — sidebar click, search result, deep link — reveals
+  // its pages in the sidebar. Only the chevron collapses a tree, and never automatically:
+  // an expansion the panel took back on its own read as the sidebar forgetting.
+  useEffect(()=>{
+    setExpandedTabs(current=>current.has(activeTab)?current:new Set(current).add(activeTab))
+  },[activeTab])
+
   // ---- In-tab section rail -------------------------------------------------
   // The rail is scroll anchors, never sub-tabs. Every section of a tab stays
   // mounted, which is what keeps the search index able to see the whole tab, keeps
   // Ctrl+F working, and keeps the single Save transaction from ever hiding a dirty
   // field behind a tab you cannot see while its validation error names it.
   const contentEl = ():HTMLElement|null => panel.current?.querySelector<HTMLElement>('.settings-content')||null
-  // How far below the scroller's top edge a section counts as arrived: the rail is
-  // sticky and covers that band, so measuring against the true top would select a
-  // heading the rail is sitting on top of.
-  const railAnchor = (content:HTMLElement):number =>
-    (content.querySelector<HTMLElement>('.settings-section-rail')?.offsetHeight||0)+10
+  // How far below the scroller's top edge a section counts as arrived: a small margin
+  // so a heading is not measured flush against the very top pixel.
+  const SECTION_SCROLL_MARGIN = 10
 
   // A section chosen by clicking holds the rail until the scroll settles. Without
   // this the late sections of a short tab are unpickable: scrolling to one lands at
@@ -501,7 +506,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(!content||!heading)return
     const offset=heading.getBoundingClientRect().top-content.getBoundingClientRect().top+content.scrollTop
     scrollClaim.current=performance.now()
-    content.scrollTo({top:Math.max(0,offset-railAnchor(content)),behavior})
+    content.scrollTo({top:Math.max(0,offset-SECTION_SCROLL_MARGIN),behavior})
     setActiveSection(id)
   },[])
 
@@ -568,7 +573,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       const headings=[...content.querySelectorAll<HTMLElement>('h3[data-settings-section]')]
       if(!headings.length)return
       const top=content.getBoundingClientRect().top
-      const edge=railAnchor(content)+1
+      const edge=SECTION_SCROLL_MARGIN+1
       let current=headings[0]
       for(const heading of headings)if(heading.getBoundingClientRect().top-top<=edge)current=heading
       // The final section is usually shorter than the viewport, so its heading never
@@ -842,7 +847,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   useEffect(() => {
     if(!draft)return
     const timer=window.setTimeout(()=>{
-      const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors):not(.settings-section-rail)')
+      const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors)')
       if(!mounted?.length)return
       const index=settingsTabs.findIndex(tab=>tab.id===activeTab)
       const label=settingsTabs[index]?.label||activeTab
@@ -859,11 +864,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(!jump)return
     const root=panel.current?.querySelector('.settings-content')
     if(!root)return
-    // The section rail is excluded from the index, so it must be excluded here
-    // too: its buttons repeat every heading, and counting them as candidates
-    // would shift the occurrence a result was recorded against.
     const candidates=[...root.querySelectorAll<HTMLElement>(kindSelector[jump.entry.kind])]
-      .filter(item=>!item.closest('.settings-section-rail'))
     const index=matchIndex(candidates.map(item=>item.textContent||''),jump.entry.key,jump.entry.occurrence)
     const target=index>=0?candidates[index]:null
     if(!target)return
@@ -1318,15 +1319,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
         <span aria-hidden="true">{group.group}</span>
         {group.tabs.map(tab=>{
+          // A paged tab lists its declared pages. An unpaged tab lists the sections it
+          // actually rendered, as scroll anchors — knowable only while it is the active
+          // tab, which is also the only time scrolling it means anything.
           const pages=settingsSubpages[tab.id]||[]
-          const expanded=expandedTabs.has(tab.id)&&pages.length>0
+          const sections=!pages.length&&tab.id===activeTab&&railSections.length>=SECTION_RAIL_MIN?railSections:[]
+          const entries=pages.length?pages:sections
+          const expanded=expandedTabs.has(tab.id)&&entries.length>0
           return <Fragment key={tab.id}>
             <div class="settings-tab-row" role="presentation">
               <button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>
-              {!!pages.length&&<button type="button" class="settings-tab-expand" aria-label={`${expanded?'Collapse':'Expand'} ${tab.label} pages`} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded?'▾':'▸'}</button>}
+              {!!entries.length&&<button type="button" class="settings-tab-expand" aria-label={`${expanded?'Collapse':'Expand'} ${tab.label} pages`} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded?'▾':'▸'}</button>}
             </div>
             {expanded&&<div class="settings-subtabs" role="group" aria-label={`${tab.label} pages`}>
-              {pages.map(page=><button key={page.id} type="button" class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>)}
+              {pages.length
+                ?pages.map(page=><button key={page.id} type="button" class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>)
+                :sections.map(section=><button key={section.id} type="button" class={activeSection===section.id?'active':''} onClick={()=>{scrollToSection(section.id);setNavOpen(false)}}>{section.label}</button>)}
             </div>}
           </Fragment>
         })}
@@ -1337,14 +1345,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // Before the bundle lands the panel renders its full chrome — header, section
   // list, footer — with a placeholder in the content area, so opening Settings
   // paints immediately and the chosen tab can be selected while data loads.
+  {/* Disabled twin of the real search box: the index needs the config, and a control
+      that appears late would shift the chrome out from under a tap. Narrow it lives in
+      the header; wide it sits above the section list, at the top of the nav column. */}
+  const loadingSearch = <div class="settings-search"><input type="search" disabled placeholder="Search settings…" aria-label="Search settings (loading)" /></div>
   if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label="Settings">
     <header>{navTrigger}{heading}
-      {/* Disabled twin of the real search box: the index needs the config, and a
-          control that appears late would shift the header out from under a tap. */}
-      <div class="settings-search"><input type="search" disabled placeholder="Search settings…" aria-label="Search settings (loading)" /></div>
+      {narrow&&loadingSearch}
       <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     <main class="settings-body">
-      {tabNav}
+      {narrow?tabNav:<div class="settings-nav-col">{loadingSearch}{tabNav}</div>}
       <div class="settings-content"><section class="settings-loading" role="status" aria-live="polite">{status}</section></div>
     </main>
     <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
@@ -1408,7 +1418,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               a chat message can create a folder in. The Add-project dialog is unaffected. */}
           <section><h3>New project location</h3>
             <label data-setting="new_project_parent">Default parent folder<input value={draft.new_project_parent} placeholder={projectParentHint||'e.g. D:\\PROJECTS'} onInput={e=>change('new_project_parent',e.currentTarget.value)}/></label>
-            <p>The one directory the Mux assistant's <em>create project</em> can make new project folders inside. The assistant is given a name, never a path, and refuses to create anything until this is set. The Add project dialog is unaffected and can use any parent.{projectParentHint&&<Fragment> Most of your projects live in <code>{projectParentHint}</code>.</Fragment>}</p>
+            <p>The only directory the Mux assistant may create new project folders inside; the Add project dialog can use any parent.{projectParentHint&&<Fragment> Most of your projects live in <code>{projectParentHint}</code>.</Fragment>}</p>
           </section>
 
           {/* Setup commands offered when a Project is registered. They are yours, typed
@@ -1433,13 +1443,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section><h3>Global project ignores</h3>
             <label data-setting="project_ignore_patterns">Ignore patterns<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label>
-            <p>One glob per line. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p>
-            <p>Every Project adds its own list on top of this one, under <strong>Manage projects → Repository options → Additional ignore patterns</strong>. The two compose; neither replaces the other.</p>
-          </section>
-
-          <section><h3>Project resources</h3>
-            <p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p>
-          <p>Project roots, launch defaults, worktree commands, and prompt scope live in <strong>Manage projects</strong>. Automation opt-ins live in the Automation workspace.</p>
+            <p>One glob per line, matched at any depth. Affects the file tree and resource watchers, not Git. Each Project adds its own list on top under <strong>Manage projects → Repository options</strong>.</p>
           </section>
         </Fragment>}
 
@@ -1456,15 +1460,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               a fresh attach is handed, what survives losing the daemon and its PTY
               owner together. */}
           <section><h3>Scrollback</h3>
-            <label>Scrollback bytes<input type="number" min="1024" max="1073741824" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
-            <p>How much output a session keeps for replay when a client attaches. Larger keeps more history reachable after a reconnect and costs memory per live session.</p>
-            <label data-setting="attach_replay_bytes">Replay bytes on a fresh attach<input type="number" min="1024" max="1073741824" value={draft.attach_replay_bytes} onInput={e=>change('attach_replay_bytes',Number(e.currentTarget.value))} /><small>What a client is handed when it attaches with no position of its own, as opposed to what the daemon retains above. Every replayed byte is parsed before anything renders, so this is reconnect latency; scrolling further back is a later request.</small></label>
+            <label>Scrollback bytes<input type="number" min="1024" max="1073741824" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /><small>Output kept per live session for replay after a reconnect; larger costs memory.</small></label>
+            <label data-setting="attach_replay_bytes">Replay bytes on a fresh attach<input type="number" min="1024" max="1073741824" value={draft.attach_replay_bytes} onInput={e=>change('attach_replay_bytes',Number(e.currentTarget.value))} /><small>Handed to a client attaching with no position of its own; every byte is parsed before render, so this is reconnect latency.</small></label>
             <h4>Crash recovery</h4>
-          <p>These limits cover a full daemon and PTY-supervisor failure. Recovered sessions return as readable ended panes.</p>
-            <label data-setting="session_recovery_checkpoint_bytes">Recovery checkpoint bytes<input type="number" min="0" max="67108864" value={draft.session_recovery_checkpoint_bytes} onInput={e=>change('session_recovery_checkpoint_bytes',Number(e.currentTarget.value))} /><small>Terminal bytes kept per session so a recovered pane shows what it printed. 0 keeps the registry that brings sessions back and stores no output at all. Deliberately far below the retention above: a cold pane is a post-mortem, not a session.</small></label>
-            <label data-setting="session_recovery_retention_days">Recovery retention days<input type="number" min="0" max="365" value={draft.session_recovery_retention_days} onInput={e=>change('session_recovery_retention_days',Number(e.currentTarget.value))} /><small>How long recovery data for an <em>ended</em> session is kept. Cold sessions themselves are bounded by the count below instead.</small></label>
-            <label data-setting="session_recovery_max_sessions">Recoverable sessions kept<input type="number" min="0" max="1000" value={draft.session_recovery_max_sessions} onInput={e=>change('session_recovery_max_sessions',Number(e.currentTarget.value))} /><small>Newest first. Without a ceiling a machine that crashes repeatedly accumulates cold rows forever.</small></label>
-          <p><code>session_recovery_enabled</code> controls crash recovery and checkpoint capture. Ended sessions remain in the durable registry.</p>
+          <p>These limits cover a full daemon and PTY-supervisor failure. Recovered sessions return as readable ended panes; <code>session_recovery_enabled</code> is a config-file switch.</p>
+            <label data-setting="session_recovery_checkpoint_bytes">Recovery checkpoint bytes<input type="number" min="0" max="67108864" value={draft.session_recovery_checkpoint_bytes} onInput={e=>change('session_recovery_checkpoint_bytes',Number(e.currentTarget.value))} /><small>Terminal bytes kept per session for the recovered pane; 0 keeps recovery on and stores no output.</small></label>
+            <label data-setting="session_recovery_retention_days">Recovery retention days<input type="number" min="0" max="365" value={draft.session_recovery_retention_days} onInput={e=>change('session_recovery_retention_days',Number(e.currentTarget.value))} /><small>How long an <em>ended</em> session's recovery data is kept.</small></label>
+            <label data-setting="session_recovery_max_sessions">Recoverable sessions kept<input type="number" min="0" max="1000" value={draft.session_recovery_max_sessions} onInput={e=>change('session_recovery_max_sessions',Number(e.currentTarget.value))} /><small>Newest first, so repeated crashes cannot accumulate cold rows forever.</small></label>
           </section>
 
           <section><h3>Default profile</h3>
@@ -1512,23 +1514,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='git'&&<section><h3>Git and worktrees</h3><label>Worktree root<input value={draft.worktree_root} onInput={e=>change('worktree_root',e.currentTarget.value)}/></label><p>New Run worktrees are grouped below this absolute directory by Project and branch. Clear the field to restore <code>{draft.data_dir}{draft.data_dir.includes('\\')?'\\':'/'}worktrees</code>. Existing worktrees and manually edited Run paths are not moved.</p><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label><p>A Project's own worktree setup command lives in <strong>Manage projects → Git and worktrees</strong>. Which Git fields a session row shows is under <strong>Appearance → Session rows</strong>.</p></section>}
 
         {activeTab==='processes'&&<Fragment>
-          <section><h3>Process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Process evidence uses PID plus creation time and command fingerprint. Surviving descendants are flagged after the grace period and are never killed automatically.</p><p>What is running right now, and what it is serving, is the drawer's <strong>Processes</strong> tab rather than a setting.</p></section>
+          <section><h3>Process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Surviving descendants are flagged after the grace period and never killed automatically. What is running right now is the drawer's <strong>Processes</strong> tab.</p></section>
 
           {/* Its own section rather than another row under process evidence: the sweep
               moves something on screen, which is the one thing here that changes what
               the machine looks like rather than what swe-mux records about it. */}
           <section><h3>Ghost windows</h3>
-          <p>Chrome launched with the new headless mode owns a real top-level window, and the Windows compositor keeps drawing it over your desktop even though Win32 reports it hidden. The sweep parks those off screen rather than closing them, so the browser and its screenshots keep working. Its predicate is narrow on purpose — the exact headless window class, hidden, titled, and a <code>--headless</code> in the owning process's command line — so an application deliberately showing a window is never touched.</p>
-          <label class="check" data-setting="ghost_window_sweep_enabled"><span>Park ghost headless-browser windows off screen</span><input type="checkbox" checked={draft.ghost_window_sweep_enabled} onChange={e=>change('ghost_window_sweep_enabled',e.currentTarget.checked)}/><small>Off leaves such a window where it is, which is the setting to reach for only when you want to watch one.</small></label>
-          <label data-setting="ghost_window_poll_seconds">Sweep seconds<input type="number" min=".5" max="60" step=".5" value={draft.ghost_window_poll_seconds} onInput={e=>change('ghost_window_poll_seconds',Number(e.currentTarget.value))}/><small>How often the sweep looks. Windows-only, idempotent, and it reads a command line only for windows that already look like ghosts.</small></label>
+          <p>Headless Chrome can leave a hidden window the compositor still draws over the desktop; the sweep parks those off screen without closing the browser.</p>
+          <label class="check" data-setting="ghost_window_sweep_enabled"><span>Park ghost headless-browser windows off screen</span><input type="checkbox" checked={draft.ghost_window_sweep_enabled} onChange={e=>change('ghost_window_sweep_enabled',e.currentTarget.checked)}/><small>Matches only hidden headless-class windows whose process ran with <code>--headless</code>, so a deliberately shown window is never touched.</small></label>
+          <label data-setting="ghost_window_poll_seconds">Sweep seconds<input type="number" min=".5" max="60" step=".5" value={draft.ghost_window_poll_seconds} onInput={e=>change('ghost_window_poll_seconds',Number(e.currentTarget.value))}/><small>How often the sweep looks. Windows-only and idempotent.</small></label>
           </section>
 
           {/* Detection telemetry rather than process telemetry, but it belongs beside the
               other evidence windows rather than under Usage: it is the per-session record
               an incident is reconstructed from, not a spend or quota figure. */}
           <section><h3>Detection timeline</h3>
-          <p>Keeps the evidence behind past session states. Detection data has its own shorter retention because active turns write frequently.</p>
-          <label data-setting="status_timeline_retention_days">Status timeline retention days<input type="number" min="1" max="3650" value={draft.status_timeline_retention_days} onInput={e=>change('status_timeline_retention_days',Number(e.currentTarget.value))}/><small>Long enough to investigate an incident from last week; short enough that a busy fleet does not carry a year of per-transition detail.</small></label>
+          <label data-setting="status_timeline_retention_days">Status timeline retention days<input type="number" min="1" max="3650" value={draft.status_timeline_retention_days} onInput={e=>change('status_timeline_retention_days',Number(e.currentTarget.value))}/><small>The per-transition evidence behind past session states; kept shorter than process evidence because active turns write frequently.</small></label>
           </section>
         </Fragment>}
 
@@ -1538,35 +1539,32 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             colour variables, and a second source for them would fight it. */}
         {activeTab==='notes'&&<Fragment>
           <section><h3>Note editor</h3>
-            <label class="check"><span>Spellcheck</span><input type="checkbox" checked={draft.note_spellcheck} onChange={e=>change('note_spellcheck',e.currentTarget.checked)}/></label>
-            <p>The browser's own spellchecker, on the editor's text input. Notes are prose, so it is worth more here than in a terminal — but it also underlines code, paths, and identifiers.</p>
-            <label class="check"><span>Indent guides</span><input type="checkbox" checked={draft.note_indent_guides} onChange={e=>change('note_indent_guides',e.currentTarget.checked)}/></label>
-            <p>Vertical rules marking each enclosing indent level, the way the standalone Continuity app draws them. A guide marks where a parent list item's content starts, so the outermost level shows none, and the level the caret sits in is drawn brighter.</p>
+            <label class="check"><span>Spellcheck</span><input type="checkbox" checked={draft.note_spellcheck} onChange={e=>change('note_spellcheck',e.currentTarget.checked)}/><small>The browser's spellchecker; it also underlines code, paths, and identifiers.</small></label>
+            <label class="check"><span>Indent guides</span><input type="checkbox" checked={draft.note_indent_guides} onChange={e=>change('note_indent_guides',e.currentTarget.checked)}/><small>Vertical rules marking each enclosing indent level; the caret's level draws brighter.</small></label>
             <label>Markdown<Dropdown value={draft.note_syntax} onChange={value=>change('note_syntax',value as Config['note_syntax'])} options={[{value:'markdown',label:'Render Markdown'},{value:'plain',label:'Show raw text'}]}/></label>
-            <p>Raw text keeps every editing feature — undo, multi-cursor, list continuation, autosave — and only stops the Markdown projection, so headings, emphasis, links, and task markers stay as the characters you typed.</p>
+            <p>Raw text keeps every editing feature and only stops the Markdown projection.</p>
             <label>Tab key<Dropdown value={draft.note_tab_behavior} onChange={value=>change('note_tab_behavior',value as Config['note_tab_behavior'])} options={[{value:'indent',label:'Indent and outdent lines'},{value:'focus',label:'Move focus out of the editor'}]}/></label>
-            <p>Indenting is the default; Escape then Tab still leaves the editor either way, so the keyboard is never trapped.</p>
+            <p>Escape then Tab always leaves the editor, so the keyboard is never trapped.</p>
           </section>
 
           <section><h3>Typography</h3>
             <label>Font family<input value={draft.note_font_family} placeholder="editor default: ui-monospace, Cascadia Mono, Consolas" onInput={e=>change('note_font_family',e.currentTarget.value)}/></label>
             <label>Font size<input type="number" min="0" max="48" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/></label>
             <label>Line height<input type="number" min="0" max="3" step="0.05" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/></label>
-            <p>Pixels and a multiplier. Zero keeps the editor's own default (16px, 1.55) so a future editor update can still move it. Saving re-measures open notes in place; nothing is remounted, so no undo history is lost.</p>
+            <p>Pixels and a multiplier; zero keeps the editor's own default (16px, 1.55). Saving re-measures open notes in place with no lost undo history.</p>
           </section>
 
           <section><h3>Touch command rail</h3>
-            <p>The editor's bottom quick-action strip — undo, indent, bullet, task, bold, heading, and this app's <code>→ agent</code> action — which runs each one without dismissing the on-screen keyboard.</p>
+            <p>The editor's bottom quick-action strip, which runs each action without dismissing the on-screen keyboard.</p>
             <label>Show the rail<Dropdown value={draft.note_command_rail} onChange={value=>change('note_command_rail',value as Config['note_command_rail'])} options={[{value:'auto',label:'Automatic: touch devices only'},{value:'on',label:'Always'},{value:'off',label:'Never'}]}/></label>
-            <label>Button size<input type="number" min="0" max="96" value={draft.note_rail_button_size_px} onInput={e=>change('note_rail_button_size_px',Number(e.currentTarget.value))}/></label>
-            <p>Pixels, zero for the default 48px button in a 56px rail; the rail's height and the content inset above it follow the button size together. It is deliberately not sized in <code>rem</code>, so a dense page font cannot shrink a touch target.</p>
-            <div class="keybinding-heading"><div><strong>RAIL::ARRANGEMENT</strong><p>Which buttons appear, and in what order, is chosen from the gear button on the rail itself and saved by the editor per device — not in this config, so it is not part of this draft and Cancel does not undo a reset.</p></div><button type="button" onClick={resetNoteRailArrangement}>Reset rail arrangement</button></div>
+            <label>Button size<input type="number" min="0" max="96" value={draft.note_rail_button_size_px} onInput={e=>change('note_rail_button_size_px',Number(e.currentTarget.value))}/><small>Pixels; zero keeps the default 48px button in a 56px rail.</small></label>
+            <div class="keybinding-heading"><div><strong>RAIL::ARRANGEMENT</strong><p>Which buttons appear, and in what order, is chosen from the gear on the rail itself and saved per device, so Cancel does not undo a reset.</p></div><button type="button" onClick={resetNoteRailArrangement}>Reset rail arrangement</button></div>
           </section>
 
           <section><h3>Editor shortcuts</h3>
             <label>Policy<Dropdown value={draft.note_shortcut_policy} onChange={value=>change('note_shortcut_policy',value as ShortcutPolicy)} options={[{value:'browser-safe',label:'Browser-safe: leave browser chords alone'},{value:'editor-first',label:'Editor first: claim every chord'},{value:'none',label:'None: no editor shortcuts'}]}/></label>
-            <p>Browser-safe releases the chords Chromium claims for itself (reload, search, DevTools) so they keep doing what they do everywhere else. Editor-first suits the desktop app, where those chords are not wanted. Either way the browser may still swallow an accelerator before the page sees it.</p>
-            <div class="keybinding-heading"><div><strong>EDITOR::CHORDS</strong><p>Per-chord overrides on top of that policy. <em>Run the command</em> reclaims a chord the policy would release; <em>leave to the browser</em> gives one back. These apply inside a note only, and are separate from this app's own shortcuts on the Input tab.</p></div><button type="button" onClick={()=>change('note_shortcut_overrides',{...DEFAULT_NOTE_SHORTCUT_OVERRIDES})}>Restore editor shortcut defaults</button></div>
+            <p>Browser-safe releases the chords Chromium claims (reload, search, DevTools); editor-first suits the desktop app, where those chords are not wanted.</p>
+            <div class="keybinding-heading"><div><strong>EDITOR::CHORDS</strong><p>Per-chord overrides on that policy, applied inside a note only. This app's own shortcuts are on the Input tab.</p></div><button type="button" onClick={()=>change('note_shortcut_overrides',{...DEFAULT_NOTE_SHORTCUT_OVERRIDES})}>Restore editor shortcut defaults</button></div>
             <input class="note-chord-filter" type="search" value={noteChordQuery} placeholder="Filter chords and commands…" aria-label="Filter editor shortcuts" spellcheck={false} onInput={e=>setNoteChordQuery(e.currentTarget.value)}/>
             <div class="note-chord-list">
               {NOTE_CHORDS.filter(binding=>{
@@ -1615,9 +1613,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false)&&<p class="profile-hint">Instrumentation changes take effect on the next daemon restart (live sessions are preserved).</p>}
             {appliesWidthEnvelope(harness.name)&&<Fragment>
               <label data-setting="claude_max_columns">Width limit<Dropdown value={String(draft.claude_max_columns)} onChange={value=>change('claude_max_columns',Number(value) as ClaudeMaxColumns)} options={CLAUDE_MAX_COLUMN_STEPS.map(step=>({value:String(step),label:claudeMaxColumnsLabel(step)}))}/></label>
-              <p class="profile-hint">{harness.display_name}'s renderer can leave stale and duplicated cells when its width changes by a lot, so a pane dragged past this many columns adds margin instead of resizing the terminal again. Raise it for wide diffs and long log lines; choose No limit to let it fill its pane like every other session. Phone and other compact panes are never limited.</p>
+              <p class="profile-hint">Past this many columns a pane adds margin instead of resizing, because {harness.display_name}'s renderer can corrupt cells on large width changes. Raise it for wide diffs; compact panes are never limited.</p>
             </Fragment>}
-            <p class="profile-hint">Applies to every {harness.display_name} session. For one named alternative instead, add a launch profile under Terminals. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
+            <p class="profile-hint">Applies to every {harness.display_name} session; a named alternative is a launch profile under Terminals. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
           </div>)}
           </section>
 
@@ -1625,13 +1623,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               it: the scan is scoped to exactly the harnesses enabled above, so the two
               are read together or not at all. */}
           <section><h3>Conversation history</h3>
-          <p>Indexes conversations created outside swe-mux so they can be searched and resumed. Large first imports are explicit and cancellable.</p>
+          <p>Indexes conversations created outside swe-mux so they can be searched and resumed.</p>
           <label class="check"><span>Reconcile native history on startup</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
-          <label>History page size<input type="number" min="1" max="10000" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
-          <p>How many conversations one page of the history browser asks for. It bounds a request, not what is stored.</p>
+          <label>History page size<input type="number" min="1" max="10000" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /><small>Conversations per history-browser page; bounds a request, not what is stored.</small></label>
           <div class="settings-history-scan">
             <div class="settings-history-scan-head">
-              <div><strong>Scan native history now</strong><p>Indexes past conversations from the enabled harnesses without waiting for a restart. A first import can take a while on a machine with a large history, so it runs in the background and can be cancelled.</p></div>
+              <div><strong>Scan native history now</strong><p>Indexes past conversations from the enabled harnesses in the background; a large first import is cancellable.</p></div>
               {scanJob?.status==='running'
                 ?<button type="button" class="danger" onClick={()=>void cancelHistoryScan()}>{scanJob.phase==='cancelling'?'Cancelling…':'Cancel scan'}</button>
                 :<button type="button" onClick={()=>void startHistoryScan()}>Scan now</button>}
@@ -1679,8 +1676,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <h4>Mid-turn delivery</h4>
           <p>Mid-turn delivery hands text to a busy CLI for its next boundary. The target Project may disable it.</p>
           <label class="check" data-setting="agent_interject_enabled"><span>Allow mid-turn delivery</span><input type="checkbox" checked={draft.agent_interject_enabled} onChange={e=>change('agent_interject_enabled',e.currentTarget.checked)} /></label>
-          <label data-setting="agent_interject_hourly_budget">Mid-turn deliveries one session may ask for per hour<input type="number" min="0" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} /><small>Far tighter than the ordinary message budget: a message that waits costs the receiver nothing until it is read, and one that lands mid-turn costs attention immediately. Bound by the messaging rate-limit switch above; with limits off it runs at a backstop of 120 an hour.</small></label>
-          <label data-setting="agent_interject_min_interval_seconds">Seconds between mid-turn deliveries into one session<input type="number" min="0" max="3600" step="1" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} /><small>The floor that stops a peer machine-gunning a session that is trying to work. With rate limits off it runs at a 5-second backstop.</small></label>
+          <label data-setting="agent_interject_hourly_budget">Mid-turn deliveries one session may ask for per hour<input type="number" min="0" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} /><small>Tighter than the message budget because a mid-turn landing costs attention immediately. With limits off: 120/hour backstop.</small></label>
+          <label data-setting="agent_interject_min_interval_seconds">Seconds between mid-turn deliveries into one session<input type="number" min="0" max="3600" step="1" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} /><small>Stops a peer machine-gunning a working session. With limits off: 5-second backstop.</small></label>
           </section>
 
           {/* Approvals sit beside auto-delivery deliberately: both answer "what
@@ -1701,13 +1698,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Agent messaging</h3>
           <p>Bounds on messages agents address to each other. A message still enters the target's queue under every auto-delivery rule; these limit how far one thread may travel.</p>
           <label class="check" data-setting="agent_messaging_enabled"><span>Allow agent-to-agent messages</span><input type="checkbox" checked={draft.agent_messaging_enabled} onChange={e=>change('agent_messaging_enabled',e.currentTarget.checked)} /></label>
-          <label class="check" data-setting="agent_message_limits_enabled"><span>Enforce the rate limits below</span><input type="checkbox" checked={draft.agent_message_limits_enabled} onChange={e=>change('agent_message_limits_enabled',e.currentTarget.checked)} /><small>Off, an orchestrator relaying work for hours never trips a send budget: the four bounds below and the two mid-turn bounds run at fixed generous backstops (500 messages an hour, 50 pending, 10 hops, 1000 per thread) that exist to end a runaway loop, not to pace a working exchange. The message size cap, ring detection, and expiry always apply.</small></label>
+          <label class="check" data-setting="agent_message_limits_enabled"><span>Enforce the rate limits below</span><input type="checkbox" checked={draft.agent_message_limits_enabled} onChange={e=>change('agent_message_limits_enabled',e.currentTarget.checked)} /><small>Off, the bounds run at generous runaway-loop backstops (500/hour, 50 pending, 10 hops, 1000 per thread). Size cap, ring detection, and expiry always apply.</small></label>
           <label>Relay hops before a thread must be restarted by a human<input type="number" min="1" max="10" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_chain_depth} onInput={e=>change('agent_message_max_chain_depth',Number(e.currentTarget.value))} /></label>
           <label>Messages in one thread<input type="number" min="1" max="100" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /></label>
           <label>Messages one session may originate per hour<input type="number" min="1" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /></label>
           <label>Pending messages allowed per target<input type="number" min="1" max="100" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /></label>
-          <label data-setting="agent_message_max_chars">Characters one message may carry<input type="number" min="1" max="100000" value={draft.agent_message_max_chars} onInput={e=>change('agent_message_max_chars',Number(e.currentTarget.value))} /><small>A message over this is refused rather than truncated, so a hand-off is never silently cut in half. Applies whether or not the rate limits are enforced.</small></label>
-          <p>Ring detection and the message-size cap always apply, even when rate limits are off.</p>
+          <label data-setting="agent_message_max_chars">Characters one message may carry<input type="number" min="1" max="100000" value={draft.agent_message_max_chars} onInput={e=>change('agent_message_max_chars',Number(e.currentTarget.value))} /><small>Over this a message is refused, never truncated. Applies even with rate limits off.</small></label>
           </section>
 
           {/* Its own section rather than more rows under messaging, and a deliberate
@@ -1717,16 +1713,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               to share nothing at all - every field here was enforced with no control
               anywhere, reachable only by hand-editing the daemon's config file. */}
           <section><h3>Agent actuation</h3>
-          <p>Install-wide limits for spawn, interrupt, end-session, and watch requests. Project policy decides availability and authority.</p>
-          <label class="check" data-setting="request_spawn_enabled"><span>Let agents request spawns</span><input type="checkbox" checked={draft.request_spawn_enabled} onChange={e=>change('request_spawn_enabled',e.currentTarget.checked)} /><small>By default a Project's <code>spawn_grant</code> is granted, so the request creates the session directly inside the budget below; a Project lowered to draft gets an inert Fleet Queue request a human approves.</small></label>
-          <label data-setting="agent_spawn_hourly_budget">Spawns one session may make per hour<input type="number" min="0" max="1000" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} /><small>Applies on the granted path. A spawn's blast radius is one injection into fan-out, so this is what bounds that fan-out and is smaller than the interrupt budget below.</small></label>
+          <p>Install-wide limits for spawn, interrupt, end-session, and watch requests. Project policy decides availability and authority, edited in the Automation workspace.</p>
+          <label class="check" data-setting="request_spawn_enabled"><span>Let agents request spawns</span><input type="checkbox" checked={draft.request_spawn_enabled} onChange={e=>change('request_spawn_enabled',e.currentTarget.checked)} /><small>A granted Project creates the session directly inside the budget below; a draft Project gets an inert Fleet Queue request instead.</small></label>
+          <label data-setting="agent_spawn_hourly_budget">Spawns one session may make per hour<input type="number" min="0" max="1000" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} /><small>Bounds fan-out on the granted path.</small></label>
           <label class="check" data-setting="session_control_enabled"><span>Let agents interrupt and end sessions</span><input type="checkbox" checked={draft.session_control_enabled} onChange={e=>change('session_control_enabled',e.currentTarget.checked)} /></label>
-          <label data-setting="session_control_hourly_budget">Control actions one session may take per hour<input type="number" min="0" max="1000" value={draft.session_control_hourly_budget} onInput={e=>change('session_control_hourly_budget',Number(e.currentTarget.value))} /><small>The actuation analogue of the message budget above, counted on the granted path.</small></label>
-          <label data-setting="session_control_graceful_timeout_s">Seconds a graceful end waits before a hard stop<input type="number" min="1" max="120" step="1" value={draft.session_control_graceful_timeout_s} onInput={e=>change('session_control_graceful_timeout_s',Number(e.currentTarget.value))} /><small>How long the CLI is given to tear itself down after the exit sequence.</small></label>
-          <label class="check" data-setting="session_watch_enabled"><span>Let agents watch a session until it settles</span><input type="checkbox" checked={draft.session_watch_enabled} onChange={e=>change('session_watch_enabled',e.currentTarget.checked)} /><small>A watch is a read that matures into one queue message addressed to the watcher itself, so it needs no Project opt-in and no grant — only the two bounds below.</small></label>
-          <label data-setting="session_watch_max_per_session">Watches one session may hold at once<input type="number" min="1" max="100" value={draft.session_watch_max_per_session} onInput={e=>change('session_watch_max_per_session',Number(e.currentTarget.value))} /><small>Sized for an orchestrator watching a handful of workers. A session that wants to watch everything should be listing sessions instead, which costs one call rather than N notices.</small></label>
-          <label data-setting="session_watch_max_minutes">Longest a single watch may run<input type="number" min="1" max="1440" value={draft.session_watch_max_minutes} onInput={e=>change('session_watch_max_minutes',Number(e.currentTarget.value))} /><small>Minutes. Watches live in daemon memory, so a window longer than a working session is a promise this service cannot keep across the restarts that happen inside it.</small></label>
-          <p>Project authority is edited in the Automation workspace.</p>
+          <label data-setting="session_control_hourly_budget">Control actions one session may take per hour<input type="number" min="0" max="1000" value={draft.session_control_hourly_budget} onInput={e=>change('session_control_hourly_budget',Number(e.currentTarget.value))} /></label>
+          <label data-setting="session_control_graceful_timeout_s">Seconds a graceful end waits before a hard stop<input type="number" min="1" max="120" step="1" value={draft.session_control_graceful_timeout_s} onInput={e=>change('session_control_graceful_timeout_s',Number(e.currentTarget.value))} /></label>
+          <label class="check" data-setting="session_watch_enabled"><span>Let agents watch a session until it settles</span><input type="checkbox" checked={draft.session_watch_enabled} onChange={e=>change('session_watch_enabled',e.currentTarget.checked)} /><small>A watch matures into one queue message addressed to the watcher itself, so it needs no grant — only the bounds below.</small></label>
+          <label data-setting="session_watch_max_per_session">Watches one session may hold at once<input type="number" min="1" max="100" value={draft.session_watch_max_per_session} onInput={e=>change('session_watch_max_per_session',Number(e.currentTarget.value))} /><small>Sized for an orchestrator watching a handful of workers.</small></label>
+          <label data-setting="session_watch_max_minutes">Longest a single watch may run<input type="number" min="1" max="1440" value={draft.session_watch_max_minutes} onInput={e=>change('session_watch_max_minutes',Number(e.currentTarget.value))} /><small>Minutes; watches live in daemon memory and do not survive its restarts.</small></label>
           </section>
 
           <section><h3>Queue history</h3>
@@ -1750,17 +1745,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <label for="llm-provider-select" data-setting="llm_provider">Provider<Dropdown id="llm-provider-select" value={draft.llm_provider} onChange={value=>change('llm_provider',value)} options={[
               {value:'openrouter',label:'OpenRouter (hosted)'},
               {value:'custom',label:'Custom OpenAI-compatible endpoint'},
-            ]}/><small>Everything model-backed follows this: automation observers, the scan timeline, spoken summaries, attention narration, the titler, the Project context card, and the Mux assistant.</small></label>
+            ]}/><small>Every model-backed feature follows this: observers, scan timeline, spoken summaries, narration, titler, Project card, assistant.</small></label>
             <ProviderReadiness readiness={provider?.llm}/>
             {/* The one bound on the transport rather than on a feature, and it applies
                 to whichever endpoint is selected - so it lives with the provider choice
                 rather than inside a section that disappears when you switch away. */}
-            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))} /><small>How long any model-backed call waits for an answer, on OpenRouter and on a custom endpoint alike. A local server generating on CPU is the case that needs it raised. <strong>Takes effect on the next daemon restart</strong> — the HTTP client is built once at start.</small></label>
+            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))} /><small>How long any model-backed call waits, on either endpoint; raise it for a slow local server. <strong>Takes effect on the next daemon restart.</strong></small></label>
             {draft.llm_provider==='custom'&&<Fragment>
-              <label data-setting="custom_llm_base_url">Base URL<input type="url" autocomplete="off" spellcheck={false} value={draft.custom_llm_base_url} placeholder="http://127.0.0.1:11434/v1" onInput={event=>change('custom_llm_base_url',event.currentTarget.value)} /><small>Everything up to but not including <code>/chat/completions</code>. Ollama serves <code>http://127.0.0.1:11434/v1</code>, llama.cpp and LM Studio <code>http://127.0.0.1:8080/v1</code> and <code>:1234/v1</code>, vLLM whatever host you started it on.</small></label>
-              <label data-setting="custom_llm_model">Model<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_model} placeholder="qwen2.5-coder:7b" onInput={event=>change('custom_llm_model',event.currentTarget.value)} /><small>Only used when this endpoint publishes no model catalog, in which case it serves one model and every setting under <strong>Models</strong> resolves to it. Leave it blank if there is a catalog — then each feature's own model reaches the wire exactly as written.</small></label>
-            <label data-setting="custom_llm_catalog_url">Model catalog URL<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_catalog_url} placeholder={`${draft.custom_llm_base_url||'http://host/v1'}/models`} onInput={event=>change('custom_llm_catalog_url',event.currentTarget.value)} /><small>Optional. Blank uses the <code>/models</code> beside the base URL above, which is right for every OpenAI-compatible server. Set it when the catalog lives somewhere else — including a document you wrote yourself listing the models your server loads, with their names and prices. Accepts <code>{'{"data":[…]}'}</code>, <code>{'{"models":[…]}'}</code>, or a bare array. Whatever it publishes is what the pickers under <strong>Models</strong> offer; verify the endpoint again after changing it.</small></label>
-              <label>API key<input type="password" autocomplete="off" value={customKey} placeholder={customProvider?.secret.configured?'write only · enter to replace':'often unnecessary for a local server'} onInput={event=>setCustomKey(event.currentTarget.value)} /><small>Optional. llama.cpp and Ollama accept requests with no credential; a hosted proxy usually does not. Stored in the platform credential store, never in config.</small></label>
+              <label data-setting="custom_llm_base_url">Base URL<input type="url" autocomplete="off" spellcheck={false} value={draft.custom_llm_base_url} placeholder="http://127.0.0.1:11434/v1" onInput={event=>change('custom_llm_base_url',event.currentTarget.value)} /><small>Everything up to but not including <code>/chat/completions</code> — e.g. Ollama's <code>http://127.0.0.1:11434/v1</code>.</small></label>
+              <label data-setting="custom_llm_model">Model<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_model} placeholder="qwen2.5-coder:7b" onInput={event=>change('custom_llm_model',event.currentTarget.value)} /><small>Used only when the endpoint publishes no catalog; every setting under <strong>Models</strong> then resolves to it. Leave blank when a catalog exists.</small></label>
+            <label data-setting="custom_llm_catalog_url">Model catalog URL<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_catalog_url} placeholder={`${draft.custom_llm_base_url||'http://host/v1'}/models`} onInput={event=>change('custom_llm_catalog_url',event.currentTarget.value)} /><small>Optional; blank uses <code>/models</code> beside the base URL. Accepts <code>{'{"data":[…]}'}</code>, <code>{'{"models":[…]}'}</code>, or a bare array; verify again after changing it.</small></label>
+              <label>API key<input type="password" autocomplete="off" value={customKey} placeholder={customProvider?.secret.configured?'write only · enter to replace':'often unnecessary for a local server'} onInput={event=>setCustomKey(event.currentTarget.value)} /><small>Optional for local servers. Stored in the platform credential store, never in config.</small></label>
               <div class="theme-actions">
                 <button class="primary" disabled={!customKey} onClick={()=>void providerKeyAction('set','custom')}>Store key</button>
                 <button disabled={!customProvider?.secret.configured} onClick={()=>void providerKeyAction('clear','custom')}>Clear stored key</button>
@@ -1805,7 +1800,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               while it would be inert. */}
           {draft.llm_provider==='openrouter'&&<section><h3>OpenRouter</h3>
             <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
-            <p class="profile-hint">One OpenRouter key unlocks every model-backed feature: automation observers, the scan timeline, spoken TTS summaries, attention narration, the conversation titler and summarizer, and the Project context card. Without it these features stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
+            <p class="profile-hint">One key unlocks every model-backed feature; without it they stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
             <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
             <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
             <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
@@ -1870,7 +1865,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
         </Fragment>}
 
-        {activeTab==='usage'&&<Fragment><section><h3>Operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p></section><section><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check" data-setting="ccusage_enabled"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. One refresh discovers every historical source supported by the installed ccusage version.</p><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section></Fragment>}
+        {activeTab==='usage'&&<Fragment><section><h3>Operational telemetry</h3><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/><small>Globally rate limited and selected-account only.</small></label></section><section><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check" data-setting="ccusage_enabled"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section></Fragment>}
 
         {activeTab==='automation'&&<section><h3>Automation workspace</h3>
           <p>Graph definitions, rules, Project policy, global limits, spend, learned fixes, and diagnostics now share one Automation workspace.</p>
@@ -1992,7 +1987,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check" data-setting="stt_enabled"><span>Enable Talk &amp; dictation</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
           {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">The first Talk downloads the local Whisper speech model (several hundred MB) plus the browser voice-activity runtime. It runs once, then transcription is offline.</p>}
           <label>Daemon transcription engine<Dropdown value={draft.stt_engine} onChange={value=>change('stt_engine',value as Config['stt_engine'])} options={[{value:'whisper',label:'Whisper Turbo (local, recommended)'},{value:'sapi',label:'Windows Speech Recognition (legacy)'}]}/></label>
-          <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /><small>Whisper's <code>turbo</code> dictation model is English-first and large. Set a language and model that match how you speak; this is a first-use choice, not a fixed assumption.</small></label>
+          <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /><small>A first-use choice, not a fixed assumption: set the language and model that match how you speak.</small></label>
           {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
@@ -2049,7 +2044,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p><strong>Mux Assistant is independent from Talk.</strong> Text chat works whenever the assistant is on. Unmatched spoken requests reach it only when Talk &amp; dictation is also on.</p>
           <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
           {draft.assistant_enabled&&!draft.stt_enabled&&<div class="settings-capability-status"><strong>Text chat available · spoken fallback unavailable</strong><span>Enable Talk &amp; dictation to speak to the assistant.</span></div>}
-          <div class="model-routing-elsewhere" data-setting="assistant_model"><span>Assistant model</span><code>{routedModel('assistant_model')}</code><button type="button" onClick={()=>goToSetting('accounts','assistant_model')}>Edit in Accounts → Models</button></div><small>Pinned rather than routed: the assistant is an agentic tool-calling loop, and a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one. The default <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small>
+          <div class="model-routing-elsewhere" data-setting="assistant_model"><span>Assistant model</span><code>{routedModel('assistant_model')}</code><button type="button" onClick={()=>goToSetting('accounts','assistant_model')}>Edit in Accounts → Models</button></div><small>Pinned rather than routed: the assistant is a tool-calling loop and needs a model that reliably emits well-formed calls. <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small>
           <BudgetControl name="assistant_daily_budget" label="Assistant, daily" value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
           <label>Reversible-action trust<Dropdown value={draft.assistant_trust_reversible} onChange={value=>change('assistant_trust_reversible',value as Config['assistant_trust_reversible'])} options={[{value:'cancel_window',label:'Announce with a cancel window (default)'},{value:'confirm',label:'Always confirm'},{value:'auto',label:'Run silently'}]}/><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
           <label class="check" data-setting="assistant_stream_replies"><span>Stream the reply as it is written</span><input type="checkbox" checked={draft.assistant_stream_replies} onChange={e=>change('assistant_stream_replies',e.currentTarget.checked)} /></label>
@@ -2099,11 +2094,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='remote'&&<Fragment>
           <section><h3>Tailnet listener</h3>
           <p class="settings-inline-error">Any device on this tailnet reaches this daemon with no login, and an admitted device has full terminal and code-execution authority. Do not enable the tailnet listener on a shared tailnet.</p>
-          <label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /></label>
-          <p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p>
+          <label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /><small>Applies on the next daemon restart. Binds localhost plus the Tailscale address only, never every LAN interface.</small></label>
           <TailscaleConnection status={remote} />
           <dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
-          <p>Direct tailnet HTTP is encrypted in transit by Tailscale. Mobile microphone access additionally requires the private HTTPS address.</p>
+          <p>Tailnet HTTP is encrypted in transit by Tailscale; mobile microphone access additionally needs the private HTTPS address.</p>
           </section>
 
           <section><h3>Connect a phone</h3>
@@ -2134,7 +2128,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; swe-mux only configures private tailnet access.</p>}
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile access':'Enable secure mobile access'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure address</a>}<button onClick={()=>{void api<RemoteStatus>('GET','/api/remote/status').then(setRemote);void api<FirewallStatus>('GET','/api/remote/firewall').then(setFirewall)}}>Recheck</button></div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
-          <p>No public Funnel access is enabled. Regular mobile access remains available at the direct 100.x tailnet URL; Tailscale access policy controls which devices can connect.</p>
+          <p>No public Funnel access is ever enabled; Tailscale access policy controls which devices connect.</p>
           </section>
 
           <section><h3>Phone DNS</h3>
@@ -2161,8 +2155,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               because this is where you already are when a change has not appeared.
               Each is session-preserving: none of them reaps a live agent or terminal. */}
           <section><h3>Rebuild and reload</h3>
-          <p>Every one of these keeps live sessions: the PTY supervisor owns them and outlives the daemon and the app. None of them is a way to stop swe-mux.</p>
-          <div class="settings-config-actions"><div><p><strong>Reload UI</strong> refreshes the page. <strong>Reload daemon</strong> restarts the backend. <strong>Rebuild + redeploy</strong> updates the frozen desktop app.</p></div>
+          <div class="settings-config-actions"><div><p>Every one of these keeps live sessions. <strong>Reload UI</strong> refreshes the page, <strong>Reload daemon</strong> restarts the backend, <strong>Rebuild + redeploy</strong> updates the frozen desktop app.</p></div>
             <div>
               <button disabled={!appCommand('ui.reload')} onClick={()=>runAppCommand('ui.reload')}>Reload UI</button>
               <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
@@ -2187,9 +2180,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               earlier: "collect a bundle" is what you do when you are going to ask
               somebody, and this is asking somebody. */}
           {onLaunchConfigurator&&<section><h3>Ask an agent about this install</h3>
-          <p>Starts the default agent against swe-mux with access to its settings inventory, automation graph, and health report. Changes still require specific approval.</p>
+          <p>Starts the default agent against swe-mux with its settings inventory, automation graph, and health report. Changes still require specific approval.</p>
           <div class="theme-actions"><button class="primary" onClick={()=>{onClose();onLaunchConfigurator()}}>Launch the configurator</button></div>
-          <p class="profile-hint">It runs as an ordinary session in the current Project, so it appears in the sidebar, can be interrupted, and can be closed like any other. Set which agent it uses under Harnesses → Default harness.</p>
+          <p class="profile-hint">Runs as an ordinary session in the current Project. Which agent it uses is Harnesses → Default harness.</p>
           </section>}
 
           <section><h3>Export diagnostics</h3>
@@ -2210,11 +2203,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
           </section><section><SessionRowSettings /></section><section>
-          <h3>Side panel tabs</h3>
+          <h3>Right sidebar</h3>
           <label>Drawer tabs<Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
           <label>Right rail<Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
-          <p>The drawer's tab strips and the always-visible desktop rail keep independent icon or title modes.</p>
-          </section><section><h3>Visible panels</h3>
           <div class="drawer-tab-visibility" role="group" aria-label="Visible side panels">{DRAWER_TABS.map(tab=>{
             const shown=!drawerHiddenTabs.includes(tab.id)
             const blocked=shown&&!canHideDrawerTab(drawerHiddenTabs,tab.id)
@@ -2224,18 +2215,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             </label>
           })}</div>
           <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>Show all panels</button></div>
-          <p>Hides panels from tab strips and the desktop rail without changing their arrangement. Commands and menus can still open them. Stored on this device.</p>
+          <p>Unchecked panels leave the tab strips and the rail without losing their arrangement; commands and menus can still open them. Stored on this device.</p>
           </section><section><h3>Interface scale</h3>
           <label>Desktop interface scale<Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
-          <p>The desktop browser and the phone keep separate scales, because they rarely want the same density. Both are editable from either device, so you can size the phone from here rather than on the phone. A window picks its value by width, at the same point the mobile layout takes over, so a desktop window dragged narrow adopts the mobile scale.</p>
-          <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Text editor</strong>.</p>
+          <p><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>-</kbd>, and <kbd>Ctrl</kbd>+<kbd>0</kbd> also drive the active value. The note editor keeps its own typography under <strong>Text editor</strong>.</p>
           </section><section><h3>Rail density</h3>
           <label data-setting="rail_density_desktop">Desktop rail density<Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <label data-setting="rail_density_mobile">Mobile rail density<Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
-          <p>How tightly the Action rail under each terminal packs its buttons: the gap between them, their height, and the padding inside and around them. It is the one strip that is on screen under every pane at once, so on a desktop showing four terminals a tighter rail is four rows of output back. Comfortable is the spacing that has always shipped, and both devices start there — this only ever takes space away, never adds it.</p>
-          <p>Split desktop/mobile like the scale above, and for a sharper reason: below Comfortable a phone's buttons fall under the 44-pixel touch target that makes them reliable to hit with a thumb. That is the trade the setting is offering rather than an oversight, and it is why the desktop is where it pays off.</p></section></Fragment>}
+          <p>How tightly the Action rail under each terminal packs its buttons. Below Comfortable, a phone's buttons drop under the 44px touch target, which is why the two devices are set separately.</p></section></Fragment>}
   </Fragment>
 
   // Rebuilt on the first keystroke of a search and then reused until the search
@@ -2250,7 +2239,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // notification panels) becomes searchable — a component vnode is a function
     // reference, not markup. Those harvests are kept for the page session, so a
     // tab reached once stays fully searchable from every other tab afterwards.
-    const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors):not(.settings-section-rail)')
+    const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors)')
     if(mounted?.length){
       const index=settingsTabs.findIndex(tab=>tab.id===activeTab)
       const label=settingsTabs[index]?.label||activeTab
@@ -2281,26 +2270,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     else if(event.key==='ArrowUp'){event.preventDefault();setHighlight((activeResult-1+searchResults.length)%searchResults.length)}
     else if(event.key==='Enter'){event.preventDefault();openResult(searchResults[activeResult])}
   }
+  // One search box, drawn in the place each layout reads first: inline in the header on
+  // a phone, above the section list on a desktop — beside the navigation it drives.
+  const searchBox = <div class="settings-search">
+    <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={searchResults.length>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
+    {!!query.trim()&&<div id="settings-search-results" class="settings-search-results" role="listbox" aria-label="Search results">
+      {searchResults.length?searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{entry.tabLabel}{entry.section?` · ${entry.section}`:''}</small></button>):<p>No setting matches “{query.trim()}”.</p>}
+    </div>}
+  </div>
   return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label="Settings">
     <header>{navTrigger}{heading}
-      <div class="settings-search">
-        <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={searchResults.length>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
-        {!!query.trim()&&<div id="settings-search-results" class="settings-search-results" role="listbox" aria-label="Search results">
-          {searchResults.length?searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{entry.tabLabel}{entry.section?` · ${entry.section}`:''}</small></button>):<p>No setting matches “{query.trim()}”.</p>}
-        </div>}
-      </div>
+      {narrow&&searchBox}
       <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     {!!query.trim()&&<div class="settings-search-scrim" onPointerDown={()=>setQuery('')} />}
     <main class="settings-body">
-      {tabNav}
+      {narrow?tabNav:<div class="settings-nav-col">{searchBox}{tabNav}</div>}
       <div class="settings-content">
-        {pagedSubpages
-          ?<nav class="settings-subpage-nav" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} pages`}>
-            {declaredSubpages.map(page=><button type="button" key={page.id} class={selectedSubpage===page.id?'active':''} aria-current={selectedSubpage===page.id?'page':undefined} onClick={()=>selectSubpage(activeTab,page.id)}>{page.label}</button>)}
-          </nav>
-          :railSections.length>=SECTION_RAIL_MIN&&<nav class="settings-section-rail" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} sections`}>
-            {railSections.map(section=><button type="button" key={section.id} class={activeSection===section.id?'active':''} aria-current={activeSection===section.id?'true':undefined} onClick={()=>scrollToSection(section.id)}>{section.label}</button>)}
-          </nav>}
         {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3>Validation errors</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
 
         {tabContent(activeTab)}

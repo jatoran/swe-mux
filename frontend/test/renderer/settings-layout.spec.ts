@@ -201,6 +201,19 @@ test('wide: the section list is the docked column it always was', async ({ page 
   expect(g.groups).toEqual(['Workspace', 'Agents', 'Interface', 'System'])
   expect(g.headingText).toContain('CONFIG::V6')
   expect(g.headingText).toContain('Settings')
+
+  // Wide, the search sits above the section list rather than in the header: it drives
+  // that list, and the header spends the width on nothing else.
+  const search = await page.evaluate(() => {
+    const inCol = document.querySelector('.settings-nav-col>.settings-search input')
+    const inHeader = document.querySelector('.settings-panel>header .settings-search')
+    const nav = document.querySelector('.settings-tabs')!.getBoundingClientRect()
+    const box = inCol?.getBoundingClientRect()
+    return { inCol: !!inCol, inHeader: !!inHeader, above: box ? box.bottom <= nav.top + 0.5 : false }
+  })
+  expect(search.inCol).toBe(true)
+  expect(search.inHeader).toBe(false)
+  expect(search.above).toBe(true)
 })
 
 test('the active Settings tab adds no marker or indentation', async ({ page }) => {
@@ -233,14 +246,18 @@ test('the active Settings tab adds no marker or indentation', async ({ page }) =
   expect(after[0].textLeft).toBe(after[1].textLeft)
 })
 
-test('every paged Settings tab exposes working page tabs in the content pane', async ({ page }) => {
+test('every paged Settings tab exposes working page links in the sidebar', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')
-  const pagedTabs=['General','Projects','Terminals','Processes','Harnesses','Accounts','Prompt queue','Appearance','Input','Text editor','Voice','Remote','Diagnostics']
+  // Only genuinely long tabs are paged; everything else is one scrolling column whose
+  // sections the sidebar lists as anchors while the tab is active.
+  const pagedTabs=['Accounts','Prompt queue','Input','Voice']
 
   for(const tab of pagedTabs){
-    await page.getByRole('tab',{name:tab,exact:true}).click()
-    const nav=page.locator('.settings-subpage-nav')
+    const row=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:new RegExp(`^${tab}$`)})})
+    await row.locator('[role="tab"]').click()
+    // Selecting the tab expands its pages without touching the chevron.
+    const nav=row.locator('xpath=following-sibling::div[contains(@class,"settings-subtabs")][1]')
     await expect(nav).toBeVisible()
     const pages=await nav.locator('button').allTextContents()
     expect(pages.length,`${tab} must expose more than one page`).toBeGreaterThan(1)
@@ -252,6 +269,32 @@ test('every paged Settings tab exposes working page tabs in the content pane', a
       expect((await visible.first().innerText()).trim(),`${tab} > ${label} rendered blank`).not.toBe('')
     }
   }
+})
+
+test('an unpaged tab lists its rendered sections in the sidebar, and the chevron collapses them', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  const row=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:/^Remote$/})})
+  await row.locator('[role="tab"]').click()
+
+  const nav=row.locator('xpath=following-sibling::div[contains(@class,"settings-subtabs")][1]')
+  await expect(nav).toBeVisible()
+  const sections=await nav.locator('button').allTextContents()
+  expect(sections).toContain('Tailnet listener')
+  expect(sections.length).toBeGreaterThan(2)
+
+  // The content pane carries no second copy of this navigation.
+  await expect(page.locator('.settings-subpage-nav')).toHaveCount(0)
+  await expect(page.locator('.settings-section-rail')).toHaveCount(0)
+
+  // Explicit collapse is the only collapse: the chevron folds the tree and it stays
+  // folded; selecting the tab again re-expands it.
+  await row.locator('.settings-tab-expand').click()
+  await expect(nav).toHaveCount(0)
+  await page.locator('.settings-tabs [role="tab"]',{hasText:/^General$/}).click()
+  await expect(nav).toHaveCount(0)
+  await row.locator('[role="tab"]').click()
+  await expect(nav).toBeVisible()
 })
 
 test('every tab renders, and every marked control is really in its DOM', async ({ page }) => {

@@ -1,8 +1,8 @@
 import { expect, test, type Page } from 'playwright/test'
 
 // What a deep link from a gated surface has to actually do, measured against the shipped
-// settings geometry: land the control inside the scroller, clear of the sticky section rail
-// that covers the top of it, on a desktop panel and on a phone-width one alike.
+// settings geometry: land the control inside the scroller, clear of any sticky chrome at
+// the top of it, on a desktop panel and on a phone-width one alike.
 
 const DESKTOP = { width: 1280, height: 800 }
 const MOBILE = { width: 393, height: 844 }
@@ -42,7 +42,7 @@ const reveal = (page: Page, setting: string, coarse = false) =>
   }, [setting, coarse] as [string, boolean])
 
 for (const [label, viewport] of [['desktop', DESKTOP], ['mobile', MOBILE]] as const) {
-  test(`a revealed setting lands in view and clear of the sticky rail on ${label}`, async ({ page }) => {
+  test(`a revealed setting lands in view on ${label}`, async ({ page }) => {
     await page.setViewportSize(viewport)
     await page.goto('/setting-reveal-harness.html')
 

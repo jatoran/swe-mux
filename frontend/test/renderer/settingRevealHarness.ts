@@ -1,10 +1,9 @@
 // The settings panel's real scrolling shape, for measuring what a deep link actually does.
 //
-// `revealSetting` promises three things that only a browser can check: the control ends up
-// inside the scroller's viewport, it is not left under the sticky section rail that covers the
-// top of that viewport, and the same holds on a phone, where the panel is full-screen and the
-// rail scrolls horizontally instead of wrapping. The structure and class names below are the
-// panel's own (`Settings.tsx`, `style.css`), so the geometry under test is the shipped one.
+// `revealSetting` promises two things that only a browser can check: the control ends up
+// inside the scroller's viewport, and the same holds on a phone, where the panel is
+// full-screen. The structure and class names below are the panel's own (`Settings.tsx`,
+// `style.css`), so the geometry under test is the shipped one.
 //
 // `?defer=1` withholds the target for 400ms, which is the cold-open case: the panel is asked
 // to reveal a control before its data has arrived and the control has not rendered yet.
@@ -52,9 +51,6 @@ root.innerHTML = `
           ${[...Array(8)].map((_, index) => `<button role="tab">Tab ${index + 1}</button>`).join('')}
         </nav>
         <div class="settings-content">
-          <div class="settings-section-rail">
-            ${[...Array(6)].map((_, index) => `<button>Section ${index + 1}</button>`).join('')}
-          </div>
           ${section(1)}${section(2)}${section(3)}
           ${section(4, defer ? '' : targets)}
           ${section(5)}${section(6)}

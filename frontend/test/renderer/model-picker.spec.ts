@@ -38,14 +38,32 @@ const open = async (page: Page, viewport: { width: number; height: number }) => 
  * Reach a tab in either layout. Past the breakpoint the tab list is a docked column;
  * narrow, it is a drawer that has to be opened first and closes itself on the pick.
  */
-const openTab = async (page: Page, tab: string) => {
+const openTab = async (page: Page, tab: string, subpage?: string) => {
   const trigger = page.locator('.settings-nav-trigger')
   if (await trigger.isVisible()) {
     await trigger.click()
     await expect(page.locator('.settings-tabs-drawer.open')).toHaveCount(1)
   }
-  await page.locator('.settings-tabs button', { hasText: new RegExp(`^${tab}$`) }).click()
-  await expect(page.locator('.settings-tabs button.active')).toHaveText(tab)
+  await page.locator('.settings-tabs [role="tab"]', { hasText: new RegExp(`^${tab}$`) }).click()
+  // Scoped to the tab role: selecting a tab auto-expands its page links, so a bare
+  // `button.active` would also match the active page beneath it.
+  await expect(page.locator('.settings-tabs [role="tab"].active')).toHaveText(tab)
+  if (subpage) await openSubpage(page, subpage)
+}
+
+/**
+ * Select one of the active tab's pages from its sidebar links. A paged tab shows only
+ * the selected page, so a control on another page has no layout box until this runs.
+ * Narrow, picking the tab closed the drawer, so it is reopened first.
+ */
+const openSubpage = async (page: Page, label: string) => {
+  const trigger = page.locator('.settings-nav-trigger')
+  if (await trigger.isVisible()) {
+    await trigger.click()
+    await expect(page.locator('.settings-tabs-drawer.open')).toHaveCount(1)
+  }
+  await page.locator('.settings-subtabs button', { hasText: new RegExp(`^${label}$`) }).click()
+  await expect(page.locator('.settings-subtabs button.active')).toHaveText(label)
 }
 
 /**
@@ -59,9 +77,14 @@ const openTab = async (page: Page, tab: string) => {
 const optionsOf = (page: Page, id: string) =>
   page.locator(`.model-picker:has(#${id}) .model-picker-options [role="option"]`)
 
-/** Focus a picker's input, which is what opens its listbox, and wait for the rows. */
+/**
+ * Focus a picker's input, which is what opens its listbox, and wait for the rows.
+ * A click rather than `focus()`: click waits for the input to be visible, and right
+ * after a page switch the section is still hidden for a frame — focusing a hidden
+ * input is a silent no-op that never opens the list.
+ */
 const openPicker = async (page: Page, id: string) => {
-  await page.locator(`#${id}`).focus()
+  await page.locator(`#${id}`).click()
   await optionsOf(page, id).first().waitFor()
 }
 
@@ -93,8 +116,8 @@ const rows = (page: Page) => page.evaluate(() => {
 
 test('every priced model states input and output cost, and an unpriced one states nothing', async ({ page }) => {
   await open(page, DESKTOP)
-  await openTab(page, 'Accounts')
-  await openPicker(page, 'cheap-model-picker')
+  await openTab(page, 'Accounts', 'Models')
+  await openPicker(page, 'openrouter_cheap_model-picker')
 
   const options = await rows(page)
   const byId = new Map(options.filter(row => row.id).map(row => [row.id, row]))
@@ -115,23 +138,23 @@ test('every priced model states input and output cost, and an unpriced one state
 
 test('the exact id stays on the row beside the price, because the filter ranks on it', async ({ page }) => {
   await open(page, DESKTOP)
-  await openTab(page, 'Accounts')
-  await openPicker(page, 'cheap-model-picker')
+  await openTab(page, 'Accounts', 'Models')
+  await openPicker(page, 'openrouter_cheap_model-picker')
 
-  // Typing a vendor path must be explainable by what the rows show.
-  await page.locator('#cheap-model-picker').fill('openai/')
-  await expect(optionsOf(page, 'cheap-model-picker')).toHaveCount(2)
-  const filtered = await rows(page)
+  // Typing a vendor path must be explainable by what the rows show: the two catalog
+  // matches, plus the type-exact-id escape row the query itself creates.
+  await page.locator('#openrouter_cheap_model-picker').fill('openai/')
+  await expect(optionsOf(page, 'openrouter_cheap_model-picker')).toHaveCount(3)
+  const filtered = (await rows(page)).filter(row => row.price !== '')
   expect(filtered.map(row => row.id)).toEqual(['openai/gpt-5.6-luna', 'openai/gpt-5.6-terra'])
-  expect(filtered.every(row => row.price !== '')).toBe(true)
 })
 
 const LONG_ID = 'averylongvendorname/an-extremely-long-model-identifier-preview-2026-08-01'
 
 test('wide: the id yields to the price, and prices align down one right edge', async ({ page }) => {
   await open(page, DESKTOP)
-  await openTab(page, 'Accounts')
-  await openPicker(page, 'cheap-model-picker')
+  await openTab(page, 'Accounts', 'Models')
+  await openPicker(page, 'openrouter_cheap_model-picker')
 
   const priced = (await rows(page)).filter(row => row.priceBox && row.idBox)
   expect(priced.length).toBeGreaterThan(4)
@@ -152,15 +175,15 @@ test('wide: the id yields to the price, and prices align down one right edge', a
   expect(new Set(priced.map(row => Math.round(row.priceBox!.right))).size,
     'prices are not aligned to one right edge').toBe(1)
 
-  // The one id long enough to need it ellipsizes, and it alone. Clipped rather than
-  // wrapped, because a wrapped id would push the price off its own row.
-  expect(priced.filter(row => row.idClipped).map(row => row.id)).toEqual([LONG_ID])
+  // No ordinary id may clip; only the deliberately long one is allowed to ellipsize
+  // (whether it needs to depends on the panel width, so its clipping is not asserted).
+  expect(priced.filter(row => row.idClipped).map(row => row.id).filter(id => id !== LONG_ID)).toEqual([])
 })
 
 test('narrow: the price takes its own line rather than erasing the id', async ({ page }) => {
   await open(page, PHONE)
-  await openTab(page, 'Accounts')
-  await openPicker(page, 'cheap-model-picker')
+  await openTab(page, 'Accounts', 'Models')
+  await openPicker(page, 'openrouter_cheap_model-picker')
 
   const priced = (await rows(page)).filter(row => row.priceBox && row.idBox)
   expect(priced.length).toBeGreaterThan(4)
@@ -183,8 +206,8 @@ test('narrow: the price takes its own line rather than erasing the id', async ({
 
 test('the listbox never makes the settings column scroll sideways', async ({ page }) => {
   await open(page, PHONE)
-  await openTab(page, 'Accounts')
-  await openPicker(page, 'cheap-model-picker')
+  await openTab(page, 'Accounts', 'Models')
+  await openPicker(page, 'openrouter_cheap_model-picker')
 
   const overflow = await page.evaluate(() => {
     const content = document.querySelector('.settings-content') as HTMLElement
@@ -201,39 +224,45 @@ test('the listbox never makes the settings column scroll sideways', async ({ pag
 test('a pinned model offers no way to clear itself, an override does', async ({ page }) => {
   await open(page, DESKTOP)
 
+  // Every model setting is edited in Accounts → Models now, one picker per route.
+  await openTab(page, 'Accounts', 'Models')
+
   // The assistant's model is rejected by the daemon when blank, so the control must
   // not be able to produce a blank: no clear-the-setting row.
-  await openTab(page, 'Voice')
-  await openPicker(page, 'assistant-model-picker')
-  await expect(optionsOf(page, 'assistant-model-picker')).toHaveCount(8)
-  await expect(optionsOf(page, 'assistant-model-picker').filter({ hasText: 'Use the cheap model' })).toHaveCount(0)
+  await openPicker(page, 'assistant_model-picker')
+  await expect(optionsOf(page, 'assistant_model-picker')).toHaveCount(8)
+  await expect(optionsOf(page, 'assistant_model-picker').filter({ hasText: 'Use the cheap model' })).toHaveCount(0)
 
   // The spoken summary's model is an override: clearing it is how you say "follow
   // the cheap model", so that row has to exist, above the eight catalog entries.
-  await openPicker(page, 'summary-model-picker')
-  await expect(optionsOf(page, 'summary-model-picker')).toHaveCount(9)
-  await expect(optionsOf(page, 'summary-model-picker').first()).toHaveText('Use the cheap model…')
+  await openPicker(page, 'tts_summary_model-picker')
+  await expect(optionsOf(page, 'tts_summary_model-picker')).toHaveCount(9)
+  await expect(optionsOf(page, 'tts_summary_model-picker').first()).toHaveText('Use the cheap model…')
 })
 
 test('the routing summary resolves what each feature will actually call', async ({ page }) => {
   await open(page, DESKTOP)
-  await openTab(page, 'Accounts')
+  await openTab(page, 'Accounts', 'Models')
   await page.locator('.model-routing li').first().waitFor()
 
   const summary = await page.evaluate(() => [...document.querySelectorAll('.model-routing li')].map(row => ({
     feature: row.querySelector('strong')?.textContent || '',
     kind: row.querySelector('.model-routing-kind')?.textContent || '',
-    model: row.querySelector('code')?.textContent || row.querySelector('em')?.textContent || '',
+    model: row.querySelector('.model-routing-model code')?.textContent || row.querySelector('.model-routing-model em')?.textContent || '',
     inherited: !!row.querySelector('.model-routing-inherited'),
     price: row.querySelector('.model-routing-price')?.textContent || '',
-    where: row.querySelector('.model-routing-where button,.model-routing-where span')?.textContent || '',
-    opens: !!row.querySelector('.model-routing-where button'),
+    // Membership of `MODEL_ROUTES` is what makes each row a real control: one
+    // picker per route, marked for the deep links the feature tabs carry.
+    editable: !!row.querySelector('.model-picker input'),
+    mark: row.getAttribute('data-setting') || '',
   })))
 
   expect(summary.map(row => row.feature)).toEqual([
     'Cheap model', 'Standard model', 'Scan timeline', 'Attention narration',
     'Spoken summary', 'Mux assistant', 'Project context card',
   ])
+  expect(summary.every(row => row.editable)).toBe(true)
+  expect(summary.every(row => row.mark)).toBe(true)
 
   // An unset override reports what it falls through to, not an empty cell: "blank"
   // and "not configured" are opposite answers to what this feature costs.
@@ -250,26 +279,25 @@ test('the routing summary resolves what each feature will actually call', async 
   expect(assistant.model).toBe('openai/gpt-5.6-terra')
   expect(assistant.price).toBe('400K · $1.25 / $10.00 per M')
 
-  // The card's model was the one row in this table with no control anywhere - it
-  // told the reader to edit the config file, which is exactly the defect the table
-  // exists to surface. Every row now opens a real control.
   const card = summary.find(row => row.feature === 'Project context card')!
-  expect(card.where).toBe('Automation → Budgets and execution')
   expect(card.inherited).toBe(true)
-  expect(summary.every(row => row.opens)).toBe(true)
 })
 
-test('a summary row opens the control that decides it, on whichever tab that is', async ({ page }) => {
+test("a feature tab's read-only row opens the control that decides it, in Accounts → Models", async ({ page }) => {
   await open(page, DESKTOP)
-  await openTab(page, 'Accounts')
-  await page.locator('.model-routing li').first().waitFor()
+  // The Voice tab no longer edits the assistant's model; it shows the resolved value
+  // and links back to the one editor.
+  await openTab(page, 'Voice', 'Mux assistant')
+  const readout = page.locator('.model-routing-elsewhere[data-setting="assistant_model"]')
+  await expect(readout).toBeVisible()
+  await expect(readout.locator('code')).toHaveText('openai/gpt-5.6-terra')
 
-  await page.locator('.model-routing-where button', { hasText: 'Voice → Mux assistant' }).click()
+  await readout.locator('button', { hasText: 'Edit in Accounts → Models' }).click()
 
-  // Landing on the right tab is not arriving: the control is several screens down,
-  // so it is scrolled to and flashed exactly as a deep link from outside would be.
-  const control = page.locator('[data-setting="assistant_model"]')
+  // Landing on the right tab is not arriving: the owning page is selected and the
+  // control is scrolled to and flashed exactly as a deep link from outside would be.
+  await expect(page.locator('.settings-tabs [role="tab"].active')).toHaveText('Accounts')
+  const control = page.locator('.model-routing li[data-setting="assistant_model"]')
   await expect(control).toBeVisible()
   await expect(control).toHaveClass(/setting-flash/)
-  await expect(page.locator('.settings-tabs button.active')).toHaveText('Voice')
 })

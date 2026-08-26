@@ -41,6 +41,11 @@ export type SettingsSubpage = { id:string; label:string }
 /**
  * Long Settings tabs are real page collections, not anchors into one document.
  *
+ * Only tabs that are genuinely several screens long earn pages: each declared page must
+ * itself be substantial, because a page holding two controls costs a navigation step to
+ * show less than a glance would. Every other tab renders as one scrolling column, and
+ * the sidebar lists its sections as scroll anchors while it is the active tab.
+ *
  * IDs match `sectionSlug(label)`, which is also stamped onto the rendered `<h3>`. The
  * explicit registry lets the sidebar expose a tab's pages before that tab has mounted,
  * while the renderer audit below still catches a heading that drifts from its declaration.
@@ -51,20 +56,10 @@ function subpageSlug(label:string):string {
 const subpages = (...labels:string[]):SettingsSubpage[] => labels.map(label=>({id:subpageSlug(label),label}))
 
 export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
-  general:subpages('Defaults','Getting started tutorial','Configuration file'),
-  projects:subpages('New project location','Project setup commands','Global project ignores','Project resources'),
-  terminals:subpages('Rendering','Scrollback','Default profile','Launch profiles'),
-  processes:subpages('Process evidence','Ghost windows','Detection timeline'),
-  harnesses:subpages('Default harness','Harnesses','Conversation history'),
   accounts:subpages('Provider accounts','Model provider','Models'),
   queue:subpages('Overview','Auto-delivery','Approvals','Agent messaging','Agent actuation','Queue history'),
-  automation:subpages('Automation workspace'),
-  appearance:subpages('Theme','Session rows','Side panel tabs','Visible panels','Interface scale','Rail density'),
   input:subpages('Pointer','Mobile terminal','Clipboard history','Touch gestures','Keyboard shortcuts'),
-  notes:subpages('Note editor','Typography','Touch command rail','Editor shortcuts'),
   voice:subpages('Read aloud','Talk & dictation','Voice commands','Mux assistant','Diagnostics'),
-  remote:subpages('Tailnet listener','Connect a phone','Firewall','WSL bridge','Secure HTTPS access','Phone DNS'),
-  diagnostics:subpages('System prerequisites','Rebuild and reload','Logging','Ask an agent about this install','Export diagnostics'),
 }
 
 const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
@@ -187,11 +182,11 @@ export const rememberSection = (tab:SettingsTab,section:string):void => {
 export type SettingsRailSection = {id:string;label:string}
 
 /**
- * Fewer sections than this and a rail costs a row to say what one glance already
- * shows, so short tabs render none. Tabs are not annotated with whether they get
- * a rail — the count decides, from what the tab actually rendered.
+ * Fewer sections than this and listing them is a row spent saying what one glance
+ * already shows, so shorter tabs list none. Tabs are not annotated with whether they
+ * get section links — the count decides, from what the tab actually rendered.
  */
-export const SECTION_RAIL_MIN = 4
+export const SECTION_RAIL_MIN = 2
 
 export const sectionSlug = (label:string):string =>
   label.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'section'

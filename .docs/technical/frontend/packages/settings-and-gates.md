@@ -40,16 +40,17 @@ Browser-free: the tabs and their four contiguous groups, declared subpages, deep
 It is split out of the component because none of it needs a renderer, and the rules that decide *where a setting is* are worth asserting without mounting a panel of this size.
 A group is a run of the array rather than a declared membership, and `tabForSection` matches a tab's own label before consulting its alias table, so neither can drift the way a hand-maintained heading-to-tab map does.
 
-### Separate pages and expandable navigation
+### Separate pages and the sidebar as sole navigation
 
-`settingsSubpages` declares the pages of long tabs before those tabs mount.
+`settingsSubpages` declares the pages of the genuinely long tabs (Accounts, Prompt queue, Input, Voice) before those tabs mount; every other tab is one scrolling column.
 `settingsSubpageId` maps related implementation headings to the user-facing page that owns them.
-The desktop column and mobile slide-in sidebar both render an expansion button beside a paged tab and its nested page links below it.
-Clicking the tab navigates to its remembered page; clicking the expansion button changes only the sidebar tree.
-The content pane repeats the page links in a sticky horizontal row for direct local navigation.
+The sidebar is the only in-tab navigation: the desktop column and the mobile slide-in drawer both list a paged tab's pages below it, and the *active* unpaged tab's rendered sections as scroll anchors (from `SECTION_RAIL_MIN` sections, scroll-spy highlighted).
+The content pane carries no duplicate row of page links.
+Arriving on a tab by any route expands its links; only the chevron collapses them, and never automatically.
+Clicking the tab navigates to its remembered page.
 Only the selected page is visible, but search and deep links select its owner before calling `revealSetting`, so hidden pages remain addressable.
 Reference bodies may still fold inside a page behind `<details class="settings-disclosure">`.
-Settings → Voice is the worked case, pinned by `test/renderer/voice-settings.spec.ts`.
+Settings → Voice is the worked case, pinned by `test/renderer/voice-settings.spec.ts`; the sidebar and page behavior is pinned by `test/renderer/settings-layout.spec.ts`.
 
 ### Harnesses and the WSL bridge
 

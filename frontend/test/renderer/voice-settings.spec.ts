@@ -32,7 +32,7 @@ const PAGES=['Read aloud','Talk & dictation','Voice commands','Mux assistant','D
 test('Voice exposes capability pages and renders only the selected page', async ({ page }) => {
   await open(page)
   await expect(voicePages(page).locator('button')).toHaveText(PAGES)
-  await expect(page.locator('.settings-subpage-nav button.active')).toHaveText('Read aloud')
+  await expect(voicePages(page).locator('button.active')).toHaveText('Read aloud')
   await expect(page.locator('.settings-content > section:visible > h3')).toHaveText(['Read aloud','TTS provider','Spoken summary','Clip storage'])
   await voicePages(page).locator('button',{hasText:'Talk & dictation'}).click()
   await expect(page.locator('.settings-content > section:visible > h3')).toHaveText(['Talk & dictation'])

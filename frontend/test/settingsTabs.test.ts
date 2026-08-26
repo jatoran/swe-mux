@@ -95,10 +95,12 @@ test('a rail of one entry is never drawn as navigation', () => {
   assert.ok(SECTION_RAIL_MIN>=2,'a rail of one entry is never navigation')
 })
 
-test('declared subpages are unique and belong to live tabs', () => {
+test('declared subpages are unique, plural, and belong to live tabs', () => {
   for(const [tab,pages] of Object.entries(settingsSubpages)){
     assert.ok(ids.includes(tab),`${tab} is not a live Settings tab`)
-    assert.ok(pages?.length,`${tab} declares an empty page list`)
+    // A single-page declaration is not a page collection: the sidebar would draw a
+    // chevron over one lone entry saying nothing the tab itself does not.
+    assert.ok((pages?.length||0)>1,`${tab} must declare more than one page`)
     assert.equal(new Set(pages?.map(page=>page.id)).size,pages?.length,`${tab} page ids must be unique`)
   }
 })

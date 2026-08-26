@@ -756,25 +756,33 @@ Its rules, and what each one is defending:
   device that last used `workspace` reopens on Git instead of reading as the panel forgetting.
   The panel is opened, scanned, and closed many times in a session, and landing on General
   every time re-charges the navigation that reached the tab someone actually lives in.
-- Long Settings tabs are **collections of separate pages**, not one document with scroll anchors.
-  Only the selected page is visible, which prevents unrelated controls from competing for attention and removes the need to scroll through an entire subsystem.
-  `settingsSubpages` declares the pages before their tab mounts, and `settingsSubpageId` maps related implementation headings to one user-facing capability page.
-  Search and deep links select the owning page before revealing a control, so hidden pages remain fully addressable.
-  The Settings sidebar renders an expansion button beside every paged tab.
-  Clicking the tab opens its remembered page, while clicking the expansion button reveals or hides that tab's page links in place without navigating.
-  The same page links remain visible as a horizontal row at the top of the content pane, so desktop navigation does not require returning to the sidebar.
-  The same expandable hierarchy is used in the mobile slide-in sidebar, so phones expose the same information architecture as desktop instead of replacing it with a horizontal strip.
-  Short or dynamically composed tabs may still render as one page.
-- **A section is one `<section>`, and a section that is reference may fold its body.** The rail
-  is built from headings, so a tab can satisfy it while still rendering as one unbroken column;
-  the borders between concerns come from the section boxes, and Automation, Remote, and Voice all
-  draw one box per heading. Where a section is *reference* rather than a control someone came to
-  change — a full command catalog, a diagnostic readout, a one-time setup — its body goes behind
-  a `<details class="settings-disclosure">` while its `<h3>` stays outside. That split is what
-  keeps the rail entry, the search index, and the scroll-spy intact while the tab stops paying
-  screen for something read twice a year. `data-setting` marks stay outside a collapsed
-  disclosure by convention: `revealSetting` opens the disclosures above its target, but a switch
-  a gate just promised should be on screen when the panel lands, not behind one more state change.
+- **The sidebar is the panel's only in-tab navigation, and only genuinely long tabs are pages.**
+  A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Input, Voice).
+  A page holding two controls costs a navigation step to show less than a glance would - which is how the Projects tab briefly grew a "Project resources" page that rendered two sentences and no control.
+  Every other tab renders as one scrolling column, and while it is the *active* tab the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
+  There is no second copy of this navigation in the content pane: the horizontal row it used to carry wrapped or overflowed the moment a tab had real pages, and it duplicated a sidebar one glance away.
+  For paged tabs only the selected page is visible; `settingsSubpageId` maps related implementation headings to one user-facing capability page, and search and deep links select the owning page before revealing a control, so hidden pages remain fully addressable.
+  **Arriving on a tab by any route - sidebar click, search result, deep link - expands its page links in the sidebar.**
+  The chevron beside the tab is the only thing that collapses them, and nothing collapses them automatically.
+  Clicking the tab itself opens its remembered page.
+  The same expandable hierarchy is used in the mobile slide-in sidebar, so phones expose the same information architecture as desktop.
+- **A section is one `<section>`, and a section that is reference may fold its body.** The
+  sidebar's section list is built from headings, so a tab can satisfy it while still rendering
+  as one unbroken column; the borders between concerns come from the section boxes, and
+  Automation, Remote, and Voice all draw one box per heading. Where a section is *reference*
+  rather than a control someone came to change — a full command catalog, a diagnostic readout,
+  a one-time setup — its body goes behind a `<details class="settings-disclosure">` while its
+  `<h3>` stays outside. That split is what keeps the sidebar entry, the search index, and the
+  scroll-spy intact while the tab stops paying screen for something read twice a year.
+  `data-setting` marks stay outside a collapsed disclosure by convention: `revealSetting` opens
+  the disclosures above its target, but a switch a gate just promised should be on screen when
+  the panel lands, not behind one more state change.
+- **Help text is one sentence, or it is a fold.** A control may carry one short `<small>` in
+  its control column, and a section at most one short intro `<p>`; rationale longer than that
+  goes behind a `settings-disclosure` or into `.docs/`. The panel is a control surface, not a
+  manual — stacked paragraphs between controls are the defect this rule exists to stop
+  recurring, and a hint's job is the constraint the control cannot show (units, backstop
+  values, when it takes effect), not the design history of the setting.
 - **Voice is the worked example, because it was the worst case.** One `<section>` carried eight
   headings — read-aloud policy, engine, budgets, microphone, seventeen phrase rows, the whole
   spoken-command catalog, a latency readout, a tester, mobile setup — with the pronunciation
@@ -839,10 +847,12 @@ Its rules, and what each one is defending:
   use time applies on save, one whose owner is constructed at startup says so in its own help
   text and is in `RESTART_FIELDS`, and `tests/test_settings_hot_apply.py` holds the four that
   had to gain hot-apply wiring to keep the first claim true.
-- The panel header carries a search box that reaches every setting in every tab, including
-  tabs that are not mounted. Picking a result switches to its tab, scrolls the control into
-  view, and flashes it; `Ctrl`/`Cmd`+`F` focuses the box while the panel is open, arrows and
-  Enter drive the result list, and Escape unwinds the list before it closes the panel.
+- The panel carries a search box that reaches every setting in every tab, including tabs
+  that are not mounted. Wide, it sits at the top of the nav column, above the section list
+  it drives; narrow, it is inline in the panel header. Picking a result switches to its tab,
+  scrolls the control into view, and flashes it; `Ctrl`/`Cmd`+`F` focuses the box while the
+  panel is open, arrows and Enter drive the result list, and Escape unwinds the list before
+  it closes the panel.
 - That index is derived from the same JSX that renders the form, so a setting added or renamed
   in `Settings.tsx` is searchable with nothing else to declare. Each tab's markup comes from one
   function taking the tab id, and the index walks the *vnode* tree it returns rather than the
@@ -854,9 +864,9 @@ Its rules, and what each one is defending:
   goes missing entirely. Labels, headings, buttons, option labels, placeholders, and the help
   paragraph following a control are all matched on; the index is rebuilt when a search begins
   or when the config it came from changes, never per keystroke.
-  The section rail is excluded from the index and from the jump's candidate scan alike: its
-  buttons repeat every heading, so indexing them would duplicate results and counting them as
-  candidates would shift the occurrence a recorded result points at.
+  The index and the jump's candidate scan both cover only `.settings-content`, so the
+  sidebar's page and section links — which repeat every heading — can never duplicate a
+  result or shift the occurrence a recorded result points at.
 - Every OpenRouter model setting uses the same filtering combobox, wherever it lives.
   It accepts typed queries and filters the cached catalog live by model name or exact ID, and its
   listbox scrolls inside a bounded desktop or mobile height instead of expanding to the height of
@@ -2275,7 +2285,7 @@ Its rules, and what each one is defending:
 - **The way back is where the way out was.**
   Right-clicking any tab — or long-pressing one on mobile, which already opens this menu — offers `Hide <tab>` flat, and a `Panels · N of 14` group holding the full checklist and `Show all`.
   The count is on the group header, so a rail missing something says so without being opened.
-  The same checklist is mirrored in Settings → Appearance → Visible panels, which is the reachable path on mobile and the searchable one everywhere.
+  The same checklist is mirrored in Settings → Appearance → Right sidebar, which is the reachable path on mobile and the searchable one everywhere.
   Settings alone would have been the wrong home: the rail is where a missing tab is noticed, and a settings page is not where anyone looks for chrome they removed by right-clicking.
 - **Hiding the last remaining tab is refused rather than allowed and recovered from**, because the restore control lives on the tab strip.
   The bound counts the hidden set alone and ignores structural availability, so the answer does not change with the focused session and Settings can render the identical checklist without one.
