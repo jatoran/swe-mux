@@ -43,17 +43,19 @@ PROJECT_CONFIG_FIELDS = {
     # the human switched off stays off.
     "scan_timeline_auto_enable",
     # Phase 7.6: the authority level for agent session control in this Project,
-    # once the `session_control` automation is opted in. "draft" (the default)
-    # makes an agent interrupt/end write an inert request a human approves;
-    # "granted" lets it act directly inside the daemon's bounds. The on/off is
-    # the automation opt-in; this only distinguishes draft from granted.
+    # once the `session_control` automation is opted in (itself on by default
+    # since 2026-08-25). "granted" (the default when unset) lets an agent act
+    # directly inside the daemon's bounds; "draft" makes an interrupt/end write
+    # an inert request a human approves. The on/off is the automation opt-in;
+    # this only distinguishes draft from granted.
     "session_control_grant",
     # Phase 7.6 follow-on: the authority level for agent-initiated spawn INTO this
     # Project (`mux.requestSpawn`). Same shape as session_control_grant and gated
-    # by the same `session_control` automation. "draft" (the default) keeps the
-    # Phase 5 behaviour - the call writes an inert Fleet Queue request a human
-    # approves; "granted" lets an agent create a session here directly, inside a
-    # per-origin budget. Authority is by target Project, as for interrupt/end.
+    # by the same `session_control` automation. "granted" (the default when
+    # unset, flipped 2026-08-25) lets an agent create a session here directly,
+    # inside a per-origin budget; "draft" restores the Phase 5 behaviour - the
+    # call writes an inert Fleet Queue request a human approves. Authority is by
+    # target Project, as for interrupt/end.
     "spawn_grant",
     # Phase 14: the authority level for agent-initiated landing of a worktree branch
     # into this Project's trunk, once the `land_queue` automation is opted in.
@@ -64,15 +66,15 @@ PROJECT_CONFIG_FIELDS = {
     # acts on a session, this one moves a repository's trunk.
     "land_grant",
     # Whether an agent in another session may have a message delivered into a
-    # *running* turn here (`mux.notify(delivery="now")`). "off" (the default) is
-    # the behaviour that existed before the mode did: every agent message waits
-    # for this session's queue and its readiness contract. "granted" additionally
-    # allows a mid-turn write, still only when the readiness tracker's separate
-    # interject predicate is satisfied and the receiving session has not opted
-    # out for its run. Deliberately its own field rather than a level of
-    # `session_control_grant`: being written to mid-turn is a property of a
-    # working repository, and reusing an actuation grant for it would grant it to
-    # every Project that wanted interrupt/end.
+    # *running* turn here (`mux.notify(delivery="now")`). "granted" (the default
+    # when unset, flipped 2026-08-25) allows a mid-turn write, still only when
+    # the readiness tracker's separate interject predicate is satisfied and the
+    # receiving session has not opted out for its run. "off" restores the
+    # behaviour that existed before the mode did: every agent message waits for
+    # this session's queue and its readiness contract. Deliberately its own
+    # field rather than a level of `session_control_grant`: being written to
+    # mid-turn is a property of a working repository, and reusing an actuation
+    # grant for it would grant it to every Project that wanted interrupt/end.
     "interject_grant",
     # Which tool-permission requests mux may answer for sessions in this Project
     # while a conversation holds the `allowlisted` mode, as `Tool` /
@@ -819,41 +821,52 @@ def project_automations(root: str | Path) -> dict[str, bool]:
 def project_session_control_grant(root: str | Path) -> str:
     """The agent-session-control authority level for a Project.
 
-    Returns "draft" (the default when the `session_control` automation is on but
-    the field is unset) or "granted". "off" is not returned here: whether the
+    Returns "draft" or "granted"; "off" is not returned here: whether the
     capability exists at all is the automation opt-in, which the caller checks
-    separately. A malformed or unreadable config falls back to the safe default.
+    separately. Unset defaults to "granted" (flipped 2026-08-25 - this install
+    runs default-enabled, and a Project lowers it by writing "draft"). A
+    malformed or *unreadable* config is different from an absent field and
+    falls back to the fail-closed "draft": corruption must never widen what an
+    explicit "draft" narrowed.
     """
-    path = Path(root) / ".swe-mux" / "config.toml"
-    try:
-        if path.is_file():
-            values = parse_project_config(path.read_bytes())
-            grant = values.get("session_control_grant")
-            if grant in SESSION_CONTROL_GRANTS:
-                return str(grant)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
-        pass
-    return "draft"
+    return _authority_grant(root, "session_control_grant", SESSION_CONTROL_GRANTS, "draft")
 
 
 def project_spawn_grant(root: str | Path) -> str:
     """The agent-spawn authority level for a Project: "draft" or "granted".
 
-    "draft" (the default and the fallback for a malformed config) keeps the Phase
-    5 inert-request behaviour; "granted" lets an agent create a session in this
-    Project directly. Whether the capability exists at all is the `session_control`
-    automation opt-in, checked separately by the caller.
+    "granted" (the default when the field is unset, flipped 2026-08-25) lets an
+    agent create a session in this Project directly; writing "draft" restores
+    the Phase 5 inert-request behaviour. Whether the capability exists at all
+    is the `session_control` automation opt-in, checked separately by the
+    caller. A malformed or unreadable config falls back to the fail-closed
+    "draft" rather than to the default, so corruption cannot widen an explicit
+    "draft".
+    """
+    return _authority_grant(root, "spawn_grant", SESSION_CONTROL_GRANTS, "draft")
+
+
+def _authority_grant(
+    root: str | Path, field: str, allowed: tuple[str, ...], failed: str
+) -> str:
+    """Read one authority grant with default-granted / fail-closed semantics.
+
+    Three answers, deliberately distinct: an explicit value in a valid config is
+    honoured; a valid config (or no config at all) with the field unset means
+    the install default, "granted"; a config that cannot be read or parsed
+    means `failed` - the narrow answer - because a corrupt file must degrade to
+    less authority, never more.
     """
     path = Path(root) / ".swe-mux" / "config.toml"
     try:
         if path.is_file():
             values = parse_project_config(path.read_bytes())
-            grant = values.get("spawn_grant")
-            if grant in SESSION_CONTROL_GRANTS:
+            grant = values.get(field)
+            if grant in allowed:
                 return str(grant)
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
-        pass
-    return "draft"
+        return failed
+    return "granted"
 
 
 def project_land_grant(root: str | Path) -> str:
@@ -879,21 +892,14 @@ def project_land_grant(root: str | Path) -> str:
 def project_interject_grant(root: str | Path) -> str:
     """Whether agents may have messages delivered mid-turn to this Project.
 
-    "off" (the default, and the fallback for a malformed or unreadable config) or
-    "granted". Read per call rather than cached because the answer is a standing
+    "granted" (the default when the field is unset, flipped 2026-08-25) or
+    "off". A malformed or unreadable config falls back to the fail-closed
+    "off" rather than to the default, so corruption cannot widen an explicit
+    "off". Read per call rather than cached because the answer is a standing
     permission a person edits by hand, and a stale "granted" is the direction
     that costs something.
     """
-    path = Path(root) / ".swe-mux" / "config.toml"
-    try:
-        if path.is_file():
-            values = parse_project_config(path.read_bytes())
-            grant = values.get("interject_grant")
-            if grant in INTERJECT_GRANTS:
-                return str(grant)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
-        pass
-    return "off"
+    return _authority_grant(root, "interject_grant", INTERJECT_GRANTS, "off")
 
 
 def project_approval_rules(root: str | Path) -> list[str] | None:

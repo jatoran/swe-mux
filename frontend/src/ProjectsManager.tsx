@@ -50,6 +50,10 @@ type AutomationEntry = {
   /** Whether it is inert without a proven model provider. Separate from `spends`,
    *  because a model on the operator's own machine is a dependency with no bill. */
   needs_llm?: boolean
+  /** Whether a Project that never wrote this id down has it on. An unset checkbox
+   *  renders checked, and unticking writes an explicit `false` - deleting the key
+   *  would just fall back to the default it is trying to leave. */
+  default_on?: boolean
 }
 type AutomationState = {
   revision: string
@@ -164,18 +168,29 @@ function AutomationOptIns({ project, busy, onError, store }: {
   }
   const toggle = (id: string, on: boolean) => {
     const next = { ...state.requested }
+    // Off is written as an explicit `false` for a default-on automation - absent
+    // means on there, so deleting the key would leave the switch exactly where
+    // it was - and as absence for everything else, where absent already means
+    // off and a false entry is noise the daemon strips anyway.
+    const switchOff = (item: string) => {
+      if (byId.get(item)?.default_on) next[item] = false
+      else delete next[item]
+    }
     if (on) for (const item of closure(id)) next[item] = true
     else {
-      delete next[id]
+      switchOff(id)
       // Turning substrate off turns off everything that reads from it, rather
       // than leaving dependents enabled-but-inert.
-      for (const item of state.automations) if (closure(item.id).has(id)) delete next[item.id]
+      for (const item of state.automations) if (closure(item.id).has(id)) switchOff(item.id)
     }
     void write(next)
   }
   const unverified = new Set(state.unverified || [])
   const row = (item: AutomationEntry) => {
-    const on = state.requested[item.id] === true
+    // Unset means the registry default: on for a default-on capability gate,
+    // off for everything else. Rendering only the explicit map would show
+    // "off" for a switch the daemon is honouring as on.
+    const on = state.requested[item.id] ?? (item.default_on === true)
     const missing = state.blocked[item.id] || []
     const disabled = busy || saving || !item.implemented
     return <li key={item.id} class={item.implemented ? '' : 'unavailable'} data-setting={automationSetting(item.id)}>
@@ -186,6 +201,7 @@ function AutomationOptIns({ project, busy, onError, store }: {
               lived only in a Python comment until now. Marked rather than unmarked,
               because most of this list is free and a chip on every row says nothing. */}
           {item.spends && <em class="project-setting-chip spends">spends</em>}
+          {item.default_on && <em class="project-setting-chip">on by default</em>}
           {!item.implemented && <em class="project-setting-chip">not built yet</em>}
         </span>
         <input type="checkbox" disabled={disabled} checked={on}
@@ -304,13 +320,13 @@ function AgentAuthority({ busy, onError, store }: {
       field: 'session_control_grant', setting: 'session_control_grant',
       label: 'Interrupt and end sessions',
       draft: 'A human approves each one', granted: 'Acts directly',
-      note: 'Needs the Agent session control opt-in above. Draft writes an inert request into the Fleet Queue.',
+      note: 'Needs the Agent session control opt-in above. Granted by default; draft writes an inert request into the Fleet Queue.',
     },
     {
       field: 'spawn_grant', setting: 'spawn_grant',
       label: 'Start new sessions here',
       draft: 'A human approves each one', granted: 'Creates them directly',
-      note: 'Also gated by Agent session control. Granted still bounds an agent to a per-origin budget.',
+      note: 'Also gated by Agent session control. Granted by default, and still bounds an agent to a per-origin budget.',
     },
     {
       field: 'land_grant', setting: 'land_grant',
@@ -322,17 +338,22 @@ function AgentAuthority({ busy, onError, store }: {
       field: 'interject_grant', setting: 'interject_grant',
       label: 'Write into a running turn',
       draft: 'Never (waits for the queue)', granted: 'May interject',
-      note: 'Off by default. Granted still requires the receiving session to be interruptible and not opted out for its run.',
+      note: 'On by default. Granted still requires the receiving session to be interruptible and not opted out for its run.',
     },
   ]
   const inertFor = (field: string) => field === 'interject_grant' ? 'off' : 'draft'
-  const value = (field: string) => String(config?.values[field] || inertFor(field))
+  // What an unset field means. Landing a branch still defaults to the inert
+  // draft; the three session-scoped authorities default to granted (2026-08-25),
+  // so this editor is the surface that *lowers* them.
+  const defaultFor = (field: string) => field === 'land_grant' ? 'draft' : 'granted'
+  const value = (field: string) => String(config?.values[field] || defaultFor(field))
 
   return <div class="project-automations project-authority">
     <h4 data-setting="agent_authority">Agent authority<em class="project-setting-chip">repo</em></h4>
     <p>The opt-ins above decide whether an agent may <em>ask</em>. These decide whether you
-    still approve each time. Every one starts at the inert setting, and the whole table
-    is meaningless until its automation is on.</p>
+    still approve each time. Interrupt/end, spawn, and mid-turn writes start granted and are
+    lowered here; landing starts at the inert draft. A row is meaningless until its
+    automation is on.</p>
     {!config && <p>Loading…</p>}
     {config && <ul class="project-automation-list">
       {rows.map(row => <li key={row.field} data-setting={row.setting}>

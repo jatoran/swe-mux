@@ -12,8 +12,8 @@ import {
   fetchQueue, isPendingQueueState, moveQueueMessage, queueHead, reportUnsafeDelivery,
   retargetQueueMessage, scheduleQueueMessage, scheduleStatus, senderLabel, sendQueueMessage,
   setAutoPaused, setSessionAutoPolicy,
-  type QueueAutoSession, type QueueAutoStatus, type QueueMessage, type QueueSendOutcome,
-  type QueueTargetView,
+  type QueueAutoSession, type QueueAutoStatus, type QueueConstraints, type QueueMessage,
+  type QueueSendOutcome, type QueueTargetView,
 } from './queueApi'
 import type { Session } from './types'
 import { deliversHarnessPrompts } from './harnessRegistry'
@@ -176,6 +176,9 @@ export function QueuePane({
   const [menuId, setMenuId] = useState('')
   const [editing, setEditing] = useState<{ id: string; revision: number; body: string } | null>(null)
   const [composer, setComposer] = useState('')
+  // Whether the next staged message asks for mid-turn delivery. Off by default:
+  // interrupting is a per-message choice, not a mode the pane drifts into.
+  const [composerInterrupt, setComposerInterrupt] = useState(false)
   const [retargetFor, setRetargetFor] = useState('')
   const [auto, setAuto] = useState<QueueAutoStatus | null>(null)
   const [autoOpen, setAutoOpen] = useState(false)
@@ -320,9 +323,31 @@ export function QueuePane({
   const add = async (armed: boolean) => {
     if (!composer.trim()) return
     await run('composer', async () => {
-      await enqueueMessage(sessionId, composer, { armed })
+      await enqueueMessage(sessionId, composer, {
+        armed,
+        // The default is not sent: an item without the key means what every
+        // item meant before the mode existed (wait for idle).
+        constraints: composerInterrupt ? { delivery: 'now' } : undefined,
+      })
       setComposer('')
     })
+  }
+
+  /** Flip one pending message between mid-turn and wait-for-idle delivery.
+   *
+   *  The PATCH replaces the whole constraints object, so the schedule and expiry
+   *  ride along - dropping them because the delivery mode changed would silently
+   *  un-schedule the message. */
+  const setMessageDelivery = (message: QueueMessage, interrupt: boolean) => {
+    const { delivery: _delivery, ...rest } = message.constraints || {}
+    const next: QueueConstraints = interrupt ? { ...rest, delivery: 'now' } : rest
+    return scheduleQueueMessage(message.id, Object.keys(next).length ? next : null)
+  }
+
+  /** Clear the schedule alone: delivery mode and expiry stay on the item. */
+  const clearSchedule = (message: QueueMessage) => {
+    const { not_before: _notBefore, ...rest } = message.constraints || {}
+    return scheduleQueueMessage(message.id, Object.keys(rest).length ? rest : null)
   }
 
   const copyBody = (message: QueueMessage) => {
@@ -405,8 +430,18 @@ export function QueuePane({
             >
               {head?.id === message.id ? 'Skip' : 'Cancel'}
             </button>
+            <button
+              type="button"
+              title={message.constraints?.delivery === 'now'
+                ? 'Stop asking for mid-turn delivery; wait for the agent to be idle'
+                : 'Ask for delivery into a turn that is already running, when it is safe'}
+              disabled={busy}
+              onClick={() => void run(message.id, () => setMessageDelivery(message, message.constraints?.delivery !== 'now'))}
+            >
+              {message.constraints?.delivery === 'now' ? 'Wait for idle' : 'Deliver mid-turn'}
+            </button>
             {schedule === 'scheduled' ? (
-              <button type="button" disabled={busy} onClick={() => void run(message.id, () => scheduleQueueMessage(message.id, null))}>
+              <button type="button" disabled={busy} onClick={() => void run(message.id, () => clearSchedule(message))}>
                 Clear schedule
               </button>
             ) : (
@@ -422,7 +457,13 @@ export function QueuePane({
                       // Daemon clock: this instant is sent to the daemon and the
                       // daemon is what waits on it, so a browser out of step
                       // would release the message early or hold it late.
-                      scheduleQueueMessage(message.id, { not_before: serverNow() + preset.seconds }),
+                      // Merged over the existing constraints: the PATCH replaces
+                      // the whole object, and scheduling a message must not
+                      // silently drop its delivery mode or expiry.
+                      scheduleQueueMessage(message.id, {
+                        ...(message.constraints || {}),
+                        not_before: serverNow() + preset.seconds,
+                      }),
                     )
                   }
                 >
@@ -469,6 +510,14 @@ export function QueuePane({
           {schedule === 'scheduled' && message.constraints?.not_before && (
             <span class="queue-item-schedule">
               scheduled {new Date(message.constraints.not_before * 1000).toLocaleTimeString()}
+            </span>
+          )}
+          {pending && message.constraints?.delivery === 'now' && (
+            <span
+              class="queue-item-schedule"
+              title="Asks to land in a running turn when the interject predicate says it is safe; otherwise it waits like any other message"
+            >
+              mid-turn
             </span>
           )}
           {message.blocked_reasons?.length ? (
@@ -804,6 +853,18 @@ export function QueuePane({
             }}
           />
           <div class="queue-composer-actions">
+            <label
+              class="queue-composer-interrupt"
+              title="Ask for this message to land in a turn that is already running, when the readiness tracker says it is safe. Off, it waits for the agent to be idle like every message before the mode existed."
+            >
+              <input
+                type="checkbox"
+                checked={composerInterrupt}
+                disabled={busyId === 'composer'}
+                onChange={event => setComposerInterrupt(event.currentTarget.checked)}
+              />
+              <span>Mid-turn</span>
+            </label>
             <button
               type="button"
               disabled={busyId === 'composer' || !composer.trim()}

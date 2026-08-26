@@ -4534,7 +4534,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-map-metrics .removing{display:inline-flex;align-items:center;gap:4px;color:var(--amber)}
 .git-map-spinner{width:7px;height:7px;border:1.5px solid var(--line);border-top-color:var(--amber);border-radius:50%;animation:git-map-spin .7s linear infinite}
 @keyframes git-map-spin{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){.git-map-spinner{animation:none}}
+@media(prefers-reduced-motion:reduce){.git-map-spinner,.git-map-land-status i{animation:none!important}}
 /* Selection is a mode: the column exists only while it is on, so the row keeps its
    two-column geometry the rest of the time. */
 .git-map-head.selecting{grid-template-columns:max-content minmax(0,1fr) max-content}
@@ -4670,7 +4670,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-edit textarea{min-height:80px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
 .queue-composer{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
 .queue-composer textarea{min-height:56px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
-.queue-composer-actions{display:flex;justify-content:flex-end;gap:6px}
+.queue-composer-actions{display:flex;justify-content:flex-end;align-items:center;gap:6px}
+/* The per-message mid-turn ask. First in the row and pushed left, so the two staging
+   buttons keep their right-edge position and the toggle reads as a property of what
+   they will stage. */
+.queue-composer-interrupt{display:flex;align-items:center;gap:4px;margin-right:auto;color:var(--muted);font-size:9px;cursor:pointer}
+.queue-composer-interrupt input{margin:0}
 .queue-composer-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
@@ -4791,6 +4796,18 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-review-tab .git-map-identity{grid-column:2;grid-row:1;align-self:baseline}
 .git-review-tab .git-map-chevron{grid-column:1;grid-row:2;align-self:baseline;text-align:left}
 .git-review-tab .git-map-metrics{grid-column:2;grid-row:2;align-self:baseline}
+.git-review-tab .git-map-summary.has-land-status{grid-template-rows:auto auto auto;min-height:60px}
+.git-review-tab .git-map-summary.has-land-status .git-map-chevron{grid-row:2 / span 2}
+.git-map-land-status{grid-column:2;grid-row:3;min-width:0;display:flex;align-items:center;gap:5px;color:var(--accent);font-size:8px}
+.git-map-land-status i{flex:none;width:6px;height:6px;border:1px solid currentColor;border-radius:50%}
+.git-map-land-status strong{flex:none;font-size:8px;font-weight:600}
+.git-map-land-status small{min-width:0;overflow:hidden;color:currentColor;opacity:.78;font-size:8px;text-overflow:ellipsis;white-space:nowrap}
+.git-map-land-status.state-queued{color:var(--accent)}
+/* Waiting on a live session is ordinary queue behavior, not a warning. */
+.git-map-land-status.state-waiting{color:var(--muted)}
+.git-map-land-status.state-reconciling,.git-map-land-status.state-verifying{color:var(--accent)}
+.git-map-land-status.state-landing{color:#c58af9}
+.git-map-land-status.state-reconciling i,.git-map-land-status.state-verifying i,.git-map-land-status.state-landing i{border-top-color:transparent;animation:git-map-spin .7s linear infinite}
 /* A row's expand target and its session-link target are siblings, because a button
    cannot contain a button. The summary keeps the whole row's width and the link sits at
    the trailing edge, so the two never compete for the same tap. */
@@ -4895,9 +4912,29 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-landing-facts span{color:var(--muted);font-variant-numeric:tabular-nums}
 .git-landing-chevron{margin-left:auto;color:var(--muted)}
 .git-landing-body{display:grid;gap:8px;min-width:0}
+.git-land-pipeline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:hidden;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.git-land-pipeline-step{display:grid;gap:2px;min-width:0;padding:7px 8px;border-right:1px solid var(--line)}
+.git-land-pipeline-step:last-child{border-right:0}
+.git-land-pipeline-step strong{overflow:hidden;color:var(--text);font-size:8px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.git-land-pipeline-step small{overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}
+.git-land-pipeline-step.complete strong{color:var(--green)}
+.git-land-pipeline-step.warn strong{color:var(--amber)}
+.git-land-pipeline-step.active{background:color-mix(in srgb,var(--accent) 7%,var(--panel));box-shadow:inset 0 -2px var(--accent)}
+.git-land-pipeline-step.idle strong{color:var(--muted)}
 .git-land-gate{display:grid;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px}
 .git-land-gate.warn{border-color:var(--amber)}
 .git-land-gate.ok{border-color:var(--line)}
+.git-land-gate-summary{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;align-items:center;gap:7px;min-width:0;color:var(--muted);font-size:8px;cursor:pointer;list-style:none}
+.git-land-gate-summary::-webkit-details-marker{display:none}
+.git-land-gate-summary::after{content:'+';grid-column:3;grid-row:1;color:var(--muted)}
+.git-land-gate[open]>.git-land-gate-summary::after{content:'−'}
+.git-land-gate-summary>span{color:var(--text);font-weight:600}
+.git-land-gate-summary code{min-width:0;overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}
+.git-land-gate-summary em{grid-column:3;grid-row:1;margin-right:13px;font-size:8px;font-style:normal;white-space:nowrap}
+.git-land-gate-summary em.ok{color:var(--green)}
+.git-land-gate-summary em.warn{color:var(--amber)}
+.git-land-gate-content{display:grid;gap:6px;min-width:0;padding-top:7px;border-top:1px solid var(--line)}
+.git-land-gate-content>.git-state{padding:0;text-align:left}
 .git-land-gate-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
 .git-land-gate-head code{overflow:hidden;color:var(--muted);font-size:9px;text-overflow:ellipsis;white-space:nowrap}
 .git-land-gate-head button{margin-left:auto}
@@ -4935,6 +4972,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    "3rd in line" is the fact a reader wants and a list marker cannot state. */
 .git-land-position{min-width:16px;color:var(--muted);font-size:9px;text-align:right;font-variant-numeric:tabular-nums}
 .git-land-command-editor{display:grid;gap:6px;padding-top:6px;border-top:1px dashed var(--line)}
+.git-land-command-editor>button{justify-self:start;width:auto}
 .git-land-command-editor label{display:grid;gap:4px}
 .git-land-command-editor label span{color:var(--muted);font-size:9px}
 .git-land-command-editor input{width:100%;padding:5px 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg-alt,#11141a);color:var(--fg);font-family:inherit;font-size:10px}

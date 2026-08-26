@@ -29,7 +29,8 @@ Provenance is carried into commit review packets.
 
 ### Map and Log
 
-Width-safe Map rows with one deduplicated identity line and a separate wrapping metric line.
+Width-safe Map rows use one deduplicated identity line, a separate wrapping metric line, and a third operational line only while that worktree has an active land request.
+The operational line is derived from the shared `landQueueOrder` projection and carries the state plus its queue position or observed verification detail without requiring expansion.
 Activity ordering is `sortWorktreesByActivity`, sorted once in `GitTab.tsx` and the tab's only list of checkouts.
 It is keyed on the branch tip's committer date rather than the checkout's `st_mtime`, which Windows freezes on a worktree a live session is holding open.
 The main tree is pinned first as the anchor the rest are measured against, undated trees last, with path order as the tie-break so a refresh cannot shuffle the list under the pointer.
@@ -85,13 +86,17 @@ Also: read-specific timeout guidance, failed-removal refresh with the mutation e
 
 Landing has no view of its own and is split by what each part is a *property of*.
 
+`GitTab.tsx` projects each active request onto its collapsed Map row, matched by normalized worktree root or branch, so queue position and observed gate progress are visible before expansion.
 `GitLandRow.tsx` draws the act inside the expanded Map row of the worktree it acts on: the Land button, that request's live state, a Cancel, and what stopped it last time including a conflict's paths.
 It offers **only** Land: a verify-only run is an agent surface (`request_verify`), and an operator with a worktree open has a terminal in it, so the row renders such requests without being able to start one.
 It draws **nothing Project-wide at all**, because a row is repeated once per worktree and a Project-wide fact drawn there is drawn N times.
 A row that cannot land names the blocker and *opens the strip* instead of drawing a second copy of its control.
 
 `GitLandBar.tsx` is that strip, at the head of the map: one always-readable summary line (`landingSummary`) plus a disclosure holding everything Project-wide.
-Behind the disclosure: the Project's verification command with its source, approval, recorded plan and in-place editor; agent authority; and the queue in the order the pipeline will reach it.
+The expanded disclosure leads with `LandPipeline`: gate standing, the active branch and observed step, then the number waiting behind it.
+The Project's verification source, approval, recorded plan, and in-place editor follow under `Verification settings`; an approved convention script keeps the settings closed and exposes `Use a different command` as the secondary override path.
+Unapproved and unconfigured gates open the settings when the operator reaches the expanded strip, preserving the rule that the act clearing a gate cannot be hidden.
+Agent authority and the queue in pipeline order follow the settings.
 The queue is oldest first, because the daemon lists newest-first for history reads and the request about to run would therefore sit at the bottom.
 It opens itself only while a land is stuck on a human - the install stop is off, written gate bytes are unapproved, or a worktree's own copy of the gate refused a land - which is `landingSummary`'s `opensByDefault`.
 That is deliberately narrower than "this tab cannot land anything": a repository with no verification command cannot land either, and stays folded, because that is the resting state of every repository that never opted in rather than something a person is stuck on.

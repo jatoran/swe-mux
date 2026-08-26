@@ -421,6 +421,10 @@ def automation_catalog() -> list[dict[str, Any]]:
             "implemented": automation.implemented,
             "spends": automation.spends,
             "needs_llm": automation.needs_llm,
+            # A Project that never wrote this id down has it on; an explicit
+            # `false` is how it opts out. Without this row the configurator
+            # would tell an operator to opt in to something already running.
+            "default_on": automation.default_on,
             "recommended": automation.id in RECOMMENDED_PROJECT_AUTOMATIONS,
         }
         for automation in AUTOMATION_REGISTRY.values()

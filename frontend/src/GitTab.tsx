@@ -36,7 +36,14 @@ import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
 import { GitLandBar } from './GitLandBar'
 import { GitLandRow } from './GitLandRow'
-import { landedAtByBranch } from './gitLand'
+import {
+  landGateNote,
+  landKindNote,
+  landedAtByBranch,
+  landQueueOrder,
+  landStateLabel,
+  verifyProgressLabel,
+} from './gitLand'
 import { landErrorText, useLandQueue } from './landState'
 import {
   assessRemoval,
@@ -445,6 +452,9 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // `GET /api/land` returns the newest hundred rows, so a branch that landed long enough
   // ago says nothing rather than something invented (`landedAtByBranch`).
   const landedAt=landedAtByBranch(landQueue?.requests||[])
+  // One ordered projection for both the strip and every collapsed Map row. Re-sorting
+  // inside each row would obscure that its number is its actual place in this queue.
+  const activeLands=landQueueOrder(landQueue?.requests||[])
 
   const saveComparison=async(value:string)=>{
     setBusy(true)
@@ -765,6 +775,22 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         const attached=sessionsFor(tree.path),upstream=attached.find(session=>session.git?.ahead||session.git?.behind)?.git
         const removalBlocked=tree.locked!==null||attached.length>0
         const worktreeName=pathTail(tree.path),identityQualifier=tree.main?'main tree':worktreeName!==tree.branch?worktreeName:''
+        // Live landing state belongs on the collapsed row: requiring an expansion to
+        // learn which checkout is queued or running turns the map into a search task.
+        // Match on the same two coordinates as `GitLandRow`, because the daemon's root
+        // can differ from Git's presentation in separator and case, and a removed
+        // worktree can still be identified by its branch.
+        const activeLandIndex=tree.main?-1:activeLands.findIndex(request=>
+          normalizePath(request.worktreeRoot)===normalizePath(tree.path)
+          || (!!tree.branch&&request.branch===tree.branch))
+        const activeLand=activeLandIndex>=0?activeLands[activeLandIndex]:null
+        const activeLandProgress=activeLand?verifyProgressLabel(activeLand.verifyProgress):''
+        const activeLandGate=activeLand?landGateNote(activeLand):''
+        const activeLandDetail=activeLand
+          ? activeLand.state==='queued' ? `#${activeLandIndex+1} in queue`
+            : activeLandProgress||activeLandGate||activeLand.reason
+          : ''
+        const activeLandKind=activeLand?landKindNote(activeLand):''
         // Removing is a property of the *list*, so it survives this row being collapsed
         // and it is the same reading on the fast and the slow path.
         const removing=isRemoving(pendingRemovals,tree.path)
@@ -788,10 +814,15 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
                 onClick={event=>clickSelected(tree.path,event.shiftKey)}
               />
             </label>}
-            <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
+            <button class={`git-map-summary${activeLand?' has-land-status':''}`} aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
               <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
               <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
               <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}{landed!==undefined&&<em class="landed" title={`This queue landed ${tree.branch} at ${new Date(landed*1000).toLocaleString()}`}>landed {landedLabel(landed)}</em>}{removing&&<em class="removing"><i class="git-map-spinner" aria-hidden="true"/>removing…</em>}</span>
+              {activeLand&&<span class={`git-map-land-status state-${activeLand.state}`}>
+                <i aria-hidden="true"/>
+                <strong>{activeLandKind&&`${activeLandKind} · `}{landStateLabel(activeLand.state)}</strong>
+                {activeLandDetail&&<small>{activeLandDetail}</small>}
+              </span>}
               <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
             </button>
             {attached.length>0&&<button

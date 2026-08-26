@@ -60,7 +60,7 @@ from collections.abc import Awaitable, Callable, Collection, Sequence
 from typing import Any
 
 from .background_tasks import background
-from .config import Config
+from .config import Config, agent_message_bounds
 from .harness import delivers_prompts_through_pty
 from .prompt_queue import (
     AUTO_POLICY_GLOBAL,
@@ -542,7 +542,11 @@ class AutoDeliveryController:
                     },
                 }
         found = await self.queue.store.open_reply_windows(ids, now - span)
-        max_turns = int(self.config.agent_message_max_thread_turns)
+        # The effective thread budget, not the raw config field: with the rate
+        # limits toggled off the exchange runs under the backstop ceiling, and a
+        # reply window that closed at the configured 40 while staging allowed
+        # 1000 would lapse a working exchange's grant mid-conversation.
+        max_turns = agent_message_bounds(self.config).max_thread_turns
         for session_id, entry in found.items():
             thread_id = str(entry.get("thread_id") or "")
             if not thread_id:

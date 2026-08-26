@@ -73,7 +73,29 @@ def test_defaults_are_inherited_and_overridden() -> None:
 
 
 def test_unknown_ids_are_ignored() -> None:
-    assert registry.requested_from_config({"not_a_real_automation": True}) == set()
+    # The unknown id is dropped; what remains is the registry's default-on
+    # template, which every resolution starts from (2026-08-25).
+    assert registry.requested_from_config({"not_a_real_automation": True}) == {
+        "session_control"
+    }
+
+
+def test_the_default_on_template_is_exactly_session_control() -> None:
+    # Default-on is reserved for free, dependency-less capability gates, and the
+    # registry's import-time check enforces that shape. Growing this set is a
+    # deliberate act, not a side effect of adding an automation.
+    assert registry.DEFAULT_ON_AUTOMATIONS == {"session_control": True}
+    assert registry.REGISTRY["session_control"].default_on is True
+
+
+def test_an_explicit_false_beats_the_default_on_template() -> None:
+    # A Project that wrote `session_control = false` stays off however the
+    # install default reads - the project map overrides the template entry by
+    # entry, which is what makes "off" sayable at all for a default-on id.
+    assert registry.requested_from_config({"session_control": False}) == set()
+    resolution = registry.resolve_config({"session_control": False})
+    assert not resolution.is_enabled("session_control")
+    assert registry.resolve_config({}).is_enabled("session_control")
 
 
 # ---- Per-project config field ------------------------------------------------
@@ -85,8 +107,8 @@ def test_project_config_round_trips_automations() -> None:
     assert parsed["automations"] == {"tier0": True, "raw_store": True}
 
 
-def test_interject_grant_round_trips_and_defaults_off(tmp_path: Path) -> None:
-    """Mid-turn delivery is off until a Project writes it down.
+def test_interject_grant_round_trips_and_defaults_granted(tmp_path: Path) -> None:
+    """Mid-turn delivery is granted by default (2026-08-25) and withdrawn by `off`.
 
     Its own field rather than a level of `session_control_grant`: being written
     to mid-turn is a property of a working repository, and folding it into the
@@ -96,19 +118,51 @@ def test_interject_grant_round_trips_and_defaults_off(tmp_path: Path) -> None:
 
     root = tmp_path / "repo"
     (root / ".swe-mux").mkdir(parents=True)
-    assert project_interject_grant(root) == "off"
-
-    parsed = parse_project_config(serialize_project_config({"interject_grant": "granted"}))
-    assert parsed["interject_grant"] == "granted"
-    (root / ".swe-mux" / "config.toml").write_bytes(
-        serialize_project_config({"interject_grant": "granted"})
-    )
+    # No config file, and a valid config with the field unset, both mean the
+    # install default: granted.
+    assert project_interject_grant(root) == "granted"
+    (root / ".swe-mux" / "config.toml").write_bytes(serialize_project_config({}))
     assert project_interject_grant(root) == "granted"
 
-    # A malformed value falls back to the safe answer rather than raising at a
-    # call site that has no way to report it.
+    parsed = parse_project_config(serialize_project_config({"interject_grant": "off"}))
+    assert parsed["interject_grant"] == "off"
+    (root / ".swe-mux" / "config.toml").write_bytes(
+        serialize_project_config({"interject_grant": "off"})
+    )
+    assert project_interject_grant(root) == "off"
+
+    # A malformed config falls to the fail-closed answer, never to the default:
+    # corruption must not widen a file that may have held an explicit "off".
     (root / ".swe-mux" / "config.toml").write_bytes(b'version = 1\ninterject_grant = "yes"\n')
     assert project_interject_grant(root) == "off"
+
+
+def test_the_authority_grants_default_granted_and_fail_closed(tmp_path: Path) -> None:
+    """Unset means granted (2026-08-25); unreadable means the narrow answer."""
+    from swe_mux.project_files import (
+        project_land_grant,
+        project_session_control_grant,
+        project_spawn_grant,
+    )
+
+    root = tmp_path / "repo"
+    (root / ".swe-mux").mkdir(parents=True)
+    assert project_session_control_grant(root) == "granted"
+    assert project_spawn_grant(root) == "granted"
+    # Landing a trunk deliberately keeps the inert default.
+    assert project_land_grant(root) == "draft"
+
+    (root / ".swe-mux" / "config.toml").write_bytes(
+        serialize_project_config(
+            {"session_control_grant": "draft", "spawn_grant": "draft"}
+        )
+    )
+    assert project_session_control_grant(root) == "draft"
+    assert project_spawn_grant(root) == "draft"
+
+    (root / ".swe-mux" / "config.toml").write_bytes(b"version = 1\nnot toml")
+    assert project_session_control_grant(root) == "draft"
+    assert project_spawn_grant(root) == "draft"
 
 
 def test_interject_grant_rejects_an_unknown_level() -> None:
@@ -771,7 +825,9 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
         request({"automations": {"loop_detection": True}, "revision": payload["revision"]})
     )
     blocked = json.loads(partial.body)
-    assert blocked["enabled"] == []
+    # `session_control` is the default-on capability gate (2026-08-25) and needs
+    # no substrate, so it resolves enabled on a Project that wrote nothing.
+    assert blocked["enabled"] == ["session_control"]
     assert blocked["blocked"]["loop_detection"] == ["raw_store", "tier0"]
 
     full = await put_project_automations(  # type: ignore[arg-type]
@@ -783,11 +839,59 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
         )
     )
     enabled = json.loads(full.body)
-    assert set(enabled["enabled"]) == {"loop_detection", "tier0", "raw_store"}
+    assert set(enabled["enabled"]) == {
+        "loop_detection", "tier0", "raw_store", "session_control"
+    }
     assert enabled["blocked"] == {}
     # The file stays the source of truth.
     assert "automations" in (tmp_path / ".swe-mux" / "config.toml").read_text(encoding="utf-8")
     assert emitted.count("project_configuration_changed") == 2
+
+
+@pytest.mark.asyncio
+async def test_unticking_a_default_on_automation_persists_an_explicit_false(
+    tmp_path: Path,
+) -> None:
+    """For a default-on id, absence means on - so "off" must be written down.
+
+    The write path strips a false entry as noise for an ordinary opt-in, and
+    that exact behaviour would make a default-on automation impossible to turn
+    off: the untick would write nothing and the default would show through.
+    """
+    from types import SimpleNamespace
+
+    from swe_mux.routes.automation import put_project_automations
+
+    project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
+
+    class Events:
+        async def emit(self, kind: str, **_payload: object) -> None:
+            del kind
+
+    def request(body: dict[str, object]) -> object:
+        async def resolved() -> dict[str, object]:
+            return body
+
+        return SimpleNamespace(
+            match_info={"project_id": "p1"},
+            app={
+                keys.PROJECTS: SimpleNamespace(projects={"p1": project}),
+                keys.EVENTS: Events(),
+            },
+            json=resolved,
+        )
+
+    response = await put_project_automations(  # type: ignore[arg-type]
+        request({"automations": {"session_control": False, "doc_debt": False}})
+    )
+    payload = json.loads(response.body)
+    assert "session_control" not in payload["enabled"]
+    # The false survives on disk for the default-on id and is stripped as noise
+    # for the ordinary opt-in, where absence already means off.
+    written = (tmp_path / ".swe-mux" / "config.toml").read_text(encoding="utf-8")
+    assert "session_control = false" in written
+    assert "doc_debt" not in written
+    assert project_automations(tmp_path) == {"session_control": False}
 
 
 @pytest.mark.asyncio
@@ -837,8 +941,10 @@ async def test_the_project_matrix_reports_every_project_including_the_opted_out(
     rows = {row["project_id"]: row for row in payload["projects"]}
     assert set(rows) == {"p1", "p2"}
     assert rows["p1"]["project_name"] == "Alpha"
-    assert set(rows["p1"]["enabled"]) == {"tier0", "raw_store"}
-    assert rows["p2"]["enabled"] == []
+    assert set(rows["p1"]["enabled"]) == {"tier0", "raw_store", "session_control"}
+    # An opted-out Project still shows the default-on capability gate as enabled;
+    # its explicit map is what stays empty.
+    assert rows["p2"]["enabled"] == ["session_control"]
     assert rows["p2"]["requested"] == {}
 
 

@@ -76,6 +76,16 @@ separately opt-in.
   is the one thing it was allowed to step over. The `when_idle` default is never persisted, so
   an item without the key means what every item meant before the mode existed
   (`auto-delivery.md`, `delivery-readiness.md`, `agent-messaging.md`).
+  A *human* sender asks for `now` too (2026-08-25): the Queue composer's **Mid-turn**
+  checkbox (off by default - interrupting is a per-message choice, not a mode the pane
+  drifts into) stages the item with the constraint, a `mid-turn` mark on the row says so,
+  and the overflow flips a pending item between the two modes. The three sender-side gates
+  in `agent-messaging.md` (install switch, Project `interject_grant`, receiver opt-out)
+  bound *agent* senders at staging time and are not re-imposed on a human staging into
+  their own fleet; the delivery-time `interject_state` predicate and the receiver policy on
+  the automatic path still decide every actual write. A constraints PATCH replaces the
+  whole object, so the browser merges over the item's existing constraints - scheduling a
+  message must not silently drop its delivery mode, nor the mode its schedule.
 - **Delivery bytes mirror the browser paste path.** Bracketed paste with newlines as CR,
   a 180 ms settle, then a separate `\r` — both writes through the shared operator-input
   accounting helper (`source="queue"`, `input_owner=False`), so `input_revision` /

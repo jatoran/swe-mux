@@ -918,6 +918,20 @@ class Config:
     # default because a notify lands as an inert draft unless the *receiving*
     # session opted in to accepting agent messages.
     agent_messaging_enabled: bool = True
+    # Whether the configurable rate bounds below actually bind. Off (the
+    # default), an orchestrator relaying work across a fleet for hours never
+    # trips a send/receive budget: the six rate bounds - the hourly budget, the
+    # per-target backlog, chain depth, thread turns, and the two interject
+    # bounds - are replaced by the fixed backstop ceilings in
+    # `agent_message_bounds()`, which exist to end a runaway loop rather than
+    # to pace a working exchange. On, the configured values below bind exactly
+    # as they always did. Deliberately *not* unlimited when off: the thread
+    # budget is the one brake that ends two agents talking forever (a reply
+    # refreshes the peer's auto-delivery grant, so a two-party exchange renews
+    # itself), and removing it entirely would let that loop run unattended.
+    # `agent_message_max_chars`, ring detection, expiry, and the kill switches
+    # are not rate limits and bind regardless.
+    agent_message_limits_enabled: bool = False
     agent_message_max_chars: int = 4000
     agent_message_hourly_budget: int = 20
     agent_message_pending_per_target: int = 5
@@ -948,8 +962,9 @@ class Config:
     # still ending one that has stopped converging.
     agent_message_max_thread_turns: int = 40
     # Mid-turn delivery (`mux.notify(delivery="now")`). The install-wide master
-    # switch; per-Project the capability is off until `interject_grant` is set to
-    # "granted" in that Project's `.swe-mux/config.toml`, and the receiving
+    # switch; per-Project the capability defaults to granted and is withdrawn by
+    # setting `interject_grant = "off"` in that Project's `.swe-mux/config.toml`
+    # (flipped 2026-08-25 - it began life default-off), and the receiving
     # session can still opt out for its run. False here refuses it everywhere.
     #
     # An interject is not an override: it is authorized by its own, strictly
@@ -970,10 +985,11 @@ class Config:
     # else; approval is a human act.
     request_spawn_enabled: bool = True
     # Phase 7.6 agent session control (`mux.interrupt`, `mux.end_session`). This is
-    # the install-wide master switch; per-Project the capability is off until the
-    # `session_control` automation is opted in, and even then the authority is
-    # `draft` (a human approves every action) until the Project's
-    # `session_control_grant` is raised. False here refuses both tools everywhere,
+    # the install-wide master switch. Per-Project the `session_control` automation
+    # is on by default (`automation_registry.DEFAULT_ON_AUTOMATIONS`, flipped
+    # 2026-08-25) and the authority defaults to `granted`; a Project withdraws
+    # either with `session_control = false` in its automations table or
+    # `session_control_grant = "draft"`. False here refuses both tools everywhere,
     # regardless of any Project's grant.
     session_control_enabled: bool = True
     # How many control actions one origin session may take per hour on the granted
@@ -1303,6 +1319,73 @@ def windows_pty_compatibility() -> dict[str, object] | None:
     if sys.platform != "win32":
         return None
     return {"backend": "conpty", "build_number": sys.getwindowsversion().build}
+
+
+# Backstop ceilings that bind while `agent_message_limits_enabled` is off. They are
+# deliberately far above the configurable defaults - an orchestrator relaying work
+# across a fleet for hours must not trip one - and deliberately finite, because the
+# thread budget is the only brake that ends two agents talking forever: a reply
+# refreshes the peer's auto-delivery grant, so a two-party exchange renews itself
+# and nothing else in the pipeline stops it. Constants rather than config fields:
+# a backstop someone can raise is a limit, and the limits are the other mode.
+UNLIMITED_MESSAGE_HOURLY_BUDGET = 500
+UNLIMITED_MESSAGE_PENDING_PER_TARGET = 50
+UNLIMITED_MESSAGE_CHAIN_DEPTH = 10
+UNLIMITED_MESSAGE_THREAD_TURNS = 1000
+UNLIMITED_INTERJECT_HOURLY_BUDGET = 120
+# A floor rather than a ceiling, so its backstop is *lower*: enough spacing that
+# two interjects cannot land inside one turn's paste-settle, and no more.
+UNLIMITED_INTERJECT_MIN_INTERVAL_SECONDS = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class AgentMessageBounds:
+    """The rate bounds agent messaging actually enforces right now.
+
+    Resolved through `agent_message_bounds()` by everything that reads one of the
+    six rate bounds (`agent_messaging.py` staging, `auto_delivery.py`'s reply
+    window), so the manual and automatic paths can never disagree about which
+    mode the install is in. `limits_enabled` rides along so a refusal can name
+    the configured setting when it bound and the fixed ceiling when that did.
+    """
+
+    limits_enabled: bool
+    hourly_budget: int
+    pending_per_target: int
+    max_chain_depth: int
+    max_thread_turns: int
+    interject_hourly_budget: int
+    interject_min_interval_seconds: float
+
+
+def agent_message_bounds(config: Config) -> AgentMessageBounds:
+    """The effective messaging rate bounds: configured values, or the backstops.
+
+    `agent_message_max_chars`, ring detection, message expiry, and the kill
+    switches are not here on purpose - they are not rate limits and bind in both
+    modes.
+    """
+    if config.agent_message_limits_enabled:
+        return AgentMessageBounds(
+            limits_enabled=True,
+            hourly_budget=int(config.agent_message_hourly_budget),
+            pending_per_target=int(config.agent_message_pending_per_target),
+            max_chain_depth=int(config.agent_message_max_chain_depth),
+            max_thread_turns=int(config.agent_message_max_thread_turns),
+            interject_hourly_budget=int(config.agent_interject_hourly_budget),
+            interject_min_interval_seconds=float(
+                config.agent_interject_min_interval_seconds
+            ),
+        )
+    return AgentMessageBounds(
+        limits_enabled=False,
+        hourly_budget=UNLIMITED_MESSAGE_HOURLY_BUDGET,
+        pending_per_target=UNLIMITED_MESSAGE_PENDING_PER_TARGET,
+        max_chain_depth=UNLIMITED_MESSAGE_CHAIN_DEPTH,
+        max_thread_turns=UNLIMITED_MESSAGE_THREAD_TURNS,
+        interject_hourly_budget=UNLIMITED_INTERJECT_HOURLY_BUDGET,
+        interject_min_interval_seconds=UNLIMITED_INTERJECT_MIN_INTERVAL_SECONDS,
+    )
 
 
 def _validate_project_init_scripts(config: Config, errors: dict[str, str]) -> None:

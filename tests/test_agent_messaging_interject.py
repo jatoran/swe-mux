@@ -133,6 +133,9 @@ async def test_the_per_origin_budget_and_the_per_target_floor_both_bound_it(
 ) -> None:
     clock = {"now": 1000.0}
     harness.messaging._clock = lambda: clock["now"]
+    # The configured interject bounds bind only while the limits toggle is on
+    # (2026-08-25); off, the fixed backstops apply instead.
+    harness.config.agent_message_limits_enabled = True
     harness.config.agent_interject_hourly_budget = 2
     harness.config.agent_interject_min_interval_seconds = 60.0
     await _granted(harness)

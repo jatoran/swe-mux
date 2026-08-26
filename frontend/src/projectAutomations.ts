@@ -45,6 +45,10 @@ export type ProjectAutomationState = {
     /** Whether it is inert without a proven model provider. Separate from `spends`,
      *  because a model on the operator's own machine is a dependency with no bill. */
     needs_llm?: boolean
+    /** Whether a Project that never wrote this id down has it on. Consumers that
+     *  read only the explicit `requested` map must fall back to this, or they
+     *  render a switch the daemon honours as on as if it were off. */
+    default_on?: boolean
   }[]
   scan_timeline_auto_enable: boolean
 }

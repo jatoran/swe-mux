@@ -70,7 +70,7 @@ import time
 import uuid
 from typing import Any
 
-from .config import Config
+from .config import Config, agent_message_bounds
 from .git_projects import ProjectIdentity
 from .harness import is_agent_harness
 from .project_scope import (
@@ -328,8 +328,8 @@ class AgentMessagingService:
         if grant != "granted":
             raise QueueError(
                 "interject_not_granted",
-                "that Project has not granted mid-turn delivery"
-                ' (`interject_grant = "granted"` in its .swe-mux/config.toml);'
+                "that Project switched mid-turn delivery off"
+                ' (`interject_grant = "off"` in its .swe-mux/config.toml);'
                 " send the message without `delivery` and it waits for the"
                 " target's queue",
                 status=403,
@@ -348,7 +348,8 @@ class AgentMessagingService:
             # permissions, and one that was revoked since should refuse.
             return
         now = float(self._clock())
-        budget = int(self.config.agent_interject_hourly_budget)
+        bounds = agent_message_bounds(self.config)
+        budget = bounds.interject_hourly_budget
         recent = [at for at in self._interjects_by_origin.get(caller_id, ()) if at >= now - 3600]
         self._interjects_by_origin[caller_id] = recent
         if budget <= 0 or len(recent) >= budget:
@@ -359,7 +360,7 @@ class AgentMessagingService:
                 " instead",
                 status=429,
             )
-        floor = float(self.config.agent_interject_min_interval_seconds)
+        floor = bounds.interject_min_interval_seconds
         last = self._last_interject_at.get(target_id)
         if last is not None and now - last < floor:
             raise QueueError(
@@ -428,7 +429,8 @@ class AgentMessagingService:
         target_id = str(destination.record.id)
         caller_id = str(caller.record.id)
 
-        budget = int(self.config.agent_message_hourly_budget)
+        bounds = agent_message_bounds(self.config)
+        budget = bounds.hourly_budget
         if budget <= 0:
             raise QueueError(
                 "origin_budget_exhausted",
@@ -444,7 +446,7 @@ class AgentMessagingService:
                 f"this session has staged {used} messages in the last hour (limit {budget})",
                 status=429,
             )
-        pending_cap = int(self.config.agent_message_pending_per_target)
+        pending_cap = bounds.pending_per_target
         outstanding = await self.queue.store.pending_from_sender_kind(
             target_id, AGENT_SENDER_KIND
         )
@@ -492,12 +494,20 @@ class AgentMessagingService:
         # sessions already in the thread holds its depth and answers to the turn
         # budget below instead.
         depth = len(set(path))
-        max_depth = int(self.config.agent_message_max_chain_depth)
+        max_depth = bounds.max_chain_depth
         if target_id not in path and depth > max_depth:
+            # Name what actually bound: the configured setting when limits are
+            # on, the fixed backstop when they are off - telling a sender to go
+            # raise a setting that is not even in force would send it nowhere.
+            limit_name = (
+                "`agent_message_max_chain_depth`"
+                if bounds.limits_enabled
+                else "the install's backstop ceiling"
+            )
             raise QueueError(
                 "chain_depth_exceeded",
                 f"this would carry the thread through {depth} relaying sessions"
-                f" (limit {max_depth}, `agent_message_max_chain_depth`); it may"
+                f" (limit {max_depth}, {limit_name}); it may"
                 " continue between the sessions already in it. A relay that has"
                 " to reach further needs a human to start a fresh thread, so say"
                 " so rather than stopping silently",
@@ -507,7 +517,7 @@ class AgentMessagingService:
         thread_id = str(inbound.get("thread_id") or "") or None
         # Inherited rather than minted: somebody wrote to this session first.
         continues_thread = thread_id is not None
-        max_turns = int(self.config.agent_message_max_thread_turns)
+        max_turns = bounds.max_thread_turns
         turns = 0
         if thread_id:
             turns = await self.queue.store.thread_message_count(thread_id)

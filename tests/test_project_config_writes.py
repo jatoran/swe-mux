@@ -87,7 +87,10 @@ async def test_two_sections_of_one_panel_no_longer_collide(tmp_path: Path) -> No
             },
         )
     )
-    assert set(json.loads(optins.body)["enabled"]) == {"raw_store", "tier0"}
+    # `session_control` is the default-on capability gate (2026-08-25).
+    assert set(json.loads(optins.body)["enabled"]) == {
+        "raw_store", "tier0", "session_control"
+    }
 
     # The authority row's write was composed against the file as it stood *before* the
     # opt-in above. Under the old whole-file guard this is where the operator was told

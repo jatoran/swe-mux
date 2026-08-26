@@ -198,9 +198,15 @@ def plan_grant(
             "automation_not_implemented",
             f"not implemented yet: {', '.join(unimplemented)}",
         )
-    planned_automations = frozenset(
-        item for item in closure if current_automations.get(item) is not True
-    )
+    def _already_on(item: str) -> bool:
+        explicit = current_automations.get(item)
+        if explicit is not None:
+            return explicit is True
+        # Unset and default-on is on already; granting it would only bump a
+        # revision under an open editor to write down what is already true.
+        return REGISTRY[item].default_on
+
+    planned_automations = frozenset(item for item in closure if not _already_on(item))
 
     planned_values: dict[str, Any] = {}
     for key, value in (values or {}).items():
@@ -247,7 +253,15 @@ def project_values_after(
     """
     values = dict(current)
     if plan.automations:
-        table = {key: True for key, value in current_automations.items() if value}
+        # A false entry is noise for an ordinary opt-in and load-bearing for a
+        # default-on automation (absent means on there), so an explicit opt-out
+        # survives the rewrite - unless this very grant is turning that
+        # automation on, which is the one way a gate may override it.
+        table = {
+            key: bool(value)
+            for key, value in current_automations.items()
+            if value or REGISTRY[key].default_on
+        }
         for automation_id in plan.automations:
             table[automation_id] = True
         values["automations"] = table

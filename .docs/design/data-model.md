@@ -517,15 +517,19 @@
 
 - `<project>/.swe-mux/config.toml`: versioned, typed portable Project profile, prompt-scope,
   notification-permission, additive ignore overrides, an `automations` opt-in table gating
-  control-plane substrate/consumers (`features/automation-enablement.md`), and the
-  `session_control_grant` field (`"draft"` | `"granted"`, default `"draft"`) that sets the
-  authority of the Phase 7.6 `interrupt`/`end_session` tools once the `session_control`
-  automation is opted in - read by `project_session_control_grant()`, and never machine-wide.
+  control-plane substrate/consumers (`features/automation-enablement.md`; for the one
+  default-on id, `session_control`, an explicit `false` entry is meaningful and persisted -
+  absence means on there), and the
+  `session_control_grant` field (`"draft"` | `"granted"`, default `"granted"` since
+  2026-08-25) that sets the
+  authority of the Phase 7.6 `interrupt`/`end_session` tools while the `session_control`
+  automation is on - read by `project_session_control_grant()` (malformed config resolves to
+  the narrow `draft`, never the default), and never machine-wide.
   A sibling `spawn_grant` field (same values, same default, same automation gate, read by
   `project_spawn_grant()`) sets whether `mux.requestSpawn` creates a session in this Project
-  directly (`granted`) or writes the Phase 5 inert draft (`draft`); authority is by target
-  Project, so an agent spawns into a Project the operator granted. The install caps the granted
-  path with `agent_spawn_hourly_budget` (default 10).
+  directly (`granted`, the default) or writes the Phase 5 inert draft (`draft`); authority is
+  by target Project, so an agent spawns into any Project that has not lowered it. The install
+  caps the granted path with `agent_spawn_hourly_budget` (default 10).
   Two further fields govern control-plane approvals (`features/approvals.md`): `approval_allow`,
   the `Tool` / `Tool(pattern)` rules a session's `allowlisted` mode resolves against, and
   `approval_ceiling` (`"wait"` | `"allowlisted"` | `"allow_all"`) capping the strongest mode any

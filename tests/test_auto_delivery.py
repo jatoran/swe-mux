@@ -30,7 +30,7 @@ from swe_mux.auto_delivery import (
     in_quiet_window,
     promotion_status,
 )
-from swe_mux.config import Config
+from swe_mux.config import Config, agent_message_bounds
 from swe_mux.prompt_queue import (
     SEND_CAP_REASON,
     PromptQueueService,
@@ -660,8 +660,11 @@ async def test_an_exchange_awaiting_a_reply_holds_the_idle_lapse_off(
         window = (await harness.auto.reply_windows(["s1"]))["s1"]
         assert window["peer_session_id"] == "s2"
         assert window["thread_id"] == "t1"
+        # The *effective* thread budget: with the rate-limit toggle off (the
+        # default since 2026-08-25) that is the backstop ceiling, not the
+        # configured field - the window must agree with what staging enforces.
         assert window["thread_messages_limit"] == (
-            harness.config.agent_message_max_thread_turns
+            agent_message_bounds(harness.config).max_thread_turns
         )
 
         # And the reply itself now has somewhere to land.
@@ -694,6 +697,8 @@ async def test_the_reply_window_is_capped_by_the_exchange_message_budget(
         tmp_path,
         live_session("s1"),
         live_session("s2"),
+        # The configured budget binds only with the limits toggle on (2026-08-25).
+        agent_message_limits_enabled=True,
         agent_message_max_thread_turns=1,
     )
     try:
