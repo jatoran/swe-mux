@@ -203,6 +203,57 @@ test('wide: the section list is the docked column it always was', async ({ page 
   expect(g.headingText).toContain('Settings')
 })
 
+test('the active Settings tab adds no marker or indentation', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  const general=page.locator('.settings-tabs [role="tab"]',{hasText:'General'}).first()
+  const projects=page.locator('.settings-tabs [role="tab"]',{hasText:'Projects'}).first()
+  await expect(general).toHaveAttribute('aria-selected','true')
+
+  const measure=async()=>page.locator('.settings-tabs [role="tab"]').evaluateAll(buttons=>buttons.slice(0,2).map(button=>{
+    const element=button as HTMLElement
+    const text=element.firstChild
+    const range=document.createRange()
+    if(text)range.selectNodeContents(text)
+    return {
+      marker:getComputedStyle(element,'::before').content,
+      textLeft:Math.round(range.getBoundingClientRect().left),
+    }
+  }))
+
+  const before=await measure()
+  expect(before[0].marker).toBe('none')
+  expect(before[1].marker).toBe('none')
+  expect(before[0].textLeft).toBe(before[1].textLeft)
+  await projects.click()
+  await expect(projects).toHaveAttribute('aria-selected','true')
+  const after=await measure()
+  expect(after[0].marker).toBe('none')
+  expect(after[1].marker).toBe('none')
+  expect(after[0].textLeft).toBe(after[1].textLeft)
+})
+
+test('every paged Settings tab exposes working page tabs in the content pane', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  const pagedTabs=['General','Projects','Terminals','Processes','Harnesses','Accounts','Prompt queue','Appearance','Input','Text editor','Voice','Remote','Diagnostics']
+
+  for(const tab of pagedTabs){
+    await page.getByRole('tab',{name:tab,exact:true}).click()
+    const nav=page.locator('.settings-subpage-nav')
+    await expect(nav).toBeVisible()
+    const pages=await nav.locator('button').allTextContents()
+    expect(pages.length,`${tab} must expose more than one page`).toBeGreaterThan(1)
+    for(const label of pages){
+      await nav.getByRole('button',{name:label,exact:true}).click()
+      await expect(nav.locator('button.active')).toHaveText(label)
+      const visible=page.locator('.settings-content section[data-settings-subpage]:visible')
+      expect(await visible.count(),`${tab} > ${label} rendered no page`).toBeGreaterThan(0)
+      expect((await visible.first().innerText()).trim(),`${tab} > ${label} rendered blank`).not.toBe('')
+    }
+  }
+})
+
 test('every tab renders, and every marked control is really in its DOM', async ({ page }) => {
   // `settingsCoverage.test.ts` walks from `config.py` to a control, and it reads *source*:
   // it cannot tell a control that renders from one sitting behind a condition that is never

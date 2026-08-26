@@ -3630,9 +3630,11 @@ Fix one positioning line and use it verbatim everywhere.
   awesome-list PRs (awesome-claude-code and agent-tooling lists), story-driven engineering
   posts (session-preserving reloads, the land queue, status detection) cross-posted from the
   site, and outreach to small and mid-size AI-tooling YouTube channels.
-- [ ] Name the adjacent tools (claude-squad, Vibe Kanban, Conductor, omnara) and state the
-  differentiation - session-preserving supervisor, phone and voice control, the land queue,
-  provenance - in the launch material rather than leaving readers to infer it.
+- [ ] Name the adjacent tools (herdr - the closest: YC F26, Apache-2.0 Rust agent
+  multiplexer with a session-owning background server - plus cmux, orca, claude-squad,
+  Vibe Kanban, Conductor, omnara) and state the differentiation - session-preserving
+  supervisor, phone and voice control, the land queue, provenance - in the launch material
+  rather than leaving readers to infer it.
 
 ### Phase 11 exit criteria
 

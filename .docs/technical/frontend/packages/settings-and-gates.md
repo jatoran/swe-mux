@@ -46,6 +46,7 @@ A group is a run of the array rather than a declared membership, and `tabForSect
 `settingsSubpageId` maps related implementation headings to the user-facing page that owns them.
 The desktop column and mobile slide-in sidebar both render an expansion button beside a paged tab and its nested page links below it.
 Clicking the tab navigates to its remembered page; clicking the expansion button changes only the sidebar tree.
+The content pane repeats the page links in a sticky horizontal row for direct local navigation.
 Only the selected page is visible, but search and deep links select its owner before calling `revealSetting`, so hidden pages remain addressable.
 Reference bodies may still fold inside a page behind `<details class="settings-disclosure">`.
 Settings → Voice is the worked case, pinned by `test/renderer/voice-settings.spec.ts`.

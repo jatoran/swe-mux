@@ -762,6 +762,7 @@ Its rules, and what each one is defending:
   Search and deep links select the owning page before revealing a control, so hidden pages remain fully addressable.
   The Settings sidebar renders an expansion button beside every paged tab.
   Clicking the tab opens its remembered page, while clicking the expansion button reveals or hides that tab's page links in place without navigating.
+  The same page links remain visible as a horizontal row at the top of the content pane, so desktop navigation does not require returning to the sidebar.
   The same expandable hierarchy is used in the mobile slide-in sidebar, so phones expose the same information architecture as desktop instead of replacing it with a horizontal strip.
   Short or dynamically composed tabs may still render as one page.
 - **A section is one `<section>`, and a section that is reference may fold its body.** The rail

@@ -195,6 +195,7 @@ function Host() {
     onUiScalePreview={() => 1}
     navOpen={navOpen}
     onNavOpenChange={setNavOpen}
+    onLaunchConfigurator={() => {}}
     onClose={() => {}}
   />
 }
