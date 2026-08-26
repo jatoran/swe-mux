@@ -118,7 +118,6 @@ def test_account_and_resource_switchers_escape_sidebar_as_viewport_popovers() ->
     # `ui-portal` is what keeps a body-portalled popover following the UI scale; see
     # test_frontend_ui_scale_contract for the rule it opts into.
     assert 'class="account-popover resource-usage-popover ui-portal"' in resources
-    assert "daemon + infrastructure" in resources
     assert ".account-popover{position:fixed" in css
     assert ".resource-usage-popover>section{padding:0}" in css
 
@@ -138,17 +137,29 @@ def test_expanded_resource_summary_is_one_icon_led_row_with_full_hover_copy() ->
     assert ".resource-usage-summary{width:100%;min-width:0;min-height:34px;display:flex" in css
 
 
-def test_resource_popover_separates_system_and_process_tree_memory_scopes() -> None:
+def test_resource_popover_is_three_figures_with_one_ram_box() -> None:
+    """The popover stays small: system CPU, one combined RAM box, process count.
+
+    The per-Project, daemon/infrastructure, and duplicated-tooling breakdowns
+    and the scope-explanation note were removed 2026-08-26; the Resources
+    dialog's Processes segment is the detail surface. The single RAM box
+    prefers the reclaimable (unique-set) reading the open panel samples and
+    falls back to the working set.
+    """
     resources = (ROOT / "frontend" / "src" / "ResourceUsage.tsx").read_text(
         encoding="utf-8"
     )
     css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
     assert "SYSTEM CPU" in resources
-    assert "RECLAIMABLE RAM" in resources
-    assert "WORKING SET" in resources
-    assert "CPU is whole-system load." in resources
-    assert "RAM and process counts cover swe-mux plus everything it started." in resources
+    assert "<article><span>RAM</span>" in resources
+    assert "reclaimableRam??combined.memory_bytes" in resources
+    assert "RECLAIMABLE RAM" not in resources
+    assert "WORKING SET" not in resources
+    assert "CPU is whole-system load." not in resources
+    assert "daemon + infrastructure" not in resources
+    assert "by project" not in resources
+    assert "duplicated per-session tooling" not in resources
     assert "OWNED RAM" not in resources
     assert "OWNED PROC" not in resources
     assert "grid-template-columns:repeat(auto-fit,minmax(72px,1fr))" in css
