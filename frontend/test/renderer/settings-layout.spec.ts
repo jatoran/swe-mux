@@ -203,6 +203,36 @@ test('wide: the section list is the docked column it always was', async ({ page 
   expect(g.headingText).toContain('Settings')
 })
 
+test('the active Settings tab adds no marker or indentation', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  const general=page.locator('.settings-tabs [role="tab"]',{hasText:'General'}).first()
+  const projects=page.locator('.settings-tabs [role="tab"]',{hasText:'Projects'}).first()
+  await expect(general).toHaveAttribute('aria-selected','true')
+
+  const measure=async()=>page.locator('.settings-tabs [role="tab"]').evaluateAll(buttons=>buttons.slice(0,2).map(button=>{
+    const element=button as HTMLElement
+    const text=element.firstChild
+    const range=document.createRange()
+    if(text)range.selectNodeContents(text)
+    return {
+      marker:getComputedStyle(element,'::before').content,
+      textLeft:Math.round(range.getBoundingClientRect().left),
+    }
+  }))
+
+  const before=await measure()
+  expect(before[0].marker).toBe('none')
+  expect(before[1].marker).toBe('none')
+  expect(before[0].textLeft).toBe(before[1].textLeft)
+  await projects.click()
+  await expect(projects).toHaveAttribute('aria-selected','true')
+  const after=await measure()
+  expect(after[0].marker).toBe('none')
+  expect(after[1].marker).toBe('none')
+  expect(after[0].textLeft).toBe(after[1].textLeft)
+})
+
 test('every tab renders, and every marked control is really in its DOM', async ({ page }) => {
   // `settingsCoverage.test.ts` walks from `config.py` to a control, and it reads *source*:
   // it cannot tell a control that renders from one sitting behind a condition that is never

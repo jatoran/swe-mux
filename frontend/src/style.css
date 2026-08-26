@@ -1912,7 +1912,7 @@ body {
    that names them. It is padding rather than type, because the UI-scale normalizer
    (`.settings-layer *`) owns font size, weight, and tracking with `!important`. */
 .settings-tabs button{min-height:33px;padding-left:18px;border:0;border-left:2px solid transparent!important;background:transparent!important;text-align:left;color:var(--muted)}
-.settings-tabs button:before{content:'  '}.settings-tabs button:hover{color:var(--text);background:var(--panel2)!important}.settings-tabs button.active{border-left-color:var(--accent)!important;color:var(--text);background:var(--panel2)!important}.settings-tabs button.active:before{content:'> ';color:var(--accent)}
+.settings-tabs button:hover{color:var(--text);background:var(--panel2)!important}.settings-tabs button.active{border-left-color:var(--accent)!important;color:var(--text);background:var(--panel2)!important}
 /* Tab groups. The wrapper is `display:contents` so its buttons stay direct flex
    children of the nav in both the desktop column and the mobile rail — a real box
    here would break the layout in both directions. The heading is the only thing
