@@ -75,6 +75,9 @@
   that structural instead of an audit. `cold_terminal_at` bounds how stale the replayed screen is
   and is absent when there is none; `cold_terminal_skipped` names why bytes were never kept, which
   is what lets a deliberately empty pane say so (`features/session-recovery.md`).
+- `SessionRecord.inactive` and `inactive_since`: the operator intentionally terminated this session's process tree while retaining its row and pane.
+  `inactive` is a flag beside `state="exited"`, not a `SessionState`, so every live-process consumer excludes it structurally.
+  Inactive rows persist until resume or explicit dismissal and are never aged or count-pruned.
 - `SessionRecord.approval_policy`: the live auto-approval grant —
   `ApprovalPolicy {mode: wait|allowlisted|allow_all, run_id, expires_at, granted_at, set_by,
   rules, auto_approved, max_auto, last_decision_at, last_request, floor_deferred}`.
@@ -165,11 +168,14 @@
   post-mortems (`features/status-detection.md` § durable timeline,
   `development/STATUS_INCIDENT_RUNBOOK.md`).
 - `session_recovery`: one row per session this daemon has run, holding the redacted metadata blob
-  it can be rebuilt from and an **open marker**. `closed_at IS NULL` means nobody was able to
+  it can be rebuilt from, an **open marker**, and nullable `inactive_at`.
+  `closed_at IS NULL AND inactive_at IS NULL` means nobody was able to
   record how that session ended, which is the whole signal a cold restore reads. Credentials are
   never persisted (`hook_secret`, `mcp_token` are dropped), terminal bytes live in files rather
   than in this table, and rows are bounded by `session_recovery_retention_days` (closed) and
-  `session_recovery_max_sessions` (open). See `features/session-recovery.md`.
+  `session_recovery_max_sessions` (open).
+  Rows with `inactive_at` are explicit user state and are exempt from both bounds until resume or dismissal.
+  See `features/session-recovery.md`.
 - `tier0_facts`: deterministic no-model fact capture (file writes, commands, tests, git, tools)
   with `content_hash`, canonical `fingerprint`, the owning `agent_run_id`/`project_id`, and a
   `source_seq` pointer into the event log. Test results additionally carry structured

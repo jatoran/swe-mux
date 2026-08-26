@@ -19,6 +19,19 @@ export function isColdSession(session: Session): boolean {
   return session.cold === true
 }
 
+/** An intentionally stopped session whose row and pane are durably retained. */
+export function isInactiveSession(session: Session): boolean {
+  return session.inactive === true
+}
+
+/** One line explaining why the retained row has no process behind it. */
+export function inactiveSessionSummary(session: Session): string {
+  if (!isInactiveSession(session)) return ''
+  return session.backend === 'shell'
+    ? 'Inactive - no process is running. Restart the terminal to use it again.'
+    : 'Inactive - no process is running. Resume to continue this conversation.'
+}
+
 /** Whether a recovered shell can be restarted from its recorded command. */
 export function canRestartCold(session: Session): boolean {
   // Cold *agents* are deliberately excluded. Replaying an agent's argv would

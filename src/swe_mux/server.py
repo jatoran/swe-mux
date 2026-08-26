@@ -717,6 +717,36 @@ async def _hydrate_llm_capabilities(
             capabilities.set(provider, llm_capabilities_of_record(row))
 
 
+async def _restore_durable_sessions(
+    config: Config,
+    sessions: SessionManager,
+    recovery: SessionRecoveryStore,
+    projects: ProjectManager,
+) -> None:
+    """Restore explicit inactive rows, then optional unexpected-loss rows."""
+    def project_exists(project_id: str) -> bool:
+        return project_id in projects.projects
+    try:
+        inactive = await sessions.restore_inactive_sessions(project_exists=project_exists)
+        if inactive:
+            log.info("restored %d inactive session(s) from the durable registry", inactive)
+    except Exception:
+        log.exception("inactive session restoration failed")
+    if config.session_recovery_enabled:
+        try:
+            restored = await sessions.restore_cold_sessions(project_exists=project_exists)
+            if restored:
+                log.info("restored %d cold session(s) from recovery data", restored)
+        except Exception:
+            log.exception("cold session restore failed")
+    try:
+        # A `discard` that died between deleting the row and the files, or a
+        # quarantined database, both leave directories nothing will ever read.
+        await recovery.sweep_orphan_directories(await recovery.known_ids())
+    except Exception:
+        log.exception("could not sweep orphan recovery directories")
+
+
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline
 ) -> None:
@@ -782,16 +812,17 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
     # (status-detection.md § durable timeline). Pruned by its own flush loop.
-    session_recovery = (
-        SessionRecoveryStore(
-            config.database_path,
-            config.data_dir / "recovery",
-            checkpoint_bytes=config.session_recovery_checkpoint_bytes,
-            retention_days=config.session_recovery_retention_days,
-            max_cold_sessions=config.session_recovery_max_sessions,
-        )
-        if config.session_recovery_enabled
-        else None
+    # The durable registry is always present because an explicit inactive session
+    # must survive even when unexpected-crash recovery is disabled. That switch
+    # controls only cold restoration and terminal checkpoint capture.
+    session_recovery = SessionRecoveryStore(
+        config.database_path,
+        config.data_dir / "recovery",
+        checkpoint_bytes=(
+            config.session_recovery_checkpoint_bytes if config.session_recovery_enabled else 0
+        ),
+        retention_days=config.session_recovery_retention_days,
+        max_cold_sessions=config.session_recovery_max_sessions,
     )
     status_timeline = StatusTimelineStore(
         config.database_path, retention_days=config.status_timeline_retention_days
@@ -926,20 +957,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         # Strictly after adoption: an open recovery row for a session the
         # supervisor just handed back describes a *live* process, and restoring
         # it as cold would present a running agent as a dead pane.
-        try:
-            restored = await sessions.restore_cold_sessions(
-                project_exists=lambda project_id: project_id in projects.projects
-            )
-            if restored:
-                log.info("restored %d cold session(s) from recovery data", restored)
-        except Exception:
-            log.exception("cold session restore failed")
-        try:
-            # A `discard` that died between deleting the row and the files, or a
-            # quarantined database, both leave directories nothing will ever read.
-            await session_recovery.sweep_orphan_directories(await session_recovery.known_ids())
-        except Exception:
-            log.exception("could not sweep orphan recovery directories")
+        await _restore_durable_sessions(config, sessions, session_recovery, projects)
     try:
         # Runs after both recovery paths have claimed what they can, so it can
         # only close rows that genuinely have no live pane behind them.

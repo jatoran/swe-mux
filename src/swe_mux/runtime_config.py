@@ -167,10 +167,13 @@ def apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     recovery: SessionRecoveryStore | None = app.get(keys.SESSION_RECOVERY)
     if recovery:
         # Three bounds the store reads at each checkpoint and each prune, so they
-        # apply live. Whether the store exists at all is `session_recovery_enabled`,
-        # which is restart-scoped for the opposite reason: it decides construction.
+        # apply live. `session_recovery_enabled` is restart-scoped because it gates
+        # unexpected-loss restoration and checkpoint capture; the durable registry
+        # itself stays present for explicit inactive sessions.
         if "session_recovery_checkpoint_bytes" in changed:
-            recovery.checkpoint_bytes = config.session_recovery_checkpoint_bytes
+            recovery.checkpoint_bytes = (
+                config.session_recovery_checkpoint_bytes if config.session_recovery_enabled else 0
+            )
         if "session_recovery_retention_days" in changed:
             recovery.retention_days = config.session_recovery_retention_days
         if "session_recovery_max_sessions" in changed:

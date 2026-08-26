@@ -148,7 +148,18 @@ async def health(request: web.Request) -> web.Response:
             "cold_sessions": (
                 sum(1 for s in sessions.sessions.values() if s.record.cold) if sessions else 0
             ),
-            "session_recovery": request.app.get(keys.SESSION_RECOVERY) is not None,
+            "inactive_sessions": (
+                sum(1 for s in sessions.sessions.values() if getattr(s.record, "inactive", False))
+                if sessions
+                else 0
+            ),
+            "session_recovery": bool(
+                getattr(
+                    request.app.get(keys.CONFIG),
+                    "session_recovery_enabled",
+                    request.app.get(keys.SESSION_RECOVERY) is not None,
+                )
+            ),
             # The same block the starting answer carries, so one consumer reads
             # one shape either way - and so the phase breakdown of the start that
             # just finished stays readable without going to the log.

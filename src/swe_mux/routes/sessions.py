@@ -31,6 +31,7 @@ from ..harness import (
     require_backend,
 )
 from ..http_support import json_response
+from ..layouts import attach_terminal, layout_terminal_ids, replace_terminal
 from ..models import (
     APPROVAL_MODES,
     ProjectRecord,
@@ -64,6 +65,7 @@ from ..session_attachments import (
 )
 from ..session_media import session_media_directory
 from ..session_recovery import SessionRecoveryStore
+from ..session_resume import ResumeRefused, resume_run
 from ..spawn_contract import (
     SpawnRequest,
     apply_spawn_model,
@@ -854,6 +856,122 @@ async def delete_session(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+async def stand_down_session(request: web.Request) -> web.Response:
+    """Terminate a session's process tree while retaining its visible identity."""
+    manager: SessionManager = request.app[keys.SESSIONS]
+    session = manager.resolve(request.match_info["sid"])
+    if session.record.inactive:
+        return json_response(session.record.snapshot())
+    if session.record.state in {"exited", "crashed"}:
+        raise ValueError("only a live session can be stood down")
+    recovery: SessionRecoveryStore | None = request.app.get(keys.SESSION_RECOVERY)
+    if recovery is None:
+        raise RuntimeError("the durable session registry is unavailable")
+    started = time.monotonic()
+    session.record.inactive = True
+    session.record.inactive_since = time.time()
+    session.record.requested_end_reason = "stood_down"
+    session.publish_update()
+    # Desired state first. A daemon restart in the stop window finishes this
+    # operation instead of re-adopting the resource the operator turned off.
+    await recovery.mark_inactive(session)
+    await manager.stop(session.record.id, reason="stood_down")
+    await recovery.mark_inactive(session)
+    await request.app[keys.EVENTS].emit(
+        "session_stood_down",
+        session_id=session.record.id,
+        source="http",
+        backend=session.record.backend,
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+    return json_response(session.record.snapshot())
+
+
+async def resume_inactive_session(request: web.Request) -> web.Response:
+    """Replace an inactive identity with a proven new process in the same pane."""
+    manager: SessionManager = request.app[keys.SESSIONS]
+    old = manager.resolve(request.match_info["sid"])
+    if not old.record.inactive or old.record.state not in {"exited", "crashed"}:
+        raise ValueError("session is not inactive")
+    project = request.app[keys.PROJECTS].projects.get(old.record.project_id)
+    if project is None:
+        raise ValueError("the session's owning Project is unavailable")
+
+    source_run_id = old.record.agent_run_id or old.record.id
+    outcome = None
+    if old.record.backend == "shell":
+        if not old.record.exe:
+            raise ValueError("the inactive terminal has no recorded command")
+        body: dict[str, Any] = {
+            "project_id": old.record.project_id,
+            "backend": "shell",
+            "name": old.record.name,
+            "executable": old.record.exe,
+            "argv": list(old.record.args),
+            "completion_mode": old.record.completion_mode,
+            "env": dict(old.record.spawn_env),
+        }
+        if old.record.spawn_cwd:
+            body["cwd"] = old.record.spawn_cwd
+        session = await _spawn_from_body(request.app, body)
+        session.record.relaunchable = old.record.relaunchable
+        session.publish_update()
+    else:
+        row = await request.app[keys.HISTORY].history_entry(source_run_id)
+        if row is None:
+            raise ValueError("the inactive session's history row is unavailable")
+        try:
+            outcome = await resume_run(
+                row,
+                sessions=manager,
+                projects=request.app[keys.PROJECTS],
+                target_project_id=old.record.project_id,
+                name=old.record.name,
+            )
+        except ResumeRefused as refusal:
+            return json_response(refusal.payload(), refusal.status)
+        session = outcome.session
+
+    current_layout = project.layout
+    next_layout = (
+        replace_terminal(current_layout, old.record.id, session.record.id)
+        if old.record.id in layout_terminal_ids(current_layout)
+        else attach_terminal(current_layout, session.record.id)
+    )
+    try:
+        await request.app[keys.PROJECTS].update(
+            old.record.project_id,
+            layout=next_layout,
+            layout_revision=project.layout_revision,
+        )
+    except Exception:
+        await manager.stop(session.record.id)
+        manager.sessions.pop(session.record.id, None)
+        raise
+
+    child_run_id = session.record.agent_run_id or session.record.id
+    if outcome is not None and child_run_id != source_run_id:
+        await request.app[keys.AUTOMATION_STORE].add_lineage(
+            source_run_id,
+            child_run_id,
+            "resume",
+            {"backend": old.record.backend, "project_id": old.record.project_id},
+        )
+    manager.sessions.pop(old.record.id, None)
+    recovery: SessionRecoveryStore | None = request.app.get(keys.SESSION_RECOVERY)
+    if recovery is not None:
+        await recovery.discard(old.record.id)
+    await _discard_session_media(request.app, old.record.id)
+    await request.app[keys.EVENTS].emit(
+        "session_resumed_from_inactive",
+        session_id=session.record.id,
+        source="http",
+        replaced=old.record.id,
+        backend=session.record.backend,
+    )
+    return json_response({"session": session.record.snapshot(), "replaced": old.record.id}, 201)
+
+
 async def relaunch_session(request: web.Request) -> web.Response:
     """Replay a task-launched shell in place: spawn a fresh copy, retire the old.
 
@@ -1032,6 +1150,8 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.put("/api/sessions/{sid}/approvals", put_session_approvals),
     web.post("/api/sessions/{sid}/approvals/approve-once", approve_pending_request),
     web.delete("/api/sessions/{sid}", delete_session),
+    web.post("/api/sessions/{sid}/stand-down", stand_down_session),
+    web.post("/api/sessions/{sid}/resume", resume_inactive_session),
     web.post("/api/sessions/{sid}/relaunch", relaunch_session),
     web.post("/api/sessions/{sid}/attachments", upload_session_attachment),
     web.post("/api/sessions/{sid}/media", upload_session_media),

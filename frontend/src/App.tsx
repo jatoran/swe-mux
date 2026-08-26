@@ -15,7 +15,9 @@ import { stageBranchSeed } from './branchSeed'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
 import { EndedPaneBanner } from './EndedPaneBanner'
-import { canRestartCold, coldSessionSummary, isColdSession } from './coldSession.ts'
+import {
+  canRestartCold, coldSessionSummary, inactiveSessionSummary, isColdSession, isInactiveSession,
+} from './coldSession.ts'
 import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
@@ -4206,6 +4208,16 @@ export function App() {
     }
   }
 
+  const standDownSession = async (session: Session) => {
+    try {
+      const inactive = await api<Session>('POST', `/api/sessions/${session.id}/stand-down`, {})
+      updateSession(inactive)
+      setContextMenu(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   const requestKill = (session: Session) => {
     // Confirmation guards against destroying work, and an ended session has
     // none left to destroy: there is no process to interrupt and no turn to
@@ -4691,6 +4703,24 @@ export function App() {
       setContextMenu(null)
       await updateLayout(session.project_id, replaceTerminal(layoutMap[session.project_id] || emptyLayout(), session.id, resumed.id))
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+
+  const resumeInactiveSession = async (session: Session) => {
+    try {
+      const { session: resumed } = await api<{session: Session; replaced: string}>(
+        'POST', `/api/sessions/${session.id}/resume`, {},
+      )
+      markProjectRecent(resumed.project_id)
+      startupOrigins.current[resumed.id] = performance.now()
+      setSessions(items => [...items.filter(item => item.id !== session.id && item.id !== resumed.id), resumed])
+      if (activeId === session.id) setActiveId(resumed.id)
+      if (focusedViewId === session.id) requestFocusView(resumed.id)
+      if (zoomedId === session.id) setZoomedId(resumed.id)
+      setContextMenu(null)
+      await refresh()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   // Delegated rather than reimplemented: the sidebar row and the tab strip resolve
@@ -5556,8 +5586,10 @@ export function App() {
         },
       }:undefined,
     })),
-    { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
-    { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
+    { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill and remove focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
+    { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill and remove selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
+    { id: 'session.standDown', label: 'Stand down selected session', category: 'session', available: !!commandSession && !isEndedSession(commandSession), disabledReason: 'Select a live session', run: () => commandSession && void standDownSession(commandSession) },
+    { id: 'session.resumeInactive', label: commandSession?.backend === 'shell' ? 'Restart inactive terminal' : 'Resume inactive session', category: 'session', available: !!commandSession && isInactiveSession(commandSession), disabledReason: 'Select an inactive session', run: () => commandSession && void resumeInactiveSession(commandSession) },
     { id: 'session.clearEnded', label: `Remove all ended sessions from sidebar${clearEndedCount > 1 ? ` (${clearEndedCount})` : ''}`, category: 'session', available: clearEndedCount > 0, disabledReason: 'No ended sessions in this Project', run: () => void clearEndedSessions(clearEndedTarget) },
     { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
     // Same endpoint, different framing: for a recovered shell this is not
@@ -5720,7 +5752,7 @@ export function App() {
     { id: 'session.reveal', label: 'Reveal selected working directory', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api('POST', '/api/reveal', { path: commandSession.cwd }); setContextMenu(null) } },
     { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.project_id, 'horizontal') } } },
     { id: 'session.broadcastMembership', label: commandSession?.broadcast ? 'Remove selected session from broadcast' : 'Add selected session to broadcast', category: 'input', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api<Session>('POST', `/api/sessions/${commandSession.id}/broadcast-set`, { include: !commandSession.broadcast }).then(updated => { updateSession(updated); setContextMenu(null) }) } },
-    { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
+    { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && !isInactiveSession(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
     // Offered on a live pane too, and that is the point: "pick this up on Tuesday" is
     // asked about work in progress far more often than about something already ended.
     { id: 'session.resumeLater', label: 'Resume selected agent later…', category: 'history', available: !!commandSession && isAgent(commandSession), disabledReason: 'Select an agent session', run: () => commandSession && scheduleResumeFromSession(commandSession) },
@@ -6579,15 +6611,15 @@ export function App() {
       </div>
       {isEndedSession(session)&&<EndedPaneBanner
         session={session}
-        onResume={isAgent(session)?()=>void resumeSession(session):undefined}
-        onRestart={canRestartCold(session)?()=>void relaunchSession(session):undefined}
+        onResume={isAgent(session)?()=>void (isInactiveSession(session) ? resumeInactiveSession(session) : resumeSession(session)):undefined}
+        onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeInactiveSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>void openTranscriptForSession(session.id):undefined}
       />}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
-      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -6748,7 +6780,7 @@ export function App() {
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,ackedTurns)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${isSearchCursorSession(session.id)?'search-cursor':''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${session.pending?'pending-terminal-row':''}`} title={isColdSession(session)?coldSessionSummary(session):undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${isSearchCursorSession(session.id)?'search-cursor':''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''} ${session.pending?'pending-terminal-row':''}`} title={isInactiveSession(session)?inactiveSessionSummary(session):isColdSession(session)?coldSessionSummary(session):undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig),sessionStandingMark(session,rowConfig))}
       <SessionRowLive session={session} config={rowConfig} facts={rowFacts} identityOnly={identityOnly}/>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
@@ -7542,14 +7574,15 @@ export function App() {
           learn — it belongs to the startup diagnostics, not to the menu you open to rename
           or kill something. */}
       <div class="context-session-info">
-        <span title="Process ID of the session's root process">PID {contextMenu.session.pid}</span>
+        <span title={isInactiveSession(contextMenu.session)?'This session has no running process':"Process ID of the session's root process"}>{isInactiveSession(contextMenu.session)?'No process':`PID ${contextMenu.session.pid}`}</span>
         {contextMenu.session.git.branch&&<span class="git-chip" title={`Git branch ${contextMenu.session.git.branch}${contextMenu.session.git.dirty?` · ${contextMenu.session.git.dirty} changed files`:' · clean'}`}>git:{contextMenu.session.git.branch}{contextMenu.session.git.dirty?` +${contextMenu.session.git.dirty}`:''}</span>}
       </div>
       <button class="menu-row" onClick={() => runNamedCommand('session.rename')}><span class="menu-row-icon" aria-hidden="true"><RenameIcon/></span><span class="menu-row-label">Rename</span></button>
       {isAgent(contextMenu.session)&&contextMenu.session.auto_named!==false&&!isEndedSession(contextMenu.session)&&<button class="menu-row" onClick={() => runNamedCommand('session.regenerateTitle')}><span class="menu-row-icon" aria-hidden="true"><SparkleIcon/></span><span class="menu-row-label">Regenerate title</span></button>}
       {/* No `Open in focused pane`. Clicking the row already does it, from the same list
           the menu was opened on, so the row existed only to say so a second time. */}
-      {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.resume')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">Resume as new…</span></button>}
+      {isInactiveSession(contextMenu.session)&&<button class="menu-row" onClick={() => runNamedCommand('session.resumeInactive')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">{contextMenu.session.backend==='shell'?'Restart terminal':'Resume'}</span></button>}
+      {!isInactiveSession(contextMenu.session)&&['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.resume')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">Resume as new…</span></button>}
       {canRestartCold(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.restartCold')}><span class="menu-row-icon" aria-hidden="true"><RefreshIcon/></span><span class="menu-row-label">Restart terminal</span></button>}
       {activityBadges(contextMenu.session).length>0&&<button class="menu-row" onClick={() => runNamedCommand('session.clearStandingActivity')}><span class="menu-row-icon" aria-hidden="true"><ClearIcon/></span><span class="menu-row-label">Clear standing activity</span></button>}
       {contextMenu.session.state==='awaiting'&&contextMenu.session.awaiting_reason==='approval'&&<button class="menu-row" onClick={() => runNamedCommand('session.approveOnce')}><span class="menu-row-icon" aria-hidden="true"><CheckIcon/></span><span class="menu-row-label">Approve this request</span></button>}
@@ -7595,10 +7628,11 @@ export function App() {
       </MenuGroup>}
       <div class="context-rule" />
       <button class="menu-row" onClick={() => runNamedCommand('session.broadcastMembership')}><span class="menu-row-icon" aria-hidden="true"><BroadcastIcon/></span><span class="menu-row-label">{contextMenu.session.broadcast ? 'Remove from broadcast' : 'Add to broadcast'}</span></button>
+      {!isEndedSession(contextMenu.session)&&<button class="menu-row" onClick={() => runNamedCommand('session.standDown')}><span class="menu-row-icon" aria-hidden="true"><PowerIcon/></span><span class="menu-row-label">Stand down</span></button>}
       {/* One control, two marks: a live session is stopped (power), an ended one is
           only cleared off the list (bin). The label already switches; the icon has to
           switch with it or it contradicts the word beside it. */}
-      <button class="menu-row danger" onClick={() => runNamedCommand('session.killImmediate')}><span class="menu-row-icon" aria-hidden="true">{isEndedSession(contextMenu.session) ? <TrashIcon/> : <PowerIcon/>}</span><span class="menu-row-label">{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill session'}</span></button>
+      <button class="menu-row danger" onClick={() => runNamedCommand('session.killImmediate')}><span class="menu-row-icon" aria-hidden="true">{isEndedSession(contextMenu.session) ? <TrashIcon/> : <PowerIcon/>}</span><span class="menu-row-label">{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill and remove'}</span></button>
       {/* The sweep, offered only from a row that is itself dead and only when it would
           clear more than that row. Ended sessions arrive in runs - a wave of worktree
           agents finishes, a Project is left overnight - and clearing them one row at a
@@ -7607,7 +7641,7 @@ export function App() {
           and a menu that offers the same act twice makes both rows worth reading to find
           out they are the same. Beneath the single remove rather than above it: the
           specific thing the menu was opened on comes first, the bulk act second. */}
-      {isEndedSession(contextMenu.session)&&clearEndedCount>1&&<button class="menu-row danger" onClick={() => runNamedCommand('session.clearEnded')}><span class="menu-row-icon" aria-hidden="true"><TrashSweepIcon/></span><span class="menu-row-label">Remove all {clearEndedCount} ended sessions</span></button>}
+      {isEndedSession(contextMenu.session)&&!isInactiveSession(contextMenu.session)&&clearEndedCount>1&&<button class="menu-row danger" onClick={() => runNamedCommand('session.clearEnded')}><span class="menu-row-icon" aria-hidden="true"><TrashSweepIcon/></span><span class="menu-row-label">Remove all {clearEndedCount} ended sessions</span></button>}
     </div>}
 
     {projectMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 320)) }}>

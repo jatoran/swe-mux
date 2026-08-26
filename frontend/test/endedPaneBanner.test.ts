@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  canRestartCold, checkpointAge, coldSessionSummary, isColdSession, missingContentReason,
+  canRestartCold, checkpointAge, coldSessionSummary, inactiveSessionSummary, isColdSession,
+  isInactiveSession, missingContentReason,
 } from '../src/coldSession.ts'
 import { reconcileTerminals, openTab, terminalIds, terminalLeaf, type PaneLayout } from '../src/layout.ts'
 import type { Session } from '../src/types.ts'
@@ -90,4 +91,15 @@ test('the row tooltip always accounts for the pane content, present or not', () 
     cold: true, cold_terminal_skipped: 'alternate_screen_harness',
   })
   assert.match(coldSessionSummary(withoutContent, now), /full-screen/i)
+})
+
+test('an intentionally inactive session is distinct from crash recovery', () => {
+  const agent = session('agent', { backend: 'claude', state: 'exited', inactive: true })
+  assert.equal(isInactiveSession(agent), true)
+  assert.equal(isColdSession(agent), false)
+  assert.match(inactiveSessionSummary(agent), /Resume to continue this conversation/)
+  assert.match(
+    inactiveSessionSummary(session('shell', { state: 'exited', inactive: true })),
+    /Restart the terminal/,
+  )
 })

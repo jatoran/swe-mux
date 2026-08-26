@@ -142,9 +142,9 @@ RESTART_FIELDS = {
     "automation_queue_size",
     "openrouter_request_timeout_seconds",
     "pty_supervisor_enabled",
-    # The recovery store is constructed once at daemon start, and turning it off
-    # while sessions are already tracked would leave their rows open forever -
-    # every one of them coming back as cold on the next boot.
+    # Unexpected-loss restoration and checkpoint capture are selected once at
+    # daemon start. The durable registry itself remains present for inactive
+    # sessions, so this switch never controls explicit Stand down persistence.
     "session_recovery_enabled",
     # Adapters are constructed once at daemon start, so the per-harness MCP and
     # instrumentation gates only re-read on the next restart. Marking them

@@ -241,6 +241,36 @@ def layout_terminal_ids(layout: object) -> list[str]:
     return [str(leaf["id"]) for leaf in _layout_leaves(layout) if leaf["kind"] == "terminal"]
 
 
+def replace_terminal(layout: object, target_id: str, replacement_id: str) -> dict[str, Any]:
+    """Replace one terminal identity without changing its pane or tab position."""
+    normalized = normalize_layout(layout)
+
+    def visit(node: dict[str, Any] | None) -> dict[str, Any] | None:
+        if node is None:
+            return None
+        if node["type"] == "stack":
+            children = [
+                (
+                    {**child, "id": replacement_id}
+                    if child["kind"] == "terminal" and child["id"] == target_id
+                    else child
+                )
+                for child in node["children"]
+            ]
+            return {
+                **node,
+                "children": children,
+                "active_child_id": (
+                    replacement_id
+                    if node["active_child_id"] == target_id
+                    else node["active_child_id"]
+                ),
+            }
+        return {**node, "first": visit(node["first"]), "second": visit(node["second"])}
+
+    return normalize_layout({"version": LAYOUT_VERSION, "root": visit(normalized["root"])})
+
+
 def _pane_containing(root: dict[str, Any] | None, resource_id: str | None) -> dict[str, Any] | None:
     panes: list[dict[str, Any]] = []
 

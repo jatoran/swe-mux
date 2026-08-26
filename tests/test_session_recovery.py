@@ -333,6 +333,45 @@ async def test_prune_bounds_recovery_data_by_age_and_by_count(tmp_path: Path) ->
         store.close()
 
 
+async def test_an_inactive_row_survives_retention_and_cold_count_pruning(tmp_path: Path) -> None:
+    store = make_store(tmp_path, retention_days=1, max_cold_sessions=0)
+    try:
+        session = FakeSession("inactive")
+        await store.open_session(cast(Any, session))
+        session.record.inactive = True
+        session.record.inactive_since = time.time()
+        await store.mark_inactive(cast(Any, session))
+        session.record.state = "exited"
+        await store.close_session(session.record.id, "stood_down")
+        await store.mark_inactive(cast(Any, session))
+
+        assert await store.open_rows() == []
+        assert [row.session_id for row in await store.inactive_rows()] == ["inactive"]
+        assert await store.prune(now=time.time() + 365 * 86400) == 0
+        assert [row.session_id for row in await store.inactive_rows()] == ["inactive"]
+    finally:
+        store.close()
+
+
+async def test_inactive_intent_is_durable_even_before_spawn_registration_finishes(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    try:
+        session = FakeSession("racing-registration")
+        session.record.inactive = True
+        session.record.inactive_since = 456.0
+
+        await store.mark_inactive(cast(Any, session))
+
+        rows = await store.inactive_rows()
+        assert [row.session_id for row in rows] == [session.record.id]
+        assert rows[0].inactive_at == 456.0
+        assert rows[0].meta["record"]["inactive"] is True
+    finally:
+        store.close()
+
+
 async def test_orphan_directories_are_swept(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     try:
@@ -588,6 +627,38 @@ async def test_a_recovered_session_is_dead_visible_and_labelled(tmp_path: Path) 
         assert session.pty.isalive() is False
         assert session.pty.pid == -1
         assert b"echo hi" in session.scrollback.bytes()
+    finally:
+        store.close()
+
+
+async def test_an_inactive_session_restores_without_a_process_or_crash_label(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    try:
+        retained = FakeSession("inactive")
+        retained.record.inactive = True
+        retained.record.inactive_since = 123.0
+        retained.write(b"last visible line\r\n")
+        await store.open_session(cast(Any, retained))
+        store.attach(cast(Any, retained))
+        await store.mark_inactive(cast(Any, retained))
+        retained.record.state = "exited"
+        await store.close_session(retained.record.id, "stood_down")
+        await store.mark_inactive(cast(Any, retained))
+
+        manager = bare_manager(store)
+        assert await manager.restore_inactive_sessions() == 1
+        session = manager.sessions["inactive"]
+        assert session.record.state == "exited"
+        assert session.record.inactive is True
+        assert session.record.inactive_since == 123.0
+        assert session.record.cold is False
+        assert session.record.pid == -1
+        assert session.pty.isalive() is False
+        assert b"last visible line" in session.scrollback.bytes()
+        _snapshot, _revision, kind, _payload, _position, _sub = session.attach_and_subscribe(0)
+        assert kind == "attach"
     finally:
         store.close()
 

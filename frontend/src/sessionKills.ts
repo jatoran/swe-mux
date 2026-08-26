@@ -97,6 +97,7 @@ export function clearableEndedSessions(
   return sessions.filter(session =>
     session.project_id === projectId
     && (session.state === 'exited' || session.state === 'crashed')
+    && session.inactive !== true
     && !tombstones[session.id])
 }
 

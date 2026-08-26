@@ -480,6 +480,13 @@ class SessionRecord:
     #: pulse. Naming the reason is what lets the pane say so instead of looking
     #: broken.
     cold_terminal_skipped: str | None = None
+    # Intentionally retained after its process tree was terminated. This is a
+    # flag beside ``state="exited"`` for the same structural reason ``cold`` is
+    # beside ``state="crashed"``: every process-owning consumer already excludes
+    # terminal states, while the registry and UI alone need to distinguish why
+    # this dead session must survive until an explicit resume or dismissal.
+    inactive: bool = False
+    inactive_since: float | None = None
     # The end reason to persist when this session terminates, set by a deliberate
     # end operation before it sends the exit sequence (Phase 7.6). It lets an
     # agent-initiated graceful end record `agent_ended` even when the CLI exits on

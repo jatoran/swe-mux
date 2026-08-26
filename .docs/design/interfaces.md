@@ -73,10 +73,12 @@ just cannot reach them — reporting that as "no supervisor" hides sessions that
 and unkillable from here. `supervisor_unadopted` counts supervised sessions this daemon
 could not rebuild (snapshot drift, a crash inside the spawn-meta window); they keep running
 with no UI handle, so the count must be visible rather than only a log line.
-It also reports `session_recovery: bool` and `cold_sessions`: sessions rebuilt from durable
-recovery data because their processes died with a daemon that never recorded how they ended
-(`features/session-recovery.md`). A non-zero count is the signal that something took the whole
-app down, which no other field says. Shutdown exists only when the daemon
+It also reports `session_recovery: bool`, `cold_sessions`, and `inactive_sessions`.
+`session_recovery` is whether unexpected-loss restoration is enabled.
+`cold_sessions` counts sessions rebuilt because their processes died with a daemon that never recorded how they ended (`features/session-recovery.md`).
+A non-zero cold count is the signal that something took the whole app down, which no other field says.
+`inactive_sessions` counts intentional Stand down rows with no process.
+Shutdown exists only when the daemon
 was launched with desktop control, accepts IP-loopback peers only, compares the generated token
 in constant time, and returns `202 {status: "shutting_down", mode}`. An optional JSON body
 `{mode: "quit"|"restart"}` (default `quit`) carries shutdown intent: `quit` reaps every session
@@ -734,8 +736,10 @@ POST   /sessions/{id}/title/regenerate
 POST   /sessions/{id}/standing-activity/clear
 GET    /sessions/{id}/approvals
 PUT    /sessions/{id}/approvals                 {mode: wait|allowlisted|allow_all, set_by?}
-POST   /sessions/{id}/approvals/approve-once    {fingerprint?}
-DELETE /sessions/{id}
+  POST   /sessions/{id}/approvals/approve-once    {fingerprint?}
+  POST   /sessions/{id}/stand-down
+  POST   /sessions/{id}/resume
+  DELETE /sessions/{id}
 POST   /sessions/{id}/input
 GET    /sessions/{id}/branch-points[?limit=]
 POST   /sessions/{id}/branch          {name?, target_session_id?, direction?, from_message_id?, mode?}
@@ -838,6 +842,16 @@ A no-op call emits nothing; a real one publishes a session update and a `session
 (carrying `turn_seq` and `unread`) so other devices converge.
 Separate from `PATCH /sessions/{id}` because the dwell-timer path must not carry that route's
 history metadata write.
+
+`POST /sessions/{id}/stand-down` accepts no body, writes durable inactive intent, terminates the complete process tree, and returns the retained session snapshot with `state="exited"`, `inactive=true`, and `inactive_since`.
+The row and layout leaf remain present.
+The operation emits `session_stood_down {session_id, backend, duration_ms}`.
+
+`POST /sessions/{id}/resume` accepts no body and is valid only for an inactive session.
+An agent delegates to the shared conversation-resume authority; a shell replays its recorded executable, argv, cwd, environment, and completion mode.
+The daemon proves the replacement live, replaces the old terminal identity in the Project layout, discards the inactive recovery row, and returns `201 {session, replaced}`.
+Failure before layout replacement leaves the inactive session intact.
+Success emits `session_resumed_from_inactive {session_id, replaced, backend}`.
 
 `POST /sessions/{id}/standing-activity/clear` takes an optional
 `{kind?: 'loop'|'cron'|'background_tasks'|'subagents'}` (the whole set when omitted or when the

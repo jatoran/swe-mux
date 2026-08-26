@@ -211,6 +211,9 @@ export interface Session {
    * live child to pulse.
    */
   cold_terminal_skipped?: string | null
+  /** Intentionally stopped and durably retained until resume or explicit removal. */
+  inactive?: boolean
+  inactive_since?: number | null
   /** Client-only optimistic row/tab shown while POST /api/sessions is in flight. */
   pending?: boolean
   /** Client-only copy for a pending pane whose preparation is more specific than startup. */

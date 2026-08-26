@@ -13,6 +13,7 @@
 - Project: explicit canonical folder and the only session/layout/resource container.
 - Group: optional sidebar-only organization of Projects.
 - Session: one ConPTY-hosted process with immutable Project ownership.
+- Inactive session: an intentionally stopped session retained without a process until resume or dismissal.
 - Pane: one leaf region in the desktop split tree. Each pane owns an ordered tab stack and one
   active tab.
 - Tab/view: one terminal, preview, History, or Project-resource viewport inside a pane. View
@@ -51,6 +52,8 @@ scrollback and the mirrored metadata are process memory. A **durable session reg
 supervisor crash, a force close, a power loss, or the flag being off. Sessions whose end nobody
 recorded come back as dead-but-visible **cold sessions** at the next boot, after supervisor
 adoption has claimed everything that is still running (`features/session-recovery.md`).
+An explicit Stand down writes durable inactive intent before stopping the process tree.
+Inactive rows restore on every boot independently of unexpected-loss recovery settings and retention limits.
 
 ## Package boundaries
 
@@ -151,6 +154,8 @@ adoption has claimed everything that is still running (`features/session-recover
     any two live sessions claiming one conversation and heals a Claude session back to its own
     anchor, and backends whose CLI reports conversation changes itself (Claude) never adopt a
     conversation by filesystem heuristics.
+17. Stand down terminates the process tree but preserves the session row and layout leaf.
+    Resume creates a fresh process identity and replaces the old layout identity only after the replacement is live.
 
 ## Failure modes
 

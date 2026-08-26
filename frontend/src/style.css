@@ -5334,6 +5334,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .tab-main.exited,.tab-main.crashed{opacity:.62}
 .tab-main.cold{text-decoration:underline dotted var(--muted) 1px;text-underline-offset:3px}
 .session-row.cold .row-title{text-decoration:underline dotted var(--muted) 1px;text-underline-offset:3px}
+.tab-main.inactive,.session-row.inactive{opacity:.68}
+.tab-main.inactive .state-dot,.session-row.inactive .state-dot{filter:saturate(0)}
 .cold-pane-banner{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;padding:5px 9px;border-bottom:1px solid var(--line);background:#191410;color:var(--amber);font-size:10px;line-height:1.5}
 .cold-pane-banner strong{font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:9px}
 .cold-pane-banner span{color:var(--muted)}

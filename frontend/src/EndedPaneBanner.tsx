@@ -1,4 +1,4 @@
-import { checkpointAge, missingContentReason } from './coldSession.ts'
+import { checkpointAge, isInactiveSession, missingContentReason } from './coldSession.ts'
 import type { Session } from './types'
 
 /**
@@ -26,14 +26,17 @@ export function EndedPaneBanner(
   { session, onResume, onRestart, onOpenTranscript }: EndedPaneBannerProps,
 ) {
   const cold = session.cold === true
+  const inactive = isInactiveSession(session)
   // The daemon stamps this only when it actually restored bytes, so its absence
   // *is* "this pane is empty" — the pane does not have to report back.
   const captured = session.cold_terminal_at
   const missing = cold && !captured ? missingContentReason(session) : null
   return <div class="cold-pane-banner" role="status">
-    <strong>{cold ? 'recovered' : 'ended'}</strong>
+    <strong>{inactive ? 'inactive' : cold ? 'recovered' : 'ended'}</strong>
     <span>
-      {cold
+      {inactive
+        ? 'No process is running. This session stays here until you resume or remove it.'
+        : cold
         ? 'This session was recovered after an unexpected shutdown. Its process is gone.'
         : 'This session has ended. The pane is read-only.'}
     </span>
@@ -42,7 +45,7 @@ export function EndedPaneBanner(
       : null}
     {missing ? <span class="cold-pane-empty">{missing}</span> : null}
     {onOpenTranscript ? <button onClick={onOpenTranscript}>Read transcript</button> : null}
-    {onResume ? <button onClick={onResume}>Resume as new…</button> : null}
+    {onResume ? <button onClick={onResume}>{inactive ? 'Resume' : 'Resume as new…'}</button> : null}
     {onRestart ? <button onClick={onRestart}>Restart terminal</button> : null}
   </div>
 }

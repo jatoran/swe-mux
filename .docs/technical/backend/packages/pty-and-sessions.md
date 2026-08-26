@@ -93,11 +93,18 @@ Two ordering rules make the drain safe. It **waits before it cancels** (`SESSION
 
 **Not:** provider transcript parsing, or Project mutation.
 
+Intentional inactivity stays on the terminal-state side of this registry.
+`restore_inactive_sessions` rebuilds dead visible entries and completes a stand-down interrupted after its durable intent write.
+No inactive entry owns session loops or process resources.
+
 ## `session_recovery.py`
 
 The durable session registry (`session_recovery` table, open marker, redaction) plus daemon-side terminal checkpoints: a framed append log and an atomic rebased checkpoint under `<data_dir>/recovery/<sid>/`, a crash-tolerant reader, and retention and orphan sweeps.
 
 **Not:** the supervisor process - the PTY supervisor is the *primary* recovery path and a change there reaps every live session, so nothing here may run in it - nor the session registry or HTTP handlers.
+
+`inactive_at` is explicit retained state rather than an open-row crash signal.
+Inactive rows bypass age and cold-count pruning until resume or dismissal.
 
 ## `session_attachments.py`
 

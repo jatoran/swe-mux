@@ -12,6 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import app_keys as keys
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
+from swe_mux.layouts import layout_terminal_ids
 from swe_mux.models import SessionRecord
 from swe_mux.routes.attention import list_lineage
 from swe_mux.routes.automation import (
@@ -22,7 +23,12 @@ from swe_mux.routes.automation import (
     patch_automation_notifications,
 )
 from swe_mux.routes.insights import create_observer_batch, export_handoff, second_opinion
-from swe_mux.routes.sessions import delete_session, relaunch_session
+from swe_mux.routes.sessions import (
+    delete_session,
+    relaunch_session,
+    resume_inactive_session,
+    stand_down_session,
+)
 from swe_mux.server import error_middleware
 
 
@@ -33,6 +39,9 @@ class EventsStub:
         self.emitted: list[tuple[str, dict[str, Any]]] = []
 
     def emit_background(self, event_type: str, **payload: Any) -> None:
+        self.emitted.append((event_type, payload))
+
+    async def emit(self, event_type: str, **payload: Any) -> None:
         self.emitted.append((event_type, payload))
 
     def payload(self, event_type: str) -> dict[str, Any]:
@@ -162,6 +171,158 @@ async def test_delete_live_session_stops_it_and_records_how_long_that_took(
     assert removed["exit_code"] == 0
     assert removed["stop_ms"] >= 0
     assert removed["total_ms"] >= removed["stop_ms"]
+
+
+async def test_stand_down_stops_but_retains_the_session_and_persists_both_sides(
+    tmp_path: Path,
+) -> None:
+    record = SimpleNamespace(
+        id="live-session",
+        state="idle",
+        inactive=False,
+        inactive_since=None,
+        requested_end_reason=None,
+        backend="claude",
+        snapshot=lambda: {
+            "id": "live-session",
+            "state": record.state,
+            "inactive": record.inactive,
+        },
+    )
+    published: list[str] = []
+    session = SimpleNamespace(record=record, publish_update=lambda: published.append(record.state))
+
+    class SessionsStub:
+        def __init__(self) -> None:
+            self.sessions = {record.id: session}
+
+        def resolve(self, identity: str) -> Any:
+            return self.sessions[identity]
+
+        async def stop(self, identity: str, *, reason: str = "killed") -> None:
+            assert identity == record.id
+            assert reason == "stood_down"
+            record.state = "exited"
+
+    class RecoveryStub:
+        def __init__(self) -> None:
+            self.states: list[str] = []
+
+        async def mark_inactive(self, target: Any) -> None:
+            self.states.append(target.record.state)
+
+    manager = SessionsStub()
+    recovery = RecoveryStub()
+    events = EventsStub()
+    request = SimpleNamespace(
+        app={
+            keys.SESSIONS: manager,
+            keys.SESSION_RECOVERY: recovery,
+            keys.EVENTS: events,
+        },
+        match_info={"sid": record.id},
+    )
+
+    response = await stand_down_session(cast(Any, request))
+
+    assert response.status == 200
+    assert record.inactive is True
+    assert record.inactive_since is not None
+    assert record.state == "exited"
+    assert record.id in manager.sessions
+    assert recovery.states == ["idle", "exited"]
+    assert published == ["idle"]
+    assert events.payload("session_stood_down")["backend"] == "claude"
+
+
+async def test_resume_inactive_shell_replaces_its_layout_identity_only_after_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_record = SimpleNamespace(
+        id="inactive-shell",
+        project_id="default",
+        name="parked shell",
+        backend="shell",
+        state="exited",
+        inactive=True,
+        agent_run_id="",
+        exe="pwsh.exe",
+        args=["-NoLogo"],
+        completion_mode="interactive",
+        spawn_env={"MODE": "parked"},
+        spawn_cwd=str(tmp_path),
+        relaunchable=False,
+    )
+    old = SimpleNamespace(record=old_record)
+    new_record = SimpleNamespace(
+        id="resumed-shell",
+        agent_run_id="",
+        backend="shell",
+        relaunchable=True,
+        snapshot=lambda: {"id": "resumed-shell", "backend": "shell"},
+    )
+    new = SimpleNamespace(record=new_record, publish_update=lambda: None)
+
+    class SessionsStub:
+        def __init__(self) -> None:
+            self.sessions = {old_record.id: old}
+
+        def resolve(self, identity: str) -> Any:
+            return self.sessions[identity]
+
+        async def stop(self, _identity: str, *, reason: str = "killed") -> None:
+            raise AssertionError(f"replacement unexpectedly stopped: {reason}")
+
+    class RecoveryStub:
+        def __init__(self) -> None:
+            self.discarded: list[str] = []
+
+        async def discard(self, identity: str) -> None:
+            self.discarded.append(identity)
+
+    manager = SessionsStub()
+    projects = ProjectsStub()
+    projects.projects["default"].layout = {
+        "version": 7,
+        "root": {
+            "type": "stack",
+            "id": "pane-1",
+            "children": [{"type": "leaf", "kind": "terminal", "id": old_record.id}],
+            "active_child_id": old_record.id,
+        },
+    }
+    captured: dict[str, Any] = {}
+
+    async def fake_spawn(_app: Any, body: dict[str, Any]) -> Any:
+        captured.update(body)
+        manager.sessions[new_record.id] = new
+        return new
+
+    monkeypatch.setattr("swe_mux.routes.sessions._spawn_from_body", fake_spawn)
+    recovery = RecoveryStub()
+    events = EventsStub()
+    request = SimpleNamespace(
+        app={
+            keys.SESSIONS: manager,
+            keys.PROJECTS: projects,
+            keys.SESSION_RECOVERY: recovery,
+            keys.CONFIG: SimpleNamespace(data_dir=tmp_path),
+            keys.EVENTS: events,
+        },
+        match_info={"sid": old_record.id},
+    )
+
+    response = await resume_inactive_session(cast(Any, request))
+
+    assert response.status == 201
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["env"] == {"MODE": "parked"}
+    assert old_record.id not in manager.sessions
+    assert new_record.id in manager.sessions
+    assert layout_terminal_ids(projects.projects["default"].layout) == [new_record.id]
+    assert recovery.discarded == [old_record.id]
+    resumed = events.payload("session_resumed_from_inactive")
+    assert resumed["replaced"] == old_record.id
 
 
 async def test_relaunch_replays_task_shell_and_retires_the_old_session(

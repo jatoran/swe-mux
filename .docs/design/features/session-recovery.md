@@ -1,4 +1,4 @@
-# Cold session recovery
+# Cold and inactive session recovery
 
 ## What it is
 
@@ -10,6 +10,9 @@ The PTY supervisor already keeps live sessions running across a daemon restart
 (`features/sessions.md`, "Session-preserving reload").
 This is the fallback behind it, for the cases the supervisor cannot cover: its own death, a force
 close, a power loss, or a daemon running with `pty_supervisor_enabled` off.
+
+The same durable registry also owns **inactive sessions** created by an explicit Stand down.
+Inactive sessions are intentional retained state, not crash recovery.
 
 ## Model
 
@@ -143,9 +146,9 @@ Per session, under `<data_dir>/recovery/<session_id>/`:
 - All three are edited in Settings → Terminals → Scrollback and apply to a running daemon: the
   store reads each at checkpoint and prune time, so they are pushed onto it rather than declared
   restart-scoped (`tests/test_settings_hot_apply.py`).
-  `session_recovery_enabled` is the exception and stays config-file only: it decides whether the
-  store is *constructed*, and turning it off with sessions already tracked would leave their rows
-  open forever and bring every one of them back cold.
+  `session_recovery_enabled` is the exception and stays config-file only.
+  It controls unexpected-loss restoration and checkpoint capture after restart.
+  The registry itself is always constructed because explicit inactive sessions must persist independently of crash-recovery policy.
 - Terminal bytes are whatever the child printed, which includes anything a command echoed.
   The directory is created 0700, it is its own `storage_usage` bucket, and the diagnostics export
   carries the recovery store's counters but never its bytes - the same reason scrollback itself is
@@ -154,6 +157,19 @@ Per session, under `<data_dir>/recovery/<session_id>/`:
   `mcp_token`).
 
 ## Dismissal and the way back
+
+### Intentional inactivity
+
+- `POST /api/sessions/{id}/stand-down` stamps `inactive=true` and `inactive_since`, persists `inactive_at`, then stops the process tree with end reason `stood_down`.
+- The marker is written before process termination.
+  A daemon failure inside the stop window leaves enough desired-state evidence for startup to finish the stop instead of adopting the resource as active.
+- An inactive row restores as `state="exited"`, `cold=false`, and a prepared but unspawned PTY host.
+  It starts no fanout, ticker, observer, detector, or delivery work.
+- Inactive rows are excluded from closed-row retention, the cold-session count ceiling, and bulk ended-session removal.
+  Only resume, explicit dismissal, or removal of the owning Project discards one.
+- `POST /api/sessions/{id}/resume` creates and proves a replacement before changing layout identity.
+  Agents resume the provider conversation through `session_resume.resume_run`; shells replay the recorded launch contract.
+  The old row remains intact if spawn or layout persistence fails.
 
 - **Only an explicit dismissal deletes recovery data.**
   An ordinary end closes the row and keeps the bytes: "this session finished" and "I am done looking
@@ -196,6 +212,7 @@ makes an ended session's pane survive.
 - `src/swe_mux/session.py` (`restore_cold_sessions`, `_build_cold_session`, `_attach_recovery`)
 - `src/swe_mux/history.py` (`close_orphaned_runs`)
 - `src/swe_mux/server.py` (boot restore, `session_accepts_input`, relaunch widening)
+- `src/swe_mux/routes/sessions.py` (stand-down and in-place resume endpoints)
 - `frontend/src/coldSession.ts`, `frontend/src/EndedPaneBanner.tsx`
 
 ## Relates to

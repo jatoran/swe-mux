@@ -137,6 +137,12 @@ and reattachable browser viewports.
   doing nothing (`tests/test_settings_hot_apply.py`).
 - Slow subscribers receive a gap frame and deterministic bounded replay.
 - Explicit kill attempts adapter-specific graceful exit before process-tree termination.
+- **Stand down terminates without dismissal.**
+  The session context menu writes durable inactive intent before stopping the process tree, then retains the terminal-state record, sidebar row, and layout leaf.
+  Inactive sessions hold no PTY, conhost, observer, ticker, delivery worker, approval grant, or standing activity.
+  They are excluded from bulk ended-session removal.
+  Agent Resume continues the provider conversation; shell Restart replays the recorded launch contract.
+  Both create a fresh session id and replace the inactive layout identity only after the new process is proven live.
 - **Removal is asynchronous by contract.** `DELETE /api/sessions/{id}` cannot be quick for a
   live session: it types the backend's graceful exit keys, waits out an agent mid-turn that
   never processes them, force-kills the tree, persists the run, and clears the session's media

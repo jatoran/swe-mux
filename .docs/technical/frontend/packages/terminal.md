@@ -114,3 +114,4 @@ Plain-text URLs (the web-links addon) and OSC 8 hyperlinks (`term.options.linkHa
 `coldSession.ts` is the browser-free model: whether a session was recovered rather than merely observed, which way back it has, and the wording for a pane whose content is missing on purpose or older than the crash.
 An agent gets Resume and a shell gets Restart, because replaying an agent's argv would start a fresh conversation while re-injecting the old one's `--session-id`.
 `EndedPaneBanner.tsx` renders it above the terminal; `App.tsx` owns the actions it invokes and the layout rule that keeps an ended session's leaf (`../../../design/features/session-recovery.md`).
+The same banner renders an inactive session as intentional, names that no process is running, and offers Resume for agents or Restart terminal for shells.

@@ -388,7 +388,8 @@ Its rules, and what each one is defending:
   Same argument as the ellipsis: a marker identical on fifteen rows says only "this is a menu row", so a reader scanned fifteen prefixes and still had to read every label.
   The marks come from `railIcons.tsx`, the drawer set, so a concept appearing in more than one place (Notes, Queue, Actions, Alerts, History, Groups, Settings) is literally the same drawing.
   `MenuGroup` takes an `icon` for the same reason and lines its header up with the rows it sits among.
-  Where one control's label switches, its mark switches with it or it contradicts the word beside it: Kill session wears a power glyph and the same button wears a bin once the session has ended and only its row is left to remove.
+  Where one control's label switches, its mark switches with it or it contradicts the word beside it: Stand down wears a power glyph, Kill and remove names its destructive scope, and an ended session's Remove from sidebar wears a bin.
+  An inactive session replaces Stand down with Resume or Restart terminal, reports No process instead of a stale PID, and retains a dimmed row and tab until explicit removal.
   This is opt-in per row rather than applied to every `.context-menu button`: the remaining context menus are a handful of verbs about one object ("Rename", "Close", "Duplicate"), where a mark per verb is noise, while these four list a dozen unrelated acts and destinations.
   Inside them, a **radio set keeps its plain rows**: the three Read-aloud modes are already marked with a `✓`, and an icon column beside a check column draws two marks for one fact.
   Where two rows differ only in what they reload, the marks name the *thing* rather than the

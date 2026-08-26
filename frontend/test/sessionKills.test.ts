@@ -228,6 +228,17 @@ test('a sweep leaves out a row whose own DELETE is still in the air', () => {
     ['e1', 'e3'])
 })
 
+test('a sweep never removes intentionally inactive sessions', () => {
+  const fleet = [
+    session('ended', { state: 'exited' }),
+    session('inactive', { state: 'exited', inactive: true }),
+  ]
+  assert.deepEqual(
+    clearableEndedSessions(fleet, 'p1', {}).map(item => item.id),
+    ['ended'],
+  )
+})
+
 test('a sweep of a Project with nothing dead in it is empty, not the whole Project', () => {
   const fleet = [session('s1'), session('s2', { state: 'awaiting' })]
   assert.deepEqual(clearableEndedSessions(fleet, 'p1', {}), [])

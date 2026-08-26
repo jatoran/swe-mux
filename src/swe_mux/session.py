@@ -2386,7 +2386,7 @@ class Session:
         uncovered position with the whole buffer — correct for detection cursors,
         catastrophic for a client that would append it after a hole.
         """
-        if self.record.cold:
+        if self.record.cold or getattr(self.record, "inactive", False):
             # A cold session's ring was rebuilt from disk, so its positions
             # describe a *different* stream from the one any client parsed before
             # the crash. A `since` from that stream can still land inside this
@@ -4387,6 +4387,68 @@ class SessionManager:
             )
         return restored
 
+    async def restore_inactive_sessions(
+        self, *, project_exists: Callable[[str], bool] | None = None
+    ) -> int:
+        """Restore intentionally inactive rows and finish interrupted stand-downs."""
+        store = self.recovery
+        if store is None:
+            return 0
+        try:
+            rows = await store.inactive_rows()
+        except Exception:
+            log.exception("could not read inactive sessions from the durable registry")
+            return 0
+        restored = 0
+        for row in rows:
+            if project_exists is not None and not project_exists(row.project_id):
+                await store.discard(row.session_id)
+                continue
+            existing = self.sessions.get(row.session_id)
+            if existing is not None:
+                existing.record.inactive = True
+                existing.record.inactive_since = row.inactive_at
+                existing.record.requested_end_reason = "stood_down"
+                if existing.record.state not in TERMINAL_SESSION_STATES:
+                    await self.stop(row.session_id, reason="stood_down")
+                await store.mark_inactive(existing)
+                existing.publish_update()
+                session = existing
+            else:
+                try:
+                    session = self._build_inactive_session(row)
+                except Exception:
+                    log.exception("could not rebuild inactive session %s", row.session_id)
+                    continue
+                self.sessions[row.session_id] = session
+                self._attach_ledger_sink(session)
+                self._attach_operator_input(session)
+            restored += 1
+            await self.events.emit(
+                "session_inactive_restored",
+                session_id=row.session_id,
+                source="daemon",
+                backend=session.record.backend,
+                inactive_since=session.record.inactive_since,
+            )
+        return restored
+
+    def _build_inactive_session(self, row: RecoveredSession) -> Session:
+        """One intentionally stopped session as a dead, visible registry entry."""
+        session = self._build_cold_session(row, reason="stood_down")
+        record = session.record
+        record.state = "exited"
+        record.state_detail = "inactive; no process is running"
+        record.cold = False
+        record.cold_since = None
+        record.cold_reason = None
+        record.inactive = True
+        record.inactive_since = row.inactive_at or row.updated_at
+        record.requested_end_reason = "stood_down"
+        record.pid = -1
+        record.root_started_at = None
+        return session
+
     def _build_cold_session(self, row: RecoveredSession, *, reason: str) -> Session:
         """One recovered registry row as a dead-but-visible `Session`."""
         record = SessionRecord.from_snapshot(dict(row.meta.get("record") or {}))
@@ -4400,6 +4462,10 @@ class SessionManager:
         record.cold_reason = reason
         record.cold_terminal_at = row.terminal.captured_at if row.terminal else None
         record.cold_terminal_skipped = row.checkpoint_skipped
+        record.inactive = False
+        record.inactive_since = None
+        record.pid = -1
+        record.root_started_at = None
         # Everything below described a running process. A dead one holds no
         # standing engagements, has no open turn, is waiting on nothing, and its
         # exit code is genuinely unknown - reporting the last one observed would

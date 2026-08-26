@@ -86,7 +86,7 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-SESSION_RECOVERY_SCHEMA_VERSION = 1
+SESSION_RECOVERY_SCHEMA_VERSION = 2
 SESSION_RECOVERY_FLUSH_LOOP = "session-recovery-flush"
 
 #: How often the write-behind loop rewrites registry rows and appends terminal
@@ -129,7 +129,8 @@ CREATE TABLE IF NOT EXISTS session_recovery (
   checkpoint_at REAL,
   checkpoint_cols INTEGER,
   checkpoint_rows INTEGER,
-  checkpoint_skipped TEXT
+  checkpoint_skipped TEXT,
+  inactive_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_session_recovery_open
   ON session_recovery(closed_at, updated_at DESC);
@@ -254,6 +255,7 @@ class RecoveredSession:
     opened_at: float
     updated_at: float
     meta: dict[str, Any]
+    inactive_at: float | None = None
     checkpoint_at: float | None = None
     checkpoint_skipped: str | None = None
     terminal: RestoredTerminal | None = None
@@ -401,6 +403,12 @@ class SessionRecoveryStore:
         with self._operation_lock:
             self._db = connect_or_quarantine(self.path, self._open)
             self._db.executescript(SCHEMA)
+            columns = {
+                str(row["name"])
+                for row in self._db.execute("PRAGMA table_info(session_recovery)").fetchall()
+            }
+            if "inactive_at" not in columns:
+                self._db.execute("ALTER TABLE session_recovery ADD COLUMN inactive_at REAL")
             write_schema_version(self._db, "session_recovery", SESSION_RECOVERY_SCHEMA_VERSION)
             self._db.commit()
         # 0o700 is a no-op on Windows (the profile ACL already restricts it) and
@@ -471,7 +479,7 @@ class SessionRecoveryStore:
                 "(session_id,project_id,opened_at,updated_at,closed_at,close_reason,"
                 "daemon_pid,meta_json) VALUES(?,?,?,?,NULL,NULL,?,?) "
                 "ON CONFLICT(session_id) DO UPDATE SET project_id=excluded.project_id,"
-                "updated_at=excluded.updated_at,closed_at=NULL,close_reason=NULL,"
+                "updated_at=excluded.updated_at,closed_at=NULL,close_reason=NULL,inactive_at=NULL,"
                 "daemon_pid=excluded.daemon_pid,meta_json=excluded.meta_json",
                 (sid, project_id, now, now, pid, payload),
             )
@@ -503,6 +511,38 @@ class SessionRecoveryStore:
         await self._run(op)
         self._tracked.pop(str(sid), None)
         self._writers.pop(str(sid), None)
+
+    async def mark_inactive(self, session: Any) -> None:
+        """Durably retain a session before and after terminating its process.
+
+        The first write is the operator's desired state. If the daemon dies after
+        it but before the process does, startup sees the marker and completes the
+        stop. Repeating the write after the stop refreshes the final record and
+        terminal checkpoint. Inactive rows are never retention-pruned.
+        """
+        sid = str(session.record.id)
+        async with self._flush_lock:
+            await self._flush_session(session, allow_ended=True)
+            inactive_at = float(session.record.inactive_since or time.time())
+            now = time.time()
+            payload = json.dumps(redact_meta(self._meta_of(session)), default=str)
+            project_id = str(session.record.project_id or "")
+
+            def op() -> None:
+                self._db.execute(
+                    "INSERT INTO session_recovery"
+                    "(session_id,project_id,opened_at,updated_at,closed_at,close_reason,"
+                    "daemon_pid,meta_json,inactive_at) VALUES(?,?,?,?,NULL,NULL,?,?,?) "
+                    "ON CONFLICT(session_id) DO UPDATE SET project_id=excluded.project_id,"
+                    "updated_at=excluded.updated_at,meta_json=excluded.meta_json,"
+                    "inactive_at=excluded.inactive_at",
+                    (sid, project_id, now, now, os.getpid(), payload, inactive_at),
+                )
+                self._db.commit()
+
+            await self._run(op)
+            self._tracked.pop(sid, None)
+            self._writers.pop(sid, None)
 
     async def discard(self, sid: str) -> None:
         """Drop a session's row and its recovery data entirely.
@@ -549,7 +589,7 @@ class SessionRecoveryStore:
             rows = self._db.execute(
                 "SELECT session_id,project_id,opened_at,updated_at,meta_json,"
                 "checkpoint_at,checkpoint_skipped FROM session_recovery "
-                "WHERE closed_at IS NULL ORDER BY updated_at DESC"
+                "WHERE closed_at IS NULL AND inactive_at IS NULL ORDER BY updated_at DESC"
             ).fetchall()
             recovered: list[RecoveredSession] = []
             for row in rows:
@@ -570,6 +610,50 @@ class SessionRecoveryStore:
                         opened_at=float(row["opened_at"] or 0.0),
                         updated_at=float(row["updated_at"] or 0.0),
                         meta=meta,
+                        checkpoint_at=row["checkpoint_at"],
+                        checkpoint_skipped=row["checkpoint_skipped"],
+                        terminal=(
+                            read_checkpoint(self.recovery_dir / sid, budget)
+                            if budget > 0
+                            else None
+                        ),
+                    )
+                )
+            return recovered
+
+        return await self._run(op)
+
+    async def inactive_rows(self) -> list[RecoveredSession]:
+        """Every intentionally inactive session, in stand-down order."""
+        budget = self.checkpoint_bytes
+
+        def op() -> list[RecoveredSession]:
+            rows = self._db.execute(
+                "SELECT session_id,project_id,opened_at,updated_at,meta_json,"
+                "checkpoint_at,checkpoint_skipped,inactive_at FROM session_recovery "
+                "WHERE inactive_at IS NOT NULL ORDER BY inactive_at ASC"
+            ).fetchall()
+            recovered: list[RecoveredSession] = []
+            for row in rows:
+                try:
+                    meta = json.loads(row["meta_json"])
+                except ValueError:
+                    log.warning(
+                        "inactive session row %s has unreadable metadata; skipping",
+                        row["session_id"],
+                    )
+                    continue
+                if not isinstance(meta, dict):
+                    continue
+                sid = str(row["session_id"])
+                recovered.append(
+                    RecoveredSession(
+                        session_id=sid,
+                        project_id=str(row["project_id"] or ""),
+                        opened_at=float(row["opened_at"] or 0.0),
+                        updated_at=float(row["updated_at"] or 0.0),
+                        meta=meta,
+                        inactive_at=float(row["inactive_at"]),
                         checkpoint_at=row["checkpoint_at"],
                         checkpoint_skipped=row["checkpoint_skipped"],
                         terminal=(
@@ -615,9 +699,9 @@ class SessionRecoveryStore:
             self.write_stats["flushes"] += 1
             return written
 
-    async def _flush_session(self, session: Any) -> int:
+    async def _flush_session(self, session: Any, *, allow_ended: bool = False) -> int:
         sid = str(session.record.id)
-        if session.record.state in {"exited", "crashed"}:
+        if session.record.state in {"exited", "crashed"} and not allow_ended:
             # Terminal sessions are drained by `close_session`; a cold session
             # must never write over the very checkpoint it was restored from.
             self._tracked.pop(sid, None)
@@ -810,14 +894,15 @@ class SessionRecoveryStore:
                 str(row["session_id"])
                 for row in self._db.execute(
                     "SELECT session_id FROM session_recovery "
-                    "WHERE closed_at IS NOT NULL AND closed_at < ?",
+                    "WHERE inactive_at IS NULL AND closed_at IS NOT NULL AND closed_at < ?",
                     (cutoff,),
                 ).fetchall()
             }
             doomed.update(
                 str(row["session_id"])
                 for row in self._db.execute(
-                    "SELECT session_id FROM session_recovery WHERE closed_at IS NULL "
+                    "SELECT session_id FROM session_recovery "
+                    "WHERE inactive_at IS NULL AND closed_at IS NULL "
                     "ORDER BY updated_at DESC LIMIT -1 OFFSET ?",
                     (limit,),
                 ).fetchall()

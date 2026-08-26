@@ -57,6 +57,9 @@ The title is deliberately a `<strong>` so `sessionAttention.ts`'s attention-tier
 
 `sessionStandingMark` is the indicator-side counterpart of `sessionContextArc`: one setting decides whether standing activity draws as row glyphs or as a pip, so the two renderings can never both be on, and every surface (sidebar, tab strips, menus) reads the same setting.
 
+Inactive sessions keep their ordinary tree and pane placement with a dimmed row and tab.
+Their context action changes from Stand down to Resume or Restart terminal, and bulk ended-session cleanup deliberately excludes them.
+
 ## Sidebar filter
 
 `sidebarSearch.ts`, `fuzzyText.ts`, `App.tsx` orchestration
