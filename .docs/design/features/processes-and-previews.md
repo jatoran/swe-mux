@@ -183,13 +183,15 @@
   System CPU comes from deltas between cumulative OS CPU counters and therefore stays on the
   familiar 0–100% whole-machine scale regardless of logical processor count.
   The first sample is unavailable until a second counter reading establishes an interval.
-  The anchored viewport popover groups live attributed processes by Project, shows a separate
-  daemon/infrastructure bucket, and links to the Resources dialog's Processes segment.
-  Its top CPU figure is system-wide; memory and process counts remain explicitly owned.
-  Attributed CPU remains additive for attribution detail and is presented as equivalent core
-  load (`1.0×` means one logical processor), not as a misleading whole-machine percentage.
-  Daemon accounting includes the daemon plus descendant infrastructure PIDs not already
-  attributed to a session, preventing double counting.
+  The anchored viewport popover keeps to three figures - system CPU, one RAM box, and the
+  owned process count - and links to the Resources dialog's Processes segment for detail;
+  per-Project, daemon/infrastructure, and duplicated-tooling breakdowns were removed from it
+  (2026-08-26) to keep it small.
+  Its top CPU figure is system-wide; memory and process counts remain explicitly owned, the
+  RAM box preferring the reclaimable (unique-set) total the open panel samples over the
+  working set.
+  Daemon accounting still includes the daemon plus descendant infrastructure PIDs not already
+  attributed to a session, preventing double counting in that owned total.
   Process Fleet totals use that same additive owned bucket, so its count and usage reconcile
   with the detailed rows rather than the system-wide sidebar CPU figure.
 

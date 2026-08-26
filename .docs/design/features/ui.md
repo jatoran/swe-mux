@@ -298,9 +298,10 @@ responsive controls.
 - The session count leads the row, and is the only value in it with no unavailable fallback.
   It is the operator's own unit of work, so it reads before the machine's accounting of it; and it is counted from the fleet the sidebar already renders rather than from process inspection, so it stays truthful on a host where process inspection is refused and the rest of the row reads `—`.
   A session counts as live by exactly the rule a Project's own collapsed badge uses: not pending, not exited, not crashed.
-- The resource popover separates machine and process-tree scope explicitly.
-  System CPU covers the whole machine; process count, reclaimable RAM, and working set cover swe-mux plus everything it started.
-  Reclaimable RAM and working set are separate metric boxes because working set counts shared pages in every process while reclaimable RAM excludes them.
+- The resource popover is deliberately three figures and nothing else: system CPU, one RAM box, and the process count.
+  System CPU covers the whole machine; RAM and the process count cover swe-mux plus everything it started, daemon and every Project's sessions combined.
+  The RAM box shows the reclaimable (unique-set) reading when the open-panel sample carries it and the working set otherwise, rather than drawing both as separate boxes.
+  Per-Project, daemon/infrastructure, and duplicated-tooling breakdowns were removed from the popover (2026-08-26) to keep it small; the Resources dialog's Processes segment remains the detail surface.
 - Popover direction is independent of the condensed trigger, so a rail anchored at the bottom of
   the window still opens upward.
 - Git state is Project/session metadata. Worktrees have no first-class sidebar row, creation

@@ -74,6 +74,6 @@ The expanded sidebar uses one icon-led row for a boxed live-session count, boxed
 The session count leads because it is the operator's own unit of work and the one figure there that is always knowable.
 It is counted from the fleet the sidebar already holds - `sessionAttention.ts`'s `liveSessionCount`, the same predicate a Project's own badge uses - rather than from process inspection, so it carries no unavailable fallback and stays truthful on a host that refuses psutil.
 
-The popover separates whole-system CPU from process-tree metrics and gives reclaimable RAM (USS) and working set (RSS) distinct boxes; attributed daemon and Project CPU is labeled as equivalent core load.
+The popover shows three figures only - whole-system CPU, one RAM box, and the owned process count; the RAM box prefers the reclaimable (USS) total when the open panel's sample carries it and falls back to working set (RSS).
+The per-Project, daemon/infrastructure, and duplicated-tooling breakdowns were removed from the popover (2026-08-26); `resourceTotals.ts`'s `projectResourceTotals` and `resourceTooling.ts`'s classifier remain as tested pure helpers with no current UI consumer.
 The rail uses the shared reduced `?summary=1` poll, while the open popover fetches the full `?unique_memory=1` projection on its own timer, because that sample is far too costly for a background poll.
-`resourceTooling.ts` classifies language servers so per-session duplication is named rather than hidden among identical `node.exe` rows.

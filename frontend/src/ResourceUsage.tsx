@@ -3,11 +3,10 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import type { FleetSnapshot } from './processFleet'
 import { memoryLabel } from './processRows'
-import type { Project, Session } from './types'
+import type { Session } from './types'
 import { anchoredPopoverStyle } from './providerAccountDisplay'
 import { liveSessionCount } from './sessionAttention'
-import { combinedResourceTotals, projectResourceTotals } from './resourceTotals'
-import { duplicateToolingGroups } from './resourceTooling'
+import { combinedResourceTotals } from './resourceTotals'
 
 /** RAM at rail width: `1.4G` / `512M`, since `1.4 GiB` does not fit. */
 export const compactMemoryLabel=(bytes:number)=>
@@ -51,8 +50,8 @@ const RamIcon=()=>
     <rect x="2" y="5" width="20" height="12" rx="1"/><path d="M6 8v6m4-6v6m4-6v6m4-6v6M5 17v3m4-3v3m6-3v3m4-3v3"/>
   </svg>
 
-export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,onRefresh,onOpenFleet}:{
-  snapshot:FleetSnapshot|null;sessions:Session[];projects:Project[];compact?:boolean
+export function ResourceUsageSummary({snapshot,sessions,compact=false,onRefresh,onOpenFleet}:{
+  snapshot:FleetSnapshot|null;sessions:Session[];compact?:boolean
   onRefresh:()=>void;onOpenFleet:()=>void
 }) {
   const [open,setOpen]=useState(false)
@@ -72,10 +71,6 @@ export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,o
   const liveSessions=liveSessionCount(sessions)
   const summaryTitle=resourceSummaryLabel(snapshot,liveSessions)
   const reclaimableRam=typeof combined.memory_unique_bytes==='number'?combined.memory_unique_bytes:null
-  const projectTotals=projectResourceTotals(shown,sessions,projects)
-  const tooling=duplicateToolingGroups(shown)
-  const daemon=shown?.daemon
-  const daemonReclaimableRam=typeof daemon?.memory_unique_bytes==='number'?daemon.memory_unique_bytes:null
   const position=()=>{const rect=root.current?.getBoundingClientRect();if(rect)setPopoverStyle(anchoredPopoverStyle(rect,false,{width:window.innerWidth,height:window.innerHeight}))}
   const toggle=()=>{if(!open)position();setOpen(value=>!value)}
   useEffect(()=>{
@@ -106,22 +101,14 @@ export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,o
     <header><div><strong>RESOURCE USAGE</strong><span>system CPU · swe-mux process tree</span></div><button aria-label="Close resource usage" onClick={()=>setOpen(false)}>×</button></header>
     {!snapshot&&<p class="resource-usage-empty">Loading resource usage…</p>}
     {snapshot&&!snapshot.available&&<p class="resource-usage-empty">{snapshot.diagnostic||'Process resource inspection is unavailable.'}</p>}
-    {snapshot?.available&&<>
-      <section class="resource-usage-total">
-        <article><span>SYSTEM CPU</span><strong>{systemCpu}</strong></article>
-        {reclaimableRam!==null&&reclaimableRam!==combined.memory_bytes&&<article><span>RECLAIMABLE RAM</span><strong>{memoryLabel(reclaimableRam)}</strong></article>}
-        <article><span>WORKING SET</span><strong>{memoryLabel(combined.memory_bytes)}</strong></article>
-        <article><span>PROCESSES</span><strong>{combined.processes}</strong></article>
-      </section>
-      <p class="resource-usage-note">CPU is whole-system load. RAM and process counts cover swe-mux plus everything it started.{reclaimableRam!==null&&reclaimableRam!==combined.memory_bytes?' Reclaimable RAM excludes shared pages; working set counts them once per process.':''}</p>
-      <section class="resource-daemon-usage"><h4>daemon + infrastructure</h4><article><div><strong>swe-mux daemon</strong><small>PID {daemon?.pid||'—'} · {daemon?.processes||0} process{daemon?.processes===1?'':'es'}</small></div><span>CORE LOAD <b>{((daemon?.cpu_pct||0)/100).toFixed(1)}×</b></span><span>{daemonReclaimableRam!==null?'RECLAIMABLE':'WORKING SET'} <b>{memoryLabel(daemonReclaimableRam??daemon?.memory_bytes??0)}</b></span></article></section>
-      <section class="resource-project-list"><h4>by project</h4>{projectTotals.map(project=><article key={project.project_id}><div><strong>{project.label}</strong><small>{project.processes} process{project.processes===1?'':'es'}</small></div><span>CORE LOAD <b>{(project.cpu_pct/100).toFixed(1)}×</b></span><span>{typeof project.memory_unique_bytes==='number'?'RECLAIMABLE':'WORKING SET'} <b>{memoryLabel(typeof project.memory_unique_bytes==='number'?project.memory_unique_bytes:project.memory_bytes)}</b></span></article>)}{!projectTotals.length&&<p class="resource-usage-empty">No live project processes.</p>}</section>
-      {tooling.length>0&&<section class="resource-tooling-list">
-        <h4>duplicated per-session tooling</h4>
-        {tooling.map(group=><article key={group.tool}><div><strong>{group.tool}</strong><small>{group.instances} process{group.instances===1?'':'es'} across {group.sessions} sessions</small></div><span>WORKING SET <b>{memoryLabel(group.memory_bytes)}</b></span></article>)}
-        <p class="resource-usage-note">Each session runs its own language servers, so concurrent sessions on one repo index it more than once. About {memoryLabel(tooling.reduce((sum,group)=>sum+group.duplicate_bytes,0))} here is the duplication itself.</p>
-      </section>}
-    </>}
+    {snapshot?.available&&<section class="resource-usage-total">
+      <article><span>SYSTEM CPU</span><strong>{systemCpu}</strong></article>
+      {/* One RAM figure for the whole swe-mux tree (daemon + every project's processes):
+          the reclaimable (unique-set) reading when the open-panel sample carries it, the
+          working set otherwise. */}
+      <article><span>RAM</span><strong>{memoryLabel(reclaimableRam??combined.memory_bytes)}</strong></article>
+      <article><span>PROCESSES</span><strong>{combined.processes}</strong></article>
+    </section>}
     <footer><button onClick={onRefresh}>refresh</button><button onClick={()=>{setOpen(false);onOpenFleet()}}>open process fleet…</button></footer>
   </div>
   return <div ref={root} class={`resource-usage-control ${compact?'compact':''}`}>{compact
