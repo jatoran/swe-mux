@@ -418,3 +418,61 @@ def _validate_recommended() -> None:
 
 
 _validate_recommended()
+
+
+# The model tier, offered as a second - never defaulted-on - choice at Project creation.
+#
+# Exactly the automations whose work is a model call: the scan-timeline substrate and the
+# spending consumers layered over it. Applied through the same grant path as the
+# recommended set, so the dependency closure (`attention_ranking` and the detectors under
+# `model_narration`, `tier0` and the raw store under everything) is written with it
+# rather than discovered afterwards as a `blocked` entry. The values half of the choice
+# (`scan_timeline_auto_enable`) lives in `grants.LLM_PROJECT_VALUES`: what a gate may set
+# a field to is the grant allowlist's contract, not the DAG's.
+LLM_PROJECT_AUTOMATIONS: tuple[str, ...] = (
+    "scan_timeline",
+    "continuous_title",
+    "model_narration",
+)
+
+
+def _validate_llm_set() -> None:
+    for automation_id in LLM_PROJECT_AUTOMATIONS:
+        if automation_id not in REGISTRY:
+            raise ValueError(f"LLM set names unknown automation {automation_id}")
+        if not REGISTRY[automation_id].needs_llm:
+            # The checkbox says "the model-backed automations"; a model-free id here
+            # would make that sentence quietly wrong.
+            raise ValueError(f"LLM set names model-free {automation_id}")
+    for automation_id in enabling_closure(LLM_PROJECT_AUTOMATIONS):
+        if not REGISTRY[automation_id].implemented:
+            raise ValueError(f"LLM set drags in unimplemented {automation_id}")
+
+
+_validate_llm_set()
+
+
+# The agent-autonomy starting set. Capability opt-ins only; the authority half that
+# raises spawn and land past "a human approves every action" is
+# `grants.AUTONOMY_PROJECT_VALUES`, applied in the same grant. `observation_inbox` is
+# deliberately included: under this posture whatever still arrives as a draft - a spawn
+# over its hourly budget, a control request the grant does not cover - gets its review
+# surface instead of silence.
+AUTONOMY_PROJECT_AUTOMATIONS: tuple[str, ...] = (
+    "session_control",
+    "land_queue",
+    "observation_inbox",
+)
+
+
+def _validate_autonomy_set() -> None:
+    for automation_id in AUTONOMY_PROJECT_AUTOMATIONS:
+        if automation_id not in REGISTRY:
+            raise ValueError(f"autonomy set names unknown automation {automation_id}")
+        if not REGISTRY[automation_id].implemented:
+            raise ValueError(f"autonomy set names unimplemented {automation_id}")
+    if spends_money(AUTONOMY_PROJECT_AUTOMATIONS):
+        raise ValueError("the autonomy starting set must be free to run")
+
+
+_validate_autonomy_set()

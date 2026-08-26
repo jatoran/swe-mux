@@ -198,16 +198,30 @@ Every automation is off for a new Project, which is correct as a rule and made e
 surface in the drawer inert on the first day.
 Two things address that without weakening the rule:
 
-- **A named starting set at Project creation.** `RECOMMENDED_PROJECT_AUTOMATIONS` is the
-  model-free set - the four detectors and the code graph. It is offered as one checkbox on the
-  creation form, defaulted on, and applied through the ordinary `POST /api/grants` so it leaves
-  the same audit record as a gate press.
-  `_validate_recommended` refuses at import to let a spending automation into it.
-  It is deliberately **not** an inherited default template: it is written into that Project's own
+- **Named starting sets at Project creation.** Three checkboxes on the creation form, each a
+  set served by `GET /api/grants` (`project_starting_sets`) and applied through the ordinary
+  `POST /api/grants` - the ticked sets go as **one** POST, so the daemon computes the
+  dependency closure, writes the Project file once, and leaves one audit record.
+  None is an inherited default template: each is written into that Project's own
   `.swe-mux/config.toml`, so "nothing runs on a Project that did not opt in" stays literally
-  true and no existing Project changes behaviour because the constant did.
-  `scan_timeline` is not in it - it is the one substrate that spends, and it is offered
-  separately with its budget attached.
+  true and no existing Project changes behaviour because a constant did.
+  - `RECOMMENDED_PROJECT_AUTOMATIONS` is the model-free set - the four detectors and the code
+    graph - and the only checkbox defaulted on.
+    `_validate_recommended` refuses at import to let a spending automation into it.
+  - `LLM_PROJECT_AUTOMATIONS` is the model tier - `scan_timeline`, `continuous_title`,
+    `model_narration`, with the closure (`attention_ranking` and the detectors under it)
+    written alongside - plus `scan_timeline_auto_enable` (`grants.LLM_PROJECT_VALUES`) so the
+    timeline arms per run instead of waiting for a grant nobody new knows to press.
+    Off by default because it can bill; the checkbox discloses spend, points at the
+    install-wide budgets, and states the unproven provider when `llm.ready` is false.
+    `_validate_llm_set` holds every member to `needs_llm` and the closure to `implemented`.
+  - `AUTONOMY_PROJECT_AUTOMATIONS` (`session_control`, `land_queue`, `observation_inbox`)
+    plus `grants.AUTONOMY_PROJECT_VALUES` (`spawn_grant`/`land_grant` → `granted`).
+    Off by default because it hands agents real authority; the hourly budgets still bound the
+    granted paths, `observation_inbox` is deliberately included so whatever still drafts gets
+    its review surface, and `session_control_grant`/`interject_grant` are deliberately
+    excluded - acting on a *live* session stays an individual, disclosed raise in the
+    Projects registry.
 - **A tutorial step** (`gates`) that says the expensive things start off and that every notice
   turns its own thing on where you are standing.
 
@@ -239,7 +253,9 @@ Two things address that without weakening the rule:
 
 ```text
 GET  /api/grants     → {install: [key], values: {field: [allowed]}, automations: [...],
-                        recommended_project_automations: [id]}
+                        recommended_project_automations: [id],
+                        project_starting_sets: {recommended|llm|autonomy:
+                          {automations: [id], values: {field: value}}}}
 POST /api/grants     {install?: {key: true}, project_id?, automations?: [id],
                       values?: {field: value}, revision?}
                      → {applied: {install, automations, values}, spends, config, project?}

@@ -542,8 +542,10 @@ Its rules, and what each one is defending:
   registry header, so `+ Add project` rendered but could not be tapped.
 - Add project is one form with an `Existing folder` / `Create new folder` mode strip. Create
   mode asks for a parent plus a folder name (prefilled from the Project name until edited) and
-  shows the exact canonical root it will register. Optional setup commands sit in a collapsed
-  `<details>` and start unchecked, so the common path stays name, folder, Enter.
+  shows the exact canonical root it will register. Three starting-set checkboxes follow (only
+  the free analysis set ticked; the model-backed and agent-authority sets start off and carry
+  their disclosures - `setting-links.md` § First use), and optional setup commands sit in a
+  collapsed `<details>` and start unchecked, so the common path stays name, folder, Enter.
 - Backdrop clicks close Settings. Dirty settings first open an in-app Save/Discard decision;
   interaction with that confirmation is inside the modal boundary and cannot also trigger the
   Settings backdrop.

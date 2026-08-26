@@ -64,6 +64,30 @@ GRANTABLE_PROJECT_VALUES: Mapping[str, tuple[Any, ...]] = {
     "interject_grant": ("granted",),
 }
 
+# The values halves of the two optional starting sets the create form offers beside the
+# recommended one (`automation_registry.LLM_PROJECT_AUTOMATIONS` /
+# `AUTONOMY_PROJECT_AUTOMATIONS` hold their automation halves). They live here rather
+# than in the registry because what a field may be set to is this allowlist's contract:
+# `_validate_allowlists` holds every entry to a key and value `plan_grant` accepts, so
+# the form can never offer a set the daemon then refuses.
+LLM_PROJECT_VALUES: Mapping[str, Any] = {
+    # Arm the timeline for every new run in the Project. Without it the opt-in sits
+    # waiting for a per-run grant a new user does not know to press, which is the
+    # enabled-and-does-nothing state the enablement design exists to prevent.
+    "scan_timeline_auto_enable": True,
+}
+
+AUTONOMY_PROJECT_VALUES: Mapping[str, Any] = {
+    # An agent's request_spawn starts the session directly and its request_land starts
+    # the landing pipeline directly, each still under its install-wide hourly budget.
+    # Interrupt/end (`session_control_grant`) and mid-turn interjection
+    # (`interject_grant`) stay at their inert defaults: acting on a live session is a
+    # different risk class, and raising those remains an individual, disclosed act in
+    # the Projects registry.
+    "spawn_grant": "granted",
+    "land_grant": "granted",
+}
+
 # Install switches whose whole point is a feature that calls a model. Turning one on
 # does not spend by itself - a Project still has to permit the work - but a gate that
 # offered them without saying so would be hiding the one fact worth reading twice.
@@ -256,6 +280,13 @@ def _validate_allowlists() -> None:
         raise ValueError(
             f"grantable Project fields are not in the project config: {', '.join(unknown_project)}"
         )
+    for name, table in (("LLM", LLM_PROJECT_VALUES), ("autonomy", AUTONOMY_PROJECT_VALUES)):
+        for key, value in table.items():
+            allowed = GRANTABLE_PROJECT_VALUES.get(key)
+            if allowed is None or value not in allowed:
+                raise ValueError(
+                    f"the {name} starting set gives {key} a value no gate may grant"
+                )
 
 
 _validate_allowlists()
