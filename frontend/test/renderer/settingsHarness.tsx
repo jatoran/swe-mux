@@ -103,6 +103,20 @@ const REMOTE: RemoteStatus = {
 }
 const FIREWALL: FirewallStatus = { supported: false, detail: '' }
 const WSL: WslBridgeStatus = { supported: false, enabled: false, distros: [] }
+const EDGE_CATALOG = {status:'ready',fetched_at:1_770_000_000,error:null,
+  package_version:'7.2.8',stale:false,selected:'en-US-JennyNeural',selected_present:true,
+  voices:[
+    {id:'en-GB-SoniaNeural',locale:'en-GB',gender:'Female',name:'Sonia',status:'GA',codec:'audio/mpeg',categories:['General'],personalities:['Friendly']},
+    {id:'en-US-JennyNeural',locale:'en-US',gender:'Female',name:'Jenny',status:'GA',codec:'audio/mpeg',categories:['General'],personalities:['Friendly']},
+  ]}
+const EDGE_PROVIDER = {
+  id:'edge',available:false,integration:'unknown',diagnostic:'check integration',python:'',
+  package_version:null,tested_version:false,last_probe_at:null,risk_acknowledged:false,
+  retry_after:null,using_managed:false,catalog:EDGE_CATALOG,
+  managed:{status:'not_installed',phase:null,error:null,version:null,
+    python:'C:/Users/test/.mux/integrations/edge-tts/current/Scripts/python.exe',
+    requirement:'edge-tts==7.2.8',uv_available:true,installed_at:null,updated_at:null},
+}
 
 const RESPONSES: Record<string, unknown> = {
   '/api/settings/bundle': BUNDLE,
@@ -111,16 +125,9 @@ const RESPONSES: Record<string, unknown> = {
   '/api/wsl/bridge': WSL,
   '/api/diagnostics/prerequisites': { prerequisites: [] },
   '/api/voice': null,
-  '/api/voice/providers/edge': {
-    id:'edge',available:false,integration:'unknown',diagnostic:'check integration',python:'',
-    package_version:null,tested_version:false,last_probe_at:null,risk_acknowledged:false,
-    retry_after:null,catalog:{status:'ready',fetched_at:1_770_000_000,error:null,
-      package_version:'7.2.8',stale:false,selected:'en-US-JennyNeural',selected_present:true,
-      voices:[
-        {id:'en-GB-SoniaNeural',locale:'en-GB',gender:'Female',name:'Sonia',status:'GA',codec:'audio/mpeg',categories:['General'],personalities:['Friendly']},
-        {id:'en-US-JennyNeural',locale:'en-US',gender:'Female',name:'Jenny',status:'GA',codec:'audio/mpeg',categories:['General'],personalities:['Friendly']},
-      ]},
-  },
+  '/api/voice/providers/edge': EDGE_PROVIDER,
+  '/api/voice/providers/edge/install': {...EDGE_PROVIDER,started:true,
+    managed:{...EDGE_PROVIDER.managed,status:'installing',phase:'creating_environment'}},
   '/api/voice/stt-latency': null,
   // Save is one request now, and its answer carries both halves plus what committed.
   '/api/settings/apply': {
@@ -155,7 +162,7 @@ const FAILURES: Record<string, { path: string; status: number; body: unknown }> 
 declare global {
   interface Window {
     /** Every request the panel made, in order, for asserting what a click did not send. */
-    settingsCalls: Array<{ method: string; path: string; body?:unknown }>
+    settingsCalls: Array<{ method: string; path: string; body?:unknown; gesture?:string|null }>
   }
 }
 window.settingsCalls = []
@@ -165,7 +172,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = raw.split('?')[0]
   let requestBody:unknown
   if(typeof init?.body==='string')try{requestBody=JSON.parse(init.body)}catch{requestBody=init.body}
-  window.settingsCalls.push({ method: (init?.method || 'GET').toUpperCase(), path, body:requestBody })
+  const gesture=new Headers(init?.headers).get('X-Mux-User-Gesture')
+  window.settingsCalls.push({ method: (init?.method || 'GET').toUpperCase(), path, body:requestBody, gesture })
   const failure = FAILURES[new URLSearchParams(location.search).get('fail') || '']
   if (failure && failure.path === path) {
     return new Response(JSON.stringify(failure.body), {

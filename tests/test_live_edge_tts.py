@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -25,11 +24,16 @@ async def test_live_catalog_and_audio_output(tmp_path: Path) -> None:
         config,
         {
             "tts_engine": "edge",
-            "tts_edge_python": sys.executable,
             "tts_edge_risk_ack_version": EDGE_RISK_ACK_VERSION,
         },
     )
     provider = EdgeTtsProvider(config)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+    managed = provider.managed_status()
+    assert managed["status"] == "ready", managed
+    assert managed["version"] == "7.2.8"
+    assert provider.python() == managed["python"]
     status = await provider.probe()
     assert status["integration"] == "ready", status
     catalog = await provider.refresh_voices()

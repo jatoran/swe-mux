@@ -3436,6 +3436,10 @@ body {
 .edge-tts-settings{display:grid;gap:10px;margin-top:8px}
 .provider-disclosure{display:grid;gap:6px;padding:10px;border:1px solid color-mix(in srgb,var(--warning,#d8a657) 55%,var(--line));border-radius:6px;background:color-mix(in srgb,var(--warning,#d8a657) 8%,var(--panel))}
 .provider-disclosure p{margin:0;color:var(--muted)}
+.edge-managed-install{display:grid;gap:7px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}
+.edge-managed-install p,.edge-managed-install small{margin:0}
+.edge-managed-install a{color:var(--accent);text-decoration:none}
+.edge-managed-install a:hover{text-decoration:underline}
 .edge-voice-filters,.edge-prosody-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .edge-voice-filters{grid-template-columns:minmax(0,2fr) minmax(120px,1fr)}
 .edge-tts-settings select[size]{width:100%;min-height:calc(120px*var(--ui-scale));padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}

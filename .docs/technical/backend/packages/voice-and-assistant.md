@@ -38,7 +38,10 @@ Provider-neutral immutable synthesis profiles for SAPI, Kokoro, and Edge: provid
 
 ## `edge_tts_provider.py`
 
-The external-only Edge provider: source/frozen interpreter resolution, bounded structured bridge invocation, classified service failures and automatic backoff, MP3 duration from the fixed bitrate, and the atomic last-good service voice catalog under `<data_dir>/voice/providers/edge/voices.json`.
+The external-only Edge provider: managed/custom/source interpreter resolution, bounded structured bridge invocation, classified service failures and automatic backoff, MP3 duration from the fixed bitrate, and the atomic last-good service voice catalog under `<data_dir>/voice/providers/edge/voices.json`.
+Its managed installer runs `uv venv` and pinned `uv pip install` through `run_bounded`, persists
+phases in `<data_dir>/integrations/edge-tts/install.json`, verifies the staging interpreter through
+the bridge, and atomically activates `current` without displacing a working environment on failure.
 GET/status methods read cached state only; probe, refresh, preview, and synthesis are explicit operations.
 Spoken text reaches the bridge through a bounded temporary file and never through argv or logs.
 
@@ -46,7 +49,7 @@ Spoken text reaches the bridge through a bounded temporary file and never throug
 
 ## `assets/integrations/edge_tts_bridge.py`
 
-Apache-licensed subprocess bridge run by the user-managed Python that owns `edge-tts`.
+Apache-licensed subprocess bridge run by the managed or operator-supplied Python that owns `edge-tts`.
 Returns bounded JSON for status and voice discovery and writes the service's MP3 output for synthesis.
 
 **Not:** daemon state, config persistence, retries beyond the upstream client's own protocol handling, or logs containing speech text.

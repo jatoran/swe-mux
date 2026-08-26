@@ -563,10 +563,13 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `summary` (OpenRouter cheap model, budgeted under `builtin:voice-summary`) or `verbatim`
   (`speechify`, no LLM) → OS voice (SAPI), local Kokoro-82M, or explicit experimental
   external Edge TTS → WAV/MP3 clips in `<data_dir>/voice/` + `voice_clips` SQLite.
-  Edge is never bundled: `edge_tts_provider.py` runs the shipped Apache bridge under a
-  user-managed Python containing the LGPL client, requires a versioned service/privacy
-  acknowledgement before text leaves the machine, and exposes only explicit probe/catalog-refresh
-  network operations.
+  Edge is never bundled: `edge_tts_provider.py` runs the shipped Apache bridge under an isolated
+  managed or operator-supplied Python containing the LGPL client, requires a versioned
+  service/privacy acknowledgement before text leaves the machine, and exposes only explicit
+  install/probe/catalog-refresh network operations.
+  The managed install is user-gesture-gated, `uv`-driven, staged and bridge-verified before its
+  atomic activation under `<data_dir>/integrations/edge-tts/current`; its phases are cached status,
+  not a request held open.
   One immutable `TtsProfile` owns every segment in a stream, and provider-aware
   `synthesis_key` reuse prevents an old provider, voice, prosody, model, or lexicon from
   satisfying a newly configured request.

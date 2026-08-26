@@ -144,7 +144,11 @@ continues to own every terminal.
   `swe_mux.spec` excludes `edge_tts` even when the build environment installed that extra, and
   `verify_bundle_licenses` rejects `_internal/edge_tts/` as a distribution-boundary regression.
   The bundle carries only `assets/integrations/edge_tts_bridge.py`, which is swe-mux Apache code;
-  a frozen install names a separate user-managed Python containing the LGPL client.
+  the explicit Settings action asks the host's `uv` to install the pinned LGPL client directly
+  from PyPI under `<data_dir>/integrations/edge-tts/current`, or the operator names a separate
+  Python override.
+  The managed environment is staged and bridge-verified before activation, so a failed install
+  does not replace a working one and still does not make the client part of `dist/swe-mux`.
 - **`pystray` and `num2words` are in the spec's `collect_all` loop for a licensing
   reason, not a packaging one.** Both are LGPL. `collect_all` defaults to
   `include_py_files=True`, so each lands as plain source under `_internal/<pkg>/`

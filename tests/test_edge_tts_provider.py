@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
 
+from swe_mux import app_keys as keys
 from swe_mux.config import load_config, update_config
 from swe_mux.edge_tts_provider import (
     EDGE_RISK_ACK_VERSION,
@@ -15,6 +19,7 @@ from swe_mux.edge_tts_provider import (
     _safe_error_message,
     normalize_edge_voices,
 )
+from swe_mux.routes.voice import edge_provider_install
 from swe_mux.tts_profiles import resolve_tts_profile
 
 VOICE_PAYLOAD = [
@@ -152,6 +157,119 @@ def test_provider_startup_sweeps_only_its_abandoned_text_inputs(tmp_path: Path) 
     EdgeTtsProvider(config)
     assert not abandoned.exists()
     assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+async def test_managed_install_stages_verifies_and_activates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        commands.append(argv)
+        if argv[1] == "venv":
+            python = provider.managed_python(Path(argv[-1]))
+            python.parent.mkdir(parents=True)
+            python.write_bytes(b"python")
+
+    async def invoke(
+        executable: str,
+        operation: str,
+        *_arguments: str,
+        **options: Any,
+    ) -> dict[str, Any]:
+        assert Path(executable).name.startswith("python")
+        assert operation == "status"
+        assert options["record_version"] is False
+        return {"ok": True, "version": "7.2.8"}
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_invoke_unlocked", invoke)
+    assert provider.start_managed_install() is True
+    assert provider.start_managed_install() is False
+    await provider.wait_install()
+
+    managed = provider.managed_status()
+    assert managed["status"] == "ready"
+    assert managed["version"] == "7.2.8"
+    assert provider.python() == str(provider.managed_python())
+    assert provider.package_version == "7.2.8"
+    assert [command[1] for command in commands] == ["venv", "pip"]
+    assert json.loads(provider.install_state_path.read_text(encoding="utf-8"))["status"] == "ready"
+
+
+async def test_failed_repair_keeps_the_working_managed_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(tmp_path / "config.toml")
+    integration = tmp_path / "integrations" / "edge-tts"
+    python = integration / "current" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"working")
+    (integration / "install.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "ready",
+                "version": "7.2.8",
+                "installed_at": 1.0,
+                "updated_at": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        if argv[1] == "venv":
+            staged_python = provider.managed_python(Path(argv[-1]))
+            staged_python.parent.mkdir(parents=True)
+            staged_python.write_bytes(b"staged")
+            return
+        raise EdgeTtsError("install_failed", "registry unavailable")
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+    managed = provider.managed_status()
+    assert managed["status"] == "ready"
+    assert "registry unavailable" in str(managed["last_install_error"])
+    assert provider.managed_python().read_bytes() == b"working"
+    assert provider.python() == str(provider.managed_python())
+
+
+async def test_managed_install_endpoint_requires_an_explicit_gesture() -> None:
+    app = web.Application()
+    app[keys.VOICE] = SimpleNamespace(edge_tts=SimpleNamespace())
+    request = make_mocked_request("POST", "/api/voice/providers/edge/install", app=app)
+    response = await edge_provider_install(request)
+    assert response.status == 403
+
+
+async def test_managed_install_endpoint_starts_one_user_requested_install() -> None:
+    edge = SimpleNamespace(
+        start_managed_install=lambda: True,
+        status=lambda: {"id": "edge", "managed": {"status": "installing"}},
+    )
+    app = web.Application()
+    app[keys.VOICE] = SimpleNamespace(edge_tts=edge)
+    request = make_mocked_request(
+        "POST",
+        "/api/voice/providers/edge/install",
+        headers={"X-Mux-User-Gesture": "edge-tts-install"},
+        app=app,
+    )
+    response = await edge_provider_install(request)
+    assert response.status == 202
+    payload = json.loads(response.body)
+    assert payload["started"] is True
+    assert payload["managed"]["status"] == "installing"
 
 
 async def test_external_synthesis_keeps_text_out_of_argv_and_cleans_input(

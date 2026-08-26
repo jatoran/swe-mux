@@ -88,9 +88,12 @@ rather than by review:
   phonemizer libraries. It is a dependency-review rule, not a preference.
   `.docs/development/ROADMAP.md` Phase 10.5 records the measurements behind it.
 - **External-only means absent from the artifact.** The `voice-edge` extra is a source-install
-  convenience for a user-managed Python and is not in `DISTRIBUTED_EXTRAS`.
+  convenience and is not in `DISTRIBUTED_EXTRAS`.
   `packaging/swe_mux.spec` excludes `edge_tts`, and the bundle verifier fails if the LGPL client
   appears under `_internal/`; only swe-mux's Apache bridge ships.
+  The managed Settings action installs the client from PyPI into the data directory after
+  distribution, where it remains inspectable and replaceable; it does not alter the bundle
+  closure.
 
 After changing any dependency, regenerate the notices:
 

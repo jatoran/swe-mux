@@ -1604,6 +1604,12 @@ and makes no network request.
 `GET /voice/providers/edge` returns that cached Edge entry.
 `POST /voice/providers/edge/probe` explicitly starts the configured external Python and checks that
 its `edge-tts` package loads.
+`POST /voice/providers/edge/install` requires `X-Mux-User-Gesture: edge-tts-install`, starts one
+staged managed install or repair, and returns `202 {started, ...provider_status}`.
+Provider status carries `managed.status` (`not_installed | installing | ready | error`), the current
+install phase, exact requirement/interpreter, `uv_available`, timestamps, and any error.
+The POST returns `started: false` when the same install is already live; progress is polled through
+the network-free GET rather than held on one request.
 `GET /voice/providers/edge/voices` returns the last-good cached catalog.
 `POST /voice/providers/edge/voices/refresh` explicitly asks the Microsoft consumer service for its
 structured catalog; a refusal is `503 {error, code}` and does not discard cached voices.

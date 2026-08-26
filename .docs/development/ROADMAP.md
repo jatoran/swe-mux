@@ -3221,7 +3221,8 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
   (Current correction, 2026-08-25: schema 33 reintroduces Edge only as an explicit experimental
   external provider.
   The frozen artifact still excludes `edge_tts`; source users may install the `voice-edge` extra,
-  and frozen users name a separate Python.
+  and Settings now offers an explicit `uv`-managed staged install under the data directory while
+  retaining a separate-Python override.
   The schema-26 migration remains, so an old install is never silently reconnected to Microsoft.
   A versioned service/privacy acknowledgement, explicit probe and catalog refresh, no silent
   fallback, and provider backoff keep the unsupported endpoint non-load-bearing.)

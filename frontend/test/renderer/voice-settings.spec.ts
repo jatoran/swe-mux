@@ -200,6 +200,20 @@ test('provider-specific draft settings survive switching in both directions', as
   })
 })
 
+test('managed Edge installation is explicit and carries the user-gesture proof', async ({ page }) => {
+  await open(page)
+  const engine=page.locator('[data-setting="tts_engine"]')
+  await chooseDropdown(page,engine.locator('.dropdown-trigger'),'edge')
+  const install=page.getByRole('button',{name:'Install Edge TTS integration'})
+  await expect(install).toBeVisible()
+  expect(await page.evaluate(()=>window.settingsCalls.filter(call=>call.path==='/api/voice/providers/edge/install').length)).toBe(0)
+  await install.click()
+  const call=await page.evaluate(()=>window.settingsCalls.filter(item=>item.path==='/api/voice/providers/edge/install').at(-1))
+  expect(call?.method).toBe('POST')
+  expect(call?.gesture).toBe('edge-tts-install')
+  await expect(page.getByRole('button',{name:'Installing…'})).toBeVisible()
+})
+
 test('the budget control is a row of chips on a phone, not a stack of form rows', async ({ page }) => {
   await open(page)
   await page.setViewportSize({ width: 390, height: 780 })

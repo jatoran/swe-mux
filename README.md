@@ -21,10 +21,12 @@ dictates through the browser, and Settings reports the local engines as unavaila
 than failing. The desktop bundle is always built with it.
 
 Experimental Edge TTS is a separate online provider and is never bundled.
-For a source install, `uv sync --extra voice-edge` installs the tested `edge-tts` client and
-Settings can use the current Python interpreter.
-The frozen app requires a path to a separate user-managed Python containing
-`edge-tts==7.2.8`.
+Settings can explicitly install or repair a pinned `edge-tts==7.2.8` environment under
+`<data_dir>/integrations/edge-tts/current` when `uv` is available.
+The install is staged, bridge-verified, and atomically activated; selecting the provider alone
+downloads nothing.
+For source installs, `uv sync --extra voice-edge` remains a convenience, and the external Python
+field remains an override for an environment the operator maintains.
 Selecting Edge requires an explicit disclosure acknowledgement because each spoken segment is
 sent to an undocumented Microsoft consumer endpoint with no SLA or published third-party
 commercial-use grant.
@@ -182,5 +184,6 @@ services. swe-mux proxies nothing and resells nothing.
 
 The optional Edge TTS integration is different: the upstream client uses Microsoft Edge's
 consumer Read Aloud endpoint without an API key or documented third-party service contract.
-The LGPL client runs only in a user-managed external Python and is absent from the frozen
-bundle, but that software boundary does not resolve Microsoft's service terms.
+The LGPL client runs only in a managed isolated environment or an operator-supplied external
+Python and is absent from the frozen bundle, but that software boundary does not resolve
+Microsoft's service terms.

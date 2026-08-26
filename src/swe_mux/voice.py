@@ -1626,6 +1626,7 @@ class VoiceService:
 
     async def stop(self) -> None:
         await background.stop(VOICE_EVENT_LOOP)
+        await self.edge_tts.stop()
         for task in self._debounce.values():
             task.cancel()
         pending = list(self._debounce.values())

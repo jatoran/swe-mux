@@ -14,8 +14,9 @@ Design: `../../../design/features/voice.md`, `../../../design/features/assistant
 `voice.ts`, `mobileVoice.ts`, `smartTurnFeatures.ts`, `smartTurn.ts`, `smartTurnLab.tsx`
 
 `EdgeTtsSettings.tsx` owns the selected Edge provider panel: versioned disclosure,
-external-interpreter status/probe, explicit cached-catalog refresh, searchable locale-aware voice
-selection, preview, and rate/volume/pitch controls.
+user-gesture-gated managed installation/repair with polled phases, external-interpreter override and
+probe, explicit cached-catalog refresh, searchable locale-aware voice selection, preview, and
+rate/volume/pitch controls.
 Only the selected provider panel is mounted; its config fields remain in the parent Settings draft,
 so hiding a panel never resets it.
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+import shutil
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,11 @@ EDGE_CATALOG_LIMIT = 2 * 1024 * 1024
 EDGE_STATUS_LIMIT = 16 * 1024
 EDGE_CATALOG_STALE_SECONDS = 7 * 24 * 60 * 60
 EDGE_TESTED_VERSION_PREFIX = "7.2."
+EDGE_TTS_VERSION = "7.2.8"
+EDGE_TTS_REQUIREMENT = f"edge-tts=={EDGE_TTS_VERSION}"
+EDGE_INSTALL_TIMEOUT_SECONDS = 300.0
+EDGE_INSTALL_OUTPUT_LIMIT = 512 * 1024
+PYPI_SIMPLE_INDEX = "https://pypi.org/simple"
 
 
 def _safe_error_message(value: Any) -> str:
@@ -140,6 +148,9 @@ class EdgeTtsProvider:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.bridge = Path(__file__).with_name("assets") / "integrations" / "edge_tts_bridge.py"
+        self.integration_directory = config.data_dir / "integrations" / "edge-tts"
+        self.managed_directory = self.integration_directory / "current"
+        self.install_state_path = self.integration_directory / "install.json"
         self.catalog = EdgeVoiceCatalog(
             config.data_dir / "voice" / "providers" / "edge" / "voices.json"
         )
@@ -151,6 +162,18 @@ class EdgeTtsProvider:
         self.package_version: str | None = None
         self.failure_count = 0
         self.retry_after = 0.0
+        self._operation_lock = asyncio.Lock()
+        self._install_task: asyncio.Task[None] | None = None
+        self._install_state = self._load_install_state()
+        self._recover_interrupted_install()
+        managed = self.managed_python()
+        if (
+            not self.config.tts_edge_python.strip()
+            and self._install_state.get("status") == "ready"
+            and managed.is_file()
+        ):
+            installed = str(self._install_state.get("version") or "")
+            self.package_version = installed or None
 
     def _sweep_stale_inputs(self) -> None:
         """No synthesis survives a daemon, so no prior input file is live."""
@@ -169,20 +192,116 @@ class EdgeTtsProvider:
         if removed:
             log.warning("removed stale Edge TTS input files count=%d", removed)
 
+    def managed_python(self, root: Path | None = None) -> Path:
+        environment = root or self.managed_directory
+        if os.name == "nt":
+            return environment / "Scripts" / "python.exe"
+        return environment / "bin" / "python"
+
+    def _load_install_state(self) -> dict[str, Any]:
+        try:
+            raw = json.loads(self.install_state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return {"status": "not_installed", "phase": None, "error": None}
+        if not isinstance(raw, dict):
+            return {"status": "not_installed", "phase": None, "error": None}
+        return raw
+
+    def _write_install_state(self, state: dict[str, Any]) -> None:
+        self.integration_directory.mkdir(parents=True, exist_ok=True)
+        payload = {"schema_version": 1, **state}
+        temporary = self.install_state_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(temporary, self.install_state_path)
+        self._install_state = payload
+
+    def _recover_interrupted_install(self) -> None:
+        interrupted = self._install_state.get("status") == "installing"
+        removed = 0
+        try:
+            staging = list(self.integration_directory.glob(".staging-*"))
+        except OSError:
+            staging = []
+        for path in staging:
+            try:
+                shutil.rmtree(path)
+                removed += 1
+            except OSError:
+                continue
+        if interrupted:
+            try:
+                message = "the managed Edge TTS installation was interrupted by a restart"
+                if self._install_state.get("previous_ready") and self.managed_python().is_file():
+                    self._write_install_state(
+                        {
+                            "status": "ready",
+                            "phase": None,
+                            "version": self._install_state.get("previous_version"),
+                            "installed_at": self._install_state.get("previous_installed_at"),
+                            "last_install_error": message,
+                            "updated_at": time.time(),
+                        }
+                    )
+                else:
+                    self._write_install_state(
+                        {
+                            "status": "error",
+                            "phase": None,
+                            "error": message,
+                            "updated_at": time.time(),
+                        }
+                    )
+            except OSError:
+                log.warning("could not persist interrupted Edge TTS install state", exc_info=True)
+        if interrupted or removed:
+            log.warning(
+                "edge tts managed install recovered interrupted=%s staging_removed=%d",
+                interrupted,
+                removed,
+            )
+
+    def managed_status(self) -> dict[str, Any]:
+        installing = self._install_task is not None and not self._install_task.done()
+        state = dict(self._install_state)
+        status = "installing" if installing else str(state.get("status") or "not_installed")
+        if status == "installing" and not installing:
+            status = "error"
+            state["error"] = "the managed Edge TTS installation was interrupted by a restart"
+        python = self.managed_python()
+        if status == "ready" and not python.is_file():
+            status = "error"
+            state["error"] = "the managed Edge TTS Python is missing; repair the integration"
+        return {
+            "status": status,
+            "phase": state.get("phase") if installing else None,
+            "error": None if status in {"ready", "installing"} else state.get("error"),
+            "version": state.get("version") if status == "ready" else None,
+            "python": str(python),
+            "requirement": EDGE_TTS_REQUIREMENT,
+            "uv_available": shutil.which("uv") is not None,
+            "installed_at": state.get("installed_at"),
+            "updated_at": state.get("updated_at"),
+            "last_install_error": state.get("last_install_error"),
+        }
+
     def python(self) -> str | None:
         configured = self.config.tts_edge_python.strip()
         if configured:
             return str(Path(configured).expanduser())
+        managed = self.managed_status()
+        if managed["status"] == "ready":
+            return str(self.managed_python())
         if not getattr(sys, "frozen", False):
             return sys.executable
         return None
 
     def status(self) -> dict[str, Any]:
+        managed = self.managed_status()
         executable = self.python()
         if executable is None:
             integration = "unconfigured"
             diagnostic = (
-                "Edge TTS needs an external Python interpreter with edge-tts installed; "
+                "install the managed Edge TTS integration or configure an external Python; "
                 "the frozen app does not bundle LGPL code"
             )
         elif self.last_error:
@@ -213,6 +332,10 @@ class EdgeTtsProvider:
             "last_probe_at": self.last_probe_at,
             "risk_acknowledged": acknowledged,
             "retry_after": self.retry_after or None,
+            "managed": managed,
+            "using_managed": bool(
+                executable and Path(executable) == self.managed_python()
+            ),
             "catalog": self.catalog.snapshot(selected=self.config.tts_edge_voice),
         }
 
@@ -226,6 +349,260 @@ class EdgeTtsProvider:
         self.failure_count = 0
         self.retry_after = 0.0
 
+    def start_managed_install(self) -> bool:
+        """Start one staged managed install; return False when one is already live."""
+
+        if self._install_task is not None and not self._install_task.done():
+            return False
+        operation_id = uuid.uuid4().hex
+        prior_state = dict(self._install_state)
+        self._write_install_state(
+            {
+                "status": "installing",
+                "phase": "queued",
+                "operation_id": operation_id,
+                "error": None,
+                "updated_at": time.time(),
+                "previous_ready": prior_state.get("status") == "ready",
+                "previous_version": prior_state.get("version"),
+                "previous_installed_at": prior_state.get("installed_at"),
+            }
+        )
+        self._install_task = asyncio.create_task(
+            self._install_managed(operation_id, prior_state),
+            name=f"edge-tts-install-{operation_id[:8]}",
+        )
+        return True
+
+    async def wait_install(self) -> None:
+        if self._install_task is not None:
+            await asyncio.gather(self._install_task, return_exceptions=True)
+
+    async def stop(self) -> None:
+        if self._install_task is None or self._install_task.done():
+            return
+        self._install_task.cancel()
+        await asyncio.gather(self._install_task, return_exceptions=True)
+
+    def _install_phase(self, operation_id: str, phase: str) -> None:
+        self._write_install_state(
+            {
+                **self._install_state,
+                "status": "installing",
+                "phase": phase,
+                "operation_id": operation_id,
+                "error": None,
+                "updated_at": time.time(),
+            }
+        )
+        log.info("edge tts managed install phase operation=%s phase=%s", operation_id, phase)
+
+    def _record_install_error(
+        self, operation_id: str, message: str, prior_state: dict[str, Any]
+    ) -> None:
+        prior_ready = (
+            prior_state.get("status") == "ready" and self.managed_python().is_file()
+        )
+        state = (
+            {
+                **prior_state,
+                "status": "ready",
+                "phase": None,
+                "operation_id": operation_id,
+                "last_install_error": message,
+                "updated_at": time.time(),
+            }
+            if prior_ready
+            else {
+                "status": "error",
+                "phase": None,
+                "operation_id": operation_id,
+                "error": message,
+                "updated_at": time.time(),
+            }
+        )
+        try:
+            self._write_install_state(state)
+        except OSError:
+            log.error(
+                "edge tts managed install state write failed operation=%s",
+                operation_id,
+                exc_info=True,
+            )
+
+    async def _run_install_command(
+        self, argv: list[str], *, label: str, operation_id: str
+    ) -> None:
+        try:
+            outcome = await run_bounded(
+                argv,
+                label=label,
+                timeout_seconds=EDGE_INSTALL_TIMEOUT_SECONDS,
+                output_limit=EDGE_INSTALL_OUTPUT_LIMIT,
+                operation_id=operation_id,
+            )
+        except OSError as exc:
+            raise EdgeTtsError("install_spawn_failed", f"could not start {label}: {exc}") from exc
+        if outcome.timed_out:
+            raise EdgeTtsError("install_timeout", f"{label} timed out")
+        if outcome.truncated:
+            raise EdgeTtsError("install_output_too_large", f"{label} returned too much output")
+        if outcome.exit_code != 0:
+            raw = (outcome.stderr or outcome.stdout).decode("utf-8", errors="replace").strip()
+            detail = _safe_error_message(raw[-400:]) if raw else "no diagnostic"
+            raise EdgeTtsError(
+                "install_failed",
+                f"{label} exited with status {outcome.exit_code}: {detail}",
+            )
+        log.info(
+            "edge tts managed command complete operation=%s label=%s duration_ms=%.0f",
+            operation_id,
+            label,
+            outcome.duration_ms,
+        )
+
+    def _activate_managed(self, staging: Path) -> Path | None:
+        previous = self.integration_directory / "previous"
+        if previous.exists():
+            shutil.rmtree(previous)
+        if self.managed_directory.exists():
+            os.replace(self.managed_directory, previous)
+        try:
+            os.replace(staging, self.managed_directory)
+        except BaseException:
+            if previous.exists() and not self.managed_directory.exists():
+                os.replace(previous, self.managed_directory)
+            raise
+        return previous if previous.exists() else None
+
+    async def _install_managed(
+        self, operation_id: str, prior_state: dict[str, Any]
+    ) -> None:
+        started = time.monotonic()
+        staging = self.integration_directory / f".staging-{operation_id}"
+        previous: Path | None = None
+        activated = False
+        try:
+            uv = shutil.which("uv")
+            if uv is None:
+                raise EdgeTtsError(
+                    "uv_not_found",
+                    "uv is required for the managed Edge TTS installation",
+                )
+            self.integration_directory.mkdir(parents=True, exist_ok=True)
+            if staging.exists():
+                shutil.rmtree(staging)
+            async with self._operation_lock:
+                self._install_phase(operation_id, "creating_environment")
+                await self._run_install_command(
+                    [uv, "venv", "--python", "3.12", str(staging)],
+                    label="Edge TTS environment creation",
+                    operation_id=operation_id,
+                )
+                staging_python = self.managed_python(staging)
+                if not staging_python.is_file():
+                    raise EdgeTtsError(
+                        "install_invalid",
+                        "uv completed without creating the managed Python interpreter",
+                    )
+                self._install_phase(operation_id, "installing_package")
+                await self._run_install_command(
+                    [
+                        uv,
+                        "pip",
+                        "install",
+                        "--python",
+                        str(staging_python),
+                        "--default-index",
+                        PYPI_SIMPLE_INDEX,
+                        EDGE_TTS_REQUIREMENT,
+                    ],
+                    label="Edge TTS package installation",
+                    operation_id=operation_id,
+                )
+                self._install_phase(operation_id, "verifying")
+                payload = await self._invoke_unlocked(
+                    str(staging_python),
+                    "status",
+                    timeout_seconds=20.0,
+                    record_version=False,
+                    correlation_id=operation_id,
+                )
+                installed = str(payload.get("version") or "")
+                if installed != EDGE_TTS_VERSION:
+                    raise EdgeTtsError(
+                        "install_version_mismatch",
+                        f"expected Edge TTS {EDGE_TTS_VERSION}, found {installed or 'unknown'}",
+                    )
+                self._install_phase(operation_id, "activating")
+                previous = self._activate_managed(staging)
+                activated = True
+                now = time.time()
+                self._write_install_state(
+                    {
+                        "status": "ready",
+                        "phase": None,
+                        "operation_id": operation_id,
+                        "version": installed,
+                        "installed_at": now,
+                        "updated_at": now,
+                        "error": None,
+                        "last_install_error": None,
+                    }
+                )
+                self.package_version = installed
+                self._remember_success()
+                if previous is not None:
+                    try:
+                        shutil.rmtree(previous)
+                    except OSError:
+                        log.warning(
+                            "edge tts previous environment cleanup failed operation=%s",
+                            operation_id,
+                            exc_info=True,
+                        )
+            log.info(
+                "edge tts managed install complete operation=%s version=%s seconds=%.1f",
+                operation_id,
+                EDGE_TTS_VERSION,
+                time.monotonic() - started,
+            )
+        except asyncio.CancelledError:
+            self._record_install_error(
+                operation_id,
+                "the managed Edge TTS installation was cancelled",
+                prior_state,
+            )
+            log.warning("edge tts managed install cancelled operation=%s", operation_id)
+            raise
+        except (EdgeTtsError, OSError) as exc:
+            message = _safe_error_message(exc)
+            if activated and previous is not None and previous.exists():
+                try:
+                    if self.managed_directory.exists():
+                        shutil.rmtree(self.managed_directory)
+                    os.replace(previous, self.managed_directory)
+                except OSError:
+                    log.error(
+                        "edge tts managed install rollback failed operation=%s",
+                        operation_id,
+                        exc_info=True,
+                    )
+            self._record_install_error(operation_id, message, prior_state)
+            log.warning(
+                "edge tts managed install failed operation=%s error=%s",
+                operation_id,
+                message,
+            )
+        finally:
+            if staging.exists():
+                try:
+                    shutil.rmtree(staging)
+                except OSError:
+                    log.warning(
+                        "edge tts staging cleanup failed operation=%s", operation_id, exc_info=True
+                    )
+
     async def _invoke(
         self,
         operation: str,
@@ -236,8 +613,25 @@ class EdgeTtsProvider:
         if executable is None:
             raise EdgeTtsError(
                 "integration_unconfigured",
-                "configure an external Python interpreter with edge-tts installed",
+                "install the managed Edge TTS integration or configure an external Python",
             )
+        async with self._operation_lock:
+            return await self._invoke_unlocked(
+                executable,
+                operation,
+                *arguments,
+                timeout_seconds=timeout_seconds,
+            )
+
+    async def _invoke_unlocked(
+        self,
+        executable: str,
+        operation: str,
+        *arguments: str,
+        timeout_seconds: float = EDGE_BRIDGE_TIMEOUT_SECONDS,
+        record_version: bool = True,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
         try:
             outcome = await run_bounded(
                 [executable, str(self.bridge), operation, *arguments],
@@ -245,7 +639,7 @@ class EdgeTtsProvider:
                 timeout_seconds=timeout_seconds,
                 output_limit=EDGE_CATALOG_LIMIT if operation == "voices" else EDGE_STATUS_LIMIT,
                 stderr_limit=32 * 1024,
-                operation_id=f"edge-tts:{operation}",
+                operation_id=correlation_id or f"edge-tts:{operation}",
             )
         except OSError as exc:
             raise EdgeTtsError(
@@ -292,7 +686,7 @@ class EdgeTtsProvider:
                 code = "service_error"
             raise EdgeTtsError(code, message)
         package_version = str(payload.get("version") or "")[:80]
-        if package_version:
+        if package_version and record_version:
             self.package_version = package_version
         return payload
 

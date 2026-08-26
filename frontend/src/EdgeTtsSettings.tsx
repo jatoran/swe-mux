@@ -14,6 +14,13 @@ export type EdgeProviderStatus = {
   id:'edge';available:boolean;integration:'unconfigured'|'unknown'|'ready'|'error'
   diagnostic?:string|null;python:string;package_version?:string|null;tested_version:boolean
   last_probe_at?:number|null;risk_acknowledged:boolean;retry_after?:number|null
+  using_managed:boolean
+  managed:{
+    status:'not_installed'|'installing'|'ready'|'error';phase?:string|null
+    error?:string|null;version?:string|null;python:string;requirement:string
+    uv_available:boolean;installed_at?:number|null;updated_at?:number|null
+    last_install_error?:string|null
+  }
   catalog:EdgeCatalog
 }
 export type EdgeSettingsValue = {
@@ -41,6 +48,17 @@ export function EdgeTtsSettings({value,onChange}:{
     return()=>audioRef.current?.pause()
   },[])
 
+  useEffect(()=>{
+    if(provider?.managed.status!=='installing')return
+    const timer=setInterval(()=>{
+      void api<EdgeProviderStatus>('GET','/api/voice/providers/edge').then(next=>{
+        setProvider(next);setCatalog(next.catalog)
+        if(next.managed.status!=='installing')setBusy('')
+      }).catch(()=>{})
+    },1000)
+    return()=>clearInterval(timer)
+  },[provider?.managed.status])
+
   const run=async(kind:'probe'|'refresh')=>{
     setBusy(kind);setError('')
     try{
@@ -54,6 +72,19 @@ export function EdgeTtsSettings({value,onChange}:{
       }
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
+  }
+
+  const install=async()=>{
+    setBusy('install');setError('')
+    try{
+      const response=await fetch('/api/voice/providers/edge/install',{
+        method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'edge-tts-install'},body:'{}',
+      })
+      const next=await response.json() as EdgeProviderStatus&{started?:boolean;error?:string}
+      if(!response.ok)throw new Error(next.error||'Managed Edge TTS installation failed to start.')
+      setProvider(next);setCatalog(next.catalog)
+      if(next.managed.status!=='installing')setBusy('')
+    }catch(cause){setBusy('');setError(cause instanceof Error?cause.message:String(cause))}
   }
 
   const locales=useMemo(()=>[...new Set((catalog?.voices||[]).map(voice=>voice.locale))].sort(),[catalog])
@@ -78,7 +109,15 @@ export function EdgeTtsSettings({value,onChange}:{
       <p>Edge TTS sends each spoken segment to Microsoft through an undocumented consumer endpoint. It has no API key, SLA, or published third-party commercial-use grant. Microsoft can change or refuse it at any time. Summary mode may send session-derived text to OpenRouter first and the resulting summary to Microsoft.</p>
       <label class="check" data-setting="tts_edge_risk_ack_version"><span>I understand the service, privacy, reliability, and commercial-use uncertainty</span><input type="checkbox" checked={value.tts_edge_risk_ack_version>=1} onChange={event=>onChange('tts_edge_risk_ack_version',event.currentTarget.checked?1:0)}/></label>
     </div>
-    <label data-setting="tts_edge_python">External Python interpreter<input value={value.tts_edge_python} placeholder="Blank uses this Python in a source install" onInput={event=>onChange('tts_edge_python',event.currentTarget.value)}/><small>The frozen app never bundles the LGPL client. Install <code>edge-tts==7.2.8</code> in this interpreter, save, then check the integration.</small></label>
+    <div class="edge-managed-install">
+      <p aria-live="polite"><span class={`state-dot ${provider?.managed.status==='ready'?'idle':provider?.managed.status==='installing'?'running':'stopped'}`}/> managed::{provider?.managed.status||'loading'}{provider?.managed.phase?` · ${provider.managed.phase.replaceAll('_',' ')}`:''}{provider?.managed.version?` · edge-tts ${provider.managed.version}`:''}{provider?.managed.error?` · ${provider.managed.error}`:''}</p>
+      <div class="theme-actions"><button type="button" disabled={!!busy||provider?.managed.status==='installing'||provider?.managed.uv_available===false} onClick={()=>void install()}>{provider?.managed.status==='installing'?'Installing…':provider?.managed.status==='ready'?'Repair / reinstall managed Edge TTS':provider?.managed.status==='error'?'Retry managed installation':'Install Edge TTS integration'}</button></div>
+      <small>swe-mux asks <code>uv</code> to fetch <code>{provider?.managed.requirement||'edge-tts==7.2.8'}</code> directly from PyPI into the environment containing <code>{provider?.managed.python||'<data_dir>/integrations/edge-tts/current/python'}</code>, verifies it, and activates it atomically. The package remains inspectable and replaceable under its <a href="https://github.com/rany2/edge-tts/blob/master/LICENSE" target="_blank" rel="noreferrer">LGPL-3.0 license</a>. Nothing installs merely because this provider is selected.</small>
+      {provider?.managed.uv_available===false&&<p class="tts-lexicon-hint">Managed installation requires <code>uv</code>. Install uv or use the external interpreter override.</p>}
+      {provider?.managed.status==='ready'&&provider.managed.last_install_error&&<p class="tts-lexicon-hint tts-lexicon-error">The current managed integration is still active, but its last repair failed: {provider.managed.last_install_error}</p>}
+      {provider?.managed.status==='ready'&&!!value.tts_edge_python.trim()&&<p class="tts-lexicon-hint">The managed environment is ready, but the external interpreter override is active. Clear the override and Save to use the managed installation.</p>}
+    </div>
+    <label data-setting="tts_edge_python">External Python interpreter override<input value={value.tts_edge_python} placeholder="Blank uses the managed installation" onInput={event=>onChange('tts_edge_python',event.currentTarget.value)}/><small>Advanced escape hatch for an environment you maintain yourself. Save before checking it.</small></label>
     <p aria-live="polite"><span class={`state-dot ${provider?.integration==='ready'?'idle':busy?'running':'stopped'}`}/> integration::{provider?.integration||'unknown'}{provider?.package_version?` · edge-tts ${provider.package_version}${provider.tested_version?' tested':' untested'}`:''}{provider?.diagnostic?` · ${provider.diagnostic}`:''}</p>
     <div class="theme-actions">
       <button type="button" disabled={!!busy} onClick={()=>void run('probe')}>{busy==='probe'?'Checking…':'Check integration'}</button>

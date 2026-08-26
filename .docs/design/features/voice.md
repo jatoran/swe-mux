@@ -146,9 +146,16 @@ install-wide, so the tab edits them directly for the focused session.
   clip cannot satisfy an Edge request and a voice, speed, prosody, model, or lexicon change
   regenerates audio.
 - **Edge TTS stays outside the frozen artifact** (`edge_tts_provider.py`).
-  The shipped Apache-licensed bridge runs under a user-managed Python containing
-  `edge-tts==7.2.8`; source installs may use the `voice-edge` convenience extra, while a frozen
-  install must name that external interpreter.
+  The shipped Apache-licensed bridge runs under either swe-mux's isolated managed environment or
+  an operator-supplied Python containing `edge-tts==7.2.8`.
+  The explicit managed-install action requires `uv`, creates a staging environment under
+  `<data_dir>/integrations/edge-tts/`, installs from PyPI's simple index, verifies the bridge and
+  exact version, then atomically swaps it into `current`; selecting Edge starts nothing.
+  Install state and phase are durable in `install.json`, Settings polls cached status, and a daemon
+  restart converts an interrupted first install into an error while preserving a previously-ready
+  environment during a failed or interrupted repair.
+  Source installs may still use the `voice-edge` convenience extra, and `tts_edge_python` remains
+  an explicit override.
   The bridge reads speech from a bounded temporary file, never from argv, returns bounded JSON,
   and is run by `bounded_subprocess.run_bounded` so timeout and cancellation reap the process.
   Synthesis is refused until `tts_edge_risk_ack_version` matches the disclosure rendered in
@@ -1077,6 +1084,8 @@ and never touches the daemon or an LLM.
   and capabilities, content/mode defaults, spend, cache stats, and Kokoro model state.
 - `GET /api/voice/providers/edge` — cached external-integration and catalog status; no process
   or network probe.
+- `POST /api/voice/providers/edge/install` — user-gesture-gated staged managed install or repair;
+  returns `202` and exposes progress through cached provider status.
 - `POST /api/voice/providers/edge/probe` — explicitly starts the configured external Python and
   verifies that the tested `edge-tts` package can load.
 - `GET /api/voice/providers/edge/voices` — last-good cached catalog only.
@@ -1159,7 +1168,7 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `src/swe_mux/edge_tts_provider.py` — external interpreter resolution, structured bridge calls,
   classified errors/backoff, and the last-good voice catalog.
 - `src/swe_mux/assets/integrations/edge_tts_bridge.py` — the shipped Apache bridge imported by the
-  user-managed Python that owns the LGPL client.
+  managed or operator-supplied Python that owns the LGPL client.
 - `frontend/src/EdgeTtsSettings.tsx` — Edge disclosure, integration probe, catalog refresh/search,
   voice selection/preview, and prosody controls.
 - `src/swe_mux/server.py` — voice HTTP handlers.

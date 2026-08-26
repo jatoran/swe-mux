@@ -64,6 +64,21 @@ async def edge_provider_probe(request: web.Request) -> web.Response:
     return json_response(await voice.edge_tts.probe())
 
 
+async def edge_provider_install(request: web.Request) -> web.Response:
+    """Explicitly create or repair the managed external Edge TTS environment."""
+
+    if request.headers.get("X-Mux-User-Gesture") != "edge-tts-install":
+        return json_response(
+            {"error": "managed Edge TTS installation requires an explicit user action"}, 403
+        )
+    voice: VoiceService = request.app[keys.VOICE]
+    try:
+        started = voice.edge_tts.start_managed_install()
+    except OSError as exc:
+        return json_response({"error": f"could not start the managed installation: {exc}"}, 500)
+    return json_response({"started": started, **voice.edge_tts.status()}, 202)
+
+
 async def edge_voice_catalog(request: web.Request) -> web.Response:
     voice: VoiceService = request.app[keys.VOICE]
     return json_response(
@@ -574,6 +589,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/voice", voice_status),
     web.get("/api/voice/providers/edge", edge_provider_status),
     web.post("/api/voice/providers/edge/probe", edge_provider_probe),
+    web.post("/api/voice/providers/edge/install", edge_provider_install),
     web.get("/api/voice/providers/edge/voices", edge_voice_catalog),
     web.post("/api/voice/providers/edge/voices/refresh", edge_voice_refresh),
     web.get("/api/voice/providers/edge/preview", edge_voice_preview),
