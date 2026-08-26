@@ -257,8 +257,8 @@ uncommitted work together.
   Land answered "what is happening to this worktree" beside a Map answering "what is in it", and the split cost more than it bought: the act sat on a surface with a second copy of Map's own list of checkouts and none of the diff that decides whether to press it.
   Moving the act onto the row left the segment holding one Project-wide block, which is not a view.
 - Landing is split by what each part is a property of, and drawn in one place each.
-  A worktree **row** owns the act: its Land button, its live land state including what a running verification gate reports about itself, a Cancel, and what stopped it last time, drawn above the expansion's change groups so an unbounded file list cannot push them out of reach (`land-queue.md`).
-  A compact **strip at the head of the map** owns everything Project-wide: the verification command with its approval and editor, who besides the operator may start a land, and the queue in run order with its history.
+  A worktree **row** owns the act: its collapsed reading carries any active request's state, queue position, and observed gate detail; its expansion carries the Land button, Cancel, and what stopped the branch last time, drawn before the change groups so an unbounded file list cannot push them out of reach (`land-queue.md`).
+  A compact **strip at the head of the map** owns everything Project-wide: an operational pipeline reading first, then the verification command with its approval and editor under `Verification settings`, who besides the operator may start a land, and the queue in run order with its history.
   Nothing Project-wide is drawn on a row - a fact true of the Project drawn on a row is drawn once per worktree, which is what the verification block did under each of eight expansions before it moved up.
   The strip is one summary line with the rest behind a disclosure, so the tab still opens on a map; it opens itself only when a land is stuck on a human, and never merely because this repository has no verification command (`land-queue.md`).
 - The retired Land segment keeps its palette command and voice phrases, migrated onto Map (`RETIRED_DRAWER_SEGMENTS`), and so does a stored selection and a `drawer.git.land` keybinding.
@@ -342,6 +342,9 @@ uncommitted work together.
   The worktree indicator is inline with the identity, while the left-aligned expand control is inline with the metrics; neither control reserves an otherwise empty row.
   The worktree leaf appears beside the branch only when it adds information; the exact root remains in expanded detail.
   Zero comparison divergence is omitted rather than rendered as separate ahead and behind labels.
+- A worktree with an active land request adds one operational line to its collapsed row.
+  The line names queued, waiting, merging trunk, verifying, or fast-forwarding and carries only state-specific evidence: queue position, the gate's observed progress label, its skipped-gate note, or the daemon's reason.
+  Terminal history remains in the expansion, except the existing last-landed time, because a finished request is not live map status.
 - A worktree being removed is dimmed with a spinner from the press until the refreshed inventory no longer lists it, and the pending set is a property of the **list** rather than of any row (`worktreeRemoval.ts`).
   A row holding its own removing state stopped saying it the moment the row was collapsed, and the removal's response ended it too early on both paths - the daemon answers a renamed removal before Git has deleted a byte, and a fallback removal while Git still is - so the checkout sat in the map looking like every other one until a later poll dropped it.
   The refreshed inventory is therefore the only thing that ends the indication, and a refusal is the only thing that clears an entry early.

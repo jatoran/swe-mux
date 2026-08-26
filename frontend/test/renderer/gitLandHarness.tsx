@@ -14,6 +14,7 @@ import '../../src/style.css'
 const project={id:'swe-mux',name:'swe-mux',root:'D:\\PROJECTS\\swe-mux'} as Project
 const response=(body:unknown)=>new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json'}})
 const worktree='C:\\Users\\Jatora\\.mux\\worktrees\\swe-mux-29a044bb\\land-ui-rework'
+const betaWorktree='D:\\wt\\beta'
 const cleanSummary={total:0,additions:0,deletions:0,binary_files:0,files:[],truncated:false}
 
 /** Every write the page attempts, so the spec can prove the editor sends one key. */
@@ -39,6 +40,8 @@ globalThis.fetch=async(input,init)=>{
     worktrees:[
       {worktree,HEAD:'a'.repeat(40),branch:'refs/heads/worktree-land-ui-rework',detached:false,bare:false,main:false,
        comparison_counts:{ahead:3,behind:0},conflicted:cleanSummary,unstaged:cleanSummary,staged:cleanSummary,branch_delta:cleanSummary},
+      {worktree:betaWorktree,HEAD:'e'.repeat(40),branch:'refs/heads/worktree-beta',detached:false,bare:false,main:false,
+       comparison_counts:{ahead:2,behind:0},conflicted:cleanSummary,unstaged:cleanSummary,staged:cleanSummary,branch_delta:cleanSummary},
       {worktree:project.root,HEAD:'b'.repeat(40),branch:'refs/heads/master',detached:false,bare:false,main:true,
        comparison_counts:{ahead:0,behind:0},conflicted:cleanSummary,unstaged:cleanSummary,staged:cleanSummary,branch_delta:cleanSummary},
     ],
@@ -92,7 +95,7 @@ globalThis.fetch=async(input,init)=>{
          completed_steps:[{name:'pytest',duration_ms:175_000},{name:'ruff',duration_ms:3_000}],
          lines:1204,elapsed_ms:190_000,step_elapsed_ms:12_000,attempt:1,attempts:1,finished:false,
        }},
-      {id:'lnd_behind',project_id:project.id,project_root:project.root,worktree_root:'D:\\wt\\beta',
+      {id:'lnd_behind',project_id:project.id,project_root:project.root,worktree_root:betaWorktree,
        branch:'worktree-beta',trunk_ref:'master',origin:'agent',state:'queued',
        created_at:1786800050,updated_at:1786800050},
       {id:'lnd_done',project_id:project.id,project_root:project.root,worktree_root:'D:\\wt\\gamma',

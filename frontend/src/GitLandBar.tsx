@@ -131,6 +131,8 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
     </GrantGate>}
 
     {isOpen && <div class="git-landing-body">
+      <LandPipeline queue={queue} gate={gate} />
+
       <VerifyCommandEditor project={project} gate={gate} busy={busy} setBusy={setBusy}
         onError={setLocalError} onGate={setGate} onRefresh={refreshGate} />
 
@@ -202,6 +204,50 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
 }
 
 /**
+ * The queue as an operation rather than a configuration form.
+ *
+ * The strip opens over a worktree map, so the first expanded reading answers what the
+ * pipeline is doing now: whether its gate is usable, which branch owns the active step,
+ * and how many branches wait behind it. The gate editor remains reachable from the
+ * settings disclosure that follows, but it no longer outweighs the operation it serves.
+ */
+function LandPipeline({ queue, gate }: {
+  queue: LandQueue | null
+  gate: LandVerifyCommand | null
+}) {
+  const ordered = landQueueOrder(queue?.requests || [])
+  const lead = ordered.find(request => landStateTone(request.state) === 'busy') || ordered[0] || null
+  const behind = lead ? ordered.filter(request => request.id !== lead.id) : ordered
+  const waiting = behind.length
+  const progress = lead ? verifyProgressLabel(lead.verifyProgress) : ''
+  const gateLabel = gate === null ? 'Reading gate'
+    : !gate.configured ? 'Not configured'
+      : gate.approved ? 'Gate ready' : 'Needs approval'
+  const gateDetail = gate?.configured ? gate.display : gate?.scriptName || '.worktree-verify'
+  const activeLabel = lead ? landStateLabel(lead.state) : 'Idle'
+  const activeDetail = lead
+    ? `${lead.branch}${progress ? ` · ${progress}` : ''}`
+    : 'No branch is running'
+  const queueLabel = waiting ? `${waiting} waiting` : 'Queue clear'
+  const queueDetail = waiting ? `next ${behind[0].branch}` : 'Nothing behind the active branch'
+
+  return <div class="git-land-pipeline" aria-label="Landing pipeline">
+    <div class={`git-land-pipeline-step ${gate?.configured && gate.approved ? 'complete' : 'warn'}`}>
+      <strong>{gateLabel}</strong>
+      <small>{gateDetail}</small>
+    </div>
+    <div class={`git-land-pipeline-step ${lead ? 'active' : 'idle'}`}>
+      <strong>{activeLabel}</strong>
+      <small>{activeDetail}</small>
+    </div>
+    <div class={`git-land-pipeline-step ${waiting ? 'active' : 'idle'}`}>
+      <strong>{queueLabel}</strong>
+      <small>{queueDetail}</small>
+    </div>
+  </div>
+}
+
+/**
  * The Project's verification command: what resolves, whether it is approved, and the
  * one editor that changes it.
  *
@@ -237,11 +283,19 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [showing, setShowing] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // The draft follows the daemon's answer until the operator opens the editor; after
   // that it is theirs, and a poll that overwrote it mid-sentence would be the note
   // editor's own retired bug in a new place.
   useEffect(() => { if (!editing) setDraft(gate?.configCommand || '') }, [gate?.configCommand, editing])
+  // A written command awaiting approval is a gate, and an unconfigured Project only
+  // reaches this component after the operator deliberately opened Landing. In both
+  // cases the relevant settings start visible. A deliberate close then stands until
+  // the resolved bytes change, so nothing reopens under the reader.
+  useEffect(() => {
+    if (gate && !gate.approved) setSettingsOpen(true)
+  }, [gate?.digest, gate?.configured, gate?.approved])
 
   if (!project) return null
   const editable = !gate || verifyCommandEditable(gate)
@@ -280,23 +334,34 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
     ? '[worktree] verify_command'
     : gate?.source === 'convention' ? `the executable ${gate.scriptName}` : ''
 
-  return <div class={`git-land-gate ${gate?.approved ? 'ok' : 'warn'}`}>
-    <div class="git-land-gate-head">
-      <strong>{!gate?.configured
-        ? 'No verification command'
-        : gate.approved ? 'Verification approved' : 'Verification not approved'}</strong>
+  const standing = !gate?.configured
+    ? 'No verification command'
+    : gate.approved ? 'Approved' : 'Needs approval'
+
+  return <details class={`git-land-gate ${gate?.approved ? 'ok' : 'warn'}`}
+    open={settingsOpen} onToggle={event => setSettingsOpen(event.currentTarget.open)}>
+    <summary class="git-land-gate-summary">
+      <span>Verification settings</span>
       {gate?.configured && <code>{gate.display}</code>}
-      {gate?.configured && <button onClick={() => setShowing(value => !value)}>
-        {showing ? 'Hide' : 'Review'}
-      </button>}
-    </div>
+      <em class={gate?.approved ? 'ok' : 'warn'}>{standing}</em>
+    </summary>
+
+    <div class="git-land-gate-content">
+      <div class="git-land-gate-head">
+        <strong>{!gate?.configured
+          ? 'No verification command'
+          : gate.approved ? 'Verification approved' : 'Verification not approved'}</strong>
+        {gate?.configured && <button onClick={() => setShowing(value => !value)}>
+          {showing ? 'Hide bytes' : 'Review bytes'}
+        </button>}
+      </div>
 
     {/* Which of the two mechanisms is in force. Both were documented and neither was
         ever stated on screen, so "why is it running that" had no answer here. */}
     {gate?.configured && <p class="git-state">
       Resolved from {sourceLabel}, for every worktree of this Project.{' '}
       {gate.source === 'convention'
-        ? 'Set an override below to run something else.'
+        ? 'Use a different command here only if this script should be overridden.'
         : gate.scriptPresent
           ? `The override wins over the ${gate.scriptName} in the checkout.`
           : ''}
@@ -332,7 +397,9 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
 
     <div class="git-land-command-editor">
       {!editing && <button disabled={!editable} onClick={() => { setDraft(gate?.configCommand || ''); setEditing(true) }}>
-        {gate?.configCommand ? 'Change the command…' : 'Set a command…'}
+        {gate?.configCommand
+          ? 'Change the override…'
+          : gate?.configured ? 'Use a different command…' : 'Configure verification…'}
       </button>}
       {!editable && <small class="warn">
         This Project's <code>.swe-mux/config.toml</code> is {gate?.configStatus === 'malformed'
@@ -361,7 +428,8 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
     </div>
 
     <SetupPromptDisclosure scriptName={gate?.scriptName || '.worktree-verify'} />
-  </div>
+    </div>
+  </details>
 }
 
 /**
