@@ -17,6 +17,8 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
 from swe_mux.automation_registry import (
+    AUTONOMY_PROJECT_AUTOMATIONS,
+    LLM_PROJECT_AUTOMATIONS,
     RECOMMENDED_PROJECT_AUTOMATIONS,
     REGISTRY,
     enabling_closure,
@@ -25,8 +27,10 @@ from swe_mux.automation_registry import (
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.grants import (
+    AUTONOMY_PROJECT_VALUES,
     GRANTABLE_INSTALL_KEYS,
     GRANTABLE_PROJECT_VALUES,
+    LLM_PROJECT_VALUES,
     GrantRefusal,
     plan_grant,
     project_values_after,
@@ -352,6 +356,21 @@ async def test_the_catalogue_describes_exactly_what_will_be_accepted(tmp_path: P
     assert set(body["install"]) == GRANTABLE_INSTALL_KEYS
     assert set(body["values"]) == set(GRANTABLE_PROJECT_VALUES)
     assert body["recommended_project_automations"] == list(RECOMMENDED_PROJECT_AUTOMATIONS)
+    # The create form renders its checkboxes from this payload rather than a browser
+    # copy, so the served sets are the contract.
+    sets = body["project_starting_sets"]
+    assert sets["recommended"] == {
+        "automations": list(RECOMMENDED_PROJECT_AUTOMATIONS),
+        "values": {},
+    }
+    assert sets["llm"] == {
+        "automations": list(LLM_PROJECT_AUTOMATIONS),
+        "values": dict(LLM_PROJECT_VALUES),
+    }
+    assert sets["autonomy"] == {
+        "automations": list(AUTONOMY_PROJECT_AUTOMATIONS),
+        "values": dict(AUTONOMY_PROJECT_VALUES),
+    }
     # `spends` rides the registry payload, because the toggle surface and every gate that
     # offers the same switch have to say the same thing about it.
     assert {item["id"] for item in body["automations"]} == set(REGISTRY)
@@ -390,4 +409,79 @@ async def test_the_starting_set_applies_through_the_ordinary_grant_path(tmp_path
     assert set(body["project"]["enabled"]) == set(
         enabling_closure(RECOMMENDED_PROJECT_AUTOMATIONS)
     )
+    assert [name for name, _ in events].count("grant_applied") == 1
+
+
+def test_the_llm_starting_set_is_the_model_tier_and_says_so() -> None:
+    # Offered as a never-defaulted-on checkbox at creation, labelled "the model-backed
+    # automations" - so membership is held to that sentence: everything in it needs a
+    # model, the whole set discloses spend, and nothing in its closure is a switch that
+    # reads as on and does nothing.
+    for automation_id in LLM_PROJECT_AUTOMATIONS:
+        assert REGISTRY[automation_id].needs_llm
+    assert spends_money(LLM_PROJECT_AUTOMATIONS)
+    for automation_id in enabling_closure(LLM_PROJECT_AUTOMATIONS):
+        assert REGISTRY[automation_id].implemented
+    # Its values half arms the timeline per run; both halves must be values the grant
+    # path accepts, or the create form offers a set the daemon refuses.
+    for key, value in LLM_PROJECT_VALUES.items():
+        assert value in GRANTABLE_PROJECT_VALUES[key]
+
+
+def test_the_autonomy_starting_set_grants_spawn_and_land_and_nothing_livelier() -> None:
+    assert not spends_money(AUTONOMY_PROJECT_AUTOMATIONS)
+    # Deliberately included: whatever still arrives as a draft under this posture gets
+    # its review surface instead of silence.
+    assert "observation_inbox" in AUTONOMY_PROJECT_AUTOMATIONS
+    for key, value in AUTONOMY_PROJECT_VALUES.items():
+        assert value in GRANTABLE_PROJECT_VALUES[key]
+    # Acting on a *live* session is a different risk class: interrupt/end and mid-turn
+    # interjection stay at their inert defaults, raisable only as individual acts.
+    assert "session_control_grant" not in AUTONOMY_PROJECT_VALUES
+    assert "interject_grant" not in AUTONOMY_PROJECT_VALUES
+
+
+def test_both_optional_starting_sets_plan_without_refusal() -> None:
+    # The create form submits set contents it read off `GET /api/grants`; a set the
+    # planner refuses would fail at the click, which is the drift this pins down.
+    for automations, values in (
+        (LLM_PROJECT_AUTOMATIONS, LLM_PROJECT_VALUES),
+        (AUTONOMY_PROJECT_AUTOMATIONS, AUTONOMY_PROJECT_VALUES),
+    ):
+        plan = plan_grant(
+            install=None,
+            automations=list(automations),
+            values=dict(values),
+            current_install={},
+            current_automations={},
+            current_values={},
+        )
+        assert not plan.empty
+
+
+async def test_the_autonomy_set_applies_opt_ins_and_authority_as_one_grant(
+    tmp_path: Path,
+) -> None:
+    # The create form's checkbox is one POST carrying both halves, so a failure leaves
+    # nothing applied and the audit trail holds exactly one act.
+    app, _config, _cache, events = build(tmp_path)
+    client = await client_for(app)
+    try:
+        response = await client.post("/api/grants", json={
+            "project_id": "proj-1",
+            "automations": list(AUTONOMY_PROJECT_AUTOMATIONS),
+            "values": dict(AUTONOMY_PROJECT_VALUES),
+        })
+        assert response.status == 200
+        body = await response.json()
+    finally:
+        await client.close()
+    assert body["spends"] is False
+    assert set(body["project"]["enabled"]) == set(
+        enabling_closure(AUTONOMY_PROJECT_AUTOMATIONS)
+    )
+    written = await read_project_config(project_root(app))
+    assert written["values"]["spawn_grant"] == "granted"
+    assert written["values"]["land_grant"] == "granted"
+    assert "session_control_grant" not in written["values"]
     assert [name for name, _ in events].count("grant_applied") == 1

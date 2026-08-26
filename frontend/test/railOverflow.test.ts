@@ -199,6 +199,14 @@ test('scroll indicators are passive glow wedges, not buttons', () => {
   assert.match(declarations(styles, /\.overflow-rail-edge\{([^}]*)\}/), /pointer-events:none/)
 })
 
+test('command rail overflow arrows and their glow are green', () => {
+  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  assert.match(declarations(styles, /\.overflow-rail-edge::before\{([^}]*)\}/), /var\(--green\)/)
+  assert.match(declarations(styles, /\.overflow-rail-edge::after\{([^}]*)\}/), /var\(--green\)/)
+  assert.match(declarations(styles, /\.overflow-rail-left::after\{([^}]*)\}/), /border-right:5px solid var\(--green\)/)
+  assert.match(declarations(styles, /\.overflow-rail-right::after\{([^}]*)\}/), /border-left:5px solid var\(--green\)/)
+})
+
 test('every row has one drawer route to its complete list and full configuration', () => {
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
   assert.doesNotMatch(strip, /class="rail-config"/)

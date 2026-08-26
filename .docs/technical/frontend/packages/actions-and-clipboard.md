@@ -120,8 +120,12 @@ A pad claims only the axes its bound wedges span; a single-axis pad defers to th
 Three consequences are invisible to a unit test and are covered by `test/renderer/command-rail-pad.spec.ts` instead.
 The chip needs `touch-action:none`, or the strip's own `pan-x` answers a horizontal drag natively and `pointercancel`s the press.
 The press's end is announced through the gesture's `end` callback rather than the chip's `pointerup`, which by then belongs to whatever the finger has moved over.
-And **a drag delivers no mouse events at all**, so the `onMouseDown` focus refusal every other chip relies on never runs - which is why `RailPad` captures `softKeyboardHolder()` at pointer-down and calls `restoreSoftKeyboard` on a frame after the gesture ends, the same shape `RailScroller` uses for its pan.
-The spec asserts the missing `mousedown` directly, because a keyboard test alone passes with the fix removed: desktop Chromium never drops focus during a pad drag, so the spec blurs the field mid-gesture to reproduce what Android does.
+And **a drag delivers no mouse events at all**, so the `onMouseDown` focus refusal every other chip relies on never runs.
+`RailPad` is the exception that may cancel `pointerdown`: its pointer gesture resolves both drags and taps without compatibility mouse events, so it refuses the default while an IME field is active before Android can move focus.
+It still captures `softKeyboardHolder()` and calls `restoreSoftKeyboard` after the gesture as a backstop for platform focus moves that escape the refusal.
+The renderer spec asserts the cancelled pointer default and focus retention while the dial is held open.
+Desktop Chromium cannot reproduce every Android focus move, so the spec also blurs the field mid-gesture to prove the restoration fallback.
+The dial root remains a viewport-wide interaction plane for standing dismissal but paints no scrim, opacity, or backdrop filter; contrast belongs to the local wedges.
 
 Ownership rules the rest of the layer relies on:
 
