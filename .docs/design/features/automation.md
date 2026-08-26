@@ -163,11 +163,11 @@ and the declared minimum observation capability.
 - Windows persistent keys use current-user DPAPI in `automation.secrets.json`;
   `OPENROUTER_API_KEY` is the headless override, and `SWE_MUX_CUSTOM_LLM_API_KEY` is the same
   override for a custom endpoint. Neither key is ever returned.
-- The Automation workspace exposes the control graph, effective Project overlays, rules and shadow state, firings, traces, action and call results, cost, queue and degradation state, learned fixes, and no-side-effect dry-run.
+- The Automation workspace exposes the per-Project control map with its toggles, rules and shadow state, firings, traces, action and call results, cost, queue and degradation state, learned fixes, and no-side-effect dry-run.
 
 ## Control-plane presentation
 
-- The modal draws eight flat views: **overview**, **control graph**, **rules**, **projects**, **global policy**, **cost breakdown**, **learned fixes**, and **diagnostics**.
+- The modal draws seven flat views: **overview**, **rules**, **projects**, **global policy**, **cost breakdown**, **learned fixes**, and **diagnostics**.
   A `?` in the header opens
   a nested help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer to it
   while open.
@@ -175,23 +175,31 @@ and the declared minimum observation capability.
   count varies by view: hard-coded row numbers fitted exactly one case and drew the status line
   over the first heading in the others.
 - **Automation is one workspace with several object types, not several destinations.**
-  Graph definitions, executable rules, global policy, Project policy, spend, learned fixes, and diagnostics stay distinct views because they answer different questions, but they share one top-level destination.
+  The control map, executable rules, global policy, spend, learned fixes, and diagnostics stay distinct views because they answer different questions, but they share one top-level destination.
   Settings → Automation reports engine, rule, queue, and runtime status and opens Global policy.
   It does not edit automation.
+- **The workspace opens on the Project the operator is standing in.**
+  Every entry point (menu, palette, Findings, Usage) threads the active Project id;
+  a deep link that names an owning Project still wins, and with neither the selection
+  falls back to the first Project with anything enabled.
+  It used to open with no Project threaded at all, which meant editing whichever Project
+  happened to sort first — a silent wrong-target edit.
 - **Overview is a status and routing page.**
-  It reports engine state, the selected Project's effective graph coverage, enabled system rules, participating Projects, today's cost, and active runtime issues.
-  It links directly to each editing or review view rather than repeating their controls.
-- **Control graph is the global definition map with a Project overlay.**
-  Registry entries are grouped into Foundations, Deterministic intelligence, Timeline and attention, Derived consumers, and Capabilities.
-  Selecting a Project overlays requested, dependency-enabled, effective, blocked, spending, and off states without changing the global graph definition.
-- **The `projects` view answers and edits what runs where.** Nothing runs on a Project that did not opt
-  in, and before this view that fact was invisible from the one surface named "Automation": a
-  green dashboard with zero activity had no path to the explanation. It reads
-  `GET /api/automation/projects` (one row per registered Project — enabled count, enabled
-  labels, blocked count, and "nothing" for an opted-out Project, which is listed rather than
-  omitted so silence reads as off, never as covered) and links each row to that Project's own
-  policy editor below the matrix.
-  Selecting a row keeps the fleet comparison visible and opens that Project's dependency-aware, revision-checked repository policy in the same view.
+  It reports engine state, the selected Project's enabled count, enabled system rules, participating Projects, today's cost, and active runtime issues.
+  It links directly to each editing or review view rather than repeating their controls; the one control-shaped thing it draws is a Needs-review row when the engine is off, whose action is the link to Global policy.
+- **The `projects` view is the control map: it answers and edits what runs where, in one place.**
+  There is no separate read-only graph view — that design drew the whole dependency picture
+  on one tab with zero controls while the editor sat on another tab as a flat checkbox
+  list, the same objects from the same endpoint split across two surfaces.
+  The view is: a Project selector that is always visible; the selected Project's
+  dependency-grouped policy editor (`AutomationOptIns` — Foundations, Deterministic checks,
+  Capabilities, the Scan-timeline block, and Reads-the-timeline, each node carrying its own
+  revision-checked toggle, its `spends` chip, its requires line, and its blocked or
+  unverified state); and the fleet matrix below it.
+  The matrix reads `GET /api/automation/projects` — one row per registered Project with
+  enabled count, enabled labels, blocked count, and "nothing" for an opted-out Project,
+  which is listed rather than omitted so silence reads as off, never as covered — and each
+  row's Edit policy selects that Project in the editor above.
   The general Projects registry links here instead of rendering a second automation editor.
 - **The `rules.toml` editor is the dashboard's, not Settings'.** A rule's definition, its
   live/shadow state, and the firings it produces are one object; the previous arrangement put

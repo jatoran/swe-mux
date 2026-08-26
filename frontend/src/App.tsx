@@ -5432,7 +5432,7 @@ export function App() {
     { id: 'fleetActivity.open', label: 'Open fleet activity telemetry', category: 'view', available: true, run: () => openResources('fleet') },
     { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => openResources('network') },
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
-    { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('overview');setMainMenuOpen(false)} },
+    { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('overview',activeProject?.id);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
     { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
@@ -7456,7 +7456,7 @@ export function App() {
         onPreviewAttached={(preview,project)=>attachPreview(preview,project,true)}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
-        onOpenAutomationDashboard={()=>openAutomation('overview')}
+        onOpenAutomationDashboard={()=>openAutomation('overview',activeProject?.id)}
         queuePending={queuePendingTotal}
         onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}
@@ -8052,7 +8052,7 @@ export function App() {
     {usageOpen&&<UsageModal
       initial={usageOpen}
       onConfigure={()=>{setUsageOpen(null);openSettings('Usage analytics')}}
-      onOpenAutomation={()=>{setUsageOpen(null);openAutomation('cost')}}
+      onOpenAutomation={()=>{setUsageOpen(null);openAutomation('cost',activeProject?.id)}}
       onClose={()=>setUsageOpen(null)}
     />}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}

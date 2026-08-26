@@ -120,7 +120,7 @@ test('no figures table overflows its panel at desktop width', async ({ page }) =
 /** The status line used to be drawn over the first section heading in exactly this view. */
 test('the panel frame holds every view', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  for (const tab of ['overview','control graph','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'] as const) {
+  for (const tab of ['overview','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'] as const) {
     await openTab(page, tab)
     const [progress] = await boxes(page, '.usage-progress')
     const [main] = await boxes(page, '.automation-panel > main')
@@ -188,6 +188,28 @@ test('the projects view answers what runs where, including "nothing"', async ({ 
   await expect(page.locator('.automation-project-policy .project-automation-list').first()).toBeVisible()
 })
 
+test('the projects view is the control map: selector, grouped switches, and toggles in one place', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'projects')
+  // The Project selector is always visible on this view — the old design rendered it
+  // only on the read-only graph tab, so the projects view had a selection nobody could see.
+  await expect(page.locator('.automation-project-toolbar .dropdown-trigger')).toBeVisible()
+  // The dependency map is grouped, and each node carries its own switch: status and
+  // control are one surface, not two tabs.
+  await expect(page.locator('.project-automation-group')).toContainText([/Foundations/, /Deterministic checks/])
+  await expect(page.locator('.automation-project-policy .project-automation-list input[type=checkbox]').first()).toBeVisible()
+})
+
+test('the dashboard opens on the Project it was launched from', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await page.goto('/automation-cost-harness.html?project=p2')
+  await page.waitForSelector('.automation-tabs button')
+  await page.locator('.automation-tabs button', { hasText: 'projects' }).click()
+  // Without the threaded Project this would land on p1, the first Project with
+  // anything enabled — which is how you ended up editing the wrong Project's policy.
+  await expect(page.locator('.automation-project-policy h3')).toHaveText('orca policy')
+})
+
 test('global policy stays a compact page selector on a phone', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
   await openTab(page, 'global policy')
@@ -207,7 +229,9 @@ test('the dashboard keeps no second copy of the surfaces that moved out', async 
   await page.goto('/automation-cost-harness.html')
   await page.waitForSelector('.automation-tabs button')
   const tabs = await page.locator('.automation-tabs button').allInnerTexts()
-  expect(tabs).toEqual(['overview','control graph','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'])
+  // No separate read-only "control graph": the projects view draws the dependency map
+  // with the controls on it.
+  expect(tabs).toEqual(['overview','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'])
   await expect(page.locator('.automation-subtabs')).toHaveCount(0)
   // The way back to the two inboxes this dashboard used to duplicate is a permanent row,
   // not an empty-state hint: "where did the attention inbox go" is asked by someone

@@ -40,36 +40,27 @@ type MatrixAutomation={id:string;kind:'substrate'|'consumer';label:string;requir
 type MatrixProject={project_id:string;project_name:string;status:string;requested:Record<string,boolean>;enabled:string[];blocked:Record<string,string[]>;scan_timeline_auto_enable:boolean}
 type ProjectMatrix={automations:MatrixAutomation[];projects:MatrixProject[]}
 type RulesFile={text:string}
-// Five views, flat.
+// Seven views, flat.
 //
-// This was seven views in four groups, and three of them were second copies of surfaces
-// that already had a home. The pipeline produces exactly two things — an attention item or
-// a run note — and each now has exactly one place it is read:
+// The pipeline produces exactly two things — an attention item or a run note — and each
+// has exactly one place it is read (Alerts; Activity → Findings). This dashboard links to
+// both and draws second copies of neither.
 //
-//  * `attention` drew the same ranked inbox and the same records as the Alerts drawer tab.
-//    Two homes for one inbox, and neither said the other existed. It is a link now.
-//  * `notes` drew the same `/api/annotations` table as Activity → Findings, with a
-//    different filter, so a run note you had seen in one could be missing from the other.
-//    Also a link now; Findings grew a source filter to cover what this view showed.
-//  * `health` was three unrelated things wearing one name. The explainer of what the
-//    deterministic checks watch moved into the How-it-works panel, where every other
-//    explanation of this pipeline already lived; the workload telemetry moved out,
-//    following the cost column that had already left it for the same reason, and now lives
-//    in Resources → Fleet activity; and the away report moved to Alerts, which is the
-//    inbox it summarizes.
+// The read-only "control graph" view is gone: it drew the whole dependency picture with
+// zero controls while `projects` had the controls with no structure — the same objects
+// from the same endpoint split across two tabs. The `projects` view is now both at once:
+// the grouped dependency map of one Project's policy, with the toggles on the nodes.
 //
-// Global policy and per-Project control-plane opt-ins moved into this workspace too.
-// Settings retains a status portal, and the general Projects registry links here instead
-// of duplicating the editor. Eight flat views keep graph definitions, policy, rules,
-// runtime evidence, spend, and learned knowledge distinct without splitting ownership.
-export type AutomationView='overview'|'graph'|'rules'|'projects'|'policy'|'cost'|'knowledge'|'diagnostics'
+// Global policy and per-Project control-plane opt-ins live in this workspace. Settings
+// retains a status portal, and the general Projects registry links here instead of
+// duplicating the editor.
+export type AutomationView='overview'|'rules'|'projects'|'policy'|'cost'|'knowledge'|'diagnostics'
 
 const VIEWS:Array<{id:AutomationView;label:string}>=[
   {id:'overview',label:'overview'},
-  {id:'graph',label:'control graph'},
   {id:'rules',label:'rules'},
   // Per-Project participation is its own view: the global state beside the rules says
-  // whether the pipeline may run, and this answers where it actually does.
+  // whether the pipeline may run, and this answers — and edits — where it actually does.
   {id:'projects',label:'projects'},
   {id:'policy',label:'global policy'},
   // Spend is its own destination rather than a section of anything: what a thing costs and
@@ -186,13 +177,7 @@ export function AutomationDashboard({onClose,onOpenSession,onOpenAlerts,onOpenFi
     return revealSetting(panel.current,initialSetting)
   },[view,initialSetting,revealToken,policyProject?.id])
   const graphEntries=(matrix?.automations||[]).filter(entry=>entry.implemented)
-  const graphGroups=[
-    {label:'Foundations',items:graphEntries.filter(entry=>entry.kind==='substrate')},
-    {label:'Deterministic intelligence',items:graphEntries.filter(entry=>entry.kind==='consumer'&&entry.requires.includes('tier0')&&!entry.requires.includes('scan_timeline'))},
-    {label:'Timeline and attention',items:graphEntries.filter(entry=>entry.kind==='consumer'&&entry.requires.includes('scan_timeline'))},
-    {label:'Derived consumers',items:graphEntries.filter(entry=>entry.kind==='consumer'&&entry.requires.length&&!entry.requires.includes('tier0')&&!entry.requires.includes('scan_timeline'))},
-    {label:'Capabilities',items:graphEntries.filter(entry=>entry.kind==='consumer'&&!entry.requires.length)},
-  ]
+  const blockedCount=Object.keys(graphProject?.blocked||{}).length
 
   return <div class="usage-layer automation-layer" role="dialog" aria-modal="true" aria-label="Automation" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section class="usage-panel automation-panel" ref={panel}>
@@ -215,18 +200,13 @@ export function AutomationDashboard({onClose,onOpenSession,onOpenAlerts,onOpenFi
       <div class={`usage-progress ${!data&&!error?'running':''}`} role="status" aria-live="polite"><span>{error?'!':data?'·':'◌'}</span><strong>{error||message}</strong></div>
       <main>
         {view==='overview'&&<div class="usage-tables automation-overview">
-          <div class="usage-summary"><article><span>engine</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>effective graph</span><strong>{graphProject?.enabled.length||0}/{graphEntries.length||0}</strong></article><article><span>system rules</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>Projects</span><strong>{matrix?.projects.filter(project=>project.enabled.length).length||0}/{matrix?.projects.length||0}</strong></article><article><span>cost today</span><strong>{formatMoney(data?.spend_today.cost_usd||0)}</strong></article><article><span>runtime issues</span><strong>{data?.engine.diagnostic?'1':'0'}</strong></article></div>
-          <section class="usage-table"><h3>Automation workspace</h3><p>Definitions, executable rules, Project policy, global limits, spend, learned fixes, and diagnostics share one destination without becoming one kind of object.</p><div class="automation-overview-links"><button onClick={()=>setView('graph')}>Control graph</button><button onClick={()=>setView('rules')}>Rules</button><button onClick={()=>setView('projects')}>Project policies</button><button onClick={()=>setView('policy')}>Global policy</button><button onClick={()=>setView('knowledge')}>Learned fixes</button><button onClick={()=>setView('diagnostics')}>Diagnostics</button></div></section>
-          <section class="usage-table"><h3>Needs review</h3>{data?.engine.diagnostic?<p class="usage-error">{data.engine.diagnostic}</p>:<p>Runtime queue healthy. No engine diagnostic is active.</p>}{matrix&&matrix.projects.filter(project=>Object.keys(project.blocked).length).length>0&&<p>{matrix.projects.filter(project=>Object.keys(project.blocked).length).length} Project(s) have requested automations blocked by missing dependencies.</p>}</section>
-        </div>}
-        {view==='graph'&&<div class="automation-graph-view">
-          <div class="automation-graph-toolbar"><label>Project overlay<Dropdown value={graphProject?.project_id||''} onChange={setGraphProjectId} options={(matrix?.projects||[]).map(project=>({value:project.project_id,label:project.project_name}))}/></label><span>{graphProject?`${graphProject.enabled.length} effective · ${Object.keys(graphProject.blocked).length} blocked`:'Loading graph…'}</span></div>
-          <div class="automation-graph-groups">{graphGroups.map(group=><section class="automation-graph-group"><h3>{group.label}</h3>{group.items.map(entry=>{
-            const enabled=!!graphProject?.enabled.includes(entry.id)
-            const blocked=graphProject?.blocked[entry.id]
-            const requested=graphProject?.requested[entry.id]===true
-            return <article class={`${enabled?'enabled':''}${blocked?' blocked':''}`}><div><strong>{entry.label}</strong>{entry.spends&&<em class="automation-pill spends">spends</em>}</div><small>{entry.kind}{entry.requires.length?` · requires ${entry.requires.map(id=>matrix?.automations.find(item=>item.id===id)?.label||id).join(', ')}`:' · no dependencies'}</small><span>{enabled?(requested?'requested · effective':'dependency · effective'):blocked?`blocked · missing ${blocked.length}`:requested?'requested · unavailable':'off'}</span></article>
-          })}</section>)}</div>
+          <div class="usage-summary"><article><span>engine</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>{graphProject?`on in ${graphProject.project_name}`:'on here'}</span><strong>{graphProject?.enabled.length||0}/{graphEntries.length||0}</strong></article><article><span>system rules</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>Projects</span><strong>{matrix?.projects.filter(project=>project.enabled.length).length||0}/{matrix?.projects.length||0}</strong></article><article><span>cost today</span><strong>{formatMoney(data?.spend_today.cost_usd||0)}</strong></article><article><span>runtime issues</span><strong>{data?.engine.diagnostic?'1':'0'}</strong></article></div>
+          <section class="usage-table"><h3>Automation workspace</h3><p>What runs, where it runs, what it may spend, and what it produced.</p><div class="automation-overview-links"><button onClick={()=>setView('projects')}>Projects &amp; control map</button><button onClick={()=>setView('rules')}>Rules</button><button onClick={()=>setView('policy')}>Global policy</button><button onClick={()=>setView('cost')}>Cost breakdown</button><button onClick={()=>setView('knowledge')}>Learned fixes</button><button onClick={()=>setView('diagnostics')}>Diagnostics</button></div></section>
+          <section class="usage-table"><h3>Needs review</h3>
+            {data&&!data.engine.enabled&&<article class="automation-row automation-rule-row"><span class="state-dot running"/><div><strong>The automation engine is off</strong><span>Nothing runs anywhere until it is enabled.</span></div><div class="automation-row-actions"><button onClick={()=>setView('policy')}>Open global policy</button></div></article>}
+            {data?.engine.diagnostic?<p class="usage-error">{data.engine.diagnostic}</p>:data?.engine.enabled?<p>Runtime queue healthy. No engine diagnostic is active.</p>:null}
+            {matrix&&matrix.projects.filter(project=>Object.keys(project.blocked).length).length>0&&<p>{matrix.projects.filter(project=>Object.keys(project.blocked).length).length} Project(s) have requested automations blocked by missing dependencies.</p>}
+          </section>
         </div>}
         {view==='rules'&&<div class="usage-tables">
           {/* `calls today` used to sum the lifetime status counts, which is neither today's
@@ -234,56 +214,61 @@ export function AutomationDashboard({onClose,onOpenSession,onOpenAlerts,onOpenFi
               same ledger as today's cost, so the three spend tiles agree with each other. */}
           <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>system observers</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>custom rules</span><strong>{data?.engine.rules.length||0}</strong></article><article><span>calls today</span><strong>{formatCount(data?.spend_breakdown?.totals?.today_calls||0)}</strong></article><article><span>tokens today</span><strong title={integer.format(data?.spend_today.tokens||0)}>{formatCount(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{formatMoney(data?.spend_today.cost_usd||0)}</strong></article></div>
           <section class="usage-table automation-controls"><h3>Global switches</h3><p>These states are edited with their limits in Global policy.</p><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.automation_enabled?'idle':'running'}`}/><div><strong>Automation engine · {data?.controls.automation_enabled?'on':'off'}</strong><span>Runs enabled system observers and custom rules.</span></div><div class="automation-row-actions"><button onClick={()=>setView('policy')}>Open global policy</button></div></article><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.scan_timeline_enabled?'idle':'running'}`}/><div><strong>Scan timeline · {data?.controls.scan_timeline_enabled?'on':'off'}</strong><span>Global permission for Project and per-run timeline controls.</span></div><div class="automation-row-actions"><button onClick={()=>setView('policy')}>Open global policy</button></div></article></section>
-          <section class="usage-table"><h3>System observers</h3><p>Built-in, read-only rules. The three attention observers share one setting, so enabling or disabling one changes the whole attention group.</p>{data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em><ModelName model={rule.model}/> → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='attention_observers_enabled'?' group':''}</button></div></article>)}</section>
-          <section class="usage-table"><h3>Custom rules</h3><p>Canonical rules saved in the daemon rules file. The editor below owns the full TOML definition, beside the live/shadow state and the firings each rule produces.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={()=>setRulesOpen(true)}>edit custom rules</button></div>}
+          <section class="usage-table"><h3>System observers</h3><p>Built-in, read-only rules; the three attention observers share one setting.</p>{data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em><ModelName model={rule.model}/> → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='attention_observers_enabled'?' group':''}</button></div></article>)}</section>
+          <section class="usage-table"><h3>Custom rules</h3><p>Saved in the daemon rules file; the editor below owns the full TOML definition.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={()=>setRulesOpen(true)}>edit custom rules</button></div>}
           {/* The rules corpus is content this dashboard owns end to end. It was a Settings
               textarea saved inside the Settings transaction, which meant a stale copy held
               open there could overwrite a rule toggled or edited here. One owner now. */}
           <details class="automation-advanced automation-rules-editor" open={rulesOpen} onToggle={event=>setRulesOpen(event.currentTarget.open)}><summary>rules.toml editor{rulesText!==savedRulesText?' · unsaved':''}</summary>
-            <p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert. Saving validates the complete file first; an invalid file changes nothing.</p>
+            <p>Saving validates the complete file first; an invalid file changes nothing. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p>
             <textarea value={rulesText} spellcheck={false} onInput={event=>setRulesText(event.currentTarget.value)}/>
             {rulesError&&<p class="usage-error" role="alert">{rulesError}</p>}
             <div class="automation-inline"><button class="primary" disabled={rulesText===savedRulesText} onClick={()=>void saveRules()}>validate + save</button><button disabled={rulesText===savedRulesText} onClick={()=>{setRulesText(savedRulesText);setRulesError('')}}>discard edits</button></div>
           </details></section>
         </div>}
         {view==='projects'&&<div class="usage-tables">
-          <section class="usage-table"><h3>Where automations run</h3>
-            <p>Select a Project to inspect and edit its repository policy. Projects with nothing enabled stay visible, so silence means off.</p>
+          <section class="usage-table automation-project-picker"><h3>Where automations run</h3>
+            <div class="automation-project-toolbar">
+              <label>Project<Dropdown value={graphProject?.project_id||''} onChange={setGraphProjectId} options={(matrix?.projects||[]).map(project=>({value:project.project_id,label:project.project_name}))}/></label>
+              <span>{graphProject?`${graphProject.enabled.length} of ${graphEntries.length} on${blockedCount?` · ${blockedCount} blocked`:''}`:'Loading…'}</span>
+            </div>
+            <p>Select a Project to inspect and edit its policy — every switch below turns something on or off for that Project alone, and nothing runs on a Project that did not opt in.</p>
+            {matrix&&!matrix.projects.length&&<div class="automation-empty"><strong>No Projects registered</strong><span>Automations run only on registered Projects that opted in.</span></div>}
+          </section>
+          {policyProject&&<section class="usage-table automation-project-policy"><h3>{policyProject.name} policy</h3>
+            <AutomationOptIns project={policyProject} busy={false} onError={setError} store={projectPolicyStore}/>
+          </section>}
+          <section class="usage-table"><h3>All Projects</h3>
             {matrix?<div class="usage-table-scroll"><table class="data-table automation-matrix">
               <thead><tr><th>project</th><th>enabled</th><th>what is on</th><th/></tr></thead>
               <tbody>{matrix.projects.map(project=>{
                 const implemented=matrix.automations.filter(item=>item.implemented)
                 const labels=project.enabled.map(id=>matrix.automations.find(item=>item.id===id)?.label||id)
-                const blockedCount=Object.keys(project.blocked).length
+                const projectBlocked=Object.keys(project.blocked).length
                 return <tr key={project.project_id}>
                   <td data-label="project"><strong>{project.project_name}</strong>{project.status!=='ready'&&project.status!=='read-only'?<em> · config {project.status}</em>:null}</td>
-                  <td data-label="enabled">{project.enabled.length}/{implemented.length}{blockedCount?<em> · {blockedCount} blocked</em>:null}</td>
+                  <td data-label="enabled">{project.enabled.length}/{implemented.length}{projectBlocked?<em> · {projectBlocked} blocked</em>:null}</td>
                   <td data-label="what is on" class="automation-matrix-list">{labels.length?labels.join(' · '):'nothing'}</td>
-                  <td data-label="open"><button class={graphProject?.project_id===project.project_id?'active':''} onClick={()=>setGraphProjectId(project.project_id)}>Edit policy</button></td>
+                  <td data-label="open"><button class={graphProject?.project_id===project.project_id?'active':''} onClick={()=>{setGraphProjectId(project.project_id);panel.current?.querySelector('.automation-project-picker')?.scrollIntoView({block:'start',behavior:'smooth'})}}>Edit policy</button></td>
                 </tr>})}</tbody>
             </table></div>:<p>Loading Projects…</p>}
-            {matrix&&!matrix.projects.length&&<div class="automation-empty"><strong>No Projects registered</strong><span>Automations run only on registered Projects that opted in.</span></div>}
           </section>
-          {policyProject&&<section class="usage-table automation-project-policy"><h3>{policyProject.name} policy</h3>
-            <p>Saved to this Project's <code>.swe-mux/config.toml</code> and shared with the checkout.</p>
-            <AutomationOptIns project={policyProject} busy={false} onError={setError} store={projectPolicyStore}/>
-          </section>}
         </div>}
         {view==='policy'&&<AutomationPolicyView initialSetting={initialSetting} revealToken={revealToken}/>}
         {view==='cost'&&<AutomationSpendView/>}
         {view==='knowledge'&&<>
-          <section class="usage-table"><h3>Learned fixes</h3><p>Reviewed error → demonstrated resolution pairs from completed runs.</p>
+          <section class="usage-table"><h3>Learned fixes</h3><p>Reviewed error → resolution pairs extracted from completed runs.</p>
             <input class="automation-knowledge-search" type="search" value={experienceQuery} placeholder="Search errors, tools, or resolutions…" onInput={event=>setExperienceQuery(event.currentTarget.value)}/>
             {filteredExperiences.length?<div class="automation-knowledge-browser"><div class="automation-knowledge-list">{filteredExperiences.map(item=><button class={selectedExperience?.id===item.id?'active':''} onClick={()=>setSelectedExperienceId(item.id)}><strong>{item.error_summary}</strong><small>{item.backend} · {Math.round((item.confidence||0)*100)}%</small></button>)}</div>{selectedExperience&&<article class="automation-knowledge-detail"><h4>{selectedExperience.error_summary}</h4><span class="automation-pill">reviewed</span><p><strong>Demonstrated resolution</strong></p><p>{selectedExperience.resolution_summary}</p><small>{selectedExperience.backend} · source run::{selectedExperience.source_run_id} · confidence::{selectedExperience.confidence??'—'}</small><div class="automation-inline"><button onClick={()=>void navigator.clipboard.writeText(selectedExperience.resolution_summary)}>Copy resolution</button></div></article>}</div>:<div class="automation-empty"><strong>No learned fixes</strong><span>Use the reviewed batch below to extract demonstrated fixes from completed runs.</span></div>}
           </section>
-          <section class="usage-table"><h3>Build knowledge from completed runs</h3><p>Select up to 25 ended runs. Estimate first, then explicitly confirm the bounded observer batch. Results remain preview/export data and never modify a repository.</p><label>finding type<Dropdown value={batchKind} onChange={value=>{setBatchKind(value);setBatchPreview(null)}} options={[{value:'experience',label:'learned fixes'},{value:'procedure',label:'repeatable procedures'},{value:'doc-drift',label:'documentation drift candidates'},{value:'convention',label:'observed conventions'},{value:'regression',label:'regression candidates'}]}/></label><div class="batch-run-picker">{batchCandidates.length?batchCandidates.map(run=><label><input type="checkbox" checked={batchRuns.has(run.id)} disabled={!batchRuns.has(run.id)&&batchRuns.size>=25} onChange={()=>toggleBatchRun(run.id)}/><span><strong>[{run.backend}] {runDisplayName(run)}</strong><small>{run.project_label||'Ungrouped'} · {new Date(run.spawned_at*1000).toLocaleString()}</small></span></label>):<p>No ended agent transcripts are available.</p>}</div><div class="automation-inline"><span>{batchRuns.size}/25 selected</span><button disabled={!batchRuns.size} onClick={()=>void previewBatch(false)}>estimate</button><button class="primary" disabled={!batchPreview||!batchRuns.size} onClick={()=>void previewBatch(true)}>start reviewed batch</button></div>{batchPreview&&<pre>{JSON.stringify(batchPreview,null,2)}</pre>}</section>
+          <section class="usage-table"><h3>Build knowledge from completed runs</h3><p>Select up to 25 ended runs; estimate first, then confirm the bounded batch. Results are preview/export only and never modify a repository.</p><label>finding type<Dropdown value={batchKind} onChange={value=>{setBatchKind(value);setBatchPreview(null)}} options={[{value:'experience',label:'learned fixes'},{value:'procedure',label:'repeatable procedures'},{value:'doc-drift',label:'documentation drift candidates'},{value:'convention',label:'observed conventions'},{value:'regression',label:'regression candidates'}]}/></label><div class="batch-run-picker">{batchCandidates.length?batchCandidates.map(run=><label><input type="checkbox" checked={batchRuns.has(run.id)} disabled={!batchRuns.has(run.id)&&batchRuns.size>=25} onChange={()=>toggleBatchRun(run.id)}/><span><strong>[{run.backend}] {runDisplayName(run)}</strong><small>{run.project_label||'Ungrouped'} · {new Date(run.spawned_at*1000).toLocaleString()}</small></span></label>):<p>No ended agent transcripts are available.</p>}</div><div class="automation-inline"><span>{batchRuns.size}/25 selected</span><button disabled={!batchRuns.size} onClick={()=>void previewBatch(false)}>estimate</button><button class="primary" disabled={!batchPreview||!batchRuns.size} onClick={()=>void previewBatch(true)}>start reviewed batch</button></div>{batchPreview&&<pre>{JSON.stringify(batchPreview,null,2)}</pre>}</section>
           <section class="usage-table"><h3>Recent knowledge batches</h3>{batches.length?batches.map(batch=><details><summary>{batch.kind} · {batch.status} · {batch.run_ids.length} runs</summary><small>{new Date(batch.created_at*1000).toLocaleString()} · {batch.calls} calls · {integer.format(batch.tokens)} tokens · {money.format(batch.cost_usd)}</small>{batch.error&&<p class="usage-error">{batch.error}</p>}<pre>{JSON.stringify(batch.preview,null,2)}</pre></details>):<p>No reviewed batches have run.</p>}</section>
         </>}
         {view==='diagnostics'&&<>
           <div class="usage-summary automation-diagnostic-summary"><article><span>queue</span><strong>{data?.engine.queue.size||0}/{data?.engine.queue.capacity||0}</strong></article><article><span>dropped</span><strong>{data?.engine.queue.dropped||0}</strong></article><article><span>provider</span><strong>{data?.provider.secret.source||'none'}</strong></article><article><span>recent failures</span><strong>{failedExecutions}</strong></article></div>
           {failedExecutions>0&&<section class="usage-table automation-diagnostic-issues"><h3>Needs review</h3>{data?.recent_observer_calls.filter(item=>item.status==='failed').map(item=><article class="automation-row"><span class="state-dot awaiting"/><div><strong>{item.rule_id} · observer failed</strong><small>{item.error||`HTTP ${item.http_status??'unknown'} · ${item.finish_reason||'unknown finish'}`}</small></div></article>)}</section>}
           <section class="usage-table"><h3>Provider and safety boundary</h3><p>OpenRouter key::{data?.provider.secret.source||'none'} · cheap::<ModelName model={data?.provider.cheap_model} fallback="unset"/> · standard::<ModelName model={data?.provider.standard_model} fallback="unset"/></p><p>Observers can create run notes and attention items only. PTY writes, approvals, arbitrary HTTP, workers, repository rules, and model-directed actions are unavailable.</p><p>queue::{data?.engine.queue.size||0}/{data?.engine.queue.capacity||0} · dropped::{data?.engine.queue.dropped||0} · chain loops rejected::{data?.engine.queue.loop_rejections||0}</p>{data?.engine.diagnostic&&<p class="usage-error">{data.engine.diagnostic}</p>}</section>
-          <section class="usage-table"><h3>Historical event dry-run</h3><p>Evaluate custom rules against one persisted event without writing a firing, action, checkpoint, model call, or spend record.</p><div class="automation-inline"><input type="number" placeholder="event sequence" value={eventSeq} onInput={event=>setEventSeq(event.currentTarget.value)}/><button disabled={!eventSeq} onClick={()=>void runDry()}>dry-run</button></div>{dryRun&&<pre>{JSON.stringify(dryRun,null,2)}</pre>}</section>
+          <section class="usage-table"><h3>Historical event dry-run</h3><p>Evaluate custom rules against one persisted event with every side effect disabled.</p><div class="automation-inline"><input type="number" placeholder="event sequence" value={eventSeq} onInput={event=>setEventSeq(event.currentTarget.value)}/><button disabled={!eventSeq} onClick={()=>void runDry()}>dry-run</button></div>{dryRun&&<pre>{JSON.stringify(dryRun,null,2)}</pre>}</section>
           <section class="usage-table"><h3>Recent rule execution</h3><h4>Firings</h4>{data?.recent_firings.map(firing=><details><summary>{firing.rule_id} · {firing.status} · event::{firing.event_seq}</summary><small>{new Date(firing.created_at*1000).toLocaleString()} · trigger::{firing.event_type}{firing.shadow?' · shadow':''}</small>{firing.error&&<p>{firing.error}</p>}<pre>{JSON.stringify(firing.condition_trace,null,2)}</pre></details>)}<h4>Action results</h4>{data?.recent_action_results.map(item=><details><summary>{item.kind} · {item.status} · action::{item.action_index}</summary><small>firing::{item.firing_id} · {new Date(item.created_at*1000).toLocaleString()}</small>{item.error&&<p>{item.error}</p>}<pre>{JSON.stringify(item.detail,null,2)}</pre></details>)}<h4>Observer calls</h4>{data?.recent_observer_calls.map(item=><details><summary>{item.rule_id} · {item.status} · <ModelName model={item.resolved_model||item.requested_model}/></summary><small>{item.input_tokens+item.output_tokens} tokens · {money.format(item.cost_usd||0)} · {item.latency_ms??'-'}ms · input::{item.input_bytes} bytes</small><small>provider::{item.provider_name||'unknown'} · finish::{item.finish_reason||'unknown'} · response::{item.response_content_type||'unknown'}[{item.response_content_length??0}] · http::{item.http_status??'unknown'} · retryable::{item.retryable===undefined||item.retryable===null?'unknown':item.retryable?'yes':'no'}</small>{item.error&&<p>{item.error}</p>}</details>)}</section>
           <details class="usage-table automation-advanced"><summary>Research-only delivery-readiness diagnostics</summary><p>Provider-neutral replay and live evidence classify each root session as safe, blocked, or unknown. Actuation remains unauthorized in every case.</p><p>contract::v{injectionSafety?.version||'—'} · authorized::{injectionSafety?.authorizes_actuation?'yes':'no'} · transitions::{injectionSafety?.shadow_metrics.transitions||0} · tracked::{injectionSafety?.shadow_metrics.tracked_sessions||0}</p>{injectionSafety?.sessions.map(item=><article class="automation-row"><span class={`state-dot ${item.delivery_state==='safe'?'idle':item.delivery_state==='blocked'?'awaiting':'running'}`}/><div><strong>{item.backend} · {item.session_id}</strong><small>agent::{item.state} · delivery::{item.delivery_state} · candidate::{item.candidate_safe?'yes':'no'} · authorized::no</small><em>{item.diagnostic}</em><details><summary>bounded evidence</summary><pre>{JSON.stringify({checks:item.checks,evidence:item.evidence},null,2)}</pre></details></div></article>)}<h4>Parser coverage</h4>{injectionSafety?.parser_coverage.map(item=><article class="automation-row"><span class={`state-dot ${item.status==='ready'?'idle':item.status==='degraded'?'awaiting':'running'}`}/><div><strong>{item.backend} · {item.session_id}</strong><small>schema::{item.schema_version||'—'} · {item.status} · recognized::{item.recognized} · unknown::{item.unknown} ({item.unknown_rate===undefined||item.unknown_rate===null?'—':`${Math.round(item.unknown_rate*100)}%`})</small><em>{item.diagnostic||'No transcript diagnostics yet.'}</em>{Object.keys(item.unknown_signatures).length>0&&<pre>{JSON.stringify(item.unknown_signatures,null,2)}</pre>}</div></article>)}</details>
         </>}

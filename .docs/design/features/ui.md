@@ -729,7 +729,7 @@ Its rules, and what each one is defending:
     It applies on save with no restart, which is what makes "set DEBUG, reproduce, export" a
     single pass.
 - Automation has one workspace and one navigation model.
-  The Automation workspace owns the control graph, rules, per-Project participation, install-wide policy, spend, learned fixes, and diagnostics.
+  The Automation workspace owns the per-Project control map and its toggles, rules, install-wide policy, spend, learned fixes, and diagnostics.
   Settings → Automation is a status portal into that workspace and does not render a second copy of its controls.
   Accounts still owns provider credentials and routed model defaults because those are shared by non-automation features.
 - Every spending cap is edited through one control, wherever the setting lives, the way every model setting is edited through one picker.

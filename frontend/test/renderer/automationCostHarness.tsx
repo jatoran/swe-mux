@@ -108,10 +108,12 @@ window.fetch = (async (input: RequestInfo | URL) => {
 
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
+// `?project=` is how App threads the Project the operator is standing in.
+const initialProjectId = new URLSearchParams(location.search).get('project') || undefined
 render(
   <AutomationDashboard projects={[
     { id: 'p1', name: 'swe-mux', root: 'D:/PROJECTS/swe-mux' } as Project,
     { id: 'p2', name: 'orca', root: 'D:/PROJECTS/orca' } as Project,
-  ]} onClose={() => {}} onOpenSession={() => {}} onOpenAlerts={() => {}} onOpenFindings={() => {}} onOpenUsage={() => {}} />,
+  ]} initialProjectId={initialProjectId} onClose={() => {}} onOpenSession={() => {}} onOpenAlerts={() => {}} onOpenFindings={() => {}} onOpenUsage={() => {}} />,
   document.querySelector('#root')!,
 )

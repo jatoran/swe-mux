@@ -219,21 +219,31 @@ export function AutomationOptIns({ project, busy, onError, store }: {
       </p>}
     </li>
   }
-  const substrate = state.automations.filter(item => item.kind === 'substrate')
-  // Scan timeline gets its own block below, with the two settings that only
-  // make sense next to its permission. Listing it twice would mean two
-  // checkboxes for one thing.
+  // The control map, grouped the way the dependencies actually flow. Scan timeline is
+  // substrate too, but it keeps its own block below with the two settings that only make
+  // sense beside its permission — the flat list used to render it in the substrate list
+  // *and* in that block, which was two checkboxes for one switch.
+  const substrate = state.automations.filter(item => item.kind === 'substrate' && item.id !== 'scan_timeline')
   const consumers = state.automations.filter(item => item.kind === 'consumer' && item.id !== 'scan_timeline')
+  const readsTimeline = (item: AutomationEntry) => closure(item.id, new Set()).has('scan_timeline')
+  const deterministic = consumers.filter(item => item.requires.length > 0 && !readsTimeline(item))
+  const capabilities = consumers.filter(item => !item.requires.length)
+  const timeline = consumers.filter(item => readsTimeline(item))
+  const group = (title: string, hint: string, items: AutomationEntry[]) => items.length ? <>
+    <h5 class="project-automation-group">{title}<span>{hint}</span></h5>
+    <ul class="project-automation-list">{items.map(row)}</ul>
+  </> : null
   const scanOn = state.requested.scan_timeline === true
   const scanBlocked = state.blocked.scan_timeline || []
   return <div class="project-automations">
     <h4 data-setting="automations">Automations<em class="project-setting-chip">repo</em></h4>
-    <p>Per-project opt-in. Substrate records facts and never acts. Nothing here runs on a project that did not opt in. Spending limits are global, in <SettingLink target="automation.budgets" variant="link">Automation → Global policy</SettingLink>.</p>
-    <ul class="project-automation-list">{substrate.map(row)}</ul>
-    <ul class="project-automation-list">{consumers.map(row)}</ul>
+    <p>Per-Project opt-in — nothing runs on a Project that did not opt in. Spending limits are global, in <SettingLink target="automation.budgets" variant="link">Automation → Global policy</SettingLink>.</p>
+    {group('Foundations', 'record facts, never act', substrate)}
+    {group('Deterministic checks', 'model-free reads over the recorded facts', deterministic)}
+    {group('Capabilities', 'what agents and schedules may do in this Project', capabilities)}
 
     <h4>Scan timeline<em class="project-setting-chip">repo</em></h4>
-    <p>A readable behavioural history of each conversation in this Project. Permitting it here also enables the substrate it reads from. The Timeline drawer tab shows the result; everything that applies to the whole Project is set here.</p>
+    <p>A readable behavioural history of each conversation, shown in the Timeline drawer tab. Permitting it also enables the substrate it reads from.</p>
     <ul class="project-automation-list">
       <li data-setting={automationSetting('scan_timeline')}>
         <label class="check">
@@ -271,6 +281,7 @@ export function AutomationOptIns({ project, busy, onError, store }: {
       </li>
     </ul>
     {scanOn && <ProjectContextEditor projectId={project.id} busy={busy || saving} onError={onError} />}
+    {group('Reads the timeline', 'distillations of the scan timeline above', timeline)}
   </div>
 }
 

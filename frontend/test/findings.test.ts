@@ -81,8 +81,10 @@ test('the Automation dashboard keeps no second copy of the attention inbox', () 
   assert.ok(!dashboard.includes("view==='health'"), 'the health view was split three ways')
   assert.ok(dashboard.includes('onOpenAlerts'))
   // One workspace separates definitions, rules, policy, runtime review, and knowledge.
-  assert.ok(dashboard.includes("export type AutomationView='overview'|'graph'|'rules'|'projects'|'policy'|'cost'|'knowledge'|'diagnostics'"))
-  assert.ok(dashboard.includes("view==='graph'"))
+  // The read-only control-graph view merged into `projects`, which draws the same
+  // dependency map with the toggles on the nodes.
+  assert.ok(dashboard.includes("export type AutomationView='overview'|'rules'|'projects'|'policy'|'cost'|'knowledge'|'diagnostics'"))
+  assert.ok(!dashboard.includes("view==='graph'"), 'the read-only graph view must not come back')
   assert.ok(dashboard.includes("view==='policy'&&<AutomationPolicyView"))
   // The away report moved to the inbox it summarizes.
   assert.ok(source('Notifications.tsx').includes("api('GET','/api/attention/absence')"))

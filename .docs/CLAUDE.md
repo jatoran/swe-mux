@@ -342,10 +342,11 @@
   The rule the presentation turns on: the pipeline produces exactly two things - an attention
   item or a run note - and each has exactly one home (the Alerts drawer tab, and Activity →
   Findings). The Automation dashboard owns the rule corpus and the runtime (rules and their
-  live/shadow state, the rules.toml editor, the per-Project enablement matrix, spend,
-  diagnostics) and links to those two homes rather than drawing second copies of them. The
-  same one-owner rule applies to switches: every install-wide automation switch and bound
-  lives in Settings → Automation, and the dashboard only shows switch state and links there.
+  live/shadow state, the rules.toml editor, the per-Project control map with its toggles,
+  spend, diagnostics) and links to those two homes rather than drawing second copies of them.
+  The same one-owner rule applies to switches: every install-wide automation switch and bound
+  lives in Automation → Global policy; Settings → Automation and the other dashboard views
+  only show switch state and link there.
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`

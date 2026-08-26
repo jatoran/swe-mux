@@ -133,6 +133,9 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 
 ## Toggle surface
 
+The editor is the control map: switches render grouped by dependency layer (Foundations,
+Deterministic checks, Capabilities, the Scan-timeline block, Reads-the-timeline), so the
+structure the retired read-only graph view drew is on the same surface as the toggles.
 Toggling a consumer shows the substrate it needs as a dependency line rather than a flat
 checkbox, because a consumer whose substrate is off would otherwise read as
 enabled-and-working:
