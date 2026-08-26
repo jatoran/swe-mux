@@ -543,20 +543,23 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[treeMenu])
 
   // Debounced recursive search. An empty query restores the tree; a generation guard drops a
-  // slow response that arrives after the query already moved on.
+  // slow response that arrives after the query already moved on. Clear the previous query's
+  // rows immediately: presenting them beneath new input made a narrow filesystem walk look
+  // inert, especially after a one-letter query had already filled the 300-result cap.
   useEffect(()=>{
     if(resource.kind!=='files')return
     const q=query.trim()
     if(!q){searchGeneration.current++;setResults(null);setSearching(false);setSearchLimit(null);return}
-    setSearching(true)
+    const controller=new AbortController()
+    setResults([]);setSearchLimit(null);setError('');setSearching(true)
     const generation=++searchGeneration.current
     const handle=window.setTimeout(()=>{
-      void api<SearchPayload>('GET',`/api/projects/${project.id}/search?q=${encodeURIComponent(q)}&mode=${searchMode}`)
+      void api<SearchPayload>('GET',`/api/projects/${project.id}/search?q=${encodeURIComponent(q)}&mode=${searchMode}`,undefined,{timeoutMs:REQUEST_TIMEOUT_MS,signal:controller.signal})
         .then(payload=>{if(generation!==searchGeneration.current)return;setResults(payload.items);setSearchLimit(payload);setError('')})
-        .catch(cause=>{if(generation!==searchGeneration.current)return;setError(cause instanceof Error?cause.message:String(cause));setResults([]);setSearchLimit(null)})
+        .catch(cause=>{if(generation!==searchGeneration.current||cause instanceof DOMException&&cause.name==='AbortError')return;setError(cause instanceof Error?cause.message:String(cause));setResults([]);setSearchLimit(null)})
         .finally(()=>{if(generation===searchGeneration.current)setSearching(false)})
     },250)
-    return()=>window.clearTimeout(handle)
+    return()=>{window.clearTimeout(handle);controller.abort()}
   },[resource.kind,project.id,query,searchMode])
 
   const watchedPaths=resource.kind==='files'
@@ -1423,7 +1426,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       {notice&&<p class="resource-notice" role="status" aria-live="polite">{notice}</p>}
       {results!==null
         ?<div class="file-results" role="list" aria-busy={searching} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
-          {searching&&!results.length?<p class="file-tree-loading">Searching…</p>
+          {searching&&!results.length?<p class="file-tree-loading" role="status" aria-live="polite">Searching for “{query.trim()}”…</p>
             :!results.length?<p class="file-tree-loading">No matches.</p>
             :<>{results.map(hit=>{const item:DirectoryItem={name:hit.name,path:hit.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={hit.path} title="Open file · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>onOpenFile(hit.path))} onContextMenu={event=>openTreeMenu(item,event)}>
                 <span class="file-result-line"><span>·</span><strong>{hit.name}</strong><small>{hit.path}</small></span>

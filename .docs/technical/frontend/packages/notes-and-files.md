@@ -21,6 +21,12 @@ Design: `../../../design/features/project-resources.md`.
 - Shared path, reveal, and clipboard actions across the Files tree and opened-file tabs.
 - The Files tab's three mutually exclusive bodies - the lazy tree, the flat search results, and the Recent list - with search winning over Recent because typing a query is an explicit act.
 
+### Search results belong to one query
+
+`ProjectResource.tsx` clears the prior result rows as soon as the trimmed query or search mode changes and renders the pending query in a live status line.
+The effect aborts its previous HTTP request and also guards response application by generation, because cancellation and response completion can race.
+Keeping old rows visible under new input is forbidden: a broad one-letter query can return immediately while a narrow query walks to the file bound, making the unchanged rows look like the new query did nothing.
+
 ### The source editor is two dynamic boundaries, not one
 
 `LazyCodeEditor.tsx` is the boundary for CodeMirror's core (view, state, commands, language, autocomplete, search, and this app's theme layer), on the same pattern as `LazyGitDiff.tsx`.

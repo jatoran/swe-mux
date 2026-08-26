@@ -465,6 +465,8 @@ include a registered Project nested below another Git root.
   content, or both (a scope toggle). A non-empty query replaces the lazy tree with a flat,
   path-ordered result list (content matches show the first matching line); clearing it restores
   the tree. Results and the tree share the same open, context-menu, and drag behavior.
+  Each query clears the previous query's rows immediately and names the pending query while the filesystem walk runs.
+  A superseded request is aborted and its response cannot replace the current query's results.
 - **The search walk is breadth-first, and that is correctness rather than taste.** It is bounded
   at 20,000 files so a huge tree cannot stall the daemon, and a depth-first walk spends that
   whole budget on whichever subtree sorts first - a dot-directory, always - and can return
