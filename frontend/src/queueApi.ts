@@ -16,6 +16,13 @@ export type QueueSenderKind = 'user' | 'remote_user' | 'rule' | 'agent' | 'queue
 export interface QueueConstraints {
   not_before?: number
   expires_at?: number
+  /**
+   * "now" asks for delivery into a turn that is already running, decided at
+   * delivery time by the readiness tracker's strictly narrower interject
+   * predicate - never by overriding ordinary readiness. Absent means what every
+   * item meant before the mode existed: wait for the target to be idle.
+   */
+  delivery?: 'when_idle' | 'now'
 }
 
 export interface QueueMessage {

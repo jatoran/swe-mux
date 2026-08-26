@@ -436,6 +436,9 @@ async def test_size_budget_and_backlog_bounds(tmp_path: Path) -> None:
         live_session("s1"),
         live_session("s2"),
         agent_message_max_chars=20,
+        # The rate bounds bind only while the limits toggle is on (2026-08-25);
+        # off, the fixed backstop ceilings apply instead.
+        agent_message_limits_enabled=True,
         agent_message_hourly_budget=2,
         agent_message_pending_per_target=1,
     )
@@ -469,6 +472,7 @@ async def test_chain_depth_bounds_propagation_not_conversation(tmp_path: Path) -
         live_session("s2"),
         live_session("s3"),
         live_session("s4"),
+        agent_message_limits_enabled=True,
         agent_message_max_chain_depth=2,
     )
     try:
@@ -613,6 +617,7 @@ async def test_a_thread_has_a_turn_budget(tmp_path: Path) -> None:
         tmp_path,
         live_session("s1"),
         live_session("s2"),
+        agent_message_limits_enabled=True,
         agent_message_max_thread_turns=2,
         agent_message_pending_per_target=10,
     )
@@ -637,6 +642,63 @@ async def test_a_thread_has_a_turn_budget(tmp_path: Path) -> None:
         assert spent.value.code == "thread_budget_exhausted"
     finally:
         harness.close()
+
+
+@pytest.mark.asyncio
+async def test_with_limits_off_the_configured_bounds_do_not_bind(tmp_path: Path) -> None:
+    """The default mode (2026-08-25): backstop ceilings, not the configured values.
+
+    An orchestrator relaying work for hours must not trip a send budget, so with
+    `agent_message_limits_enabled` off (the default) a configured budget of 1 is
+    ignored and the fixed backstops in `config.agent_message_bounds()` bind
+    instead. The size cap is not a rate limit and still applies.
+    """
+    harness = Harness(
+        tmp_path,
+        live_session("s1"),
+        live_session("s2"),
+        agent_message_max_chars=20,
+        agent_message_hourly_budget=1,
+        agent_message_pending_per_target=1,
+    )
+    try:
+        caller = harness.manager.sessions["s1"]
+        await harness.messaging.notify(caller, target="s2", body="one")
+        # Past both the configured hourly budget (1) and the configured backlog
+        # cap (1), and still accepted: neither is in force while limits are off.
+        await harness.messaging.notify(caller, target="s2", body="two")
+        with pytest.raises(QueueError) as oversized:
+            await harness.messaging.notify(caller, target="s2", body="x" * 21)
+        assert oversized.value.code == "body_too_large"
+    finally:
+        harness.close()
+
+
+def test_agent_message_bounds_switches_between_the_two_modes() -> None:
+    """One helper answers for staging and the reply window alike."""
+    from swe_mux.config import (
+        UNLIMITED_MESSAGE_HOURLY_BUDGET,
+        UNLIMITED_MESSAGE_THREAD_TURNS,
+        agent_message_bounds,
+    )
+
+    limited = Config(
+        agent_message_limits_enabled=True,
+        agent_message_hourly_budget=3,
+        agent_message_max_thread_turns=7,
+    )
+    bounds = agent_message_bounds(limited)
+    assert bounds.limits_enabled
+    assert bounds.hourly_budget == 3
+    assert bounds.max_thread_turns == 7
+
+    unlimited = agent_message_bounds(Config(agent_message_hourly_budget=3))
+    assert not unlimited.limits_enabled
+    assert unlimited.hourly_budget == UNLIMITED_MESSAGE_HOURLY_BUDGET
+    assert unlimited.max_thread_turns == UNLIMITED_MESSAGE_THREAD_TURNS
+    # The backstops are ceilings, not the absence of one: the runaway-exchange
+    # brake survives the toggle.
+    assert unlimited.max_thread_turns < 10_000
 
 
 @pytest.mark.asyncio
@@ -676,6 +738,7 @@ async def test_an_unrelated_deep_chain_does_not_wedge_a_reply(tmp_path: Path) ->
         live_session("s2"),
         live_session("s3"),
         live_session("s4"),
+        agent_message_limits_enabled=True,
         agent_message_max_chain_depth=2,
     )
     try:

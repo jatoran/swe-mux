@@ -244,6 +244,51 @@ def test_the_merged_table_keeps_what_was_already_opted_in() -> None:
     assert merged["land_grant"] == "granted"
 
 
+def test_a_default_on_opt_out_survives_an_unrelated_grant() -> None:
+    """`session_control = false` is load-bearing (absence means on) and must not
+    be dropped by a grant that never mentioned it - while a grant that *does*
+    ask for it is the one way a gate may override the opt-out."""
+    current_automations = {"session_control": False, "tier0": True, "raw_store": True}
+    unrelated = plan_grant(
+        install=None,
+        automations=["doc_debt"],
+        values=None,
+        current_install={},
+        current_automations=current_automations,
+        current_values={"automations": dict(current_automations)},
+    )
+    merged = project_values_after(
+        {"automations": dict(current_automations)}, unrelated, current_automations
+    )
+    assert merged["automations"]["session_control"] is False
+
+    # Unset-and-default-on is already on: granting it plans no write, so a
+    # double click cannot bump a revision under an open editor.
+    redundant = plan_grant(
+        install=None,
+        automations=["session_control"],
+        values=None,
+        current_install={},
+        current_automations={},
+        current_values={},
+    )
+    assert redundant.empty
+
+    # An explicit opt-out is the one state a session_control grant overrides.
+    explicit = plan_grant(
+        install=None,
+        automations=["session_control"],
+        values=None,
+        current_install={},
+        current_automations={"session_control": False},
+        current_values={"automations": {"session_control": False}},
+    )
+    merged = project_values_after(
+        {"automations": {"session_control": False}}, explicit, {"session_control": False}
+    )
+    assert merged["automations"]["session_control"] is True
+
+
 # -- the endpoint ------------------------------------------------------------
 
 
@@ -387,7 +432,9 @@ async def test_the_starting_set_applies_through_the_ordinary_grant_path(tmp_path
     finally:
         await client.close()
     assert body["spends"] is False
+    # `session_control` rides along as the default-on capability gate
+    # (2026-08-25), not as part of the granted closure.
     assert set(body["project"]["enabled"]) == set(
         enabling_closure(RECOMMENDED_PROJECT_AUTOMATIONS)
-    )
+    ) | {"session_control"}
     assert [name for name, _ in events].count("grant_applied") == 1

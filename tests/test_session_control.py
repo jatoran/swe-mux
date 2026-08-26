@@ -1,8 +1,10 @@
 """Phase 7.6: agent session control - interrupt and end.
 
 What these pin is the contract: the install master switch and the per-Project
-grant gate every action; `draft` (the default) writes an inert request and acts
-nothing; `granted` acts inside bounds (per-origin budget, reciprocal-cycle guard,
+grant gate every action; `draft` writes an inert request and acts
+nothing; `granted` (the default since 2026-08-25 - the grant values here are
+injected, so the tests pin behaviour per level rather than the default) acts
+inside bounds (per-origin budget, reciprocal-cycle guard,
 idempotency) and an interrupt only when delivery-readiness is `safe`; a shell
 pane, an out-of-scope session, and the daemon-hosting session are never valid
 targets; and self-end returns before teardown. MCP is transport - every bound

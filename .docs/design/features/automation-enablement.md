@@ -57,12 +57,20 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   rather than the caller's scoped Project set (`mux-mcp.md`, `scan-timeline.md`).
 - **`session_control` (Phase 7.6)** gates a capability rather than a read, so it depends on no
   substrate (`requires ()`); the delivery-readiness predicate an interrupt gates on is
-  intrinsic, not an opt-in. It is off by default (in no defaults template). Opting it in is
-  necessary but not sufficient: the authority still defaults to `draft` - a human approves
-  every `interrupt`/`end_session` in the Fleet Queue - until the Project's separate
-  `session_control_grant` config field is raised to `granted` (`mux-mcp.md`, `data-model.md`).
-  The same automation gates the Project's `spawn_grant`, which does the identical draft/granted
-  split for agent-initiated `mux.requestSpawn` into that Project.
+  intrinsic, not an opt-in. Since 2026-08-25 it is **on by default**: the registry's
+  `default_on` marks it, `DEFAULT_ON_AUTOMATIONS` is the inherited template every resolution
+  starts from, and a Project withdraws it with an explicit `session_control = false` -
+  which the toggle surface and the grant path both *persist* rather than strip, because for
+  a default-on id absence means on and a dropped false would silently re-enable. Default-on
+  is reserved by an import-time check for exactly this shape: free, dependency-less,
+  model-less capability gates whose every act is separately bounded and attributable -
+  "nothing runs on a Project that did not opt in" still holds for everything that runs.
+  The authority beside it also defaults open now: `session_control_grant` unset reads as
+  `granted`, lowered by writing `draft` (a human approves every `interrupt`/`end_session` in
+  the Fleet Queue) - and a malformed config falls to `draft`, never to the default, so
+  corruption cannot widen an explicit narrowing (`mux-mcp.md`, `data-model.md`).
+  The same automation gates the Project's `spawn_grant`, which does the identical
+  granted-by-default split for agent-initiated `mux.requestSpawn` into that Project.
 - **`land_queue` (Phase 14)** gates a capability rather than a read, so it depends on no
   substrate (`requires ()`) and is off by default. Its own id rather than a second meaning
   for `session_control`: that one acts on a *session*, this one moves a *repository's
@@ -154,12 +162,16 @@ impossible to change from the app; one of them told the agent to go and edit the
 (`agent_messaging.py`). They live in the Projects registry beside the opt-ins they qualify,
 because only an editor may take a permission away.
 
-| Field | Inert default | Granted | Gated by |
+| Field | Default when unset (2026-08-25) | Lowered form | Gated by |
 |---|---|---|---|
-| `session_control_grant` | `draft` — a human approves each | acts directly | `session_control` |
-| `spawn_grant` | `draft` | creates sessions directly | `session_control` |
-| `land_grant` | `draft` | starts the pipeline directly | `land_queue` |
-| `interject_grant` | `off` — waits for the queue | may write mid-turn | (delivery readiness) |
+| `session_control_grant` | `granted` — acts directly | `draft`: a human approves each | `session_control` |
+| `spawn_grant` | `granted` — creates sessions directly | `draft` | `session_control` |
+| `land_grant` | `draft` — a human approves each (unchanged) | — (`granted` raises it) | `land_queue` |
+| `interject_grant` | `granted` — may write mid-turn | `off`: waits for the queue | (delivery readiness) |
+
+The three session-scoped authorities default open; landing a trunk still defaults to the
+inert draft. In every case a malformed or unreadable config resolves to the *narrow* value
+(`draft`/`off`), never to the default - corruption must not widen an explicit lowering.
 
 `frontend/test/settingTargets.test.ts` holds every grantable Project field to having a control
 here, so a fifth arriving the same way fails a test.

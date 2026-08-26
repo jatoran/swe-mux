@@ -264,6 +264,11 @@ Mid-turn delivery adds `agent_interject_enabled` (install master, on),
 `agent_interject_min_interval_seconds` (60, per target), which are edited under the same
 Auto-delivery heading rather than beside the messaging bounds: an interject is a *delivery*
 mode with its own strictly narrower readiness predicate, not a kind of message.
+The two interject bounds bind only while `agent_message_limits_enabled` is on; off (the
+default since 2026-08-25) they run at the fixed backstops in
+`config.agent_message_bounds()` (120 an hour, 5 s floor), the same helper the reply window
+reads its thread budget through so staging and the window cannot disagree about the mode
+(`agent-messaging.md`).
 Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
 SQLite, not config, so the emergency pause never waits on a config write.
 

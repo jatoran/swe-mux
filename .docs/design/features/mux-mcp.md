@@ -17,24 +17,28 @@ Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), Phase 5
 and Codex session — no user setup — and reachable by a user-typed `claude`/`codex` inside a
 mux shell session via the agent shims.
 
-**No tool here delivers anything.** The one read that produces a message at all is
+**No messaging tool here delivers anything.** The one read that produces a message at all is
 `watch_session`, and it produces exactly one, addressed to the caller itself, through the
 ordinary queue where the same head-of-line order and readiness contract apply (see
-"Session-settle watches" below). Neither `notify` nor `request_spawn` delivers either. `notify`
+"Session-settle watches" below). `notify`
 stages a message in another session's Phase 4 queue, where head-of-line order, receiver
-readiness, and (by default) human arming still apply; `request_spawn` writes an inert Fleet
-Queue approval draft and starts nothing. `notify(dry_run=true)` stages nothing at all - it is
+readiness, and the receiver's arming policy still apply; `request_spawn` acts per the target
+Project's grant - directly under the default `granted` (2026-08-25), as an inert Fleet Queue
+approval draft against a Project lowered to `draft`. `notify(dry_run=true)` stages nothing at
+all - it is
 the same call answering the same question with no side effect - and `revoke_message` only
 removes something the caller itself put there and nothing has delivered, so neither adds
 authority to the surface. `notify(delivery="now")` asks for the item to be
 delivered into a turn that is already running rather than at the target's next prompt; it
-still delivers nothing itself, is refused unless the target's Project granted it and the
-target session accepts it, and is authorized at delivery time by a strictly narrower
+still delivers nothing itself, is refused where the target's Project switched it off or the
+target session opted out (Projects grant it by default), and is authorized at delivery time
+by a strictly narrower
 readiness predicate (`agent-messaging.md`, `delivery-readiness.md`). It does not stop the
 turn - the CLI buffers the text and takes it at the turn boundary - so it is a latency
 choice, and `interrupt` remains the way to stop one. The Phase 7.6 tools `interrupt` and `end_session`
-are the first that act on a running agent, and they act only under a per-Project grant that
-defaults to writing an inert approval a human must decide (see "Session control" below).
+are the first that act on a running agent, under a per-Project grant that defaults to acting
+directly since 2026-08-25 and is lowered to `draft` to put an inert approval in front of a
+human (see "Session control" below).
 
 `run_action` is the one tool that starts a process, and its authority is borrowed rather than
 granted: it can run only a command whose exact bytes a human already approved through the Project
@@ -185,10 +189,10 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `watch_session` | arms a one-shot watch on another session and returns having delivered nothing. Exactly one deterministic notice then enters the **caller's own** prompt queue: when the target leaves working for a settled state and holds it, when it ends, or when the caller's timeout elapses - whichever is first. The notice names which case fired and the target's state, including the `awaiting` sub-reason and any background work still running. It is staged **armed** (`solicited_by` naming the watch), because the watch is the receiver's own request for it - armed is still not delivered. Bounded per watcher, one per target, ephemeral (see "Session-settle watches" below) |
 | `notify` | stages a message with a visible sender/message/correlation envelope, a `from_project` header when it crossed a Project, and a `delivery` header when it landed mid-turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not. `dry_run:true` runs every one of those bounds and answers with the same verdict having staged nothing and spent nothing, so an unreachable peer is chosen rather than discovered after the item is armed |
 | `revoke_message` | withdraws one message the caller sent that nothing has delivered, cancelling it as `revoked`. Attribution is the whole check and a miss answers `unknown_message`; a delivered message answers `not_revocable`, because the text is already in another terminal |
-| `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
+| `request_spawn` | creates a session in the target Project directly under the default `granted` grant (since 2026-08-25), inside the per-origin spawn budget; against a Project lowered to `draft` it writes an inert spawn approval row into that Project's Fleet Queue and starts nothing |
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
-| `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |
-| `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Under the default `draft` grant it writes an inert approval instead of acting |
+| `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Acts directly under the default `granted` grant (since 2026-08-25); a Project lowered to `draft` gets an inert approval instead |
+| `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Acts directly under the default `granted` grant; a Project lowered to `draft` gets an inert approval instead |
 | `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
 | `request_verify` | the same pipeline stopped before its last step: reconcile, run the repository's verification command, report the verdict back, move no trunk. A pass is kept against the exact (git tree, command digest) it ran over, so a later `request_land` of that content skips the gate; a trunk that moved in between produces different content and the gate runs again. Gated on the same automation, and the `draft` grant **enqueues** it rather than drafting it - it moves nothing there is anything to approve in advance (`land-queue.md`) |
 
@@ -389,12 +393,16 @@ operator's.
   finished-worker case. A self-end returns its result **before** teardown begins; the final
   turn is flushed and the record stays readable through `list_sessions(include_ended)`,
   `get_session`, and history. An agent may end itself; it may not erase itself.
-- **A three-position per-Project grant.** `off` is the absence of the `session_control`
-  automation opt-in and refuses both tools. `draft`, the default once opted in, makes the call
+- **A three-position per-Project grant.** `off` means the `session_control` automation is
+  switched off for the Project (it is on by default since 2026-08-25, withdrawn with an
+  explicit `session_control = false`) and refuses both tools. `draft` makes the call
   write an inert `control_request` observation that a human approves in the Fleet Queue - the
-  approval is what acts. `granted` acts directly, inside bounds. The draft/granted split is the
-  `.swe-mux/config.toml` field `session_control_grant` (`"draft"` | `"granted"`, default
-  `"draft"`), read by `project_session_control_grant()`.
+  approval is what acts. `granted`, the default when the field is unset (also 2026-08-25;
+  it began life defaulting to `draft`), acts directly, inside bounds. The draft/granted
+  split is the `.swe-mux/config.toml` field `session_control_grant`
+  (`"draft"` | `"granted"`), read by `project_session_control_grant()`, which resolves a
+  malformed config to `draft` rather than to the default so corruption cannot widen an
+  explicit lowering.
 - **Bounds on the granted path.** A per-origin hourly budget (charged only when the granted
   path acts, not for a draft), a reciprocal-cycle guard (A interrupting B while B recently
   controlled A is refused `relay_cycle`), idempotency by `correlation_id`, and typed refusals
@@ -408,15 +416,17 @@ operator's.
   All of them were enforced with no control anywhere until 2026-08-21, which made the whole
   actuation surface adjustable only by hand-editing `~/.mux/config.toml`.
 - **Granted spawn.** `mux.requestSpawn` takes the same three-position model. A per-Project
-  `spawn_grant` (`"draft"` | `"granted"`, default `"draft"`, gated by the same `session_control`
-  automation, read by `project_spawn_grant()`) decides whether the call creates a session in the
-  target Project directly or writes the Phase 5 inert draft. Authority is by target Project, so
-  an agent can spawn into any registered Project that granted it (and, since interrupt/end are
-  also target-authority, monitor and end that session too). The granted spawn goes through the
-  same `_spawn_from_body` path the browser and Fleet-Queue approval use, is capped by a
-  dedicated per-origin `agent_spawn_hourly_budget` (default 10), and emits an
-  `agent_session_control` event with `action:"spawn"`. The default everywhere stays the inert
-  draft, so nothing spawns directly until an operator raises a Project's grant.
+  `spawn_grant` (`"draft"` | `"granted"`, default `"granted"` since 2026-08-25, gated by the
+  same `session_control` automation, read by `project_spawn_grant()`) decides whether the call
+  creates a session in the target Project directly or writes the Phase 5 inert draft. Authority
+  is by target Project, so an agent can spawn into any registered Project that grants it (and,
+  since interrupt/end are also target-authority, monitor and end that session too) - which,
+  with the default open, is cross-Project spawning by naming the Project. The granted spawn
+  goes through the same `_spawn_from_body` path the browser and Fleet-Queue approval use, is
+  capped by a dedicated per-origin `agent_spawn_hourly_budget` (default 10), and emits an
+  `agent_session_control` event with `action:"spawn"`. The budget stays enforced whatever the
+  messaging rate-limit toggle says, because a spawn's blast radius is one injection into
+  fan-out; a Project lowered to `draft` puts a human back in front of each spawn.
 - **What stays impossible at any grant.** A target outside the requested scope is
   indistinguishable from nonexistent; a shell or other non-agent pane is refused; and the
   session that hosts the running daemon is refused (`_session_owns_daemon`, a psutil ancestry

@@ -45,6 +45,16 @@ class Automation:
     # is inert. `_validate_registry` holds spends ⊆ needs_llm, since every way of
     # spending money in swe-mux is a model call.
     needs_llm: bool = False
+    # True when a Project that never wrote this id down has it ON. The inherited
+    # default template `requested_from_config` always supported, finally used:
+    # an explicit `<id> = false` in the Project map still wins, and the write
+    # path persists that false rather than stripping it, so "off" stays sayable.
+    # Reserved for capability gates that read nothing, run nothing, and spend
+    # nothing on their own (`_validate_registry` enforces exactly that) - a
+    # substrate or detector default-on would break "nothing runs on a Project
+    # that did not opt in", but a permission whose every act is separately
+    # bounded and attributable only decides who approves.
+    default_on: bool = False
 
 
 _AUTOMATIONS: tuple[Automation, ...] = (
@@ -176,13 +186,16 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     Automation("observation_inbox", CONSUMER, "Spawn request review"),
     Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent"),
     # Phase 7.6: the per-Project opt-in that makes the `interrupt` and
-    # `end_session` MCP tools reachable at all. It gates a capability rather than
-    # a read over another consumer's output, so it depends on no substrate; the
+    # `end_session` MCP tools reachable at all (and, with it off, collapses
+    # `spawn_grant` back to drafting). It gates a capability rather than a read
+    # over another consumer's output, so it depends on no substrate; the
     # delivery-readiness predicate an interrupt gates on is intrinsic, not an
-    # opt-in. Off by default (not in any defaults template), and even when on the
-    # authority defaults to `draft` - a human approves every action - until the
-    # Project's `session_control_grant` is raised to `granted`.
-    Automation("session_control", CONSUMER, "Agent session control", ()),
+    # opt-in. On by default since 2026-08-25 (the one `default_on` entry): this
+    # install runs default-enabled, every act under it stays bounded and
+    # attributable, and a Project withdraws it with an explicit
+    # `session_control = false`. The authority level beside it
+    # (`session_control_grant`) defaults to `granted` the same way.
+    Automation("session_control", CONSUMER, "Agent session control", (), default_on=True),
     # Scheduled runs: cron/interval/one-off spawns of an agent session in this
     # Project, authored by a human ahead of time. Like `session_control` it gates
     # a capability rather than a read over another automation's output, so it
@@ -203,6 +216,13 @@ _AUTOMATIONS: tuple[Automation, ...] = (
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}
 
+#: The inherited default template every resolution starts from. A Project's own
+#: map overrides it entry by entry, so `session_control = false` in one
+#: `.swe-mux/config.toml` still switches that Project off.
+DEFAULT_ON_AUTOMATIONS: dict[str, bool] = {
+    automation.id: True for automation in _AUTOMATIONS if automation.default_on
+}
+
 
 def _validate_registry() -> None:
     for automation in REGISTRY.values():
@@ -214,6 +234,17 @@ def _validate_registry() -> None:
             # outside the verified-provider gate while still billing - the exact
             # silent downstream failure that gate exists to remove.
             raise ValueError(f"{automation.id} spends money but does not need a model")
+        if automation.default_on and (
+            automation.requires
+            or automation.spends
+            or automation.needs_llm
+            or not automation.implemented
+        ):
+            # Default-on is reserved for free, dependency-less capability gates.
+            # Anything that reads a substrate, calls a model, or does not exist
+            # yet running on Projects that never opted in is exactly the silent
+            # behaviour the per-Project opt-in exists to prevent.
+            raise ValueError(f"{automation.id} cannot be on by default")
         for dependency in automation.requires:
             if dependency not in REGISTRY:
                 raise ValueError(f"{automation.id} requires unknown automation {dependency}")
@@ -289,10 +320,15 @@ def requested_from_config(
 ) -> set[str]:
     """Merge an inherited default template with a project's explicit opt-ins.
 
-    Global config is only an inherited default; the project map overrides it.
-    Unknown ids are dropped so a stale config never enables a phantom automation.
+    A default is only an inherited default; the project map overrides it entry
+    by entry, so an explicit ``false`` beats a default-on. ``defaults`` omitted
+    means the registry's own `DEFAULT_ON_AUTOMATIONS` - every resolution path
+    (the daemon gate, the matrix, the Projects editor) goes through here, which
+    is what keeps them agreeing on what an unset id means. Unknown ids are
+    dropped so a stale config never enables a phantom automation.
     """
-    merged: dict[str, bool] = {**(defaults or {}), **(project_map or {})}
+    template = DEFAULT_ON_AUTOMATIONS if defaults is None else defaults
+    merged: dict[str, bool] = {**template, **(project_map or {})}
     return {key for key, value in merged.items() if value and key in REGISTRY}
 
 

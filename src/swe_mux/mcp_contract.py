@@ -74,9 +74,10 @@ WRITE_TOOL_NAMES = (
     # fingerprint, which un-trusts it, so an agent cannot approve its own command.
     "run_action",
     # Phase 7.6 session control (CP §7.6, §16). The first tools that act on a
-    # running agent. Kept as two tools with different blast radii, each defaulting
-    # to a per-Project `draft` grant: the call writes an inert approval request
-    # and a human is what acts, until the Project raises the grant to `granted`.
+    # running agent. Kept as two tools with different blast radii, governed by a
+    # per-Project grant: `granted` (the default since 2026-08-25) acts directly
+    # inside the daemon's bounds, and a Project lowered to `draft` gets the
+    # inert approval request a human acts on.
     "interrupt",
     "end_session",
     # Phase 14: ask for this worktree's branch to be landed. A request, not the

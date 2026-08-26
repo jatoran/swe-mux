@@ -18,6 +18,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "agent_interject_min_interval_seconds": 60.0,
   "agent_message_hourly_budget": 20,
   "agent_message_max_chain_depth": 6,
+  "agent_message_limits_enabled": false,
   "agent_message_max_chars": 4000,
   "agent_message_max_thread_turns": 40,
   "agent_message_pending_per_target": 5,

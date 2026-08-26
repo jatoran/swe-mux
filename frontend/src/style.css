@@ -4671,7 +4671,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-edit textarea{min-height:80px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
 .queue-composer{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
 .queue-composer textarea{min-height:56px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
-.queue-composer-actions{display:flex;justify-content:flex-end;gap:6px}
+.queue-composer-actions{display:flex;justify-content:flex-end;align-items:center;gap:6px}
+/* The per-message mid-turn ask. First in the row and pushed left, so the two staging
+   buttons keep their right-edge position and the toggle reads as a property of what
+   they will stage. */
+.queue-composer-interrupt{display:flex;align-items:center;gap:4px;margin-right:auto;color:var(--muted);font-size:9px;cursor:pointer}
+.queue-composer-interrupt input{margin:0}
 .queue-composer-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}

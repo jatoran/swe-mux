@@ -158,6 +158,7 @@ It draws that evidence from two sources: the queue's own `open_reply_windows`, a
 ### `agent_messaging.py`
 
 Relay policy for agent-authored messages: requested Project scope re-resolved through `project_scope.py`, size, per-origin budget, target backlog, propagation depth, per-thread turn budget, ring detection, kill switch, and expiry.
+The four rate bounds and the two interject bounds resolve through `config.agent_message_bounds()` - the configured values while `agent_message_limits_enabled` is on, fixed backstop ceilings while it is off (the default since 2026-08-25) - and `auto_delivery.py`'s reply window reads its thread cap through the same helper so the two modes cannot disagree.
 Also the `dry_run` projection (every bound run, nothing staged, no budget spent), sender-attributed `revoke` of a still-undelivered message, sender-only message and request status, inert `spawn_request` drafts, and the Fleet Queue projection over messages plus targetless spawn approvals and drafted `control_request` interrupt and end rows.
 
 **Not:** delivery, spawning (approval is a `routes/observations.py` human act), session-control authority (`session_control.py`), or MCP protocol.

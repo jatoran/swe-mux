@@ -691,10 +691,10 @@ TOOLS: list[dict[str, Any]] = [
                         "does not stop the turn: the CLI buffers your text and "
                         "takes it at the turn boundary, so what you buy is arriving "
                         "sooner, not preemption. To actually stop a turn, use "
-                        "interrupt. Refused unless the target's Project granted "
-                        "mid-turn delivery and the target session accepts it; the "
-                        "refusal says which, and sending without this argument "
-                        "always works."
+                        "interrupt. Refused where the target's Project switched "
+                        "mid-turn delivery off (it is granted by default) or the "
+                        "target session opted out; the refusal says which, and "
+                        "sending without this argument always works."
                     ),
                 },
                 "dry_run": {
@@ -4825,9 +4825,10 @@ class McpService:
         Project granted it) create the session directly.
 
         Which one happens is the target Project's `spawn_grant`, resolved inside
-        the session-control service - never here. The default everywhere is the
-        inert draft a human approves; a Project raises its grant to let agents
-        spawn into it directly, inside a per-origin budget.
+        the session-control service - never here. Since 2026-08-25 the default
+        is `granted` - agents spawn directly, inside a per-origin budget - and a
+        Project lowers its grant to `draft` (or switches the `session_control`
+        automation off) to get the inert draft a human approves.
         """
         self.writes += 1
         prompt = str(args.get("prompt") or "")

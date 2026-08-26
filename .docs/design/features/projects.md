@@ -210,7 +210,8 @@ Argv for an agent CLI is an authority field, so repository-supplied argv would b
 escalation, while naming a locally-authored profile is the same kind of statement
 `preferred_backend` already makes (`launch-profiles.md`).
 
-`interject_grant` (`off` by default, or `granted`) is the Project's standing permission for a
+`interject_grant` (`granted` by default since 2026-08-25, withdrawn by writing `off`) is the
+Project's standing permission for a
 peer agent to have a message delivered into a *running* turn here rather than at the next
 prompt (`agent-messaging.md`).
 It is its own field rather than a level of `session_control_grant` because being written to

@@ -937,6 +937,11 @@ def _automation_registry_payload() -> list[dict[str, Any]]:
             # Whether it is inert without a proven model provider. Separate from
             # `spends` because a local endpoint is a dependency without a bill.
             "needs_llm": automation.needs_llm,
+            # Whether a Project that never wrote this id down has it on. The
+            # toggle surface needs it to render an unset checkbox as checked -
+            # and to write an explicit `false` on untick, since deleting the
+            # key would just fall back to the default it is trying to leave.
+            "default_on": automation.default_on,
         }
         for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
     ]
@@ -1061,7 +1066,16 @@ async def put_project_automations(request: web.Request) -> web.Response:
     # more: it is one global setting in Settings -> Automation. A body that
     # still sends it is ignored rather than refused, and the retired key is
     # dropped from the file on this write.
-    automations = {key: bool(value) for key, value in requested.items() if value}
+    #
+    # A false is stripped as noise for an ordinary opt-in (absent already means
+    # off) and *persisted* for a default-on automation, where absent means on -
+    # dropping it there would make unticking the box a write that changes
+    # nothing.
+    automations = {
+        key: bool(value)
+        for key, value in requested.items()
+        if value or AUTOMATION_REGISTRY[key].default_on
+    }
     changes: dict[str, Any] = {"automations": automations}
     # Auto-enable is meaningless without the permission it rides on, and leaving
     # it set would silently re-arm every run the moment the Project is opted in

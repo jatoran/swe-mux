@@ -93,22 +93,34 @@ its own is the default and nothing widens implicitly.
 - **Every bound lives in the daemon operation, not in the tool** (CP §7.1), so the browser,
   the CLI, and any later client inherit them:
 
-  | Bound | Default | Refusal code |
-  |---|---|---|
-  | target in the requested scope, live agent session, not the caller | caller's Project | `unknown_target`, `ambiguous_target`, `unknown_project`, `not_agent_target`, `self_notify` |
-  | body size | 4 000 chars | `body_too_large` |
-  | per-origin hourly budget | 20 messages | `origin_budget_exhausted` |
-  | undelivered agent messages per target | 5 | `target_backlog_full` |
-  | relay propagation: distinct sessions one thread may reach | 6 | `chain_depth_exceeded` |
-  | agent messages within one thread | 12 | `thread_budget_exhausted` |
-  | ring back past the session that messaged you | — | `relay_cycle` |
-  | kill switch (`agent_messaging_enabled`) | on | `agent_messaging_disabled` |
-  | expiry | 24 h | item is cancelled, `cancel_kind: expired` |
-  | mid-turn kill switch (`agent_interject_enabled`) | on | `interject_disabled` |
-  | target Project's `interject_grant` | `off` | `interject_not_granted` |
-  | target's `accept_agent_interjections` | on for a live run | `interject_refused_by_target` |
-  | mid-turn deliveries per origin per hour | 10 | `interject_budget_exhausted` |
-  | floor between mid-turn deliveries to one target | 60 s | `interject_too_soon` |
+  | Bound | Configured default | Backstop (limits off) | Refusal code |
+  |---|---|---|---|
+  | target in the requested scope, live agent session, not the caller | caller's Project | same | `unknown_target`, `ambiguous_target`, `unknown_project`, `not_agent_target`, `self_notify` |
+  | body size | 4 000 chars | same (always binds) | `body_too_large` |
+  | per-origin hourly budget | 20 messages | 500 | `origin_budget_exhausted` |
+  | undelivered agent messages per target | 5 | 50 | `target_backlog_full` |
+  | relay propagation: distinct sessions one thread may reach | 6 | 10 | `chain_depth_exceeded` |
+  | agent messages within one thread | 40 | 1 000 | `thread_budget_exhausted` |
+  | ring back past the session that messaged you | — | same (always binds) | `relay_cycle` |
+  | kill switch (`agent_messaging_enabled`) | on | same | `agent_messaging_disabled` |
+  | expiry | 24 h | same (always binds) | item is cancelled, `cancel_kind: expired` |
+  | mid-turn kill switch (`agent_interject_enabled`) | on | same | `interject_disabled` |
+  | target Project's `interject_grant` | `granted` (since 2026-08-25; a Project writes `off` to withdraw it) | same | `interject_not_granted` |
+  | target's `accept_agent_interjections` | on for a live run | same | `interject_refused_by_target` |
+  | mid-turn deliveries per origin per hour | 10 | 120 | `interject_budget_exhausted` |
+  | floor between mid-turn deliveries to one target | 60 s | 5 s | `interject_too_soon` |
+
+- **The rate limits are a mode, off by default (2026-08-25).** `agent_message_limits_enabled`
+  decides which column above binds: on, the configured values; off (the default), the fixed
+  backstop ceilings in `config.agent_message_bounds()`. The backstops exist so an orchestrator
+  relaying work across a fleet for hours never trips a send budget, while a runaway loop still
+  ends: the thread budget is the one brake that stops two agents talking forever (a reply
+  refreshes the peer's auto-delivery grant, so a two-party exchange renews itself), which is
+  why "off" is a high ceiling rather than no ceiling. Size, ring detection, expiry, and the
+  kill switches are not rate limits and bind in both modes. Both paths resolve through the one
+  `agent_message_bounds()` helper - staging in `agent_messaging.py` and the reply window in
+  `auto_delivery.py` must never disagree about which mode the install is in, or a working
+  exchange's grant would lapse at the configured 40 while staging allowed 1 000.
 
 - **The envelope states its authority, because a receiver cannot infer it.** A peer's note and
   an instruction a human approved arrive through the same pipe. The `authority` header says
@@ -133,10 +145,10 @@ its own is the default and nothing widens implicitly.
   later and elsewhere, by the readiness tracker's `interject_state`
   (`delivery-readiness.md`), which can refuse everything the gates here allowed. The three
   gates are deliberately the same shape as the rest of the control plane: an install-wide
-  switch the operator holds, a per-Project standing permission somebody wrote down
-  (`interject_grant = "granted"`, its own field rather than a level of
-  `session_control_grant`, because being written to mid-turn is a property of a working
-  repository), and the receiving session's own opt-out for its run. The receiver keeps a veto
+  switch the operator holds, a per-Project standing permission (`interject_grant`, its own
+  field rather than a level of `session_control_grant`, because being written to mid-turn is
+  a property of a working repository; `granted` by default since 2026-08-25, withdrawn by
+  writing `off`), and the receiving session's own opt-out for its run. The receiver keeps a veto
   because the receiver pays the cost: an ordinary message costs nothing until it is read, and
   a mid-turn one costs attention immediately. Every refusal names the ordinary path, because a
   sender that reads "no" without reading "send it without `delivery` instead" abandons the
@@ -220,21 +232,28 @@ its own is the default and nothing widens implicitly.
   same head-of-line rule, same `queue_deliveries` rows, distinguishable only by
   `sender_kind` and its provenance. Events (`queue_message_received`) carry ids and counts,
   never the body.
-- **Spawn is drafted, never granted** (CP §7.2/§16). `request_spawn` appends a typed
+- **Spawn under a `draft` grant is drafted, never granted** (CP §7.2/§16). `request_spawn`
+  against a Project whose `spawn_grant` is `draft` appends a typed
   `spawn_request` item to `<project>/.swe-mux/observations.json` with the proposed prompt,
   backend, cwd, and calling-session provenance, and emits `spawn_request_drafted`.
   Approving it (`POST …/observations/{id}/decide`) spawns through the ordinary spawn path
   with the prompt as `seed_text`; dismissing marks it decided. A request can only be decided
-  once. An agent holding real spawn authority turns one prompt injection into unbounded
-  fan-out — that is the failure mode a queue purge cannot undo.
-- **Session control drafts the same way under a `draft` grant** (Phase 7.6, CP §7.6). A
-  `mux.interrupt`/`mux.end_session` call whose Project sits at the default `draft` grant appends
+  once. Since 2026-08-25 the *default* grant is `granted` - the call creates the session
+  directly, inside the per-origin hourly budget - so the draft path is what a Project
+  lowered to `draft` (or with the `session_control` automation switched off) gets. The
+  fan-out hazard the draft path was built for ("an agent holding real spawn authority turns
+  one prompt injection into unbounded fan-out") is now answered by the budget and the audit
+  trail rather than by a human per request; the per-Project lowering is the way back.
+- **Session control acts the same way under the same grant** (Phase 7.6, CP §7.6). A
+  `mux.interrupt`/`mux.end_session` call whose Project sits at a `draft` grant appends
   a typed `control_request` item to the same `observations.json` (action, target, reason,
   calling-session provenance), emits `agent_control_drafted`, and starts nothing; approving it
   runs the shared interrupt/graceful-end daemon operation. It mirrors `spawn_request` exactly -
   inert draft, one human decision, one place to review - which is why it is worth stating here
   even though its authority and bounds live in `session_control.py` and its full contract in
-  `mux-mcp.md`. A Project raised to `granted` skips the draft and acts directly, inside bounds.
+  `mux-mcp.md`. The default grant is `granted` (2026-08-25): the call skips the draft and acts
+  directly, inside bounds, and a Project writes `session_control_grant = "draft"` to put the
+  human back in front of each action.
 - **Write status is readable by the attributed caller.** `message_status(message_id)` exposes
   drafted, armed, delivered, stranded, expired, or refused outcomes only when the MCP token
   owns the message's `sender_id`. Sender attribution is the whole check: the message row
@@ -314,9 +333,12 @@ name or id. `notify` also accepts `"Project name/session name"` as its `target`.
 
 ## Configuration
 
-`agent_messaging_enabled`, `agent_message_max_chars`, `agent_message_hourly_budget`,
-`agent_message_pending_per_target`, `agent_message_max_chain_depth`,
-`agent_message_max_thread_turns`, `request_spawn_enabled` (`config.py`).
+`agent_messaging_enabled`, `agent_message_limits_enabled` (off by default - the configured
+rate bounds bind only while it is on, with the fixed backstops of
+`config.agent_message_bounds()` binding otherwise), `agent_message_max_chars`,
+`agent_message_hourly_budget`, `agent_message_pending_per_target`,
+`agent_message_max_chain_depth`, `agent_message_max_thread_turns`,
+`request_spawn_enabled` (`config.py`).
 All of them are edited in Settings → Prompt queue: the message bounds under **Agent messaging**,
 and `request_spawn_enabled` with its hourly budget under **Agent actuation**, because a spawn
 acts on the fleet where a message is text a human still reads.

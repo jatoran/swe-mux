@@ -443,9 +443,13 @@ Malformed storage reports `observations_unreadable` and is never rewritten as em
 See `features/observations.md`.
 
 The automations routes are the per-project control-plane opt-in surface. `GET` returns the
-registry (id, kind, label, `requires`, `implemented`), the project's `requested` table, and
+registry (id, kind, label, `requires`, `implemented`, `spends`, `needs_llm`, `default_on`),
+the project's `requested` table, and
 the resolution (`enabled`, plus `blocked` → the dependencies each still needs) so a toggle
-can show a dependency tree rather than a flat checkbox list. `PUT` replaces the table
+can show a dependency tree rather than a flat checkbox list. For a `default_on` id
+(`session_control`, 2026-08-25) an unset entry resolves enabled, and `PUT` persists an
+explicit `false` for it rather than stripping it as noise - absence means on there, so the
+false is the opt-out. `PUT` replaces the table
 through the ordinary project-config write: `409 revision_conflict` on a stale revision,
 `409 automation_not_implemented` for a reserved id with no code behind it. The same table is
 also carried by the typed portable Project options (`features/automation-enablement.md`).
@@ -631,8 +635,15 @@ GET    /queue                                       per-target aggregates
 GET    /queue/messages?target_session_id=           one target's ordered queue
 POST   /queue/messages                              {target_session_id, body, armed?, insert_after?,
                                                      constraints?, correlation_id?}
+                                                    constraints: {not_before?, expires_at?,
+                                                     delay_seconds?, delivery?: when_idle|now}
+                                                    - "now" asks for mid-turn delivery, human
+                                                    senders included (the composer's Mid-turn
+                                                    toggle); when_idle is never persisted
 PATCH  /queue/messages/{message_id}                 {body, revision} | {armed} | {after} |
                                                      {retarget_session_id} | {constraints}
+                                                    constraints replaces the whole object -
+                                                    callers merge over the item's existing one
 DELETE /queue/messages/{message_id}                 erase and hide; 409 while delivering
 POST   /queue/messages/{message_id}/cancel          {kind: cancelled|skipped|revoked}
 GET    /queue/messages/{message_id}/deliveries      audit rows (no prompt text)
@@ -2268,7 +2279,8 @@ replacement un-verifies the endpoint regardless, and keeping the row would show 
 that a different credential produced.
 
 `GET /api/automation/projects` is the read-only fleet aggregation of per-Project automation
-enablement: the registry (id, kind, label, `requires`, `implemented`, `spends`, `needs_llm`)
+enablement: the registry (id, kind, label, `requires`, `implemented`, `spends`, `needs_llm`,
+`default_on`)
 once, plus one row per registered Project in sidebar order — `project_id`, `project_name`,
 config `status`, the `requested` table, the resolved `enabled` list, `blocked`
 (id → missing dependencies), `unverified` (opted in, dependencies met, held back by an unproven

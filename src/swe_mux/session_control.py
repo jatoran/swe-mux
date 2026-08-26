@@ -669,9 +669,11 @@ class SessionControlService:
     async def _resolve_grant(self, root: str) -> str:
         """The effective grant for a Project root: off / draft / granted.
 
-        `off` is the absence of the `session_control` automation opt-in; the
-        draft/granted split lives in the Project config field, defaulting to the
-        safe `draft`.
+        `off` means the `session_control` automation is switched off for the
+        Project (it is on by default since 2026-08-25, withdrawn with an
+        explicit `session_control = false`); the draft/granted split lives in
+        the Project config field, which now also defaults to `granted` and is
+        lowered by writing `draft`.
         """
         if not root:
             return "off"
