@@ -1,5 +1,6 @@
 import type { JSX } from 'preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { readGitTabMemory, writeGitTabMemory } from './gitTabCache.ts'
 import { api, type ApiError } from './api'
 import { Dropdown } from './Dropdown'
 import { GitSessionLinks, sessionLinkDestination, type SessionLinkItem, type SessionLinkMenu } from './GitSessionLinks'
@@ -166,20 +167,10 @@ type Props={
 
 type ReviewState={files:ReviewFileChange[];locator:ReviewLocator;initialPath:string;truncated:boolean;provenance:GitProvenance[]}
 
-/** The last good overview per Project, for stale-while-revalidate rendering on mount.
- *  Bounded: a handful of Projects is the working set, and an evicted entry only costs
- *  the blank-first-paint this cache exists to remove. */
-const OVERVIEW_CACHE=new Map<string,GitWorktreeOverview>()
-const OVERVIEW_CACHE_LIMIT=8
-function rememberOverview(projectId:string,overview:GitWorktreeOverview){
-  OVERVIEW_CACHE.delete(projectId)
-  OVERVIEW_CACHE.set(projectId,overview)
-  while(OVERVIEW_CACHE.size>OVERVIEW_CACHE_LIMIT){
-    const oldest=OVERVIEW_CACHE.keys().next().value
-    if(oldest===undefined)break
-    OVERVIEW_CACHE.delete(oldest)
-  }
-}
+// The last good reading per Project - overview, graph, ledger, and where the reader had
+// got to - lives in `gitTabCache.ts`. It used to be the overview alone, inline here,
+// which left Log and Provenance blank on every visit and threw away an expanded row for
+// no better reason than that the tab is not `keepMounted`.
 
 function SummaryHeader({title,summary}:{title:string;summary:ReviewChangeSummary}) {
   return <h4><span>{title}</span><small>{summary.total} file{summary.total===1?'':'s'} · +{summary.additions} -{summary.deletions}{summary.binaryFiles?` · ${summary.binaryFiles} binary`:''}</small></h4>
@@ -198,34 +189,45 @@ function ReviewGroup(props:{
 
 export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFile,onSendToAgent,onProjectUpdated,onOpenSession,onOpenHistory}:Props) {
   const [links,setLinks]=useState<SessionLinkMenu|null>(null)
-  // Stale-while-revalidate: the tab is not `keepMounted`, so every open is a cold mount,
-  // and without this the map is blank for a full network+git round trip that usually
-  // returns what the reader was just looking at. The last good overview per Project is
-  // rendered immediately and `refresh()` still runs underneath; `busy` tells the truth
-  // about the revalidation, and everything derived from a *changed* tree (detail rows,
-  // pending removals, selections) is reconciled by the refresh exactly as before.
-  // Same shape as `projectAutomations.ts`; bounded, module-scoped, dropped on daemon
-  // restart with the page.
-  const [overview,setOverview]=useState<GitWorktreeOverview|null>(()=>project?OVERVIEW_CACHE.get(project.id)??null:null)
-  const [graph,setGraph]=useState<GitGraph|null>(null)
-  const [provenance,setProvenance]=useState<GitProvenance[]>([])
-  const [provenanceGroups,setProvenanceGroups]=useState<ProvenanceGroup[]>([])
-  const [refMoves,setRefMoves]=useState<GitRefMove[]>([])
+  // Stale-while-revalidate, for all three readings: the tab is not `keepMounted`, so
+  // every open is a cold mount, and without this each view is blank for a full
+  // network+git round trip that usually returns what the reader was just looking at.
+  // The last good reading per Project is rendered immediately and the refresh still
+  // runs underneath; `busy` tells the truth about the revalidation, and everything
+  // derived from a *changed* tree (pending removals, selections) is reconciled by the
+  // refresh exactly as before. Bounded and module-scoped in `gitTabCache.ts`; dropped
+  // on daemon restart with the page.
+  const [overview,setOverview]=useState<GitWorktreeOverview|null>(()=>readGitTabMemory(project?.id).overview??null)
+  const [graph,setGraph]=useState<GitGraph|null>(()=>readGitTabMemory(project?.id).graph??null)
+  const [provenance,setProvenance]=useState<GitProvenance[]>(()=>readGitTabMemory(project?.id).provenance?.rows??[])
+  const [provenanceGroups,setProvenanceGroups]=useState<ProvenanceGroup[]>(()=>readGitTabMemory(project?.id).provenance?.groups??[])
+  const [refMoves,setRefMoves]=useState<GitRefMove[]>(()=>readGitTabMemory(project?.id).provenance?.refMoves??[])
   const [provenanceError,setProvenanceError]=useState('')
   const [graphLimit,setGraphLimit]=useState(GRAPH_STEP)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
-  const [expandedTree,setExpandedTree]=useState('')
+  const [expandedTree,setExpandedTree]=useState(()=>readGitTabMemory(project?.id).expandedTree??'')
   // Full-detail rows, one per checkout the reader has expanded. The Map itself is read
   // with `detail=summary`, which withholds every per-file list: four lists of up to two
   // hundred records per worktree, served so a badge can say "12 local".
   const [treeDetail,setTreeDetail]=useState<Record<string,GitOverviewWorktree>>({})
+  // What marks an expanded row's file lists stale, in place of dropping them.
+  //
+  // `refresh()` used to clear `treeDetail` outright, on the reasoning that those lists
+  // describe a tree that has moved. It does - but a row falls back to the Map's own
+  // reading when it has no detail, and that reading withholds every file list, so
+  // clearing it replaced the open row's contents with *nothing* for the length of a
+  // round trip. With a fleet working in the repository that happened every few seconds,
+  // which is a file list that empties and refills while you are reading it. Bumping an
+  // epoch re-reads the row while the previous answer stays on screen, which is the same
+  // trade the overview above already makes.
+  const [detailEpoch,setDetailEpoch]=useState(0)
   const [detailBusy,setDetailBusy]=useState('')
   const [detailError,setDetailError]=useState('')
   // Client-side only, and deliberately: every branch and path this filters on is already
   // in the payload, so asking the daemon would be a round trip to re-send what is on
   // screen.
-  const [treeFilter,setTreeFilter]=useState('')
+  const [treeFilter,setTreeFilter]=useState(()=>readGitTabMemory(project?.id).treeFilter??'')
   const [logQuery,setLogQuery]=useState('')
   const [logField,setLogField]=useState<'message'|'author'>('message')
   const [logRegex,setLogRegex]=useState(false)
@@ -277,23 +279,28 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // which is what lets a row name a Project-wide control without drawing one.
   const [landingOpen,setLandingOpen]=useState<boolean|null>(null)
 
-  const refresh=useCallback(async()=>{
+  const refresh=useCallback(async(fresh=false)=>{
     if(!project){setOverview(null);return}
     const mine=++generation.current
     setBusy(true)
     try{
       // `detail=summary`: counts for every row, file lists for none. The daemon serves
       // this with an `ETag` and `Cache-Control: no-cache`, so a poll that finds nothing
-      // changed costs a conditional request and no body at all.
-      const raw=await api<unknown>('GET',`/api/git/worktrees?project_id=${encodeURIComponent(project.id)}&detail=summary`,undefined,{timeoutMs:20000})
+      // changed costs a conditional request and no body at all - and serves its own
+      // last reading immediately while revalidating behind it, so this call no longer
+      // waits on Git at all in the ordinary case. `fresh=1` is the explicit Refresh
+      // button, the one caller that asks to wait for a newly measured answer.
+      const query=`project_id=${encodeURIComponent(project.id)}&detail=summary${fresh?'&fresh=1':''}`
+      const raw=await api<unknown>('GET',`/api/git/worktrees?${query}`,undefined,{timeoutMs:20000})
       if(mine!==generation.current)return
       const parsed=parseGitOverview(raw)
       if(!parsed)throw new Error('The daemon returned an invalid Git overview.')
-      setOverview(parsed);rememberOverview(project.id,parsed);setError('');setPreview({});setNotRepository(false)
-      // Every expanded row's file lists are now a statement about a tree that has moved
-      // (that is what brought us here), so they are dropped rather than redrawn. The
-      // effect below re-reads whichever one is still open.
-      setTreeDetail({})
+      setOverview(parsed);writeGitTabMemory(project.id,{overview:parsed});setError('');setNotRepository(false)
+      // Every expanded row's file lists now describe a tree that has moved, so they are
+      // re-read - but they stay on screen until the new ones arrive. An open file
+      // preview is left alone for the same reason: closing it was a side effect of a
+      // background poll, not something the reader asked for.
+      setDetailEpoch(epoch=>epoch+1)
       // The inventory is the only thing that ends a removing indication, and the only
       // thing that can: the daemon answers a fast removal before Git has finished
       // deleting anything, and a slow one while it still is.
@@ -325,7 +332,12 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       }
       const raw=await api<unknown>('GET',`/api/git/graph?${query}`,undefined,{timeoutMs:20000})
       if(mine!==graphGeneration.current)return
-      setGraph(parseGitGraph(raw));setError('')
+      const parsed=parseGitGraph(raw)
+      setGraph(parsed);setError('')
+      // Only the default reading is remembered. A search result is the answer to a
+      // different question, and painting it as the graph on the next visit would be
+      // wrong rather than merely stale.
+      if(!search.query.trim()&&limit===GRAPH_STEP)writeGitTabMemory(project.id,{graph:parsed})
     }catch(cause){if(mine===graphGeneration.current)setError(describeGitError(cause,'Reading the commit graph'))}
   },[project?.id])
 
@@ -337,7 +349,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       if(search.trim())query.set('subject',search.trim())
       const raw=await api<unknown>('GET',`/api/git/provenance?${query}`)
       if(mine!==provenanceGeneration.current)return
-      setProvenance(parseGitProvenance(raw));setProvenanceGroups(groupProvenance(raw));setRefMoves(parseGitRefMoves(raw));setProvenanceError('')
+      const rows=parseGitProvenance(raw),groups=groupProvenance(raw),moves=parseGitRefMoves(raw)
+      setProvenance(rows);setProvenanceGroups(groups);setRefMoves(moves);setProvenanceError('')
+      // Unsearched only, for the same reason as the graph above.
+      if(!search.trim())writeGitTabMemory(project.id,{provenance:{rows,groups,refMoves:moves}})
     }catch(cause){if(mine===provenanceGeneration.current)setProvenanceError(cause instanceof Error?cause.message:String(cause))}
   },[project?.id])
 
@@ -365,7 +380,21 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   useEffect(()=>{
     // On a Project switch the map seeds from the cache instead of blanking, for the same
     // reason the mount does; `refresh()` below revalidates it immediately.
-    setOverview(project?OVERVIEW_CACHE.get(project.id)??null:null);setGraph(null);setProvenance([]);setProvenanceGroups([]);setRefMoves([]);setProvenanceError('');setExpandedTree('');setTreeDetail({});setDetailError('');setTreeFilter('');setLogQuery('');setProvenanceQuery('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
+    const remembered=readGitTabMemory(project?.id)
+    setOverview(remembered.overview??null);setGraph(remembered.graph??null)
+    setProvenance(remembered.provenance?.rows??[]);setProvenanceGroups(remembered.provenance?.groups??[]);setRefMoves(remembered.provenance?.refMoves??[])
+    // The reading *position* comes back with the readings. A worktree the reader had
+    // open is where they were, and collapsing it on every return - then charging a
+    // per-checkout read to open it again - was the tab forgetting the thing a reader
+    // most obviously expects it to hold. Its file lists are not remembered: those
+    // describe a working tree and are re-read on arrival.
+    setExpandedTree(remembered.expandedTree??'');setTreeFilter(remembered.treeFilter??'')
+    // Open previews are cleared *here* rather than on every refresh. They are keyed by
+    // worktree path, so another Project's entries could never render anyway - but they
+    // would accumulate for the life of the page, and a Project switch is the moment
+    // they stop meaning anything.
+    setPreview({})
+    setProvenanceError('');setTreeDetail({});setDetailError('');setLogQuery('');setProvenanceQuery('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
     void refresh()
     // Two filters on one listener, and both are the same defect: work done for a
     // repository nobody is looking at. `git_changed` is raised by *every* session's
@@ -382,8 +411,13 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       window.clearTimeout(timer)
       timer=window.setTimeout(()=>{void refresh()},GIT_REFRESH_DEBOUNCE_MS)
     }
-    window.addEventListener('mux:git-changed',changed);window.addEventListener('mux:events-connected',changed);window.addEventListener('mux:worktree-created',changed);window.addEventListener('mux:worktree-removed',changed)
-    return()=>{window.clearTimeout(timer);window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:events-connected',changed);window.removeEventListener('mux:worktree-created',changed);window.removeEventListener('mux:worktree-removed',changed)}
+    // `mux:git-overview-changed` closes the loop on the daemon's own stale-serve: it
+    // fires when a revalidation landed on a different reading than the one this client
+    // was handed, and the refetch it provokes is served instantly from that new
+    // reading. Without it a client that arrived during a quiet moment would paint the
+    // cached answer and never learn that the revalidation disagreed.
+    window.addEventListener('mux:git-changed',changed);window.addEventListener('mux:git-overview-changed',changed);window.addEventListener('mux:events-connected',changed);window.addEventListener('mux:worktree-created',changed);window.addEventListener('mux:worktree-removed',changed)
+    return()=>{window.clearTimeout(timer);window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:git-overview-changed',changed);window.removeEventListener('mux:events-connected',changed);window.removeEventListener('mux:worktree-created',changed);window.removeEventListener('mux:worktree-removed',changed)}
   },[refresh,project?.id])
 
   // The provenance ledger is read by Log (its per-commit session links) and by
@@ -398,10 +432,19 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // The expanded row's own file lists. Re-runs after a refresh drops them, which is what
   // keeps an open row current without the Map paying for every row's lists.
   useEffect(()=>{
-    if(view!=='map'||!expandedTree||treeDetail[expandedTree])return
+    if(view!=='map'||!expandedTree)return
     void loadTreeDetail(expandedTree)
-  },[view,expandedTree,treeDetail,loadTreeDetail])
+    // `treeDetail` is deliberately not a dependency any more. Gating on "we have no
+    // detail for this path" was the other half of the drop-and-refetch above: it is
+    // what made a retained-but-stale list never re-read. The epoch is the signal
+    // instead, and it changes only when the Map itself was re-read.
+  },[view,expandedTree,detailEpoch,loadTreeDetail])
   useEffect(()=>setCompareOverride(project?.git_compare_ref||''),[project?.git_compare_ref])
+  // Where the reader is, remembered as it moves rather than on unmount: the tab is
+  // unmounted by the drawer, not by itself, so there is no teardown it can rely on
+  // running before its state is gone.
+  useEffect(()=>{writeGitTabMemory(project?.id,{expandedTree})},[project?.id,expandedTree])
+  useEffect(()=>{writeGitTabMemory(project?.id,{treeFilter})},[project?.id,treeFilter])
   useEffect(()=>{
     const id=project?.id
     if(!id){setProvenancePermitted(null);return}
@@ -702,7 +745,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           a toggle of this tab's own. The refresh control is its glyph alone, so it keeps
           an explicit accessible name. */}
       <div class="git-toolbar-actions">
-        <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map'){void refresh();if(expandedTree)void loadTreeDetail(expandedTree)}else if(view==='log')void refreshGraph(graphLimit,{query:logQuery,field:logField,regex:logRegex});else void refreshProvenance(provenanceQuery)}}>↻</button>
+        <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map'){void refresh(true);if(expandedTree)void loadTreeDetail(expandedTree)}else if(view==='log')void refreshGraph(graphLimit,{query:logQuery,field:logField,regex:logRegex});else void refreshProvenance(provenanceQuery)}}>↻</button>
         {/* Bulk is a mode, not a permanent column. Fifty accumulated worktrees is what
             makes it necessary; a checkbox under every branch name on a surface people
             open to read a diff is what makes it a mode. */}

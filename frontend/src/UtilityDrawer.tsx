@@ -19,7 +19,7 @@ import {
 } from './drawerLayout'
 import {
   availableDrawerSegments, drawerSectionTarget, drawerSegment, hasDrawerSegments,
-  resolveDrawerSegment, type DrawerSegmentContext,
+  hasSharedSegmentBody, resolveDrawerSegment, type DrawerSegmentContext,
 } from './drawerSegments'
 import { DrawerSegmentControl } from './DrawerSegmentControl'
 import { revealSetting } from './settingReveal'
@@ -512,6 +512,11 @@ export function UtilityDrawer(props: Props) {
    */
   const renderSegmentedBody = (stackId: string, tab: DrawerTabId, active: string | null) => {
     if (!hasDrawerSegments(tab)) return renderBody(tab, null)
+    // One body for every segment, switching on the active one, for a tab whose segments
+    // are readings of a single component rather than separate panes
+    // (`hasSharedSegmentBody`). No `hidden` wrapper and no mounted-set bookkeeping: there
+    // is only ever one body, and it is the one on screen.
+    if (hasSharedSegmentBody(tab)) return renderBody(tab, active)
     const segments = availableDrawerSegments(tab, segmentContext)
     return segments.map(segment => {
       const on = segment.id === active

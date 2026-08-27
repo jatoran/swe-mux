@@ -12,6 +12,7 @@ import {
   drawerSegment,
   drawerSegmentsFor,
   hasDrawerSegments,
+  hasSharedSegmentBody,
   migratedDrawerSegment,
   resolveDrawerSegment,
 } from '../src/drawerSegments.ts'
@@ -205,4 +206,28 @@ test('a stored selection of a retired segment migrates rather than falling back'
   const layout = source('drawerLayout.ts')
   assert.ok(layout.includes("import { migratedDrawerSegment } from './drawerSegments.ts'"))
   assert.ok(layout.includes('migratedDrawerSegment(tab, stored)'))
+})
+
+test('Git is one mount across its three segments, and nothing else is', () => {
+  // Map, Log, and Provenance are three readings of one component reading one
+  // repository - they share a refresh listener, a comparison ref, a land queue, and a
+  // commit cache. Mounting one body per segment meant switching to Log and back threw
+  // away the map, the reader's expanded worktree, and the filter they had typed.
+  assert.equal(hasSharedSegmentBody('git'), true)
+  for (const tab of DRAWER_SEGMENT_TABS.filter(id => id !== 'git')) {
+    assert.equal(hasSharedSegmentBody(tab), false, tab)
+  }
+  // A tab with no segments has no shared body to speak of.
+  const unsegmented = DRAWER_TABS.map(tab => tab.id).filter(id => !hasDrawerSegments(id))
+  for (const tab of unsegmented) assert.equal(hasSharedSegmentBody(tab), false, tab)
+})
+
+test('a shared-body tab never also marks its segments keepMounted', () => {
+  // The two are alternative answers to the same problem and compose badly: keeping all
+  // three Git instances alive would give each its own `git_changed` listener and turn
+  // one refresh into three.
+  for (const segment of DRAWER_SEGMENTS) {
+    if (!hasSharedSegmentBody(segment.tab)) continue
+    assert.equal(segment.keepMounted ?? false, false, `${segment.tab}:${segment.id}`)
+  }
 })

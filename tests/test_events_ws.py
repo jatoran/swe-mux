@@ -246,3 +246,85 @@ async def test_the_socket_carries_device_presence_and_forgets_it_on_close(
         assert presence.snapshot()["devices"] == []
     finally:
         history.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_transient_events_reach_the_browser_without_touching_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """A transient frame is delivered, is not stored, and does not move the cursor.
+
+    All three at once, because they are one property: it is fanned out live and has
+    no sequence number, so treating it like a durable event either drops it (a seq
+    of 0 never beats the cursor) or corrupts the resume point for the durable events
+    around it.
+    """
+
+    history = HistoryIndex(tmp_path / "mux.db")
+    bus = EventBus(sink=history.append_event)
+    try:
+        async with TestClient(TestServer(_app(history, bus))) as client:
+            ws = await client.ws_connect("/events")
+            await _receive_hello(ws)
+            assert await ws.receive_json() == {"type": "events_ready", "sequence": 0}
+            bus.emit_transient(
+                "delivery_readiness_changed", session_id="s1", readiness={"state": "safe"}
+            )
+            live = await ws.receive_json()
+            assert live["type"] == "delivery_readiness_changed"
+            assert live["transient"] is True
+            assert live["seq"] == 0
+            assert live["payload"]["readiness"] == {"state": "safe"}
+            # The durable event after it still arrives with the sequence it would
+            # have had: the transient frame neither consumed a row nor advanced the
+            # handler's watermark past it.
+            await bus.emit("state_changed", session_id="s1", source="daemon", state="live")
+            durable = await ws.receive_json()
+            assert durable["type"] == "state_changed"
+            assert durable["seq"] == 1
+            await ws.close()
+        rows, _truncated = await history.recent_events(limit=50)
+        assert [row["type"] for row in rows] == ["state_changed"]
+    finally:
+        history.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_transient_events_are_not_resumable_after_a_reconnect(tmp_path: Path) -> None:
+    """Nothing replays them, which is the trade a transient event makes.
+
+    Pinned rather than left implied: a later reader tempted to route some other fact
+    through this path has to see that a client which was disconnected when one fired
+    learns nothing about it here, and must re-read the fact from REST.
+    """
+
+    history = HistoryIndex(tmp_path / "mux.db")
+    bus = EventBus(sink=history.append_event)
+    try:
+        await _seed(history, 2)
+        async with TestClient(TestServer(_app(history, bus))) as client:
+            # Fired while nobody was connected: it reached no subscriber and left
+            # no row, so there is nothing for the resume to find.
+            bus.emit_transient("delivery_readiness_changed", session_id="s1", readiness={})
+            ws = await client.ws_connect("/events?after_seq=1")
+            await _receive_hello(ws)
+            # The catch-up holds exactly the durable gap, and nothing else.
+            replayed = await ws.receive_json()
+            assert replayed["type"] == "state_changed"
+            assert replayed["seq"] == 2
+            await bus.emit("state_changed", session_id="s1", source="daemon", state="live")
+            live = await ws.receive_json()
+            assert live["seq"] == 3
+            await ws.close()
+    finally:
+        history.close()
+
+
+async def test_transient_events_still_honour_the_browser_omission_list() -> None:
+    """The omission list is about payload size, not about durability."""
+
+    bus = EventBus()
+    assert "tool_result" in pty_routes.BROWSER_OMITTED_EVENT_TYPES
+    event = bus.emit_transient("tool_result", session_id="s1", content="large")
+    assert event.transient is True
+    assert event.type in pty_routes.BROWSER_OMITTED_EVENT_TYPES

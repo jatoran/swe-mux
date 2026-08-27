@@ -12,18 +12,33 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 Project-scoped comparison-ref inference and bounded review reads.
 
 - `resolve_comparison_ref` is the shared core; `infer_comparison` adds the drawer's selector candidates, and `git_monitor` deliberately imports the core so the sidebar and the drawer cannot pick different bases.
+- `read_ref_index` is one `for-each-ref` giving every branch and the commit each names, and the core takes it as an optional accelerator: a ref present in that listing needs no `check-ref-format`, no `rev-parse --verify`, and no separate object-ID read, while a ref outside it (a tag, a raw object ID, a revision expression) still takes the probes it always did, so the accepted set is unchanged.
+  Callers with no index - `git_monitor`, the Project settings probe - are unaffected.
+  It also makes the three ref answers *consistent*: the object ID the branch memo is keyed on can no longer come from a different instant than the ref name it belongs to.
+  The candidate cap is a display budget for the dropdown; the object-ID map is uncapped, so an override naming a branch past the cap still resolves.
 - Exact worktree and relative-path validation, and single-flight overview reads.
 - `head_commit_dates` gives per-worktree branch-tip committer dates in one batched `git show` against the shared object database, keyed back by the oid asked for.
   It is deliberately not the checkout directory's `st_mtime`, which Windows freezes while a live session holds a file open there, so a directory clock reports the busiest worktree as the most dormant and any activity ordering built on it is inverted.
   Reading from the object database also means a locked or prunable tree still dates.
+  Results are memoized by oid (`_commit_date_memo`) and can never go stale, because a commit's committer date is part of the object its oid names - a commit whose date changed would be a different commit.
+  An **absent** oid is not memoized as absent: it can arrive by `fetch`, and caching the miss would leave that row undated until the daemon restarted.
+- `repository_identity` reads the top level and the common Git directory in **one** `rev-parse`, which also removes the possibility of two processes disagreeing about whether the folder is a repository at all.
 - File-count and aggregate-byte-bounded worktree and commit summaries, numstat and porcelain parsing, commit graph reads and `--grep`/`--author` searches, capped commit-message reads, patch snapshots, stale hashes, and typed review failures.
 - The overview's branch memo (`_branch_memo`, `reset_overview_cache`), keyed `(worktree, HEAD, comparison oid)` and holding the ahead/behind counts and the branch delta.
   Both are commit-to-commit, so the key is exact and the memo can never be stale; the local working-tree summaries are deliberately **not** memoized, because `status --porcelain=v2` carries no worktree blob hash and a fingerprint taken from it would go wrong about line counts while the status output stayed identical.
   A reading Git refused is never memoized, so a locked index cannot pin "unavailable" onto a healthy checkout.
+- The per-checkout identity memo (`_toplevel_memo`), keyed `(exact root, worktree-listing digest)`.
+  The overview proves every checkout's reported top level equals its listed root so a broken nested worktree cannot inherit status from an enclosing repository, and that costs one `rev-parse --show-toplevel` per checkout to re-derive a property of the *registration*.
+  The digest of `git worktree list --porcelain` is the invalidation because every way the answer can change is a way that listing changes - added, removed, moved, repaired, or gone `prunable`.
+  What is memoized is the **observation, never the verdict**: the comparison runs on every request, so a checkout that fails the guard keeps failing it.
+- `shared_worktree_overview` serves the last reading for a (project, root, comparison override, scope) immediately and revalidates behind it (`_overview_cache`), calling an injected `on_refreshed` only when the revalidation lands on a *different* reading than the one already served.
+  `fresh=True` bypasses the served reading for the explicit Refresh button while still sharing the in-flight computation.
+  `invalidate_overview_cache` is for registration changes, which are not drift: they change which rows exist.
+  A failed revalidation leaves the previous reading in place, so a transient Git error cannot turn an answer the reader has into a blocking read.
 - `summarize_overview` projects the same payload with per-file lists withheld and marked, and `worktree_overview(..., only=...)` measures one listed checkout, refusing an unlisted path rather than measuring it.
 - A commit-graph *search* drops `--graph`: Git draws lanes only for a contiguous walk, so lanes over a filtered subset would connect commits that are not connected.
 
-**Not:** network fetches, Git mutations, live-session polling, HTTP caching (the `ETag` and its comparison are `server.list_worktrees`), or browser presentation.
+**Not:** network fetches, Git mutations, live-session polling, HTTP caching (the `ETag` and its comparison are `routes.git._conditional_json`, shared by all three readings), emitting the refresh notice (the route owns the event bus and injects the callback), or browser presentation.
 
 ## `git_monitor.py`
 

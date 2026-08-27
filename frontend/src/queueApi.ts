@@ -1,5 +1,6 @@
 import { api, type ApiError } from './api.ts'
 import { serverNow } from './serverClock.ts'
+import type { DeliveryReadiness } from './types.ts'
 
 // Phase 4: the persistent manual prompt queue. Every function here is a thin
 // caller over the daemon's typed queue operations — the daemon owns ordering,
@@ -132,6 +133,18 @@ export interface QueueTargetView {
     agent_run_id: string | null
     label: string | null
     state: string | null
+    /**
+     * The target's delivery readiness as of this fetch, so opening the Queue tab
+     * never shows a verdict it has to correct a moment later. Null for a target
+     * whose session is gone (the pop-out tab outliving its session).
+     *
+     * It rides this request rather than being fetched separately because the
+     * readiness stream only follows sessions a surface can be reading, and the
+     * one case it cannot see is exactly this one: a mobile Queue tab, which
+     * replaces the terminal rather than sitting beside it, on a target with
+     * nothing queued yet.
+     */
+    delivery_readiness: DeliveryReadiness | null
   }
   messages: QueueMessage[]
   pending: number

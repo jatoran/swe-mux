@@ -37,6 +37,9 @@ async def test_empty_repository_has_an_empty_graph_not_an_error(
     response = await git_routes.git_graph(
         SimpleNamespace(
             query={"project_id": "p", "limit": "80"},
+            # The graph is served conditionally too - the drawer refetches it on any
+            # session's dirty tick, and the answer is usually the one it already has.
+            headers={},
             app={
                 keys.PROJECTS: SimpleNamespace(
                     projects={"p": SimpleNamespace(id="p", root="C:/repo")}
@@ -84,7 +87,11 @@ def _overview_request(query: dict[str, str], headers: dict[str, str] | None = No
                 projects={
                     "p": SimpleNamespace(id="p", root="C:/repo", git_compare_ref=None)
                 }
-            )
+            ),
+            # The overview hands the reading layer a way to say "the answer you were
+            # served is superseded"; nothing in these tests provokes one, but the
+            # handler builds the callback on every request.
+            keys.EVENTS: SimpleNamespace(emit_background=lambda *a, **k: None),
         },
     )
 

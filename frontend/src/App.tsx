@@ -158,7 +158,7 @@ import { createLayoutWriter } from './layoutWriter.ts'
 import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
-import type { ApprovalMode, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
+import type { ApprovalMode, DeliveryReadiness, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { HarnessSetup } from './HarnessSetup'
@@ -2191,6 +2191,19 @@ export function App() {
           // The drawer's transcript reader refreshes on this rather than on a timer.
           // Replayed turns are re-broadcast on purpose: a reconnect is exactly when the
           // reader's copy is stalest, and a reread is cheap and idempotent.
+          // A transient frame carrying one session's complete new readiness. Patched
+          // onto the row directly rather than merged as a session snapshot: it is not
+          // one, it has no revision or generation to order against, and routing it
+          // through `mergeSessionSnapshot` would have it compete with the record
+          // authorities over fields it does not carry.
+          if (event.type === 'delivery_readiness_changed' && event.session_id) {
+            const readiness = event.payload?.readiness as DeliveryReadiness | undefined
+            if (readiness) {
+              const targetId = String(event.session_id)
+              setSessions(items => items.map(item =>
+                item.id === targetId ? { ...item, delivery_readiness: readiness } : item))
+            }
+          }
           if (event.type === 'turn_ended') window.dispatchEvent(new CustomEvent(TURN_ENDED_EVENT, { detail: { sessionId: event.session_id } }))
           if (event.type === 'transcript_message') window.dispatchEvent(new CustomEvent(TRANSCRIPT_CHANGED_EVENT, { detail: { sessionId: event.session_id } }))
           // The daemon replaced a finished reply's segments with the single clip
@@ -2284,6 +2297,12 @@ export function App() {
           // raised by every session's five-second dirty tick, so an unfiltered listener
           // was re-reading one Project's whole worktree map on another Project's poll.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
+          // The daemon serves its last worktree reading immediately and revalidates
+          // behind it; this is that revalidation reporting that it disagreed. Its own
+          // event because it is not an observation of a repository moving - it is the
+          // reading layer superseding an answer it already handed out - and because
+          // only the Git tab has anything to do with it.
+          if(event.type==='git_overview_changed')window.dispatchEvent(new CustomEvent('mux:git-overview-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
           // Its own event rather than folding into `mux:git-changed`: a land step
           // changes the queue on a five-second cadence, and re-reading the whole
           // worktree overview and provenance ledger each time is not free.

@@ -291,11 +291,74 @@ a composer whose contents nothing here can see, which is the false-safe the whol
 exists to prevent. A gate may only be relaxed by evidence that cannot be wrong in that
 direction.
 
+## Watching readiness, without being able to change it
+
+The classifier pushes nothing, so every surface that displayed a verdict read one at fetch
+time and kept it until some *other* fact happened to trigger a refresh.
+That left three staleness regimes on one line of UI.
+Lifecycle reasons (`root_agent_working`, `awaiting_*`, `session_ended`) ride `state_changed`,
+which the browser already treats as a reason to re-read the fleet, so those were live.
+Composer and screen reasons (`terminal_input_after_completion`, `operator_recently_typed`,
+`screen_not_at_agent_prompt`) turn on `terminal_input` and `terminal_mode_changed`, both
+deliberately excluded from fleet refresh because they arrive at keystroke rate - so those
+were stale for up to the browser's sixty-second safety poll.
+And the clock-driven transitions have no event at all and never will: `operator_quiet`
+becoming true is the *absence* of typing, and `readiness_debounce_pending` and
+`lifecycle_evidence_stale` are thresholds crossing.
+That third class is why `readiness_watch.py` is a loop rather than another event subscriber.
+
+Four properties make a one-second loop affordable and safe, and each is load-bearing:
+
+- **Edge-triggered.** A tick emits only when a session's `(state, reasons)` tuple differs
+  from the last tick's, and a first sighting establishes the baseline silently because the
+  client's REST load already carries that verdict.
+- **Transient.** The frames are `MuxEvent.transient` (`emit_transient`): fanned out to live
+  subscribers, never written to `events`. That table is swept to the newest 100k rows, so a
+  per-second event type would not merely cost writes - it would evict the git-provenance,
+  scan-timeline and incident-forensics history the window exists to hold. The trade is that
+  a transient event carries no sequence number and cannot be resumed after a gap, which is
+  acceptable only because a reconnecting client re-reads readiness from REST anyway.
+- **Gated on a listener.** The only consumer is a browser, counted by the `/events`
+  subscriber label, so a headless daemon skips the whole pass including the screen
+  classification that is its real cost.
+- **Scoped.** Sessions with an attached terminal (somebody is looking) or a pending queue
+  item (somebody is waiting on this exact verdict). Classification measured 2.1 ms on a
+  full 32 KiB tail, so following a fleet nobody is reading would spend real event-loop time
+  on announcements with no recipient.
+
+**The watcher evaluates with `adopt=False`, and that is a correctness requirement rather
+than an optimization.** `evaluate` mutates: `_adopt_catchup_settle` and
+`_adopt_first_prompt_ready` fill lifecycle gaps, and the second snapshots the *live* screen
+as `screen_at_completion` - the baseline every later `screen_at_agent_prompt` check for that
+run compares against. An observer running once a second would therefore make those adoptions
+fire at the earliest legal instant rather than at the operator's first GET or send, and a
+Claude session watched before it wrote `?1049h` would be remembered as having completed on
+the normal screen and blocked for the rest of its run. An observer must not be able to change
+the verdict it observes.
+
+It also passes `record_metrics=False`. Those counters are the shadow distribution behind the
+Phase 5 promotion argument (`GET /api/automation/injection-safety`); they describe delivery
+attempts, and a watch is not one. A loop evaluating every followed session every second would
+swamp the proving period within minutes - the same class of mistake `routes/terminal.py`
+already carries a warning about.
+
+The scan the loop pays for is not additional. `_pty_state` now *writes* the shared snapshot
+cache from every caller and only *reads* it when the caller allows a bounded age, so
+`GET /api/sessions` reuses the watcher's classification instead of rescanning every terminal
+itself. Only reading is gated, which is the half that carries the safety argument:
+authorization never trusts a verdict it did not measure itself.
+
 ## Diagnostics
 
 `GET /api/automation/injection-safety` returns the v2 research contract, per-session checks,
 bounded evidence, parser coverage, and aggregate shadow counts/reasons/unknown duration.
-`GET /api/sessions` includes a compact `delivery_readiness` summary for the session surface.
+`GET /api/sessions` includes a compact `delivery_readiness` summary for the session surface,
+and `GET /api/queue/messages` carries the same summary for its target.
+Both are built by `delivery_summary` in `prompt_queue.py` - one builder, because three
+hand-rolled projections of one verdict is how the Queue tab and the send-to-agent dialog come
+to disagree about one session. It carries `state`, `reason`, every `reasons` entry, the
+`protected` subset that no confirmation can override, `interject_state`, and `observed_at`;
+`authorized` is pinned false there as it is at the source.
 The Automation Diagnostics view exposes the complete evidence and always states that
 actuation is unauthorized.
 
@@ -303,6 +366,11 @@ actuation is unauthorized.
 
 - `src/swe_mux/observation.py`
 - `src/swe_mux/delivery_readiness.py`
+- `src/swe_mux/readiness_watch.py` (the edge-triggered announcer; read-only against the tracker)
+- `src/swe_mux/prompt_queue.py` (`delivery_summary`, `protected_reasons` — the display projection)
+- `frontend/src/deliveryReadiness.ts` (the reason vocabulary, worded once)
+- `tests/test_readiness_watch.py`, `tests/test_events_ws.py` (transient fanout)
+- `frontend/test/deliveryReadiness.test.ts`, `frontend/test/renderer/queue-readiness.spec.ts`
 - `src/swe_mux/composer_input.py` (display-only sibling; deliberately not an input here)
 - `src/swe_mux/screen_mode.py`
 - `src/swe_mux/event_bus.py`

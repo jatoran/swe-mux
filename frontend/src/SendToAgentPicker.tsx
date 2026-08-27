@@ -9,6 +9,7 @@ import {
   agentTargetName, agentTargets, backendFromTargetKey, defaultNewTarget, newTargetKey,
   retargetForProject, sessionIdFromTargetKey, sessionTargetKey,
 } from './agentTargets'
+import { describeReadiness, wordReasons } from './deliveryReadiness'
 import { enqueueMessage } from './queueApi'
 import type { Project, Session } from './types'
 import type { MessageScope } from './noteSelection'
@@ -92,6 +93,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
   // Advisory only: the queue's send operation is where a not-safe target is actually refused
   // and (when allowed) overridden — this warning just says what is likely to happen.
   const unreadied = !!chosen && !!readiness && readiness.state !== 'safe'
+  const verdict = describeReadiness(readiness)
   // The refusal belongs to one exact message on one target; switching targets demotes the
   // retry back to a fresh send (the staged message stays in the old target's queue).
   const activeRefusal = refusal && chosen && refusal.sessionId === chosen.id ? refusal : null
@@ -145,9 +147,9 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
       })
       setError(
         result.protected
-          ? `The queue refused delivery and this cannot be overridden (${result.reasons.join(', ')}). ` +
+          ? `The queue refused delivery and this cannot be overridden: ${wordReasons(result.reasons)}. ` +
             'The message stays queued; it can be sent from the Queue panel once the target is free.'
-          : `The target is not safe right now (${result.reasons.join(', ')}).`,
+          : `The target is not safe right now: ${wordReasons(result.reasons)}.`,
       )
       return
     }
@@ -261,12 +263,17 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
               <span>Remove the selected text from the note after this handoff is accepted</span>
             </label>
           )}
-          {unreadied && chosen && readiness && !activeRefusal && (
+          {/* Same vocabulary as the Queue tab's readiness strip, from the same
+              module: two hand-worded renderings of one verdict is how two surfaces
+              come to describe one session differently. */}
+          {unreadied && chosen && verdict && !activeRefusal && (
             <p class="modal-warning" role="status">
-              {agentTargetName(chosen)} is{' '}
-              {readiness.state === 'blocked' ? 'not ready for input' : 'in an unknown state'}
-              {readiness.reason ? `: ${readiness.reason}` : '.'} Sending will ask the queue to
-              deliver; it re-checks and may ask you to confirm.
+              {agentTargetName(chosen)} is {verdict.headline}
+              {verdict.summary ? ` — ${verdict.summary}` : ''}.{' '}
+              {verdict.clears ? `${verdict.clears} ` : ''}
+              {verdict.protected
+                ? 'Sending will stage the message; the queue will refuse to deliver it until this clears, and no confirmation overrides it.'
+                : 'Sending will ask the queue to deliver; it re-checks and may ask you to confirm.'}
             </p>
           )}
           {error && (

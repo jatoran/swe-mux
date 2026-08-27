@@ -633,7 +633,11 @@ adds Enter or submits.
 
 ```text
 GET    /queue                                       per-target aggregates
-GET    /queue/messages?target_session_id=           one target's ordered queue
+GET    /queue/messages?target_session_id=           one target's ordered queue, plus
+                                                     target.delivery_readiness (same shape as
+                                                     the session summary; null when the
+                                                     session is gone) so opening the Queue tab
+                                                     paints no verdict it must correct
 POST   /queue/messages                              {target_session_id, body, armed?, insert_after?,
                                                      constraints?, correlation_id?}
                                                     constraints: {not_before?, expires_at?,
@@ -1005,7 +1009,14 @@ to the same persistent workspace storage. Neither endpoint writes to the PTY; th
 the returned reference as unicast draft input without submitting it.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
-`state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
+`state: safe|blocked|unknown`, `reason` (always the first of `reasons`), the full `reasons`
+list, the `protected` subset that no per-send confirmation can override, `interject_state`,
+`observed_at` in epoch seconds, and `authorized: false`. It is not accepted on writes.
+`protected` is computed by the same helper `send_next` refuses with, so a surface can say
+"this will be refused no matter what" before the press rather than only after it.
+`observed_at` is load-bearing rather than decorative: clients preserve the last known
+readiness across raw PTY snapshots, so without a stamp a minute-old verdict renders
+identically to a current one.
 Rows carry `unsent_input` — `{since}` in epoch seconds, or absent — the daemon's estimate that
 text is sitting unsent in that session's composer, derived from the bytes every operator path
 writes to the PTY (`features/terminal-input.md`).
@@ -1952,6 +1963,15 @@ error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 Git review routes are derived, read-only tooling APIs except for the existing worktree create and remove mutations.
 Every review read is Project-scoped and rejects unlisted parameters instead of accepting caller-supplied repositories or arbitrary refs.
 
+`GET /git/worktrees` does not measure a repository on the read path: the daemon serves its last
+reading for that (Project, comparison ref, worktree scope) immediately and revalidates behind it.
+`fresh=1` opts back into waiting for a newly measured answer, and is what the explicit Refresh
+button sends. A revalidation that lands on a different reading than the one already served emits
+`git_overview_changed {project_id}` - the reading layer reporting that an answer it handed out is
+superseded, with no session and no working tree, which is why it is not a `git_changed`. A first
+computation and an unchanged revalidation emit nothing, so a quiet repository raises no events and
+the refetch this provokes cannot sustain itself.
+
 The session snapshot's `git` object and the `git_changed.git` event field carry the same shape, which describes the **checkout** a session is in and never the session:
 
 ```text
@@ -2225,6 +2245,15 @@ frame advances the sequence without transferring their payloads.
 `PreToolUse`, `PostToolUse`, `tool_use`, and `tool_result` remain durable but are omitted from
 browser delivery because user-visible state changes use separate event types.
 A malformed `after_seq` is rejected with 400.
+
+Some frames are **transient**: they carry `"transient": true`, always `"seq": 0`, and are never
+written to the `events` table. They are delivered to whoever is connected and are not replayed
+on reconnect, so they neither consume a sequence number nor advance the resume cursor - a
+client must not order against them, and must re-read the fact from REST after a gap. The trade
+buys the ability to stream a derived current value at a per-second cadence without it evicting
+real history from the capped ledger. `delivery_readiness_changed` (`session_id`, and a
+`readiness` payload identical to the `GET /sessions` summary) is the first, emitted only when a
+followed session's state or reasons actually change; see `features/delivery-readiness.md`.
 
 The stream is otherwise server-to-client, with one exception: clients may send
 `{"type":"presence", profile, visible, focused, interaction_age}` to report which device
