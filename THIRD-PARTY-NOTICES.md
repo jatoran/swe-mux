@@ -10,8 +10,7 @@ Do not edit it by hand.
 
 **swe-mux redistributes no strong-copyleft (GPL/AGPL) code.** The desktop bundle
 contains none, which is checked against the built tree on every build rather than
-asserted here. One GPL package does resolve as a transitive dependency without
-being redistributed; it has its own section rather than being quietly omitted.
+asserted here, and no GPL package resolves into the dependency closure either.
 
 swe-mux does ship two weak-copyleft (LGPL) libraries. Weak copyleft imposes
 nothing on swe-mux's own license: the obligation is to say the library is there,
@@ -39,22 +38,6 @@ version and relaunch; the application imports them from disk at startup.
 Running from source (`uv sync --extra desktop && uv run muxd`) replaces it the
 usual way, with `pip install pystray==<your build>`.
 
-## In the dependency closure but not redistributed
-
-These resolve as dependencies and are installed by `pip install swe-mux`, but
-swe-mux redistributes none of them: the desktop bundle excludes each one, and a
-wheel install fetches them from PyPI rather than from us. They are listed anyway,
-because an audit that reads only what is shipped and calls the closure clean is
-the exact mistake this file exists to prevent.
-
-### av 18.0.0 - GPL-2.0-or-later
-
-*Declared license is misleading.* PyAV declares BSD-3-Clause. Its bundled `av.libs` is 63 MB of FFmpeg, and avcodec's import table links libx264 and libx265 (GPL-2.0-or-later); the configure string carries `--enable-libx264 --enable-libx265 --enable-version3` while `av_license()` compiles to the single string 'LGPL version 3 or later'. The linkage governs, not the self-description.
-
-Reached only through `faster_whisper/__init__` into `faster_whisper/audio.py`, whose module-level `import av` exists for `decode_audio`. No swe-mux call site reaches `decode_audio`: `voice.py` builds a float32 array from int16 PCM taken from a validated WAV header and hands it straight to `WhisperModel`. The desktop bundle therefore excludes it outright (`excludes=["av"]` in swe_mux.spec plus `packaging/rthook_av_stub.py`), and `build_desktop.verify_no_gpl_av` fails the build if it returns.
-
-**Unresolved for the wheel.** `faster-whisper` hard-requires `av>=11`, so `pip install swe-mux` still resolves and installs PyAV with its GPL FFmpeg onto the user's machine. swe-mux redistributes none of it - pip fetches it from PyPI - but a diligence scan reading the transitive closure will flag it, and the Phase 10.5 goal of a copyleft-free closure is met for the bundle only. Closing it means installing the stub into `sys.modules` before `faster_whisper` is imported in source mode too, then dropping `av` with a uv dependency override. Tracked as a Phase 11 precondition.
-
 ## Modified redistributions
 
 - **@xterm/xterm and @xterm/addon-webgl** (MIT). Patched at install time by `frontend/scripts/patch-xterm-webgl.mjs` and `frontend/scripts/patch-xterm-requestmode.mjs`. The shipped copies are therefore modified versions, not upstream releases.
@@ -75,7 +58,7 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | Silero VAD | MIT | snakers4/silero-vad |
 | en_core_web_sm (spaCy English model) | MIT | explosion/spacy-models |
 
-## Python packages (107)
+## Python packages (106)
 
 | Package | Version | License |
 |---|---|---|
@@ -87,7 +70,6 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | annotated-types | 0.8.0 | MIT |
 | anyio | 4.14.1 | MIT |
 | attrs | 26.1.0 | MIT |
-| av | 18.0.0 | GPL-2.0-or-later |
 | blis | 1.3.3 | BSD |
 | bottle | 0.13.4 | MIT |
 | catalogue | 2.0.10 | MIT |

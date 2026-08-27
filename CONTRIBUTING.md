@@ -87,6 +87,15 @@ rather than by review:
 - **No espeak-ng, in any form.** This rejected three otherwise-reasonable
   phonemizer libraries. It is a dependency-review rule, not a preference.
   `.docs/development/ROADMAP.md` Phase 10.5 records the measurements behind it.
+- **A transitive dependency nothing imports gets dropped, not documented.** `faster-whisper`
+  hard-requires `av>=11`, which is 63 MB of GPL-linked FFmpeg that no swe-mux call site
+  reaches. It is removed from the resolution by a `[tool.uv] override-dependencies` entry
+  carrying a marker no environment satisfies, and the module-level `import av` it existed for
+  is satisfied by `src/swe_mux/av_stub.py`. That stub has exactly one definition, called both
+  by the PyInstaller runtime hook and by `voice.py`; adding a second copy is the regression to
+  watch for, because the frozen app and a source checkout would then disagree about dictation.
+  Note the limit of an override: it governs this project's resolution, not the wheel's
+  published `Requires-Dist`.
 - **External-only means absent from the artifact.** The `voice-edge` extra is a source-install
   convenience and is not in `DISTRIBUTED_EXTRAS`.
   `packaging/swe_mux.spec` excludes `edge_tts`, and the bundle verifier fails if the LGPL client

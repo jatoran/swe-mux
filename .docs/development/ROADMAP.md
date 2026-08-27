@@ -3204,7 +3204,7 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
   **Drift.** `--write` needs the full closure installed and refreshes `THIRD-PARTY-NOTICES.md` plus the machine-readable sidecar `packaging/third_party_licenses.json`; `--check` needs no environment at all and reconciles that sidecar against both lockfiles, so a dependency entering, leaving, or moving fails on any machine. `tests/test_license_audit.py` runs the same reconciliation inside the ordinary suite, so a forgotten regeneration fails the gate rather than surfacing in a diligence review.)
 - [x] **Baseline correction: `num2words` is a second LGPL package, and it is not in the 2026-08-17 audit.** It entered *with the espeak-free TTS replacement this phase performed*, so the audit that motivated the work predates it. `misaki/en.py` imports it at module scope to speak numbers, meaning there is no misaki English path without it, and it is a declared direct dependency in `pyproject.toml`. The espeak removal therefore traded one copyleft payload for a much smaller one rather than eliminating copyleft, and the phase's own exit criterion ("no GPL or unallowlisted LGPL component") was unmet at the time it was written. Allowlisted with `pystray`, under the same reasoning and the same relink treatment.
 - [x] **`num2words` ships as replaceable source, which it previously did not.** LGPL requires that a recipient be able to substitute their own build of the library. `pystray` already satisfied this by accident of being in the spec's `collect_all` loop - `collect_all` defaults to `include_py_files=True`, so it lands as readable `.py` under `_internal/pystray/` - while `num2words` was frozen into the executable's archive and was not replaceable at all. Adding it to that loop is the whole fix, and `verify_bundle_licenses` now asserts the property on the built tree so it cannot regress into a notices file that promises something untrue.
-- [x] **Recorded, not fixed: `av` is still in the resolved closure, and a wheel install takes it.** The bundle excludes PyAV outright and the build fails if it returns, so the frozen app is clean. But `faster-whisper` hard-requires `av>=11`, so `pip install swe-mux` resolves and installs 63 MB of GPL FFmpeg onto the user's machine. swe-mux redistributes none of it - pip fetches it from PyPI - and the phase's exit criterion is scoped to the built bundle, which is met. The gap is real for **Phase 11**, whose artifact is the wheel, and a diligence scan reading the transitive closure will flag it. The gate no longer hides it: `MISDECLARED` records PyAV's true license against its BSD-3-Clause declaration, `BUNDLE_EXCLUDED` records what keeps it out and what remains open, and `THIRD-PARTY-NOTICES.md` carries both under "In the dependency closure but not redistributed". Closing it means installing the stub into `sys.modules` before `faster_whisper` is imported in source mode too - the existing `rthook_av_stub.py` covers only the frozen app - and then dropping `av` with a uv dependency override. Deliberately not done here: it changes the voice subsystem's import path, which is not a licensing-paperwork change.
+- [x] **Recorded, not fixed: `av` is still in the resolved closure, and a wheel install takes it.** The bundle excludes PyAV outright and the build fails if it returns, so the frozen app is clean. But `faster-whisper` hard-requires `av>=11`, so `pip install swe-mux` resolves and installs 63 MB of GPL FFmpeg onto the user's machine. swe-mux redistributes none of it - pip fetches it from PyPI - and the phase's exit criterion is scoped to the built bundle, which is met. The gap is real for **Phase 11**, whose artifact is the wheel, and a diligence scan reading the transitive closure will flag it. The gate no longer hides it: `MISDECLARED` records PyAV's true license against its BSD-3-Clause declaration, `BUNDLE_EXCLUDED` records what keeps it out and what remains open, and `THIRD-PARTY-NOTICES.md` carries both under "In the dependency closure but not redistributed". Closing it means installing the stub into `sys.modules` before `faster_whisper` is imported in source mode too - the existing `rthook_av_stub.py` covers only the frozen app - and then dropping `av` with a uv dependency override. Deliberately not done here: it changes the voice subsystem's import path, which is not a licensing-paperwork change. **Closed 2026-08-27 under Phase 11**, exactly as described: `src/swe_mux/av_stub.py` holds the one stub, the rthook and `voice.py` both call its `install()`, and a `[tool.uv]` override with an unsatisfiable marker takes `av` out of the resolved closure. `BUNDLE_EXCLUDED` is now empty and `MISDECLARED["av"]` remains as a tripwire.
 
 ### Replace the TTS engine
 
@@ -3272,7 +3272,7 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
 ### Phase 10.5 exit criteria
 
 - [x] A built bundle contains no GPL or unallowlisted LGPL component, proven by a test over the resolved closure rather than by inspection, and `av.libs` is absent.
-  (Both halves. The closure test is `tests/test_license_audit.py` over `packaging/third_party_licenses.json`, reconciled against `uv.lock` and `package-lock.json` with nothing installed; the artifact test is `build_desktop.verify_bundle_licenses` on every build. **Scope, stated precisely:** the criterion is met for the *bundle*. `av` remains in the *install* closure because `faster-whisper` hard-requires it, which is recorded rather than hidden and is a Phase 11 precondition.)
+  (Both halves. The closure test is `tests/test_license_audit.py` over `packaging/third_party_licenses.json`, reconciled against `uv.lock` and `package-lock.json` with nothing installed; the artifact test is `build_desktop.verify_bundle_licenses` on every build. **Scope, stated precisely:** the criterion was met for the *bundle* only. `av` remained in the *install* closure because `faster-whisper` hard-requires it, which was recorded rather than hidden and was a Phase 11 precondition; that precondition closed 2026-08-27 and the closure now has no strong-copyleft member at all.)
 - [x] Default read aloud works with `edge-tts` absent, and the frozen artifact carries no Edge
   client or automatic Microsoft call.
   (`edge-tts` is absent from the distributed closure and frozen bytes.
@@ -3431,8 +3431,12 @@ acceptable until Windows proving and the supported platform matrix are complete.
 Licensing, third-party notices, and the copyleft removal are Phase 10.5's and are not restated here;
 this phase consumes their result and must not publish an artifact before they land.
 They landed 2026-08-24, with one item handed forward rather than finished: the wheel's install
-closure still resolves `av`, which is the first item under "Artifacts and installation" and is a
+closure still resolved `av`, which is the first item under "Artifacts and installation" and was a
 precondition for publishing, not a nice-to-have.
+That item closed 2026-08-27 - `av` is out of the resolved closure and dictation is measured
+working with no PyAV installed - with one residue recorded there rather than hidden: a uv override
+does not travel in the wheel's `Requires-Dist`, so a downstream `pip install swe-mux[voice-local]`
+still resolves faster-whisper's own `av>=11` until upstream makes it optional.
 Every dependency this phase adds passes `packaging/license_audit.py`, and any addition requires
 regenerating `THIRD-PARTY-NOTICES.md` in the same commit.
 The packaging and external-trial readiness gaps, and the CI matrices, are inventoried in
@@ -3446,19 +3450,52 @@ the onboarding and launch subsections and is not restated here.
 
 ### Artifacts and installation
 
-- [ ] **Precondition inherited from Phase 10.5: get `av` out of the wheel's install closure.**
+- [x] **Precondition inherited from Phase 10.5: get `av` out of the wheel's install closure.**
   Phase 10.5 closed the copyleft question for the *bundle*, which is the artifact that existed
   when it was written. This phase's artifact is a wheel, and `faster-whisper` hard-requires
   `av>=11`, so `pip install swe-mux` resolves and installs 63 MB of GPL FFmpeg onto the user's
   machine. swe-mux redistributes none of it and the dependency declaration is defensible, but
   it is the first thing a transitive-closure scan flags, and shipping it would make the wheel
   the one artifact that fails the standard the rest of the project now meets.
-  The fix is two small pieces, and it is a *runtime* change, which is why 10.5 declined it:
-  install the existing `av` stub into `sys.modules` before `faster_whisper` is imported in
-  source mode as well as frozen (`packaging/rthook_av_stub.py` covers only PyInstaller today),
-  then drop the dependency with a uv override. Verify by transcribing on a clean install with
-  no `av` present at all. `packaging/license_audit.py`'s `BUNDLE_EXCLUDED` entry is where this
-  is recorded, and the entry should be deleted rather than edited once the override lands.
+  (Done 2026-08-27, in the two pieces this item named.
+  **One stub, two entry points.** `src/swe_mux/av_stub.py` is now the single definition;
+  `packaging/rthook_av_stub.py` is three lines calling its `install()`, and `voice.py` calls the
+  same function immediately before each of its two `faster_whisper` imports. A second copy of
+  the stub is the thing that would drift, and its failure mode is the worst kind - dictation
+  working in dev and not in the frozen app - so `test_the_frozen_hook_installs_the_same_stub_the_wheel_does`
+  and `test_voice_installs_the_stub_before_importing_faster_whisper` pin both halves.
+  Measuring turned up a defect in the original stub that the frozen-only path had been carrying:
+  refusing *every* attribute meant `repr()` of the module raised, because Python reads `__file__`
+  to build it - so a log line or traceback that merely mentioned `av` raised from inside the stub
+  and buried whatever was being diagnosed. Dunders now answer as ordinary missing attributes and
+  only real PyAV names (`open`, `audio`, `error`) raise.
+  **The override.** `[tool.uv] override-dependencies = ["av; sys_platform == 'swe-mux-drops-pyav'"]`
+  carries a marker no supported environment satisfies, which removes the edge from the resolution
+  rather than pinning a version. `av` is gone from `uv.lock`'s reachable graph, from
+  `license_audit.python_closure()` (106 packages, down one), from the sidecar, and from
+  `THIRD-PARTY-NOTICES.md`, whose "In the dependency closure but not redistributed" section now
+  renders only when it has entries - a standing heading over an empty list reads as a claim that
+  such packages exist. `BUNDLE_EXCLUDED` is empty and the `MISDECLARED` entry stays as a
+  **tripwire**: it costs nothing while nothing depends on PyAV and it is what makes the gate fail
+  rather than read BSD-3-Clause the day something reintroduces it.
+  **Verified by measurement, not by reasoning.** `uv sync --extra desktop --extra voice-local`
+  uninstalled `av==18.0.0`; with `importlib.util.find_spec("av")` returning `None` and a bare
+  `import av` raising `ModuleNotFoundError`, the real production path
+  (`VoiceService.transcribe_wav` → `_transcribe_whisper` → `faster_whisper.WhisperModel`)
+  transcribed a 3.375 s OS-voice WAV of "the quick brown fox jumps over the lazy dog" back to
+  exactly that text on `small.en` in 637 ms, and `sys.modules["av"]` was the stub with
+  `av.open` raising.
+  **Scope, stated precisely, because the item's title overreaches.** A uv override is a property
+  of *this* project's resolution, not of published metadata. It governs `uv.lock`, `uv sync`,
+  every artifact built from them, and the gate - but it is not carried in the wheel's
+  `Requires-Dist`, so a downstream `pip install swe-mux[voice-local]` still resolves
+  faster-whisper's own declared `av>=11`. There is no PEP 508 mechanism to exclude a transitive
+  dependency from published metadata; closing that last inch needs faster-whisper to make `av`
+  optional upstream, or the installing side to pass its own override/constraint. What did change
+  for that user is that swe-mux never imports the real package on any path, so the residue is a
+  size-and-diligence question rather than a functional dependency.
+  **Not validated by a desktop rebuild.** The frozen path is unchanged in behaviour and the spec
+  is untouched; the rebuild is owed before the next release, not before landing.)
 - [ ] Guarantee every wheel contains a frontend bundle from the same revision; fail release
   validation on stale or missing assets.
 - [ ] Complete package metadata/governance: URLs, platform classifiers, changelog, release
