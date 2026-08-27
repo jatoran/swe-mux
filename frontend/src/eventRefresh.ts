@@ -12,6 +12,12 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'agent_context_changed',
   'clipboard_changed',
   'configuration_changed',
+  // Carries the complete new readiness for one session and is patched straight
+  // onto that row. Its whole reason to exist is that a fleet refetch is the wrong
+  // response to it: the daemon emits this at up to once a second, and the reasons
+  // it reports (typing, screen changes, debounce thresholds) are exactly the ones
+  // whose own events are excluded here for the same cost reason.
+  'delivery_readiness_changed',
   'note_changed',
   'notification',
   'notification_created',

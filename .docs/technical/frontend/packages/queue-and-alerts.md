@@ -5,9 +5,20 @@ Design: `../../../design/features/prompt-queue.md`, `../../../design/features/sc
 
 ## Prompt queue and fleet queue
 
-`queueApi.ts`, `QueuePane.tsx`, `FleetQueue.tsx`
+`queueApi.ts`, `QueuePane.tsx`, `FleetQueue.tsx`, `deliveryReadiness.ts`
 
 Neither surface is a conversation, and the daemon owns every safety decision.
+
+`deliveryReadiness.ts` is the one place a daemon readiness verdict becomes something a person can act on: reason code to sentence, plus what would clear it, plus whether any confirmation can override it.
+Every surface that prints refusal reasons goes through it - `QueuePane`, `SendToAgentPicker`, `PromptsTab` - because four independent `join(', ')` of the raw codes is four places for the vocabulary to drift and four places a reader meets `terminal_input_after_completion` with no way to find out what it means.
+An unmapped code passes through as itself rather than being hidden, and a frontend test reads the reason list out of `delivery_readiness.py`, so a new daemon reason fails the gate instead of reaching a user raw.
+Two rules hold it honest.
+It **never predicts safety**: it explains a verdict the daemon reached and is not an input to any decision, so nothing here disables a Send button - the browser's copy can be stale, and a stale advisory that removed the operator's only override would be a false block with no way out.
+And it **never reads the composer estimate**: `unsent_input` may narrate why a block looks wrong ("nothing is sitting in the composer now"), and may not participate in the verdict, because an estimate that concluded "empty" would suggest safety over text nothing can see.
+
+Readiness reaches a surface three ways - the session row, the queue's own target view, and the daemon's transient `delivery_readiness_changed` frame - and `freshestReadiness` orders them by `observed_at` rather than by arrival, because none of the three is reliably the newest.
+An unstamped payload loses by construction, and a reading older than a few seconds renders its age: `sessionSnapshots.ts` preserves the last known readiness across raw PTY snapshots, so an unlabelled stale verdict is indistinguishable from a current one.
+The tab's zero-lag paint is the same mechanism: the row's copy is already in memory at mount, so the strip renders before any fetch, and the fetch the pane was making anyway corrects it.
 
 `QueuePane` is strictly session-scoped: ordered list, arm/edit/reorder/cancel/skip/delete, send-now confirmation, stranded retarget, composer, conversation auto-delivery disclosure, and schedule presets.
 Its drawer rendering follows focus, and its `queue:` pane leaf pins a target.

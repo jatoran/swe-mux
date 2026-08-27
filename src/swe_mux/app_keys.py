@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from .prompt_queue import PromptQueueService, PromptQueueStore
     from .provider_accounts import ProviderAccountManager
     from .push import PushStore
+    from .readiness_watch import ReadinessWatcher
     from .scan_timeline import ScanTimelineService
     from .schedule_store import ScheduleStore
     from .scheduler import ScheduleService
@@ -176,6 +177,7 @@ PROMPT_QUEUE: web.AppKey[PromptQueueService] = web.AppKey("prompt_queue")
 PROMPT_QUEUE_STORE: web.AppKey[PromptQueueStore] = web.AppKey("prompt_queue_store")
 PROVIDER_ACCOUNTS: web.AppKey[ProviderAccountManager] = web.AppKey("provider_accounts")
 PUSH_STORE: web.AppKey[PushStore] = web.AppKey("push_store")
+READINESS_WATCH: web.AppKey[ReadinessWatcher] = web.AppKey("readiness_watch")
 RUNTIME_INVENTORIES: web.AppKey[LiveSnapshotStore] = web.AppKey("runtime_inventories")
 SCAN_TIMELINE: web.AppKey[ScanTimelineService] = web.AppKey("scan_timeline")
 SCHEDULE_STORE: web.AppKey[ScheduleStore] = web.AppKey("schedule_store")

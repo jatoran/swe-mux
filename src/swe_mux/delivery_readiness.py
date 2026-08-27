@@ -109,6 +109,14 @@ class DeliveryReadinessTracker:
         current PTY tail. The fleet endpoint is diagnostic-only (``authorized`` is
         always false), so it may reuse a sub-second verdict instead of synchronously
         rescanning 32 KiB for every browser refresh.
+
+        The cache is *written* by every caller, including the ones that refuse to
+        read it. Classification measured 2.1 ms on a full 32 KiB tail, so a fleet
+        endpoint that rescans every session per browser refresh is the expensive
+        path here — and a fresh scan the readiness watcher just paid for is exactly
+        the verdict that endpoint would have computed. Only reading is gated, which
+        is the half that carries the safety argument: authorization never trusts a
+        verdict it did not measure itself.
         """
         session_id = str(session.record.id)
         run_id = session.record.agent_run_id
@@ -134,8 +142,7 @@ class DeliveryReadinessTracker:
             )
         except (AttributeError, OSError, ValueError):
             state = "unknown"
-        if snapshot_max_age > 0:
-            self._snapshot_pty_states[session_id] = (run_id, now, state)
+        self._snapshot_pty_states[session_id] = (run_id, now, state)
         return state
 
     def _memory(self, session: ReadinessSession) -> ReadinessMemory:
@@ -457,12 +464,29 @@ class DeliveryReadinessTracker:
         *,
         record_metrics: bool = True,
         snapshot_pty_cache_seconds: float = 0.0,
+        adopt: bool = True,
     ) -> dict[str, Any]:
+        """Classify one session's delivery readiness. Never authorizes anything.
+
+        ``adopt=False`` makes this a pure read. The two gap-filling adoptions below
+        *mutate* the tracker's memory, and one of them (`_adopt_first_prompt_ready`)
+        snapshots the live screen mode as `screen_at_completion` — the value every
+        later `screen_at_agent_prompt` check for that run compares against. So a
+        caller that merely *watches* readiness on a timer is not passive: evaluating
+        once a second makes the adoption fire at the earliest instant it is legal
+        rather than at the first GET or delivery attempt, and a Claude session that
+        has not yet written `?1049h` would then be remembered as having completed on
+        the normal screen and block on `screen_not_at_agent_prompt` for the rest of
+        the run. Observers pass ``adopt=False``; the delivery path and the fleet
+        endpoint keep the default, because their timing is the operator's.
+        """
+
         now = self.clock()
         memory = self._memory(session)
         record = session.record
-        self._adopt_catchup_settle(session, memory)
-        self._adopt_first_prompt_ready(session, memory)
+        if adopt:
+            self._adopt_catchup_settle(session, memory)
+            self._adopt_first_prompt_ready(session, memory)
         lifecycle_age = max(0.0, now - memory.observed_at)
         terminal_mode = getattr(session, "terminal_mode", None)
         terminal_mode_updated_at = float(getattr(session, "terminal_mode_updated_at", 0.0))

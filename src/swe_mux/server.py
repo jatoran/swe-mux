@@ -148,6 +148,7 @@ from .provider_accounts import (
     ProviderAccountManager,
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
+from .readiness_watch import ReadinessWatcher
 from .reconcile import reconcile_external_history
 from .routes import configurator as configurator_routes
 from .routes import history as history_routes
@@ -1063,6 +1064,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # enqueue. Neither is a second delivery path — both call the typed queue
     # operations above (`CONTROL_PLANE_ROADMAP.md` §7.1).
     auto_delivery = AutoDeliveryController(prompt_queue, sessions, config)
+    # Display-only sibling of the controller above: it presses nothing and only
+    # announces when a verdict changes, so the surfaces that show readiness stop
+    # depending on an unrelated event happening to trigger a fleet refresh.
+    readiness_watch = ReadinessWatcher(sessions, fleet.readiness, prompt_queue, events)
     agent_messaging = AgentMessagingService(
         prompt_queue,
         sessions,
@@ -1862,6 +1867,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # also sweeps message expiry, which is a promise the user made about any
     # delivery path, and it re-checks its own enablement every tick.
     auto_delivery.start()
+    readiness_watch.start()
     project_watcher.start()
     # Every long-lived loop runs under the background-task supervisor: restarted
     # with capped backoff, faults counted, health surfaced at
@@ -1997,6 +2003,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             keys.PROMPT_LIBRARY: prompt_library,
             keys.PROMPT_QUEUE: prompt_queue,
             keys.AUTO_DELIVERY: auto_delivery,
+            keys.READINESS_WATCH: readiness_watch,
             keys.SCHEDULES: schedules,
             keys.SCHEDULE_STORE: schedule_store,
             keys.AGENT_MESSAGING: agent_messaging,
@@ -2117,6 +2124,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     for key in (
         "attention_ranking",
         "auto_delivery",
+        "readiness_watch",
         "schedules",
         "land_queue",
         # Before `prompt_queue`, and that position is load-bearing rather than

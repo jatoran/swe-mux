@@ -78,6 +78,13 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'bundleSplit.test.ts': ['build-artifact', 'stylesheet'],
   'changeMap.test.ts': ['component-jsx', 'cross-language-contract'],
   'conversationToggle.test.ts': ['component-jsx', 'stylesheet'],
+  //: `cross-language-contract` because the reason vocabulary is declared in
+  //: `delivery_readiness.py` and worded in `deliveryReadiness.ts`, and a code with no
+  //: sentence reaches a user as a raw identifier. `component-jsx` and
+  //: `negative-invariant` for the two rules that are about what the Queue tab must
+  //: *not* do: gate the Send button on the advisory, and let the composer estimate
+  //: reach the verdict.
+  'deliveryReadiness.test.ts': ['cross-language-contract', 'component-jsx', 'negative-invariant'],
   'drawerSegments.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'drawerTabs.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'findings.test.ts': ['composition-root', 'component-jsx'],

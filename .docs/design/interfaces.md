@@ -633,7 +633,11 @@ adds Enter or submits.
 
 ```text
 GET    /queue                                       per-target aggregates
-GET    /queue/messages?target_session_id=           one target's ordered queue
+GET    /queue/messages?target_session_id=           one target's ordered queue, plus
+                                                     target.delivery_readiness (same shape as
+                                                     the session summary; null when the
+                                                     session is gone) so opening the Queue tab
+                                                     paints no verdict it must correct
 POST   /queue/messages                              {target_session_id, body, armed?, insert_after?,
                                                      constraints?, correlation_id?}
                                                     constraints: {not_before?, expires_at?,
@@ -1005,7 +1009,14 @@ to the same persistent workspace storage. Neither endpoint writes to the PTY; th
 the returned reference as unicast draft input without submitting it.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
-`state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
+`state: safe|blocked|unknown`, `reason` (always the first of `reasons`), the full `reasons`
+list, the `protected` subset that no per-send confirmation can override, `interject_state`,
+`observed_at` in epoch seconds, and `authorized: false`. It is not accepted on writes.
+`protected` is computed by the same helper `send_next` refuses with, so a surface can say
+"this will be refused no matter what" before the press rather than only after it.
+`observed_at` is load-bearing rather than decorative: clients preserve the last known
+readiness across raw PTY snapshots, so without a stamp a minute-old verdict renders
+identically to a current one.
 Rows carry `unsent_input` — `{since}` in epoch seconds, or absent — the daemon's estimate that
 text is sitting unsent in that session's composer, derived from the bytes every operator path
 writes to the PTY (`features/terminal-input.md`).
@@ -2225,6 +2236,15 @@ frame advances the sequence without transferring their payloads.
 `PreToolUse`, `PostToolUse`, `tool_use`, and `tool_result` remain durable but are omitted from
 browser delivery because user-visible state changes use separate event types.
 A malformed `after_seq` is rejected with 400.
+
+Some frames are **transient**: they carry `"transient": true`, always `"seq": 0`, and are never
+written to the `events` table. They are delivered to whoever is connected and are not replayed
+on reconnect, so they neither consume a sequence number nor advance the resume cursor - a
+client must not order against them, and must re-read the fact from REST after a gap. The trade
+buys the ability to stream a derived current value at a per-second cadence without it evicting
+real history from the capped ledger. `delivery_readiness_changed` (`session_id`, and a
+`readiness` payload identical to the `GET /sessions` summary) is the first, emitted only when a
+followed session's state or reasons actually change; see `features/delivery-readiness.md`.
 
 The stream is otherwise server-to-client, with one exception: clients may send
 `{"type":"presence", profile, visible, focused, interaction_age}` to report which device

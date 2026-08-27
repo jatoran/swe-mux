@@ -16,6 +16,9 @@ import {
   type QueueSendOutcome, type QueueTargetView,
 } from './queueApi'
 import type { Session } from './types'
+import {
+  describeReadiness, freshestReadiness, readinessAgeLabel, wordReasons,
+} from './deliveryReadiness'
 import { deliversHarnessPrompts } from './harnessRegistry'
 import { reportPromptSubmitted } from './projectRecency'
 import { serverNow } from './serverClock.ts'
@@ -89,10 +92,16 @@ function describeOutcome(outcome: QueueSendOutcome): string {
       return ''
     case 'queued_behind':
       return 'An earlier pending message must go first (strict order).'
-    case 'blocked':
+    case 'blocked': {
+      // Worded, not code-dumped. `Not safe right now: terminal_input_after_completion`
+      // named the check that fired and answered none of what the reader needs, which
+      // is what the readiness strip above the list now says continuously — this is the
+      // same vocabulary so the refusal and the strip cannot disagree.
+      const said = wordReasons(outcome.reasons)
       return outcome.protected
-        ? `Blocked by a protection that cannot be overridden: ${outcome.reasons.join(', ')}`
-        : `Not safe right now: ${outcome.reasons.join(', ')}`
+        ? `Cannot be sent: ${said}. No confirmation overrides this one.`
+        : `Not safe right now: ${said}.`
+    }
     case 'stranded':
       return outcome.error
     case 'revision_conflict':
@@ -521,7 +530,9 @@ export function QueuePane({
             </span>
           )}
           {message.blocked_reasons?.length ? (
-            <span class="queue-item-reasons">{message.blocked_reasons.join(', ')}</span>
+            <span class="queue-item-reasons" title={message.blocked_reasons.join(', ')}>
+              {wordReasons(message.blocked_reasons)}
+            </span>
           ) : null}
           {message.stranded_reason && (
             <span class="queue-item-reasons">{message.stranded_reason}</span>
@@ -572,9 +583,16 @@ export function QueuePane({
                       Send anyway
                     </button>
                   ) : (
+                    // Never pre-labelled "Send anyway" on the advisory, and never
+                    // disabled by it. The confirm is always the second press against a
+                    // refusal the daemon issued *this instant*, so a stale reading can
+                    // neither smuggle a confirmation through nor take the override
+                    // away. All the advisory earns here is a hint that a confirmation
+                    // is coming; the strip above says why.
                     <button
                       type="button"
-                      class="queue-send"
+                      class={`queue-send${sendHint ? ' queue-send-hinted' : ''}`}
+                      title={sendHint}
                       disabled={busy}
                       onClick={() => void send(message, false)}
                     >
@@ -636,6 +654,18 @@ export function QueuePane({
 
   const targetLabel = session ? agentTargetName(session) : view?.target.label || sessionId
   const live = view?.target.live ?? !!session
+  // Two readings of the same fact, and neither is reliably the newer one: the row's
+  // is kept live by the readiness stream but only for sessions the daemon is
+  // following, while the target view's arrived with this pane's own fetch. Taking
+  // the freshest is also what makes opening the tab lag-free — the row's copy paints
+  // on mount from memory, and the fetch that was already happening corrects it.
+  const readiness = freshestReadiness(session?.delivery_readiness, view?.target.delivery_readiness)
+  const verdict = describeReadiness(readiness)
+  const sendHint = !verdict || verdict.state === 'safe'
+    ? ''
+    : verdict.protected
+      ? `This will be refused: ${verdict.summary}.`
+      : `This will ask you to confirm: ${verdict.summary}.`
   /** A live agent this pane can stage for. The per-session auto-delivery policy is
    *  meaningless without one; the install-wide state and its brakes are not. */
   const sessionTargeted = targetable && live
@@ -677,6 +707,63 @@ export function QueuePane({
           </button>
         )}
       </header>
+      {/* Whether this target can take a message right now, and why not.
+         *
+         * Permanently on screen rather than behind a disclosure, because the
+         * question it answers is the one the pane is opened to decide, and the
+         * alternative — learning the answer by pressing Send and reading a refusal
+         * naming a check like `terminal_input_after_completion` — is how the
+         * confirmation that exists to stop a genuinely unsafe send became a thing
+         * to click through. Advisory only: the daemon re-evaluates at send and its
+         * verdict is the one that counts, which is also why nothing here disables
+         * the Send button. A stale advisory that removes the operator's only
+         * override would be a false block with no way out, which is strictly worse
+         * than the wrong label. */}
+      {sessionTargeted && verdict && (
+        <div class={`queue-readiness queue-readiness-${verdict.state}`}>
+          <div class="queue-readiness-line">
+            <span class="queue-readiness-headline">{verdict.headline}</span>
+            {verdict.summary && <span class="queue-readiness-summary">{verdict.summary}</span>}
+            {/* Shown only once it is old enough to matter. The stream holds this at
+                zero for a followed session, so a visible age is itself the signal
+                that this reading is a poll result rather than a live one. */}
+            {readinessAgeLabel(verdict) && (
+              <span class="queue-readiness-age" title="When the daemon last read this">
+                {readinessAgeLabel(verdict)}
+              </span>
+            )}
+          </div>
+          {verdict.state !== 'safe' && verdict.clears && (
+            <p class="queue-readiness-clears">{verdict.clears}</p>
+          )}
+          {/* Narration, never evidence. The composer estimate is deliberately not an
+              input to readiness (an estimate that concluded "empty" could authorize a
+              send on top of text nothing can see), but it is the one thing that makes
+              this particular block stop looking like a bug: the line really is clear,
+              and the block really does persist. */}
+          {verdict.state === 'blocked'
+            && readiness?.reasons?.includes('terminal_input_after_completion')
+            && !session?.unsent_input && (
+              <p class="queue-readiness-clears">Nothing is sitting in the composer now.</p>
+            )}
+          {verdict.protected && (
+            <p class="queue-readiness-protected">
+              “Send anyway” will not be offered for this one — writing into it would
+              answer a prompt or write to a target that is gone.
+            </p>
+          )}
+          {verdict.also.length > 0 && (
+            <p class="queue-readiness-also">Also: {verdict.also.join('; ')}.</p>
+          )}
+          {/* A mid-turn message is decided by a second, strictly narrower predicate,
+              so "this agent is mid-turn" is not the end of the story for one. */}
+          {verdict.state === 'blocked' && readiness?.interject_state === 'safe' && (
+            <p class="queue-readiness-also">
+              A message marked “mid-turn” can still be written into the running turn.
+            </p>
+          )}
+        </div>
+      )}
       <div class="queue-auto-strip">
         <button
           type="button"

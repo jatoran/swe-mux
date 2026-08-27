@@ -45,6 +45,7 @@ from ..project_files import (
 )
 from ..projects import ProjectManager
 from ..prompt_queue import (
+    delivery_summary,
     stage_seed_argv,
 )
 from ..session import (
@@ -83,6 +84,7 @@ async def list_sessions(request: web.Request) -> web.Response:
     manager: SessionManager = request.app[keys.SESSIONS]
     sessions = []
     readiness = request.app[keys.FLEET].readiness
+    now = time.time()
     for session in manager.sessions.values():
         item = session.record.snapshot()
         item["_snapshot_generation"] = request.app[keys.DAEMON_GENERATION]
@@ -91,16 +93,14 @@ async def list_sessions(request: web.Request) -> web.Response:
         # This readiness is display-only and never authorizes a PTY write. Reuse a
         # bounded classifier verdict so simultaneous browser refreshes cannot make
         # GET /api/sessions repeatedly scan every live terminal on the event loop.
+        # On a fleet the readiness watcher is already following, that cache is
+        # warm from its last tick and this endpoint scans nothing at all.
         delivery = readiness.evaluate(
             session,
             record_metrics=False,
             snapshot_pty_cache_seconds=1.0,
         )
-        item["delivery_readiness"] = {
-            "state": delivery["delivery_state"],
-            "reason": delivery["reason"],
-            "authorized": False,
-        }
+        item["delivery_readiness"] = delivery_summary(session.record, delivery, observed_at=now)
         # Present only while something is actually sitting in the composer, so a
         # client can treat presence as the whole signal. The character estimate
         # stays server-side: it is inferred from keystrokes, and a number on

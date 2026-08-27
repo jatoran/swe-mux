@@ -84,6 +84,45 @@ export interface ApprovalStatus {
   modes: ApprovalMode[]
 }
 
+export type DeliveryState = 'safe' | 'blocked' | 'unknown'
+
+/**
+ * The daemon's display-only reading of whether text may be written into a
+ * session's prompt (`delivery-readiness.md`).
+ *
+ * `authorized` is always false and is not a field to check: the daemon's own
+ * send-time evaluation is the only thing that decides a delivery, and it runs
+ * again at send. Everything here is advisory - it says what will likely happen,
+ * so a reader is not told only by pressing the button.
+ */
+export interface DeliveryReadiness {
+  state: DeliveryState
+  /** The leading reason. Always the first entry of `reasons`. */
+  reason: string
+  /** Every reason at once; a session can be blocked by several facts. */
+  reasons?: string[]
+  /**
+   * The subset of `reasons` no per-send confirmation can override. Non-empty
+   * means "Send anyway" will be refused, which is a different sentence from
+   * "not safe right now" and has to be said before the press, not after.
+   */
+  protected?: string[]
+  /**
+   * The strictly narrower "may this be written into a turn that is *running*"
+   * verdict. Never a relaxation of `state`; only an item that asked for
+   * mid-turn delivery consumes it.
+   */
+  interject_state?: DeliveryState | null
+  /**
+   * When the daemon took this reading, in epoch seconds. Load-bearing rather
+   * than decorative: `sessionSnapshots.ts` preserves the last known readiness
+   * across raw PTY snapshots, so without a stamp a verdict from a minute ago
+   * renders identically to one from this second.
+   */
+  observed_at?: number
+  authorized: false
+}
+
 export interface Session {
   id: string; name: string; project_id: string; backend: string
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
@@ -173,7 +212,7 @@ export interface Session {
   /** Set when the followed transcript is no longer this PTY's conversation. */
   observation_stale_since?:number
   observation_diagnostic?:string
-  delivery_readiness?:{state:'safe'|'blocked'|'unknown';reason:string;authorized:false}
+  delivery_readiness?:DeliveryReadiness
   /**
    * Text sitting unsent in this session's composer, estimated by the daemon from
    * the bytes written to the PTY (`composer_input.py`). Present only while

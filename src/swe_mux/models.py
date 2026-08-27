@@ -643,6 +643,18 @@ class MuxEvent:
     type: str
     payload: dict[str, Any]
     seq: int = 0
+    #: A derived, re-derivable *current value* rather than something that happened.
+    #:
+    #: The `events` table is the fleet's history and it is capped — `append_event`
+    #: sweeps to the newest 100k rows — so anything written at a per-second cadence
+    #: does not merely cost writes, it evicts the git-provenance, scan-timeline and
+    #: incident-forensics history that window exists to hold. A transient event is
+    #: therefore fanned out to live subscribers and never persisted, which also means
+    #: it carries no `seq` and cannot be resumed after a gap. That is the right
+    #: trade only for facts a reconnecting client re-reads authoritatively from REST
+    #: anyway; use an ordinary durable event for anything a later reader must be able
+    #: to reconstruct.
+    transient: bool = False
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
