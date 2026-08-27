@@ -14,9 +14,25 @@
 //     it is pressed, which lowers the keyboard as a side effect of using it — an
 //     overlay button (jump-to-latest), or the platform's own handling of a
 //     long-press over non-editable content. `holdSoftKeyboard` prevents the focus
-//     move before it happens; `restoreSoftKeyboard` puts it back when a gesture
-//     already took it. Between them a gesture that was not typing leaves the
-//     keyboard exactly as open or closed as it found it.
+//     move before it happens; `shouldHoldBridgeFocus` refuses the platform's own
+//     move while a gesture is in flight; `restoreSoftKeyboard` puts the keyboard
+//     back when one got through anyway. Between them a gesture that was not typing
+//     leaves the keyboard exactly as open or closed as it found it.
+//
+// The ordering of those three is the design, not an accident. A repair is visible:
+// between the platform lowering the keyboard and the next frame putting it back, the
+// layout has moved twice, which is exactly what makes a long-press selection hard to
+// aim. So prevention comes first and the repair is the backstop, and the guard that
+// used to leak — the window in which a touch gesture's synthesized mouse events are
+// swallowed — is measured from the end of the gesture rather than its start
+// (`touchCompatMouseEvent`), because measuring from the start silently capped how long
+// a deliberate hold was allowed to be.
+//
+// The other half of "leaving it alone" is not code here at all: on a touch device the
+// terminal's own IME bridge is the *only* element permitted to raise the keyboard, which
+// is enforced by giving xterm's helper textarea `inputmode="none"` (see TerminalPane).
+// Predicates that reason about "would focusing this raise a keyboard" are only as good as
+// that invariant.
 //
 // None of this is the terminal's read/select mode (`terminal.keyboardToggle`),
 // which is a sticky per-pane mode. Nothing here is sticky — tapping the terminal
@@ -370,4 +386,82 @@ export function restoreSoftKeyboard(
   if(!holder||!softKeyboardLost(holder,deepActiveElement(document)))return false
   holder.focus({preventScroll:true})
   return true
+}
+
+/**
+ * How long after a touch gesture ends its synthesized mouse events may still arrive.
+ *
+ * A phone delivers a press to code that does not consume the touch by replaying it as
+ * `mousedown`/`mouseup`/`click` once the gesture has resolved, and the terminal has to
+ * swallow that replay. xterm's own `mousedown` handler is `preventDefault(); this.focus()`,
+ * which focuses its helper textarea — so a replayed press that reaches xterm raises the
+ * keyboard for a gesture that was never a tap.
+ *
+ * Measured from the *end* of the gesture, which is the whole point. This window used to be
+ * measured from its start, which made it a cap on gesture *duration*: a long-press (450 ms)
+ * plus a careful selection drag routinely outran it, the replay reached xterm, and the
+ * keyboard came up by itself. That is why the behaviour read as intermittent rather than
+ * broken — short gestures were inside the window and long ones, the ones most likely to be
+ * a deliberate hold, were not.
+ *
+ * The cost of the change is a real mouse press landing within this window of a touch gesture
+ * on the same surface being swallowed. On a phone there is no mouse; on a hybrid device it
+ * is one lost click, against a keyboard that opens and closes on its own.
+ *
+ * Feed it a monotonic clock (`performance.now()`), not `Date.now()`: a wall-clock step would
+ * otherwise decide that a gesture ended in the future and stop suppressing anything.
+ */
+export const TOUCH_COMPAT_MOUSE_WINDOW_MS = 1200
+
+/** Whether a mouse event is a touch gesture's synthesized replay rather than a real mouse. */
+export function touchCompatMouseEvent(input:{
+  /** A touch pointer is still down on this surface. */
+  gestureActive:boolean
+  /** When the last touch gesture on this surface ended, or null if none has. */
+  endedAt:number|null
+  /** Monotonic now. */
+  now:number
+  windowMs?:number
+}):boolean {
+  const { gestureActive, endedAt, now, windowMs = TOUCH_COMPAT_MOUSE_WINDOW_MS } = input
+  if(gestureActive)return true
+  if(endedAt===null||!Number.isFinite(endedAt)||!Number.isFinite(now))return false
+  const since = now - endedAt
+  return since>=0&&since<windowMs
+}
+
+/**
+ * Whether the IME bridge should refuse to give up focus mid-gesture.
+ *
+ * The prevention half of `restoreSoftKeyboard`, which is a repair and therefore late: it
+ * runs a frame after the gesture ends, so for the whole of a long-press-and-drag the
+ * keyboard is genuinely down and the pane reflows twice around it — the reserved strip is
+ * handed back (an xterm resize, so the cells move out from under the finger mid-selection)
+ * and the peek translate reverts. Re-focusing synchronously inside the `focusout` the
+ * platform causes keeps the IME from animating out at all, so none of that happens.
+ *
+ * `holding` is deliberately narrow: it is set only when the bridge *itself* was what held
+ * the keyboard up as the finger landed. That makes this incapable of raising a keyboard
+ * that was down — the direction the old code had no guard for at all — and it stands down
+ * in read mode and with the draft composer open for free, because the bridge is blurred in
+ * both and so was never the holder.
+ *
+ * Split from the DOM so the decision is testable without one, like `softKeyboardLost`.
+ */
+export function shouldHoldBridgeFocus(input:{
+  /** A gesture is in flight and the bridge was holding the keyboard when it began. */
+  holding:boolean
+  dismissalsAtGestureStart:number
+  dismissals:number
+  /** Where focus is going, when the platform says. */
+  incoming:FocusedField|null|undefined
+}):boolean {
+  const { holding, dismissalsAtGestureStart, dismissals, incoming } = input
+  if(!holding)return false
+  // Somebody lowered the keyboard on purpose while this gesture was running — a mobile
+  // panel opening over it — and that outranks holding it, exactly as in `restoreSoftKeyboard`.
+  if(dismissals!==dismissalsAtGestureStart)return false
+  // Focus heading for another real field is a move something made on purpose, and the
+  // keyboard is not going anywhere. Fighting it would trap focus on the terminal.
+  return !raisesSoftKeyboard(incoming)
 }

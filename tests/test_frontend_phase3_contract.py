@@ -88,10 +88,16 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     assert "/last-reply" in pane
     # Selection auto-copy runs a frame after the gesture ends, never inline: the platform
     # makes its own focus and selection decision as the tap resolves. The deferral is the
-    # invariant; the call itself moved inside an arrow when soft-keyboard restoration was
-    # deliberately ordered after the copy, so do not assert a bare callback reference.
+    # invariant, and it has survived two refactors of where the call sits - first into an
+    # arrow when soft-keyboard restoration was ordered after the copy, then into
+    # `endTouchGesture`'s `beforeRestore` hook when that whole sequence was shared with
+    # `pointerCancel`. Assert the two halves that carry the invariant rather than any one
+    # spelling of the call site: the pointer path hands the copy to the gesture-end
+    # sequence, and that sequence runs it inside a frame, ahead of the keyboard repair.
     assert "const autoCopySelection=" in pane
-    assert "requestAnimationFrame(()=>{autoCopySelection()" in pane
+    assert "endTouchGesture(gesture," in pane and ",autoCopySelection)" in pane
+    assert "requestAnimationFrame(()=>{\n        beforeRestore?.()\n" in pane
+    assert pane.index("beforeRestore?.()") < pane.index("restoreSoftKeyboard(restoreKeyboard,")
     assert ".terminal-action-rail" in css
     # The rail also sends terminal keys and toggles the on-screen keyboard for read/select
     # mode; it overflows and scrolls horizontally rather than wrapping. The key/item
