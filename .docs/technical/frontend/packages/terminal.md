@@ -61,6 +61,19 @@ It resolves against `session.agent_launch_pending`, refuses two candidates rathe
 `consoleContention.ts` turns the daemon's standing verdict into the pane's highest-priority notice and into `agentOutlivesPane`, which is the one that changes what an action does rather than what a message says.
 The wording names the shell rather than the launch chain: the operator's repair is the same whichever link failed, and describing wrapper processes to someone whose terminal has stopped working explains nothing they can act on.
 
+**Nothing inside the terminal's construction effect may read a backend off the `session` prop.**
+That effect is keyed on `session.id` and deliberately never re-runs on a promotion - rebuilding xterm would drop the socket and replay the whole buffer - so a `session` read there is frozen at whatever the pane mounted as, which for a promoted shell is `shell` forever.
+Five behaviours were found frozen that way after the promotion fix shipped: Shift+Enter and paste bracketing, the "Copy last reply" gate, the scrollback-repaint request, the Codex column-floor font policy, and the DOM-only renderer choice.
+The rule is therefore absolute and enforced as a negative invariant over the effect body (`frontend/test/terminalPaneInputBackend.test.ts`): read `backendRef.current`, or `inputBackendRef.current` where the question is input *encoding*.
+`pasteIntoTerminal` takes a resolved backend rather than a `Session` for the same reason - a function that resolves the backend itself makes the stale call writable.
+
+The renderer choice is the one member of that family a ref cannot repair, because it is made once at construction.
+A pane promoted onto a harness declaring `webgl_unsafe` disposes its WebGL addon instead (`dropWebglRef`), which costs no remount and reuses the teardown a real context loss already performs.
+
+`terminalPaneMemo.ts` is the other half of that rule: a live ref is assigned during *render*, so a prop change the memo swallows is a ref that never updates.
+It is its own module because importing `TerminalPane` into a node test pulls in xterm's stylesheet, so this is the one thing about that file which can be tested as a function rather than grepped.
+Beyond the props it always compared, it compares `agent_launch_pending` by value (the daemon publishes it while nothing else about the session moves) and `console_contention` by cause (the census inside it is refreshed on every shell prompt while the notice stays the same).
+
 ## Multi-device terminal input
 
 `inputOwnership.ts`, `terminalLetterbox.ts`, `terminalWheelPacing.ts`

@@ -281,7 +281,10 @@ test('the width envelope reaches live panes and explains itself when it clamps',
   // the socket and replay the whole buffer to change a max-width.
   assert.match(app, /claudeMaxColumns=\{claudeMaxColumns\}/)
   assert.match(app, /setClaudeMaxColumns\(claudeMaxColumnsFrom\(config\)\)/)
-  assert.match(pane, /a\.claudeMaxColumns === b\.claudeMaxColumns &&/)
+  // The memo moved to its own module so its rules could be exercised as a function
+  // rather than only grepped (`terminalPaneInputBackend.test.ts`).
+  const memo = readFileSync(join(root, '..', 'src', 'terminalPaneMemo.ts'), 'utf8')
+  assert.match(memo, /a\.claudeMaxColumns === b\.claudeMaxColumns/)
   const lifetime = /\n  \}, \[session\.id, keybindings,[^\]]*\]\)/.exec(pane)?.[0] ?? ''
   assert.ok(lifetime, 'the terminal lifetime effect dep list has moved')
   assert.doesNotMatch(lifetime, /claudeMaxColumns/)
