@@ -3647,6 +3647,19 @@ Fix one positioning line and use it verbatim everywhere.
   Vibe Kanban, Conductor, omnara) and state the differentiation - session-preserving
   supervisor, phone and voice control, the land queue, provenance - in the launch material
   rather than leaving readers to infer it.
+- [ ] Work the full venue checklist; every item has a draft in `.docs/marketing/`:
+  - Blog (swemux.dev/blog, cross-posted to dev.to and Hashnode): the launch post, the
+    session-preserving-runtime story, the land queue, status detection, phone-and-voice
+    fleet control, and serverless update propagation - staggered weekly, not dumped.
+  - Launch sequence: r/ClaudeAI + r/ChatGPTCoding + r/LocalLLaMA + Claude Developers
+    Discord (soft launch) → Show HN → Product Hunt → X launch thread.
+  - Forums and feeds, one post each: r/programming (the engineering posts, never the
+    announcement), r/commandline, r/selfhosted, r/opensource, r/vibecoding, r/codex,
+    lobste.rs (invite required), Bluesky, LinkedIn.
+  - Directories: GitHub topics/description, AlternativeTo, selfh.st, plus the awesome-list
+    PRs above.
+  - Editorial: Console.dev, TLDR AI, and Changelog News submissions; YouTube outreach with
+    the demo video.
 
 ### Phase 11 exit criteria
 
