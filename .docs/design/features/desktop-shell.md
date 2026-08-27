@@ -138,6 +138,25 @@ continues to own every terminal.
   check reads the built tree rather than package metadata because declared metadata is
   exactly what hid the original defect - PyAV declares BSD-3-Clause and links GPL
   x264/x265, sherpa-onnx declares Apache-2.0 and statically links espeak-ng.
+- **PyAV is out of the dependency closure entirely, not just out of the bundle**
+  (2026-08-27). `faster-whisper` hard-requires `av>=11` and nothing in swe-mux reaches it:
+  the only import is `faster_whisper/audio.py`'s module-level `import av` for
+  `decode_audio`, while `voice.py` hands validated raw PCM straight to `WhisperModel`.
+  So the dependency is dropped rather than replaced, by a `[tool.uv]`
+  `override-dependencies` entry whose marker no supported environment satisfies, and the
+  import it existed for is satisfied by a stub.
+  **That stub has one definition** - `src/swe_mux/av_stub.py` - reached by two entry
+  points: `packaging/rthook_av_stub.py` (before any application import in the frozen app)
+  and `voice.py` immediately before each of its `faster_whisper` imports. Keeping a second
+  copy in the hook is what would drift, and the drift shows up as dictation that works in
+  a source checkout and not in the shipped app. Any *use* of the stub raises; module
+  dunders answer as ordinary missing attributes, because `repr()` of a module reads
+  `__file__` and a stub that refused that turned every log line mentioning `av` into a
+  RuntimeError from inside the stub.
+  The override governs this project's resolution - `uv.lock`, `uv sync`, the bundle, the
+  gate - and is *not* carried in the wheel's `Requires-Dist`, so a downstream
+  `pip install swe-mux[voice-local]` still resolves faster-whisper's own `av>=11`; swe-mux
+  imports the real package on no path either way.
 - **The optional Edge TTS client is external-only.**
   `voice-edge` is a source-install convenience extra and is not a member of
   `license_audit.DISTRIBUTED_EXTRAS`.

@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 
 from swe_mux import app_keys as keys
+from swe_mux import av_stub
 from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
@@ -741,6 +742,12 @@ def test_whisper_decoding_never_touches_the_disk(tmp_path: Path) -> None:
     # `voice-local` extra actually installed. A bare `uv sync` leaves it out
     # by design; `.worktree-setup` and the Windows CI job sync it, so this
     # skips only for a developer who chose not to install local speech.
+    #
+    # The stub goes in first for the same reason production does it: PyAV is
+    # out of the closure, `faster_whisper.audio` imports `av` at module scope,
+    # and `importorskip` would swallow that as a *skip* - a silently absent
+    # test instead of a red one, which is the worst way for this to regress.
+    av_stub.install()
     pytest.importorskip("faster_whisper")
     service, _events, _emitted, _record = make_service(tmp_path)
     seen: list[Any] = []
@@ -860,6 +867,12 @@ def test_whisper_model_load_falls_back_when_cuda_runtime_fails(
     # `voice-local` extra actually installed. A bare `uv sync` leaves it out
     # by design; `.worktree-setup` and the Windows CI job sync it, so this
     # skips only for a developer who chose not to install local speech.
+    #
+    # The stub goes in first for the same reason production does it: PyAV is
+    # out of the closure, `faster_whisper.audio` imports `av` at module scope,
+    # and `importorskip` would swallow that as a *skip* - a silently absent
+    # test instead of a red one, which is the worst way for this to regress.
+    av_stub.install()
     pytest.importorskip("faster_whisper")
     ctranslate2 = pytest.importorskip("ctranslate2")
 

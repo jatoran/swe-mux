@@ -33,6 +33,17 @@ Failures are typed `VoiceError` and never touch the PTY, history, or transcripts
 
 **Not:** browser microphone permission, mounted-composer state, PTY ownership, or approval-state classification.
 
+## `av_stub.py`
+
+The single definition of the `av` stub, and the one function that installs it into `sys.modules`.
+PyAV is not in swe-mux's resolved closure at all: `faster-whisper` hard-requires it, nothing here reaches it, and it is dropped by a `[tool.uv] override-dependencies` marker no environment satisfies (and by `excludes=["av"]` in the frozen spec) so 63 MB of GPL-linked FFmpeg stays out of both artifacts.
+`faster_whisper/audio.py` still runs `import av` at module scope, so `install()` must be called before *any* `faster_whisper` import: the frozen app does it from `packaging/rthook_av_stub.py` before any application import, and a source or wheel install does it from `voice.py` immediately before each of its two imports.
+Both entry points call this module rather than carrying their own copy - a second copy drifts, and the drift reads as dictation that works in a checkout and not in the shipped app.
+Reaching a real PyAV attribute raises, because that means a code path started needing the removed decoder; module dunders answer as ordinary missing attributes, since `repr()` of a module reads `__file__` and refusing that buried real diagnostics under a RuntimeError from inside the stub.
+`install()` is `setdefault`, so a developer environment that still has PyAV installed keeps whatever is already imported.
+
+**Not:** decoding audio, any PyAV shim behaviour, or deciding which decoder `voice.py` uses.
+
 ## `tts_profiles.py`
 
 Provider-neutral immutable synthesis profiles for SAPI, Kokoro, and Edge: provider, voice, output format, provider options, duration-rate hint, and a stable hash over everything that can change audio.

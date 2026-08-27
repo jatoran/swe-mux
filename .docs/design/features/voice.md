@@ -130,6 +130,14 @@ install-wide, so the tab edits them directly for the focused session.
   absent closure is an unavailable engine and never an import error
   (`kokoro_tts._ensure_loaded`, `kokoro_tts._ensure_g2p`, `voice._transcribe_whisper`,
   `voice.status`).
+  What the extra does **not** bring is PyAV. `faster-whisper` hard-requires `av>=11` and
+  swe-mux reaches none of it - the sole import is `faster_whisper/audio.py`'s module-level
+  `import av` for `decode_audio`, while transcription hands validated raw PCM straight to
+  `WhisperModel` - so 63 MB of GPL-linked FFmpeg is dropped from the resolution by a
+  `[tool.uv]` override and the import is satisfied by `swe_mux.av_stub`, whose `install()`
+  both `voice.py` and the frozen app's runtime hook call before importing `faster_whisper`.
+  Dictation is verified working with no PyAV installed at all
+  (`.docs/development/ROADMAP.md` Phase 11).
   It is optional to install and **mandatory to build from**: `num2words` is LGPL, and the
   frozen bundle's relink obligation is met only by the spec collecting it as replaceable
   source, so `build_desktop` and the `redeploy_desktop` preflight both refuse a build whose

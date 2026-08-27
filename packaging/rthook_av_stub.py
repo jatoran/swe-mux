@@ -7,27 +7,21 @@ executes ``import av`` at module import time for its ``decode_audio`` helper -
 a function no swe-mux code path reaches, because ``voice.py`` hands validated
 raw PCM straight to ``WhisperModel``.
 
-This hook registers a stub module before any application import runs, so
-``faster_whisper`` imports cleanly with no FFmpeg present. Any *use* of the
-stub fails loudly: reaching a PyAV attribute means a code path started
-depending on the removed decoder, which must fail at the call site rather than
-resurrect the GPL closure silently.
+This hook registers the stub before any application import runs. The stub
+itself lives in ``swe_mux.av_stub`` rather than here, because the wheel needs
+exactly the same object installed at exactly the same point (``av`` is dropped
+from the wheel's resolved closure too, by a ``[tool.uv]``
+``override-dependencies`` entry), and two copies of a module that must behave
+identically in the frozen app and in a source install is the thing that drifts.
+``swe_mux.av_stub`` documents why any *use* of the stub raises.
+
+The hook is kept as the frozen app's entry point rather than being deleted in
+favour of the call sites in ``voice.py``: it runs before *any* application
+import, so a new module that imports ``faster_whisper`` at module scope cannot
+lose the race, and a failure here is a loud startup crash rather than a silent
+resurrection of the GPL closure.
 """
 
-import sys
-import types
+from swe_mux.av_stub import install
 
-_stub = types.ModuleType("av")
-_stub.__doc__ = "swe-mux stub: PyAV is deliberately not bundled (GPL FFmpeg build)."
-
-
-def _refuse(name: str):  # noqa: ANN202 - PyInstaller runtime hook, keep dependency-free
-    raise RuntimeError(
-        "PyAV is not bundled with swe-mux (its wheel ships a GPL FFmpeg build); "
-        f"the attribute av.{name} is unavailable. Audio decoding must use the "
-        "validated raw-PCM path in swe_mux.voice instead."
-    )
-
-
-_stub.__getattr__ = _refuse  # type: ignore[attr-defined]  # PEP 562 module fallback
-sys.modules.setdefault("av", _stub)
+install()

@@ -35,7 +35,7 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from . import budget
+from . import av_stub, budget
 from .background_tasks import background
 from .config import Config
 from .edge_tts_provider import EdgeTtsError, EdgeTtsProvider
@@ -3219,6 +3219,10 @@ class VoiceService:
     def _transcribe_whisper(
         self, frames: bytes, audio_ms: float, profile: str, marks: dict[str, Any]
     ) -> str:
+        # Before the import, never after: `faster_whisper.audio` executes a
+        # module-level `import av`, and PyAV is deliberately absent from the
+        # resolved closure (GPL FFmpeg linkage). See `swe_mux.av_stub`.
+        av_stub.install()
         try:
             import numpy
             from faster_whisper import WhisperModel
@@ -3435,6 +3439,7 @@ class VoiceService:
                 stt_available = False
                 stt_diagnostic = "Windows Speech Recognition requires Windows PowerShell"
         else:
+            av_stub.install()  # `faster_whisper` imports `av` at module scope.
             try:
                 import faster_whisper  # noqa: F401
             except ImportError:

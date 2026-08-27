@@ -138,6 +138,12 @@ def owning_extra(name: str, lock_path: Path = UV_LOCK) -> str | None:
 # thing metadata can never tell you - each entry is here because someone read
 # the binary. Without it the gate reads PyAV as BSD-3-Clause and reports a clean
 # closure while 63 MB of GPL FFmpeg sits inside it.
+#
+# `av` is no longer in the closure at all (Phase 11 dropped it; see `[tool.uv]`
+# in pyproject.toml), so its entry is now a **tripwire** rather than a
+# description: it costs nothing while the override holds, and the day something
+# reintroduces PyAV the gate reads it as GPL-2.0-or-later and fails instead of
+# waving through a package that says BSD-3-Clause.
 MISDECLARED: dict[str, tuple[str, str]] = {
     "av": (
         "GPL-2.0-or-later",
@@ -153,25 +159,12 @@ MISDECLARED: dict[str, tuple[str, str]] = {
 # records what keeps it out and what remains unresolved, because "absent from the
 # bundle" is not the same claim as "absent from the closure": a wheel install
 # resolves the full dependency graph and takes these with it.
-BUNDLE_EXCLUDED: dict[str, str] = {
-    "av": (
-        "Reached only through `faster_whisper/__init__` into `faster_whisper/audio.py`, "
-        "whose module-level `import av` exists for `decode_audio`. No swe-mux call site "
-        "reaches `decode_audio`: `voice.py` builds a float32 array from int16 PCM taken "
-        "from a validated WAV header and hands it straight to `WhisperModel`. The desktop "
-        "bundle therefore excludes it outright (`excludes=[\"av\"]` in swe_mux.spec plus "
-        "`packaging/rthook_av_stub.py`), and `build_desktop.verify_no_gpl_av` fails the "
-        "build if it returns.\n\n"
-        "**Unresolved for the wheel.** `faster-whisper` hard-requires `av>=11`, so "
-        "`pip install swe-mux` still resolves and installs PyAV with its GPL FFmpeg onto "
-        "the user's machine. swe-mux redistributes none of it - pip fetches it from PyPI - "
-        "but a diligence scan reading the transitive closure will flag it, and the Phase "
-        "10.5 goal of a copyleft-free closure is met for the bundle only. Closing it means "
-        "installing the stub into `sys.modules` before `faster_whisper` is imported in "
-        "source mode too, then dropping `av` with a uv dependency override. Tracked as a "
-        "Phase 11 precondition."
-    ),
-}
+#
+# Empty since Phase 11 dropped `av`, which was the only entry. That is the
+# intended steady state - an entry here is a package a *user* installs and we do
+# not ship, which is weaker than not depending on it - so the mechanism stays for
+# the next one rather than being deleted along with its last occupant.
+BUNDLE_EXCLUDED: dict[str, str] = {}
 
 # Licenses that are file-level copyleft. They impose obligations on the *files*
 # of that package only, never on swe-mux, so they need license text reproduced
@@ -576,8 +569,7 @@ def render_notices(packages: list[Package]) -> str:
         "",
         "**swe-mux redistributes no strong-copyleft (GPL/AGPL) code.** The desktop bundle",
         "contains none, which is checked against the built tree on every build rather than",
-        "asserted here. One GPL package does resolve as a transitive dependency without",
-        "being redistributed; it has its own section rather than being quietly omitted.",
+        "asserted here, and no GPL package resolves into the dependency closure either.",
         "",
         "swe-mux does ship two weak-copyleft (LGPL) libraries. Weak copyleft imposes",
         "nothing on swe-mux's own license: the obligation is to say the library is there,",
@@ -600,25 +592,29 @@ def render_notices(packages: list[Package]) -> str:
             *_source_replacement_lines(name),
             "",
         ]
-    lines += [
-        "## In the dependency closure but not redistributed",
-        "",
-        "These resolve as dependencies and are installed by `pip install swe-mux`, but",
-        "swe-mux redistributes none of them: the desktop bundle excludes each one, and a",
-        "wheel install fetches them from PyPI rather than from us. They are listed anyway,",
-        "because an audit that reads only what is shipped and calls the closure clean is",
-        "the exact mistake this file exists to prevent.",
-        "",
-    ]
-    for name, reason in sorted(BUNDLE_EXCLUDED.items()):
-        package = next((item for item in packages if item.name == name), None)
-        version = package.version if package else "(not in the current closure)"
-        true_license = MISDECLARED.get(name, (package.license if package else "?", ""))[0]
-        declared = MISDECLARED.get(name, ("", ""))[1]
-        lines += [f"### {name} {version} - {true_license}", ""]
-        if declared:
-            lines += [f"*Declared license is misleading.* {declared}", ""]
-        lines += [reason, ""]
+    # Rendered only when there is something to render. A standing heading over an
+    # empty list would read as a claim that such packages exist, which is the
+    # opposite of what an empty `BUNDLE_EXCLUDED` means.
+    if BUNDLE_EXCLUDED:
+        lines += [
+            "## In the dependency closure but not redistributed",
+            "",
+            "These resolve as dependencies and are installed by `pip install swe-mux`, but",
+            "swe-mux redistributes none of them: the desktop bundle excludes each one, and a",
+            "wheel install fetches them from PyPI rather than from us. They are listed anyway,",
+            "because an audit that reads only what is shipped and calls the closure clean is",
+            "the exact mistake this file exists to prevent.",
+            "",
+        ]
+        for name, reason in sorted(BUNDLE_EXCLUDED.items()):
+            package = next((item for item in packages if item.name == name), None)
+            version = package.version if package else "(not in the current closure)"
+            true_license = MISDECLARED.get(name, (package.license if package else "?", ""))[0]
+            declared = MISDECLARED.get(name, ("", ""))[1]
+            lines += [f"### {name} {version} - {true_license}", ""]
+            if declared:
+                lines += [f"*Declared license is misleading.* {declared}", ""]
+            lines += [reason, ""]
 
     lines += [
         "## Modified redistributions",

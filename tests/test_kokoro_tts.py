@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from swe_mux import kokoro_tts
+from swe_mux import av_stub, kokoro_tts
 from swe_mux.config import load_config
 from swe_mux.kokoro_tts import (
     MAX_PHONEME_TOKENS,
@@ -363,12 +364,79 @@ def test_av_runtime_stub_satisfies_import_and_refuses_use() -> None:
     try:
         runpy.run_path(str(hook))
         stub = sys.modules["av"]
-        with pytest.raises(RuntimeError, match="not bundled"):
+        with pytest.raises(RuntimeError, match="not installed"):
             _ = stub.open  # any attribute use must fail loudly
     finally:
         sys.modules.pop("av", None)
         if saved is not None:
             sys.modules["av"] = saved
+
+
+def test_the_frozen_hook_installs_the_same_stub_the_wheel_does() -> None:
+    """One definition, two entry points.
+
+    The frozen app reaches the stub through a PyInstaller runtime hook and a
+    source/wheel install reaches it through `voice.py`. Two copies of a module
+    that must behave identically is what drifts, and the failure mode is the
+    worst kind - dictation working in dev and not in the app - so the hook is
+    held to being a call into the shared module rather than a second stub.
+    """
+    hook = (REPO_ROOT / "packaging" / "rthook_av_stub.py").read_text(encoding="utf-8")
+    assert "from swe_mux.av_stub import install" in hook
+    assert "types.ModuleType" not in hook
+
+
+def test_av_stub_survives_introspection_but_refuses_pyav_attributes() -> None:
+    """Dunders answer as absent; PyAV attributes raise.
+
+    `repr()` of a module reads `__file__`, so a stub that raised on every name
+    turned any log line or traceback mentioning it into a RuntimeError from
+    inside the stub - burying whatever was actually being diagnosed.
+    """
+    stub = av_stub.build()
+    assert repr(stub) and stub.__name__ == "av"
+    assert getattr(stub, "__file__", None) is None
+    assert getattr(stub, "__path__", None) is None
+    for attribute in ("open", "audio", "error"):  # what faster_whisper.audio uses
+        with pytest.raises(RuntimeError, match="not installed"):
+            getattr(stub, attribute)
+
+
+def test_av_stub_install_is_idempotent_and_never_evicts_a_real_pyav() -> None:
+    saved = sys.modules.pop("av", None)
+    try:
+        first = av_stub.install()
+        assert sys.modules["av"] is first
+        assert av_stub.install() is first  # idempotent
+        sentinel = object()
+        sys.modules["av"] = sentinel  # type: ignore[assignment]
+        assert av_stub.install() is sentinel  # setdefault, not overwrite
+    finally:
+        sys.modules.pop("av", None)
+        if saved is not None:
+            sys.modules["av"] = saved
+
+
+def test_voice_installs_the_stub_before_importing_faster_whisper() -> None:
+    """The source-mode half of the fix, pinned by source order.
+
+    `faster_whisper/audio.py` runs `import av` at module scope, and PyAV is not
+    in the resolved closure, so an `av_stub.install()` that moved below the
+    import would turn local dictation into an ImportError on every install that
+    does not happen to have PyAV lying around.
+    """
+    source = (REPO_ROOT / "src" / "swe_mux" / "voice.py").read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"^\s*(?:from faster_whisper import|import faster_whisper)\b", re.MULTILINE
+    )
+    imports = list(pattern.finditer(source))
+    assert imports, "voice.py no longer imports faster_whisper; this test is stale"
+    for match in imports:
+        install = source.rfind("av_stub.install()", 0, match.start())
+        assert install != -1, f"no stub install precedes {match.group(0).strip()!r}"
+        # And no *earlier* faster_whisper import sits between the two, which
+        # would import `av` before the stub was in place.
+        assert not pattern.search(source, install, match.start())
 
 
 def test_spec_excludes_av_and_installs_the_stub() -> None:

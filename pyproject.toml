@@ -218,5 +218,36 @@ module = [
 ]
 ignore_errors = true
 
+[tool.uv]
+# `faster-whisper` hard-requires `av>=11`, and PyAV's wheel carries 63 MB of
+# FFmpeg linked against GPL x264/x265 (`packaging/license_audit.py`'s
+# MISDECLARED entry records the measurement; PyAV itself declares BSD-3-Clause).
+# Nothing in swe-mux reaches it: the only import is `faster_whisper/audio.py`'s
+# module-level `import av` for `decode_audio`, and `voice.py` hands validated
+# raw PCM straight to `WhisperModel`.
+#
+# So it is dropped rather than replaced. An override carrying a marker no
+# environment can satisfy removes the edge from the resolution entirely, which
+# is what takes `av` out of `uv.lock` and therefore out of both the closure
+# `license_audit.python_closure()` walks and what `uv sync` installs.
+# `swe_mux.av_stub` puts a stub in `sys.modules` before `faster_whisper` is
+# imported, so the import that motivated the dependency still succeeds and any
+# *use* of PyAV raises at the call site instead of silently needing the GPL
+# payload back. The frozen bundle reaches the same end by a different route
+# (`excludes=["av"]` plus `packaging/rthook_av_stub.py`), and both call the same
+# `install()`.
+#
+# Scope, stated precisely because it is easy to overread: an override is a
+# property of *this* project's resolution, not of the published metadata. It
+# governs `uv.lock`, `uv sync`, `uv pip install <this checkout>`, and every
+# artifact built from them - the desktop bundle and the verification gate
+# included. It is NOT carried in the wheel's `Requires-Dist`, so a downstream
+# `pip install swe-mux[voice-local]` still resolves faster-whisper's own
+# declared `av>=11`. Closing that last gap needs faster-whisper to make `av`
+# optional upstream (or a `--override`/constraint on the installing side); the
+# stub is what makes it a size-and-diligence question rather than a broken
+# feature, because swe-mux never imports the real package either way.
+override-dependencies = ["av; sys_platform == 'swe-mux-drops-pyav'"]
+
 [tool.uv.sources]
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

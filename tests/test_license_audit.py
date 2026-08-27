@@ -200,37 +200,63 @@ def test_the_only_copyleft_that_ships_is_the_two_allowlisted_lgpl_packages() -> 
     assert unknown == set()
     assert weak == {"pystray", "num2words"}
     assert weak == set(license_audit.ALLOWLIST)
-    # The one GPL package in the closure is excluded from the bundle, not shipped.
-    assert strong == set(license_audit.BUNDLE_EXCLUDED)
+    # Phase 11: strong copyleft is absent from the closure outright. `av` was the
+    # only member and the only BUNDLE_EXCLUDED entry; both are now empty, and an
+    # entry appearing in either is a decision someone has to make deliberately.
+    assert strong == set()
+    assert license_audit.BUNDLE_EXCLUDED == {}
 
 
 def test_pyav_is_classified_by_what_it_ships_not_what_it_declares() -> None:
-    """The audit's central finding, encoded so the gate cannot repeat it.
+    """The audit's central finding, kept as a tripwire after `av` was dropped.
 
-    PyAV declares BSD-3-Clause and links GPL x264/x265. Without the override the
-    gate reads it as permissive and reports a clean closure with 63 MB of GPL
-    FFmpeg inside it - which is exactly the state this phase started from.
+    PyAV declares BSD-3-Clause and links GPL x264/x265. The `MISDECLARED` entry
+    is what makes the gate read the truth, and it stays after the override
+    removed `av` from the closure: it costs nothing while nothing depends on
+    PyAV, and it is the difference between the gate failing and the gate waving
+    through 63 MB of GPL FFmpeg the day something reintroduces it.
     """
-    recorded = {item.name: item for item in license_audit.read_sidecar()}
-    assert recorded["av"].license == "GPL-2.0-or-later"
-    assert recorded["av"].category == "strong-copyleft"
-    assert "av" in license_audit.BUNDLE_EXCLUDED
+    true_license, evidence = license_audit.MISDECLARED["av"]
+    assert license_audit.classify(true_license) == "strong-copyleft"
+    assert "BSD-3-Clause" in evidence
+    assert license_audit.classify("BSD-3-Clause") == "permissive"
 
 
 def test_bundle_excluded_packages_record_what_keeps_them_out() -> None:
+    """Empty today; the rule stands for whatever lands there next."""
     for name, reason in license_audit.BUNDLE_EXCLUDED.items():
         assert "bundle" in reason.lower(), f"{name} must say what keeps it out"
         assert len(reason) > 200, f"{name} must record the consequence, not just the fact"
 
 
-def test_faster_whisper_still_requires_av_so_the_wheel_gap_is_real() -> None:
-    """Guards the BUNDLE_EXCLUDED note against becoming stale good news.
+def test_pyav_is_out_of_the_resolved_closure() -> None:
+    """Phase 11's precondition, measured rather than asserted.
 
-    If faster-whisper ever drops its hard `av` dependency, `av` leaves the
-    closure, this fails, and the honest thing is to delete the entry rather than
-    keep warning about a gap that closed itself.
+    `faster-whisper` still hard-requires `av>=11`; what removes it is the
+    `[tool.uv] override-dependencies` entry, whose marker no supported
+    environment satisfies. Both halves are pinned because either one alone is
+    reversible by accident: dropping the override silently reinstates 63 MB of
+    GPL FFmpeg, and dropping `swe_mux.av_stub` breaks dictation instead.
     """
-    assert "av" in license_audit.python_closure()
+    assert "av" not in license_audit.python_closure()
+
+    manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "override-dependencies" in manifest
+    marker = re.search(r'"av; sys_platform == \'([^\']+)\'"', manifest)
+    assert marker, "the av override must stay a marker no environment satisfies"
+    assert all(
+        environment["sys_platform"] != marker.group(1)
+        for environment in license_audit.SUPPORTED_ENVIRONMENTS
+    )
+
+    # The lockfile records the override, so `uv sync` and CI resolve the same way
+    # rather than depending on whoever last regenerated it.
+    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
+    recorded = (
+        f'overrides = [{{ name = "av", '
+        f"marker = \"sys_platform == '{marker.group(1)}'\" }}]"
+    )
+    assert recorded in lock
 
 
 def test_allowlist_entries_explain_themselves() -> None:
