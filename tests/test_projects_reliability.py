@@ -31,6 +31,10 @@ async def test_project_creation_initializes_resources_and_persists_layout(
     project = await projects.create("Main", str(root))
     assert Path(project.root) == root.resolve()
     assert (root / ".swe-mux" / "config.toml").read_text(encoding="utf-8") == "version = 1\n"
+    local_ignore = (root / ".swe-mux" / ".gitignore").read_text(encoding="utf-8")
+    assert "/notes/" in local_ignore
+    assert "/preview-shots/" in local_ignore
+    assert "config.toml" not in local_ignore
     loaded = await read_note(root, "project")
     assert loaded["title"] == "Main notes"
     assert loaded["markdown"] == "# Main notes\n\n\n"

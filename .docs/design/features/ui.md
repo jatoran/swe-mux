@@ -757,6 +757,8 @@ Its rules, and what each one is defending:
 - The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Harnesses rather than duplicating the per-harness editors.
 - Git exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
+  The same Settings tab owns the machine-wide `Show swe-mux repository setup prompts` switch and a reset for recorded Project decisions.
+  The first-open prompt itself stays in the Git Map because that is where the repository state and the consequence are visible.
 - Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device) and, within
   that tab, on the **section it was last left on** (`mux.settings.section.v1`, a per-tab map).
   A caller that names a section still wins, such as Voice from the read-aloud chip or Accounts from the account switcher, because that caller knows where the user needs to be.

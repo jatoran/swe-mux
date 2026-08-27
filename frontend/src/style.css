@@ -4686,6 +4686,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-init .git-state:not(.error){text-align:left;padding:6px 0;color:var(--text)}
 .git-init .drawer-empty{margin:6px 0;text-align:left}
 .git-init code{overflow-wrap:anywhere}
+.git-init-ignore{display:flex;align-items:flex-start;gap:8px;margin:12px 0;padding:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-size:9px;line-height:1.45}
+.git-init-ignore input{margin-top:2px}
+.git-init-ignore span{display:grid;gap:4px}.git-init-ignore small{color:var(--muted);font-size:8px}
+.git-swe-mux-setup{display:grid;gap:8px;padding:10px;border-bottom:1px solid color-mix(in srgb,var(--blue) 45%,var(--line));background:color-mix(in srgb,var(--blue) 7%,var(--panel2))}
+.git-swe-mux-setup strong{color:var(--text);font-size:10px}.git-swe-mux-setup p{margin:4px 0 0;color:var(--muted);font-size:8px;line-height:1.5}.git-swe-mux-setup p.warning{color:var(--amber)}
 .git-map-actions{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding-top:2px}
 .git-map-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
 .git-map-actions button:hover:not(:disabled){border-color:var(--accent)}

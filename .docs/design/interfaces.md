@@ -1880,7 +1880,9 @@ GET    /git/worktrees
 GET    /git/graph
 GET    /git/commits/{oid}/changes
 GET    /git/diff
-POST   /git/init                     {project_id}
+POST   /git/init                     {project_id, ignore_swe_mux?: bool}
+GET    /git/swe-mux-setup            ?project_id=
+POST   /git/swe-mux-setup            {project_id, decision: keep_visible|ignore_all|never_ask}
 POST   /git/worktrees
 POST   /git/worktrees/session
 DELETE /git/worktrees
@@ -1902,11 +1904,27 @@ DELETE /previews/{id}
 
 `POST /git/init` creates a repository for a Project whose folder has none, writes a starter
 `.gitignore` when the folder has no such file, stages nothing and commits nothing, and returns
-`{ok, root, branch, gitignore: "created"|"existing", operation_id}` plus a `git_changed` event.
+`{ok, root, branch, gitignore: "created"|"existing", swe_mux_ignore:
+"not_requested"|"added"|"already_ignored", operation_id}` plus a `git_changed` event.
+`ignore_swe_mux=true` explicitly permits appending `/.swe-mux/` to an existing root
+`.gitignore`; false preserves existing content.
 It re-resolves the folder's repository state inside the request: `404 project_not_found`,
 `404 root_unavailable`, `409 already_initialized` for a folder Git already tracks, and
 `400 git_error` carrying Git's own message. The reading that leads a client here is the
 `404 not_git_repository` code from `GET /git/worktrees`. See `features/git.md`.
+
+`GET /git/swe-mux-setup` combines the machine-wide prompt switch, the Project's recorded
+decision, and live Git tracked/ignored status.
+It returns `{show, reason, decision, can_ignore, tracked?}`.
+An effective existing ignore answers `show=false`; tracked `.swe-mux` content answers
+`show=true, can_ignore=false` because writing an ignore rule cannot untrack it.
+
+`POST /git/swe-mux-setup` records `keep_visible`, atomically appends the root-anchored ignore
+rule and records `ignore_all`, or disables the prompt globally for `never_ask`.
+The ignore path rechecks repository identity, tracked paths, and effective ignore state inside
+the mutation.
+`409 swe_mux_tracked` means the repository began tracking content before the decision.
+No path stages, commits, or runs `git rm --cached`.
 
 The `/land` routes are the land queue (`features/land-queue.md`). **None of them lands
 anything**: `POST /land` enqueues a request and the daemon's own sweep is the only thing that

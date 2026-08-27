@@ -13,7 +13,7 @@ from .layouts import normalize_layout
 from .leaf_names import validate_leaf_name
 from .models import ProjectGroupRecord, ProjectRecord
 from .path_identity import same_path
-from .project_files import DEFAULT_NOTE_STORAGE_ID, note_header
+from .project_files import DEFAULT_NOTE_STORAGE_ID, ensure_project_local_data_ignored, note_header
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +75,7 @@ def initialize_project_files(root: Path, name: str | None = None) -> None:
     mux_dir = root / ".swe-mux"
     notes_dir = mux_dir / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
+    ensure_project_local_data_ignored(root)
     config = mux_dir / "config.toml"
     if not config.exists():
         config.write_text("version = 1\n", encoding="utf-8")

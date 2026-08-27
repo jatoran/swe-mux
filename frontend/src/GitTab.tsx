@@ -70,6 +70,8 @@ import {
   type ReviewChangeSummary, type ReviewFileChange,
 } from './gitWorktrees'
 import type { ReviewLocator } from './gitReview'
+import { parseGitSweMuxSetup, type GitSweMuxSetup } from './gitSetup'
+import { INSTALL_CONFIG_CHANGED } from './installSwitches'
 
 // One repository, three readings:
 //
@@ -263,6 +265,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // Set only from the daemon's own `not_git_repository`, never inferred from a message.
   const [notRepository,setNotRepository]=useState(false)
   const [initNote,setInitNote]=useState('')
+  const [ignoreSweMuxOnInit,setIgnoreSweMuxOnInit]=useState(false)
+  const [sweMuxSetup,setSweMuxSetup]=useState<GitSweMuxSetup|null>(null)
+  const [sweMuxSetupBusy,setSweMuxSetupBusy]=useState(false)
+  const [sweMuxSetupError,setSweMuxSetupError]=useState('')
   const generation=useRef(0)
   const graphGeneration=useRef(0)
   const provenanceGeneration=useRef(0)
@@ -394,7 +400,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     // would accumulate for the life of the page, and a Project switch is the moment
     // they stop meaning anything.
     setPreview({})
-    setProvenanceError('');setTreeDetail({});setDetailError('');setLogQuery('');setProvenanceQuery('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
+    setProvenanceError('');setTreeDetail({});setDetailError('');setLogQuery('');setProvenanceQuery('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setIgnoreSweMuxOnInit(false);setSweMuxSetup(null);setSweMuxSetupError('');setCompareOverride(project?.git_compare_ref||'')
     void refresh()
     // Two filters on one listener, and both are the same defect: work done for a
     // repository nobody is looking at. `git_changed` is raised by *every* session's
@@ -419,6 +425,22 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     window.addEventListener('mux:git-changed',changed);window.addEventListener('mux:git-overview-changed',changed);window.addEventListener('mux:events-connected',changed);window.addEventListener('mux:worktree-created',changed);window.addEventListener('mux:worktree-removed',changed)
     return()=>{window.clearTimeout(timer);window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:git-overview-changed',changed);window.removeEventListener('mux:events-connected',changed);window.removeEventListener('mux:worktree-created',changed);window.removeEventListener('mux:worktree-removed',changed)}
   },[refresh,project?.id])
+
+  useEffect(()=>{
+    if(!project||notRepository||!overview)return
+    let stale=false
+    const read=()=>api<unknown>('GET',`/api/git/swe-mux-setup?project_id=${encodeURIComponent(project.id)}`)
+      .then(raw=>{
+        if(stale)return
+        const parsed=parseGitSweMuxSetup(raw)
+        if(!parsed)throw new Error('The daemon returned invalid swe-mux Git setup state.')
+        setSweMuxSetup(parsed);setSweMuxSetupError('')
+      })
+      .catch(cause=>{if(!stale)setSweMuxSetupError(describeGitError(cause,'Reading swe-mux Git setup'))})
+    void read()
+    window.addEventListener(INSTALL_CONFIG_CHANGED,read)
+    return()=>{stale=true;window.removeEventListener(INSTALL_CONFIG_CHANGED,read)}
+  },[project?.id,notRepository,overview?.repository.root])
 
   // The provenance ledger is read by Log (its per-commit session links) and by
   // Provenance. Map draws none of it, and used to fetch five hundred rows of it on
@@ -591,15 +613,29 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const initialize=async()=>{
     setBusy(true);setError('');setInitNote('')
     try{
-      const result=await api<{branch:string;gitignore:string}>('POST','/api/git/init',{project_id:project.id},{timeoutMs:60000})
+      const result=await api<{branch:string;gitignore:string;swe_mux_ignore:string}>('POST','/api/git/init',{
+        project_id:project.id,ignore_swe_mux:ignoreSweMuxOnInit,
+      },{timeoutMs:60000})
+      const ignoreNote=ignoreSweMuxOnInit
+        ? result.swe_mux_ignore==='added'?' All .swe-mux files are ignored.':' .swe-mux was already ignored.'
+        :''
       setInitNote(result.gitignore==='created'
-        ?`Repository created on ${result.branch}, with a starter .gitignore. Nothing is staged yet.`
-        :`Repository created on ${result.branch}. The folder already had a .gitignore, which was left alone.`)
+        ?`Repository created on ${result.branch}, with a starter .gitignore.${ignoreNote} Nothing is staged yet.`
+        :`Repository created on ${result.branch}.${ignoreNote} The existing .gitignore was otherwise preserved.`)
       // Everything else in the tab reads through the same refresh path, and other clients
       // learn about it from the daemon's `git_changed` event rather than from this one.
       await refresh()
     }catch(cause){setError(describeGitError(cause,'Creating the repository',true))}
     finally{setBusy(false)}
+  }
+  const decideSweMuxSetup=async(decision:'keep_visible'|'ignore_all'|'never_ask')=>{
+    setSweMuxSetupBusy(true);setSweMuxSetupError('')
+    try{
+      await api('POST','/api/git/swe-mux-setup',{project_id:project.id,decision})
+      setSweMuxSetup(current=>current?{...current,show:false,decision:decision==='never_ask'?'unseen':decision}:current)
+      if(decision==='ignore_all')await refresh()
+    }catch(cause){setSweMuxSetupError(describeGitError(cause,'Updating swe-mux Git setup',true))}
+    finally{setSweMuxSetupBusy(false)}
   }
   /**
    * Remove one or many, by exactly one path.
@@ -704,7 +740,8 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   if(notRepository)return <div class="git-tab git-init">
     <p class="git-state">This Project's folder is not a Git repository.</p>
     <p class="drawer-empty"><code>{project.root}</code></p>
-    <p class="drawer-empty">Initializing creates a repository here and writes a starter <code>.gitignore</code> matched to what the folder already contains. Nothing is staged and no commit is made, so history starts empty and the files are exactly as they are now. An existing <code>.gitignore</code> is left alone.</p>
+    <p class="drawer-empty">Initializing creates a repository here and writes a starter <code>.gitignore</code> matched to what the folder already contains. Nothing is staged and no commit is made, so history starts empty and the files are exactly as they are now.</p>
+    <label class="git-init-ignore"><input type="checkbox" checked={ignoreSweMuxOnInit} onChange={event=>setIgnoreSweMuxOnInit(event.currentTarget.checked)}/><span><strong>Ignore all <code>.swe-mux/</code> Project files</strong><small>This also hides portable settings, Project Actions, prompt templates, and Project context. Leave this off to keep those files available to commit.</small></span></label>
     <div class="git-map-actions"><button disabled={busy} onClick={()=>void initialize()}>{busy?'Initializing…':'Initialize repository'}</button></div>
     {initNote&&<p class="git-state" role="status">{initNote}</p>}
     {error&&<p class="git-state error" role="alert">{error}</p>}
@@ -753,6 +790,11 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}
       </div>
     </div>
+    {view==='map'&&sweMuxSetup?.show&&<section class="git-swe-mux-setup" aria-label="swe-mux Git setup">
+      <div><strong>Choose how Git treats swe-mux files</strong><p>Local notes, attachments, seed prompts, screenshots, and runtime state are ignored separately. Portable Project settings, Actions, prompt templates, and context remain visible so they can be committed.</p>{sweMuxSetup.tracked&&<p class="warning"><code>.swe-mux</code> already contains tracked files. Adding an ignore rule would not untrack them, so that action is unavailable.</p>}</div>
+      <div class="git-map-actions"><button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('keep_visible')}>Keep portable files visible</button>{sweMuxSetup.canIgnore&&<button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('ignore_all')}>Ignore all .swe-mux files</button>}<button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('never_ask')}>Never ask again</button></div>
+      {sweMuxSetupError&&<p class="git-state error" role="alert">{sweMuxSetupError}</p>}
+    </section>}
     {overview&&<div class="git-compare"><label>COMPARE <Dropdown disabled={busy} value={compareOverride} onChange={value=>void saveComparison(value)} options={[
       {value:'',label:`Auto${overview.comparison.available?` (${overview.comparison.display})`:''}`},
       ...(compareOverride&&!overview.comparison.candidates.includes(compareOverride)?[{value:compareOverride,label:`${compareOverride} (unavailable)`}]:[]),

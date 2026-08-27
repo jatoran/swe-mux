@@ -73,6 +73,7 @@ const graphLines = [
 
 globalThis.fetch = async input => {
   const url = String(input)
+  if(url.startsWith('/api/git/swe-mux-setup?'))return response({show:false,reason:'decided',decision:'keep_visible',can_ignore:false,tracked:false})
   if (url.startsWith('/api/git/worktrees?')) {
     // The Map asks for `detail=summary`; an expanded row asks for one checkout in full,
     // and that is the read this harness holds open.

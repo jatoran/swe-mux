@@ -10,6 +10,7 @@ import pytest
 
 from swe_mux import app_keys as keys
 from swe_mux import git_init, git_review
+from swe_mux.config import Config
 from swe_mux.models import ProjectRecord
 from swe_mux.routes import git as git_routes
 
@@ -39,6 +40,10 @@ class Request:
         self.app = {
             keys.PROJECTS: SimpleNamespace(projects={project.id: project}),
             keys.EVENTS: Events(),
+            keys.CONFIG: Config(
+                data_dir=Path(project.root),
+                config_path=Path(project.root) / "mux-config.toml",
+            ),
         }
 
     async def json(self) -> Any:
@@ -107,6 +112,55 @@ async def test_initialize_never_rewrites_an_existing_ignore_file(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_initialize_can_explicitly_append_whole_swe_mux_ignore(tmp_path: Path) -> None:
+    (tmp_path / ".swe-mux").mkdir()
+    (tmp_path / ".swe-mux" / "config.toml").write_text("version = 1\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("mine-only\r\n", encoding="utf-8", newline="")
+
+    result = await git_init.initialize_repository(
+        str(tmp_path), operation_id="op-ignore", ignore_swe_mux_files=True
+    )
+
+    assert result.swe_mux_ignore == "added"
+    assert (tmp_path / ".gitignore").read_bytes() == (
+        b"mine-only\r\n# Keep all swe-mux Project files local to this checkout.\r\n"
+        b"/.swe-mux/\r\n"
+    )
+    assert git(tmp_path, "check-ignore", ".swe-mux/config.toml") == ".swe-mux/config.toml"
+
+
+@pytest.mark.asyncio
+async def test_whole_swe_mux_ignore_refuses_tracked_files(tmp_path: Path) -> None:
+    git(tmp_path, "init")
+    mux = tmp_path / ".swe-mux"
+    mux.mkdir()
+    (mux / "config.toml").write_text("version = 1\n", encoding="utf-8")
+    git(tmp_path, "add", ".swe-mux/config.toml")
+
+    status = await git_init.repository_setup_status(str(tmp_path), operation_id="op-status")
+    assert status.tracked is True
+    assert status.ignored is False
+    with pytest.raises(git_init.RepositoryInitError, match="already tracked"):
+        await git_init.ignore_swe_mux(str(tmp_path), operation_id="op-refuse")
+    assert not (tmp_path / ".gitignore").exists()
+
+
+@pytest.mark.asyncio
+async def test_whole_swe_mux_ignore_is_idempotent(tmp_path: Path) -> None:
+    git(tmp_path, "init")
+    mux = tmp_path / ".swe-mux"
+    mux.mkdir()
+    (mux / "config.toml").write_text("version = 1\n", encoding="utf-8")
+
+    assert await git_init.ignore_swe_mux(str(tmp_path), operation_id="op-first") == "added"
+    assert (
+        await git_init.ignore_swe_mux(str(tmp_path), operation_id="op-second")
+        == "already_ignored"
+    )
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").count("/.swe-mux/") == 1
+
+
+@pytest.mark.asyncio
 async def test_initialize_names_the_default_branch(tmp_path: Path) -> None:
     result = await git_init.initialize_repository(str(tmp_path), operation_id="op-branch")
     # Whatever the host's `init.defaultBranch` says, the repository reports a real branch
@@ -140,8 +194,73 @@ async def test_init_endpoint_creates_the_repository_and_announces_the_change(
 
     assert body["ok"] is True
     assert body["gitignore"] == "created"
+    assert body["swe_mux_ignore"] == "not_requested"
     assert (tmp_path / ".git").exists()
+    assert request.app[keys.CONFIG].git_swe_mux_prompt_decisions == {
+        project.id: "keep_visible"
+    }
     assert ("git_changed", {"project_id": project.id}) in request.app[keys.EVENTS].emitted
+
+
+@pytest.mark.asyncio
+async def test_setup_endpoint_records_a_project_choice_without_touching_gitignore(
+    tmp_path: Path,
+) -> None:
+    git(tmp_path, "init")
+    mux = tmp_path / ".swe-mux"
+    mux.mkdir()
+    (mux / "config.toml").write_text("version = 1\n", encoding="utf-8")
+    project = ProjectRecord("project", "Project", str(tmp_path), 0)
+    request = Request(project, {})
+    request.query = {"project_id": project.id}
+
+    initial = payload(await git_routes.get_swe_mux_setup(request))  # type: ignore[arg-type]
+    assert initial == {
+        "show": True,
+        "reason": "available",
+        "decision": "unseen",
+        "can_ignore": True,
+        "tracked": False,
+    }
+
+    request._body = {"project_id": project.id, "decision": "keep_visible"}
+    decided = payload(await git_routes.decide_swe_mux_setup(request))  # type: ignore[arg-type]
+    assert decided == {"ok": True, "decision": "keep_visible", "changed": False}
+    assert not (tmp_path / ".gitignore").exists()
+    assert request.app[keys.CONFIG].git_swe_mux_prompt_decisions == {
+        project.id: "keep_visible"
+    }
+
+
+@pytest.mark.asyncio
+async def test_setup_endpoint_applies_ignore_and_never_ask_is_reversible(
+    tmp_path: Path,
+) -> None:
+    git(tmp_path, "init")
+    mux = tmp_path / ".swe-mux"
+    mux.mkdir()
+    (mux / "config.toml").write_text("version = 1\n", encoding="utf-8")
+    project = ProjectRecord("project", "Project", str(tmp_path), 0)
+    request = Request(project, {"project_id": project.id, "decision": "ignore_all"})
+
+    ignored = payload(await git_routes.decide_swe_mux_setup(request))  # type: ignore[arg-type]
+    assert ignored["changed"] is True
+    assert _root_ignore(tmp_path) == "/.swe-mux/"
+    assert request.app[keys.CONFIG].git_swe_mux_prompt_decisions[project.id] == "ignore_all"
+
+    request.app[keys.CONFIG].git_swe_mux_prompt_decisions = {}
+    request._body = {"project_id": project.id, "decision": "never_ask"}
+    disabled = payload(await git_routes.decide_swe_mux_setup(request))  # type: ignore[arg-type]
+    assert disabled == {"ok": True, "decision": "never_ask", "changed": False}
+    assert request.app[keys.CONFIG].git_swe_mux_prompt_enabled is False
+    assert request.app[keys.CONFIG].git_swe_mux_prompt_decisions == {}
+
+
+def _root_ignore(root: Path) -> str:
+    return next(
+        line for line in (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+        if line == "/.swe-mux/"
+    )
 
 
 @pytest.mark.asyncio

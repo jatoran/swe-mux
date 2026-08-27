@@ -783,6 +783,28 @@ def test_worktree_root_defaults_below_data_dir_and_accepts_an_absolute_override(
         update_config(config, {"worktree_root": "relative/worktrees"})
 
 
+def test_git_swe_mux_prompt_settings_persist_and_validate(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.git_swe_mux_prompt_enabled is True
+    assert config.git_swe_mux_prompt_decisions == {}
+    hot, restart = update_config(
+        config,
+        {
+            "git_swe_mux_prompt_enabled": False,
+            "git_swe_mux_prompt_decisions": {"project-1": "keep_visible"},
+        },
+    )
+    assert hot == {"git_swe_mux_prompt_enabled", "git_swe_mux_prompt_decisions"}
+    assert restart == set()
+    loaded = load_config(path)
+    assert loaded.git_swe_mux_prompt_enabled is False
+    assert loaded.git_swe_mux_prompt_decisions == {"project-1": "keep_visible"}
+
+    with pytest.raises(ValueError):
+        update_config(config, {"git_swe_mux_prompt_decisions": {"project-1": "maybe"}})
+
+
 def test_new_project_parent_is_hot_shape_validated_and_defaults_empty(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)

@@ -23,7 +23,7 @@ from .. import (
     worktree_graveyard,
     worktree_mutation,
 )
-from ..config import Config
+from ..config import Config, update_config
 from ..file_manager import open_in_file_manager
 from ..git_monitor import _git
 from ..git_operations import run_git_mutation
@@ -49,6 +49,161 @@ GIT_GRAPH_DEFAULT_LIMIT = 80
 
 
 GIT_GRAPH_MAX_LIMIT = 200
+
+
+def _record_swe_mux_prompt_decision(config: Config, project_id: str, decision: str) -> None:
+    update_config(
+        config,
+        {
+            "git_swe_mux_prompt_decisions": {
+                **config.git_swe_mux_prompt_decisions,
+                project_id: decision,
+            }
+        },
+    )
+
+
+async def get_swe_mux_setup(request: web.Request) -> web.Response:
+    """The per-Project first-open decision, with live Git applicability."""
+
+    extras = set(request.query) - {"project_id"}
+    if extras:
+        raise git_review.GitReviewError(
+            "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
+        )
+    project_id = request.query.get("project_id", "")
+    project = request.app[keys.PROJECTS].projects.get(project_id)
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    config: Config = request.app[keys.CONFIG]
+    decision = config.git_swe_mux_prompt_decisions.get(project.id, "unseen")
+    if not config.git_swe_mux_prompt_enabled:
+        return json_response(
+            {"show": False, "reason": "disabled", "decision": decision, "can_ignore": False}
+        )
+    if decision != "unseen":
+        return json_response(
+            {"show": False, "reason": "decided", "decision": decision, "can_ignore": False}
+        )
+    if not Path(project.root).is_dir():
+        raise git_review.GitReviewError(
+            "root_unavailable", "the Project's folder no longer exists", 404
+        )
+    await git_review.repository_identity(project.root)
+    operation_id = uuid4().hex
+    try:
+        status = await git_init.repository_setup_status(
+            project.root, operation_id=operation_id
+        )
+    except git_init.RepositoryInitError as exc:
+        log.warning(
+            "repository_swe_mux_status_failed operation_id=%s project_id=%s root=%s",
+            operation_id,
+            project.id,
+            project.root,
+        )
+        return json_response(
+            {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
+        )
+    if status.ignored:
+        return json_response(
+            {
+                "show": False,
+                "reason": "already_ignored",
+                "decision": decision,
+                "can_ignore": False,
+                "tracked": status.tracked,
+            }
+        )
+    return json_response(
+        {
+            "show": True,
+            "reason": "tracked" if status.tracked else "available",
+            "decision": decision,
+            "can_ignore": not status.tracked,
+            "tracked": status.tracked,
+        }
+    )
+
+
+async def decide_swe_mux_setup(request: web.Request) -> web.Response:
+    """Persist the choice, optionally applying the root-anchored ignore rule."""
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("body must be an object")
+    project_id = str(body.get("project_id") or "")
+    decision = str(body.get("decision") or "")
+    if decision not in {"keep_visible", "ignore_all", "never_ask"}:
+        raise ValueError("decision must be keep_visible, ignore_all, or never_ask")
+    project = request.app[keys.PROJECTS].projects.get(project_id)
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    config: Config = request.app[keys.CONFIG]
+    events = request.app[keys.EVENTS]
+    if decision == "never_ask":
+        update_config(config, {"git_swe_mux_prompt_enabled": False})
+        await events.emit("configuration_changed", source="git_setup")
+        log.info(
+            "repository_swe_mux_prompt_disabled project_id=%s root=%s",
+            project.id,
+            project.root,
+        )
+        return json_response({"ok": True, "decision": decision, "changed": False})
+    if decision == "keep_visible":
+        _record_swe_mux_prompt_decision(config, project.id, decision)
+        await events.emit("configuration_changed", source="git_setup")
+        log.info(
+            "repository_swe_mux_prompt_decided project_id=%s root=%s decision=%s",
+            project.id,
+            project.root,
+            decision,
+        )
+        return json_response({"ok": True, "decision": decision, "changed": False})
+
+    if not Path(project.root).is_dir():
+        raise git_review.GitReviewError(
+            "root_unavailable", "the Project's folder no longer exists", 404
+        )
+    await git_review.repository_identity(project.root)
+    operation_id = uuid4().hex
+    try:
+        changed = await git_init.ignore_swe_mux(project.root, operation_id=operation_id)
+    except git_init.RepositoryInitError as exc:
+        code = exc.code if isinstance(exc, git_init.RepositorySetupError) else "git_error"
+        status = 409 if code == "swe_mux_tracked" else 400
+        log.warning(
+            "repository_swe_mux_ignore_failed operation_id=%s project_id=%s root=%s code=%s",
+            operation_id,
+            project.id,
+            project.root,
+            code,
+        )
+        return json_response(
+            {"error": str(exc), "code": code, "operation_id": operation_id}, status
+        )
+    _record_swe_mux_prompt_decision(config, project.id, decision)
+    git_review.invalidate_overview_cache(project.id)
+    await events.emit("git_changed", project_id=project.id)
+    await events.emit("configuration_changed", source="git_setup")
+    log.info(
+        "repository_swe_mux_prompt_decided operation_id=%s project_id=%s root=%s "
+        "decision=%s result=%s",
+        operation_id,
+        project.id,
+        project.root,
+        decision,
+        changed,
+    )
+    return json_response(
+        {
+            "ok": True,
+            "decision": decision,
+            "changed": changed == "added",
+            "result": changed,
+            "operation_id": operation_id,
+        }
+    )
 
 
 async def list_worktrees(request: web.Request) -> web.Response:
@@ -496,6 +651,11 @@ async def init_repository(request: web.Request) -> web.Response:
 
     operation_id = uuid4().hex
     body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("body must be an object")
+    ignore_swe_mux_files = body.get("ignore_swe_mux", False)
+    if not isinstance(ignore_swe_mux_files, bool):
+        raise ValueError("ignore_swe_mux must be true or false")
     project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id", "")))
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
@@ -522,7 +682,11 @@ async def init_repository(request: web.Request) -> web.Response:
         project.root,
     )
     try:
-        result = await git_init.initialize_repository(project.root, operation_id=operation_id)
+        result = await git_init.initialize_repository(
+            project.root,
+            operation_id=operation_id,
+            ignore_swe_mux_files=ignore_swe_mux_files,
+        )
     except git_init.RepositoryInitError as exc:
         log.warning(
             "repository_init_failed operation_id=%s project_id=%s root=%s",
@@ -534,13 +698,19 @@ async def init_repository(request: web.Request) -> web.Response:
             {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
         )
     git_review.invalidate_overview_cache(project.id)
+    config: Config = request.app[keys.CONFIG]
+    _record_swe_mux_prompt_decision(
+        config, project.id, "ignore_all" if ignore_swe_mux_files else "keep_visible"
+    )
     await request.app[keys.EVENTS].emit("git_changed", project_id=project.id)
+    await request.app[keys.EVENTS].emit("configuration_changed", source="git_setup")
     return json_response(
         {
             "ok": True,
             "root": result.root,
             "branch": result.branch,
             "gitignore": result.gitignore,
+            "swe_mux_ignore": result.swe_mux_ignore,
             "operation_id": operation_id,
         }
     )
@@ -752,6 +922,8 @@ def _schedule_graveyard_purge(app: web.Application, root: Path, operation_id: st
 
 
 ROUTES: tuple[web.RouteDef, ...] = (
+    web.get("/api/git/swe-mux-setup", get_swe_mux_setup),
+    web.post("/api/git/swe-mux-setup", decide_swe_mux_setup),
     web.get("/api/git/worktrees", list_worktrees),
     web.get("/api/git/graph", git_graph),
     web.get("/api/git/provenance", git_provenance),
