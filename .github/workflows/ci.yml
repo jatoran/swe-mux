@@ -75,10 +75,19 @@ jobs:
       # included. `--dist loadgroup` is what honours the `xdist_group` mark that
       # keeps each real-console file on a single worker; see the script and
       # CLAUDE.md § Verification.
+      #
+      # The `-m` expression is copied from that script byte for byte, and drift
+      # in it is the failure mode to guard against: it is the only place a live
+      # mark is excluded, so a mark the script deselects and this does not turns
+      # into a red gate against a third-party service rather than against the
+      # code. `live_edge_tts` was exactly that - `tests/test_live_edge_tts.py`
+      # reaches Microsoft's hosted Edge TTS endpoint, which no CI runner should
+      # be calling and which would have gone red on all three runners the first
+      # time this workflow ran in public.
       - name: pytest (incl. ConPTY integration + harness adapter matrix)
         run: >-
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
-          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -153,7 +162,9 @@ jobs:
       - name: mypy
         run: uv run mypy
 
+      # Same `-m` expression as the `verify` job above and as `.worktree-verify`.
+      # The three copies are kept identical on purpose; see the comment there.
       - name: pytest
         run: >-
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
-          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts"
