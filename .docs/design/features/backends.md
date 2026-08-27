@@ -296,7 +296,9 @@ The guarded assertions themselves did not move: a real turn still has to produce
 - Claude receives atomically generated per-session hook settings for `SessionStart`,
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
   `PermissionRequest`, `Notification`, `SubagentStart`, `SubagentStop`, `Stop`, and
-  `SessionEnd`. The subagent pair drives the `subagents` standing-activity count
+  `SessionEnd`. The subagent pair feeds the `subagents` standing-activity count but does not
+  own it: `SubagentStop` fires every time an async agent comes to rest and long before it
+  finishes, so the transcript's launch/completion pair is counted alongside it
   (`status-detection.md`). The settings directory is removed when its owning terminal ends.
 - When mux MCP is registered, the same generated Claude settings allow only the closed read-tool set without a permission prompt.
   `notify` and `request_spawn` are deliberately absent from that allowlist and retain Claude's normal tool approval.
