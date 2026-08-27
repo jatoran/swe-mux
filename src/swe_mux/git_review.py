@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import difflib
 import hashlib
+import json
 import logging
 import os
 import re
 import stat
 import time
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, NotRequired, TypedDict
@@ -271,9 +272,15 @@ def _require_success(result: GitResult, operation: str, *, not_found: bool = Fal
 
 
 async def repository_identity(project_root: str | Path) -> tuple[str, str]:
-    root_result, common_result = await asyncio.gather(
-        _run_git_bytes(project_root, "rev-parse", "--show-toplevel"),
-        _run_git_bytes(project_root, "rev-parse", "--git-common-dir"),
+    """The repository's top level and common Git directory, in one process.
+
+    `rev-parse` takes both flags at once and prints one line per flag in the order
+    given, so asking twice bought nothing but a second spawn. It also cannot disagree
+    with itself about whether this folder is a repository at all, which two concurrent
+    processes racing a `git init` could.
+    """
+    result = await _run_git_bytes(
+        project_root, "rev-parse", "--show-toplevel", "--git-common-dir"
     )
     # "This folder is not a repository yet" is a state the Git tab offers an action for
     # (`git_init.initialize_repository`), so it has to arrive as its own code rather than
@@ -282,21 +289,24 @@ async def repository_identity(project_root: str | Path) -> tuple[str, str]:
     # no `.git` of its own keeps a corrupt or unreadable repository out of it - offering
     # to initialize one of those would reinitialize a repository the user still has.
     if (
-        root_result.code == 128
+        result.code == 128
         and Path(project_root).is_dir()
         and not (Path(project_root) / ".git").exists()
     ):
         raise GitReviewError(
             "not_git_repository", "Project folder is not a Git repository", 404
         )
-    root = (
-        _require_success(root_result, "resolving the repository").decode("utf-8", "replace").strip()
-    )
-    common_raw = (
-        _require_success(common_result, "resolving the Git common directory")
+    lines = (
+        _require_success(result, "resolving the repository")
         .decode("utf-8", "replace")
-        .strip()
+        .splitlines()
     )
+    root = lines[0].strip() if lines else ""
+    common_raw = lines[1].strip() if len(lines) > 1 else ""
+    if not common_raw:
+        raise GitReviewError(
+            "git_error", "Git did not report the repository's common directory"
+        )
     if not root:
         raise GitReviewError("not_git_repository", "Project is not inside a Git repository")
     common = Path(common_raw)
@@ -321,11 +331,21 @@ def parse_worktrees(output: str) -> list[dict[str, Any]]:
     return items
 
 
-async def listed_worktrees(repository: str | Path) -> list[dict[str, Any]]:
+async def listed_worktrees_digested(repository: str | Path) -> tuple[list[dict[str, Any]], str]:
+    """Git's worktree registry, and a digest of the exact bytes it reported.
+
+    The digest is the invalidation key for `_toplevel_memo`: it changes on every
+    registration change - added, removed, moved, repaired, or gone prunable - which is
+    every way a checkout's reported top level can stop matching its listed root.
+    """
     result = await _run_git_bytes(repository, "worktree", "list", "--porcelain")
-    return parse_worktrees(
-        _require_success(result, "listing repository worktrees").decode("utf-8", "replace")
-    )
+    raw = _require_success(result, "listing repository worktrees")
+    return parse_worktrees(raw.decode("utf-8", "replace")), hashlib.sha256(raw).hexdigest()[:32]
+
+
+async def listed_worktrees(repository: str | Path) -> list[dict[str, Any]]:
+    items, _digest = await listed_worktrees_digested(repository)
+    return items
 
 
 async def validate_worktree_root(repository: str | Path, requested: str) -> str:
@@ -365,14 +385,74 @@ def validate_relative_path(value: str) -> str:
     return path.as_posix()
 
 
-async def _ref_resolves(repository: str, ref: str) -> bool:
-    if (
-        not ref
-        or len(ref) > GIT_COMPARE_REF_MAX_CHARS
-        or any(ord(char) < 32 or ord(char) == 127 for char in ref)
-        or ref.startswith("-")
-    ):
+class RefIndex(TypedDict):
+    """Every branch this repository has, with the commit each one names.
+
+    One `for-each-ref` in place of the four to eight sequential probes the comparison
+    used to run (measured 2026-08-27: 50ms of the Map's 217ms preamble, and the same
+    50ms again on every row expansion). The comparison ref is a branch in every
+    ordinary case, and a branch that appears here needs no `check-ref-format`, no
+    `rev-parse --verify`, and no separate read for its object ID - this listing already
+    answered all three, exactly, from the same snapshot of the ref database.
+
+    It is an accelerator and not a gate: a ref that is *not* listed - a tag, a raw
+    object ID, a revision expression - still falls through to the probes it always
+    used, so the set of comparison refs this module accepts is unchanged.
+    """
+
+    #: Candidate order for the comparison dropdown, capped for display.
+    names: list[str]
+    #: Every listed ref, uncapped. `refs/heads/` and `refs/remotes/` name commits
+    #: directly, so no peeling is needed here; a tag would, which is another reason
+    #: tags are left to the probes.
+    oids: dict[str, str]
+
+
+_EMPTY_REF_INDEX: RefIndex = {"names": [], "oids": {}}
+
+
+def _ref_name_usable(ref: str) -> bool:
+    return bool(
+        ref
+        and len(ref) <= GIT_COMPARE_REF_MAX_CHARS
+        and not any(ord(char) < 32 or ord(char) == 127 for char in ref)
+        and not ref.startswith("-")
+    )
+
+
+async def read_ref_index(repository: str | Path) -> RefIndex:
+    result = await _run_git_bytes(
+        repository,
+        "for-each-ref",
+        "--format=%(refname:short) %(objectname)",
+        "refs/heads/",
+        "refs/remotes/",
+    )
+    if result.code:
+        return {"names": [], "oids": {}}
+    names: list[str] = []
+    seen: set[str] = set()
+    oids: dict[str, str] = {}
+    for line in result.stdout.decode("utf-8", "replace").splitlines():
+        name, _, oid = line.strip().partition(" ")
+        if not name or name.endswith("/HEAD"):
+            continue
+        if _OID.fullmatch(oid.strip()):
+            oids.setdefault(name, oid.strip())
+        # The object-ID map is uncapped while the candidate list is not. The cap is a
+        # display budget for a dropdown; an override naming the two hundred and first
+        # branch still has to resolve, and before this it did - through the probes.
+        if name not in seen and len(names) < GIT_COMPARE_CANDIDATE_LIMIT:
+            seen.add(name)
+            names.append(name)
+    return {"names": names, "oids": oids}
+
+
+async def _ref_resolves(repository: str, ref: str, index: RefIndex | None = None) -> bool:
+    if not _ref_name_usable(ref):
         return False
+    if index is not None and ref in index["oids"]:
+        return True
     checked = await _run_git_bytes(repository, "check-ref-format", "--branch", ref)
     if checked.code:
         return False
@@ -381,35 +461,25 @@ async def _ref_resolves(repository: str, ref: str) -> bool:
 
 
 async def comparison_candidates(repository: str) -> list[str]:
-    result = await _run_git_bytes(
-        repository,
-        "for-each-ref",
-        "--format=%(refname:short)",
-        "refs/heads/",
-        "refs/remotes/",
-    )
-    if result.code:
-        return []
-    candidates: list[str] = []
-    for line in result.stdout.decode("utf-8", "replace").splitlines():
-        candidate = line.strip()
-        if not candidate or candidate.endswith("/HEAD") or candidate in candidates:
-            continue
-        candidates.append(candidate)
-        if len(candidates) >= GIT_COMPARE_CANDIDATE_LIMIT:
-            break
-    return candidates
+    return (await read_ref_index(repository))["names"]
 
 
-async def resolve_comparison_ref(repository: str, override: str | None) -> GitComparisonRef:
+async def resolve_comparison_ref(
+    repository: str, override: str | None, index: RefIndex | None = None
+) -> GitComparisonRef:
     """Auto (or overridden) comparison ref for one repository, without candidates.
 
     An explicit override that no longer resolves stays visibly unavailable rather
     than silently falling back to the inferred ref: a comparison against a base
     the user did not choose is worse than no comparison at all.
+
+    `index` only makes the answer cheaper, never different: every ref in it is one
+    `_ref_resolves` would have confirmed, and every ref not in it still goes to
+    `_ref_resolves`. Callers with no index (`git_monitor`, the Project settings probe)
+    are unaffected.
     """
     if override is not None:
-        if await _ref_resolves(repository, override):
+        if await _ref_resolves(repository, override, index):
             return {
                 "ref": override,
                 "display": override,
@@ -429,7 +499,7 @@ async def resolve_comparison_ref(repository: str, override: str | None) -> GitCo
         repository, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"
     )
     origin_ref = origin.stdout.decode("utf-8", "replace").strip()
-    if not origin.code and origin_ref and await _ref_resolves(repository, origin_ref):
+    if not origin.code and origin_ref and await _ref_resolves(repository, origin_ref, index):
         return {
             "ref": origin_ref,
             "display": origin_ref,
@@ -452,7 +522,7 @@ async def resolve_comparison_ref(repository: str, override: str | None) -> GitCo
         if (
             not remote_ref_result.code
             and remote_ref
-            and await _ref_resolves(repository, remote_ref)
+            and await _ref_resolves(repository, remote_ref, index)
         ):
             return {
                 "ref": remote_ref,
@@ -463,7 +533,7 @@ async def resolve_comparison_ref(repository: str, override: str | None) -> GitCo
             }
 
     for fallback in ("main", "master"):
-        if await _ref_resolves(repository, fallback):
+        if await _ref_resolves(repository, fallback, index):
             return {
                 "ref": fallback,
                 "display": fallback,
@@ -480,12 +550,28 @@ async def resolve_comparison_ref(repository: str, override: str | None) -> GitCo
     }
 
 
+async def _infer_comparison_indexed(
+    repository: str, override: str | None
+) -> tuple[GitComparison, RefIndex]:
+    """`infer_comparison`, handing back the ref listing it already read.
+
+    The overview needs three things out of the ref database - the candidate list, the
+    resolution, and the base's object ID - and used to spend a separate process on each
+    of them (plus two more probing the resolution). They are one snapshot of one
+    listing, and reading it once also makes them *consistent*: the object ID the branch
+    memo is keyed on can no longer come from a different instant than the ref name it
+    belongs to, which is what a concurrent `fetch` between two `rev-parse` calls could
+    previously produce.
+    """
+    index = await read_ref_index(repository)
+    resolved = await resolve_comparison_ref(repository, override, index)
+    comparison: GitComparison = {**resolved, "candidates": index["names"]}
+    return comparison, index
+
+
 async def infer_comparison(repository: str, override: str | None) -> GitComparison:
-    candidates, resolved = await asyncio.gather(
-        comparison_candidates(repository),
-        resolve_comparison_ref(repository, override),
-    )
-    return {**resolved, "candidates": candidates}
+    comparison, _index = await _infer_comparison_indexed(repository, override)
+    return comparison
 
 
 def parse_name_status(data: bytes) -> list[GitFileChange]:
@@ -836,6 +922,37 @@ async def _local_summaries(
     return change_summary(unstaged), change_summary(staged), change_summary(conflicted)
 
 
+#: oid -> committer date. The one reading in this module that can be memoized
+#: unconditionally and forever: a commit's committer date is part of the object the oid
+#: names, so the key *is* the answer's identity. A commit whose date changed would be a
+#: different commit with a different oid.
+#:
+#: It was worth doing because the Map asks for every listed worktree's tip date on every
+#: request - 88ms of the 217ms preamble at 41 checkouts (measured 2026-08-27) - and a
+#: fleet's branch tips move far more slowly than the Map is read.
+_commit_date_memo: OrderedDict[str, int] = OrderedDict()
+#: Well above one tip per checkout for any real fleet, and small enough to be free.
+COMMIT_DATE_MEMO_LIMIT = 4096
+
+
+def _memoized_commit_date(oid: str) -> int | None:
+    stamp = _commit_date_memo.get(oid)
+    if stamp is None:
+        return None
+    _commit_date_memo.move_to_end(oid)
+    return stamp
+
+
+def _memoize_commit_date(oid: str, stamp: int) -> None:
+    # Only oids Git actually answered for. An absent oid is not memoized as absent: a
+    # commit missing today can arrive by `fetch` tomorrow, and caching the miss would
+    # leave that worktree undated until the daemon restarted.
+    _commit_date_memo[oid] = stamp
+    _commit_date_memo.move_to_end(oid)
+    while len(_commit_date_memo) > COMMIT_DATE_MEMO_LIMIT:
+        _commit_date_memo.popitem(last=False)
+
+
 async def head_commit_dates(
     repository: str | Path, oids: Sequence[str]
 ) -> dict[str, int]:
@@ -859,21 +976,32 @@ async def head_commit_dates(
     unique = list(dict.fromkeys(oid for oid in oids if _OID.fullmatch(oid or "")))
     if not unique:
         return {}
-    result = await _run_git_bytes(repository, "show", "-s", "--format=%H %ct", *unique)
     dates: dict[str, int] = {}
-    for line in result.stdout.decode("utf-8", "replace").splitlines():
-        oid, _, stamp = line.strip().partition(" ")
-        if not stamp.isdigit():
-            continue
-        dates[oid.lower()] = int(stamp)
-    if result.code:
-        log.warning(
-            "git_review head_commit_dates partial repository=%s asked=%d got=%d stderr=%s",
-            repository,
-            len(unique),
-            len(dates),
-            result.stderr.decode("utf-8", "replace").strip()[:200],
-        )
+    missing: list[str] = []
+    for oid in unique:
+        remembered = _memoized_commit_date(oid.lower())
+        if remembered is None:
+            missing.append(oid)
+        else:
+            dates[oid.lower()] = remembered
+    if missing:
+        result = await _run_git_bytes(repository, "show", "-s", "--format=%H %ct", *missing)
+        found = 0
+        for line in result.stdout.decode("utf-8", "replace").splitlines():
+            oid, _, stamp = line.strip().partition(" ")
+            if not stamp.isdigit():
+                continue
+            found += 1
+            dates[oid.lower()] = int(stamp)
+            _memoize_commit_date(oid.lower(), int(stamp))
+        if result.code:
+            log.warning(
+                "git_review head_commit_dates partial repository=%s asked=%d got=%d stderr=%s",
+                repository,
+                len(missing),
+                found,
+                result.stderr.decode("utf-8", "replace").strip()[:200],
+            )
     # Keyed back by the spelling the caller passed, so a short-vs-full or cased oid
     # still finds its row.
     return {oid: dates[oid.lower()] for oid in unique if oid.lower() in dates}
@@ -901,9 +1029,48 @@ _branch_memo: OrderedDict[
 BRANCH_MEMO_LIMIT = 512
 
 
+#: (exact worktree root, worktree-listing digest) -> the top level Git reports for it.
+#:
+#: The Map validates every checkout's identity before measuring it, so a broken nested
+#: worktree cannot inherit status from an enclosing repository (see `measure`). That
+#: guard costs one `rev-parse --show-toplevel` per checkout - 41 processes and roughly
+#: half the Map's per-worktree spawns at this repository's size - to re-derive an answer
+#: that is a property of the registration rather than of anything in the tree.
+#:
+#: The digest of `git worktree list --porcelain` is the invalidation, and it is the
+#: right one because every way this answer can change is a way that listing changes: a
+#: registration added, removed, moved, or repaired rewrites the entry, and a checkout
+#: whose `.git` link is broken or replaced is reported `prunable` rather than as the
+#: same clean row. A path that starts resolving elsewhere changes the key's own first
+#: half. What is memoized is the *observation*, never the verdict - a mismatch is still
+#: compared on every request, so a checkout that fails the guard keeps failing it.
+_toplevel_memo: OrderedDict[tuple[str, str], str] = OrderedDict()
+#: One entry per (checkout, listing) pair, so a fleet churning worktrees still keeps a
+#: full listing's worth memoized while the previous listing's entries age out.
+TOPLEVEL_MEMO_LIMIT = 512
+
+
+def _memoized_toplevel(key: tuple[str, str]) -> str | None:
+    reported = _toplevel_memo.get(key)
+    if reported is None:
+        return None
+    _toplevel_memo.move_to_end(key)
+    return reported
+
+
+def _memoize_toplevel(key: tuple[str, str], reported: str) -> None:
+    _toplevel_memo[key] = reported
+    _toplevel_memo.move_to_end(key)
+    while len(_toplevel_memo) > TOPLEVEL_MEMO_LIMIT:
+        _toplevel_memo.popitem(last=False)
+
+
 def reset_overview_cache() -> None:
-    """Drop every memoized branch reading. For tests and daemon restart."""
+    """Drop every memoized and cached reading. For tests and daemon restart."""
     _branch_memo.clear()
+    _commit_date_memo.clear()
+    _toplevel_memo.clear()
+    _overview_cache.clear()
 
 
 def _memoized_branch(
@@ -945,15 +1112,22 @@ def _same_path(listed: str, normalized: str) -> bool:
     return candidate == normalized
 
 
-async def _comparison_oid(repository: str, ref: str | None) -> str:
+async def _comparison_oid(repository: str, ref: str | None, index: RefIndex | None = None) -> str:
     """The commit a comparison ref names right now, or `''`.
 
     One process for the whole overview rather than one per worktree: every checkout is
     compared against the same base, and it is the *base moving* that has to invalidate
-    fifty memoized branch readings at once.
+    fifty memoized branch readings at once. With a `RefIndex` in hand it is no processes
+    at all - `refs/heads/` and `refs/remotes/` name commits directly, so the listing's
+    `%(objectname)` is the same oid this would ask for. A ref outside those namespaces
+    (a tag, which would need peeling) still goes to `rev-parse`.
     """
     if not ref:
         return ""
+    if index is not None:
+        listed = index["oids"].get(ref)
+        if listed:
+            return listed
     result = await _run_git_bytes(repository, "rev-parse", "--verify", f"{ref}^{{commit}}")
     if result.code:
         return ""
@@ -1003,8 +1177,8 @@ async def worktree_overview(
     """
     started = time.monotonic()
     repository, common_dir = await repository_identity(project_root)
-    comparison = await infer_comparison(repository, compare_override)
-    items = await listed_worktrees(repository)
+    comparison, ref_index = await _infer_comparison_indexed(repository, compare_override)
+    items, listing_digest = await listed_worktrees_digested(repository)
     wanted: str | None = None
     if only is not None:
         try:
@@ -1019,9 +1193,10 @@ async def worktree_overview(
             for item in items
         ):
             raise GitReviewError("worktree_not_found", "unknown worktree for this Project", 404)
-    compare_oid = await _comparison_oid(repository, comparison["ref"])
+    compare_oid = await _comparison_oid(repository, comparison["ref"], ref_index)
     semaphore = asyncio.Semaphore(GIT_CONCURRENCY)
     reused = 0
+    identities_reused = 0
 
     # Tip dates are read for *every* listed tree, including the ones below that return
     # unmeasured: the commit object is in the shared database, so a locked or prunable
@@ -1049,7 +1224,7 @@ async def worktree_overview(
         return isinstance(listed, str) and _same_path(listed, wanted)
 
     async def measure(index: int, item: dict[str, Any]) -> dict[str, Any]:
-        nonlocal reused
+        nonlocal reused, identities_reused
         row = dict(item)
         # Read off the position in the *full* listing even when only one row is being
         # served: `main` is "the first tree Git lists", and a single-row read that
@@ -1066,18 +1241,31 @@ async def worktree_overview(
             or "prunable" in row
         ):
             return unmeasured(row)
+        try:
+            exact_root = os.path.normcase(os.path.normpath(str(Path(worktree).resolve())))
+        except OSError:
+            return unmeasured(row)
         async with semaphore:
-            top_level_result = await _run_git_bytes(worktree, "rev-parse", "--show-toplevel")
-            if top_level_result.code:
-                return unmeasured(row)
-            reported_root = top_level_result.stdout.decode("utf-8", "replace").strip()
-            try:
-                exact_root = os.path.normcase(os.path.normpath(str(Path(worktree).resolve())))
-                reported_exact_root = os.path.normcase(
-                    os.path.normpath(str(Path(reported_root).resolve()))
-                )
-            except OSError:
-                return unmeasured(row)
+            # The identity guard, memoized on the registration that vouches for it
+            # (`_toplevel_memo`). What is cached is what Git reported, not whether it
+            # matched: the comparison below still runs on every request.
+            identity_key = (exact_root, listing_digest)
+            reported_exact_root = _memoized_toplevel(identity_key)
+            if reported_exact_root is None:
+                top_level_result = await _run_git_bytes(worktree, "rev-parse", "--show-toplevel")
+                if top_level_result.code:
+                    return unmeasured(row)
+                reported_root = top_level_result.stdout.decode("utf-8", "replace").strip()
+                try:
+                    reported_exact_root = os.path.normcase(
+                        os.path.normpath(str(Path(reported_root).resolve()))
+                    )
+                except OSError:
+                    return unmeasured(row)
+                _memoize_toplevel(identity_key, reported_exact_root)
+            else:
+                identities_reused += 1
+                reported_root = reported_exact_root
             if reported_exact_root != exact_root:
                 log.warning(
                     "git_review worktree_identity_mismatch project_id=%s listed=%s reported=%s",
@@ -1143,8 +1331,13 @@ async def worktree_overview(
         repository=repository,
         ref=comparison["ref"],
         # How much of this answer was memoized, so "the Map got slow again" is a
-        # question the log can answer rather than one that needs a profiler.
-        result=f"ok reused={reused}/{len(worktrees)}",
+        # question the log can answer rather than one that needs a profiler. Two
+        # numbers because the two memos fail independently: `reused` is the branch
+        # half, `identities` the per-checkout guard whose key is the worktree listing.
+        result=(
+            f"ok reused={reused}/{len(worktrees)} "
+            f"identities={identities_reused}/{len(worktrees)}"
+        ),
         count=len(worktrees),
         truncated=any(
             bool(row.get(scope, {}).get("truncated"))
@@ -1164,43 +1357,150 @@ async def worktree_overview(
     }
 
 
-_inflight_worktree_overviews: dict[
-    tuple[str, str, str | None, str | None], asyncio.Task[dict[str, Any]]
-] = {}
+_OverviewKey = tuple[str, str, str | None, str | None]
+
+_inflight_worktree_overviews: dict[_OverviewKey, asyncio.Task[dict[str, Any]]] = {}
 
 
-async def shared_worktree_overview(
-    project_id: str, project_root: str, compare_override: str | None, only: str | None = None
-) -> dict[str, Any]:
-    """Share one in-flight Map computation across clients and refreshes.
+@dataclass(slots=True)
+class _CachedOverview:
+    payload: dict[str, Any]
+    taken: float
+    digest: str
 
-    `only` is part of the key rather than folded away: a single-worktree read and a
-    whole-Project read are different answers, and joining one onto the other would hand
-    a row expansion the full inventory or - worse - hand the Map one row.
+
+#: The last answer served for each reading, kept so the next reader does not wait for it.
+#:
+#: The Map is a *derived observation over a repository the daemon is already watching*,
+#: and it was being recomputed synchronously on the read path: at 41 checkouts that is
+#: ~700ms with every memo hitting (measured 2026-08-27), paid on every tab open, every
+#: Project switch, and every `git_changed` the fleet raised. A reader waited on work
+#: whose answer was, in the overwhelming majority of cases, identical to the one served
+#: a few seconds earlier.
+#:
+#: So the read path stops blocking on it: a cached reading is served immediately and a
+#: revalidation runs behind it, and when that revalidation lands on a *different* answer
+#: the daemon says so (`on_refreshed`) and the client reads again - by which point the
+#: fresh reading is the cached one and that read is instant too. The staleness window is
+#: one revalidation, and it is spent showing a real map rather than a spinner.
+#:
+#: What it is deliberately *not* is a TTL over the working-tree half. Nothing here
+#: claims a stale reading is current; the reading is served, revalidated, and corrected.
+#: `git status --porcelain=v2` still runs live on every revalidation for exactly the
+#: reason it always did (it carries no worktree blob hash, so a fingerprint over it
+#: would go quietly wrong about the line counts a row draws).
+_overview_cache: OrderedDict[_OverviewKey, _CachedOverview] = OrderedDict()
+#: A handful of Projects' Maps plus their expanded rows. Small because each entry is a
+#: whole inventory, and a reader who has not looked at a Project in that long can afford
+#: the one blocking read that re-seeds it.
+OVERVIEW_CACHE_LIMIT = 32
+
+
+def _overview_digest(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def invalidate_overview_cache(project_id: str | None = None) -> None:
+    """Forget cached readings, so the next read blocks on a fresh one.
+
+    Called by the mutations that make a served reading actively misleading rather than
+    merely old: a worktree added or removed changes *which rows exist*, and a Map that
+    re-lists a checkout the reader just deleted would revive its row - and with it the
+    Land and Remove controls on a registration Git no longer has. Ordinary drift (a
+    commit, an edit) is not invalidated here; that is what revalidation is for.
     """
+    for key in [
+        key for key in _overview_cache if project_id is None or key[0] == project_id
+    ]:
+        _overview_cache.pop(key, None)
 
-    key = (project_id, project_root, compare_override, only)
+
+def _start_overview(
+    key: _OverviewKey,
+    project_id: str,
+    project_root: str,
+    compare_override: str | None,
+    only: str | None,
+    on_refreshed: Callable[[], None] | None,
+) -> asyncio.Task[dict[str, Any]]:
+    """The one in-flight computation for this reading, started if there is none."""
     task = _inflight_worktree_overviews.get(key)
-    if task is None or task.done():
-        task = asyncio.create_task(
-            worktree_overview(project_id, project_root, compare_override, only),
-            name=f"git-overview:{project_id}",
-        )
-        _inflight_worktree_overviews[key] = task
-
-        def forget(finished: asyncio.Task[dict[str, Any]]) -> None:
-            if _inflight_worktree_overviews.get(key) is finished:
-                _inflight_worktree_overviews.pop(key, None)
-            if not finished.cancelled():
-                finished.exception()
-
-        task.add_done_callback(forget)
-    else:
+    if task is not None and not task.done():
         log.info(
             "git_review overview_joined project_id=%s repository=%s",
             project_id,
             project_root,
         )
+        return task
+    task = asyncio.create_task(
+        worktree_overview(project_id, project_root, compare_override, only),
+        name=f"git-overview:{project_id}",
+    )
+    _inflight_worktree_overviews[key] = task
+
+    def finished(done: asyncio.Task[dict[str, Any]]) -> None:
+        if _inflight_worktree_overviews.get(key) is done:
+            _inflight_worktree_overviews.pop(key, None)
+        if done.cancelled():
+            return
+        if done.exception() is not None:
+            # A failed revalidation leaves the previous reading in place rather than
+            # dropping it: a transient Git error should not turn an answer the reader
+            # already has into a blocking read next time.
+            return
+        payload = done.result()
+        digest = _overview_digest(payload)
+        previous = _overview_cache.get(key)
+        _overview_cache[key] = _CachedOverview(payload, time.monotonic(), digest)
+        _overview_cache.move_to_end(key)
+        while len(_overview_cache) > OVERVIEW_CACHE_LIMIT:
+            _overview_cache.popitem(last=False)
+        # Only when a reader was served the *other* answer. A first computation had no
+        # stale serve behind it, and an unchanged one has nothing to correct - which is
+        # what keeps a quiet repository from emitting an event per read.
+        if previous is not None and previous.digest != digest and on_refreshed is not None:
+            on_refreshed()
+
+    task.add_done_callback(finished)
+    return task
+
+
+async def shared_worktree_overview(
+    project_id: str,
+    project_root: str,
+    compare_override: str | None,
+    only: str | None = None,
+    *,
+    fresh: bool = False,
+    on_refreshed: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """The Map's reading: cached if there is one, computed if there is not.
+
+    `only` is part of the key rather than folded away: a single-worktree read and a
+    whole-Project read are different answers, and joining one onto the other would hand
+    a row expansion the full inventory or - worse - hand the Map one row.
+
+    `fresh` is the explicit Refresh button, and the one caller that means "I am willing
+    to wait": it bypasses the cached reading and returns the revalidation's own answer.
+    It still shares the in-flight computation, so holding Refresh cannot start a second
+    Git storm over the first.
+    """
+    key = (project_id, project_root, compare_override, only)
+    cached = None if fresh else _overview_cache.get(key)
+    task = _start_overview(key, project_id, project_root, compare_override, only, on_refreshed)
+    if cached is not None:
+        _overview_cache.move_to_end(key)
+        log.info(
+            "git_review overview_served project_id=%s repository=%s scope=%s "
+            "result=cached age_ms=%.1f",
+            project_id,
+            project_root,
+            only or "",
+            (time.monotonic() - cached.taken) * 1000,
+        )
+        return cached.payload
     return await asyncio.shield(task)
 
 

@@ -1456,6 +1456,10 @@ def _provenance_request(
 
     return SimpleNamespace(
         query=query,
+        # The ledger is served conditionally, like every other Git reading: a revisit
+        # asking for bytes it already holds is the common case, and this is the largest
+        # payload the daemon serves.
+        headers={},
         app={
             keys.PROJECTS: SimpleNamespace(projects={"p": SimpleNamespace(id="p")}),
             keys.HISTORY: SimpleNamespace(
