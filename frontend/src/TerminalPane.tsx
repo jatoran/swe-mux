@@ -103,7 +103,7 @@ import {
   type TerminalInputSource,
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
-import { SOFT_KEYBOARD_EVENT, clampPeekOffset, hiddenOutputDeservesPeek, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, type PeekTrigger } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, clampPeekOffset, deepActiveElement, hiddenOutputDeservesPeek, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, shouldHoldBridgeFocus, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, touchCompatMouseEvent, type PeekTrigger } from './mobileKeyboard'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { RESERVE_INTENT_WINDOW_MS, nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
@@ -575,6 +575,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // keyboard is up: with it down the whole grid fits and there is no slice to move.
   const [keyboardInset,setKeyboardInset]=useState(0)
   const keyboardInsetRef=useRef(0)
+  // A touch gesture on this pane's grid freezes every keyboard-driven layout answer until it
+  // ends. The keyboard going down mid-gesture is not just a keyboard: it hands the reserved
+  // strip back, which *resizes xterm*, so the cell the finger is on becomes a different cell
+  // halfway through a selection drag. The layers above try hard to stop the keyboard moving
+  // at all; this is what makes the outcome the same when they lose. Written from the mount
+  // effect's pointer handlers, which run at pointer rate and must not re-render the pane.
+  const terminalGestureActiveRef=useRef(false)
+  const deferredKeyboardInsetRef=useRef<number|null>(null)
+  const flushDeferredKeyboardInsetRef=useRef<()=>void>(()=>{})
   // Android Back hides the IME without blurring its textarea. Track whether focus still
   // represents typing intent separately, so a later rail action can restore focus with
   // `inputmode="none"` instead of treating stale focus as a request to reopen the keyboard.
@@ -639,8 +648,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const applyPeekRef=useRef(applyPeek)
   applyPeekRef.current=applyPeek
   useEffect(()=>{
-    const onKeyboard=(event:Event)=>{
-      const inset=(event as CustomEvent<number>).detail
+    const applyKeyboardInset=(inset:number)=>{
       keyboardInsetRef.current=inset
       setKeyboardInset(inset)
       const bridge=mobileLiveInputRef.current
@@ -657,8 +665,24 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if(inset<=0)applyPeekRef.current('keyboardClosed')
       scheduleKeyboardSettleRef.current()
     }
+    // Held, not dropped: only the newest reading survives a gesture, because the
+    // intermediate states no longer exist by the time anything could act on them.
+    const onKeyboard=(event:Event)=>{
+      const inset=(event as CustomEvent<number>).detail
+      if(terminalGestureActiveRef.current){deferredKeyboardInsetRef.current=inset;return}
+      applyKeyboardInset(inset)
+    }
+    flushDeferredKeyboardInsetRef.current=()=>{
+      const pending=deferredKeyboardInsetRef.current
+      deferredKeyboardInsetRef.current=null
+      if(pending!==null&&pending!==keyboardInsetRef.current)applyKeyboardInset(pending)
+    }
     window.addEventListener(SOFT_KEYBOARD_EVENT,onKeyboard)
-    return()=>window.removeEventListener(SOFT_KEYBOARD_EVENT,onKeyboard)
+    return()=>{
+      window.removeEventListener(SOFT_KEYBOARD_EVENT,onKeyboard)
+      flushDeferredKeyboardInsetRef.current=()=>{}
+      deferredKeyboardInsetRef.current=null
+    }
   },[])
   // A pane that reserved space while peeked would leave the grid pushed down past a
   // keyboard that now covers nothing. Reserving and peeking are alternatives, not layers.
@@ -933,6 +957,18 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     termRef.current = term
     searchRef.current = search
     term.open(host.current)
+    // On a touch device the IME bridge below is the *only* element allowed to raise the soft
+    // keyboard, and this is what makes that true rather than merely intended. xterm's own
+    // `mousedown` handler is `preventDefault(); this.focus()`, which focuses this helper
+    // textarea — so any press reaching xterm raised the keyboard for a gesture that may not
+    // have been a tap, and then hid the damage: the helper is a textarea, so it reads as a
+    // field legitimately holding the keyboard, `softKeyboardLost` answered "nothing was
+    // lost", and `restoreSoftKeyboard` declined to repair anything while mobile input had
+    // quietly stopped being routed through the bridge. `inputmode="none"` costs xterm
+    // nothing here — mobile typing never goes through this element — and it closes every
+    // such path at once, including the ones nobody has enumerated. It also stops App's
+    // `armPending` treating that focus as a keyboard on its way and reserving space for it.
+    if(typesWithSoftKeyboard()&&term.textarea)term.textarea.inputMode='none'
     // Warm panes keep parsing but must not keep rendering: see terminalRenderPause.ts.
     // Created once — renderer swaps (WebGL load, DOM fallback) replace the renderer
     // inside the same RenderService, so the control stays valid across them.
@@ -1451,6 +1487,18 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       surface.classList.remove('keyboard-peek-animated')
       surface.classList.toggle('keyboard-peek', offset > 0)
       surface.style.setProperty('--peek-offset', `${offset}px`)
+    }
+    // The peek translate is scoped to `:root.soft-keyboard-open`, which is App's reading of
+    // the *live* viewport and so is not something this pane can defer. If the platform drops
+    // the keyboard mid-gesture that class goes with it and the grid snaps back by the whole
+    // peek offset — under a finger that is halfway through a selection. This class keeps the
+    // translate applying for the rest of the gesture, so the grid is still where the finger
+    // left it and any correction happens after the release rather than during it. Toggled on
+    // the element rather than through state: it brackets a gesture that renders at pointer
+    // rate, and re-rendering a terminal pane to set a class is a frame budget this does not
+    // have.
+    const setKeyboardGestureHold = (held: boolean) => {
+      host.current?.parentElement?.classList.toggle('keyboard-gesture-hold', held)
     }
     const terminalStateTimer = window.setInterval(() => {
       reportTerminalState()
@@ -2670,7 +2718,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       })
     }
     let longPress: number | null = null
-    let lastTouchAt = 0
+    // Whether a touch gesture is in flight on this grid, and when the last one ended. A
+    // phone replays a press it could not deliver natively as `mousedown`/`mouseup`/`click`
+    // after the gesture resolves, and these two are how `mobileMouseClaim` recognises that
+    // replay. Measured from the *end* on purpose - see `touchCompatMouseEvent` for what
+    // measuring from the start silently capped. `performance.now()`, because a wall clock
+    // that steps would decide a gesture ended in the future and suppress nothing.
+    let touchGestureActive = false
+    let touchGestureEndedAt: number | null = null
     let activePointerId:number|null=null
     let tap:{
       pointerId:number
@@ -2686,6 +2741,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let touch:{
       pointerId:number
       lastY:number
+      /** Monotonic gesture start, so a report can say how long the hold was. */
+      startedAt:number
       startX:number
       startY:number
       px:number
@@ -2714,6 +2771,35 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // The dismissal count when this touch landed, so a restore can tell "the platform took
     // the keyboard" from "the user asked for it to go".
     let softKeyboardDismissalsBeforeGesture=0
+    // Set while a gesture is in flight *and* the bridge itself was the field holding the
+    // keyboard up when it began, which is when the bridge refuses to be blurred. Narrow on
+    // purpose: it makes the hold incapable of raising a keyboard that was down, and it
+    // stands down in read mode and with the draft composer open for free, because the
+    // bridge is blurred in both and so cannot have been the holder. See
+    // `shouldHoldBridgeFocus`.
+    let holdingBridgeFocus=false
+    // Prevention, where `restoreSoftKeyboard` is repair. The repair runs a frame after the
+    // gesture ends, so for the whole of a long-press-and-drag the keyboard is really down
+    // and the pane reflows twice around it — the reserved strip is handed back, which
+    // resizes xterm and moves the cells out from under the finger, and the peek translate
+    // reverts. Re-focusing synchronously inside the platform's own `focusout` keeps the IME
+    // from animating out at all, so none of that happens and there is nothing to repair.
+    const keepBridgeFocused=(event:FocusEvent)=>{
+      if(!mobileLiveInput)return
+      const incoming=event.relatedTarget
+      if(!shouldHoldBridgeFocus({
+        holding:holdingBridgeFocus,
+        dismissalsAtGestureStart:softKeyboardDismissalsBeforeGesture,
+        dismissals:softKeyboardDismissals(),
+        incoming:incoming instanceof HTMLElement?incoming:null,
+      })){
+        // A deliberate dismissal ends the hold outright; letting it stand would re-raise the
+        // keyboard on the next stray blur of the same gesture.
+        if(softKeyboardDismissals()!==softKeyboardDismissalsBeforeGesture)holdingBridgeFocus=false
+        return
+      }
+      mobileLiveInput.focus({preventScroll:true})
+    }
     let forwardingTerminalMouse=false
     let selectionScrollTimer:number|undefined
     let selectionScrollDir=0
@@ -2803,11 +2889,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         modified:event.altKey||event.ctrlKey||event.metaKey||event.shiftKey,
       }
       if (event.pointerType === 'touch') {
-        lastTouchAt = Date.now()
+        touchGestureActive = true
         softKeyboardBeforeGesture=softKeyboardHolder()
         softKeyboardDismissalsBeforeGesture=softKeyboardDismissals()
+        holdingBridgeFocus=!!mobileLiveInput&&softKeyboardBeforeGesture===mobileLiveInput
+        // Nothing about the keyboard may move this grid until the finger is off it.
+        terminalGestureActiveRef.current=true
+        setKeyboardGestureHold(true)
         touch={
-          pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,
+          pointerId:event.pointerId,lastY:event.clientY,startedAt:performance.now(),
+          startX:event.clientX,startY:event.clientY,
           px:event.clientX,py:event.clientY,moved:false,pixels:0,
           applicationInputPixels:0,applicationReports:0,
           panPixels:0,terminalSteps:0,terminalMoved:false,selecting:null,
@@ -2830,9 +2921,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const mobileMouseClaim=(event:MouseEvent)=>{
       if(forwardingTerminalMouse)return
-      if(Date.now()-lastTouchAt>=1500)return
+      if(!touchCompatMouseEvent({
+        gestureActive:touchGestureActive,
+        endedAt:touchGestureEndedAt,
+        now:performance.now(),
+      }))return
       // The synthesized tap after a drag (scroll/selection) is swallowed without
-      // focusing, so only a genuine tap raises the soft keyboard.
+      // focusing, so only a genuine tap raises the soft keyboard. Swallowed in the capture
+      // phase, which is also what keeps the replay away from xterm's own `mousedown`
+      // (`preventDefault(); this.focus()`) - `preventDefault` alone would not, because that
+      // focus is imperative rather than the event's default action.
       event.preventDefault();event.stopPropagation()
       if(focusOnMouseClaim)focusTerminalInput()
     }
@@ -2928,6 +3026,72 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       return true
     }
+    /**
+     * Everything a touch gesture owes back when the finger leaves, in the one order that works.
+     *
+     * Deferred a frame because the platform makes its own focus decision as the touch
+     * resolves, and anything done inside the handler is undone by it. Within that frame the
+     * copy runs first (it reads the selection, which a focus move can clear), then the
+     * keyboard repair, and the gesture's grip on the layout is released last — the pane must
+     * not act on a "the keyboard went away" reading it is one line away from contradicting.
+     *
+     * `gesture` is null for a release that was not a touch, and for one whose touch state
+     * has already been torn down. It gates only the report — every release is unconditional,
+     * because a held flag is the failure that lasts.
+     */
+    const endTouchGesture=(
+      gesture:{selecting:boolean;moved:boolean;startedAt:number}|null,
+      restoreKeyboard:HTMLElement|null,
+      beforeRestore?:()=>void,
+    )=>{
+      const dismissalsAtStart=softKeyboardDismissalsBeforeGesture
+      const keyboardUpAtStart=!!softKeyboardBeforeGesture
+      const typingTap=focusOnMouseClaim
+      softKeyboardBeforeGesture=null
+      // Keyed off the flag itself rather than off `gesture`, and every release below is
+      // unconditional for the same reason: these all fail *closed* — a gesture flag left
+      // set would suppress every mouse event and freeze this pane's keyboard layout for
+      // the rest of its life, which is far worse than releasing one that was never set.
+      if(touchGestureActive){touchGestureActive=false;touchGestureEndedAt=performance.now()}
+      requestAnimationFrame(()=>{
+        beforeRestore?.()
+        const restored=restoreSoftKeyboard(restoreKeyboard,dismissalsAtStart)
+        holdingBridgeFocus=false
+        terminalGestureActiveRef.current=false
+        setKeyboardGestureHold(false)
+        // A restore makes the deferred reading stale by construction: the pane was told the
+        // keyboard had gone and has just put it back, so the authoritative inset is the one
+        // the viewport is about to report. Applying the stale zero would hand the reserved
+        // strip back and take it again for nothing.
+        if(restored)deferredKeyboardInsetRef.current=null
+        flushDeferredKeyboardInsetRef.current()
+        // The invariant, reporting its own violations. A gesture that was not a typing tap
+        // must leave the keyboard exactly as it found it in *both* directions, and only one
+        // of those directions had any guard at all before this change. The symptom is
+        // unfalsifiable from outside — "it sometimes opens the keyboard" names no layer and
+        // no gesture — so this says which gesture, which direction, and how long the hold
+        // was, since duration is exactly what the old compat-mouse window was really capping.
+        // A deliberate dismissal mid-gesture is a decision, not a violation.
+        if(!gesture||typingTap||softKeyboardDismissals()!==dismissalsAtStart)return
+        const keyboardUpNow=!!softKeyboardHolder()
+        if(keyboardUpNow===keyboardUpAtStart)return
+        const active=deepActiveElement(document)
+        reportInputDiagnostic('mobile_gesture_keyboard_changed',{
+          backend:backendRef.current,
+          direction:keyboardUpNow?'opened':'closed',
+          selecting:gesture.selecting,
+          moved:gesture.moved,
+          durationMs:Math.round(performance.now()-gesture.startedAt),
+          restoreAttempted:!!restoreKeyboard,
+          restored,
+          activeTag:(active?.tagName??'').toLowerCase(),
+          activeInputMode:active?.inputMode??'',
+          keyboardInset:keyboardInsetRef.current,
+          reserved:keyboardReservedRef.current,
+          peekOffset:Math.round(peekOffsetRef.current),
+        })
+      })
+    }
     const pointerEnd=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
       activePointerId=null
@@ -2993,27 +3157,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           })
         }
       }
+      const gesture=touch?{selecting:!!touch.selecting,moved:touch.moved,startedAt:touch.startedAt}:null
       stopSelectionScroll();cancelLongPress();touch=null;commitPeekOffsetRef.current()
       // A gesture that was not a typing tap gives the keyboard back exactly as it found
-      // it — up if it was up, down if it was down. Deferred a frame, and ordered after
-      // the copy, because the platform makes its own focus decision as the tap resolves:
-      // restoring inside this handler would be undone by it. `focusOnMouseClaim` already
-      // owns the other case, so the two never both act.
-      const restoreKeyboard=focusOnMouseClaim?null:softKeyboardBeforeGesture
-      const dismissalsAtStart=softKeyboardDismissalsBeforeGesture
-      softKeyboardBeforeGesture=null
-      requestAnimationFrame(()=>{autoCopySelection();restoreSoftKeyboard(restoreKeyboard,dismissalsAtStart)})
+      // it — up if it was up, down if it was down. `focusOnMouseClaim` already owns the
+      // other case, so the two never both act.
+      endTouchGesture(gesture,focusOnMouseClaim?null:softKeyboardBeforeGesture,autoCopySelection)
     }
     const pointerCancel=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
+      const gesture=touch?{selecting:!!touch.selecting,moved:touch.moved,startedAt:touch.startedAt}:null
       activePointerId=null;tap=null;focusOnMouseClaim=false;stopSelectionScroll();cancelLongPress();touch=null;commitPeekOffsetRef.current()
       // A cancelled pointer is the platform taking the gesture over, which is precisely
       // when it lowers the keyboard without anything here asking. Nothing typed, so the
       // keyboard state before the touch is the one to keep.
-      const restoreKeyboard=softKeyboardBeforeGesture
-      const dismissalsAtStart=softKeyboardDismissalsBeforeGesture
-      softKeyboardBeforeGesture=null
-      requestAnimationFrame(()=>restoreSoftKeyboard(restoreKeyboard,dismissalsAtStart))
+      endTouchGesture(gesture,softKeyboardBeforeGesture)
     }
     const openMenu = (event: MouseEvent) => {
       // The terminal body has no context menu: right-click stays out of the
@@ -3083,6 +3241,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.addEventListener('pointermove', pointerMove)
     window.addEventListener('pointerup', pointerEnd)
     window.addEventListener('pointercancel', pointerCancel)
+    mobileLiveInput?.addEventListener('focusout', keepBridgeFocused)
     // Focus alone is ambiguous: the pane focuses its own terminal on attach and on tab
     // switches. Only focus that follows a real interaction claims as a gesture.
     host.current.addEventListener('focusin', claimOnFocus)
@@ -3128,7 +3287,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Publish this rail's box so the app's bottom-anchored messages clear it. Registration
