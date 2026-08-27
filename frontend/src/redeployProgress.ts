@@ -26,9 +26,21 @@
  *  learning that a redeploy started at all, which is why it is broadcast during
  *  the build, minutes before it can affect anyone, and mirrored into
  *  sessionStorage so a reload or a second tab does not come up blind.
+ *
+ *  A third, much shorter stage precedes both and exists only on the client that
+ *  pressed the button:
+ *
+ *  - **requested** - the accept request is in flight. The daemon's preflight
+ *    walks every process on the host looking for one that anchors the app
+ *    bundle (measured 2.7-7.8s), and until it answers there is no `202`, no
+ *    broadcast, and no redeploy lock for anything to observe. Waiting for that
+ *    before showing anything made the button read as dead for the whole window,
+ *    so the chip and its clock start at the press instead. Nothing probes during
+ *    it: the status endpoint would report `running: false` - truthfully, and the
+ *    wait loop would read that as "the redeploy ended before it started".
  */
 
-export type RedeployPhase = 'idle' | 'building' | 'down'
+export type RedeployPhase = 'idle' | 'requested' | 'building' | 'down'
 
 /** How a finished redeploy is reported once the successor daemon is up. */
 export type RedeployOutcome = {
@@ -49,6 +61,9 @@ export type RedeployInterruptions = {
   note?: string
 }
 
+/** A process anchoring the app bundle, which would fail the redeploy's swap. */
+export type BundleHolder = { pid: number; name: string; via: string; path: string }
+
 export type RedeployStatus = {
   running?: boolean
   phase?: string
@@ -56,6 +71,9 @@ export type RedeployStatus = {
   log_tail?: string[]
   last_result?: RedeployOutcome | null
   interrupted?: RedeployInterruptions | null
+  /** Only present when the read asked for the scan (`?holders=1`). `null` means
+   *  "not scanned", which is a different fact from an empty list. */
+  bundle_holders?: BundleHolder[] | null
   available?: boolean
 }
 
@@ -75,6 +93,25 @@ export function interruptionSummary(
   const list = rest > 0 ? `${shown} and ${rest} more` : shown
   const count = previews.length === 1 ? '1 preview' : `${previews.length} previews`
   return `${count} unreachable while the app restarts: ${list}.`
+}
+
+/** One line naming what would refuse the redeploy, or '' when nothing does.
+ *
+ *  The same processes the accept would refuse on, said before the operator
+ *  commits rather than as a toast after they have: the swap cannot rename
+ *  `dist/swe-mux` while any of these anchor it, and stopping them is something
+ *  only a person can do. Bounded, and paths are left out - the refusal message
+ *  carries the full path, and this has to fit above the dialog's buttons on a
+ *  phone. */
+export function holderWarning(
+  holders: BundleHolder[] | null | undefined, limit = 3,
+): string {
+  if (!holders || !holders.length) return ''
+  const named = holders.slice(0, limit).map(holder => `pid ${holder.pid} ${holder.name} (${holder.via})`)
+  const rest = holders.length - limit
+  const list = rest > 0 ? `${named.join(', ')} and ${rest} more` : named.join(', ')
+  const subject = holders.length === 1 ? '1 process holds' : `${holders.length} processes hold`
+  return `${subject} the app bundle open, so the redeploy will be refused: ${list}.`
 }
 
 /** Persisted so a reload, a second tab, or a client that was not the initiator
@@ -127,6 +164,38 @@ export function beginRedeploy(now: number): RedeployState {
   return { ...IDLE_REDEPLOY, phase: 'building', startedAt: now, expiresAt: now + REDEPLOY_MAX_MS }
 }
 
+/** The press itself, before the daemon has accepted anything. */
+export function requestRedeploy(now: number): RedeployState {
+  return { ...beginRedeploy(now), phase: 'requested' }
+}
+
+/** The daemon accepted (or a broadcast said one is running): start believing in
+ *  it. Keeps the clock the press started, so the elapsed timer never jumps back
+ *  to zero when the 202 lands several seconds later. */
+export function confirmRedeploy(state: RedeployState, now: number): RedeployState {
+  if (state.phase === 'idle') return beginRedeploy(now)
+  if (state.phase !== 'requested') return state
+  return { ...state, phase: 'building' }
+}
+
+/** Undo a press the daemon refused - and only that press.
+ *
+ *  Matched on `startedAt` rather than on the phase alone: a refusal racing a
+ *  *different* redeploy's broadcast must not take the chip away from the
+ *  redeploy that really is running. */
+export function abandonRequest(state: RedeployState, startedAt: number): RedeployState {
+  if (state.phase !== 'requested' || state.startedAt !== startedAt) return state
+  return IDLE_REDEPLOY
+}
+
+/** Whether this phase is one the wait loop may probe the daemon about. A
+ *  request in flight is not: the redeploy lock it polls for is claimed by the
+ *  very request being awaited, so an early probe reads a redeploy that has not
+ *  started yet as one that already ended. */
+export function waitsOnDaemon(phase: RedeployPhase): boolean {
+  return phase === 'building' || phase === 'down'
+}
+
 /** Enter the blocking stage. Keeps `startedAt` so the elapsed timer stays
  *  continuous across the transition. */
 export function enterOutage(state: RedeployState): RedeployState {
@@ -158,7 +227,11 @@ export type ProbeVerdict =
  * failure message would be thrown away by the navigation.
  */
 export function applyProbe(state: RedeployState, probe: ProbeResult, now: number): ProbeVerdict {
-  if (state.phase === 'idle') return { action: 'wait', state }
+  // Nothing to conclude before the daemon has accepted the request: the lock a
+  // status read reports on is claimed by the accept itself, so `running: false`
+  // during `requested` is the truth about a redeploy that has not begun, and
+  // treating it as `finished` would clear the chip the press just raised.
+  if (!waitsOnDaemon(state.phase)) return { action: 'wait', state }
   if (!probe.healthy) {
     const downProbes = state.downProbes + 1
     // Two strikes before the overlay, unless the daemon already told us it was
@@ -189,12 +262,20 @@ export function elapsedLabel(startedAt: number, now: number): string {
  *  the daemon away - so this says what stage it is in and lets the elapsed timer
  *  carry the rest, rather than inventing a percentage. */
 export function phaseLabel(phase: RedeployPhase): string {
-  if (phase === 'building') return 'Rebuilding app'
+  // `requested` deliberately says the same thing as `building`. The two are
+  // seconds apart and the operator asked for one thing, so a headline that
+  // changed in between would read as churn rather than as progress; what
+  // differs between them is in `phaseDetail`.
+  if (phase === 'requested' || phase === 'building') return 'Rebuilding app'
   if (phase === 'down') return 'Restarting app'
   return ''
 }
 
 export function phaseDetail(phase: RedeployPhase): string {
+  if (phase === 'requested') {
+    return 'Checking that nothing is holding the app bundle open, then the build starts. '
+      + 'It runs alongside the app you are using now.'
+  }
   if (phase === 'building') {
     return 'The new build runs alongside the current app, so you can keep working. '
       + 'The app restarts when it finishes.'
@@ -267,7 +348,10 @@ export function loadRedeploy(store: Storage | null, now: number): RedeployState 
 export function saveRedeploy(store: Storage | null, state: RedeployState): void {
   if (!store) return
   try {
-    if (state.phase === 'idle') store.removeItem(REDEPLOY_STORAGE_KEY)
+    // A request in flight is never persisted: it resolves within seconds and
+    // only on the client that made it, and a tab restoring one would come up
+    // waiting on a `202` that was answered in another document.
+    if (state.phase === 'idle' || state.phase === 'requested') store.removeItem(REDEPLOY_STORAGE_KEY)
     // The log tail is deliberately not persisted: it is refetched from the
     // daemon whenever one is reachable, and it is the only unbounded field here.
     else store.setItem(REDEPLOY_STORAGE_KEY, JSON.stringify({ ...state, logTail: [] }))

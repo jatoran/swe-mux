@@ -241,6 +241,21 @@ continues to own every terminal.
   indistinguishable from an ordinary blip.
   Nothing here is load-bearing for the redeploy itself - it only buys the UI a progress chip, so an
   unreachable or older daemon costs nothing but the old behaviour.
+- **The press is acknowledged before the daemon has accepted it.**
+  Every signal a client can observe about a redeploy - the `202`, the broadcast, the lock a status
+  read reports - is produced *after* the accept path's preflight, whose bundle-holder scan walks
+  every process on the host reading its exe and cwd (7.8s cold and 2.7s warm, measured on the
+  primary host 2026-08-27). So the button did nothing observable for seconds, on the one action in
+  the app that takes minutes and that an operator has every reason to doubt they pressed.
+  Two changes, and only together: the UI enters a `requested` phase at the press and probes nothing
+  until the accept lands (`design/features/ui.md`, `technical/frontend/packages/composition.md`),
+  and the scan moves off the press - the confirm dialog runs it via `GET /api/daemon/redeploy?holders=1`
+  while the dialog is being read, and the accept joins that single-flight scan rather than starting
+  a second one.
+  The dialog therefore also *names* a blocker before the operator commits, instead of refusing after
+  they have. The scan's 15s reuse window is short by construction: a holder appearing inside it is
+  missed, and the swap's own rename retry and rollback stay the backstop rather than becoming the
+  first line of defence.
 - **A planned stop records itself before it happens**, because it usually does not get to finish.
   `POST /api/desktop/shutdown` and `POST /api/daemon/restart` both call `lifecycle.planned_handoff`
   at the moment they decide the intent, which is the last moment the daemon is guaranteed to still

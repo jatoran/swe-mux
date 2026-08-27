@@ -164,7 +164,21 @@ The endpoint passes `--restore-visibility`; the script samples whether a desktop
 It also passes `--lock-held`, because the lock above is already claimed and
 already names the child; without it the script would refuse itself.
 
-GET returns `{running, pid, phase, log_tail, last_result, interrupted, available}`.
+The holder scan is cached for 15s per (data dir, bundle) and is single-flight, which is
+what keeps it off the press: the confirm dialog runs it via `GET ?holders=1` while the
+operator is still reading, and the accept joins that scan (or its result) instead of
+starting a second walk of the process table. Measured on the primary host 2026-08-27:
+7.8s cold, 2.7s warm, and it used to sit between the button and the `202` that is the
+first thing any client can observe about a redeploy. The window is short because a holder
+that appears inside it is missed, leaving the swap's own rename retry and rollback as the
+backstop they were designed to be; a failed or cancelled scan is never cached, because
+"nothing holds the bundle" and "the scan did not finish" are opposite facts.
+
+GET returns `{running, pid, phase, log_tail, last_result, interrupted, bundle_holders,
+bundle_holders_note, available}`.
+`bundle_holders` is `null` unless `?holders=1` asked for the scan - "not scanned" and
+"scanned, nothing holds it" are different answers and never render the same - and the
+default is off because the redeploy wait loop polls this endpoint every two seconds.
 `interrupted` is served whether or not a redeploy is in flight - the confirm
 dialog reads it before you commit - and carries `previews[]` (each with its
 `proxy_path`, stable across the restart), `kills_processes: false`, and a note

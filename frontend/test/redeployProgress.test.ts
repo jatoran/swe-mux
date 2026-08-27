@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  applyProbe, beginRedeploy, elapsedLabel, enterOutage, IDLE_REDEPLOY, loadRedeploy,
-  markResultPending, outcomeIsFresh, outcomeNotice, REDEPLOY_DOWN_PROBES, REDEPLOY_MAX_MS,
-  REDEPLOY_RESULT_KEY, REDEPLOY_STORAGE_KEY, saveRedeploy, takeResultPending,
-  interruptionSummary,
+  abandonRequest, applyProbe, beginRedeploy, confirmRedeploy, elapsedLabel, enterOutage,
+  holderWarning, IDLE_REDEPLOY, loadRedeploy,
+  markResultPending, outcomeIsFresh, outcomeNotice, phaseDetail, phaseLabel,
+  REDEPLOY_DOWN_PROBES, REDEPLOY_MAX_MS,
+  REDEPLOY_RESULT_KEY, REDEPLOY_STORAGE_KEY, requestRedeploy, saveRedeploy, takeResultPending,
+  interruptionSummary, waitsOnDaemon,
   type ProbeVerdict,
 } from '../src/redeployProgress.ts'
 
@@ -25,6 +27,80 @@ function fakeStore() {
     removeItem: (key: string) => { data.delete(key) },
   }
 }
+
+test('the chip goes up at the press, not at the accept', () => {
+  const pressed = 1_000_000
+  const state = requestRedeploy(pressed)
+  assert.equal(state.phase, 'requested')
+  assert.equal(state.startedAt, pressed)
+  assert.equal(state.expiresAt, pressed + REDEPLOY_MAX_MS)
+  // Same headline as the build it is about to become: the two are seconds apart
+  // and a label that changed in between would read as churn.
+  assert.equal(phaseLabel('requested'), phaseLabel('building'))
+  assert.notEqual(phaseDetail('requested'), phaseDetail('building'))
+})
+
+test('nothing is probed while the accept is still in flight', () => {
+  const pressed = 1_000_000
+  const state = requestRedeploy(pressed)
+  assert.equal(waitsOnDaemon(state.phase), false)
+  // The lock a status read reports on is claimed by the very request being
+  // awaited, so `running: false` here is the truth about a redeploy that has not
+  // begun. Read as a verdict it would clear the chip the press just raised.
+  const verdict = applyProbe(state, { healthy: true, status: { running: false } }, pressed + 3_000)
+  assert.equal(verdict.action, 'wait')
+  assert.equal(stateOf(verdict).phase, 'requested')
+  // Nor can an unreachable daemon turn a request into the blocking overlay.
+  const down = applyProbe(state, { healthy: false }, pressed + 3_000)
+  assert.equal(down.action, 'wait')
+  assert.equal(stateOf(down).phase, 'requested')
+  assert.equal(stateOf(down).sawDown, false)
+})
+
+test('accepting keeps the clock the press started', () => {
+  const pressed = 1_000_000
+  // The 202 can land eight seconds later (the daemon scans every process on the
+  // host first); an elapsed timer that restarted there would under-report the
+  // wait the operator actually sat through.
+  const confirmed = confirmRedeploy(requestRedeploy(pressed), pressed + 8_000)
+  assert.equal(confirmed.phase, 'building')
+  assert.equal(confirmed.startedAt, pressed)
+  assert.equal(confirmed.expiresAt, pressed + REDEPLOY_MAX_MS)
+  // A client that never pressed anything (the daemon's broadcast) starts now.
+  assert.deepEqual(confirmRedeploy(IDLE_REDEPLOY, pressed), beginRedeploy(pressed))
+  // Idempotent: broadcast, accept, and boot-time sentinel all call it.
+  const running = beginRedeploy(pressed)
+  assert.equal(confirmRedeploy(running, pressed + 60_000), running)
+  const outage = enterOutage(running)
+  assert.equal(confirmRedeploy(outage, pressed + 60_000), outage)
+})
+
+test('a refusal clears the press it answered, and only that one', () => {
+  const pressed = 1_000_000
+  assert.equal(abandonRequest(requestRedeploy(pressed), pressed).phase, 'idle')
+  // A refusal must not take the chip away from a redeploy that really is
+  // running - somebody else's, learned from the broadcast while ours was
+  // in flight.
+  const running = beginRedeploy(pressed)
+  assert.equal(abandonRequest(running, pressed), running)
+  assert.equal(abandonRequest(requestRedeploy(pressed + 5), pressed).phase, 'requested')
+})
+
+test('the stopping broadcast reaches the outage from a request in flight', () => {
+  // The daemon can be gone before this client ever saw its own 202 - which is
+  // the case that would otherwise leave a tab typing into a dead PTY socket.
+  const state = enterOutage(confirmRedeploy(requestRedeploy(1_000_000), 1_000_500))
+  assert.equal(state.phase, 'down')
+  assert.equal(state.sawDown, true)
+})
+
+test('a request in flight is never persisted', () => {
+  const store = fakeStore()
+  saveRedeploy(store, requestRedeploy(1_000))
+  // It resolves within seconds and only in the document that made it; a tab
+  // restoring one would come up waiting on a 202 answered somewhere else.
+  assert.equal(store.getItem(REDEPLOY_STORAGE_KEY), null)
+})
 
 test('the build stage never blocks: it stays out of the down phase while the daemon answers', () => {
   const start = 1_000_000
@@ -186,6 +262,32 @@ test('the confirm dialog names what goes dark, and says nothing when nothing doe
     interruptionSummary({ previews: [preview(5173), preview(8080)] }),
     '2 previews unreachable while the app restarts: :5173, :8080.',
   )
+})
+
+function holder(pid: number, name = 'node.exe', via = 'cwd') {
+  return { pid, name, via, path: `D:\\PROJECTS\\swe-mux\\dist\\swe-mux\\_internal\\${pid}` }
+}
+
+test('the dialog names a blocker before the operator commits, not after', () => {
+  // Null is "not scanned yet" and says nothing; an empty scan says nothing either.
+  assert.equal(holderWarning(null), '')
+  assert.equal(holderWarning(undefined), '')
+  assert.equal(holderWarning([]), '')
+  const one = holderWarning([holder(4321)])
+  assert.match(one, /^1 process holds the app bundle open/)
+  assert.match(one, /refused: pid 4321 node\.exe \(cwd\)\.$/)
+  // Paths are deliberately absent: the refusal toast carries them in full, and
+  // this has to fit above the dialog's buttons on a phone.
+  assert.ok(!one.includes('_internal'))
+  assert.match(holderWarning([holder(1), holder(2)]), /^2 processes hold/)
+})
+
+test('a swarm of holders cannot push the dialog buttons off a phone screen', () => {
+  const many = [1, 2, 3, 4, 5].map(pid => holder(pid))
+  const warning = holderWarning(many)
+  assert.match(warning, /^5 processes hold/)
+  assert.match(warning, /and 2 more\.$/)
+  assert.ok(!warning.includes('pid 4 '))
 })
 
 test('a Project with many services cannot push the dialog buttons off a phone screen', () => {
