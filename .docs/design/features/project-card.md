@@ -49,7 +49,7 @@ The retired generated-card design is archived at `../../development/archive/PROJ
 
 The four config bounds that design left behind - `project_card_daily_budget`,
 `project_card_model`, `project_card_max_input_tokens`, `project_card_max_output_tokens` - are
-edited together in Automation → Global policy → Budgets, under one **Project context
+edited together in Automation → Policy → Limits & budgets, under one **Project context
 card** heading beside the budget that was already there.
 The model was the one setting in `modelRouting.ts` with no control anywhere, and two surfaces
 sent the reader looking for one that did not exist (the budget hint named Accounts; the routing

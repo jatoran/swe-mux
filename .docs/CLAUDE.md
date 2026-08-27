@@ -340,13 +340,16 @@
   `design/features/automation.md`, `design/features/fleet-intelligence.md`,
   `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`.
   The rule the presentation turns on: the pipeline produces exactly two things - an attention
-  item or a run note - and each has exactly one home (the Alerts drawer tab, and Activity →
-  Findings). The Automation dashboard owns the rule corpus and the runtime (rules and their
-  live/shadow state, the rules.toml editor, the per-Project control map with its toggles,
-  spend, diagnostics) and links to those two homes rather than drawing second copies of them.
-  The same one-owner rule applies to switches: every install-wide automation switch and bound
-  lives in Automation → Global policy; Settings → Automation and the other dashboard views
-  only show switch state and link there.
+  item or a run note. Run notes keep exactly one home (Activity → Findings); attention items
+  have two surfaces (the Alerts drawer tab and the Automation dashboard's Activity tab), and
+  the second is the SAME `AttentionInbox` component over the same endpoints, so mirroring is
+  done with components, never copies - the rule `AutomationSpendView` already carries for
+  spend (Usage ↔ Automation → Usage). The dashboard is three tabs (Policy | Usage |
+  Activity) and its Policy matrix is the ONE editor that may turn an automation off in
+  either scope - the install-wide ceiling (`automation_global_allow` + the dedicated
+  switches) and every Project opt-in - which is what keeps every grant gate additive-only.
+  The install limits live behind the Policy tab's Limits & budgets disclosure; Settings →
+  Automation only shows status and links there.
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`

@@ -305,7 +305,10 @@ async def test_openrouter_is_ready_on_a_key_alone_so_no_install_regresses(
 async def test_a_held_back_automation_arrives_with_its_reason(tmp_path: Path) -> None:
     # The whole point of the section: an unverified provider must read as the stated
     # reason a switch is inert, never as a switch that is quietly missing from `enabled`.
+    # The install switch is on, so the ceiling is not the blocker here - with it off
+    # the same request would land in `globally_disabled`, which has its own answer.
     config = custom_config(tmp_path)
+    config.scan_timeline_enabled = True
     app, store = build(tmp_path, config)
     root = Path(app[keys.PROJECTS].projects["proj-1"].root)
     current = await read_project_config(root)

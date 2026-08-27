@@ -11,7 +11,7 @@ It is the Tier 1 substrate for dead-end memory and later cross-session semantic 
 Three independent gates must all be open before a scan can call OpenRouter:
 
 1. The global `scan_timeline_enabled` master switch is on.
-   It is in **Automation → Global policy**, beside the scan budgets; the Automation workspace
+   It is the scan row's Global switch on the **Automation Policy matrix**; the Automation workspace
    shows its state and links there.
 2. The Project enables `scan_timeline` and its `raw_store` and `tier0` dependencies.
 3. The current `agent_run_id` is enabled from that session's Timeline drawer tab.
@@ -147,7 +147,7 @@ A bounded page therefore means "rows returned" rather than "rows scanned": a `bl
 The default ordering stays oldest-first because the derivations in `scan_consumers.py` require it; `newest_first` is what a bounded read asks for.
 
 No scan or backfill trigger is exposed through MCP.
-Reads cost nothing; a scan spends the human's gated budget against caps set in Automation → Global policy → Scan timeline.
+Reads cost nothing; a scan spends the human's gated budget against the global automation caps set in Automation → Policy → Limits &amp; budgets.
 
 ## Budgets and visibility
 
@@ -157,22 +157,23 @@ Those bound an observer that fires once per session, such as the session titler.
 Sharing that envelope with an event-triggered, three-minute-heartbeat sampler capped the whole feature at roughly ten scans a day across the entire fleet, and it stopped at 0.2% of the dollar budget that was supposed to be the real ceiling.
 The token axis must never be the binding constraint while the dollar axis is untouched.
 
-The caps that do apply are:
+The caps that do apply are the **global automation ceilings, and only those**:
 
-- `scan_timeline_daily_budget` (3,000,000 tokens or $5.00, mode `either`), the feature's own daily ceiling;
-- `scan_timeline_run_budget` (500,000 tokens, mode `tokens`), one conversation's share;
-- `scan_timeline_hourly_call_cap` (600), its own burst limiter;
-- `automation_daily_budget`, the global emergency ceiling over every automation.
+- `automation_daily_budget` (`{tokens?, usd?, mode}` - `budgets.md` owns the contract), the one daily ceiling over every automation;
+- `automation_hourly_call_cap`, the shared burst limiter;
+- `automation_max_output_tokens`, the shared per-call output ceiling - sized for the scan's worst case (~900 tokens of schema prose; a truncated strict-JSON body is an unparseable response that costs a record), and lifted on upgrade by schema 34 so an older config's 256 default cannot start truncating scans.
 
-The three budgets carry the shared `{tokens?, usd?, mode}` shape and can each be denominated in tokens, dollars, or first-hit; `design/features/budgets.md` owns that contract and the migration that gave each of these the mode matching the unit it already enforced.
-All four caps are **global**, edited in Automation → Global policy → Scan timeline, and apply to every Project.
-`scan_timeline_model` is edited in the same section, beside the caps it is priced against, so which model a given budget is being spent on is answerable without leaving the section.
+The scan's dedicated caps (`scan_timeline_daily_budget`, `scan_timeline_run_budget`,
+`scan_timeline_hourly_call_cap`, `scan_timeline_max_output_tokens`) were retired: one set
+of global bounds replaces five per-feature ones, and a config still naming them loads with
+the keys dropped. The snapshot's `daily_budget` and the drawer's gauges therefore draw the
+global budget as the ceiling, with the scan's own share of it beside it.
+All caps are **global**, edited in Automation → Policy → Limits & budgets, and apply to every Project.
+`scan_timeline_model` keeps a read-only row in the same limits view, linking to Settings → Accounts → Models where it is edited.
 The OpenRouter key that unlocks it stays in Settings → Accounts, with the other provider credentials.
-The dollar ceiling used to be a per-Project field in the committed `.swe-mux/config.toml`.
+The dollar ceiling was once a per-Project field in the committed `.swe-mux/config.toml`.
 That put the cap most likely to stop scanning inside a file nobody opens, gave every checkout a different value, and meant raising it was a per-Project chore.
-It is one setting now; a `scan_timeline_daily_budget_usd` still present in a Project file is read tolerantly, ignored, and dropped on the next write.
-The global ceiling must stay above the scan's own daily budget, or it silently becomes the new invisible binding cap.
-The dollar budget should stay above what the daily token budget can cost, so the tokens run out first.
+A `scan_timeline_daily_budget_usd` still present in a Project file is read tolerantly, ignored, and dropped on the next write.
 Successful calls, provider failures that report billable usage, and locally refused responses all enter the shared spend ledger with Project and run attribution.
 A billable call whose completion reported no cost reserves the conservative preflight estimate, so missing provider accounting cannot weaken a budget - **but only when the endpoint is one that prices at all**.
 Against a bring-your-own endpoint the model is in no catalog and that estimate is a bare fallback constant, so the row is recorded as unpriced (`cost_known = 0`) instead, the drawer reads the dollar total as a floor, and the token axis is what bounds the feature.

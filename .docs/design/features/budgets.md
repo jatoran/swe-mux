@@ -33,19 +33,24 @@ zero.
 
 ## The inventory
 
-Eight caps, each declared once in `BUDGET_SPECS` with its bounds and the pre-`Budget` settings it
+Five caps, each declared once in `BUDGET_SPECS` with its bounds and the pre-`Budget` settings it
 replaced.
 
 | Config field | Bounds it enforces | Default mode | Edited in |
 | --- | --- | --- | --- |
-| `automation_daily_budget` | every automation, per UTC day | `either` | Automation → Global policy |
-| `automation_rule_daily_budget` | one automation rule, per UTC day | `either` | Automation → Global policy |
-| `project_card_daily_budget` | Project context card rebuilds | `usd` | Automation → Global policy |
-| `scan_timeline_daily_budget` | scan timeline, per UTC day | `either` | Automation → Global policy |
-| `scan_timeline_run_budget` | scan timeline, per conversation | `tokens` | Automation → Global policy |
-| `attention_narration_daily_budget` | model narration on ranked items | `usd` | Automation → Global policy |
+| `automation_daily_budget` | every automation, per UTC day - including the scan timeline and attention narration | `either` | Automation → Policy → Limits & budgets |
+| `automation_rule_daily_budget` | one automation rule, per UTC day | `either` | Automation → Policy → Limits & budgets |
+| `project_card_daily_budget` | Project context card rebuilds | `usd` | Automation → Policy → Limits & budgets |
 | `tts_daily_budget` | read-aloud summaries | `usd` | Settings → Voice |
 | `assistant_daily_budget` | the Mux assistant | `usd` | Settings → Assistant |
+
+The scan timeline's daily and per-conversation budgets and attention narration's daily
+budget were retired outright (schema 34): both features enforce `automation_daily_budget`,
+the global hourly call cap, and the global per-call output ceiling. One set of bounds is
+the whole point - the per-feature caps were the largest source of "which of five budgets
+stopped this" confusion, and every one of them still sat under the global ceiling anyway.
+A config still naming a retired cap, budget-shaped or legacy scalar, loads with the key
+dropped.
 
 **Rate limits are not budgets and are deliberately absent.** `automation_hourly_call_cap`,
 `agent_message_hourly_budget`, `attention_daily_interrupt_budget`, `land_hourly_budget`, and their
@@ -107,11 +112,15 @@ nobody measured, about a server that may bill nothing.
 **A config written by the previous build enforces exactly what it enforced before.** Each cap maps
 onto the mode matching the unit the pre-`Budget` code compared:
 
-- The automation ceilings and the scan-timeline daily budget checked tokens **and** dollars →
-  `either`.
-- The scan-timeline run budget checked tokens only → `tokens`.
-- The assistant, read-aloud summary, Project card, and attention-narration caps checked dollars
-  only → `usd`.
+- The automation ceilings checked tokens **and** dollars → `either`.
+- The assistant, read-aloud summary, and Project card caps checked dollars only → `usd`.
+
+A *retired* cap maps onto nothing - but the ceiling that absorbs its feature must not
+narrow what fit before. Schema 34 lifts `automation_max_output_tokens` to the loosest of
+itself and the retired scan/narration per-call ceilings (the scan's was 900, and a global
+ceiling left at the old 256 default would truncate every scan response into an
+unparseable strict-JSON body); a deliberately lowered figure that already covers them is
+untouched.
 
 The case a naive migration loses: a config naming only one half of a pair still had the other half
 enforced, at the dataclass default, by code that never asked whether the file mentioned it. Each
