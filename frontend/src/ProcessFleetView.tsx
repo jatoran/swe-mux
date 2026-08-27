@@ -4,6 +4,7 @@ import { api } from './api'
 import { Dropdown } from './Dropdown'
 import type { Project, Session } from './types'
 import { buildProcessTree, type ProcessTreeNode } from './processTree'
+import { projectDropdownOptions } from './projectOptions'
 import { buildProjectGroups } from './projectGroups'
 import {
   commandTail, isAbnormalState, memoryLabel, processDetails, processMetrics, processRowKey,
@@ -279,7 +280,12 @@ export function ProcessFleetView({
     ariaLabel="Filter processes by project"
     value={projectScope}
     onChange={value => { onProjectScope(value); onSelectedSessionId(null) }}
-    options={[{ value: '', label: 'All projects' }, ...projects.map(project => ({ value: project.id, label: project.name }))]}
+    filter
+    filterPlaceholder="Filter Projects…"
+    options={[
+      { value: '', label: 'All projects' },
+      ...projectDropdownOptions(projects, project => ({ value: project.id, label: project.name, detail: project.root })),
+    ]}
   />
 
   const refresh = <button class="process-refresh" title="Re-read the latest sample" onClick={() => refreshFleet(request)}>Refresh</button>

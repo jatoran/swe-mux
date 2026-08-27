@@ -7316,7 +7316,12 @@ export function App() {
               // here would set a preference with no visible effect until the filter clears.
               if(sidebarFilter)return
               setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))}}>
-              <span class="bucket-chevron" aria-hidden="true">{bucketCollapsed?'▸':'▾'}</span><span>{bucket.name}</span>
+              <span class="bucket-chevron" aria-hidden="true">{bucketCollapsed?'▸':'▾'}</span><span class="bucket-name">{bucket.name}</span>
+              {/* Folded, the header is the only thing left of the Group, so it carries both
+                  counts: how many Projects are inside (which the fold hid outright) and how
+                  many sessions are live across them, the latter coloured by the strongest
+                  state so a bare number cannot hide something waiting on you. */}
+              {bucketCollapsed&&<span class="bucket-count-badge" title={`${bucketItems.length} Project${bucketItems.length===1?'':'s'} in this group`}>{bucketItems.length}</span>}
               {bucketStatus&&bucketStatus.liveCount>0&&<span class={`bucket-collapsed-badge activity-${bucketStatus.activity} ${bucketStatus.unread?'unread':''}`} title={`${bucketStatus.liveCount} live session${bucketStatus.liveCount===1?'':'s'} · ${projectRailActivityLabel[bucketStatus.activity]}${bucketStatus.unread?' · unread output':''}`}><i aria-hidden="true"/>{bucketStatus.liveCount}</span>}
               {/* Rename only. Sort lives in the PROJECTS header, and delete is in the
                   Group's context menu behind a confirm — it carried a `×` here once, one
@@ -7955,7 +7960,10 @@ export function App() {
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onHandoff={openHandoff}/>}
 
-    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialSetting={projectsManagerFocus?.setting} revealToken={revealToken} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
+    {/* Opened with no target, the registry lands on the Project in focus rather than on
+        whichever one sorts first: "manage Projects" almost always means the one being
+        worked in, and the alphabetically-first Project is nobody's intent. */}
+    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId||projectId} initialSetting={projectsManagerFocus?.setting} revealToken={revealToken} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 
     {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}>
       <form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}>

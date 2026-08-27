@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
+import { byProjectName, projectDropdownOptions } from './projectOptions'
 import { formatBytes } from './networkUsage'
 
 type StorageBucket={name:string;bytes:number;files:number}
@@ -72,7 +73,7 @@ export function StorageUsageView() {
       <div class="network-usage-actions">
         <div><strong>{snapshot?`swe-mux footprint ${formatBytes(footprint)}`:'Measuring on-disk footprint…'}</strong><span>{snapshot?`${snapshot.data_dir}${snapshot.cached?` · cached ${Math.round(snapshot.age_seconds)}s ago`:` · measured in ${Math.round(snapshot.duration_ms)}ms`}`:'Walking the data directory and project files'}</span></div>
         <div class="resource-view-actions">
-          <label class="storage-usage-filter">project<Dropdown value={projectFilter} disabled={!snapshot} onChange={setProjectFilter} options={[{value:'',label:'All projects'},...projects.map(project=>({value:project.project_id,label:project.label}))]}/></label>
+          <label class="storage-usage-filter">project<Dropdown value={projectFilter} disabled={!snapshot} onChange={setProjectFilter} filter filterPlaceholder="Filter Projects…" options={[{value:'',label:'All projects'},...projectDropdownOptions(projects,project=>({value:project.project_id,label:project.label,detail:project.root}))]}/></label>
           <button disabled={refreshing} onClick={()=>void load(true)}>{refreshing?'measuring…':'refresh'}</button>
         </div>
       </div>
@@ -104,7 +105,7 @@ export function StorageUsageView() {
 
           <section class="network-usage-table">
             <h3>Projects (.swe-mux)</h3>
-            {projects.length?<div class="usage-table-scroll"><table><thead><tr><th>project</th><th>size</th><th>files</th></tr></thead><tbody>{projects.map(project=><tr key={project.project_id}><td title={project.root}><button class="storage-usage-drill" onClick={()=>setProjectFilter(project.project_id)}>{project.label}</button></td><td>{formatBytes(project.bytes)}</td><td>{integer.format(project.files)}</td></tr>)}</tbody></table></div>:<p>No project has written a .swe-mux folder yet.</p>}
+            {projects.length?<div class="usage-table-scroll"><table><thead><tr><th>project</th><th>size</th><th>files</th></tr></thead><tbody>{byProjectName(projects,project=>project.label).map(project=><tr key={project.project_id}><td title={project.root}><button class="storage-usage-drill" onClick={()=>setProjectFilter(project.project_id)}>{project.label}</button></td><td>{formatBytes(project.bytes)}</td><td>{integer.format(project.files)}</td></tr>)}</tbody></table></div>:<p>No project has written a .swe-mux folder yet.</p>}
           </section>
         </>}
       </main>

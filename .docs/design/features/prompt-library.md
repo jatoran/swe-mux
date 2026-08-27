@@ -33,7 +33,12 @@ Two unfocused Projects holding copies of one file are not ambiguous, and are not
 ## Browser flow
 
 The Actions drawer contains a Prompt templates section for browsing, inserting, and authoring templates beside Skills and Clipboard.
-Each row shows a bounded two-line excerpt of the body so templates remain distinguishable at a glance.
+Each row is a title with its scope, tags and field count as pills on the same line, over a bounded two-line
+excerpt of the body so templates remain distinguishable at a glance.
+The pills share the title's row rather than taking one of their own: as a second dim line under the title they
+inherited the shared clipboard row's `meta` grid area, which the excerpt also claims, and the two drew on top
+of each other. The fix that had covered that was keyed on an ancestor class the drawer no longer emits, which
+is why the row styling now keys off the row's own class.
 The section is expanded by default, remembers its disclosure state on the device, and its Manage button opens the full responsive library.
 The command palette, main menu, and that Manage button all open that same library.
 The session context menu no longer does: it opened a whole surface of its own from a menu whose every other row acts on the session and closes, and the library is a palette command and a drawer tab away from wherever you already are (`ui.md`).

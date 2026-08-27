@@ -29,13 +29,15 @@ render(
     <div class="sidebar" style="display:flex;flex-direction:column;background:var(--panel)">
       <div class="project-tree" style="flex:1;min-height:0;overflow:auto">
       <section class="sidebar-project-list sidebar-project-bucket" data-group-id="g1">
-        <header><span class="bucket-chevron" aria-hidden="true">▾</span><span>Active work</span>
+        <header><span class="bucket-chevron" aria-hidden="true">▾</span><span class="bucket-name">Active work</span>
           <button class="bucket-rename" aria-label="Rename group Active work">✎</button></header>
         {projectRow('swe-mux', true)}
         {projectRow('continuity')}
       </section>
       <section class="sidebar-project-list sidebar-project-bucket collapsed" data-group-id="g2">
-        <header><span class="bucket-chevron" aria-hidden="true">▸</span><span>Archived</span>
+        <header><span class="bucket-chevron" aria-hidden="true">▸</span><span class="bucket-name">Archived</span>
+          <span class="bucket-count-badge" title="3 Projects in this group">3</span>
+          <span class="bucket-collapsed-badge activity-working"><i aria-hidden="true"/>2</span>
           <button class="bucket-rename" aria-label="Rename group Archived">✎</button></header>
       </section>
       <div class="sidebar-project-list sidebar-ungrouped-projects" data-group-id="">
@@ -43,7 +45,7 @@ render(
         {projectRow('dotfiles')}
       </div>
       <section class="sidebar-project-list sidebar-project-bucket" data-group-id="g3">
-        <header><span class="bucket-chevron" aria-hidden="true">▾</span><span>Experiments</span>
+        <header><span class="bucket-chevron" aria-hidden="true">▾</span><span class="bucket-name">Experiments</span>
           <button class="bucket-rename" aria-label="Rename group Experiments">✎</button></header>
         {projectRow('orca')}
       </section>

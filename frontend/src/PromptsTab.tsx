@@ -304,7 +304,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     <div class="clipboard-entries" role="group" aria-label="Prompt templates">
       {filtered.map(item => <div key={item.key} class={`clipboard-entry ${selected === item.key ? 'active' : ''} has-actions`}>
         <button
-          class="clipboard-entry-body"
+          class="clipboard-entry-body prompt-entry-body"
           title={`${item.variables.length ? 'Fill placeholders, then insert' : 'Insert into the focused session'} · right-click or long-press to send to a session`}
           onContextMenu={event => {
             event.preventDefault(); event.stopPropagation()
@@ -321,8 +321,18 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
           onPointerLeave={cancelLongPress}
           onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } choose(item) }}
         >
-          <span>{item.favorite ? '★ ' : ''}{item.title}</span>
-          <small>{item.scope}{item.tags.length ? ` · ${item.tags.join(', ')}` : ''}{item.variables.length ? ` · ${item.variables.length} field${item.variables.length === 1 ? '' : 's'}` : ''}</small>
+          {/* Scope, tags and the field count ride the title's own row as pills. As a
+              second `<small>` under the title they inherited the clipboard row's
+              `meta` grid area, which the excerpt also claims, and the two drew on
+              top of each other. */}
+          <span class="prompt-row-head">
+            <span class="prompt-row-title">{item.favorite ? '★ ' : ''}{item.title}</span>
+            <span class="prompt-row-tags">
+              <b class="prompt-pill scope">{item.scope}</b>
+              {item.tags.map(tag => <b class="prompt-pill" key={tag}>{tag}</b>)}
+              {item.variables.length > 0 && <b class="prompt-pill fields">{item.variables.length} field{item.variables.length === 1 ? '' : 's'}</b>}
+            </span>
+          </span>
           <small class="prompt-template-excerpt">{promptTemplateExcerpt(item.body)}</small>
         </button>
         <button

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
+import { projectDropdownOptions } from './projectOptions'
 import { allBackendNames } from './harnessRegistry'
 import { notifyPromptLibraryChanged } from './promptLibraryEvents'
 import { promptTemplateVariables, type PromptTemplate } from './promptTemplates'
@@ -239,7 +240,8 @@ export function PromptDraftFields({ state, owners = [], compact }: {
         {template
           ? <input value={owner?.name || draft.projectId || 'unknown'} readOnly />
           : <Dropdown value={draft.projectId || ''} disabled={owners.length < 2} onChange={value => set({ projectId: value })}
-            options={owners.map(item => ({ value: item.id, label: item.name }))}/>}
+            filter filterPlaceholder="Filter Projects…"
+            options={projectDropdownOptions(owners, item => ({ value: item.id, label: item.name }))}/>}
       </label>}
     </div>
     <label>Tags

@@ -3589,6 +3589,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     /** Short face for a pad petal, where the chip's icon and full wording do not fit. */
     padLabel?:string
   }
+  // The three drop-up triggers, which are the only chips that open a list instead of
+  // doing the thing they are named after. `rail-picker` is what draws the corner mark
+  // that says so - deliberately a stack of rules rather than an arrow, because an arrow
+  // on a rail chip already means a pad's direction.
+  const railPickerView=(view:Omit<RailItemView,'run'>,kind:RailDropupState['kind']):RailItemView=>({
+    ...view,
+    className:`rail-picker ${dropup?.kind===kind?'rail-dropup-open-trigger ':''}${view.className||''}`.trim(),
+    expanded:dropup?.kind===kind,
+    run:anchor=>{if(anchor)toggleDropup(kind,anchor)},
+  })
   const railItemView=(item:RailItem):RailItemView|null=>{
     switch(item.id){
       case 'attach':{
@@ -3640,17 +3650,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // sticky row inside the drop-up, so nothing became less reachable.
       case 'clipboardHistory':{
         const view=actionPresentation(item)
-        return {...view,className:`${dropup?.kind==='clipboard'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined,expanded:dropup?.kind==='clipboard',run:anchor=>{if(anchor)toggleDropup('clipboard',anchor)},title:'Recent clipboard - tap an entry to insert it here',padLabel:'Clip'}
+        return {...railPickerView(view,'clipboard'),title:'Recent clipboard - tap an entry to insert it here',padLabel:'Clip'}
       }
       // `agentOnly` already keeps this off shells, where the endpoint 409s.
       case 'skills':{
         const view=actionPresentation(item)
-        return {...view,className:`${dropup?.kind==='skills'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined,expanded:dropup?.kind==='skills',run:anchor=>{if(anchor)toggleDropup('skills',anchor)},title:item.title||'Insert one of this session’s skills'}
+        return {...railPickerView(view,'skills'),title:item.title||'Insert one of this session’s skills'}
       }
       // Every template, not only those with dedicated configured buttons.
       case 'prompts':{
         const view=actionPresentation(item)
-        return {...view,className:`${dropup?.kind==='prompts'?'rail-dropup-open-trigger ':''}${view.className||''}`.trim()||undefined,expanded:dropup?.kind==='prompts',run:anchor=>{if(anchor)toggleDropup('prompts',anchor)},title:item.title||'Insert one of your prompt templates'}
+        return {...railPickerView(view,'prompts'),title:item.title||'Insert one of your prompt templates'}
       }
       case 'copyInput':{
         // Disabled rather than absent on an unmeasured harness: a button that is

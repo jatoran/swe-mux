@@ -22,7 +22,7 @@ import { useProjectConfig, type ProjectConfigStore } from './projectConfigState'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
 import { allBackendNames, harnessDisplayName } from './harnessRegistry'
 import { useDismissLevel } from './modalFocus'
-import { ProjectPicker, type ProjectPickerOption } from './ProjectPicker'
+import { byProjectName, projectDropdownOptions } from './projectOptions'
 
 // The Projects registry owns a Project's record, defaults, resources, and agent
 // authority. Control-plane opt-ins live in the Automation workspace with the graph
@@ -413,7 +413,10 @@ const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global o
 
 export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialSetting,revealToken,onClose,onAdd,onAddGroup,onOpen,onPatch,onRemove}:Props){
   const isVisible=(project:Project)=>project.sidebar_visible!==false
-  const ordered=useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)),[projects])
+  // By name, not by sidebar position. Position is the operator's own sidebar arrangement,
+  // which says nothing here: this list is searched for a Project by name, and the picker
+  // above it is read the same way.
+  const ordered=useMemo(()=>byProjectName(projects,project=>project.name),[projects])
   const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
   const panel=useRef<HTMLElement>(null)
   // List and detail sit side by side rather than drilling in, so the registry is one
@@ -560,8 +563,14 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     setSelectedId(id)
   }
   useEffect(()=>{setPendingSwitch(null)},[selectedId])
-  const pickerOptions=useMemo<ProjectPickerOption[]>(()=>ordered.map(project=>({
-    id:project.id,name:project.name,hint:project.root,visible:isVisible(project),
+  // The root is the `detail` line rather than a second field, and it is what the filter
+  // searches beyond the name: two checkouts of one repo are two Projects with the same name,
+  // and the path is the only thing that tells them apart. Sidebar visibility rides the same
+  // line, because it was a coloured dot the shared control has no room for.
+  const pickerOptions=useMemo(()=>projectDropdownOptions(ordered,project=>({
+    value:project.id,
+    label:project.name,
+    detail:`${project.root}${isVisible(project)?'':' · hidden'}`,
   })),[ordered])
 
   const save=async()=>{
@@ -617,7 +626,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
           <div data-tutorial="project-list" class="projects-manager-list">{shown.map(project=><button class={project.id===selected?.id?'active':''} onClick={()=>selectProject(project.id)}><span class={`project-visibility-dot ${isVisible(project)?'visible':'hidden'}`} aria-hidden="true"/><strong>{project.name}</strong><small>{project.root}</small><em>{isVisible(project)?'sidebar':'hidden'}</em></button>)}{!shown.length&&<p>No Projects match this view.</p>}</div>
         </aside>
         <main>{selected?<>
-          <div class="projects-manager-picker"><ProjectPicker id="projects-manager-picker" value={selected.id} options={pickerOptions} placeholder="Select a project…" onChange={selectProject}/></div>
+          <div class="projects-manager-picker"><Dropdown id="projects-manager-picker" class="projects-manager-picker-trigger" ariaLabel="Selected project" listLabel="Configured projects" value={selected.id} options={pickerOptions} placeholder="Select a project…" filter filterPlaceholder="Filter Projects…" onChange={selectProject}/></div>
           {pendingSwitch&&<div class="projects-manager-switch-confirm" role="alertdialog" aria-label="Unsaved changes"><span>Discard unsaved changes to <strong>{selected.name}</strong>?</span><div><button onClick={()=>setPendingSwitch(null)}>Keep editing</button><button class="danger" onClick={()=>{const target=pendingSwitch;setPendingSwitch(null);setSelectedId(target)}}>Discard and switch</button></div></div>}
           <div class="projects-manager-title"><span>PROJECT</span><h3>{selected.name}</h3><div class="projects-manager-title-meta"><small>{liveCount} live session{liveCount===1?'':'s'} · {selected.history_count||0} conversation{selected.history_count===1?'':'s'}{selected.root_available===false?' · folder missing':''}</small><div class="projects-manager-title-actions"><button data-tutorial="open-project" class="primary" disabled={selected.root_available===false} onClick={()=>onOpen(selected)}>Open workspace</button><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div></div></div>
           <div class="projects-manager-panel">

@@ -609,6 +609,9 @@ Its rules, and what each one is defending:
   A truncated list defeats that, which is why the model picker's unfiltered catalog is no longer capped: a control that cannot show you what it is set to is worse than a long list.
 - **Entries are ordered where they are built, not by the control.**
   A list with a meaningful order (a commit's parents, severity, recency) keeps it.
+  **Projects have no such order outside the sidebar**, so every list of them elsewhere - the filters in Automations, History, the process fleet, storage, the fleet queue; the scope pickers in the rail editor and the prompt editor; the registry's own list - is by name, case- and accent-insensitively and numerically, so `phase-9` precedes `phase-10`.
+  Registration order is meaningless to a reader and sidebar position is the operator's own arrangement, which says nothing on a surface they did not arrange.
+  The sidebar itself is the deliberate exception: that arrangement is the whole point of it.
   The OpenRouter catalog had no such order - it arrived in the provider's own, which read as reverse-alphabetical and was navigable by nobody - so the daemon now serves it A-Z, case-folded, ties broken by model id.
   That happens as the catalog leaves the cache rather than as it enters, so an install that fetched before the fix is corrected without anyone pressing Refresh.
 - **Keyboard and form semantics are the native control's, kept rather than approximated.**
@@ -617,9 +620,14 @@ Its rules, and what each one is defending:
 - **The list is drawn over everything, from the page's own root.**
   A picker inside a scrolling panel would be clipped by it - the Settings scroller, the drawer, a modal body - where the native popup was clipped by nothing.
   It opens downward and flips up only when there is no room, measured against what the soft keyboard leaves visible rather than against the full page.
+- **A list you search by name gets a filter box, from the same control.**
+  It is opt-in per surface rather than automatic on a row count, because a box that appeared on its own once a Project was added would move the first row under the finger between two visits.
+  Every rule above still holds while it is on - the pan still scrolls, the list still opens at the value in force, the order is still the data's - because the filter narrows the rows and changes nothing else.
+  Type-ahead stands down while it is on: it is the weaker answer to the same question, and two mechanisms competing for one highlight is worse than either alone.
+  This is what every Project picker uses, and it is why there is no longer a second hand-rolled one: the registry's picker was its own component, with its own filter, and with the commit-on-press defect the shared control had already fixed - so on a phone it could not be scrolled at all.
 - **Two pickers are deliberately not this control**, and both for the same reason: their rows are not a list of labels.
   The **theme picker** shows a swatch strip per row and *applies* a theme as you walk the list, committing nothing - a preview contract, not a selection one - and it is the design this component was modelled on.
-  The **model picker** filters hundreds of entries by typed text and shows an id and a price beside each name; a list is not how anyone finds one of those, so it stays a combobox.
+  The **model picker** shows an id and a price beside each name over a catalog of hundreds; it stays a combobox, where the typed text *is* the control rather than a box inside its list, and it can commit an id the catalog has never heard of.
   It borrows the three rules above that it was failing, which is the point: the rules belong to the app, not to one component.
 - The **Group** row in a Project's context menu also stays a pop-out submenu rather than becoming a dropdown, because a picker nested in a context menu opens a second overlay over one, and every row around it is a menu row.
 
@@ -1796,6 +1804,12 @@ Its rules, and what each one is defending:
   They take the same treatment the drawer overlay and the sidebar do, because they are the same kind of thing - a fixed panel covering everything, with nothing above it to leave behind: `top:var(--visual-offset)` and `bottom:var(--keyboard-cover)` on the layer, `height:100%` on the panel.
   So the *scroller* gives up the height, every control stays reachable, and the buttons come back above the keyboard.
   `height:auto` on the layer is load-bearing - the explicit `100dvh` would otherwise out-rank the shorter box those two describe.
+- **A chip that opens a list says so, in its own corner.**
+  Clip, Skills and Prompts are the only rail chips that do not *do* the thing they are named after - they
+  raise a list to pick from - and until the mark, nothing on the face distinguished them from a chip that
+  fires a key. A small stack of rules in the top-right corner reads as "a list opens here", and brightens
+  while its drop-up is open. Deliberately not an arrow: on this rail an arrow already means a pad direction.
+  The mark travels with the chip into the row's overflow popover, where the same chip is cloned.
 - **The drop-up pickers work from inside the popover.**
   A Clip, Skills, Prompts, or Actions chip opened there renders its drop-up *over* the panel and leaves it standing, which needs two exemptions rather than one: the tap that opens a drop-up is an outside press for the panel, and Escape reaches both listeners on `window` where `stopPropagation` stops neither — so the panel stands aside for as long as a drop-up is open.
   The exception is a selection that *takes you somewhere else*: a drawer tab, a drawer section, or the prompt library folds the panel, because leaving it standing would cover the surface the tap just asked for.
@@ -1819,6 +1833,15 @@ Its rules, and what each one is defending:
   A wedge in an upward fan does not claim to *be* a compass heading (Jump's four are line and document starts and ends, and nobody reads the leftmost as pointing west), so a wedge for Down is no more a lie than any other slot.
   And the centre cost the tap, which is worth more: what a pad *holds* is the one thing a finger cannot discover, because the chip shows marks rather than labels.
   A stored centre binding is carried onto the pad's first free wedge rather than dropped — dropping is what a slot the operator deliberately shrinks away gets, and nobody asked for the centre to go — and is dropped only when every wedge is already taken.
+- **A pad's chip marks its populated wedges, and the marks point outward.**
+  One tick per bound wedge, angled down that wedge - the direction the drag actually goes - so the chip is a
+  small picture of the fan it opens rather than a decoration. A far-ring tick sits inboard of its near
+  partner, which is the only thing on the chip that says a wedge has two depths.
+  They shipped pointing *inward*, 180° off, and placed at a percentage of the chip, which put the two
+  horizontal wedges' ticks within a pixel of the chip's own border - so on the four-arrow pad the leftmost
+  wedge read as unbound when it had been drawn all along. Ticks are placed at a fixed inset from each edge
+  instead, per axis, because a chip is much wider than it is tall.
+  Nothing about them is laid out: a pad is exactly as wide as the same chip would be with the marks removed.
 - **The fan can be divided two ways, and they cost different things.**
   By **angle**, into 1–5 wedges: this costs angular tolerance and nothing else.
   By **distance**, into 1 or 2 rings: this costs *fire-on-entry*, because reaching the far ring means crossing the near one, so a ringed pad's slots default to firing on release.
@@ -3225,6 +3248,7 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/Dropdown.tsx`
 - `frontend/src/dropdownOptions.ts`
 - `frontend/src/dropdownPlacement.ts`
+- `frontend/src/projectOptions.ts`
 - `frontend/src/dismissStack.ts`
 - `frontend/src/systemBack.ts`
 - `frontend/src/viewHistory.ts`

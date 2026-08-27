@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { Dropdown } from './Dropdown'
+import { compareProjectNames, projectDropdownOptions } from './projectOptions'
 import { useDismissLevel, useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
 import { TranscriptToolCalls } from './TranscriptToolCalls'
@@ -205,7 +206,10 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
       const group=groups.get(key)||{label:known?.removed_at?`${baseLabel} (removed)`:baseLabel,entries:[]}
       group.entries.push(entry);groups.set(key,group)
     }
-    return [...groups.entries()]
+    // Headings by Project name; the conversations inside each keep the feed's own order,
+    // which is what carries recency. The unassigned bucket sorts last rather than under U.
+    return [...groups.entries()].sort(([leftKey,left],[rightKey,right])=>
+      Number(leftKey===null)-Number(rightKey===null)||compareProjectNames(left.label,right.label))
   },[items,historyProjects,projects])
 
   const resetSections=()=>{setSections(defaultHistorySections());setTimelineExpanded(false)}
@@ -330,7 +334,7 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
       <aside>
         <div class="history-search">
           <div class="history-query-row"><input aria-label="Search session history" placeholder="Search prompts, replies, titles, and paths…" value={query} onInput={event=>setQuery(event.currentTarget.value)}/><Dropdown ariaLabel="Search within" value={scope} onChange={value=>setScope(value as typeof scope)} options={[{value:'all',label:'All content'},{value:'user',label:'User prompts'},{value:'assistant',label:'Agent replies'},{value:'metadata',label:'Titles + paths'}]}/></div>
-          <Dropdown ariaLabel="Filter history project" value={project} onChange={value=>{setProject(value);setTranscript(null)}} options={[{value:'',label:'All projects'},...projects.map(item=>({value:item.id,label:item.name})),{value:'__ungrouped__',label:'Unassigned'}]}/>
+          <Dropdown ariaLabel="Filter history project" value={project} onChange={value=>{setProject(value);setTranscript(null)}} filter filterPlaceholder="Filter Projects…" options={[{value:'',label:'All projects'},...projectDropdownOptions(projects,item=>({value:item.id,label:item.name,detail:item.root})),{value:'__ungrouped__',label:'Unassigned'}]}/>
           <Dropdown ariaLabel="Filter history provider" value={backend} onChange={setBackend} options={[{value:'',label:'All agents'},...historyHarnesses.map(harness=>({value:harness.name,label:harness.display_name}))]}/>
           <Dropdown ariaLabel="Filter history state" value={state} onChange={setState} options={[{value:'',label:'All states'},{value:'idle',label:'Completed'},{value:'exited',label:'Exited'},{value:'crashed',label:'Crashed'}]}/>
           <Dropdown ariaLabel="Filter history origin" value={external} onChange={setExternal} options={[{value:'',label:'Mux + external'},{value:'false',label:'Mux sessions'},{value:'true',label:'External sessions'}]}/>

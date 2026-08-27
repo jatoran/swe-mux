@@ -520,21 +520,32 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   >
     {content}
     {/* Populated wedges, marked inside the chip's own border. Drawn rather than laid out, so
-        the chip is exactly the size it would be without them. One tick per wedge, angled the
-        way that wedge points; a far-ring one sits inboard of its near partner, which is the
-        only thing on the chip that says a wedge has two depths. */}
+        the chip is exactly the size it would be without them. One tick per wedge, pointing
+        the way that wedge points; a far-ring one sits inboard of its near partner, which is
+        the only thing on the chip that says a wedge has two depths.
+        Placed against a *fixed inset from each edge* rather than at a percentage of the
+        chip. A percentage put the horizontal wedges' ticks within a pixel of the border on a
+        narrow chip, where the tick's arms lay along the border and read as part of it - the
+        leftmost wedge of the four-arrow pad looked unbound when it was drawn all along. The
+        inset is per-axis because a chip is much wider than it is tall. */}
     <span class="rail-pad-marks" aria-hidden="true">
       {populated.map(key => {
         const at = parsePadSlotKey(key)!
         const unit = padWedgeUnit(at.wedge, wedges)
-        const reach = at.ring > 0 ? 0.62 : 0.86
+        const reach = at.ring > 0 ? 0.7 : 1
+        const along = (axis: 'x' | 'y', inset: number) =>
+          `calc(50% + (50% - ${inset}px) * ${(unit[axis] * reach).toFixed(4)})`
         return <span
           key={key}
           class="rail-pad-mark"
           style={{
-            left: `${50 + unit.x * reach * 50}%`,
-            top: `${50 + unit.y * reach * 50}%`,
-            transform: `translate(-50%,-50%) rotate(${-padWedgeCentreDeg(at.wedge, wedges) - 45}deg)`,
+            left: along('x', 7),
+            top: along('y', 5),
+            // The glyph is a corner bracket whose apex points up-left, so `135 - centre`
+            // aims it down its own wedge - *outward*, the way the drag goes. It used to
+            // carry `-centre - 45`, which is 180° off: every tick pointed back at the
+            // middle of the chip.
+            transform: `translate(-50%,-50%) rotate(${135 - padWedgeCentreDeg(at.wedge, wedges)}deg)`,
           }}
         />
       })}

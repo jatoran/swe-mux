@@ -6,6 +6,7 @@ import {
   type SpendBreakdown,
 } from './automationCost'
 import { displayModelName } from './modelDisplay'
+import { byProjectName, projectDropdownOptions } from './projectOptions'
 import { ModelName } from './ModelName'
 import { AutomationSpendView } from './AutomationSpendView'
 import { useModalFocus } from './modalFocus'
@@ -229,7 +230,7 @@ export function AutomationDashboard({onClose,onOpenSession,onOpenAlerts,onOpenFi
         {view==='projects'&&<div class="usage-tables">
           <section class="usage-table automation-project-picker"><h3>Where automations run</h3>
             <div class="automation-project-toolbar">
-              <label>Project<Dropdown value={graphProject?.project_id||''} onChange={setGraphProjectId} options={(matrix?.projects||[]).map(project=>({value:project.project_id,label:project.project_name}))}/></label>
+              <label>Project<Dropdown value={graphProject?.project_id||''} onChange={setGraphProjectId} filter filterPlaceholder="Filter Projects…" options={projectDropdownOptions(matrix?.projects||[],project=>({value:project.project_id,label:project.project_name}))}/></label>
               <span>{graphProject?`${graphProject.enabled.length} of ${graphEntries.length} on${blockedCount?` · ${blockedCount} blocked`:''}`:'Loading…'}</span>
             </div>
             <p>Select a Project to inspect and edit its policy — every switch below turns something on or off for that Project alone, and nothing runs on a Project that did not opt in.</p>
@@ -241,7 +242,7 @@ export function AutomationDashboard({onClose,onOpenSession,onOpenAlerts,onOpenFi
           <section class="usage-table"><h3>All Projects</h3>
             {matrix?<div class="usage-table-scroll"><table class="data-table automation-matrix">
               <thead><tr><th>project</th><th>enabled</th><th>what is on</th><th/></tr></thead>
-              <tbody>{matrix.projects.map(project=>{
+              <tbody>{byProjectName(matrix.projects,project=>project.project_name).map(project=>{
                 const implemented=matrix.automations.filter(item=>item.implemented)
                 const labels=project.enabled.map(id=>matrix.automations.find(item=>item.id===id)?.label||id)
                 const projectBlocked=Object.keys(project.blocked).length

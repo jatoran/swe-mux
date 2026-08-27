@@ -112,10 +112,12 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - Mobile Project rows expose `⋮` immediately left of Run for the Project context menu.
   Project long-press is reserved for reorder; desktop right-click remains the pointer context-menu route.
   Mobile session long-press remains context-menu-only and never starts sidebar grouping or reorder.
-- A Group header's only button is `✎` (rename), revealed on hover over that header (and on
-  keyboard focus; touch always shows it, having no hover). It carried a `×` that deleted the Group and
-  ungrouped its Projects; that sat a pixel from the fold toggle and dissolved a Group on a stray
-  click, so no header button deletes a Group.
+- A Group header's only button is `✎` (rename), revealed on hover over that header and on keyboard focus.
+  It carried a `×` that deleted the Group and ungrouped its Projects; that sat a pixel from the fold toggle
+  and dissolved a Group on a stray click, so no header button deletes a Group.
+  **Touch does not get the button at all.** A coarse pointer never hovers, so it would be permanently on -
+  a fourth thing competing for a one-line strip whose job is the Group's name and its counts - and renaming
+  is already on the hold-for-actions menu, where every other Group action lives on mobile.
 - **A Group has its own context menu**, opened by right-clicking anywhere in its section that is not a Project or session row, or by holding its header on mobile.
   It carries exactly three items: `Rename group…`, `Collapse group` / `Expand group`, and `Delete group…`.
   The first two mirror the header's `✎` and its fold click, so the menu is a second route to them rather than the only one; delete has no other home, which is why the menu exists.
@@ -129,9 +131,21 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   tree, so creating a Group appeared to do nothing and the only way to fill it pointed at a section
   that was not on screen. The ungrouped root list follows the same rule in reverse: it renders
   whenever any Group exists, so a user who grouped every Project can still drag one back out.
-- A folded Group reports both a live-session count and the strongest agent state inside it,
-  in the collapsed rail's colours. A count alone would let an agent waiting for approval
-  disappear behind the fold, which is the one thing collapsing must not hide.
+- A folded Group reports **how many Projects it is hiding and how many sessions are live across them**,
+  the second coloured by the strongest agent state inside it, in the collapsed rail's colours.
+  A count alone would let an agent waiting for approval disappear behind the fold, which is the one thing
+  collapsing must not hide; and the Project count answers the thing the fold hid outright.
+  The two badges are told apart by shape rather than by position - the Project count is hollow and
+  uncoloured, the session count is a filled pill with a state dot - because only one of them carries a state.
+- **A Group reads as a container, not as a heading with a stripe beside it.**
+  Groups are interleaved with loose Projects rather than stacked below them, so a gap between two runs of
+  identical rows is not a statement about which run is inside anything: it needs a full border with its own
+  corner radius, a ground recessed from the sidebar's, rows inset and rounded inside it, and more air above
+  and below than any row has. The accent left edge stays as the Group's identity mark.
+- **A folded Group is deliberately not row-shaped.** Its header is taller than an open Group's and carries
+  the card's border and radius plus two receding edges beneath it, so it reads as a closed stack with
+  something under it rather than as one more Project row in the column. An empty Group has nothing stacked
+  and drops the cue.
 - A drag only ever permutes the rows on screen; a Project hidden from the sidebar keeps the slot it
   already held rather than being reshuffled by a reorder the user could not see. (Empty Groups are
   now on screen and so are ordinary drag participants; `mergeVisibleOrder` stays in the Group path
