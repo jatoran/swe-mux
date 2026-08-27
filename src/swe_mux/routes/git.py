@@ -58,13 +58,13 @@ async def list_worktrees(request: web.Request) -> web.Response:
     draws: four lists of up to two hundred file records per worktree, served so a badge
     can say "12 local". The full reading is what a row expansion asks for.
 
-    The `ETag` is over the reading that is being served, so the two cannot be confused
-    for one another, and it is the first conditional request anywhere in this daemon:
-    the overview is refetched by every client on any session's five-second dirty tick,
-    and the great majority of those answers are byte-identical to the one that client
-    already has.
+    It does not measure a repository on the read path. The daemon keeps its last
+    reading and serves that immediately, revalidating behind it and saying so when the
+    revalidation disagrees (`git_review.shared_worktree_overview`) - so a tab open costs
+    a conditional request rather than the ~700ms of Git that measuring 41 checkouts
+    takes. `fresh=1` is the explicit Refresh button opting back into waiting.
     """
-    extras = set(request.query) - {"project_id", "detail", "worktree"}
+    extras = set(request.query) - {"project_id", "detail", "worktree", "fresh"}
     if extras:
         raise git_review.GitReviewError(
             "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
@@ -78,11 +78,41 @@ async def list_worktrees(request: web.Request) -> web.Response:
     project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    events = request.app[keys.EVENTS]
+
+    def refreshed() -> None:
+        # A revalidation that landed on a different answer than the one a reader was
+        # served. Its own event type rather than `git_changed`: that one is a
+        # *session's* observation and is recorded as Tier 0 provenance, while this is
+        # the daemon saying "the reading you have is superseded" and has no session,
+        # no working tree, and nothing to record.
+        events.emit_background("git_overview_changed", project_id=project.id)
+
     payload = await git_review.shared_worktree_overview(
-        project.id, project.root, project.git_compare_ref, request.query.get("worktree") or None
+        project.id,
+        project.root,
+        project.git_compare_ref,
+        request.query.get("worktree") or None,
+        fresh=request.query.get("fresh") == "1",
+        on_refreshed=refreshed,
     )
     if detail == "summary":
         payload = git_review.summarize_overview(payload)
+    return _conditional_json(request, payload)
+
+
+def _conditional_json(request: web.Request, payload: Any) -> web.Response:
+    """A read whose answer is usually the one the client already has.
+
+    Every Git reading in this module has that shape - the drawer refetches all three on
+    any session's dirty tick, and the great majority of those answers are byte-identical
+    to the last one - so all three are served conditionally rather than only the
+    overview.
+
+    The `ETag` is over the bytes being served, so two readings of the same repository
+    can never be confused for one another: the summary and the full inventory, or a
+    searched ledger and an unsearched one, get different tags by construction.
+    """
     body = compact_json_bytes(payload)
     etag = f'W/"{hashlib.sha256(body).hexdigest()[:32]}"'
     # Weak, and honestly so: this is a semantic identity over the reading, not a promise
@@ -137,7 +167,8 @@ async def git_graph(request: web.Request) -> web.Response:
         return json_response({"error": "limit must be an integer"}, 400)
     if not 1 <= limit <= GIT_GRAPH_MAX_LIMIT:
         return json_response({"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400)
-    return json_response(
+    return _conditional_json(
+        request,
         await git_review.git_graph(
             project.id,
             project.root,
@@ -145,7 +176,7 @@ async def git_graph(request: web.Request) -> web.Response:
             grep=request.query.get("grep", ""),
             author=request.query.get("author", ""),
             regex=request.query.get("regex", "") in {"1", "true"},
-        )
+        ),
     )
 
 
@@ -204,12 +235,17 @@ async def git_provenance(request: web.Request) -> web.Response:
     # `items` stays one row per session per commit, which is what each piece of
     # evidence is about. `commits` answers the reader's question — who made this
     # commit and whose work is in it — without a second round trip.
-    return json_response(
+    # Conditional for the same reason as the overview, and with more to gain: the
+    # unsearched ledger is the largest payload this daemon serves (measured 2026-08-27:
+    # 994KB, 140KB compressed, at 500 rows in this repository), and the ledger is
+    # append-mostly, so a revisit is very often asking for bytes it already holds.
+    return _conditional_json(
+        request,
         {
             "items": items,
             "commits": summarize_git_provenance(items),
             "ref_moves": moves,
-        }
+        },
     )
 
 
@@ -497,6 +533,7 @@ async def init_repository(request: web.Request) -> web.Response:
         return json_response(
             {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
         )
+    git_review.invalidate_overview_cache(project.id)
     await request.app[keys.EVENTS].emit("git_changed", project_id=project.id)
     return json_response(
         {
@@ -591,6 +628,9 @@ async def create_worktree(request: web.Request) -> web.Response:
     if spawn_body is not None:
         setup = await _prepare_worktree_setup(request.app, spawn_body, path)
         result["spawn"] = await _spawn_into_worktree(request.app, spawn_body, path, setup)
+    # A new registration changes which rows exist, so no reader may be served the
+    # inventory that predates it (`git_review.invalidate_overview_cache`).
+    git_review.invalidate_overview_cache()
     await request.app[keys.EVENTS].emit("worktree_created", source="user", cwd=cwd, path=path)
     log.info(
         "worktree_create_completed operation_id=%s cwd=%s path=%s branch=%s "
@@ -662,9 +702,13 @@ async def remove_worktree(request: web.Request) -> web.Response:
         if outcome.removed:
             payload["removed"] = True
             payload["path"] = outcome.path
+        # Even a refusal: repair, or a Git command interrupted partway, can have
+        # changed the registration this reading describes.
+        git_review.invalidate_overview_cache()
         return json_response(payload, outcome.status)
     if outcome.purge_root is not None:
         _schedule_graveyard_purge(request.app, outcome.purge_root, operation_id)
+    git_review.invalidate_overview_cache()
     await request.app[keys.EVENTS].emit(
         "worktree_removed", source="user", cwd=cwd, path=outcome.registered
     )

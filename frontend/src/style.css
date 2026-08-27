@@ -4798,6 +4798,31 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
+/* ---- Delivery readiness, above the auto-delivery strip ---- */
+/* Not disclosed, unlike the auto-delivery line below it: that one reports a standing
+   policy that rarely changes, this one reports whether the thing you are about to do
+   will work. It is also the one place the reason is spelled out, so it takes the
+   vertical space a wrapped sentence needs rather than truncating to a code. */
+.queue-readiness{display:grid;gap:3px;padding:5px 10px;border-bottom:1px solid var(--line);font-size:9px;line-height:1.45}
+.queue-readiness-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
+.queue-readiness-headline{font-weight:600;text-transform:lowercase}
+.queue-readiness-summary{flex:1 1 auto;min-width:0;color:var(--text)}
+/* Only rendered once the reading is old enough to matter, so it reads as an
+   exception rather than as a permanent timestamp nobody looks at. */
+.queue-readiness-age{color:var(--muted);white-space:nowrap}
+.queue-readiness-clears,.queue-readiness-protected,.queue-readiness-also{margin:0;color:var(--muted);line-height:1.45}
+.queue-readiness-protected{color:var(--amber)}
+.queue-readiness-safe .queue-readiness-headline{color:var(--green)}
+.queue-readiness-blocked .queue-readiness-headline{color:var(--amber)}
+.queue-readiness-unknown .queue-readiness-headline{color:var(--muted)}
+/* Amber, not red: a not-deliverable target is the normal state of a working agent,
+   and colouring the common case as an error teaches the reader to stop seeing it. */
+.queue-readiness-blocked{background:color-mix(in srgb,var(--amber) 7%,transparent)}
+.queue-readiness-unknown{background:color-mix(in srgb,var(--muted) 7%,transparent)}
+/* Send stays enabled whatever this says — the daemon re-evaluates at send and its
+   verdict is the only one that acts. The hint is a hint. */
+.queue-send-hinted{border-color:color-mix(in srgb,var(--amber) 45%,var(--line))}
+
 /* ---- Auto-delivery, schedules, fleet queue, spawn requests ---- */
 /* One status line, disclosed. Two labelled checkboxes and a sentence cost three wrapped
    lines of a 380px column, permanently, above the thing the panel was opened for. */

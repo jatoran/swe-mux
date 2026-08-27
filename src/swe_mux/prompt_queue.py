@@ -39,7 +39,7 @@ import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
@@ -136,6 +136,57 @@ NON_OVERRIDABLE_REASONS = frozenset(
     {"session_ended", "not_live_agent_run", "approval_required", "awaiting_user_input"}
 )
 PROTECTED_AWAITING_REASONS = frozenset({"approval", "question", "elicitation"})
+
+
+def protected_reasons(record: Any, reasons: Sequence[str]) -> list[str]:
+    """Which of ``reasons`` no per-send confirmation may override.
+
+    Exactly what ``send_next`` computes before it refuses with
+    ``delivery_protected``, factored out so the surfaces that *display* readiness
+    say the same thing the daemon will do. A reader who cannot tell "press Send
+    anyway" from "this will be refused no matter what" learns the difference by
+    pressing the button, which is the one moment the confirmation is meant to
+    carry weight.
+    """
+
+    protected = sorted(set(reasons) & NON_OVERRIDABLE_REASONS)
+    awaiting = getattr(record, "awaiting_reason", None)
+    if getattr(record, "state", None) == "awaiting" and awaiting in PROTECTED_AWAITING_REASONS:
+        protected.append(f"awaiting_{awaiting}")
+    return protected
+
+
+def delivery_summary(
+    record: Any, evaluation: Mapping[str, Any], *, observed_at: float
+) -> dict[str, Any]:
+    """The compact, display-only readiness payload every client surface reads.
+
+    One builder for `/api/sessions`, the queue's target view, and the readiness
+    watcher, because three hand-rolled projections of the same verdict is how the
+    Queue tab and the send-to-agent dialog come to disagree about one session.
+
+    `authorized` is pinned false here as it is at the source: this classifies
+    evidence and never grants authority (`delivery-readiness.md`). `observed_at`
+    is not decoration — a client merges these onto session snapshots that can
+    outlive the reading (`sessionSnapshots.ts` preserves the last known readiness
+    across raw PTY updates), so without a stamp a stale verdict is indistinguishable
+    from a current one.
+    """
+
+    reasons = [str(item) for item in evaluation.get("reasons") or []]
+    return {
+        "state": evaluation["delivery_state"],
+        # Derived rather than read from the evaluation's own `reason`, which is
+        # defined as exactly this: one field that can disagree with the list beside
+        # it is one field that eventually will.
+        "reason": reasons[0] if reasons else "",
+        "reasons": reasons,
+        "protected": protected_reasons(record, reasons),
+        "interject_state": evaluation.get("interject_state"),
+        "observed_at": observed_at,
+        "authorized": False,
+    }
+
 
 # The disable reason the consecutive-auto-send cap writes. It lives here rather
 # than in `auto_delivery.py` because the store is what has to recognize it: the
@@ -2208,16 +2259,14 @@ class PromptQueueService:
         evaluation = self.readiness.evaluate(session)
         delivery_state = str(evaluation["delivery_state"])
         reasons = [str(reason) for reason in evaluation.get("reasons", [])]
-        protected_reasons = sorted(set(reasons) & NON_OVERRIDABLE_REASONS)
-        if record.state == "awaiting" and record.awaiting_reason in PROTECTED_AWAITING_REASONS:
-            protected_reasons.append(f"awaiting_{record.awaiting_reason}")
-        if protected_reasons:
+        blocking = protected_reasons(record, reasons)
+        if blocking:
             raise await refuse(
                 "delivery_protected",
                 "delivery is blocked by a protection that cannot be overridden",
                 message_state="blocked",
                 delivery_state=delivery_state,
-                reasons=protected_reasons,
+                reasons=blocking,
                 protected=True,
             )
         confirmed = False
@@ -2371,6 +2420,23 @@ class PromptQueueService:
             "agent_run_id": session.record.agent_run_id if session else None,
             "label": session.record.name if session else None,
             "state": session.record.state if session else None,
+            # Readiness rides the request the Queue tab already makes, so opening
+            # it never shows a verdict it has to correct a moment later. The
+            # watcher keeps it current afterwards, but it only follows sessions a
+            # surface can be reading — and the one case it cannot see is exactly
+            # this one: a mobile Queue tab, which replaces the terminal rather
+            # than sitting beside it, opened on a target with nothing queued yet.
+            "delivery_readiness": (
+                delivery_summary(
+                    session.record,
+                    self.readiness.evaluate(
+                        session, record_metrics=False, snapshot_pty_cache_seconds=1.0
+                    ),
+                    observed_at=time.time(),
+                )
+                if session is not None
+                else None
+            ),
         }
         return view
 

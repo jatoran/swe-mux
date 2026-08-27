@@ -29,6 +29,8 @@ from swe_mux.prompt_queue import (
     PromptQueueStore,
     QueueError,
     delivery_payload,
+    delivery_summary,
+    protected_reasons,
     stage_seed_argv,
 )
 
@@ -85,9 +87,13 @@ class ReadinessStub:
             interject_reasons if interject_reasons is not None else ["not_a_running_turn"]
         )
 
-    def evaluate(self, session: Any) -> dict[str, Any]:
+    def evaluate(self, session: Any, **_options: Any) -> dict[str, Any]:
+        # `**_options` because the display paths pass `record_metrics` and a
+        # snapshot cache bound the delivery path never uses. Swallowing them here
+        # keeps the stub from having to track the tracker's tuning knobs.
         return {
             "delivery_state": self.state,
+            "reason": self.reasons[0] if self.reasons else "",
             "reasons": list(self.reasons),
             "interject_state": self.interject_state,
             "interject_reasons": list(self.interject_reasons),
@@ -856,6 +862,93 @@ async def test_a_v1_database_migrates_in_place(tmp_path: Path) -> None:
         assert policy is not None and policy["accept_agent_interjections"] == 1
     finally:
         store.close()
+
+
+# ------------------------------------------------------- readiness projection
+
+
+def test_protected_reasons_are_exactly_what_send_next_will_refuse() -> None:
+    """One implementation, because the surfaces have to agree with the daemon.
+
+    A reader who cannot tell "press Send anyway" from "this will be refused no
+    matter what" learns the difference by pressing the button, which is the one
+    moment the confirmation is meant to carry weight.
+    """
+
+    idle = record("s1")
+    assert protected_reasons(idle, ["root_agent_working", "operator_recently_typed"]) == []
+    assert protected_reasons(idle, ["session_ended", "root_agent_working"]) == ["session_ended"]
+
+    # The awaiting protections are derived from the record, not from the reason
+    # list, which is why this cannot be a plain set intersection.
+    awaiting = record("s1", state="awaiting", awaiting_reason="approval")
+    assert protected_reasons(awaiting, ["root_agent_working"]) == ["awaiting_approval"]
+    unprotected = record("s1", state="awaiting", awaiting_reason="rate_limit")
+    assert protected_reasons(unprotected, ["provider_rate_limit"]) == []
+
+
+def test_delivery_summary_carries_what_a_surface_needs_and_grants_nothing() -> None:
+    evaluation = {
+        "delivery_state": "blocked",
+        "reason": "terminal_input_after_completion",
+        "reasons": ["terminal_input_after_completion", "operator_recently_typed"],
+        "interject_state": "safe",
+    }
+    summary = delivery_summary(record("s1"), evaluation, observed_at=1234.5)
+    assert summary == {
+        "state": "blocked",
+        "reason": "terminal_input_after_completion",
+        "reasons": ["terminal_input_after_completion", "operator_recently_typed"],
+        "protected": [],
+        "interject_state": "safe",
+        "observed_at": 1234.5,
+        "authorized": False,
+    }
+
+
+def test_delivery_summary_reason_is_always_the_first_of_reasons() -> None:
+    """Two fields that can disagree are one field that eventually will."""
+
+    evaluation = {"delivery_state": "blocked", "reason": "stale_copy", "reasons": ["session_ended"]}
+    summary = delivery_summary(record("s1"), evaluation, observed_at=0.0)
+    assert summary["reason"] == "session_ended"
+    assert summary["protected"] == ["session_ended"]
+
+
+@pytest.mark.asyncio
+async def test_the_target_view_carries_readiness_with_the_queue(harness: Harness) -> None:
+    """So opening the Queue tab never paints a verdict it corrects a moment later.
+
+    It rides this request rather than a second one because the readiness stream
+    only follows sessions some surface can be reading, and the case it cannot see
+    is exactly this one: a mobile Queue tab, which replaces the terminal rather
+    than sitting beside it, on a target with nothing queued yet.
+    """
+
+    harness.readiness.state = "blocked"
+    harness.readiness.reasons = ["terminal_input_after_completion"]
+    view = await harness.service.target_view("s1")
+    readiness = view["target"]["delivery_readiness"]
+    assert readiness is not None
+    assert readiness["state"] == "blocked"
+    assert readiness["reason"] == "terminal_input_after_completion"
+    assert readiness["authorized"] is False
+    assert readiness["observed_at"] > 0
+
+
+@pytest.mark.asyncio
+async def test_a_target_with_no_session_reports_no_readiness_rather_than_unknown(
+    harness: Harness,
+) -> None:
+    """A pop-out queue outliving its session has nothing to classify.
+
+    `null` and `unknown` are different facts — the second is a verdict the tracker
+    reached — and a surface that conflates them tells the reader the daemon looked
+    when it could not have.
+    """
+
+    view = await harness.service.target_view("gone")
+    assert view["target"]["delivery_readiness"] is None
 
 
 # -------------------------------------------------------------- seed staging

@@ -71,6 +71,44 @@ class EventBus:
         task.add_done_callback(finished)
         return task
 
+    def emit_transient(
+        self,
+        event_type: str,
+        *,
+        session_id: str | None = None,
+        source: str = "daemon",
+        **payload: Any,
+    ) -> MuxEvent:
+        """Fan one event out to live subscribers **without persisting it**.
+
+        See ``MuxEvent.transient``: the event reaches everyone currently subscribed,
+        carries no sequence number, and leaves the capped `events` history untouched.
+        For derived current-state fanout at a per-second cadence, where writing a row
+        would evict real history rather than add to it.
+
+        Its own method rather than a flag on `emit`, because `emit` takes its payload
+        as `**kwargs`: a keyword-only `transient=` there would silently swallow any
+        event that legitimately wanted a payload field of that name, and the failure
+        would be a missing field rather than an error.
+
+        Synchronous, because there is no sink to await. That also means it is safe to
+        call from a path that must not yield — nothing here can be interleaved with.
+
+        The coalescing `emit` applies to retried lifecycle events is deliberately not
+        applied: that dedupe exists for unordered side channels delivering the same
+        fact twice, and a transient event has no retry to collapse.
+        """
+
+        event = MuxEvent(
+            self._clock(), session_id, source, event_type, payload, transient=True
+        )
+        for queue in tuple(self._subscribers):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                self._record_drop(queue, event)
+        return event
+
     async def emit(
         self,
         event_type: str,
@@ -138,6 +176,18 @@ class EventBus:
             "last_drop_ts": dict(self._last_drop_ts),
             "queue_depth": depths,
         }
+
+    def subscriber_count(self, name: str) -> int:
+        """How many live subscribers registered under ``name``.
+
+        For loops whose only consumer is a browser: a producer that costs real work
+        per tick should be able to ask whether anyone is listening, rather than
+        computing a fanout nobody receives. Counted by label because the daemon's
+        own consumers subscribe to the same bus, so a bare subscriber count is
+        never zero and answers a different question.
+        """
+
+        return sum(1 for queue in self._subscribers if self._labels.get(id(queue)) == name)
 
     def subscribe(self, *, name: str = "anonymous") -> asyncio.Queue[MuxEvent]:
         queue: asyncio.Queue[MuxEvent] = asyncio.Queue(maxsize=1024)
