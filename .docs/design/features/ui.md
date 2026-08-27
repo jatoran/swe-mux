@@ -1607,15 +1607,49 @@ Its rules, and what each one is defending:
   menu. Selection release automatically attempts to copy by default; the preference is
   hot-reloadable from Settings.
 - A terminal touch that is not a typing tap leaves the soft keyboard exactly as open or closed
-  as it found it. Not raising it is only half of that, and was the only half the pane
-  implemented: every touch here lands on non-editable content, because the mobile IME bridge is
-  a 1px `pointer-events:none` field, and Android lowers the keyboard whenever a touch resolves
-  against something other than the field holding it up. A long-press-and-drag to select and copy
-  therefore closed the keyboard with nothing in the pane asking for it. The pane records the
-  keyboard's holder at `pointerdown` and hands it back at `pointerup`/`pointercancel` unless the
-  gesture resolved as a typing tap, which owns the focus decision itself. Restoration is deferred
-  one frame and ordered after the selection copy, because the platform makes its own focus
-  decision as the tap resolves and would otherwise undo a restore issued inside the handler.
+  as it found it, in both directions. Not raising it is only half of that, and was the only half
+  the pane implemented: every touch here lands on non-editable content, because the mobile IME
+  bridge is a 1px `pointer-events:none` field, and Android lowers the keyboard whenever a touch
+  resolves against something other than the field holding it up. A long-press-and-drag to select
+  and copy therefore closed the keyboard with nothing in the pane asking for it. The pane records
+  the keyboard's holder at `pointerdown` and hands it back at `pointerup`/`pointercancel` unless
+  the gesture resolved as a typing tap, which owns the focus decision itself. Restoration is
+  deferred one frame and ordered after the selection copy, because the platform makes its own
+  focus decision as the tap resolves and would otherwise undo a restore issued inside the handler.
+- Restoration alone was never enough, because a repair is visible. Between the platform lowering
+  the keyboard and the next frame putting it back the pane reflows twice - the reserved strip is
+  handed back, which *resizes xterm* and moves the cells out from under the finger mid-selection,
+  and the peek translate reverts - so the layers below prevent the loss rather than repairing it,
+  and the restore is the backstop for what still gets through.
+  - The bridge refuses to be blurred while a gesture is in flight, re-focusing synchronously
+    inside the platform's own `focusout` so the IME never animates out (`shouldHoldBridgeFocus`).
+    It arms only when the bridge itself held the keyboard as the finger landed, which is what
+    makes it incapable of raising one that was down.
+  - The window in which a touch gesture's replayed mouse events are swallowed is measured from
+    the *end* of the gesture (`touchCompatMouseEvent`). Measured from the start, as it was, it
+    was really a cap on how long a hold was allowed to be: past it the replay reached xterm's
+    `mousedown` handler, which is `preventDefault(); this.focus()`, and the keyboard came up by
+    itself. Short gestures behaved and long ones did not, which is what read as intermittent.
+  - On a touch device the bridge is the only element permitted to raise the keyboard at all,
+    enforced by giving xterm's helper textarea `inputmode="none"`. That closes every path
+    through xterm at once, including the ones nobody enumerated, and it repairs the predicates
+    downstream: an un-neutralised helper reads as a field legitimately holding the keyboard, so
+    the loss was invisible to `softKeyboardLost` while mobile input had stopped being routed
+    through the bridge.
+  - A touch on the grid freezes every keyboard-driven layout answer until the finger leaves. The
+    pane defers its own reaction to the keyboard moving and replays only the newest reading at
+    release, and a `keyboard-gesture-hold` class keeps the peek translate applying even though
+    `soft-keyboard-open` is App's reading of the live viewport and cannot be deferred. So when
+    the layers above lose anyway, the correction happens after the release rather than under the
+    finger. The deferred reading is dropped when the restore succeeded, since the pane is one
+    line away from contradicting it.
+- The invariant reports its own violations. A non-tap gesture that ends with the keyboard in a
+  different state than it began, absent a deliberate dismissal, emits
+  `mobile_gesture_keyboard_changed` with the direction, whether it was a selection, and the hold
+  duration - duration being the discriminator, given what the old window was really capping. The
+  symptom is unfalsifiable from outside ("it sometimes opens the keyboard" names no layer and no
+  gesture), so the next occurrence arrives as evidence rather than as another report of
+  intermittency.
 - Restoration is scoped to a keyboard actually lost: focus that moved to another text field kept
   the keyboard up, so it stands rather than being pulled back to the terminal (`softKeyboardLost`
   in `mobileKeyboard.ts`). A gesture that began with the keyboard already down restores nothing,
@@ -1631,7 +1665,9 @@ Its rules, and what each one is defending:
 - One gap remains, and it is not reachable through focus. Dismissing the keyboard with the
   Android back gesture hides it without blurring the field, so the pane sees an unchanged holder
   and Chrome may re-raise the keyboard on the next touch that resolves against that same focused
-  field. Closing it needs an `inputmode` gate rather than focus bookkeeping. The keyboard toggle
+  field. Closing it needs an `inputmode` gate on the *bridge* rather than focus bookkeeping -
+  a different element from the `inputmode="none"` on xterm's helper textarea above, which
+  governs what may raise the keyboard rather than what is holding it. The keyboard toggle
   (`terminal.keyboardToggle`) is unaffected: it blurs, so the pane and the platform agree.
 - A still primary tap or click inside the currently editable agent composer moves its caret.
   Which path a pane takes follows the terminal's measured mouse mode rather than which harness is running.

@@ -769,6 +769,14 @@ CLIENT_INPUT_DIAGNOSTIC_PHASES = frozenset(
         # scrollback, a forwarded wheel, or `disabled` — are indistinguishable from outside
         # when they fail. The report carries which one it took and what the pane believed.
         "mobile_drag_inert",
+        # A mobile gesture that was not a tap left the soft keyboard in a different state
+        # than it found it. The pane holds that as an invariant in both directions and
+        # reports its own violations, because the symptom is unfalsifiable from outside:
+        # "it sometimes opens the keyboard" names neither a layer nor a gesture. The report
+        # carries the direction, whether it was a selection, and how long the hold was —
+        # duration being the discriminator, since the compat-mouse suppression window that
+        # used to leak was really a cap on how long a deliberate hold was allowed to be.
+        "mobile_gesture_keyboard_changed",
     }
 )
 

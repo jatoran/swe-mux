@@ -650,6 +650,25 @@ async def test_client_diagnostic_persists_allowlisted_repairs_rate_limited() -> 
         assert input_event.payload["phase"] == "input_main_thread_stall"
         assert json.loads(input_event.payload["detail"]) == {"durationMs": 8500}
         assert input_event.payload["input_owner"] is False
+
+        # A mobile gesture that changed the soft keyboard it was supposed to leave alone.
+        # Its own phase, so the per-phase rate window cannot let a chatty neighbour absorb
+        # it: the report is only useful as evidence of a violation the pane cannot
+        # reproduce on demand.
+        await ws.send_json(
+            {
+                "type": "client_diagnostic",
+                "phase": "mobile_gesture_keyboard_changed",
+                "detail": {"direction": "opened", "selecting": True, "durationMs": 2400},
+            }
+        )
+        gesture_event = await _next_event_of(events, "terminal_input_diagnostic")
+        assert gesture_event.payload["phase"] == "mobile_gesture_keyboard_changed"
+        assert json.loads(gesture_event.payload["detail"]) == {
+            "direction": "opened",
+            "selecting": True,
+            "durationMs": 2400,
+        }
         await ws.close()
 
 
