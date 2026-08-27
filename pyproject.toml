@@ -4,6 +4,41 @@ version = "0.1.0"
 description = "A browser-based terminal multiplexer for interactive coding agents"
 readme = "README.md"
 requires-python = ">=3.12"
+# Every entry is a claim an installer can check, so each one is what the project
+# actually proves rather than what it aspires to.
+#
+# There is deliberately **no `License ::` classifier**. The license is declared as
+# the PEP 639 `license` expression below, and carrying both is an error: build
+# backends reject the pair, and a classifier is the legacy spelling of the same
+# fact.
+#
+# The operating-system entries are the honest half. Windows is the proving
+# platform - it is where the frozen desktop app ships, where ConPTY is the PTY
+# backend, and where the full CI gate runs. Linux runs the daemon and the suite
+# from source on the POSIX seam, so it is claimed. macOS is implemented and
+# typechecked but has never been exercised (its CI leg is `continue-on-error`),
+# so it is not claimed, and `Operating System :: OS Independent` would be false
+# about all three.
+#
+# `Development Status :: 3 - Alpha` matches the distribution rather than the
+# feature set: the code is used daily, but no clean-machine install of this wheel
+# has been proven yet (`.docs/development/ROADMAP.md` Phase 11).
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development",
+  "Topic :: System :: Shells",
+  "Topic :: Terminals",
+  "Topic :: Terminals :: Terminal Emulators/X Terminals",
+  "Topic :: Utilities",
+]
 # Declared as a PEP 639 SPDX expression rather than a classifier. Without this the
 # wheel shipped no license metadata at all, which reads as all-rights-reserved over
 # an Apache-2.0 repository - the one place a permissive project can accidentally
@@ -45,6 +80,18 @@ dependencies = [
   "tzdata>=2024.1; sys_platform == 'win32'",
   "watchfiles>=1.0",
 ]
+
+[project.urls]
+# TODO(release): OWNER - the GitHub organization has not been decided, so every
+# repository URL here carries the `OWNER` placeholder. Replace it in one pass
+# when the repository is published; these strings are what an installed copy and
+# every package index page point at, and a placeholder that survives publication
+# is a dead link on the artifact rather than in a document.
+Homepage = "https://swemux.dev"
+Repository = "https://github.com/OWNER/swe-mux"
+Documentation = "https://swemux.dev/docs/"
+Changelog = "https://github.com/OWNER/swe-mux/blob/master/CHANGELOG.md"
+Issues = "https://github.com/OWNER/swe-mux/issues"
 
 [project.scripts]
 mux = "swe_mux.cli:main"
