@@ -217,6 +217,27 @@ export function hasDrawerSegments(tab: DrawerTabId): boolean {
 }
 
 /**
+ * Tabs whose segments are three readings of one component, not three components.
+ *
+ * The default shape mounts one body *per segment*, so switching segments unmounts the
+ * one you left. That is right when the segments are unrelated panes. It is wrong for
+ * Git: Map, Log, and Provenance are one component reading one repository, they share a
+ * refresh listener, a comparison ref, a land queue, and a commit cache, and mounting
+ * them separately meant switching to Log and back threw away the map, the reader's
+ * expanded worktree, and the filter they had typed — then paid for all of it again.
+ *
+ * `keepMounted` is not the fix here and would be the wrong one: it would leave all
+ * three instances alive, each with its own `git_changed` listener, and turn one refresh
+ * into three. One mount taking the active segment as a prop is what the component
+ * already expects — `GitTab` has always switched on a `view` prop internally.
+ */
+const SHARED_SEGMENT_BODY_TABS: DrawerTabId[] = ['git']
+
+export function hasSharedSegmentBody(tab: DrawerTabId): boolean {
+  return SHARED_SEGMENT_BODY_TABS.includes(tab)
+}
+
+/**
  * The `[data-setting]` value a section marks itself with.
  *
  * Sections reuse `settingReveal.ts` rather than growing a parallel mechanism: it already
