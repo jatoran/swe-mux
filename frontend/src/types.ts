@@ -123,6 +123,29 @@ export interface DeliveryReadiness {
   authorized: false
 }
 
+/** Why the daemon believes this pane's console has more than one reader.
+ *
+ * `agent_orphaned` - the CLI outlived the wrapper that launched it, so nothing
+ * is holding the shell back and nothing will reap the CLI with the pane.
+ * `shell_regained_console` - the shell printed a prompt while the CLI is alive.
+ * `shim_exited_first` - the launch wrapper reported its own child outliving it.
+ */
+export type ConsoleContentionReason =
+  'agent_orphaned' | 'shell_regained_console' | 'shim_exited_first'
+
+export interface ConsoleContention {
+  reason: ConsoleContentionReason | string
+  since: number
+  census?: {
+    root_pid: number | null
+    agent_pid: number | null
+    agent_alive: boolean | null
+    agent_in_pty_tree: boolean | null
+    participants?: { pid: number; name: string; is_root?: boolean; is_agent?: boolean }[]
+    error?: string | null
+  }
+}
+
 export interface Session {
   id: string; name: string; project_id: string; backend: string
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
@@ -154,6 +177,17 @@ export interface Session {
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
   standing_activity?: StandingActivity[]
+  /** Agent backends whose launch has been seen in this still-`shell` pane's
+   *  output but which have not promoted it yet. The window is real — measured at
+   *  ~10s on the frozen app — and during it the pane would otherwise apply shell
+   *  input encoding to an agent's composer (`inputBackend.ts`). */
+  agent_launch_pending?: string[]
+  /** The promoted CLI's own pid, distinct from `pid` (this pane's PTY root). */
+  agent_process_pid?: number | null
+  /** Set while this pane's shell has the terminal back with its agent still
+   *  running: two processes reading one pseudoconsole, which presents as a
+   *  composer that shows none of what was typed. */
+  console_contention?: ConsoleContention | null
   /** Absent from a daemon predating control-plane approvals, which reads as `wait`. */
   approval_policy?: ApprovalPolicy
   process_job_assignment:string

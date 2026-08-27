@@ -15,6 +15,8 @@ import { takeBranchSeed } from './branchSeed'
 import type { Session } from './types'
 import { sessionDisplayName } from './sessionNames'
 import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
+import { consoleContentionNotice } from './consoleContention.ts'
+import { resolveInputBackend } from './inputBackend.ts'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
@@ -288,12 +290,16 @@ function acceptsTerminalAttachments(session: Session) {
  * prepended to the paste text, because xterm would rewrite it to a bare CR.
  */
 function pasteIntoTerminal(term: Terminal, session: Session, text: string) {
-  const { leading, body } = composerInsertionParts(text, session.backend)
+  // Input encoding follows the launch, not the binding: a paste into an agent
+  // that has started but not promoted yet must still be bracketed, or xterm
+  // turns each of its newlines into a submit (`inputBackend.ts`).
+  const inputBackend = resolveInputBackend(session)
+  const { leading, body } = composerInsertionParts(text, inputBackend)
   if (leading) term.input(leading, true)
   if (!body) return
   if (pasteNeedsManualBracketing({
     text: body,
-    agentBackend: acceptsTerminalAttachments(session),
+    agentBackend: isAgentBackend(inputBackend),
     bracketedPasteMode: term.modes.bracketedPasteMode,
   })) {
     // term.input keeps this on the normal onData path, so broadcast membership and
@@ -730,6 +736,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   stateRef.current=session.state
   const backendRef=useRef(session.backend)
   backendRef.current=session.backend
+  // The backend whose *input encoding* applies, which leads `backend` by the
+  // length of an unpromoted launch. Kept as its own ref beside the real one so
+  // a handler has to name which question it is asking (`inputBackend.ts`).
+  const inputBackendRef=useRef(resolveInputBackend(session))
+  inputBackendRef.current=resolveInputBackend(session)
   // An ended or recovered pane has no child to receive keystrokes. The daemon
   // refuses the write either way, so this is not what makes it safe — it is what
   // stops a pane the operator is reading from filling the socket with input it
@@ -1071,7 +1082,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     window.addEventListener('mux:theme', onTheme)
     term.attachCustomKeyEventHandler(event => {
-      const decision = terminalKeyDecision(event, keybindings[keyChord(event)], term.hasSelection(), session.backend)
+      const decision = terminalKeyDecision(event, keybindings[keyChord(event)], term.hasSelection(), resolveInputBackend(session))
       if (decision.kind === 'sendInput') {
         event.preventDefault()
         // term.input keeps the write on the normal onData path, so broadcast membership
@@ -2428,7 +2439,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       return socket.readyState===WebSocket.CONNECTING?'connecting':'closed'
     }
     const input = term.onData(data => {
-      if (shouldSuppressTerminalProtocolResponse(data, backendRef.current)) return
+      if (shouldSuppressTerminalProtocolResponse(data, inputBackendRef.current)) return
       if (isTerminalProtocolResponse(data)) {
         // Terminal query replies are only meaningful inside the probe window that asked
         // for them, so these are never queued: a late reply is worse than none.
@@ -2503,7 +2514,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const terminalBeforeInputCapture = (event: InputEvent) => notePhysicalInput(event, 'beforeinput')
     // A shell can promote into an agent harness without replacing the pane, so read
     // the live backend at the event rather than capturing the effect's first one.
-    const mobileLineBreak=()=>mobileEnterPayload(backendRef.current)
+    const mobileLineBreak=()=>mobileEnterPayload(inputBackendRef.current)
     let lineBreakSent=false
     let lineBreakResetTimer:number|undefined
     const markLineBreakSent=()=>{
@@ -3949,6 +3960,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const renderedRailRows=builtRailRows.length?builtRailRows:[{id:'rail-empty',nodes:[]}]
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
+  // Ordered above every other notice in the slot, because it is the only one
+  // that explains input going *nowhere*. A letterbox or a width cap is a pane
+  // rendered at a size nobody chose; this is a pane whose keystrokes are being
+  // read by two processes, which is indistinguishable from the app failing.
+  const contentionNotice=consoleContentionNotice(session)
   // No style at all when the cap is off, rather than one carrying `maxWidth:'none'`:
   // an uncapped Claude pane then has exactly the host every other backend has, so
   // "the envelope is disabled" and "this build never had an envelope" are the same
@@ -3983,7 +3999,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     <button class={findCase ? 'active' : ''} title="Match case" aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>Aa</button>
     <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
     <button title="Close find" onClick={closeFind}>×</button>
-  </div>}{ownerNotice
+  </div>}{contentionNotice
+    ?<div class="terminal-input-owner console-contention-notice" role="alert" title={contentionNotice.hint}><span>{contentionNotice.text}</span><SettingLink variant="link" target="terminals.agentShims" title="How agents launched from a shell reach this terminal">Why?</SettingLink></div>
+    :ownerNotice
     ?<div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive?` · showing its ${letterboxSize}`:''}</span><button title="Take terminal input on this device" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Take over</button></div>
     /* Letterboxed with nobody else visibly holding input. `inputOwnerNotice` only speaks
        when this pane was *refused*, so the case that looks most broken — a grid drawn at
@@ -3995,7 +4013,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
        grid the user can widen from Settings. A pane that is both letterboxed and
        capped is showing another device's size, and naming this device's envelope
        would be describing something that is not on screen. */}
-  {!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span><SettingLink variant="link" target="terminals.claudeWidth" title="Change or remove the Claude width limit">Change…</SettingLink></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+  {!contentionNotice&&!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span><SettingLink variant="link" target="terminals.claudeWidth" title="Change or remove the Claude width limit">Change…</SettingLink></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
