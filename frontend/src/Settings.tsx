@@ -108,6 +108,7 @@ type Config = {
   usage_commands:Record<string,string[]>
   custom_theme:CustomTheme
   default_shell_profile:string; shell_profiles:LaunchProfile[]
+  agent_shims_on_shell_path:boolean
   project_ignore_patterns:string[]
   project_init_scripts:InitScript[]
   auto_delivery_enabled:boolean;auto_delivery_stable_seconds:number
@@ -1472,6 +1473,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Default profile</h3>
             <label>Global default terminal profile<Dropdown value={draft.default_shell_profile} onChange={value=>change('default_shell_profile',value)} options={draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))}/></label>
           <p>A profile names an executable, arguments, and environment. Shell profiles open terminals; agent profiles start a harness variant. Project defaults are under Projects → Options.</p>
+          </section>
+
+          <section><h3>Typing an agent's name in a terminal</h3>
+            <label class="check" data-setting="agent_shims_on_shell_path"><span>Launch agents through swe-mux <em>· makes a typed <code>claude</code> a real session</em></span><input type="checkbox" checked={draft.agent_shims_on_shell_path} onChange={e=>change('agent_shims_on_shell_path',e.currentTarget.checked)} /></label>
+            <p>On, a terminal's PATH starts with <code>~/.mux/bin</code>, so typing an agent's name launches it through swe-mux: the pane adopts the conversation, gets a name, and joins status detection, history, and the prompt queue.</p>
+            <p class="profile-hint">Off, <code>claude</code> in a terminal means your own <code>claude</code> and the pane stays a shell. Choose this if you use swe-mux purely as a terminal multiplexer. Agents started from the Run menu are unaffected either way — they are spawned straight into their terminal and never go through this. Takes effect on the next daemon restart, for terminals opened after it.</p>
           </section>
 
           <section class="profile-settings"><h3>Launch profiles</h3>

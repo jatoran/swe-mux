@@ -181,11 +181,30 @@ def create_agent_shims(
     bin_dir.mkdir(parents=True, exist_ok=True)
     for backend in agent_harnesses():
         _write_shim(bin_dir, backend)
+    # `agent_shims_on_shell_path` governs only what a shell pane's PATH advertises,
+    # so the shims themselves are written either way: `MUX_*_EXE` and the settings
+    # paths below are read by any shim that is invoked by absolute path, and a user
+    # who turns the setting back on must not have to restart the daemon to get a
+    # working `~/.mux/bin`. With it off, PATH and `MUX_SHIM_DIR` are simply absent,
+    # which also makes the PowerShell profile's own re-assertion of the shim
+    # directory a no-op by construction (`profiles._powershell_bootstrap`) rather
+    # than by a second copy of this decision.
+    on_path = bool(getattr(config, "agent_shims_on_shell_path", True))
     result = {
         # Strip inherited shim directories (ours or a stale data dir's) before
         # prepending, so sessions see exactly one shim dir at the front.
-        "PATH": f"{bin_dir}{os.pathsep}{path_without_shim_dirs()}",
-        "MUX_SHIM_DIR": str(bin_dir),
+        **(
+            {
+                "PATH": f"{bin_dir}{os.pathsep}{path_without_shim_dirs()}",
+                "MUX_SHIM_DIR": str(bin_dir),
+            }
+            if on_path
+            # A session must not inherit the *daemon's* shim directory when the
+            # setting is off: a daemon relaunched from inside a session carries one
+            # on its own PATH, and passing that through would reinstate the feature
+            # the operator turned off, silently and only on that host.
+            else {"PATH": path_without_shim_dirs()}
+        ),
         # Roots for the per-session artifacts a shim-launched harness has to
         # materialize itself, because a shell promotion has no adapter to do it.
         # Missing `MUX_OPENCODE_CONFIG_ROOT` meant `agent_launcher._opencode`
