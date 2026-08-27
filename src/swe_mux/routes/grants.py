@@ -49,13 +49,17 @@ async def describe_grants(request: web.Request) -> web.Response:
     one the daemon will accept, so a renamed switch fails a test instead of failing at
     the click - the same rule `settingTargets.test.ts` already applies to deep links.
     """
+    config: Config = request.app[keys.CONFIG]
     return json_response(
         {
             "install": sorted(GRANTABLE_INSTALL_KEYS),
             "values": {
                 key: list(allowed) for key, allowed in sorted(GRANTABLE_PROJECT_VALUES.items())
             },
-            "automations": automation._automation_registry_payload(),
+            # With the config threaded in, each entry carries `globally_allowed`
+            # so the creation form and every gate can grey a set the install-wide
+            # ceiling blocks instead of offering a grant the daemon will refuse.
+            "automations": automation._automation_registry_payload(config),
             "recommended_project_automations": list(RECOMMENDED_PROJECT_AUTOMATIONS),
             # The named starting sets the create form offers as checkboxes. Served
             # rather than restated in the browser so the form and the daemon cannot
@@ -163,6 +167,7 @@ async def apply_grants(request: web.Request) -> web.Response:
             },
             current_automations=current_automations,
             current_values=current_values,
+            global_allow=automation._global_allow(config),
         )
     except GrantRefusal as refusal:
         return json_response({"error": refusal.message, "code": refusal.code}, 409)
@@ -243,9 +248,11 @@ async def apply_grants(request: web.Request) -> web.Response:
     if project is not None:
         result["project"] = {
             **await automation._project_automation_state(
-                project, llm=await automation._llm_readiness(request)
+                project,
+                llm=await automation._llm_readiness(request),
+                global_allow=automation._global_allow(config),
             ),
-            "automations": automation._automation_registry_payload(),
+            "automations": automation._automation_registry_payload(config),
         }
     return json_response(result)
 

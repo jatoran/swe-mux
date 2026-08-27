@@ -44,6 +44,7 @@ from .auto_delivery import AutoDeliveryController
 from .automation import (
     AutomationEngine,
 )
+from .automation_registry import effective_global_allow
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
@@ -1147,6 +1148,11 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         leaves the free consumers over them running on the records they already
         have. `Resolution.unverified` carries which ones and the status endpoint
         carries why, so the switch reads as held back rather than as broken.
+
+        The install-wide ceiling joins it at the same chokepoint: an automation
+        the operator disallowed globally (`automation_global_allow`, plus the
+        scan timeline's dedicated switch) is off in every Project along with
+        everything that depends on it, however the Project's own map reads.
         """
         now = time.monotonic()
         cached = automation_gate_cache.get(root)
@@ -1154,7 +1160,14 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             return cached[1]
         project_map = await asyncio.to_thread(project_automations, root)
         ready = await _llm_ready()
-        enabled = resolve_automation_config(project_map, llm_ready=ready.ready).enabled
+        enabled = resolve_automation_config(
+            project_map,
+            llm_ready=ready.ready,
+            global_allow=effective_global_allow(
+                config.automation_global_allow,
+                scan_timeline_enabled=config.scan_timeline_enabled,
+            ),
+        ).enabled
         automation_gate_cache[root] = (now, enabled)
         return enabled
 

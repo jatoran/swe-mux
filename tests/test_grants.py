@@ -202,6 +202,55 @@ def test_a_grant_for_something_already_on_plans_nothing() -> None:
     assert plan.empty
 
 
+def test_a_globally_disallowed_automation_is_refused_not_granted_inert() -> None:
+    """The install-wide ceiling refuses the grant instead of reporting success.
+
+    Unlike an unverified provider - disclosed and granted anyway - a ceiling
+    entry is the operator's standing "not anywhere", so a gate reporting
+    success against it would offer to turn on nothing. Asked of the closure:
+    `provenance_graph` itself is allowed, and dies with `tier0`.
+    """
+    with pytest.raises(GrantRefusal) as refusal:
+        plan_grant(
+            install=None,
+            automations=["provenance_graph"],
+            values=None,
+            current_install={},
+            current_automations={},
+            current_values={},
+            global_allow={"tier0": False},
+        )
+    assert refusal.value.code == "automation_globally_disabled"
+    assert "tier0" in refusal.value.message
+
+
+def test_a_grant_that_raises_the_blocking_switch_in_the_same_act_is_allowed() -> None:
+    # The one-act scan-timeline gate turns `scan_timeline_enabled` on together
+    # with the Project opt-in; the act itself lifts the ceiling, so refusing it
+    # would make the gate impossible to satisfy.
+    plan = plan_grant(
+        install={"scan_timeline_enabled": True},
+        automations=["scan_timeline"],
+        values=None,
+        current_install={"scan_timeline_enabled": False},
+        current_automations={},
+        current_values={},
+        global_allow={"scan_timeline": False},
+    )
+    assert "scan_timeline" in plan.automations
+    with pytest.raises(GrantRefusal) as refusal:
+        plan_grant(
+            install=None,
+            automations=["scan_timeline"],
+            values=None,
+            current_install={"scan_timeline_enabled": False},
+            current_automations={},
+            current_values={},
+            global_allow={"scan_timeline": False},
+        )
+    assert refusal.value.code == "automation_globally_disabled"
+
+
 def test_an_unimplemented_automation_is_refused() -> None:
     with pytest.raises(GrantRefusal) as refusal:
         plan_grant(
@@ -316,7 +365,11 @@ async def test_a_mixed_scope_grant_lands_in_one_request(tmp_path: Path) -> None:
     assert config.scan_timeline_enabled is True
     written = await read_project_config(project_root(app))
     assert written["values"]["automations"]["scan_timeline"] is True
-    assert cache.cleared == 1
+    # Cleared at least once. The Project write clears it, and the install half's
+    # `apply_runtime_config` clears it again for `scan_timeline_enabled` - the
+    # switch now composes into the gate's install-wide ceiling, so a second
+    # clear is the correct behaviour rather than a double count to pin away.
+    assert cache.cleared >= 1
     # One audit record for the whole act, the way an approved verification command leaves
     # exactly one `land_verify_approved`.
     names = [name for name, _ in events]

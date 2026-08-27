@@ -115,8 +115,18 @@ def forget_llm_readiness(app: web.Application) -> None:
         gate_cache.clear()
 
 
+#: Config fields the per-Project automation gate resolves under. Editing one
+#: must drop the gate cache so the flip lands on the next event rather than up
+#: to five seconds later, when the HTTP reads (which resolve fresh) would
+#: already disagree with it.
+AUTOMATION_CEILING_FIELDS = frozenset({"automation_global_allow", "scan_timeline_enabled"})
+
+
 def apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     config: Config = app[keys.CONFIG]
+    if changed & AUTOMATION_CEILING_FIELDS:
+        if gate_cache := app.get(keys.AUTOMATION_GATE_CACHE):
+            gate_cache.clear()
     if changed & LLM_ENDPOINT_FIELDS:
         forget_llm_readiness(app)
         # The measurement described the endpoint that *was* configured. Keeping

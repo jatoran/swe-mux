@@ -28,7 +28,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .automation_registry import REGISTRY, enabling_closure, needs_llm, spends_money
+from .automation_registry import (
+    DEDICATED_INSTALL_SWITCHES,
+    REGISTRY,
+    enabling_closure,
+    needs_llm,
+    spends_money,
+)
 
 # Install-wide switches a gate may turn on.
 #
@@ -160,6 +166,7 @@ def plan_grant(
     current_install: Mapping[str, Any],
     current_automations: Mapping[str, bool],
     current_values: Mapping[str, Any],
+    global_allow: Mapping[str, bool] | None = None,
 ) -> GrantPlan:
     """Validate a grant request against the allowlists and the current state.
 
@@ -167,6 +174,14 @@ def plan_grant(
     holding only what actually needs writing - a grant for something already on is a
     no-op rather than a redundant write, so a double click on a gate cannot bump a
     revision and race an open editor.
+
+    `global_allow` is the install-wide ceiling (`effective_global_allow`). An
+    automation it turns off is refused rather than granted-and-inert: unlike an
+    unverified provider - which is an outage the opt-in legitimately outlives -
+    the ceiling is the operator's standing "not anywhere", and a gate reporting
+    success against it would offer to turn on nothing. A grant that raises the
+    blocking dedicated switch in the same act is not refused, because the act
+    itself lifts the ceiling.
     """
     planned_install: dict[str, bool] = {}
     for key, value in (install or {}).items():
@@ -198,6 +213,24 @@ def plan_grant(
             "automation_not_implemented",
             f"not implemented yet: {', '.join(unimplemented)}",
         )
+    if global_allow is not None:
+        lifted = {
+            automation_id
+            for automation_id, switch in DEDICATED_INSTALL_SWITCHES.items()
+            if planned_install.get(switch) or current_install.get(switch) is True
+        }
+        disallowed = sorted(
+            item
+            for item in closure
+            if global_allow.get(item, True) is not True and item not in lifted
+        )
+        if disallowed:
+            raise GrantRefusal(
+                "automation_globally_disabled",
+                "disabled install-wide: "
+                + ", ".join(disallowed)
+                + "; allow it in Automation policy first",
+            )
     def _already_on(item: str) -> bool:
         explicit = current_automations.get(item)
         if explicit is not None:
