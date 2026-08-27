@@ -3632,9 +3632,16 @@ Fix one positioning line and use it verbatim everywhere.
   posts, and the multi-agent-orchestration audience on X is the target demographic.
 - [ ] Ongoing multipliers, none time-critical: newsletter submissions (Console.dev has a
   submission form and features exactly this kind of tool; TLDR AI; Changelog News),
-  awesome-list PRs (awesome-claude-code and agent-tooling lists), story-driven engineering
-  posts (session-preserving reloads, the land queue, status detection) cross-posted from the
-  site, and outreach to small and mid-size AI-tooling YouTube channels.
+  story-driven engineering posts (session-preserving reloads, the land queue, status
+  detection) cross-posted from the site, and outreach to small and mid-size AI-tooling
+  YouTube channels.
+- [ ] Awesome-list PRs, each after checking the list's current inclusion rules:
+  `hesreallyhim/awesome-claude-code` (the direct audience),
+  `andyrewlee/awesome-agent-orchestrators` (the exact category - herdr, claude-squad, and
+  the rest are already on it), `e2b-dev/awesome-ai-agents` (broadest reach), and
+  `awesome-selfhosted/awesome-selfhosted` once the release history satisfies its stricter
+  criteria (it requires released, maintained software - a post-launch PR, not a launch-day
+  one).
 - [ ] Name the adjacent tools (herdr - the closest: YC F26, Apache-2.0 Rust agent
   multiplexer with a session-owning background server - plus cmux, orca, claude-squad,
   Vibe Kanban, Conductor, omnara) and state the differentiation - session-preserving
