@@ -85,10 +85,15 @@ The interval behind `useRowClock` is module-scoped and shared, so N subscribed r
 
 The frozen-app rebuild's two unalike stages, and everything the UI does about them.
 
-- `redeployProgress.ts` is pure and DOM-free: the `idle | building | down` phase, the probe-to-verdict transition, the `sessionStorage` sentinel, and the outcome sentence.
+- `redeployProgress.ts` is pure and DOM-free: the `idle | requested | building | down` phase, the probe-to-verdict transition, the `sessionStorage` sentinel, and the outcome sentence.
 - The split is the whole point.
   During the multi-minute build the current daemon keeps serving, so the app stays usable and only the corner chip appears.
   The daemon-down tail blocks and suppresses request-failure toasts, because keystrokes typed into a terminal then go nowhere - the PTY sockets are proxied by the daemon, not held open to the supervisor.
+- `requested` is the press itself, before the daemon has accepted anything, and exists only on the client that pressed the button.
+  The accept's preflight walks every process on the host looking for one that anchors the app bundle (2.7-7.8s measured), and there is no `202`, no broadcast, and no redeploy lock until it answers - so a chip raised at the `202` left the button reading as dead for that whole window.
+  The chip and its elapsed clock therefore start at the press, `confirmRedeploy` promotes without resetting that clock, and a refusal is undone by `abandonRequest`, matched on `startedAt` so it cannot take the chip away from a different redeploy learned from the broadcast meanwhile.
+  Nothing probes while a request is in flight (`waitsOnDaemon`): the lock a status read reports on is claimed by the very request being awaited, so `running: false` there is the truth about a redeploy that has not begun and would otherwise read as one that already ended.
+  `requested` is never persisted, and it says the same headline as `building` because the two are seconds apart and only `phaseDetail` differs.
 - `applyProbe`'s `sawDown` separates "the successor is up, reload into it" from "the build failed and this is the same daemon that has been serving all along"; reloading in the second case would discard the failure message and load nothing new.
 - Two consecutive failed probes are required before the overlay, so a phone waking or a momentary stall cannot raise it; the authoritative `daemon_redeploy_stopping` broadcast skips that wait.
 - Restored sentinels are clamped to `building` with `sawDown` cleared, because there is no offline shell: a page that loaded at all was served by a live daemon.

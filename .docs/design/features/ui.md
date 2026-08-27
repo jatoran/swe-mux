@@ -559,6 +559,15 @@ Its rules, and what each one is defending:
   when no PTY supervisor is attached so the action can never silently kill sessions.
   "Rebuild + redeploy app (keep sessions)" confirms, then posts `/api/daemon/redeploy` (staged
   frozen-app rebuild; the only reload that reaches the frozen bundle's own assets).
+  The confirm dialog names what the redeploy interrupts (previews, which never refuse it) and,
+  once its `?holders=1` scan lands a few seconds later, what would *refuse* it - a process
+  anchoring the app bundle, drawn as the refusal it is rather than as the same advisory amber,
+  because stopping it is something only a person can do and doing so after the press is strictly
+  worse.
+  The chip goes up the moment the button is pressed, not when the daemon accepts: the accept's
+  preflight takes seconds and produces every signal a client could otherwise watch for, so
+  acknowledging only at the `202` left the app's longest action reading as a dead button
+  (`technical/frontend/packages/composition.md`, `design/features/desktop-shell.md`).
   A redeploy has two stages that the UI deliberately treats as unalike.
   While the new bundle builds in `dist/.staging` the current daemon keeps serving, so the app stays
   fully usable and the only sign of the redeploy is a persistent expandable spinner **in the top

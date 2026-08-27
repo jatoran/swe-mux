@@ -105,10 +105,12 @@ import {
 import { InteractionHud, showInteractionHud } from './InteractionHud'
 import { RedeployChip } from './RedeployChip'
 import {
-  applyProbe, beginRedeploy, enterOutage, IDLE_REDEPLOY, interruptionSummary, loadRedeploy,
-  markResultPending, outcomeIsFresh, outcomeNotice, REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS,
-  saveRedeploy, takeResultPending,
-  type ProbeResult, type RedeployInterruptions, type RedeployState, type RedeployStatus,
+  abandonRequest, applyProbe, confirmRedeploy, enterOutage, holderWarning, IDLE_REDEPLOY,
+  interruptionSummary, loadRedeploy, markResultPending, outcomeIsFresh, outcomeNotice,
+  REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS, requestRedeploy, saveRedeploy, takeResultPending,
+  waitsOnDaemon,
+  type BundleHolder, type ProbeResult, type RedeployInterruptions, type RedeployState,
+  type RedeployStatus,
 } from './redeployProgress'
 import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subscribeInsertTarget } from './insertTarget'
 import type { InsertTarget } from './insertTarget'
@@ -487,6 +489,10 @@ export function App() {
   // What the confirm dialog reports will go dark. Advisory: nothing here can
   // refuse a redeploy, because a port being open is not a reason it would fail.
   const [redeployInterruptions, setRedeployInterruptions] = useState<RedeployInterruptions | null>(null)
+  // Who would refuse the redeploy, scanned while the dialog is being read. Null
+  // until the scan lands (it takes seconds), which is why it is a second request
+  // rather than a field on the one that fills in the interruptions line.
+  const [redeployHolders, setRedeployHolders] = useState<BundleHolder[] | null>(null)
   const loadedBuildId = useRef(loadedUiBuildId())
   const [uiUpdateAvailable, setUiUpdateAvailable] = useState(false)
   const [redeployConfirmOpen, setRedeployConfirmOpen] = useState(false)
@@ -2274,7 +2280,10 @@ export function App() {
             // Sent by the daemon from its own shutdown handler, while it is still
             // alive: the one authoritative "the outage starts now". Health probes
             // would get there too, two strikes later; this skips the guessing.
-            setRedeploy(current => enterOutage(current.phase === 'idle' ? beginRedeploy(Date.now()) : current))
+            // `confirmRedeploy` first, so a client whose own accept is still in
+            // flight (or which never heard the start) is in `building` before
+            // the outage is entered from it.
+            setRedeploy(current => enterOutage(confirmRedeploy(current, Date.now())))
           }
           if (!isReplay && event.type === 'settings_changed') refreshSettings()
           // Another device (or another tab) changed the ring; an open picker refetches.
@@ -5024,6 +5033,7 @@ export function App() {
     // its in-memory registry). A failure leaves the dialog saying nothing extra,
     // which is the old behaviour.
     setRedeployInterruptions(null)
+    setRedeployHolders(null)
     void (async () => {
       try {
         const response = await fetch('/api/daemon/redeploy', { cache: 'no-store' })
@@ -5032,13 +5042,35 @@ export function App() {
         setRedeployInterruptions(status.interrupted ?? null)
       } catch { /* advisory only */ }
     })()
+    // A second request, because this one runs a seconds-long scan of every
+    // process on the host and the line above must not wait behind it. It is
+    // worth starting here twice over: it names a blocker *before* the operator
+    // commits, instead of refusing after they have, and the accept then joins
+    // this same scan rather than starting its own.
+    void (async () => {
+      try {
+        const response = await fetch('/api/daemon/redeploy?holders=1', { cache: 'no-store' })
+        if (!response.ok) return
+        const status = await response.json() as RedeployStatus
+        setRedeployHolders(status.bundle_holders ?? null)
+      } catch { /* advisory only; the accept runs the same gate */ }
+    })()
   }
 
   async function startRedeploy() {
     setRedeployConfirmOpen(false)
+    // The chip goes up at the press, not at the 202. The daemon's preflight
+    // walks the whole process table looking for a bundle holder (measured
+    // 2.7-7.8s on the primary host), and reporting only afterwards left the
+    // button reading as dead for that entire window. Nothing probes during
+    // 'requested' - the lock a status read reports on is claimed by the very
+    // request being awaited.
+    const requestedAt = Date.now()
+    setRedeploy(current => current.phase === 'idle' ? requestRedeploy(requestedAt) : current)
     // Direct fetch (not api()): 409 bodies carry a human-readable `message`
     // (no source checkout, uv missing, supervisor detached, already running).
     let accepted = false
+    let alreadyRunning = false
     try {
       const response = await fetch('/api/daemon/redeploy', {
         method: 'POST',
@@ -5048,22 +5080,27 @@ export function App() {
       if (response.status === 202) accepted = true
       else {
         const detail = await response.json().catch(() => ({}))
+        // Refused because one is already in flight: the chip is right, it just
+        // belongs to somebody else's redeploy. Track that one rather than
+        // taking the indicator away from a real outage that is coming.
+        alreadyRunning = detail.error === 'redeploy_in_progress'
         setError(detail.message || detail.error || 'Redeploy request failed.')
       }
     } catch {
       setError('Redeploy request failed.')
     }
     // The daemon broadcasts the start to every client, this one included, so
-    // there is nothing to set here beyond covering the case where the broadcast
-    // is lost. Entering 'building' rather than blocking is the point: the build
-    // takes minutes during which this daemon keeps serving normally.
-    if (accepted) enterRedeploy()
+    // the promotion here only covers the case where the broadcast is lost.
+    // Entering 'building' rather than blocking is the point: the build takes
+    // minutes during which this daemon keeps serving normally.
+    if (accepted || alreadyRunning) enterRedeploy()
+    else setRedeploy(current => abandonRequest(current, requestedAt))
   }
 
   // Entering is idempotent so the local start, the daemon's broadcast, and the
   // boot-time sentinel can all call it without racing each other into a second
   // wait loop or resetting the elapsed clock mid-redeploy.
-  const enterRedeploy = () => setRedeploy(current => current.phase === 'idle' ? beginRedeploy(Date.now()) : current)
+  const enterRedeploy = () => setRedeploy(current => confirmRedeploy(current, Date.now()))
 
   const focusedDrawerStack=drawerStackForTab(drawerLayout,drawerTabId)
   const navigateDrawerTab=(offset:number)=>{
@@ -6047,7 +6084,7 @@ export function App() {
   // click the button behaves exactly like the one that did. Keyed on whether a
   // redeploy is in flight, never on the state itself: reading through a ref keeps
   // each probe's own update from tearing down and restarting the timer.
-  const redeployActive = redeploy.phase !== 'idle'
+  const redeployActive = waitsOnDaemon(redeploy.phase)
   useEffect(() => {
     if (!redeployActive) return
     let cancelled = false
@@ -8000,7 +8037,7 @@ export function App() {
     {/* Only the daemon-down stage blocks. While the build runs the app is fully
         usable and the corner chip is the whole of the UI's report. */}
     {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>The rebuilt app is being swapped in and restarted around your live sessions, which are held by the PTY supervisor and are not affected. A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
-    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p>{interruptionSummary(redeployInterruptions)&&<p class="redeploy-interrupts"><strong>{interruptionSummary(redeployInterruptions)}</strong><span>{redeployInterruptions?.note}</span></p>}<div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
+    {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p>{interruptionSummary(redeployInterruptions)&&<p class="redeploy-interrupts"><strong>{interruptionSummary(redeployInterruptions)}</strong><span>{redeployInterruptions?.note}</span></p>}{holderWarning(redeployHolders)&&<p class="redeploy-interrupts redeploy-blocked"><strong>{holderWarning(redeployHolders)}</strong><span>Stop those processes (or close the tab or session they belong to) first - the app bundle cannot be replaced while they hold it open.</span></p>}<div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onHandoff={openHandoff}/>}
 
