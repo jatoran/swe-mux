@@ -526,6 +526,9 @@
 
 ## Filesystem records
 
+- `<project>/.swe-mux/.gitignore`: generated on Project initialization when absent.
+  It ignores local `notes/`, `attachments/`, `seeds/`, `preview-shots/`, and `observations.json` while leaving portable Project files visible.
+  Existing content is never rewritten.
 - `<project>/.swe-mux/config.toml`: versioned, typed portable Project profile, prompt-scope,
   notification-permission, additive ignore overrides, an `automations` opt-in table gating
   control-plane substrate/consumers (`features/automation-enablement.md`; for the one

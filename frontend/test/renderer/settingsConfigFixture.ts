@@ -241,7 +241,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "scheduled_runs_enabled": true,
   "scheduled_runs_max_concurrent": 3,
   "scheduled_runs_poll_seconds": 5.0,
-  "schema_version": 34,
+  "schema_version": 35,
   "scrollback_bytes": 5242880,
   "session_control_enabled": true,
   "session_control_graceful_timeout_s": 12.0,
@@ -471,6 +471,8 @@ export const SETTINGS_CONFIG_FIXTURE = {
     "mucks",
     "max"
   ],
+  "git_swe_mux_prompt_enabled": true,
+  "git_swe_mux_prompt_decisions": {},
   "worktree_root": "C:\\Users\\Jatora\\.mux\\worktrees",
   "wsl_bridge_enabled": false,
   "xterm_scrollback_lines": 32768

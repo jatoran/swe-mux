@@ -148,6 +148,15 @@ _IMAGE_EXTENSIONS = frozenset(
 _DELIMITED_EXTENSIONS = {".csv": ",", ".tsv": "\t"}
 _RESERVED_PROJECT_RESOURCE_NAMES = frozenset({".git", ".swe-mux"})
 
+PROJECT_LOCAL_GITIGNORE = """\
+# Local swe-mux data. Portable Project files beside these remain visible to Git.
+/notes/
+/attachments/
+/seeds/
+/preview-shots/
+/observations.json
+"""
+
 
 class ProjectFileRevisionConflict(ValueError):
     """The caller inspected a different file revision than the one now on disk."""
@@ -374,6 +383,28 @@ def note_path(root: str | Path, identity: str) -> Path:
     if identity == DEFAULT_NOTE_STORAGE_ID:
         return mux_dir / "project.md"
     return mux_dir / "items" / f"{safe_note_filename(identity)}.md"
+
+
+def ensure_project_local_data_ignored(root: str | Path) -> Path:
+    """Create the Project-local ignore manifest without rewriting one the user owns."""
+
+    project_root = Path(root).resolve()
+    if not project_root.is_dir():
+        raise FileNotFoundError(f"Project folder is unavailable: {project_root}")
+    mux_root = project_root / ".swe-mux"
+    mux_root.mkdir(parents=True, exist_ok=True)
+    if mux_root.is_symlink() or not mux_root.is_dir():
+        raise ValueError("Project swe-mux storage path is unsafe")
+    ignore = mux_root / ".gitignore"
+    try:
+        with ignore.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(PROJECT_LOCAL_GITIGNORE)
+        log.info("Project local-data Git ignore initialized root=%s path=%s", root, ignore)
+    except FileExistsError:
+        pass
+    if ignore.is_symlink() or not ignore.is_file():
+        raise ValueError("Project local-data ignore file is unsafe")
+    return ignore
 
 
 def ensure_project_notes_ignored(root: str | Path) -> Path:

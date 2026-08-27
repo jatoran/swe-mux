@@ -161,8 +161,9 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   Existing databases seed the new field from the latest non-imported session start because no older exact prompt-submit record exists.
 - Device-local Group fold state is pruned against the registered Groups, so a Group id that is deleted and later reused cannot inherit a fold the user never applied.
   The prune is suppressed until the Group registry has actually loaded, for the same reason.
-- Creating a Project validates the root and initializes `.swe-mux/config.toml` plus
-  `.swe-mux/notes/project.md`. The registration is not inferred from Git or current cwd.
+- Creating a Project validates the root and initializes `.swe-mux/config.toml`,
+  `.swe-mux/notes/project.md`, and the local-data-only `.swe-mux/.gitignore`.
+  The registration is not inferred from Git or current cwd.
 - Add project has two modes of one form: register a folder that exists, or create a new folder
   inside an existing parent. Create mode makes exactly one directory, so a mistyped deep path is
   an error rather than a silently materialized tree, and the duplicate-root and group checks run

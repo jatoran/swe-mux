@@ -58,9 +58,9 @@ Daemon-owned, client-cancellation-shielded Git mutation workers with a 30-minute
 
 ## `git_init.py`
 
-First-time repository creation for a Project folder: default-branch choice, the starter `.gitignore` and the marker probes that shape it, and the init sequence.
+First-time repository creation for a Project folder: default-branch choice, the starter `.gitignore` and the marker probes that shape it, the init sequence, bounded tracked/ignored status probes, and the explicit atomic root-ignore append.
 
-**Not:** deciding whether the folder needs one (`git_review.repository_identity` raises `not_git_repository`), staging, committing, or every later Git mutation.
+**Not:** deciding whether the folder needs a repository (`git_review.repository_identity` raises `not_git_repository`), staging, committing, or untracking an existing path.
 
 ## `git_provenance.py`
 

@@ -246,7 +246,7 @@ Provider usage and its cache, operational telemetry, quota series and reset revi
 
 ### `routes/git.py`
 
-Worktree inventory, the commit graph, provenance, commit changes, diff, repository init, worktree create and remove, worktree session spawn, and path reveal.
+Worktree inventory, the commit graph, provenance, commit changes, diff, repository init, per-Project `.swe-mux` setup decisions, worktree create and remove, worktree session spawn, and path reveal.
 Also holds worktree setup orchestration and graveyard-purge scheduling.
 
 **Not:** the removal transaction (`worktree_mutation.py`), which this module only translates to HTTP.

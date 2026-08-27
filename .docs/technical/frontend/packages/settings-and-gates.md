@@ -161,6 +161,10 @@ The summary is an index, never a second editor: two controls writing one config 
 The tour's second-to-last step is a hand-off rather than a lesson: it anchors on the sidebar footer's configurator control and says what pressing it does.
 Two minutes cannot explain an install, and ending on the one surface that can answer the questions the tour did not cover is worth more than one more feature tour stop.
 
+The Git Map's per-Project `.swe-mux` setup callout is not part of this tutorial.
+Its completion and global suppression are daemon configuration because a repository decision made on one device must not reappear on another.
+Settings -> Git owns the global switch and decision reset.
+
 ## Configurator launcher
 
 `configurator.ts` - the launcher's presentation logic, and deliberately almost nothing else.

@@ -33,6 +33,7 @@ const unconfigured=parameters.has('unconfigured')
 
 globalThis.fetch=async(input,init)=>{
   const url=String(input)
+  if(url.startsWith('/api/git/swe-mux-setup?'))return response({show:false,reason:'decided',decision:'keep_visible',can_ignore:false,tracked:false})
   const method=String(init?.method||'GET').toUpperCase()
   if(url.startsWith('/api/git/worktrees?'))return response({
     repository:{root:project.root,common_dir:'D:\\PROJECTS\\swe-mux\\.git'},

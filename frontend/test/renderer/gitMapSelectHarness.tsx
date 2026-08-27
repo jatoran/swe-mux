@@ -47,6 +47,7 @@ const worktree=(path:string,branch:string,extra:Record<string,unknown>)=>({
 
 globalThis.fetch=async(input,init)=>{
   const url=String(input)
+  if(url.startsWith('/api/git/swe-mux-setup?'))return response({show:false,reason:'decided',decision:'keep_visible',can_ignore:false,tracked:false})
   if(url.startsWith('/api/git/worktrees')&&init?.method==='DELETE'){
     const path=String(JSON.parse(String(init.body)).path)
     if(refuse.has(path))return response({error:'git refused to remove it',code:'git_error'},400)

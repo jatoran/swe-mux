@@ -78,7 +78,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -191,6 +191,8 @@ QUIET_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 #: has to respect the same ceiling `_validate` enforces: appending past it would turn a
 #: silent upgrade into a daemon that refuses to start.
 PROJECT_IGNORE_PATTERN_LIMIT = 256
+GIT_SWE_MUX_PROMPT_DECISIONS = frozenset({"keep_visible", "ignore_all"})
+GIT_SWE_MUX_PROMPT_DECISION_LIMIT = 4096
 
 #: Where the agent providers put worktrees they branch from this checkout, and the bare
 #: path Codex also registers. Carried as ignore patterns rather than left to the dynamic
@@ -660,6 +662,13 @@ class Config:
     # 120 is what the app has always done: installing this build changes nothing.
     claude_max_columns: int = 120
     git_poll_seconds: float = 5.0
+    # The Git tab's per-Project repository-setup question is machine-side, not
+    # browser-local: answering on the phone must not ask again on the desktop.
+    # The mapping records only explicit Project decisions. "Never ask again" flips
+    # the global switch without manufacturing a decision for every registered Project,
+    # so turning the switch back on genuinely restores unresolved prompts.
+    git_swe_mux_prompt_enabled: bool = True
+    git_swe_mux_prompt_decisions: dict[str, str] = field(default_factory=dict)
     # Empty means the app-managed directory below data_dir. The public config exposes
     # the resolved absolute value so browser clients never infer the daemon's home.
     worktree_root: str = ""
@@ -1900,6 +1909,23 @@ def _validate(config: Config) -> None:
             errors["worktree_root"] = "must be an absolute directory path or empty"
         elif worktree_root.parent == worktree_root:
             errors["worktree_root"] = "must not be a filesystem root"
+    if not isinstance(config.git_swe_mux_prompt_enabled, bool):
+        errors["git_swe_mux_prompt_enabled"] = "must be true or false"
+    decisions = config.git_swe_mux_prompt_decisions
+    if not isinstance(decisions, dict) or len(decisions) > GIT_SWE_MUX_PROMPT_DECISION_LIMIT:
+        errors["git_swe_mux_prompt_decisions"] = (
+            f"must map at most {GIT_SWE_MUX_PROMPT_DECISION_LIMIT} Project ids to decisions"
+        )
+    elif any(
+        not isinstance(project_id, str)
+        or not project_id
+        or len(project_id) > 128
+        or decision not in GIT_SWE_MUX_PROMPT_DECISIONS
+        for project_id, decision in decisions.items()
+    ):
+        errors["git_swe_mux_prompt_decisions"] = (
+            "must map bounded Project ids to keep_visible or ignore_all"
+        )
     if not isinstance(config.new_project_parent, str):
         errors["new_project_parent"] = "must be an absolute directory path or empty"
     elif config.new_project_parent.strip():

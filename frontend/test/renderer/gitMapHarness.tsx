@@ -13,6 +13,7 @@ const cleanSummary={total:0,additions:0,deletions:0,binary_files:0,files:[],trun
 
 globalThis.fetch=async input=>{
   const url=String(input)
+  if(url.startsWith('/api/git/swe-mux-setup?'))return response({show:false,reason:'decided',decision:'keep_visible',can_ignore:false,tracked:false})
   if(url.startsWith('/api/git/worktrees?'))return response({
     repository:{root:project.root,common_dir:'D:\\PROJECTS\\swe-mux\\.git'},
     comparison:{ref:'origin/main',display:'origin/main',source:'origin_head',available:true,reason:null,candidates:['origin/main']},

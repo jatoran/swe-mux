@@ -71,6 +71,10 @@ The tab is also **one mount across its three segments** (`hasSharedSegmentBody` 
 
 Each reading's search box belongs to that reading and is wired where the search is cheapest: Map filters the payload in the browser, Log and Provenance debounce at `HistoryBrowser`'s own 220 ms and ask the daemon.
 A refetch caused by the repository moving, or by loading more commits, is not a keystroke and waits for nothing.
+
+`gitSetup.ts` validates the setup-status response before `GitTab.tsx` draws the first-open callout.
+The callout is Project-scoped daemon state rather than tutorial or localStorage state, so one device's answer reaches every device.
+The tracked-files reading removes the whole-directory action rather than claiming an ignore rule can untrack files.
 A filtered Log carries no lanes by construction (`filtered` on the payload), and the context strip's scope says what is being matched so their absence is explained.
 
 ### Pending removals and bulk select

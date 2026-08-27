@@ -300,12 +300,20 @@ uncommitted work together.
 - In that state the tab replaces Map, Log, Provenance, the comparison control, and the worktree form with the folder's path and a single **Initialize repository** action.
   There is nothing to read, so nothing is rendered present-and-empty.
 - Initialization creates the repository and writes a starter `.gitignore` whose language sections are chosen from marker files already in the folder (Node, Python, Rust, Go), over a fixed base covering secrets, environment files, and operating-system noise.
+  An unchecked explicit option may add the root-anchored `/.swe-mux/` rule in the same operation.
+  The option states that it also hides portable Project settings, Project Actions, prompt templates, and Project context.
 - **Nothing is staged and no commit is made.**
   `git init` over existing work is reversible by deleting `.git`; a first commit that swept in a stray `.env` or a virtualenv is not, and an ignore file inferred from filename probes is not trustworthy enough to make that call for someone.
-- An existing `.gitignore` is never rewritten.
-  A folder can carry one long before it carries a repository, and it is the user's file either way.
+- An existing `.gitignore` is preserved unless the user explicitly selects the whole-directory swe-mux option.
+  That one authorized path appends the rule with the file's newline style and changes no existing bytes.
 - The branch is named `main` unless the host sets `init.defaultBranch`, in which case Git's own configured answer stands.
 - The daemon re-resolves the folder's repository state inside the request rather than trusting what the client last read, and refuses an already-tracked folder with `already_initialized`.
+- On the first Git Map open for each unresolved Project, an inline setup callout distinguishes portable `.swe-mux` files from local generated data.
+  `Keep portable files visible` records the Project decision without changing the repository.
+  `Ignore all .swe-mux files` appends `/.swe-mux/` only when no path below it is already tracked; an ignore rule cannot untrack files and the action is absent in that state.
+  `Never ask again` disables the callout across devices without manufacturing decisions for every Project.
+  Settings -> Git can re-enable prompts and reset the per-Project decisions.
+  Both settings are machine-local daemon configuration rather than repository or browser state.
 - Success emits `git_changed` for the Project, so every other client re-reads rather than holding the pre-init view.
 - The no-commit contract leaves HEAD unborn, and `git worktree add` cannot branch from an unborn HEAD.
   Worktree creation refuses that state before mutating, with a typed `repository_has_no_commits` error naming the fix (make a first commit) - a deliberate consequence, not a reason to auto-commit.
@@ -523,7 +531,7 @@ The whole-Project reading is still several hundred milliseconds of Git, and that
   Map draws none of it and used to fetch five hundred rows of it on every one of the refreshes above.
 - An open Log refreshes its graph while retaining immutable commit caches.
 - Explicit Refresh covers Git changes created outside swe-mux event paths.
-- The Git surface mutates only through the worktree create and remove operations and the one-time repository initialization offered to a Project whose folder has no repository.
+- The Git surface mutates only through worktree create/remove, one-time repository initialization, and the explicit root `.gitignore` append described in this document.
 - It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.
 - The **land queue** is the one path that merges, and it is not this surface: it is a daemon-owned pipeline with its own fixed vocabulary, its own preconditions, and its own approval (`land-queue.md`).
   Its controls in this tab - the Land button on a Map row, and the landing strip's cancel, verification-command editor, and approval - enqueue and cancel *requests*, write one Project config key, and approve the bytes that will run.
@@ -621,11 +629,11 @@ and provider-managed worktrees may live outside that root.
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
 - Durable session-to-commit capture and explicit historical import: `src/swe_mux/git_provenance.py`, `src/swe_mux/tools/git_provenance_backfill.py`, `src/swe_mux/history.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
-- First-time repository creation and the starter ignore file: `src/swe_mux/git_init.py`
+- First-time repository creation, setup-status probes, and ignore-file writes: `src/swe_mux/git_init.py`
 - Routes: `src/swe_mux/server.py`
 - Bootstrap runner: `src/swe_mux/worktree_setup.py`
 - Display-name resolution shared by every surface that names a session: `src/swe_mux/session_titles.py`, `frontend/src/sessionNames.ts`
-- Drawer Map, Log, Provenance ledger, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
+- Drawer Map, first-open setup, Log, Provenance ledger, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitSetup.ts`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
 - Landing on a Map row, the Project-wide landing strip above it, and the shared queue/gate reads both use: `frontend/src/GitLandRow.tsx`, `frontend/src/GitLandBar.tsx`, `frontend/src/landState.ts` (`land-queue.md`)
 - Session-link list and its destination rule: `frontend/src/GitSessionLinks.tsx`
 - Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
