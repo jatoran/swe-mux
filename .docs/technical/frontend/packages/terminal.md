@@ -72,13 +72,26 @@ Its input is one wheel event per row, because xterm emits exactly one scroll rep
 
 `mobileKeyboard.ts`, `mobileTerminalIme.ts`
 
-`mobileKeyboard.ts` decides which focused element holds the on-screen keyboard up, and owns all three things a caller can do about it.
+`mobileKeyboard.ts` decides which focused element holds the on-screen keyboard up, and owns everything a caller can do about it.
 Each is expressed as a focus move, because Android exposes no keyboard API:
 
 - `dismissSoftKeyboard` lowers it, and is the one blur.
 - `holdSoftKeyboard` keeps a non-text control's press from taking focus off it, by cancelling the `mousedown` default.
+- `shouldHoldBridgeFocus` refuses the platform's own focus move while a terminal touch gesture is in flight.
 - `restoreSoftKeyboard` hands it back to the field a gesture took it from.
   It is gated on `softKeyboardLost` so focus that moved to another text field stands, and abandoned outright when `softKeyboardDismissals` moved during the gesture, so a deliberate dismissal always wins.
+
+The ordering of the last three is the design.
+A repair is visible: between the platform lowering the keyboard and the next frame putting it back, the layout has moved twice, which is what makes a long-press selection hard to aim.
+So prevention comes first and `restoreSoftKeyboard` is the backstop.
+`shouldHoldBridgeFocus` is deliberately narrow - it arms only when the bridge *itself* held the keyboard as the finger landed - which makes it incapable of raising a keyboard that was down, and stands it down in read mode and with the draft composer open for free, because the bridge is blurred in both.
+
+`touchCompatMouseEvent` recognises the `mousedown`/`mouseup`/`click` a phone replays after a touch gesture, which `TerminalPane` swallows in the capture phase.
+The window is measured from the *end* of the gesture.
+Measuring it from the start, which is what shipped until this was fixed, made it a cap on gesture duration instead: a 450 ms long-press plus a selection drag outran it, the replay reached xterm's `mousedown` handler (`preventDefault(); this.focus()`), and the keyboard came up on its own - so short gestures behaved and long ones did not, which is what read as intermittent rather than broken.
+
+The invariant every predicate here rests on is not enforced in this file: on a touch device the terminal's IME bridge is the *only* element permitted to raise the keyboard, which `TerminalPane` establishes by giving xterm's helper textarea `inputmode="none"` after `term.open`.
+Without it that helper reads as a field legitimately holding the keyboard, so `softKeyboardLost` answers "nothing was lost" while mobile input has quietly stopped being routed through the bridge, and `App.tsx`'s `armPending` reserves space for a keyboard that a non-tap gesture summoned.
 
 `softKeyboardInputMode` is the terminal bridge's typing-intent gate: coarse-pointer synthetic actions refocus with `inputmode="none"` while the keyboard is down, whereas visible-keyboard preservation and explicit typing intent use text mode.
 

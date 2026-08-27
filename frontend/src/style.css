@@ -2957,6 +2957,14 @@ body {
      transition on a value the finger is already setting reads as the pane lagging behind. */
   :root.soft-keyboard-open .terminal-surface>.terminal-host{transform:translateY(var(--peek-offset,0px))}
   :root.soft-keyboard-open .terminal-surface.keyboard-peek-animated>.terminal-host{transition:transform 140ms ease-out}
+  /* The same translate, unscoped from the root class, for as long as a finger is on this
+     grid. `soft-keyboard-open` is App's reading of the live viewport, so the pane cannot
+     defer it the way it defers its own keyboard state: if the platform drops the keyboard
+     mid-gesture the class goes with it and the grid snaps back by the whole peek offset,
+     under a finger that is halfway through a selection. Holding the translate means any
+     correction happens after the release instead of during it. Deliberately not paired with
+     the animated rule - a gesture never animates. */
+  .terminal-surface.keyboard-gesture-hold>.terminal-host{transform:translateY(var(--peek-offset,0px))}
   /* Every other mobile surface shortens instead of sliding, and the difference is not a
      stylistic one. The terminal must not resize because shrinking an alternate-screen PTY
      destroys the rows that no longer fit. A note editor, a file view, or the drawer reflows
