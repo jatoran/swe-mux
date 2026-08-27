@@ -28,6 +28,12 @@ from .agent_environment import capture_config_baseline
 from .background_tasks import background
 from .cli_state import CliStateMonitor, ConversationHolder, ParkedMove
 from .composer_input import ComposerState, clear_composer
+from .console_contention import (
+    ConsoleCensus,
+    ConsoleEvidence,
+    classify_shell_prompt,
+    probe_console_participants,
+)
 from .errors import NotFound
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
@@ -3082,6 +3088,13 @@ class SessionManager:
             "MUX_HOOK_URL": hook_url,
             "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
             "MUX_DEMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/demote",
+            # Where the agent shim reports its own lifecycle. Separate from
+            # promote/demote because it is diagnostics rather than identity: it
+            # never changes the session's backend, and the one fact it publishes
+            # that the daemon acts on — the real CLI's pid — is what lets a shell
+            # prompt under a promoted pane be classified rather than guessed
+            # (`console_contention.py`).
+            "MUX_SHIM_URL": f"{self.ingress_url}/api/sessions/{sid}/shim-report",
             "MUX_HOOK_SECRET": hook_secret,
             # Where an injected extension publishes a runtime inventory (its live
             # MCP tool list). Separate from the hook URL because it is not a
@@ -4645,10 +4658,19 @@ class SessionManager:
             if current > scan_cursor:
                 haystack = (carry + session.scrollback.bytes_since(scan_cursor)).lower()
                 scan_cursor = current
+                before = len(seen_names)
                 for name in agent_names:
                     if name.encode() in haystack:
                         seen_names.add(name)
                 carry = haystack[-(max_name_len - 1) :] if max_name_len > 1 else b""
+                if len(seen_names) != before:
+                    # Publish the launch window. A pane still reading as `shell`
+                    # while an agent boots inside it applies shell input encoding
+                    # to an agent composer, and on the frozen app that window was
+                    # measured at ~10 s — long enough to cover the CLI's own
+                    # terminal capability probes and a user's first keystrokes.
+                    session.record.agent_launch_pending = sorted(seen_names)
+                    session.publish_update()
             # Full-screen CLIs redraw the echoed command quickly and ANSI can split
             # prompt text, so exact ``> claude`` matching is not reliable. Only
             # output and native transcript activity created during this detection
@@ -4707,6 +4729,12 @@ class SessionManager:
                 session.record.parser_schema_version = None
                 reset_session_observation_state(session, "backend_detected")
                 session.agent_promoted_at = time.time()
+                # This path has no shim, so no process id will ever be reported
+                # for the CLI; the console check falls back to `cli_state` and,
+                # failing that, to the transcript. Clearing is still owed: the
+                # launch window is over and any earlier contention belonged to a
+                # run that has ended.
+                self._reset_console_identity(session)
                 session.publish_update()
                 await self.history.session_promoted(session.record, str(path))
                 await self.events.emit(
@@ -4787,6 +4815,12 @@ class SessionManager:
         session.record.state_detail = None
         session.state_source_priority = -1
         session.agent_promoted_at = time.time()
+        # A new agent generation owns the console from here. The previous run's
+        # process id, and any contention it was in, are facts about a process that
+        # is gone; the shim's `child_started` report repopulates the pid moments
+        # later, and inheriting the old one would point liveness checks at a pid
+        # Windows has very likely already recycled.
+        self._reset_console_identity(session)
         if session.record.auto_named:
             session.record.name = Path(session.record.run_cwd or session.record.cwd).name or backend
         session.publish_update()
@@ -4849,6 +4883,7 @@ class SessionManager:
         revoke_approval_policy(session, evidence="demotion")
         session.observation_replay = False
         session.agent_promoted_at = None
+        self._reset_console_identity(session)
         session.transcript_path = None
         session.transcript_provisional = False
         # The spool is keyed by mux session id, which survives demotion. Anything
@@ -6817,7 +6852,7 @@ class SessionManager:
             session.bracketed_paste.feed(chunk)
             session.sticky_modes.feed(chunk)
             session.osc_signals.feed(chunk)
-            self._note_shell_breakpoints(session, chunk)
+            shell_prompt_marker = self._note_shell_breakpoints(session, chunk)
             prompt_uris = session.osc7.feed(chunk)
             if prompt_uris and "first_prompt" not in session.record.startup_timing_ms:
                 session.record.startup_timing_ms["first_prompt"] = round(
@@ -6826,7 +6861,7 @@ class SessionManager:
                 timing_changed = True
             for uri in prompt_uris:
                 self._queue_runtime_cwd(session, uri)
-            if prompt_uris and session.record.backend in AGENT_BACKENDS:
+            if (prompt_uris or shell_prompt_marker) and session.record.backend in AGENT_BACKENDS:
                 self._queue_agent_exit_check(session)
             session.scrollback.append(chunk)
             session.publish_output(chunk)
@@ -6837,26 +6872,35 @@ class SessionManager:
             if prompt_uris:
                 self._schedule_startup_measurement(session, "first_prompt")
 
-    def _note_shell_breakpoints(self, session: Session, chunk: bytes) -> None:
-        """Report the human's own command finishing, from OSC 133 in a shell pane.
+    def _note_shell_breakpoints(self, session: Session, chunk: bytes) -> bool:
+        """Consume OSC 133 shell-integration markers, whatever this pane is.
 
-        Only a shell counts. An agent pane's "finished" is the agent's breakpoint,
-        not the human's, and the whole point of this signal is that swe-mux owns
-        the terminal the human is working in themselves. Emitted in the background
-        because it is telemetry on the PTY fan-out path and must never add latency
-        to output delivery.
+        Two consumers, and separating them is the point. `shell_command_finished`
+        is attention ranking's breakpoint and belongs only to a shell: an agent
+        pane's "finished" is the agent's, not the human's.
+
+        A prompt marker (`A`) under a *promoted* pane is a different fact
+        entirely, and the parser used to be skipped there so it was never seen.
+        The shell that launched the agent is supposed to be blocked for the
+        agent's whole life; a prompt from it means either the CLI exited or
+        something in the launch chain unblocked and there are now two readers on
+        one pseudoconsole (`console_contention.py`). Returning that lets the
+        caller run the same check OSC 7 already triggers, so the pane is covered
+        whether the profile carries cwd reporting, breakpoint markers, or both.
         """
-        if session.record.backend in AGENT_BACKENDS:
-            return
         markers = session.osc133.feed(chunk)
-        if not any(marker == "D" for marker, _ in markers):
-            return
-        self.events.emit_background(
-            "shell_command_finished",
-            session_id=session.record.id,
-            source="daemon",
-            exit_status=session.osc133.last_exit_status,
-        )
+        if not markers:
+            return False
+        if session.record.backend in AGENT_BACKENDS:
+            return any(marker == "A" for marker, _ in markers)
+        if any(marker == "D" for marker, _ in markers):
+            self.events.emit_background(
+                "shell_command_finished",
+                session_id=session.record.id,
+                source="daemon",
+                exit_status=session.osc133.last_exit_status,
+            )
+        return False
 
     def _queue_agent_ready_check(self, session: Session) -> None:
         """Use settled PTY output only while semantic startup evidence is absent."""
@@ -6918,13 +6962,22 @@ class SessionManager:
         task.add_done_callback(session.tasks.discard)
 
     async def _confirm_agent_exit(self, session: Session) -> None:
-        """Demote a promoted session once its shell prompt has returned.
+        """Resolve what a shell prompt under a promoted session means.
 
         The shim posts an authenticated demotion, but agents launched without it
         (profile PATH rewrites, manual launches) would otherwise stay [claude]/
         [codex] forever. The transcript-quiet requirement keeps a still-writing
         agent from being demoted by any stray prompt sequence; the bounded retry
         absorbs exit-time transcript writes.
+
+        **There are three answers, not two.** This loop used to demote or give up,
+        and giving up is what it did during the 2026-08-27 incident: the shell had
+        the console back while the CLI was still alive and still writing, so every
+        attempt saw a busy transcript, the task ended, and mux went on presenting a
+        healthy agent pane over a terminal two processes were fighting for. That
+        third state is now measured (`console_contention.py`) rather than left as
+        the loop's silence, and it is checked *first* — a live CLI plus a shell
+        prompt is contention whatever the transcript says.
         """
         for _attempt in range(AGENT_EXIT_CONFIRM_ATTEMPTS):
             await asyncio.sleep(AGENT_EXIT_CHECK_INTERVAL_SECONDS)
@@ -6933,19 +6986,174 @@ class SessionManager:
             backend = session.record.backend
             if backend not in AGENT_BACKENDS:
                 return
-            path = session.transcript_path
-            quiet = True
-            if path is not None:
-                try:
-                    quiet = (
-                        time.time() - path.stat().st_mtime >= AGENT_EXIT_TRANSCRIPT_QUIET_SECONDS
-                    )
-                except OSError:
-                    quiet = True
-            if quiet:
+            census = await asyncio.to_thread(
+                probe_console_participants,
+                session.record.pid if session.record.pid > 0 else None,
+                self._agent_process_pid(session),
+            )
+            verdict = classify_shell_prompt(
+                ConsoleEvidence(
+                    backend_is_agent=True,
+                    seconds_since_promotion=time.time() - (session.agent_promoted_at or 0.0),
+                    agent_pid=census.agent_pid,
+                    agent_alive=None if census.error else census.agent_alive,
+                    agent_in_pty_tree=None if census.error else census.agent_in_pty_tree,
+                    transcript_quiet=self._transcript_is_quiet(session),
+                )
+            )
+            if verdict.contended:
+                await self._note_console_contention(session, census, verdict.reason)
+                return
+            if verdict.verdict == "agent_gone":
                 native_id = session.agent_lifecycle_id or session.record.native_session_id
                 await self.demote(session.record.id, backend, native_id)
                 return
+
+    @staticmethod
+    def _reset_console_identity(session: Session) -> None:
+        """Forget which process owned this pane's console, at a run seam.
+
+        Called from both promotion and demotion because both replace the answer.
+        A pid is not an identity on Windows — it is recycled aggressively — so
+        carrying one across a seam is how a liveness check ends up reporting on
+        somebody else's process.
+        """
+        session.record.agent_process_pid = None
+        session.record.console_contention = None
+        session.record.agent_launch_pending = []
+
+    @staticmethod
+    def _agent_process_pid(session: Session) -> int | None:
+        """The promoted CLI's own pid, from whichever source has one.
+
+        The shim's report is preferred because it is the launch itself speaking and
+        it exists for every harness. `cli_state` is the fallback and covers a
+        shim-less launch of a harness that publishes its own state file; it is
+        deliberately second, since it describes a *conversation* and a stale one
+        can name a pid that has already been recycled.
+        """
+        reported = session.record.agent_process_pid
+        if reported and reported > 0:
+            return reported
+        state = getattr(session, "cli_state", None)
+        if isinstance(state, dict):
+            candidate = state.get("pid")
+            if isinstance(candidate, int) and candidate > 0:
+                return candidate
+        return None
+
+    @staticmethod
+    def _transcript_is_quiet(session: Session) -> bool:
+        path = session.transcript_path
+        if path is None:
+            return True
+        try:
+            return time.time() - path.stat().st_mtime >= AGENT_EXIT_TRANSCRIPT_QUIET_SECONDS
+        except OSError:
+            return True
+
+    async def _note_console_contention(
+        self, session: Session, census: ConsoleCensus, reason: str
+    ) -> None:
+        """Publish "this pane has two readers" once per stretch of it.
+
+        Never demotes. The run is not over — dropping the agent's identity would
+        take its transcript binding, its token accounting, and its queue eligibility
+        with it, which is a worse pane than the one the user already has. The
+        session keeps its backend and gains a standing report the UI can state and
+        an operator can act on.
+        """
+        report = {
+            "reason": reason,
+            "since": time.time(),
+            "census": census.snapshot(),
+        }
+        previous = session.record.console_contention
+        session.record.console_contention = report
+        if previous and previous.get("reason") == reason:
+            # Already standing and unchanged. Refreshing the census is worth doing;
+            # re-emitting the event on every prompt the shell prints is not.
+            return
+        log.warning(
+            "session %s console contention (%s): agent pid %s alive=%s in_tree=%s root=%s",
+            session.record.id,
+            reason,
+            census.agent_pid,
+            census.agent_alive,
+            census.agent_in_pty_tree,
+            census.root_pid,
+        )
+        session.publish_update()
+        await self.events.emit(
+            "agent_console_contended",
+            session_id=session.record.id,
+            source="daemon",
+            backend=session.record.backend,
+            reason=reason,
+            agent_pid=census.agent_pid,
+            root_pid=census.root_pid,
+            agent_in_pty_tree=census.agent_in_pty_tree,
+            participants=[item.name for item in census.participants],
+        )
+
+    async def record_shim_report(self, sid: str, body: dict[str, Any]) -> None:
+        """Ingest one `agent_launcher` lifecycle report.
+
+        Everything is durable telemetry; exactly one field changes daemon
+        behaviour. ``child_pid`` is the real CLI's process id, and it is what turns
+        `_confirm_agent_exit` from a transcript guess into a measurement.
+        ``child_outlived_shim`` is the same defect proven from the other side — the
+        wrapper stopped waiting while the agent kept the console — and is reported
+        as contention immediately rather than waiting for a shell prompt to arrive.
+        """
+        try:
+            session = self.resolve(sid)
+        except NotFound:
+            return
+        kind = str(body.get("kind") or "")
+        child_pid = body.get("child_pid")
+        if isinstance(child_pid, int) and child_pid > 0:
+            session.record.agent_process_pid = child_pid
+        await self.events.emit(
+            "agent_shim_report",
+            session_id=sid,
+            source="shim",
+            **{
+                key: value
+                for key, value in body.items()
+                # The shim already withholds argument values (`argv_shape`); this
+                # is the second boundary, so a future field cannot widen what a
+                # report carries without being named here.
+                if key
+                in {
+                    "kind",
+                    "backend",
+                    "shim_pid",
+                    "parent_pid",
+                    "child_pid",
+                    "executable",
+                    "exit_code",
+                    "exit_path",
+                    "child_outlived_shim",
+                    "elapsed_ms",
+                    "boot_ms",
+                    "argv_flags",
+                    "argv_count",
+                    "native_id_assigned",
+                    "frozen",
+                    "console_window",
+                    "std_handles",
+                    "stdio_mode",
+                }
+            },
+        )
+        if kind == "exited" and body.get("child_outlived_shim") is True:
+            census = await asyncio.to_thread(
+                probe_console_participants,
+                session.record.pid if session.record.pid > 0 else None,
+                self._agent_process_pid(session),
+            )
+            await self._note_console_contention(session, census, "shim_exited_first")
 
     def _schedule_startup_measurement(self, session: Session, milestone: str) -> None:
         if session.startup_measurement_task is not None:

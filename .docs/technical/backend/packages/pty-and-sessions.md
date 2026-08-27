@@ -132,6 +132,20 @@ Pure multi-device rules for one shared PTY.
 
 **Not:** sockets, PTYs, telemetry, or *which* device is in use - `device_presence.py` answers that, `session.py` holds the state, and `routes/pty.py` applies the decisions.
 
+## `console_contention.py`
+
+Who is reading a promoted pane's pseudoconsole: the shell it was spawned as, the agent typed into it, or both.
+
+The pure half is `classify_shell_prompt`, an ordered rule set turning "a shell prompt arrived under a promoted session" into one of three answers - the CLI exited (demote), the CLI is alive so the shell has the console back (report, never demote), or there is no evidence (say nothing).
+`agent_orphaned` is separated from plain contention because it names a different repair: the CLI is outside the pane's process tree, so ending the pane will not stop it.
+Every measured input is three-valued, and `None` means "not measured" rather than "false" - a failed process walk must neither demote a live agent nor report a dead one as contention.
+
+The measuring half is `probe_console_participants`, a bounded psutil walk from the pane's PTY root answering two questions (is the agent's pid alive, is it still under that root) with the participant list as diagnostic detail.
+It is blocking and callers run it on a thread.
+
+**Not:** deciding anything - `session.py` owns the transitions and the standing report, `agent_launcher.py` supplies the pid, and `routes/diagnostics.py` serves the census.
+Not a sampler either: nothing polls this, because it answers a yes/no question about two processes and only matters when a prompt arrives or an operator asks.
+
 ## `composer_input.py`
 
 A pure estimate of unsent composer text from the bytes written to a PTY: what each write does to it (typed, erased, submitted, discarded), bracketed-paste state carried between writes, and the empty-to-non-empty crossing that is the only reportable event.

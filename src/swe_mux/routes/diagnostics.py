@@ -17,6 +17,7 @@ from .. import (
 )
 from ..background_tasks import background
 from ..config import Config
+from ..console_contention import ConsoleCensus, probe_console_participants
 from ..deterministic_consumers import DeterministicConsumerService
 from ..errors import NotFound
 from ..event_bus import EventBus
@@ -61,8 +62,16 @@ from .support import _query_epoch
 log = logging.getLogger(__name__)
 
 
-def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any]:
-    """The live half of the state-log: current fields plus the in-memory rings."""
+def _live_state_log_payload(
+    app: Any, session: Any, now: float, console_census: ConsoleCensus | None = None
+) -> dict[str, Any]:
+    """The live half of the state-log: current fields plus the in-memory rings.
+
+    ``console_census`` is passed in rather than measured here because it is the
+    one field that walks a process tree, and this function is synchronous and
+    runs on the event loop. Callers await it on a thread; ``None`` renders as an
+    unmeasured census rather than as an absent key, so the shape is stable.
+    """
     transcript = session.transcript_path
     transcript_mtime: float | None = None
     if transcript is not None:
@@ -154,6 +163,22 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         # these values are ledgered as `layer_reading` timeline entries.
         "layer_readings": dict(session.layer_readings),
         "pty_explain": pty_explanation,
+        # Who is reading this pane's pseudoconsole. A session spawned as a shell
+        # and promoted around an agent typed into it has two processes that could
+        # be, and exactly one that may (`console_contention.py`). Walked here
+        # rather than sampled continuously: it answers a yes/no question about two
+        # pids and only matters when someone is asking. `contention` is the
+        # standing verdict, set by the daemon when a shell prompt arrives under a
+        # live agent; a census with `agent_in_pty_tree: false` beside a live
+        # `agent_pid` is the orphaned-wrapper shape.
+        "console": {
+            "contention": session.record.console_contention,
+            "agent_launch_pending": list(session.record.agent_launch_pending),
+            "census": (
+                console_census
+                or ConsoleCensus(None, None, None, None, error="not_measured")
+            ).snapshot(),
+        },
         "status_health": session.status_health(now),
         # Multi-device terminal arbitration. Non-zero rejections mean keystrokes
         # arrived from a client that had lost input ownership; non-zero denials
@@ -211,6 +236,15 @@ async def _post_mortem_state_log(
     )
 
 
+async def _session_console_census(session: Any) -> ConsoleCensus:
+    """Walk this pane's process tree off the event loop."""
+    return await asyncio.to_thread(
+        probe_console_participants,
+        session.record.pid if session.record.pid > 0 else None,
+        session.record.agent_process_pid,
+    )
+
+
 async def get_session_state_log(request: web.Request) -> web.Response:
     """End-detection diagnostics: transitions, faults, watchdog and layer activity.
 
@@ -227,7 +261,9 @@ async def get_session_state_log(request: web.Request) -> web.Response:
     except KeyError:
         return await _post_mortem_state_log(request.app, sid, from_ts, to_ts)
     now = time.time()
-    payload = _live_state_log_payload(request.app, session, now)
+    payload = _live_state_log_payload(
+        request.app, session, now, await _session_console_census(session)
+    )
     store: StatusTimelineStore = request.app[keys.STATUS_TIMELINE]
     if from_ts is not None or to_ts is not None:
         await store.flush_session(session)
@@ -330,7 +366,9 @@ async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
     identity = sid
     if session is not None:
         await store.flush_session(session)
-        state_log = _live_state_log_payload(request.app, session, now)
+        state_log = _live_state_log_payload(
+            request.app, session, now, await _session_console_census(session)
+        )
         identity = session.record.id
     timeline, truncated = await store.timeline(identity, from_ts=from_ts, to_ts=to_ts)
     history_row = await request.app[keys.HISTORY].history_entry(identity)

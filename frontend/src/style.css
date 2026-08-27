@@ -2940,6 +2940,12 @@ body {
 /* Muted for the same reason, and transient besides (WIDTH_CAP_NOTICE_MS): a configured
    width envelope is a setting the user can see the effect of, not a fault. */
 .terminal-input-owner.width-cap-notice{border-color:var(--line);color:var(--muted)}
+/* The one notice in this slot that is a fault rather than a fact, so it is the one that
+   gets the error colour and `role="alert"`. It states that keystrokes are being split
+   between two readers, which is otherwise indistinguishable from the terminal being
+   broken, and it does not time out: the condition persists until someone acts on it. */
+.terminal-input-owner.console-contention-notice{border-color:var(--red);color:var(--red)}
+.terminal-input-owner.console-contention-notice a{pointer-events:auto;color:inherit}
 /* The badge itself never eats terminal input; only its retry button does. */
 .terminal-connection-retry{pointer-events:auto;min-height:0;padding:1px 6px;border:1px solid var(--line);background:var(--panel2);color:inherit;font:inherit;cursor:pointer}
 @media(hover:none){.terminal-connection-retry{min-height:26px;padding:0 10px}}

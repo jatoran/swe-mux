@@ -433,25 +433,34 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
 
   `idle_reason: waiting_on_background` is still *derived* from this annotation (or the
   live footer) at each turn end — kept one release for UI compat.
-- **`subagents`** — `SubagentStart`/`SubagentStop` lifecycle hooks (registered in
-  `adapters/claude.py`) own the count (starts − stops, floor 0; a stop at zero clears).
-  Fallback when hooks are lost: `Task`/`Agent` tool_use opens, its tool_result closes —
-  but only while no lifecycle hook has arrived this run, so one subagent is never
-  counted by two tiers. Any sidechain record refreshes recency (creating at count 1 if
-  even the launch was missed) — **and so does the subagent's own tool-hook stream**
-  (subagent-scoped `PreToolUse`/`PostToolUse`), which is not a nicety but the only
-  recency evidence a *background* subagent produces at all: measured live 2026-08-02, a
-  session whose agents ran 16 minutes wrote zero `isSidechain` records into the root
-  transcript, so without the hook refresh the TTL expired the annotation ~2 minutes in
-  while the agents kept working. Tool-hook activity may also re-create a zeroed
-  annotation at count 1 (healing a count a lone under-counted `SubagentStop` collapsed),
-  but only `SUBAGENT_REOPEN_GRACE_SECONDS` (10 s) past the last stop: hooks are
-  unordered and retried, so the stopped agent's last `PostToolUse` can land after its
-  stop, and re-opening on that straggler is the hook-channel twin of the
-  trailing-transcript flap below. Hooks arrive subagent-scoped carrying the root
-  `session_id`; the foreign filter runs first, so a nested child's fleet never counts.
-  Rendered on the working axis too (`working · Task · 2 subagents`) — the root turn is
-  open during Task execution.
+- **`subagents`** — two tiers count the same fleet and combine with **`max`**, never a sum, because each is blind where the other is not.
+  The **launch registry** (`subagent_launches`, keyed by tool_use id) holds every `Agent`/`Task` launch this run's transcript carried, and counts async ones exactly.
+  The **hook counter** (`subagent_hook_count`, starts − stops, floor 0, from the `SubagentStart`/`SubagentStop` hooks registered in `adapters/claude.py`) sees every subagent, async or not, and mis-counts the async ones downward.
+  The counter is state of its own rather than the annotation's count read back, because the annotation is also where the liveness tiers heal a lost count to 1: reading it back is what let one stop after a heal erase a fleet.
+  It is seeded from the annotation once per run, so a count adopted across a daemon restart is still what the first stop decrements.
+
+  **A `SubagentStop` is not proof that an agent is gone.**
+  An async `Agent` launch acks within seconds (`Async agent launched successfully`, carrying the `agentId`) and the agent then runs for minutes, stopping — and notifying — every time it comes to rest with no live children of its own.
+  Measured live 2026-08-27: three async agents produced 3 `SubagentStart` and 11 `SubagentStop` hooks, the first stop 32 s after launch and 3.5 minutes before any agent finished.
+  Under a stop-means-ended rule the count zeroed minutes early, the annotation cleared, the next tool hook healed it back to 1, and the pane alternated between a solid green "ready · turn complete" and a hollow one-subagent ring every ~15 s for as long as the fleet ran.
+
+  What an async launch does have is **both ends in the root transcript**: the `Agent` tool_use id at launch, and a `<task-notification>` naming that same id (its `<task-id>` is the `agentId`) at completion.
+  That pair is the registry, and it is why the annotation survives its own fleet's stops.
+  A launch is registered even when it may not open the annotation, because the registry is what binds the ack and the completion to that id; while lifecycle hooks own the count, a launch record the transcript delivers late is an agent they have already retired, so it registers without re-opening - the trailing-record rule, on the launch side.
+
+  A completion is routed to the tier whose launch it names, structurally, before any wording is read: an agent's `<task-notification>` subtracting from `background_tasks` is a running shell erased on paper.
+  Only for an id neither tier knows (a daemon restart mid-fleet) does the `<summary>` shape decide, and a rewording there falls back to the pre-existing behaviour rather than a new one.
+
+  Recency is separate from counting.
+  Any sidechain record refreshes it (creating at count 1 if even the launch was missed) — **and so does the subagent's own tool-hook stream** (subagent-scoped `PreToolUse`/`PostToolUse`), which is not a nicety but the only recency evidence a *background* subagent produces at all: measured live 2026-08-02, a session whose agents ran 16 minutes wrote zero `isSidechain` records into the root transcript, so without the hook refresh the TTL expired the annotation ~2 minutes in while the agents kept working.
+  Tool-hook activity may also re-create a zeroed annotation at count 1 (healing a count a lone under-counted `SubagentStop` collapsed), but only `SUBAGENT_REOPEN_GRACE_SECONDS` (10 s) past the last stop: hooks are unordered and retried, so the stopped agent's last `PostToolUse` can land after its stop, and re-opening on that straggler is the hook-channel twin of the trailing-transcript flap.
+  The same evidence runs the other way as `SUBAGENT_LIVENESS_HOLD_SECONDS` (30 s): a stop that would zero the count while that fleet's tool hooks are still arriving is contradicted by them, so it holds the annotation at one agent (evidence `hook:SubagentStop:contradicted`) expiring with the proof of life rather than clearing outright.
+  This is the residual guard for a fleet the registry never saw, and 30 s is also its entire cost - a fleet that really did end holds the annotation that long past its last tool call, never the full quiet TTL.
+  A positive completion never holds: it *is* the evidence, and a tool the agent ran on its way to finishing does not contradict it.
+
+  Hooks arrive subagent-scoped carrying the root `session_id`; the foreign filter runs first, so a nested child's fleet never counts.
+  A manual clear retracts both tiers, or the next piece of evidence re-derives the count from bookkeeping the user just said was wrong.
+  Rendered on the working axis too (`working · Task · 2 subagents`) — the root turn is open during Task execution.
 
 Two cross-backend sources complete the set:
 

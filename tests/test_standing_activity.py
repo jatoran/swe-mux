@@ -649,6 +649,289 @@ async def test_a_stop_straggler_never_reopens_but_live_activity_heals_a_zeroed_c
     assert activity.evidence == "hook:subagent:PreToolUse"
 
 
+def _agent_launch(tool_use_id: str, description: str = "survey the radius") -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "isSidechain": False,
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": tool_use_id,
+                    "name": "Agent",
+                    "input": {"description": description, "subagent_type": "Explore"},
+                }
+            ]
+        },
+    }
+
+
+def _async_agent_ack(tool_use_id: str, agent_id: str) -> dict[str, Any]:
+    """The tool_result an async `Agent` launch returns within seconds of dispatch."""
+    return {
+        "type": "user",
+        "isSidechain": False,
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Async agent launched successfully. (This tool result is "
+                                f"internal metadata.)\nagentId: {agent_id}\n"
+                                "The agent is working in the background."
+                            ),
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+
+async def test_an_async_agent_fleet_outlives_its_own_mid_flight_stops() -> None:
+    # Measured live 2026-08-27, and the reason the launch registry exists. Three
+    # async agents launched at 15:27:07-15:27:33; their `SubagentStop` hooks began
+    # 32 s after the first launch and kept arriving every ~15 s (11 of them) while
+    # the agents worked, and no agent actually finished until 15:31:26. Reading a
+    # stop as an ending zeroed the count minutes early, so the pane rendered
+    # "ready · turn complete" — a solid green dot — with three agents running,
+    # healed itself back to 1 on the next tool hook, and flickered like that for
+    # as long as the fleet ran.
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step({"kind": "hook", "event": "UserPromptSubmit", "payload": {}})
+    fleet = [("toolu_a1", "agent-a"), ("toolu_a2", "agent-b"), ("toolu_a3", "agent-c")]
+    for index, (tool_use_id, agent_id) in enumerate(fleet):
+        await replay.step(
+            {"kind": "transcript", "ts_offset": index * 2, "record": _agent_launch(tool_use_id)}
+        )
+        await replay.step(
+            {
+                "kind": "hook",
+                "event": "SubagentStart",
+                "payload": {"session_id": OWN_CONVERSATION, "agent_id": agent_id},
+            }
+        )
+        await replay.step(
+            {
+                "kind": "transcript",
+                "ts_offset": index * 2 + 1,
+                "record": _async_agent_ack(tool_use_id, agent_id),
+            }
+        )
+    # Three launches counted once each: the tool_use record and the SubagentStart
+    # hook describe the same three agents, and the tiers combine with max.
+    (activity,) = replay.session.record.standing_activity
+    assert (activity.kind, activity.count) == ("subagents", 3)
+
+    for agent_id in ("agent-a", "agent-b", "agent-c"):
+        await replay.step({"kind": "timer", "seconds": 15})
+        await replay.step(
+            {
+                "kind": "hook",
+                "event": "SubagentStop",
+                "payload": {"session_id": OWN_CONVERSATION, "agent_id": agent_id},
+            }
+        )
+    (activity,) = replay.session.record.standing_activity
+    assert activity.count == 3
+
+    # The hand-off: the root turn ends so the agents can carry on. This is where
+    # the flicker was visible, because the dot only goes hollow while idle.
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 40,
+            "record": {
+                "type": "assistant",
+                "isSidechain": False,
+                "message": {
+                    "content": [{"type": "text", "text": "dispatched"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+        }
+    )
+    assert replay.session.record.state == "idle"
+    (activity,) = replay.session.record.standing_activity
+    assert activity.count == 3
+
+    # The completions are the only record of an ending there is, and they name
+    # the launch they close.
+    for index, (tool_use_id, agent_id) in enumerate(fleet):
+        await replay.step(
+            {
+                "kind": "transcript",
+                "ts_offset": 50 + index,
+                "record": {
+                    "type": "queue-operation",
+                    "operation": "enqueue",
+                    "content": _notification_body(agent_id, tool_use_id),
+                },
+            }
+        )
+        remaining = len(fleet) - index - 1
+        counts = [a.count for a in replay.session.record.standing_activity]
+        assert counts == ([remaining] if remaining else [])
+
+
+async def test_a_stop_contradicted_by_live_tool_hooks_holds_rather_than_clears() -> None:
+    # The residual case the launch registry cannot reach: a fleet whose launches
+    # this run never saw (a daemon restart mid-run), whose count spurious stops
+    # still zero. A stop seconds after one of that fleet's own tool hooks is
+    # contradicted by the tool hook, so it holds one agent instead of clearing.
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    await replay.step({"kind": "timer", "seconds": 20})
+    await replay.step(_subagent_tool_hook("PostToolUse"))
+    await replay.step({"kind": "timer", "seconds": 2})
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStop",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    (activity,) = replay.session.record.standing_activity
+    assert (activity.count, activity.evidence) == (1, "hook:SubagentStop:contradicted")
+    # A hold, not a latch, and the whole lingering cost: the annotation expires
+    # with the proof of life that contradicted the stop, not on the quiet TTL.
+    await replay.step({"kind": "timer", "seconds": 31})
+    await replay.step({"kind": "watchdog"})
+    assert replay.session.record.standing_activity == []
+
+
+async def test_an_agent_completion_never_decrements_the_background_count() -> None:
+    # A background shell and an async agent announce their ends in the same record
+    # shape. Reading one as the other subtracts from a count it knows nothing
+    # about: a running shell erased on paper, and the agent's own annotation left
+    # standing. The launch this run tracked settles it, whatever the wording says.
+    replay = DetectionReplay("claude")
+    session = replay.session
+    session.record.native_session_id = OWN_CONVERSATION
+    await replay.step({"kind": "transcript", "ts_offset": 0, "record": _bash_launch("toolu_sh")})
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": _bash_result("toolu_sh", "Command running in background with ID: bsh1."),
+        }
+    )
+    await replay.step({"kind": "transcript", "ts_offset": 2, "record": _agent_launch("toolu_ag")})
+    await replay.step(
+        {"kind": "transcript", "ts_offset": 3, "record": _async_agent_ack("toolu_ag", "agent-x")}
+    )
+    assert {a.kind: a.count for a in session.record.standing_activity} == {
+        "background_tasks": 1,
+        "subagents": 1,
+    }
+
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 4,
+            "record": {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": _notification_body("agent-x", "toolu_ag"),
+            },
+        }
+    )
+    assert {a.kind: a.count for a in session.record.standing_activity} == {"background_tasks": 1}
+
+
+async def test_an_untracked_completion_is_routed_by_the_only_evidence_left() -> None:
+    # Same collision, with the launch registry empty (a daemon restart mid-run).
+    # Nothing structural is left to route by, so the summary shape decides — and
+    # when the CLI rewords it, the fallback is the pre-existing behaviour rather
+    # than a new one.
+    replay = DetectionReplay("claude")
+    session = replay.session
+    now = replay.clock.wall()
+    set_standing_activity(
+        session,
+        "background_tasks",
+        source="transcript",
+        evidence="transcript:Bash:run_in_background",
+        expires_at=now + 1800,
+        count=1,
+        now=now,
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "user",
+                "isSidechain": False,
+                "message": {
+                    "content": _notification_body(
+                        "agent-gone", "toolu_gone", summary='Agent "survey the radius" finished'
+                    )
+                },
+            },
+        }
+    )
+    assert {a.kind: a.count for a in session.record.standing_activity} == {"background_tasks": 1}
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 2,
+            "record": {
+                "type": "user",
+                "isSidechain": False,
+                "message": {
+                    "content": _notification_body(
+                        "bsh-gone",
+                        "toolu_shell_gone",
+                        summary='Background command "npm ci" completed (exit code 0)',
+                    )
+                },
+            },
+        }
+    )
+    assert session.record.standing_activity == []
+
+
+async def test_a_manual_clear_forgets_the_subagent_launch_registry() -> None:
+    # The retraction has to reach both tiers, or the next piece of evidence
+    # re-derives the count from bookkeeping the user just said is wrong.
+    import json as _json
+
+    from swe_mux.routes.sessions import clear_session_standing_activity
+
+    replay = DetectionReplay("claude")
+    session = replay.session
+    session.record.native_session_id = OWN_CONVERSATION
+    await replay.step({"kind": "transcript", "ts_offset": 0, "record": _agent_launch("toolu_m1")})
+    await replay.step(
+        {"kind": "transcript", "ts_offset": 1, "record": _async_agent_ack("toolu_m1", "agent-m")}
+    )
+    assert [a.count for a in session.record.standing_activity] == [1]
+
+    response = await clear_session_standing_activity(
+        _clear_request(session, {"kind": "subagents"})
+    )
+    assert _json.loads(response.text)["cleared"] is True
+    assert session.record.standing_activity == []
+    # A later tool hook may still heal at 1 — one agent is alive, and one is the
+    # honest number — but the retracted fleet does not come back whole.
+    await replay.step({"kind": "timer", "seconds": 20})
+    await replay.step(_subagent_tool_hook())
+    assert [a.count for a in session.record.standing_activity] == [1]
+
+
 async def test_background_close_without_tracked_open_decrements_the_annotation() -> None:
     # A daemon restart loses the open-launch map while the adopted snapshot
     # still carries the annotation; the completion notification must still
@@ -732,11 +1015,14 @@ def _bash_result(tool_use_id: str, text: str) -> dict[str, Any]:
     }
 
 
-def _notification_body(task_id: str, tool_use_id: str, status: str = "completed") -> str:
+def _notification_body(
+    task_id: str, tool_use_id: str, status: str = "completed", *, summary: str | None = None
+) -> str:
     return (
         f"<task-notification>\n<task-id>{task_id}</task-id>\n"
         f"<tool-use-id>{tool_use_id}</tool-use-id>\n<status>{status}</status>\n"
-        "</task-notification>"
+        + (f"<summary>{summary}</summary>\n" if summary else "")
+        + "</task-notification>"
     )
 
 
