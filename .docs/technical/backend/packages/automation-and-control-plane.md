@@ -22,7 +22,8 @@ Scan-record queries run their time, trigger, and semantic predicates (`json_extr
 
 The control-plane enablement DAG: substrate and consumer deps, cycle-checked resolution, whether an entry `spends`, whether it `needs_llm`, and the model-free starting set a new Project is offered.
 `resolve(..., llm_ready=False)` moves the `needs_llm` entries out of `enabled` into `unverified` - its own field, not a `blocked` entry, because `blocked` values are ids a grant can switch on and no automation's enabling fixes an unproven endpoint.
-`resolve(..., global_allow=...)` subtracts the install-wide ceiling *with* each blocked id's dependents into `globally_disabled` - deliberately unlike `llm_ready`, because the ceiling is a standing operator decision rather than an outage. `effective_global_allow` composes the `automation_global_allow` map with `scan_timeline_enabled`, and `DEDICATED_INSTALL_SWITCHES` names the three ids whose ceiling is a dedicated Config switch and therefore may never appear in the map.
+`resolve(..., global_allow=...)` subtracts the install-wide ceiling *with* each blocked id's dependents into `globally_disabled` - deliberately unlike `llm_ready`, because the ceiling is a standing operator decision rather than an outage.
+`effective_global_allow` composes the `automation_global_allow` map with `scan_timeline_enabled`, and `DEDICATED_INSTALL_SWITCHES` names the three ids whose ceiling is a dedicated Config switch and therefore may never appear in the map.
 
 **Not:** storage, execution, or knowing whether a provider is proven or what the ceiling holds - both are the caller's answers to pass in.
 
