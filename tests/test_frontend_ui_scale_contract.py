@@ -178,7 +178,10 @@ def test_the_terminal_font_follows_the_chrome_scale() -> None:
 
     assert "const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)" in pane
     assert "useEffect(() => { applyBaseFontRef.current() }, [uiScale])" in pane
-    assert "a.uiScale === b.uiScale," in pane
+    # The memo lives in `terminalPaneMemo.ts` now, so its rules can be exercised as a
+    # function; the "let the change through" half of this wiring is asserted there.
+    memo = (SRC / "terminalPaneMemo.ts").read_text(encoding="utf-8")
+    assert "a.uiScale === b.uiScale" in memo
     # A scale change must not be in the terminal's construction deps.
     lifetime = re.search(r"\n  \}, \[session\.id, keybindings,[^\]]*\]\)", pane)
     assert lifetime, "the terminal lifetime effect's dep list has moved"

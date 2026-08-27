@@ -540,6 +540,17 @@ because those need a bound conversation and this is only evidence one is coming.
 resolve to nothing rather than a guess, on the same grounds the daemon's own promotion refuses
 an ambiguous match.
 
+**A promoted pane must be indistinguishable from a directly-spawned one, and was not.**
+Measured 2026-08-27 after the promotion work shipped: a shell promoted around a typed `claude`
+still submitted on Shift+Enter. The pane's terminal is built in an effect keyed on `session.id`
+that deliberately never re-runs on a backend change, so everything it closed over stayed frozen
+at `shell` - Shift+Enter and paste bracketing, the "Copy last reply" gate, the scrollback-repaint
+request, the Codex column-floor policy, and the DOM-only renderer choice. A directly-spawned agent
+never showed it, because its first render already carried the right backend. The repair is
+structural rather than per-call-site (`technical/frontend/packages/terminal.md`): the effect may
+not read a backend off the captured prop at all, and the renderer - the one choice made once, at
+construction - drops its WebGL surface on promotion instead.
+
 ## Key files
 
 - `src/swe_mux/session.py`

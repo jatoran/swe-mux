@@ -104,8 +104,7 @@ test('terminal memoization delivers every pane visibility transition', () => {
   // The lightweight visibility effect cannot run if the custom memo comparator
   // swallows the only prop that changed. That leaves a hidden pane registered for
   // PTY geometry and prevents the newly shown pane's redraw.
-  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
-  const comparator = source.slice(source.indexOf('export const TerminalPane = memo'))
+  const comparator = readFileSync(join(SRC, 'terminalPaneMemo.ts'), 'utf8')
   assert.match(comparator, /a\.visible === b\.visible/)
 })
 

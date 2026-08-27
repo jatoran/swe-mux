@@ -116,6 +116,12 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'tabContextMenu.test.ts': ['composition-root'],
   'terminalClipboard.test.ts': ['component-jsx', 'stylesheet'],
   'terminalRenderDiagnostics.test.ts': ['component-jsx'],
+  //: `negative-invariant` and not `component-jsx`: the assertion is that a whole effect
+  //: body contains no read of `session.backend`. That is absence over a region of a file,
+  //: and a renderer harness could only prove it for the states it happens to mount - which
+  //: is exactly how four behaviours stayed frozen at `shell` on a promoted pane after the
+  //: unit tests for each of their pure helpers stayed green.
+  'terminalPaneInputBackend.test.ts': ['negative-invariant'],
   'terminalViewport.test.ts': ['composition-root', 'component-jsx'],
   'testRegistry.test.ts': ['registry'],
   'transcriptAudio.test.ts': ['component-jsx', 'stylesheet'],

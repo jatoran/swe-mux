@@ -693,5 +693,11 @@ def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
     # An empty last-reply response must clear the value rather than leave the
     # previous session's text in place.
     assert "if(!disposed)setLastReply(result.text||'')" in pane
-    # A renderer change has to reach panes whose other props are stable.
-    assert "a.rendererPreference === b.rendererPreference" in pane
+    # A renderer change has to reach panes whose other props are stable. The memo moved
+    # to its own module so its rules could be unit-tested rather than only grepped
+    # (`frontend/test/terminalPaneInputBackend.test.ts`); the wiring assertion follows it.
+    memo = (
+        Path(__file__).parents[1] / "frontend" / "src" / "terminalPaneMemo.ts"
+    ).read_text(encoding="utf-8")
+    assert "a.rendererPreference === b.rendererPreference" in memo
+    assert "memo(TerminalPaneImpl, terminalPanePropsEqual)" in pane

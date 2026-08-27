@@ -50,7 +50,10 @@ test('one request per parsed buffer: the flag resets only where the buffer does'
     source.indexOf('const finishReplay'),
   )
   assert.match(request, /if \(scrollbackRepaintRequested \|\| replaying \|\| paneIsHidden\(\)\) return/)
-  assert.match(request, /scrollbackRepaintNeeded\(repaintsScrollback\(session\.backend\)/)
+  // `backendRef.current`, not the captured prop: this request lives in the terminal's
+  // construction effect, which never re-runs on a promotion, so a pane spawned as a
+  // shell would never ask for the repaint its agent needs.
+  assert.match(request, /scrollbackRepaintNeeded\(repaintsScrollback\(backendRef\.current\)/)
   assert.match(request, /\{ type: 'repaint' \}/)
   // The reset must sit in the same branch as term.reset(): a re-parsed buffer earns
   // a fresh judgement, and nothing else may re-arm the request.

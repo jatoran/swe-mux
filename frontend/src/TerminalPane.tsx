@@ -14,9 +14,10 @@ import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import { takeBranchSeed } from './branchSeed'
 import type { Session } from './types'
 import { sessionDisplayName } from './sessionNames'
-import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
+import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch, webglUnsafe } from './harnessRegistry.ts'
 import { consoleContentionNotice } from './consoleContention.ts'
 import { resolveInputBackend } from './inputBackend.ts'
+import { terminalPanePropsEqual } from './terminalPaneMemo.ts'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
@@ -289,11 +290,14 @@ function acceptsTerminalAttachments(session: Session) {
  * the paste (`composerInsertion.ts`). It goes through `term.input` rather than being
  * prepended to the paste text, because xterm would rewrite it to a bare CR.
  */
-function pasteIntoTerminal(term: Terminal, session: Session, text: string) {
-  // Input encoding follows the launch, not the binding: a paste into an agent
-  // that has started but not promoted yet must still be bracketed, or xterm
-  // turns each of its newlines into a submit (`inputBackend.ts`).
-  const inputBackend = resolveInputBackend(session)
+function pasteIntoTerminal(term: Terminal, inputBackend: string, text: string) {
+  // Takes the resolved backend rather than the session, so that a caller inside the
+  // terminal's construction effect cannot pass a value captured at mount. That effect
+  // is keyed on `session.id` and never re-runs on a promotion, so a `Session` argument
+  // there is frozen at `shell` for the whole life of a pane that was promoted into an
+  // agent - which is exactly how Shift+Enter and paste bracketing stayed shell-shaped
+  // after the promotion landed (measured 2026-08-27). `inputBackendRef` is the live
+  // answer; see `terminalPaneMemo.ts` for what keeps it live.
   const { leading, body } = composerInsertionParts(text, inputBackend)
   if (leading) term.input(leading, true)
   if (!body) return
@@ -353,7 +357,7 @@ function activeEditableField(): FocusedField {
   return { tagName: active.tagName, isContentEditable: active.isContentEditable, inTerminal: !!active.closest('.xterm') }
 }
 
-async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (files: Blob[]) => Promise<void>): Promise<'attachment'|'text'> {
+async function pasteBrowserClipboard(term: Terminal, session: Session, inputBackend: string, attach: (files: Blob[]) => Promise<void>): Promise<'attachment'|'text'> {
   if (acceptsTerminalAttachments(session) && typeof navigator.clipboard.read === 'function') {
     try {
       const items = await navigator.clipboard.read()
@@ -367,7 +371,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (
       // Some browsers block the richer Clipboard API while still allowing text reads.
     }
   }
-  pasteIntoTerminal(term, session, await navigator.clipboard.readText())
+  pasteIntoTerminal(term, inputBackend, await navigator.clipboard.readText())
   return 'text'
 }
 
@@ -741,6 +745,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // a handler has to name which question it is asking (`inputBackend.ts`).
   const inputBackendRef=useRef(resolveInputBackend(session))
   inputBackendRef.current=resolveInputBackend(session)
+  // Drops this pane's WebGL surface, if it has one. The one backend-dependent choice a
+  // live ref cannot repair: the renderer is selected once, at construction, so a pane
+  // that mounted as a shell chose WebGL and a promotion cannot un-choose it from inside
+  // the effect that made the decision.
+  const dropWebglRef=useRef<(reason: string)=>void>(()=>{})
   // An ended or recovered pane has no child to receive keystrokes. The daemon
   // refuses the write either way, so this is not what makes it safe — it is what
   // stops a pane the operator is reading from filling the socket with input it
@@ -992,7 +1001,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       let proposed = fit.proposeDimensions()
       if (proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)) {
         normalFontSize = terminalWidthPolicyFontSize(
-          session.backend,
+          backendRef.current,
           window.matchMedia('(max-width:760px)').matches,
           proposed.cols,
           base,
@@ -1068,9 +1077,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     pasteAttachmentRef.current=(text,nativeImage)=>{
       attachmentPasteDepth+=1
       try{
-        if(attachmentNeedsManualBracketing(nativeImage,acceptsTerminalAttachments(session),term.modes.bracketedPasteMode))term.input(bracketedPaste(text),true)
+        if(attachmentNeedsManualBracketing(nativeImage,isAgentBackend(inputBackendRef.current),term.modes.bracketedPasteMode))term.input(bracketedPaste(text),true)
         else if(nativeImage)term.paste(text)
-        else pasteIntoTerminal(term,session,text)
+        else pasteIntoTerminal(term,inputBackendRef.current,text)
       }finally{
         attachmentPasteDepth-=1
       }
@@ -1082,7 +1091,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     window.addEventListener('mux:theme', onTheme)
     term.attachCustomKeyEventHandler(event => {
-      const decision = terminalKeyDecision(event, keybindings[keyChord(event)], term.hasSelection(), resolveInputBackend(session))
+      const decision = terminalKeyDecision(event, keybindings[keyChord(event)], term.hasSelection(), inputBackendRef.current)
       if (decision.kind === 'sendInput') {
         event.preventDefault()
         // term.input keeps the write on the normal onData path, so broadcast membership
@@ -1284,7 +1293,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     window.addEventListener('error', onRenderError)
     const loadLatestReply=()=>{
-      if(!isAgentBackend(session.backend))return
+      if(!isAgentBackend(backendRef.current))return
       void api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`).then(result=>{
         // Clear on an empty result too: keeping the previous value here is what
         // let a session with no reply yet still answer "Copy reply".
@@ -1292,7 +1301,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }).catch(()=>{if(!disposed)setLastReply('')})
     }
     const scheduleLatestReply=(delay=700)=>{
-      if(!isAgentBackend(session.backend))return
+      if(!isAgentBackend(backendRef.current))return
       if(replyRefreshTimer!==undefined)window.clearTimeout(replyRefreshTimer)
       replyRefreshTimer=window.setTimeout(()=>{replyRefreshTimer=undefined;loadLatestReply()},delay)
     }
@@ -1929,7 +1938,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // but corrupt after a retained hidden interval; there is no context-loss event to
     // recover from.
     // Under `auto`, scrollback-repainting harnesses also remain on DOM.
-    if (shouldLoadWebgl(rendererPreference, mobileRenderer, session.backend)) {
+    if (shouldLoadWebgl(rendererPreference, mobileRenderer, backendRef.current)) {
       try {
         // `preserveDrawingBuffer: true`, and it is not optional here.
         //
@@ -1958,6 +1967,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         })
         term.loadAddon(addon)
         activeRenderer = 'webgl'
+        dropWebglRef.current = (reason: string) => {
+          if (webgl !== addon) return
+          webgl = null
+          activeRenderer = 'dom'
+          addon.dispose()
+          diagnoseRender?.(reason)
+          scheduleFullRedraw()
+        }
       } catch (error) {
         webgl = null
         activeRenderer = 'dom'
@@ -2155,7 +2172,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (scrollbackRepaintRequested || replaying || paneIsHidden()) return
       if (socket?.readyState !== WebSocket.OPEN) return
       const buffer = term.buffer.active
-      if (!scrollbackRepaintNeeded(repaintsScrollback(session.backend), buffer.type, buffer.baseY, term.rows)) return
+      if (!scrollbackRepaintNeeded(repaintsScrollback(backendRef.current), buffer.type, buffer.baseY, term.rows)) return
       scrollbackRepaintRequested = true
       socket.send(JSON.stringify({ type: 'repaint' }))
       reportRepair('scrollback_repaint_requested', { baseY: buffer.baseY, rows: term.rows })
@@ -2707,7 +2724,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const text=event.clipboardData.getData('text/plain')
       if(!text)return
       notePhysicalInput(event, 'paste')
-      event.preventDefault();resetMobileInput();pasteIntoTerminal(term,session,text);focusTerminalInput()
+      event.preventDefault();resetMobileInput();pasteIntoTerminal(term,inputBackendRef.current,text);focusTerminalInput()
     }
     mobileLiveInput?.addEventListener('beforeinput',mobileBeforeInput)
     mobileLiveInput?.addEventListener('input',mobileTextInput)
@@ -3208,7 +3225,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if(!text)return
       notePhysicalInput(event, 'paste')
       claimTerminalTextPaste(event,value=>{
-        pasteIntoTerminal(term,session,value)
+        pasteIntoTerminal(term,inputBackendRef.current,value)
       })
     }
     const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types || []).includes('Files')
@@ -3301,6 +3318,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
+  // A pane spawned as a shell chose WebGL, and a promotion can make that the wrong
+  // renderer: a harness declaring `webgl_unsafe` keeps an alternate-screen surface that
+  // can come back from a hidden compositing interval live but corrupt, with no
+  // context-loss event to recover from. The choice is made once inside the construction
+  // effect and that effect deliberately does not re-run on a backend change, so this is
+  // the one member of the stale-backend family a live ref cannot repair - the addon has
+  // to be disposed from outside. Dropping it is cheap and needs no remount: the DOM
+  // renderer is what xterm falls back to, and the same teardown already runs on a real
+  // context loss.
+  useEffect(()=>{
+    if(webglUnsafe(session.backend))dropWebglRef.current('webgl_dropped_on_promotion')
+  },[session.backend])
+
   // Publish this rail's box so the app's bottom-anchored messages clear it. Registration
   // is unconditional and outlives every remount reason, because the rail is always in the
   // pane - what changes is its height, and `railClearance` observes that itself.
@@ -3356,8 +3386,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(!term)throw new Error('The target terminal is not mounted.')
     try {
       const pasted=textOnly
-        ?(pasteIntoTerminal(term,session,await navigator.clipboard.readText()),'text' as const)
-        :await pasteBrowserClipboard(term, session, files=>attachFilesRef.current(files))
+        ?(pasteIntoTerminal(term,inputBackendRef.current,await navigator.clipboard.readText()),'text' as const)
+        :await pasteBrowserClipboard(term, session, inputBackendRef.current, files=>attachFilesRef.current(files))
       focusAfterTerminalActionRef.current()
       if(pasted==='text')showClipboardStatus('Pasted')
     } catch {
@@ -3629,7 +3659,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     await settleTerminalInsertion(
       text,
       !!submit,
-      value=>pasteIntoTerminal(target,session,value),
+      value=>pasteIntoTerminal(target,inputBackendRef.current,value),
       ()=>{
         if(termRef.current!==target)throw new Error('The target terminal changed before submit. Draft kept.')
         sendKey('\r')
@@ -4018,8 +4048,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
     const text=data?.getData('text/plain')||''
-    if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,session,text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,session,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
+    if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     <button role="menuitem" onClick={() => { setMenu(null); runCommand('clipboard.open') }}>Clipboard history…</button>
@@ -4041,31 +4071,4 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 // high-frequency telemetry (context_pct, tokens, model, cwd) avoids diffing every pane and
 // the sidebar on every PTY status frame. Callback props (onState/onStartupTiming) are
 // intentionally excluded: they are captured by mount-time effects keyed on session.id.
-export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
-  a.session.id === b.session.id &&
-  a.session.backend === b.session.backend &&
-  a.session.state === b.session.state &&
-  // Warm panes remain mounted. Swallowing this prop transition leaves the hidden
-  // pane registered with the daemon and prevents the shown pane's redraw.
-  a.visible === b.visible &&
-  // Changes once per agent lifecycle (codex: placeholder → detected rollout id);
-  // the resume Action rail button must pick up the flip.
-  a.session.native_session_id === b.session.native_session_id &&
-  // Task shells set this once at spawn; comparing it keeps the leaner rail authoritative.
-  a.session.relaunchable === b.session.relaunchable &&
-  a.broadcast === b.broadcast &&
-  a.scrollback === b.scrollback &&
-  a.keybindings === b.keybindings &&
-  // Omitting this blocked a renderer change from ever reaching an existing pane;
-  // it only appeared to work because unrelated prop churn re-rendered anyway.
-  a.rendererPreference === b.rendererPreference &&
-  // Identity-stable per machine (App value-compares it), so this only differs on
-  // the single boot transition from "config not loaded yet" to the real value.
-  a.windowsPty === b.windowsPty &&
-  a.mobileInput === b.mobileInput &&
-  // Without this a width envelope edited in Settings reaches no live pane, and the
-  // setting appears to do nothing until every terminal is rebuilt.
-  a.claudeMaxColumns === b.claudeMaxColumns &&
-  // Without this the memo swallows the change and the pane keeps the old font.
-  a.uiScale === b.uiScale,
-)
+export const TerminalPane = memo(TerminalPaneImpl, terminalPanePropsEqual)
