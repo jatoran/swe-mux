@@ -394,6 +394,24 @@ class SessionRecord:
     # the session id — so the counter is what makes a legitimately rolled run
     # survive a daemon restart instead of being quarantined as misattribution.
     agent_run_seq: int = 0
+    #: The promoted CLI's own process id, reported by the mux agent shim
+    #: (`agent_launcher`). Distinct from `pid`, which is this pane's PTY *root* —
+    #: for a session spawned as a shell those are two different processes, and the
+    #: whole question "who is reading this console" lives in the gap between them
+    #: (`console_contention.py`). ``None`` for a directly-spawned agent (where the
+    #: root is the CLI), for a shim-less launch, and before the shim reports.
+    agent_process_pid: int | None = None
+    #: Set while this pane's shell has the console back with its agent still
+    #: running: two live readers on one pseudoconsole, which presents as a composer
+    #: that shows none of what was typed. Diagnostic detail from
+    #: `console_contention.ConsoleCensus`, plus the verdict's reason. Cleared by
+    #: promotion, demotion, and the end of the run.
+    console_contention: dict[str, Any] | None = None
+    #: Agent backends whose name has appeared in this still-unpromoted shell's
+    #: output. Published so a pane can adopt agent input encoding during the launch
+    #: window — measured 2026-08-27 at ~10 s on the frozen app, which is exactly
+    #: when the CLI runs its terminal capability probes.
+    agent_launch_pending: list[str] = field(default_factory=list)
     run_cwd: str | None = None
     run_project_scope_id: str | None = None
     run_repo_group_id: str | None = None

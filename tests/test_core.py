@@ -26,7 +26,14 @@ from swe_mux.session_media import (
     session_media_directory,
     validate_session_media,
 )
-from swe_mux.shim_paths import SHIM_SUFFIX, is_mux_shim, path_without_shim_dirs
+from swe_mux.shim_paths import (
+    SHIM_SUFFIX,
+    is_mux_shim,
+    path_without_shim_dirs,
+)
+from swe_mux.shim_paths import (
+    clear_caches as clear_shim_caches,
+)
 from swe_mux.transcript_view import parse_transcript
 
 
@@ -186,6 +193,47 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
     assert env["MUX_SHIM_DIR"] == str(tmp_path / "bin")
 
 
+def test_shims_can_be_kept_off_a_terminal_s_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`agent_shims_on_shell_path=False`: `claude` in a terminal means their `claude`.
+
+    Someone using swe-mux purely as a terminal multiplexer should not be paying for
+    a promotion feature they are not using. Only what a shell's PATH advertises
+    changes: the shims are still written (so `MUX_*_EXE` and the settings paths
+    stay readable, and turning the setting back on needs no restart), and agents
+    mux launches itself never went through a shim in the first place.
+    """
+    monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
+    cfg = Config(data_dir=tmp_path, agent_shims_on_shell_path=False)
+    env = create_agent_shims(cfg)
+
+    assert (tmp_path / "bin" / f"claude{SHIM_SUFFIX}").is_file()
+    assert "MUX_SHIM_DIR" not in env
+    assert not env["PATH"].startswith(str(tmp_path / "bin"))
+    # The per-harness wiring a shim reads is published either way.
+    assert "MUX_CLAUDE_EXE" in env
+
+
+def test_shims_off_still_strips_an_inherited_shim_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A daemon relaunched from inside a session carries a shim dir on its own PATH.
+
+    Passing that through would reinstate the feature the operator turned off,
+    silently and only on that host.
+    """
+    inherited = tmp_path / "inherited-bin"
+    _write_mux_shim(inherited)
+    monkeypatch.setenv("PATH", f"{inherited}{os.pathsep}{tmp_path / 'ordinary'}")
+    monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
+    clear_shim_caches()
+
+    cfg = Config(data_dir=tmp_path, agent_shims_on_shell_path=False)
+    env = create_agent_shims(cfg)
+    assert str(inherited) not in env["PATH"]
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -213,6 +261,33 @@ def test_claude_shim_captures_an_explicit_resume_conversation_id() -> None:
         _, args, native_id = _claude([flag, native])
         assert native_id == native
         assert "--session-id" not in args
+
+
+
+class _FakeChild:
+    """Stands in for the spawned CLI, with the two attributes `_run_child` uses.
+
+    `_launch` moved from `subprocess.call` to `Popen` because the daemon needs the
+    real CLI's pid *while it runs* (`console_contention.py`), so these tests patch
+    the constructor and assert on the argv it was handed.
+    """
+
+    def __init__(self, pid: int = 4321, code: int = 0) -> None:
+        self.pid = pid
+        self._code = code
+
+    def wait(self) -> int:
+        return self._code
+
+
+def _capture_spawn(
+    monkeypatch: pytest.MonkeyPatch, calls: list, *, code: int = 0
+) -> None:
+    def _popen(command, **kwargs):  # noqa: ANN001, ANN202
+        calls.append(command)
+        return _FakeChild(code=code)
+
+    monkeypatch.setattr(agent_launcher.subprocess, "Popen", _popen)
 
 
 @pytest.mark.parametrize(
@@ -249,11 +324,11 @@ def test_agent_launcher_demotes_terminal_when_agent_exits(
         "_demote",
         lambda backend, native_id: calls.append(("demote", backend, native_id)),
     )
-    monkeypatch.setattr(
-        agent_launcher.subprocess,
-        "call",
-        lambda command: calls.append(("exec", command)) or 7,
-    )
+    def _popen(command, **kwargs):  # noqa: ANN001, ANN202
+        calls.append(("exec", command))
+        return _FakeChild(code=7)
+
+    monkeypatch.setattr(agent_launcher.subprocess, "Popen", _popen)
     monkeypatch.setattr(agent_launcher.shutil, "which", lambda command: command)
 
     with pytest.raises(SystemExit, match="7"):
@@ -306,9 +381,7 @@ def test_agent_launcher_runs_batch_commands_through_comspec(
 ) -> None:
     calls: list[list[str]] = []
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
-    monkeypatch.setattr(
-        agent_launcher.subprocess, "call", lambda command: calls.append(command) or 0
-    )
+    _capture_spawn(monkeypatch, calls)
 
     assert agent_launcher._launch(r"C:\npm\codex.cmd", ["--version"]) == 0
     assert calls[0][:4] == [r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c"]
@@ -330,9 +403,7 @@ def test_agent_launcher_bypasses_npm_batch_for_structured_codex_args(
     script.write_text("// fixture", encoding="utf-8")
     node.write_bytes(b"fixture")
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        agent_launcher.subprocess, "call", lambda command: calls.append(command) or 0
-    )
+    _capture_spawn(monkeypatch, calls)
 
     notify = 'notify=["python.exe", "-m", "swe_mux.hook_client"]'
     assert agent_launcher._launch(str(shim), ["-c", notify]) == 0
@@ -409,9 +480,7 @@ def test_agent_launcher_escapes_a_poisoned_shim_target(
 
     monkeypatch.setattr(agent_launcher.shutil, "which", fake_which)
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        agent_launcher.subprocess, "call", lambda command: calls.append(command) or 0
-    )
+    _capture_spawn(monkeypatch, calls)
 
     assert agent_launcher._launch(str(mux_shim), ["--version"]) == 0
     assert calls == [[str(node), str(script), "--version"]]

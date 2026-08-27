@@ -1156,6 +1156,9 @@ Its rules, and what each one is defending:
   The corruption itself is repaired at its source by the settled-resize repaint pulse (`features/terminal-input.md`), which makes the child restate the screen the user stopped on; the envelope is now a width preference rather than the only defence, and `0` is a reasonable setting.
   A capped pane whose width change is clamped raises a transient notice naming the limit and offering the setting, since the symptom - text that stops widening while margin appears - otherwise reads as the CLI refusing to resize.
   That notice yields to the ownership and letterbox notices, which share its slot and describe geometry the user has less control over.
+  All three yield to the **console-contention** notice, which takes the top of that slot and is the only one of the four that is a fault rather than a fact: it states that this pane's shell is reading the terminal alongside its agent and that typing is being split between them (`features/sessions.md` § Console contention).
+  It carries `role="alert"` and the error colour, does not time out, and names the shell rather than mux's launch chain - the operator's repair is the same whichever link failed, and a message about wrapper processes would be describing internals to someone whose terminal has stopped working.
+  When the agent is outside the pane's process tree the hint says so explicitly, because otherwise an operator closes the tab and leaves a CLI running on their machine.
   `0` removes the host style entirely rather than relaxing its maximum, so a disabled envelope is the same code path as no envelope.
   The centered grid item retains an explicit `width:100%` before its maximum is applied.
   Centering without that definite width makes CSS Grid intrinsically size the host from xterm's own fitted child, creating a repeated shrink-and-refit loop.
