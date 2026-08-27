@@ -552,6 +552,11 @@
   step-down plan that `pyproject.toml` and the root `CLAUDE.md` both point at, and § S12.2
   names `component-jsx` and `composition-root` as the source-text test debt a renderer
   harness is the way off.
+- Changing launch marketing material - blog/post drafts, the positioning line, or the venue
+  checklist: `marketing/README.md` (index + rules) and `development/ROADMAP.md` Phase 11.
+  The rule the drafts carry: every claim must be true of the shipped artifact on the day it
+  posts, `[verify]` markers are re-measured before publishing, and the positioning line is
+  one string used verbatim everywhere.
 - Changing backend package ownership or shared SQLite behavior:
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
 
