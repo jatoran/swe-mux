@@ -56,17 +56,22 @@ test('every settings target lands on a real tab', () => {
 
 test('the Automation workspace owns global and per-Project automation controls', () => {
   const dashboard = source('AutomationDashboard.tsx')
-  const policy = source('AutomationPolicyView.tsx')
+  const matrix = source('AutomationMatrix.tsx')
   assert.ok(dashboard.includes('<AutomationPolicyView'))
-  assert.ok(dashboard.includes('<AutomationOptIns'))
-  assert.ok(policy.includes('data-setting="automation_enabled"'))
-  assert.ok(policy.includes('data-setting="scan_timeline_enabled"'))
+  assert.ok(dashboard.includes('<AutomationPolicyMatrix'))
+  assert.ok(matrix.includes('data-setting="automation_enabled"'))
+  // The dedicated install switches are marked from the registry payload's
+  // `install_switch` field rather than as three literals, so the mark and the
+  // switch it names cannot drift apart; the daemon half of the promise is the
+  // registry's own DEDICATED_INSTALL_SWITCHES map.
+  assert.ok(matrix.includes('data-setting={item.install_switch||undefined}'))
+  assert.ok(registry.includes('"scan_timeline": "scan_timeline_enabled"'))
   assert.equal(settingTarget('automation.engine').surface, 'automation')
   assert.equal(settingTarget('automation.scanTimeline').surface, 'automation')
 })
 
 test('Project targets name a marked control or a real automation id', () => {
-  const manager = source('ProjectsManager.tsx')
+  const manager = source('AutomationMatrix.tsx') + source('ProjectsManager.tsx')
   // The opt-in rows are marked from the registry entry itself, so every implemented
   // automation is addressable without a per-automation attribute in the source.
   assert.ok(manager.includes('data-setting={automationSetting(item.id)}'))
@@ -100,7 +105,11 @@ test('Project targets name a marked control or a real automation id', () => {
 // with no control in any overlay, which made the inert default impossible to discover
 // and impossible to change from the app. A fifth arriving the same way fails here.
 test('every grantable Project authority field has an owner in the Projects registry', () => {
-  const manager = source('ProjectsManager.tsx')
+  // Two owners split by what the field governs: the four authority fields stay
+  // in the Projects registry (AgentAuthority), while `scan_timeline_auto_enable`
+  // rides the scan row in the Automation policy matrix beside the permission it
+  // qualifies.
+  const manager = source('ProjectsManager.tsx') + source('AutomationMatrix.tsx')
   const grantsModule = readFileSync(join(root, '..', 'src', 'swe_mux', 'grants.py'), 'utf8')
   // Split on the declaration, not the bare name: the module's own docstring names it too.
   const table = grantsModule.split('GRANTABLE_PROJECT_VALUES: Mapping')[1].split('\n}')[0]

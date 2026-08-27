@@ -17,8 +17,8 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "agent_interject_hourly_budget": 10,
   "agent_interject_min_interval_seconds": 60.0,
   "agent_message_hourly_budget": 20,
-  "agent_message_max_chain_depth": 6,
   "agent_message_limits_enabled": false,
+  "agent_message_max_chain_depth": 6,
   "agent_message_max_chars": 4000,
   "agent_message_max_thread_turns": 40,
   "agent_message_pending_per_target": 5,
@@ -33,9 +33,9 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "approval_max_auto_per_grant": 200,
   "assistant_context_messages": 30,
   "assistant_daily_budget": {
+    "mode": "usd",
     "tokens": null,
-    "usd": 2.0,
-    "mode": "usd"
+    "usd": 2.0
   },
   "assistant_enabled": false,
   "assistant_max_output_tokens": 700,
@@ -47,14 +47,9 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "attention_daily_interrupt_budget": 4,
   "attention_hourly_interrupt_cap": 2,
   "attention_incident_window_seconds": 3600.0,
-  "attention_narration_daily_budget": {
-    "tokens": null,
-    "usd": 0.1,
-    "mode": "usd"
-  },
   "attention_narration_enabled": false,
-  "attention_narration_max_output_tokens": 200,
   "attention_narration_model": "",
+  "attention_observers_enabled": false,
   "auto_delivery_enabled": false,
   "auto_delivery_max_consecutive": 3,
   "auto_delivery_quiet_end": "",
@@ -65,20 +60,21 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "auto_delivery_stable_seconds": 8.0,
   "automation_concurrency": 2,
   "automation_daily_budget": {
+    "mode": "either",
     "tokens": 10000000,
-    "usd": 20.0,
-    "mode": "either"
+    "usd": 20.0
   },
   "automation_enabled": false,
+  "automation_global_allow": {},
   "automation_hourly_call_cap": 1200,
   "automation_max_input_tokens": 4096,
-  "automation_max_output_tokens": 256,
+  "automation_max_output_tokens": 1000,
   "automation_queue_size": 256,
   "automation_retention_days": 90,
   "automation_rule_daily_budget": {
+    "mode": "either",
     "tokens": 4000000,
-    "usd": 10.0,
-    "mode": "either"
+    "usd": 10.0
   },
   "automation_rule_hourly_call_cap": 600,
   "broadcast_default": false,
@@ -92,16 +88,16 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "clipboard_history_redact_secrets": true,
   "clipboard_history_retention_hours": 24,
   "custom_llm_base_url": "",
-  "custom_llm_model": "",
   "custom_llm_catalog_url": "",
+  "custom_llm_model": "",
   "custom_theme": {
-    "background": "#090a0c",
-    "panel": "#0d0f12",
-    "line": "#2a2e34",
-    "foreground": "#d9dde2",
-    "muted": "#848b94",
     "accent": "#8bd450",
-    "error": "#f07178"
+    "background": "#090a0c",
+    "error": "#f07178",
+    "foreground": "#d9dde2",
+    "line": "#2a2e34",
+    "muted": "#848b94",
+    "panel": "#0d0f12"
   },
   "data_dir": "C:\\Users\\demo\\.mux",
   "default_backend": "shell",
@@ -115,16 +111,16 @@ export const SETTINGS_CONFIG_FIXTURE = {
     "claude": [],
     "codex": [],
     "omp": [],
-    "pi": [],
-    "opencode": []
+    "opencode": [],
+    "pi": []
   },
   "harness_enabled": {},
   "harness_exe": {
     "claude": "claude.exe",
     "codex": "codex.exe",
     "omp": "omp",
-    "pi": "pi",
-    "opencode": "opencode"
+    "opencode": "opencode",
+    "pi": "pi"
   },
   "harness_instrument_enabled": {},
   "harness_mcp_enabled": {},
@@ -141,20 +137,21 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "middle_click_paste": true,
   "mobile_back_view_history": true,
   "mobile_gesture_overlay_back": true,
-  "mobile_surface_gestures": true,
   "mobile_gesture_swipe_away_close": true,
   "mobile_gestures": {
+    "rail_swipe_up": "menu.toggle",
     "swipe_left": "mobileTab.next",
     "swipe_right": "mobileTab.previous",
+    "two_finger_swipe_down": "terminal.keyboardToggle",
     "two_finger_swipe_left": "drawer.toggle",
     "two_finger_swipe_right": "sidebar.toggle",
     "two_finger_swipe_up": "notes.open",
-    "two_finger_swipe_down": "terminal.keyboardToggle",
     "two_finger_tap": "palette.open"
   },
   "mobile_long_press": "context_menu",
   "mobile_scroll_direction": "natural",
   "mobile_scroll_sensitivity": 1.0,
+  "mobile_surface_gestures": true,
   "mobile_vertical_drag": "smart",
   "new_project_parent": "",
   "note_command_rail": "auto",
@@ -164,8 +161,8 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "note_line_height": 0.0,
   "note_rail_button_size_px": 0,
   "note_shortcut_overrides": {
-    "mod+r": "editor.toggle_bullet_at_line_start",
-    "mod+e": "markdown.toggle_task"
+    "mod+e": "markdown.toggle_task",
+    "mod+r": "editor.toggle_bullet_at_line_start"
   },
   "note_shortcut_policy": "browser-safe",
   "note_spellcheck": false,
@@ -176,16 +173,15 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "openrouter_request_timeout_seconds": 30.0,
   "openrouter_standard_model": "",
   "operational_telemetry_retention_days": 180,
-  "attention_observers_enabled": false,
   "pinned_directories": [],
   "port": 8765,
   "process_evidence_retention_days": 30,
   "process_orphan_grace_seconds": 15.0,
   "process_poll_seconds": 5.0,
   "project_card_daily_budget": {
+    "mode": "usd",
     "tokens": null,
-    "usd": 0.25,
-    "mode": "usd"
+    "usd": 0.25
   },
   "project_card_max_input_tokens": 6000,
   "project_card_max_output_tokens": 600,
@@ -193,6 +189,11 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "project_ignore_patterns": [
     ".git",
     ".swe-mux",
+    ".claude/worktrees",
+    ".codex/worktrees",
+    ".agents/worktrees",
+    ".worktrees",
+    ".trash",
     ".venv",
     "venv",
     "__pycache__",
@@ -227,29 +228,19 @@ export const SETTINGS_CONFIG_FIXTURE = {
     "backend": "conpty",
     "build_number": 19045
   },
+  "rail_density_desktop": "comfortable",
+  "rail_density_mobile": "comfortable",
   "reconcile_external_history": true,
   "request_spawn_enabled": true,
   "requires_auth": false,
   "revision": 1,
-  "scan_timeline_daily_budget": {
-    "tokens": 3000000,
-    "usd": 5.0,
-    "mode": "either"
-  },
   "scan_timeline_enabled": false,
-  "scan_timeline_hourly_call_cap": 600,
-  "scan_timeline_max_output_tokens": 900,
   "scan_timeline_model": "deepseek/deepseek-v4-flash",
-  "scan_timeline_run_budget": {
-    "tokens": 500000,
-    "usd": null,
-    "mode": "tokens"
-  },
   "scheduled_run_retention_days": 60,
   "scheduled_runs_enabled": true,
   "scheduled_runs_max_concurrent": 3,
   "scheduled_runs_poll_seconds": 5.0,
-  "schema_version": 30,
+  "schema_version": 34,
   "scrollback_bytes": 5242880,
   "session_control_enabled": true,
   "session_control_graceful_timeout_s": 12.0,
@@ -277,31 +268,29 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "tts_cache_mb": 200,
   "tts_content": "summary",
   "tts_daily_budget": {
+    "mode": "usd",
     "tokens": null,
-    "usd": 1.0,
-    "mode": "usd"
+    "usd": 1.0
   },
   "tts_default_mode": "off",
+  "tts_edge_pitch_hz": 0,
+  "tts_edge_python": "",
+  "tts_edge_rate_percent": 0,
+  "tts_edge_risk_ack_version": 0,
+  "tts_edge_voice": "en-US-JennyNeural",
+  "tts_edge_volume_percent": 0,
   "tts_enabled": false,
   "tts_engine": "sapi",
+  "tts_kokoro_lexicon": {},
   "tts_kokoro_speed": 1.0,
   "tts_kokoro_voice": "af_heart",
-  "tts_kokoro_lexicon": {},
   "tts_sapi_rate": 0,
   "tts_sapi_voice": "",
-  "tts_edge_python": "",
-  "tts_edge_voice": "en-US-JennyNeural",
-  "tts_edge_rate_percent": 0,
-  "tts_edge_volume_percent": 0,
-  "tts_edge_pitch_hz": 0,
-  "tts_edge_risk_ack_version": 0,
   "tts_summary_max_tokens": 500,
   "tts_summary_model": "",
   "tts_verbatim_max_chars": 6000,
   "ui_scale_desktop": 1.0,
   "ui_scale_mobile": 1.0,
-  "rail_density_desktop": "comfortable",
-  "rail_density_mobile": "comfortable",
   "usage_command": [
     "ccusage",
     "daily",
@@ -481,7 +470,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
     "mucks",
     "max"
   ],
-  "worktree_root": "C:\\Users\\demo\\worktrees",
+  "worktree_root": "C:\\Users\\Jatora\\.mux\\worktrees",
   "wsl_bridge_enabled": false,
   "xterm_scrollback_lines": 32768
 }

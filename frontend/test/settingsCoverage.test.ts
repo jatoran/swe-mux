@@ -43,6 +43,10 @@ const settingsSources = [
   'Settings.tsx', 'NotificationPushSettings.tsx', 'SessionRowSettings.tsx',
   'ProviderAccounts.tsx', 'remoteConnection.tsx', 'WslBridgePanel.tsx',
   'EdgeTtsSettings.tsx', 'AutomationPolicyView.tsx',
+  // The policy matrix owns the install-wide automation switches: the master
+  // `automation_enabled`, the three dedicated per-row switches, and the
+  // `automation_global_allow` ceiling map its Global column writes.
+  'AutomationMatrix.tsx',
   // The seven model settings live here now rather than beside the features they
   // configure, because switching endpoint changes all of them at once.
   'ModelRoutingSummary.tsx',
@@ -68,6 +72,14 @@ const BESPOKE_CONTROLS: Record<string, string> = {
   // Previewed live as it is chosen, so it goes through a wrapper that also repaints.
   ui_scale_desktop: "changeUiScale('ui_scale_desktop'",
   ui_scale_mobile: "changeUiScale('ui_scale_mobile'",
+  // The three dedicated install switches are the matrix's Global cells for
+  // their rows. Which key a cell writes comes from the registry payload's
+  // `install_switch` field rather than a literal in the source, so the
+  // `data-setting` mark is emitted dynamically and this fragment - the write
+  // that flips whichever switch the row names - is what proves the editor.
+  scan_timeline_enabled: 'patchConfig({[item.install_switch]',
+  scheduled_runs_enabled: 'patchConfig({[item.install_switch]',
+  land_queue_enabled: 'patchConfig({[item.install_switch]',
 }
 
 /**

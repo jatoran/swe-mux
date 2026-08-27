@@ -392,7 +392,13 @@ type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:numbe
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
 /** What the create dialog needs from `GET /api/grants`: the named starting sets its
  *  checkboxes apply, and the provider verdict the model-backed one discloses. */
-type GrantsCatalogue={project_starting_sets:StartingSetCatalog;llm:{ready:boolean;reason:string}}
+type GrantsCatalogue={
+  project_starting_sets:StartingSetCatalog
+  llm:{ready:boolean;reason:string}
+  /** The registry with each entry's resolved install-wide ceiling, so the
+   *  creation form can grey a set the daemon would refuse to grant. */
+  automations?:{id:string;globally_allowed?:boolean}[]
+}
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
@@ -630,6 +636,16 @@ export function App() {
   // The grants catalogue, read when the create dialog opens: the named starting sets
   // its checkboxes apply, and the provider verdict the model-backed one discloses.
   const [grantsCatalogue,setGrantsCatalogue]=useState<GrantsCatalogue|null>(null)
+  // A starting set with any member under the install-wide ceiling is offered
+  // greyed rather than granted-and-refused: POST /api/grants answers such a
+  // request with `automation_globally_disabled`, and the form knowing that
+  // before the press is the whole point of the catalogue carrying the ceiling.
+  const startingSetBlocked=(setName:keyof StartingSetCatalog):boolean=>{
+    const set=grantsCatalogue?.project_starting_sets?.[setName]
+    if(!set||!grantsCatalogue?.automations)return false
+    const ceiling=new Map(grantsCatalogue.automations.map(item=>[item.id,item.globally_allowed!==false]))
+    return set.automations.some(id=>ceiling.get(id)===false)
+  }
   const [projectsManagerOpen,setProjectsManagerOpen]=useState(false)
   // Which Project the registry should land on, and whether on its record or its
   // settings. Projects is the only per-Project editor, so every "project settings"
@@ -3654,7 +3670,9 @@ export function App() {
       const owner=id.startsWith('project.')?projects.find(project=>project.id===(requestedProject||projectId)):undefined
       if(id.startsWith('project.')&&!owner){setError('Select a Project first - that policy belongs to one Project.');return}
       setSettingsOpen(false);setResourcesOpen(null);setProjectsManagerOpen(false)
-      openAutomation(id.startsWith('project.')?'projects':'policy',owner?.id,target.setting)
+      // Policy is the one editing view now: install switches, the matrix, and
+      // the limits drawer all live on it, and the reveal walks to the mark.
+      openAutomation('policy',owner?.id,target.setting)
       return
     }
     if(target.surface==='project'){
@@ -3743,7 +3761,14 @@ export function App() {
     if(wantsStartingSets&&!(next as Project&{restored?:boolean}).restored){
       try{
         const catalogue=grantsCatalogue??await api<GrantsCatalogue>('GET','/api/grants')
-        const selection=selectedStartingSets(projectCreate,catalogue.project_starting_sets)
+        // A set the ceiling blocks was greyed on the form; strip it here too so
+        // a stale draft flag cannot turn one grant refusal into losing all three.
+        const selection=selectedStartingSets({
+          ...projectCreate,
+          automations:projectCreate.automations&&!startingSetBlocked('recommended'),
+          llm:projectCreate.llm&&!startingSetBlocked('llm'),
+          autonomy:projectCreate.autonomy&&!startingSetBlocked('autonomy'),
+        },catalogue.project_starting_sets)
         if(selection.automations.length||Object.keys(selection.values).length){
           await api('POST','/api/grants',{
             project_id:next.id,
@@ -5451,7 +5476,7 @@ export function App() {
     { id: 'fleetActivity.open', label: 'Open fleet activity telemetry', category: 'view', available: true, run: () => openResources('fleet') },
     { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => openResources('network') },
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
-    { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('overview',activeProject?.id);setMainMenuOpen(false)} },
+    { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('policy',activeProject?.id);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
     { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
@@ -7480,7 +7505,7 @@ export function App() {
         onPreviewAttached={(preview,project)=>attachPreview(preview,project,true)}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
-        onOpenAutomationDashboard={()=>openAutomation('overview',activeProject?.id)}
+        onOpenAutomationDashboard={()=>openAutomation('activity',activeProject?.id)}
         queuePending={queuePendingTotal}
         onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}
@@ -8005,9 +8030,12 @@ export function App() {
         {/* One choice instead of twenty checkboxes found later. Everything in this set
             reads transcripts swe-mux already stores and never calls a model, which is
             what makes it safe to default on; the scan timeline is the one that spends
-            and is deliberately not in it. */}
+            and is deliberately not in it. A set the install-wide ceiling blocks is
+            greyed with the reason, because the daemon would refuse the grant
+            (`automation_globally_disabled`) and a checkbox that then errors is worse
+            than one that says why it is off. */}
         <label class="check project-create-automations">
-          <input type="checkbox" checked={projectCreate.automations} onChange={event=>setProjectCreate(value=>({...value,automations:event.currentTarget.checked}))} />
+          <input type="checkbox" checked={projectCreate.automations&&!startingSetBlocked('recommended')} disabled={startingSetBlocked('recommended')} onChange={event=>setProjectCreate(value=>({...value,automations:event.currentTarget.checked}))} />
           <span><strong>Turn on the free analysis automations</strong>
           <small>Change map, findings detectors, and commit provenance, for this Project.
           Free — they read what swe-mux already captures and never call a model. Recorded
@@ -8018,15 +8046,15 @@ export function App() {
             the common name-folder-Enter path. Both apply through the same grant path
             as the free set, dependency closure and audit record included. */}
         <label class="check project-create-automations">
-          <input type="checkbox" checked={projectCreate.llm} onChange={event=>setProjectCreate(value=>({...value,llm:event.currentTarget.checked}))} />
+          <input type="checkbox" checked={projectCreate.llm&&!startingSetBlocked('llm')} disabled={startingSetBlocked('llm')} onChange={event=>setProjectCreate(value=>({...value,llm:event.currentTarget.checked}))} />
           <span><strong>Turn on the model-backed automations</strong>
           <small>Scan timeline (armed for every new session), adaptive session titles,
           and model narration, plus the detectors they rank over. These call your
           configured model and can cost money; the budgets are install-wide, in
-          Automation → Global policy.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}</small></span>
+          the Automation workspace.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}{startingSetBlocked('llm')?' Part of this set is disabled install-wide in Automation → Policy.':''}</small></span>
         </label>
         <label class="check project-create-automations">
-          <input type="checkbox" checked={projectCreate.autonomy} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
+          <input type="checkbox" checked={projectCreate.autonomy&&!startingSetBlocked('autonomy')} disabled={startingSetBlocked('autonomy')} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
           <span><strong>Let agents act without per-request approval</strong>
           <small>Agents working in this Project can spawn sessions and start landings
           directly, each still under its hourly budget, with spawn-request review on for
@@ -8079,19 +8107,15 @@ export function App() {
     {usageOpen&&<UsageModal
       initial={usageOpen}
       onConfigure={()=>{setUsageOpen(null);openSettings('Usage analytics')}}
-      onOpenAutomation={()=>{setUsageOpen(null);openAutomation('cost',activeProject?.id)}}
+      onOpenAutomation={()=>{setUsageOpen(null);openAutomation('usage',activeProject?.id)}}
       onClose={()=>setUsageOpen(null)}
     />}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard projects={projects} initialView={automationOpen.view} initialProjectId={automationOpen.projectId} initialSetting={automationOpen.setting} revealToken={automationOpen.revealToken} onClose={()=>setAutomationOpen(null)}
-      // The two surfaces this dashboard used to draw second copies of. Both close it on the
-      // way out: they are drawer tabs, and the dialog covers the drawer.
-      onOpenAlerts={()=>{setAutomationOpen(null);openDrawerTab('notifications')}}
-      onOpenFindings={()=>{setAutomationOpen(null);openDrawerTab('activity',projectId,'findings')}}
-      // Lands on the spend table's own segment, not on the Overview: someone crossing from
-      // the rules is already asking about automation, and wants the other two pots beside
-      // it rather than instead of it.
-      onOpenUsage={()=>{setAutomationOpen(null);openUsage('automation')}}
+      // Alerts and spend are mirrored inside the dashboard now (the same
+      // AttentionInbox and AutomationSpendView components the drawer and the
+      // Usage dialog draw), so the old escape links are gone rather than
+      // duplicated.
       onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(null);void selectSession(session)}}/>}
 
 

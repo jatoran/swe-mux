@@ -109,7 +109,7 @@ test('the model provider is a link and never a grant', () => {
 })
 
 test('the surfaces that go inert behind a provider link to the one that owns it', () => {
-  for (const file of ['GrantGate.tsx', 'ProjectsManager.tsx']) {
+  for (const file of ['GrantGate.tsx', 'AutomationMatrix.tsx']) {
     assert.match(source(file), /target="accounts\.llmProvider"/,
       `${file} names the provider without offering a way to reach it`)
   }
@@ -124,12 +124,12 @@ test('the gate reads needs_llm from the registry rather than listing ids', () =>
   assert.match(daemon('automation_registry.py'), /needs_llm: bool = False/)
 })
 
-test('the Projects editor states the reason rather than paraphrasing it', () => {
+test('the policy matrix states the reason rather than paraphrasing it', () => {
   // The daemon's sentence distinguishes never-verified from edited-since-verified, and
   // a surface that wrote its own would collapse the two.
-  const manager = source('ProjectsManager.tsx')
-  assert.match(manager, /state\.llm\?\.reason/)
-  assert.match(manager, /unverified\.has\('scan_timeline'\)/)
+  const matrix = source('AutomationMatrix.tsx')
+  assert.match(matrix, /project\?\.llm\?\.reason/)
+  assert.match(matrix, /unverified\.has\(item\.id\)/)
 })
 
 test('the Accounts panel marks the controls the links reveal', () => {

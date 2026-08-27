@@ -10,13 +10,14 @@ const source = (name: string) => readFileSync(join(root, 'src', name), 'utf8')
 // section makes - "tokens, dollars, or first hit, everywhere" - is true of whichever
 // budgets someone remembered to convert. A cap that shipped with a bespoke number box
 // would look identical to the operator until they went looking for the choice.
+// The scan timeline's daily/run budgets and attention narration's daily budget
+// are deliberately absent: retired in favour of the global automation budget,
+// which both features now enforce. Their names joining the legacy blocklist
+// below is what keeps them from quietly returning as bespoke editors.
 const BUDGETS = [
   'automation_daily_budget',
   'automation_rule_daily_budget',
   'project_card_daily_budget',
-  'scan_timeline_daily_budget',
-  'scan_timeline_run_budget',
-  'attention_narration_daily_budget',
   'tts_daily_budget',
   'assistant_daily_budget',
 ]
@@ -42,6 +43,10 @@ test('no cap is still edited as a bare number box', () => {
     'scan_timeline_run_token_budget', 'assistant_daily_budget_usd',
     'tts_daily_budget_usd', 'project_card_daily_budget_usd',
     'attention_narration_daily_budget_usd',
+    // Retired outright (schema 34): both features spend under the global caps.
+    'scan_timeline_daily_budget', 'scan_timeline_run_budget',
+    'scan_timeline_hourly_call_cap', 'scan_timeline_max_output_tokens',
+    'attention_narration_daily_budget', 'attention_narration_max_output_tokens',
   ]) {
     assert.ok(!settings.includes(legacy), `Settings still edits the retired ${legacy}`)
   }

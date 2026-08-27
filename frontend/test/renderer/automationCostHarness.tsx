@@ -72,16 +72,33 @@ const TELEMETRY = {
 
 const MATRIX = {
   automations: [
-    { id: 'raw_store', kind: 'substrate', label: 'Raw event store', requires: [], implemented: true },
-    { id: 'tier0', kind: 'substrate', label: 'Tier 0 facts', requires: ['raw_store'], implemented: true },
-    { id: 'scan_timeline', kind: 'substrate', label: 'Scan timeline', requires: ['raw_store', 'tier0'], implemented: true },
-    { id: 'loop_detection', kind: 'consumer', label: 'Loop detection', requires: ['tier0'], implemented: true },
-    { id: 'cross_session_interlocks', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false },
+    { id: 'raw_store', kind: 'substrate', label: 'Raw event store', requires: [], implemented: true, spends: false, globally_allowed: true, install_switch: null },
+    { id: 'tier0', kind: 'substrate', label: 'Tier 0 facts', requires: ['raw_store'], implemented: true, spends: false, globally_allowed: true, install_switch: null },
+    { id: 'scan_timeline', kind: 'substrate', label: 'Scan timeline', requires: ['raw_store', 'tier0'], implemented: true, spends: true, needs_llm: true, globally_allowed: true, install_switch: 'scan_timeline_enabled' },
+    { id: 'loop_detection', kind: 'consumer', label: 'Loop detection', requires: ['tier0'], implemented: true, spends: false, globally_allowed: true, install_switch: null },
+    // One row under the install-wide ceiling, so the spec can see the greyed cell.
+    { id: 'doc_debt', kind: 'consumer', label: 'Doc-debt ledger', requires: ['tier0'], implemented: true, spends: false, globally_allowed: false, install_switch: null },
+    { id: 'session_control', kind: 'consumer', label: 'Agent session control', requires: [], implemented: true, spends: false, default_on: true, globally_allowed: true, install_switch: null },
+    { id: 'catch_me_up', kind: 'consumer', label: 'Catch-me-up digest', requires: ['scan_timeline'], implemented: true, spends: false, globally_allowed: true, install_switch: null },
+    { id: 'cross_session_interlocks', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false, spends: false, globally_allowed: true, install_switch: null },
   ],
   projects: [
-    { project_id: 'p1', project_name: 'swe-mux', status: 'ready', requested: { raw_store: true, tier0: true, loop_detection: true }, enabled: ['loop_detection', 'raw_store', 'tier0'], blocked: {}, scan_timeline_auto_enable: false },
-    { project_id: 'p2', project_name: 'orca', status: 'ready', requested: {}, enabled: [], blocked: {}, scan_timeline_auto_enable: false },
+    { project_id: 'p1', project_name: 'swe-mux', status: 'ready', revision: 'r1', requested: { raw_store: true, tier0: true, loop_detection: true, doc_debt: true }, enabled: ['loop_detection', 'raw_store', 'tier0', 'session_control'], blocked: {}, unverified: [], globally_disabled: ['doc_debt'], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false },
+    { project_id: 'p2', project_name: 'orca', status: 'ready', revision: 'r2', requested: {}, enabled: ['session_control'], blocked: {}, unverified: [], globally_disabled: [], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false },
   ],
+  global_allow: { doc_debt: false },
+  install_switches: { automation_enabled: true, scan_timeline_enabled: true, scheduled_runs_enabled: true, land_queue_enabled: true },
+}
+
+const GRANTS = {
+  install: [], values: {}, automations: MATRIX.automations,
+  recommended_project_automations: ['loop_detection'],
+  project_starting_sets: {
+    recommended: { automations: ['loop_detection'], values: {} },
+    llm: { automations: ['scan_timeline'], values: { scan_timeline_auto_enable: true } },
+    autonomy: { automations: ['session_control'], values: {} },
+  },
+  llm: { ready: true, reason: '' },
 }
 
 const ROUTES: Array<[string, unknown]> = [
@@ -98,6 +115,18 @@ const ROUTES: Array<[string, unknown]> = [
   ['/api/automation/injection-safety', { version: 3, research_only: true, authorizes_actuation: false, shadow_metrics: { evaluations: {}, reasons: {}, tracked_sessions: 0, unknown_duration_s: 0, transitions: 0 }, parser_coverage: [], sessions: [] }],
   ['/api/history', { items: [] }],
   ['/api/automation/batches', { items: [] }],
+  ['/api/grants', GRANTS],
+  // The Activity tab mounts the real AttentionInbox, which reads the inbox and
+  // the per-Project ranking opt-in; both answer empty-but-working here.
+  ['/api/attention/inbox', {
+    generated_at: NOW,
+    channels: { interrupt_now: [], next_breakpoint: [], inbox: [], digest: [] },
+    suppressed: {}, suppressed_total: 0,
+    budget: { day: '2026-08-15', daily_budget: 4, used: 0, remaining: 4, hourly_cap: 2, burst_used: 0, burst_remaining: 2 },
+    fanout: { status: 'insufficient_samples', samples: 0, required: 6, interaction_seconds: null, neglect_seconds: null, sustainable_agents: null, attended_now: 0 },
+    resumption_lag: { samples: 0, mean_seconds: null, max_seconds: null },
+    rules: [], delivery: { push: false, surface: 'in_app' },
+  }],
 ]
 
 window.fetch = (async (input: RequestInfo | URL) => {
@@ -114,6 +143,6 @@ render(
   <AutomationDashboard projects={[
     { id: 'p1', name: 'swe-mux', root: 'D:/PROJECTS/swe-mux' } as Project,
     { id: 'p2', name: 'orca', root: 'D:/PROJECTS/orca' } as Project,
-  ]} initialProjectId={initialProjectId} onClose={() => {}} onOpenSession={() => {}} onOpenAlerts={() => {}} onOpenFindings={() => {}} onOpenUsage={() => {}} />,
+  ]} initialProjectId={initialProjectId} onClose={() => {}} onOpenSession={() => {}} />,
   document.querySelector('#root')!,
 )
