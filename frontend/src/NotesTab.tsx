@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
+import { byProjectName } from './projectOptions'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useDismissLevel, useModalFocus } from './modalFocus'
 import { dismissStack } from './dismissStack.ts'
@@ -187,7 +188,9 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
       bucket.notes.push(item)
       buckets.set(item.project_id,bucket)
     }
-    return [...buckets.entries()]
+    // By Project name. The buckets arrive in whatever order the notes happened to, which
+    // is not an order anybody can predict or scan; the notes *within* a bucket keep theirs.
+    return byProjectName([...buckets.entries()],([,bucket])=>bucket.label)
   },[shown,allProjects])
 
   const projectItems=useMemo(()=>stableProjectNoteTabs(

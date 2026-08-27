@@ -6,6 +6,7 @@ import {
   type QueueMessage, type SpawnRequestRow,
 } from './queueApi'
 import { Dropdown } from './Dropdown'
+import { byProjectName } from './projectOptions'
 import { useModalFocus } from './modalFocus'
 import { GrantButton } from './GrantGate'
 import type { Project } from './types'
@@ -110,7 +111,7 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
     const ids = new Set(view.targets.map(target => target.project_id).filter((id): id is string => !!id))
     for (const request of view.spawn_requests) ids.add(request.project_id)
     for (const request of view.control_requests) ids.add(request.project_id)
-    return [...ids].sort((a, b) => (projectNames.get(a) || a).localeCompare(projectNames.get(b) || b))
+    return byProjectName([...ids], id => projectNames.get(id) || id)
   }, [projectNames, view.control_requests, view.spawn_requests, view.targets])
   const targetOptions = useMemo(
     () => view.targets.filter(target => !projectId || target.project_id === projectId),
@@ -189,6 +190,8 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
             <span>Project</span>
             <Dropdown
               value={projectId}
+              filter
+              filterPlaceholder="Filter Projects…"
               onChange={nextProject => {
                 setProjectId(nextProject)
                 if (targetSessionId && !view.targets.some(target =>

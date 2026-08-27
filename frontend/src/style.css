@@ -342,18 +342,19 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .model-picker-control{display:grid;grid-template-columns:minmax(0,1fr) 31px}
 .settings-panel .model-picker-control input,.projects-manager .model-picker-control input{min-width:0}
 .settings-panel .model-picker-control button,.projects-manager .model-picker-control button{min-height:31px;padding:0;border-left:0}
-.model-picker-options{position:absolute;z-index:72;top:calc(100% + 3px);right:0;left:0;max-height:min(280px,38dvh);overflow:auto;display:grid;border:1px solid var(--line);background:var(--bg);box-shadow:5px 6px 0 #0008}
-.settings-panel .model-picker-options button,.projects-manager .model-picker-options button{min-width:0;min-height:38px;display:grid;gap:2px;padding:6px 8px;border:0;border-bottom:1px solid var(--line);background:var(--bg);text-align:left}
-.settings-panel .model-picker-options button:last-of-type,.projects-manager .model-picker-options button:last-of-type{border-bottom:0}
-.settings-panel .model-picker-options button.active,.projects-manager .model-picker-options button.active{background:var(--panel2);box-shadow:inset 2px 0 var(--green)}
-.projects-manager .model-picker-options strong{display:flex;align-items:center;gap:6px}
+/* `overscroll-behavior:contain` so a pan that reaches either end of the list stops there
+   instead of chaining into the page behind it - on a phone that chaining reads as the
+   picker refusing to scroll and the page moving instead. */
+.model-picker-options{position:absolute;z-index:72;top:calc(100% + 3px);right:0;left:0;max-height:min(280px,38dvh);overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;display:grid;border:1px solid var(--line);background:var(--bg);box-shadow:5px 6px 0 #0008}
+.settings-panel .model-picker-options button{min-width:0;min-height:38px;display:grid;gap:2px;padding:6px 8px;border:0;border-bottom:1px solid var(--line);background:var(--bg);text-align:left}
+.settings-panel .model-picker-options button:last-of-type{border-bottom:0}
+.settings-panel .model-picker-options button.active{background:var(--panel2);box-shadow:inset 2px 0 var(--green)}
 .model-picker-options strong,.model-picker-options span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .model-picker-options span{color:var(--muted);font-size:8px}
-/* The id/price row. Its own class rather than a restyled `span`, because
-   ProjectPicker borrows this whole block for a list that has no second cell. The
-   id takes the slack and ellipsizes; price keeps its natural width so figures
-   align down the list, and is undimmed because it, not the id, is what the row
-   is being read for. */
+/* The id/price row. Its own class rather than a restyled `span`, so the block above stays
+   usable by a list with no second cell. The id takes the slack and ellipsizes; price keeps
+   its natural width so figures align down the list, and is undimmed because it, not the id,
+   is what the row is being read for. */
 .model-picker-options .model-picker-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline;white-space:normal}
 .model-picker-options .model-picker-price{color:var(--text);opacity:.75;text-align:right}
 .model-picker-empty{padding:10px;color:var(--muted)}
@@ -452,6 +453,21 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .dropdown-option[aria-selected="true"]{color:var(--green)}
 .dropdown-option.disabled{color:var(--muted);cursor:not-allowed}
 .dropdown-empty{padding:8px;color:var(--muted)}
+/* A `filter` dropdown. The panel keeps its placement and its scrolling; inside it the filter
+   box is sticky so it cannot scroll away from a long list being searched, over a listbox of
+   the rows (a separate element because an `<input>` is not a legal child of `role="listbox"`).
+   The rows keep the grid the unfiltered panel gives them directly. */
+.dropdown-list-filtered{display:block}
+/* The registry's Project picker replaces the left-hand list on a phone, so it takes the
+   column's whole width and drops the sizer that reserves room for the longest label - there
+   is nothing beside it to stay aligned with, and the longest Project name is arbitrary. */
+.projects-manager-picker-trigger{width:100%}
+.projects-manager-picker-trigger>.dropdown-sizer{display:none}
+.dropdown-rows{display:grid;align-content:start}
+.dropdown-filter{position:sticky;top:0;z-index:1;padding:5px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.dropdown-filter>input{width:100%;min-width:0;min-height:calc(26px*var(--ui-scale));padding:3px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;outline:none}
+.dropdown-filter>input:focus{border-color:var(--green)}
+@media(max-width:760px){.dropdown-filter>input{min-height:36px;font-size:16px}}
 /* A phone gets the row height a finger needs. The trigger keeps its surface's own height,
    because that is the row it has to line up with. */
 @media(max-width:760px){.dropdown-option{min-height:calc(40px*var(--ui-scale))}}
@@ -2498,6 +2514,16 @@ body {
 .rail-dropup-empty,.rail-dropup-note{margin:0;padding:9px 8px;color:var(--muted);font:9px/1.5 'Cascadia Mono',Consolas,monospace}
 .rail-dropup-note{border-top:1px solid var(--line)}
 .terminal-action-rail .rail-dropup-open-trigger{border-color:color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green)}
+/* Clip / Skills / Prompts are the only chips that do not *do* the thing they name - they
+   raise a list to pick from - and until this mark nothing on the face said so. A stack of
+   rules in the top-right corner reads as "a list opens here". Deliberately not an arrow:
+   on this rail an arrow already means a pad direction. Unscoped, because the same chip is
+   cloned into the row's overflow popover and has to keep its mark there. */
+.rail-picker{position:relative}
+.rail-picker::after{content:'';position:absolute;top:2px;right:2px;width:5px;height:1px;background:currentColor;box-shadow:0 2px 0 currentColor,0 4px 0 currentColor;opacity:.5;pointer-events:none}
+.rail-picker[aria-expanded="true"]::after{opacity:1}
+.rail-picker:disabled::after{opacity:.25}
+@media(hover:hover){.rail-picker:hover:not(:disabled)::after{opacity:.85}}
 /* The overflow popover: one complete rail row, as a wrap grid of the same real chips.
    Glass rather than a solid panel, because it stands over live output the operator is
    usually still reading around; `--rail-glass` (`:root`, above) is the one opacity every
@@ -2665,6 +2691,17 @@ body {
 .clipboard-entry.has-actions>.clipboard-entry-body{flex:1 1 auto;min-width:0}
 .actions-tab button.prompt-row-edit{flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:calc(24px*var(--ui-scale));padding:2px 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 @media(hover:hover){.actions-tab button.prompt-row-edit:hover{border-color:var(--accent);color:var(--text)}}
+/* A prompt row is title-plus-pills over an excerpt, not the clipboard row's
+   caret/preview/meta grid. Styled off the row's own class rather than an
+   ancestor section class, which is how the earlier fix here went stale. */
+.clipboard-entry-body.prompt-entry-body{grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:3px}
+.clipboard-entry-body.prompt-entry-body>span,.clipboard-entry-body.prompt-entry-body>small{grid-area:auto}
+.prompt-row-head{min-width:0;display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 6px}
+.prompt-row-title{min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prompt-row-tags{min-width:0;display:flex;align-items:center;flex-wrap:wrap;gap:3px}
+.prompt-pill{flex:none;padding:1px 5px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:7px;font-weight:400;font-style:normal;line-height:1.6;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap}
+.prompt-pill.scope{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));color:var(--accent)}
+.prompt-template-excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:color-mix(in srgb,var(--text) 68%,var(--muted));line-height:1.35;white-space:normal}
 /* Authoring inside the drawer: the shared prompt form replaces the list rather
    than expanding under a row, so it owns the column and the scroll. */
 .prompt-drawer-search{display:flex;align-items:center;gap:6px}
@@ -3517,17 +3554,28 @@ body {
    beside the label (`margin-right:auto` on it, not `flex:1` on the label) because it
    acts on the list under this heading; rename/remove act on the Group and stay at the
    far edge where destructive controls live everywhere else in the app. */
-.sidebar-project-bucket{position:relative;display:flex;flex-direction:column;margin:0 0 10px;padding-left:7px;border-left:2px solid color-mix(in srgb,var(--muted) 55%,transparent);border-radius:0 3px 3px 0;background:color-mix(in srgb,var(--panel2) 96%,transparent)}.sidebar-project-bucket>header{order:-1;min-height:24px;display:flex;align-items:center;gap:3px;margin:0 0 3px -7px;padding:0 7px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 72%,var(--panel2));color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em;cursor:grab;user-select:none}.sidebar-project-bucket>header:active{cursor:grabbing}.sidebar-project-bucket>header>span{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-project-bucket>header button{flex:0 0 auto;width:20px;height:calc(20px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.sidebar-project-bucket>header button:hover{color:var(--text);background:var(--panel2)}.sidebar-project-bucket>header .bucket-rename{margin-left:auto;font-size:10px;line-height:1}.sidebar-project-bucket>header .bucket-chevron{flex:0 0 auto;width:9px;font-size:9px;line-height:1}
+/* A Group is *interleaved* with loose Projects, not stacked below them, so it has to read
+   as a container and not as a heading with an accent stripe beside it. Three things do that
+   together, and none of them is enough alone: a full border with its own corner radius, a
+   ground recessed from the sidebar's, and more air above and below than any row ever has -
+   so the loose Projects sitting between two Groups are visibly outside both. The accent
+   left edge stays as the Group's identity mark. */
+.sidebar-project-bucket{position:relative;display:flex;flex-direction:column;margin:9px 0 12px;padding:0 6px 5px;border:1px solid color-mix(in srgb,var(--muted) 26%,var(--line));border-left:2px solid color-mix(in srgb,var(--accent) 50%,var(--muted));border-radius:4px;background:color-mix(in srgb,var(--bg) 40%,var(--panel2))}.sidebar-project-bucket>header{order:-1;min-height:24px;display:flex;align-items:center;gap:4px;margin:0 -6px 5px;padding:0 6px;border-bottom:1px solid color-mix(in srgb,var(--muted) 26%,var(--line));border-radius:3px 3px 0 0;background:color-mix(in srgb,var(--bg) 72%,var(--panel2));color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em;cursor:grab;user-select:none}.sidebar-project-bucket>header:active{cursor:grabbing}.sidebar-project-bucket>header>.bucket-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-project-bucket>header button{flex:0 0 auto;width:20px;height:calc(20px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.sidebar-project-bucket>header button:hover{color:var(--text);background:var(--panel2)}.sidebar-project-bucket>header .bucket-rename{font-size:10px;line-height:1}.sidebar-project-bucket>header .bucket-chevron{flex:0 0 auto;width:9px;font-size:9px;line-height:1}
 /* Rename is a per-Group action, not part of the heading, so it stays out of the tree's
-   resting state and appears on hover over its own header. `opacity` rather than
-   `display:none` keeps the button in the tab order (it also shows on keyboard focus,
-   which is the only way a non-pointer user reaches it) and keeps the header from
-   reflowing as the glyph comes and goes. A coarse pointer has no hover, so touch
-   always shows it. */
-.sidebar-project-bucket>header .bucket-rename{opacity:0;transition:opacity .12s ease}
-.sidebar-project-bucket>header:hover .bucket-rename,
-.sidebar-project-bucket>header .bucket-rename:focus-visible{opacity:1}
-@media (pointer:coarse){.sidebar-project-bucket>header .bucket-rename{opacity:1}}
+   resting state and appears only on hover over its own header. `visibility` rather than
+   `display:none` keeps the header from reflowing as the glyph comes and goes, and stops
+   the invisible button from swallowing a click aimed at the fold toggle. Keyboard focus
+   reveals it too, which is the only way a non-pointer user reaches it.
+   Touch drops the button outright: a coarse pointer never hovers, so it would otherwise
+   be permanently on - a fourth thing competing for a 24px strip whose whole job is the
+   Group's name and counts. Renaming stays reachable there through the hold-for-actions
+   menu, which is where every other Group action already lives on mobile. */
+@media (hover:hover){
+  .sidebar-project-bucket>header .bucket-rename{opacity:0;visibility:hidden;transition:opacity .12s ease}
+  .sidebar-project-bucket>header:hover .bucket-rename,
+  .sidebar-project-bucket>header .bucket-rename:focus-visible{opacity:1;visibility:visible}
+}
+@media (pointer:coarse){.sidebar-project-bucket>header .bucket-rename{display:none}}
 /* PROJECTS is the tree title, not a synthetic Group. Root Projects follow it
    directly; fold-all, sort, the registry cog, and add stay pinned in the same row. */
 .sidebar-tools{flex:none;display:flex;align-items:center;gap:2px;min-height:30px;padding:3px 5px 3px 7px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}.sidebar-tools>strong{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit}.sidebar-tools .sidebar-tool{flex:0 0 auto;width:24px;height:calc(24px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;border-radius:4px;color:var(--muted);font-size:15px;line-height:1;cursor:pointer}.sidebar-tools .sidebar-tool:hover:not(:disabled){color:var(--text);background:var(--panel2)}.sidebar-tools .sidebar-tool:disabled{opacity:.3;cursor:default}.sidebar-tools .sidebar-sort.active:not(:disabled){color:var(--green)}
@@ -3599,14 +3647,27 @@ body {
 .bucket-collapsed-badge.activity-attention>i{animation:attention-pulse 1.2s ease-in-out infinite}
 .bucket-collapsed-badge.activity-working{background:color-mix(in srgb,var(--blue) 20%,transparent);color:var(--blue)}
 .bucket-collapsed-badge.activity-working>i{animation:agent-pulse 1.4s steps(2,end) infinite}
+.bucket-collapsed-badge.activity-waiting{background:color-mix(in srgb,var(--green) 18%,transparent);color:var(--green)}
 .bucket-collapsed-badge.activity-running{background:color-mix(in srgb,var(--muted) 22%,transparent);color:var(--muted)}
+.bucket-collapsed-badge.activity-inactive{background:color-mix(in srgb,var(--muted) 18%,transparent);color:var(--muted)}
 .bucket-collapsed-badge.unread{box-shadow:0 0 0 1px currentColor}
-/* Folded sections sit tighter together: the 8px tail exists to separate a section's
-   Projects from the next heading, and with no Projects showing it reads as a gap. */
-/* Folded sections sit tighter together, and lose the rule under a heading that now
-   has nothing beneath it to divide from. */
-.sidebar-project-bucket.collapsed{margin-bottom:6px;padding-left:0}
-.sidebar-project-bucket.collapsed>header{margin:0;border-bottom-color:transparent}
+/* How many Projects the fold is hiding, beside how many sessions are live in them. Hollow
+   and uncoloured against the session badge's filled, state-coloured pill: two numbers on
+   one strip have to be told apart at a glance, and only one of them carries a state. */
+.bucket-count-badge{flex:none;height:15px;min-width:16px;padding:0 4px;display:inline-flex;align-items:center;justify-content:center;border:1px solid color-mix(in srgb,var(--muted) 40%,var(--line));border-radius:8px;color:var(--muted);font:600 8px 'JetBrains Mono';letter-spacing:0}
+/* A folded Group is one bar in a column of Project rows, so the thing it must not read as
+   is a Project row. It gets height a row never has, the card's full border and radius
+   rather than the row's flat strip, and two receding edges beneath it - a closed stack,
+   which also says at a glance that there is something underneath to open. The heading
+   loses the rule it used to divide from Projects it no longer shows. An empty Group has
+   nothing stacked and says so. */
+.sidebar-project-bucket.collapsed{margin:9px 0 11px;padding:0;background:color-mix(in srgb,var(--bg) 55%,var(--panel2));box-shadow:0 3px 0 -1px color-mix(in srgb,var(--muted) 24%,var(--line)),0 6px 0 -2px color-mix(in srgb,var(--muted) 14%,var(--line))}
+.sidebar-project-bucket.collapsed.empty{box-shadow:none}
+.sidebar-project-bucket.collapsed>header{min-height:30px;margin:0;padding:0 7px;border-bottom-color:transparent;border-radius:3px}
+/* Projects inside an open Group are its contents, not siblings of the loose rows above and
+   below it. The section's own padding insets them from its border; rounding their corners
+   finishes the nesting, so a grouped row and an ungrouped one are never the same shape. */
+.sidebar-project-bucket>.project-row{border-radius:3px}
 /* Scoped to the two insertion values, not to the attribute: a Project dropping *into*
    this Group sets `drop-into` on the same element, and an unanchored bar would render
    at the section's static position rather than at either edge. */
@@ -4241,7 +4302,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-disclosure>summary span{flex:1}
 .agent-context-disclosure-body{display:grid;gap:7px;padding:9px;border-top:1px solid var(--line);background:var(--panel)}
 .agent-context-disclosure-body>p,.agent-context-disclosure-intro>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
-.agent-context-disclosure-intro{display:flex;align-items:start;gap:8px}
+.agent-context-disclosure-intro{display:flex;align-items:start;justify-content:flex-end;gap:8px}
 .agent-context-disclosure-intro>p{flex:1}
 .context-state,.context-comparison{flex:none;padding:1px 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-style:normal;text-transform:uppercase;letter-spacing:.03em}
 .context-state.available,.context-comparison.in_sync{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}

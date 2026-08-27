@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
+import { byProjectName } from './projectOptions'
 import {
   allRailBackends, defaultPadTriggerMode, defaultRailConfig, isBuiltinRailId,
   padRingCount, padSlotKey, padWedgeCount, padWedgeName, parsePadSlotKey,
@@ -167,7 +168,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
    *  it follows an edit that creates or empties an override. */
   const scopedProjects = useMemo(() => {
     const blob = currentRailBlob()
-    return projects
+    return byProjectName(projects, project => project.name)
       .map(project => ({ name: project.name, kind: railProjectScopeKind(blob, project.id) }))
       .filter(entry => entry.kind !== 'global')
   }, [projects, resolved])
@@ -513,9 +514,11 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
       <button type="button" onClick={dismissIntro}>Got it</button>
     </div>}
     <div class="rail-toolbar">
-      <label class="rail-scope">Editing<Dropdown value={scope} onChange={value => { setScope(value); setExpandedItem(null); setNote(''); setReattach(null) }} options={[
+      <label class="rail-scope">Editing<Dropdown value={scope} filter filterPlaceholder="Filter Projects…" onChange={value => { setScope(value); setExpandedItem(null); setNote(''); setReattach(null) }} options={[
         { value: '', label: 'Global (all projects)' },
-        ...projects.map(project => {
+        // Ordered by the Project's own name, not by the suffix the scope kind appends, so
+        // "swe-mux (detached)" still files under S.
+        ...byProjectName(projects, project => project.name).map(project => {
           const projectKind = railProjectScopeKind(currentRailBlob(), project.id)
           return {
             value: project.id,

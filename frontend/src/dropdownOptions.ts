@@ -92,6 +92,47 @@ export function typeAheadIndex(options: readonly DropdownOption[], buffer: strin
 }
 
 /**
+ * Rank one option against a typed filter, or `-1` for no match.
+ *
+ * Label before detail, and within the label exact before prefix before substring, so a Project
+ * literally called `mux` outranks the twelve whose path happens to contain it. `detail` is
+ * searched at all because it carries the thing a second row with the same label is told apart
+ * by - two checkouts of one repo differ only in their root path - and `title` after it for the
+ * same reason one row over.
+ */
+export function dropdownMatchRank(option: DropdownOption, needle: string): number {
+  if (!needle) return 0
+  const label = option.label.toLocaleLowerCase()
+  if (label === needle) return 0
+  if (label.startsWith(needle)) return 1
+  if (label.includes(needle)) return 2
+  if (option.detail?.toLocaleLowerCase().includes(needle)) return 3
+  if (option.title?.toLocaleLowerCase().includes(needle)) return 4
+  return -1
+}
+
+/**
+ * The rows a typed filter leaves, best match first.
+ *
+ * Ties keep the caller's order, because {@link DropdownOption} carries no order of its own and
+ * the list was built in the order it was meant to be read - alphabetical for Projects, severity
+ * or recency elsewhere. An empty query returns the array unchanged rather than a copy, so a
+ * dropdown that is never filtered pays nothing for the capability.
+ */
+export function filterDropdownOptions(
+  options: readonly DropdownOption[],
+  query: string,
+): readonly DropdownOption[] {
+  const needle = query.trim().toLocaleLowerCase()
+  if (!needle) return options
+  return options
+    .map((option, index) => ({ option, index, rank: dropdownMatchRank(option, needle) }))
+    .filter(entry => entry.rank >= 0)
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(entry => entry.option)
+}
+
+/**
  * The buffer a keystroke produces: it extends while the typing is continuous, and a gap longer
  * than {@link DROPDOWN_TYPEAHEAD_MS} starts a fresh one.
  */

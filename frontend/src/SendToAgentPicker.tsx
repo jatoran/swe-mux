@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { Dropdown } from './Dropdown'
+import { projectDropdownOptions } from './projectOptions'
 import { useModalFocus } from './modalFocus'
 import { StateIndicator } from './StateIndicator'
 import { useSessionRowConfig } from './sessionRowPrefs'
@@ -216,7 +217,9 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
               value={projectId}
               disabled={busy}
               onChange={setProjectId}
-              options={projects.map(item => ({ value: item.id, label: item.name }))}
+              filter
+              filterPlaceholder="Filter Projects…"
+              options={projectDropdownOptions(projects, item => ({ value: item.id, label: item.name, detail: item.root }))}
             />
           </label>
           <div class="send-agent-targets" role="radiogroup" aria-label="Send target">

@@ -141,7 +141,8 @@ Its three answers are distinct - no read price is "this model does not cache" (s
 
 `ModelPicker.tsx` renders name, then id and price on one meta line.
 Its `required` flag suppresses the clear-the-setting row for a **pinned** model the daemon rejects when blank.
-`ProjectPicker.tsx` borrows the `model-picker` CSS block, so a rule added for the meta line must be scoped to `.model-picker-meta`.
+The `model-picker` CSS block is written so a list with no second cell can borrow it, which is why a rule added for the meta line must be scoped to `.model-picker-meta`.
+There used to be a second borrower, `ProjectPicker.tsx`; it is gone, and the registry's Project picker is now `Dropdown` with `filter`, so the app has exactly one filtering picker for lists it does own.
 
 It stays a filtering combobox rather than becoming a `Dropdown`, because the catalog is hundreds of entries and a list is not how anyone finds one of those.
 It borrows three rules from that component all the same, and they are the three defects reported against it.

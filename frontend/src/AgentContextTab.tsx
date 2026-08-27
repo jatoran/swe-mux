@@ -427,7 +427,6 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       </summary>
       <div class="agent-context-disclosure-body">
         <div class="agent-context-disclosure-intro">
-          <p>Root instruction files declared by registered agent harnesses. Viewing never edits them.</p>
           <button disabled={!inventory || !!busy} onClick={() => setSyncOpen(true)}>sync…</button>
         </div>
         <div class="agent-context-sources">
@@ -511,9 +510,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         {selectedId && selected && <small>{selected.source.provider} · read-only · {formatBytes(selected.source.size)}</small>}
         {selectedId && <button class="agent-context-viewer-clear" title="Close this file" onClick={() => setSelectedId('')}>×</button>}
       </header>
-      {!selectedId
-        ? <p>Pick an instruction or memory file above to read it here. Nothing is opened for you, and what you pick is remembered for this Project.</p>
-        : selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>Reading source…</p>}
+      {selectedId && (selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>Reading source…</p>)}
     </section>
 
     {sourceMenu && <div

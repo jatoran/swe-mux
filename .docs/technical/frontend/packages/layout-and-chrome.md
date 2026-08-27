@@ -68,7 +68,7 @@ The *single-layer* composition sets the number - a drop-up row is transparent ov
 
 ## The dropdown
 
-`Dropdown.tsx`, `dropdownOptions.ts`, `dropdownPlacement.ts`
+`Dropdown.tsx`, `dropdownOptions.ts`, `dropdownPlacement.ts`, `projectOptions.ts`
 
 The app's one picker, and the only one any surface should reach for.
 There is no `<select>` left in `frontend/src`; `frontend/test/settingsCoverage.test.ts`'s siblings and `test/renderer/dropdown.spec.ts` are what hold that.
@@ -85,6 +85,19 @@ Three behaviours are the reason the component exists rather than a stylesheet, a
 `dropdownOptions.ts` is the keyboard, written down because a native select shipped all of it for free and a custom listbox that loses any of it is a downgrade.
 Arrows wrap at both ends and step over disabled rows; `Home` and `End` jump.
 Type-ahead prefers a prefix over a substring across the whole list, cycles through equal matches, and reads one repeated letter as "the next one" rather than as a two-letter prefix.
+It also owns `filterDropdownOptions`/`dropdownMatchRank`, the rank ladder the `filter` prop searches on: exact, then prefix, then substring of the label, then `detail`, then `title`, with ties keeping the caller's order because that order is the one the list was built to be read in.
+
+The `filter` prop puts a search box at the top of the open list, for the lists a person searches by name rather than scans - every Project picker, and anything else that grows without bound.
+It is opt-in rather than automatic on a row count: a box that appeared on its own once a Project was added would move the first row under the finger between two visits.
+It is the same control and not a second one.
+The filter narrows `options` into the rows on screen and every behaviour above - the opening scroll, the arrow walk, the press-slop guard - runs over those rows unchanged; type-ahead stands down while it is on, because two mechanisms competing for one highlight is worse than either alone.
+The panel takes a second shape only when it is on, because an `<input>` is not a legal child of `role="listbox"`: the panel becomes a shell holding an ARIA 1.2 combobox over a `.dropdown-rows` listbox, while staying the positioned, scrolling element either way.
+Without the prop the DOM is exactly what every existing surface and spec already has, which is the point - the capability cost the other fifty call sites nothing.
+
+`projectOptions.ts` is where a Project list gets its order.
+`compareProjectNames` is locale- and numeric-aware (so `phase-9` precedes `phase-10`), `byProjectName` copies rather than sorting a prop in place, and `projectDropdownOptions` builds the rows with the root path as `detail` - which the filter also searches, so two checkouts of one repo stay reachable by typing even though they share a name.
+Every Project list outside the sidebar goes through it.
+**The sidebar is the deliberate exception and uses none of it**: its order is the operator's own drag arrangement, which is the whole point of it.
 
 `dropdownPlacement.ts` makes two decisions that let one component drop into twenty surfaces.
 The list is portalled to `document.body` and positioned `fixed`, because a replacement rendered in place is clipped by every `overflow:auto` panel in the app - the Settings scroller, the drawer, a modal body, the Git map - where the native popup was clipped by nothing.
