@@ -618,6 +618,13 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
         if isinstance(observation_state, dict) and kind in {"", "background_tasks"}:
             observation_state.get("background_open", {}).clear()
             observation_state.get("background_labels", {}).clear()
+        if isinstance(observation_state, dict) and kind in {"", "subagents"}:
+            # Both tiers, or the retraction does not hold: the launch registry and
+            # the hook counter each re-derive the count the next time any evidence
+            # arrives, so leaving either would put back what the user just said is
+            # wrong.
+            observation_state.get("subagent_launches", {}).clear()
+            observation_state["subagent_hook_count"] = 0
         session.publish_update()
     return json_response(
         {
