@@ -24,6 +24,17 @@
   A root agent's run id is otherwise pinned to its session id, and adoption repairs any other
   value as misattribution, so `agent_run_seq > 0` is what marks a differing id as the daemon's
   own successor run rather than corruption.
+- `SessionRecord.agent_process_pid`, `console_contention`, `agent_launch_pending`: volatile,
+  run-scoped, and all three cleared together at every promotion and demotion
+  (`_reset_console_identity`), because a pid is not an identity on Windows and carrying one
+  across a run seam mis-reports on a process the OS has already recycled.
+  `agent_process_pid` is the promoted CLI's own process, reported by the mux agent shim and
+  deliberately *not* `pid` - for a session spawned as a shell those are two different
+  processes, and the question "who is reading this console" lives in the gap between them.
+  `console_contention` is set while both of them are reading it (`features/sessions.md` §
+  Console contention). `agent_launch_pending` names a harness whose launch has been seen in a
+  still-`shell` pane's output; it is evidence that a conversation is coming, never that one is
+  bound, so only input encoding may be resolved against it.
 - `SessionRecord.agent_loaded_at`: the start of the current Claude or Codex process generation.
   It is set at direct agent spawn or shell-to-agent promotion, survives conversation rollover and daemon adoption, and clears on demotion.
   Skill drift compares current file mtimes with this field rather than with `agent_run_started_at`.

@@ -1171,6 +1171,18 @@ background agents, which is exactly when the turn alone stops answering "how lon
 been going" — and it is the shape a row reading `idle` while `cli_state` reads `busy` and
 `pty_tail` reads `working` will have.
 Its `pty_explain` object exposes the effective `outcome`, raw `screen_outcome`, `outcome_source`, `cli_state_status`, and all evaluated screen rules.
+Its `console` object answers "who is reading this pane's pseudoconsole" (`features/sessions.md` § Console contention): the standing `contention` verdict if any, the `agent_launch_pending` list, and a `census` walked on demand rather than sampled - `{root_pid, agent_pid, agent_alive, agent_in_pty_tree, participants[], error}`.
+A live `agent_pid` beside `agent_in_pty_tree: false` is the orphaned-wrapper shape; an `error` means the walk could not be performed and every three-valued field is `null` rather than guessed.
+The walk is bounded and runs on a thread, so the endpoint stays a diagnostic rather than a load source.
+
+`POST /api/sessions/{id}/shim-report` ingests one lifecycle report from the mux agent shim
+(`~/.mux/bin/<harness>`, `swe_mux.agent_launcher`), authenticated with the same per-session
+`X-Mux-Hook-Secret` as promote/demote. It is diagnostics: nothing here promotes, demotes, or
+transitions a session, and every accepted field is recorded as an `agent_shim_report` event.
+The daemon filters the body against a closed key set, so a future field cannot widen what a
+report carries without being named there, and the shim itself never sends an argument *value*
+(an agent command line can carry a prompt). The one field the daemon acts on is `child_pid`;
+`child_outlived_shim: true` on an `exited` report is reported as console contention directly.
 The timeline and `layer_readings` expose the raw value as `pty_tail_screen`, the effective value as `pty_tail`, and its source as `pty_tail_arbitration`.
 
 With `?from=&to=` (epoch seconds) the state-log adds `timeline`: the requested slice of the

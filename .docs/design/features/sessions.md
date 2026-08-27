@@ -481,9 +481,71 @@ and reattachable browser viewports.
   A pid alone is not an identity on Windows, and exited sessions stay listed with their pid
   intact, so every later consumer of `record.pid` pairs the two.
 
+### Console contention
+
+A session spawned as a shell and promoted around an agent typed into it has *two* processes
+that may legitimately own its pseudoconsole over its lifetime - the shell, and the agent
+launched from it - and exactly one that may at a time.
+The launch chain keeps the shell blocked for the agent's whole life (`backends.md`).
+When that fails, both read the console and the user's keystrokes are split between them.
+
+**A shell prompt under a promoted pane has three answers, not two.**
+`_confirm_agent_exit` previously asked only "is the transcript quiet", so it could demote or
+say nothing, and saying nothing is what it did during the 2026-08-27 incident: the agent was
+alive and still writing, every retry saw a busy transcript, the loop gave up, and mux went on
+presenting a healthy agent pane over a contended terminal for the rest of the session.
+The rules are now pure and ordered (`console_contention.classify_shell_prompt`):
+
+- Inside the promotion grace window, say nothing - the launch itself scrolls a prompt past.
+- The CLI is alive and *outside* this pane's process tree ⇒ `agent_orphaned`. Checked first
+  because it names a different repair: nothing will reap that process when the pane ends.
+- The CLI is alive ⇒ `shell_regained_console`. Liveness outranks the transcript in both
+  directions; an exiting CLI writes its last records on the way out, so the transcript is at
+  its least quiet exactly when the process has just gone.
+- The CLI's pid is known and dead ⇒ demote, as before.
+- No pid at all (a shim-less launch, or a harness that publishes no state) ⇒ the transcript
+  decides, which is the historical behaviour.
+
+Every measured field is three-valued: `None` means "not measured" and never "false", so a
+psutil pass that fails neither demotes a live agent nor reports a dead one as contention.
+
+**Contention never demotes.** The run is not over, and dropping the backend would take the
+transcript binding, the token accounting and queue eligibility with it - a worse pane than the
+one the user already has. The session keeps its backend and gains a standing
+`console_contention` report, which the pane states as its highest-priority notice (it is the
+only one in that slot that is a fault rather than a fact) and `GET /api/sessions/{id}/state-log`
+serves under `console`, alongside an on-demand process census.
+
+**Two independent detectors reach the same verdict**, because their blind spots differ. The
+shim reporting its own child outliving it is direct proof and needs no prompt; a wrapper killed
+hard enough to run neither an `atexit` nor a console handler reports nothing, and the
+shell-prompt path catches that one. OSC 133 prompt markers are now consumed for a promoted pane
+too (they were previously parsed only for shells), so a profile carrying breakpoint markers and
+no cwd reporting is covered as well as one carrying OSC 7.
+
+**The promoted CLI's pid comes from the shim first, `cli_state` second.** The shim's report is
+the launch itself speaking and exists for every harness; `cli_state` describes a *conversation*,
+and a stale one can name a pid Windows has already recycled. Both are cleared at every run seam
+(`_reset_console_identity`) for the same reason.
+
+**The launch window is published.** A pane reads as `shell` until the daemon can bind the
+conversation - measured at ~10 s on the frozen app - and every rule keyed on the backend answers
+for a shell during it, while an agent's composer is on screen and the CLI is running its
+terminal capability probes. `SessionRecord.agent_launch_pending` carries the harness the
+detector has seen launching, and the browser resolves *input encoding only* against it
+(`frontend/src/inputBackend.ts`): Shift+Enter, paste bracketing, the leading-newline repair,
+the mobile Enter payload, and protocol-response suppression. Everything the promotion actually
+changes - transcript, tokens, resume, branch, width envelope - stays keyed on `backend`,
+because those need a bound conversation and this is only evidence one is coming. Two candidates
+resolve to nothing rather than a guess, on the same grounds the daemon's own promotion refuses
+an ambiguous match.
+
 ## Key files
 
 - `src/swe_mux/session.py`
+- `src/swe_mux/console_contention.py` (the rules, pure, plus the process census)
+- `src/swe_mux/agent_launcher.py` (the shim: console hold, lifecycle reports)
+- `frontend/src/inputBackend.ts`, `frontend/src/consoleContention.ts`
 - `src/swe_mux/pty_host.py`
 - `src/swe_mux/supervisor.py`
 - `src/swe_mux/supervisor_client.py`
