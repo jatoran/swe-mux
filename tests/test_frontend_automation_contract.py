@@ -16,16 +16,15 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     history = source("HistoryBrowser.tsx")
     app = source("App.tsx")
 
+    # Three tabs, and the tab is the question: what may run (and where), what
+    # it costs, what it did.
+    assert "export type AutomationView='policy'|'usage'|'activity'" in dashboard
     assert "System observers" in dashboard
-    assert "Global switches" in dashboard
-    assert "automation_enabled" in dashboard
-    assert "scan_timeline_enabled" in dashboard
     assert "Custom rules" in dashboard
     assert "built_in_rules" in dashboard
     assert "updateBuiltin" in dashboard
-    assert "run notes" in dashboard
     assert "all-session health" in dashboard
-    assert "learned fixes" in dashboard
+    assert "Learned fixes" in dashboard
     assert "automation-knowledge-browser" in dashboard
     assert "Demonstrated resolution" in dashboard
     assert "Built-in observers are controlled in Settings." not in dashboard
@@ -36,29 +35,57 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     assert "Derived annotations" not in app
 
 
-def test_every_switch_has_one_owner_automation_policy_global_dashboard_per_rule() -> None:
-    """Automation policy owns global switches; Rules owns per-rule state.
+def test_every_switch_has_one_owner_matrix_global_dashboard_per_rule() -> None:
+    """The policy matrix owns install switches; the rules drawer owns per-rule state.
 
-    Settings is only a portal into the unified workspace. Global switches live
-    in Global policy; per-rule and observer-group switches stay beside the
-    firings they explain.
+    Settings is only a portal into the unified workspace. The master switch and
+    every per-automation install ceiling live on the matrix's Global column, the
+    limits live in the Limits & budgets disclosure, and per-rule and
+    observer-group switches stay beside the firings they explain.
     """
     dashboard = source("AutomationDashboard.tsx")
     settings = source("Settings.tsx")
     policy = source("AutomationPolicyView.tsx")
+    matrix = source("AutomationMatrix.tsx")
 
-    # Global switches: policy owns the controls and Settings owns none.
-    assert "change('automation_enabled'" in policy
-    assert "change('scan_timeline_enabled'" in policy
+    # Install switches: the matrix owns the controls and Settings owns none.
+    assert 'data-setting="automation_enabled"' in matrix
+    assert "automation_global_allow" in matrix
     assert "change('automation_enabled'" not in settings
     assert "change('scan_timeline_enabled'" not in settings
+    # ...and the limits view no longer carries a second copy of either switch.
+    # The names may appear in prose explaining where the controls went; a
+    # *control* form of either is the second owner this refuses.
+    assert "change('automation_enabled'" not in policy
+    assert "change('scan_timeline_enabled'" not in policy
+    assert 'data-setting="automation_enabled"' not in policy
+    assert 'data-setting="scan_timeline_enabled"' not in policy
     assert "updateControl" not in dashboard
-    assert "Open global policy" in dashboard
     # Per-rule switches: dashboard-only.
     assert "updateBuiltin" in dashboard
     assert "change('observer_titler_enabled'" not in settings
     assert "change('observer_summarizer_enabled'" not in settings
     assert "change('attention_observers_enabled'" not in settings
+
+
+def test_the_matrix_is_the_one_editor_and_greys_the_ceiling_rather_than_hiding_it() -> None:
+    """Global x Project on one grid, and the cascade is drawn from the daemon's answer.
+
+    The matrix is the single surface that may turn an automation off, in either
+    scope - which is what keeps every grant gate additive-only. A Project cell
+    under a blocked install ceiling greys rather than unticking: the Project's
+    own choice is retained on disk, and the fix is the Global cell beside it.
+    """
+    matrix = source("AutomationMatrix.tsx")
+
+    assert "globally_allowed" in matrix, "the ceiling must come from the resolved payload"
+    assert "globally-off" in matrix
+    assert "install_switch" in matrix, "dedicated switches write their own keys"
+    assert "PUT',`/api/projects/${project.project_id}/automations`" in matrix
+    assert "'POST','/api/grants'" in matrix, "presets apply through the ordinary grant"
+    # The starting-set presets live here: full-screen on a first run, a button after.
+    assert "Choose preset" in matrix
+    assert "mux.automationPresetsSeen" in matrix
 
 
 def test_the_rules_editor_lives_on_the_dashboard_not_in_the_settings_save() -> None:
@@ -82,17 +109,18 @@ def test_the_rules_editor_lives_on_the_dashboard_not_in_the_settings_save() -> N
 def test_the_workspace_answers_and_edits_what_runs_where() -> None:
     """Nothing runs on a Project that did not opt in, and the dashboard says so.
 
-    The projects view is the fleet aggregation of per-Project enablement — an
-    opted-out Project is a row reading "nothing", never a missing row — and it
-    keeps the revision-checked Project editor below the fleet matrix.
+    The Policy tab is the fleet aggregation of per-Project enablement - every
+    registered Project is selectable, and the fleet column counts where each
+    automation actually runs - with the revision-checked Project editor as the
+    matrix's own Project column.
     """
     dashboard = source("AutomationDashboard.tsx")
+    matrix = source("AutomationMatrix.tsx")
 
     assert "'/api/automation/projects'" in dashboard
-    assert "Where automations run" in dashboard
-    assert "<AutomationOptIns" in dashboard
-    assert "Select a Project to inspect and edit" in dashboard
-    assert "PUT', `/api/projects/${project.id}/automations`" in source("ProjectsManager.tsx")
+    assert "<AutomationPolicyMatrix" in dashboard
+    assert "fleetCount" in matrix
+    assert "projectDropdownOptions" in matrix
 
 
 def test_automation_diagnostics_are_separated_from_primary_workflows() -> None:
@@ -102,7 +130,7 @@ def test_automation_diagnostics_are_separated_from_primary_workflows() -> None:
     assert "Research-only delivery-readiness diagnostics" in dashboard
     assert "delivery_state" in dashboard
     assert "Parser coverage" in dashboard
-    assert "diagnostics" in dashboard
+    assert "Diagnostics" in dashboard
     # The away report is a *reading of the attention inbox*, not a fact about the pipeline
     # that fills it, so it lives with the inbox in the Alerts drawer tab.
     assert "What happened while I was away?" not in dashboard

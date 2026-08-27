@@ -132,7 +132,6 @@ type Config = {
   approval_keystroke_delivery:boolean;approval_keystroke_window_seconds:number
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
-  attention_narration_max_output_tokens:number
   automation_daily_budget:Budget;automation_rule_daily_budget:Budget
   automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
@@ -148,13 +147,10 @@ type Config = {
   land_hold_timeout_seconds:number;land_retry_verification:boolean;land_verify_memo_seconds:number
   scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
   scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
-  scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_budget:Budget
-  scan_timeline_daily_budget:Budget
-  scan_timeline_hourly_call_cap:number;scan_timeline_max_output_tokens:number
+  scan_timeline_enabled:boolean;scan_timeline_model:string
   attention_daily_interrupt_budget:number;attention_hourly_interrupt_cap:number
   attention_incident_window_seconds:number;attention_breakpoint_markers:boolean
   attention_narration_enabled:boolean;attention_narration_model:string
-  attention_narration_daily_budget:Budget
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
   observer_titler_enabled:boolean
   attention_observers_enabled:boolean

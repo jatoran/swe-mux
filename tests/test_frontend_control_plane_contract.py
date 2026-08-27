@@ -21,17 +21,18 @@ def test_automation_dashboard_exposes_outcomes_diagnostics_and_reviewed_batches(
         "Observer calls",
     ):
         assert surface in dashboard
-    # The pipeline produces exactly two things - an attention item or a run note - and each
-    # has exactly one home. This dashboard used to draw a second copy of both, with two
-    # different filters, so a record visible in one could be missing from the other. It
-    # links to them now.
-    # The *view* is gone; the words survive as the label on the link that replaced it.
+    # The pipeline produces exactly two things - an attention item or a run note.
+    # Run notes keep exactly one home (Activity -> Findings); attention items have
+    # two surfaces now, and the second is the SAME component over the SAME
+    # endpoints (`AttentionInbox` on the Activity tab), so the two can never
+    # disagree about read state. A hand-rolled second inbox or a second
+    # annotations table is the drift this pins away.
     assert "view==='attention'" not in dashboard
     assert "view==='notes'" not in dashboard
     assert "view==='health'" not in dashboard
-    assert "onOpenAlerts" in dashboard
-    assert "onOpenFindings" in dashboard
-    assert "Run notes" in dashboard  # the link's label
+    assert "<AttentionInbox" in dashboard
+    assert "/api/attention/inbox" not in dashboard
+    assert "/api/annotations" not in dashboard
     assert "Findings" in (ROOT / "FindingsPane.tsx").read_text(encoding="utf-8")
     # The workload table went to Resources, following the cost column that had already left
     # the same view for the same reason.

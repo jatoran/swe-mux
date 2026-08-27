@@ -64,10 +64,11 @@ test('Findings is the only home for run notes, so it filters by who concluded th
   const pane = source('FindingsPane.tsx')
   const dashboard = source('AutomationDashboard.tsx')
   // The Automation dashboard used to draw a second, differently-filtered copy of this
-  // table. It links here instead, so this pane has to cover what that view showed:
-  // observer-written notes as well as deterministic ones.
+  // table. Run notes stay Findings' alone (the dashboard's Activity tab mirrors the
+  // attention inbox and the runtime trail, never annotations), so this pane has to
+  // cover both kinds: observer-written notes as well as deterministic ones.
   assert.ok(!dashboard.includes("view==='notes'"), 'the run-notes view must not come back')
-  assert.ok(dashboard.includes('onOpenFindings'))
+  assert.ok(!dashboard.includes('/api/annotations'), 'run notes must not grow a second table here')
   assert.ok(pane.includes("type Source = 'all' | 'deterministic' | 'observer'"))
   assert.ok(pane.includes("source === 'all'"))
   assert.ok(pane.includes("(source === 'deterministic') === isDeterministic(item.provenance)"))
@@ -75,18 +76,22 @@ test('Findings is the only home for run notes, so it filters by who concluded th
   assert.ok(pane.includes('sourceCounts.deterministic > 0 && sourceCounts.observer > 0'))
 })
 
-test('the Automation dashboard keeps no second copy of the attention inbox', () => {
+test('the Automation dashboard mirrors the attention inbox as the same component', () => {
   const dashboard = source('AutomationDashboard.tsx')
-  assert.ok(!dashboard.includes("view==='attention'"), 'the attention view must not come back')
+  // "Mirrored" has to mean the same component - the rule `AutomationSpendView`
+  // already carries. A hand-rolled second inbox here would have its own read
+  // state and its own actions, and the two surfaces would eventually disagree
+  // about what is unread; the shared component makes that impossible.
+  assert.ok(dashboard.includes('<AttentionInbox'), 'Activity mirrors the inbox via the shared component')
+  assert.ok(!dashboard.includes('/api/attention/inbox'), 'the dashboard must not fetch the inbox itself')
   assert.ok(!dashboard.includes("view==='health'"), 'the health view was split three ways')
-  assert.ok(dashboard.includes('onOpenAlerts'))
-  // One workspace separates definitions, rules, policy, runtime review, and knowledge.
-  // The read-only control-graph view merged into `projects`, which draws the same
-  // dependency map with the toggles on the nodes.
-  assert.ok(dashboard.includes("export type AutomationView='overview'|'rules'|'projects'|'policy'|'cost'|'knowledge'|'diagnostics'"))
+  // Three tabs, and the tab is the question: what may run (and where), what it
+  // costs, what it did.
+  assert.ok(dashboard.includes("export type AutomationView='policy'|'usage'|'activity'"))
   assert.ok(!dashboard.includes("view==='graph'"), 'the read-only graph view must not come back')
-  assert.ok(dashboard.includes("view==='policy'&&<AutomationPolicyView"))
-  // The away report moved to the inbox it summarizes.
+  assert.ok(dashboard.includes('<AutomationPolicyMatrix'))
+  assert.ok(dashboard.includes('<AutomationPolicyView'))
+  // The away report stays with the drawer inbox it summarizes.
   assert.ok(source('Notifications.tsx').includes("api('GET','/api/attention/absence')"))
   // The workload table moved to Resources, following the cost column that left before it.
   assert.ok(source('WorkloadTelemetry.tsx').includes("api<Workloads>('GET', '/api/telemetry/workloads')"))

@@ -54,23 +54,31 @@ test('a record admits when it was written behind the transcript or repaired', ()
   assert.ok(timeline.includes('Model output repaired'))
 })
 
-test('scan spending limits are global settings, never per-project', () => {
+test('scan spending limits are the global caps, with no dedicated editor anywhere', () => {
   const policy = source('AutomationPolicyView.tsx')
   const projects = source('ProjectsManager.tsx')
-  // The dollar ceiling lived in each Project's committed .swe-mux/config.toml,
-  // so the cap most likely to stop scanning sat in a file nobody opens and had
-  // to be raised once per checkout.
-  assert.ok(policy.includes('scan_timeline_daily_budget'))
-  assert.ok(policy.includes('scan_timeline_run_budget'))
-  assert.ok(policy.includes('scan_timeline_hourly_call_cap'))
-  assert.ok(policy.includes('scan_timeline_max_output_tokens'))
-  assert.ok(!projects.includes('scan_timeline_daily_budget'))
-  assert.ok(projects.includes('Automation → Global policy'))
+  const matrix = source('AutomationMatrix.tsx')
+  // The scan's dedicated budgets were retired outright: it spends under
+  // `automation_daily_budget`, the global hourly cap, and the global per-call
+  // output ceiling. A dedicated field name reappearing in any editor is the
+  // second-owner drift this pins away. (The per-Project dollar ceiling died
+  // first - it lived in each committed .swe-mux/config.toml, a file nobody
+  // opens, with a different value per checkout.)
+  for (const retired of [
+    'scan_timeline_daily_budget', 'scan_timeline_run_budget',
+    'scan_timeline_hourly_call_cap', 'scan_timeline_max_output_tokens',
+  ]) {
+    assert.ok(!policy.includes(retired), `AutomationPolicyView still edits ${retired}`)
+    assert.ok(!projects.includes(retired), `ProjectsManager still edits ${retired}`)
+    assert.ok(!matrix.includes(retired), `AutomationMatrix still edits ${retired}`)
+  }
+  assert.ok(policy.includes('<BudgetControl name="automation_daily_budget"'))
+  assert.ok(policy.includes('data-setting="automation_max_output_tokens"'))
 })
 
-test('Project-wide scan settings live in Project settings, not the drawer tab', () => {
+test('Project-wide scan settings live in the Automation policy matrix, not the drawer tab', () => {
   const timeline = source('ScanTimelineTab.tsx')
-  const projects = source('ProjectsManager.tsx')
+  const projects = source('AutomationMatrix.tsx')
   const editor = source('ProjectContextEditor.tsx')
   // The drawer tab is session-scoped. Hosting the Project permission and the
   // Project context editor there meant every session in a Project showed the
@@ -89,7 +97,7 @@ test('Project-wide scan settings live in Project settings, not the drawer tab', 
   // ...and a route to where they went, from every timeline tab.
   assert.ok(timeline.includes('onOpenProjectSettings'))
   assert.ok(timeline.includes('Project settings'))
-  assert.ok(projects.includes('ProjectContextEditor'))
+  assert.ok(projects.includes('<ProjectContextEditor'))
   assert.ok(editor.includes('/project-context'))
   assert.ok(editor.includes('Copy setup prompt'))
 })
@@ -112,7 +120,7 @@ test('the timeline grants both switches at once, and only while it is off', () =
 })
 
 test('a Project can arm every new conversation instead of being re-armed by hand', () => {
-  const projects = source('ProjectsManager.tsx')
+  const projects = source('AutomationMatrix.tsx')
   const timeline = source('ScanTimelineTab.tsx')
   assert.ok(projects.includes('scan_timeline_auto_enable'))
   assert.ok(projects.includes('Arm every new conversation'))

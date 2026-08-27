@@ -35,22 +35,39 @@ export type ProjectAutomationState = {
    * unverified endpoint - merging them would render a gate offering to turn on nothing.
    */
   unverified?: string[]
+  /**
+   * Requested ids the install-wide ceiling turns off - the id itself or something
+   * in its dependency closure disallowed globally. Its own field for the same
+   * one-actionable-answer reason as `unverified`: the fix is global policy, not a
+   * grant and not a Project toggle, and the Project's own choice is retained.
+   */
+  globally_disabled?: string[]
   /** The install-wide provider verdict this resolution was computed under. */
   llm?: LlmReadiness | null
-  automations: {
-    id: string; kind: string; label: string; requires: string[]; implemented: boolean
-    /** Whether switching it on can cost money. Read from the registry, never asserted
-     *  by a surface: "free" is the fact a one-click grant most needs to get right. */
-    spends: boolean
-    /** Whether it is inert without a proven model provider. Separate from `spends`,
-     *  because a model on the operator's own machine is a dependency with no bill. */
-    needs_llm?: boolean
-    /** Whether a Project that never wrote this id down has it on. Consumers that
-     *  read only the explicit `requested` map must fall back to this, or they
-     *  render a switch the daemon honours as on as if it were off. */
-    default_on?: boolean
-  }[]
+  automations: AutomationRegistryEntry[]
   scan_timeline_auto_enable: boolean
+}
+
+export type AutomationRegistryEntry = {
+  id: string; kind: string; label: string; requires: string[]; implemented: boolean
+  /** Whether switching it on can cost money. Read from the registry, never asserted
+   *  by a surface: "free" is the fact a one-click grant most needs to get right. */
+  spends: boolean
+  /** Whether it is inert without a proven model provider. Separate from `spends`,
+   *  because a model on the operator's own machine is a dependency with no bill. */
+  needs_llm?: boolean
+  /** Whether a Project that never wrote this id down has it on. Consumers that
+   *  read only the explicit `requested` map must fall back to this, or they
+   *  render a switch the daemon honours as on as if it were off. */
+  default_on?: boolean
+  /** The dedicated install switch that is this row's global ceiling, where one
+   *  exists (`scan_timeline_enabled` and friends) - the Global toggle writes
+   *  that key and never an `automation_global_allow` entry. */
+  install_switch?: string | null
+  /** The resolved install-wide ceiling: this id and its whole dependency
+   *  closure are allowed anywhere at all. Absent on payloads served without a
+   *  config to resolve against. */
+  globally_allowed?: boolean
 }
 
 /**

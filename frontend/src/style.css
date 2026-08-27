@@ -2099,7 +2099,43 @@ body {
    choice, and this is a choice. */
 .automation-tabs{overflow-x:auto}
 .automation-panel .automation-tabs button{min-height:32px;flex:1 1 auto}
-@media(max-width:760px){.automation-panel .automation-tabs button{min-height:44px}}
+.automation-tab-badge{margin-left:5px;padding:0 5px;border-radius:8px;background:var(--warn,#e2c56d);color:var(--bg);font-size:9px;font-weight:700}
+/* Three tabs, bottom-of-screen on a phone: the panel is a flex column, so the
+   tab row simply reorders to the end and stays tappable under the thumb. */
+@media(max-width:760px){.automation-panel .automation-tabs button{min-height:44px}.automation-panel>.automation-tabs{order:99;position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--line)}}
+/* --- Policy tab: master bar, presets, and the Global x Project matrix --- */
+.automation-policy-tab{display:block}
+.automation-masterbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px;border:1px solid var(--line);background:var(--panel)}
+.automation-master-switch{display:flex!important;grid-template-columns:none!important;align-items:center;gap:8px;color:var(--text)}
+.automation-master-switch strong{white-space:nowrap}
+.automation-masterbar .automation-project-toolbar{margin-left:auto;display:flex;align-items:center;gap:7px}
+.automation-masterbar .automation-project-toolbar label{display:flex;grid-template-columns:none;align-items:center;gap:7px;padding:0}
+.automation-preset-toggle{white-space:nowrap}
+.automation-presets{margin-top:10px}
+.automation-preset-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;padding:8px}
+.automation-preset{display:grid;gap:6px;align-content:start;padding:10px;border:1px solid var(--line);background:var(--panel)}
+.automation-preset.on{border-color:var(--accent)}
+.automation-preset header{display:flex;align-items:center;justify-content:space-between;gap:7px}
+.automation-preset p,.automation-preset small{color:var(--muted)}
+.automation-preset button{justify-self:start}
+.automation-preset-blocked{color:var(--warn,#e2c56d)}
+.automation-preset-dismiss{margin:0 8px 8px;background:none;border:0;color:var(--muted);text-decoration:underline;cursor:pointer}
+.automation-matrix-legend{margin:8px 2px;color:var(--muted)}
+.automation-matrix-grid{border:1px solid var(--line);background:var(--panel)}
+.automation-matrix-head,.automation-matrix-row{display:grid;grid-template-columns:minmax(0,1fr) 64px 84px 74px;gap:6px;align-items:center;padding:5px 8px}
+.automation-matrix-head{position:sticky;top:0;z-index:1;background:var(--panel);border-bottom:1px solid var(--line);color:var(--muted);text-transform:uppercase;font-size:9px;letter-spacing:.05em}
+.automation-matrix-head span:not(:first-child),.automation-matrix-fleet{text-align:center}
+.automation-matrix-row{border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.automation-matrix-row.globally-off .automation-matrix-name{opacity:.45}
+.automation-matrix-name{min-width:0;padding-left:calc(var(--depth,0)*14px)}
+.automation-matrix-name .project-setting-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.automation-matrix-cell{display:flex!important;grid-template-columns:none!important;justify-content:center;padding:0!important;margin:0}
+.automation-matrix-fleet{color:var(--muted);white-space:nowrap}
+.automation-matrix-grid .project-automation-group{display:flex;align-items:baseline;gap:8px;margin:0;padding:7px 8px 4px;color:var(--accent);border-top:1px solid var(--line)}
+.automation-matrix-grid .project-automation-group span{color:var(--muted);font-weight:400}
+.automation-matrix-grid .project-automation-deps{margin:2px 0 0;color:var(--muted);font-size:10px}
+.automation-limits-drawer,.automation-rules-drawer{margin-top:10px;border:1px solid var(--line);background:var(--panel)}
+@media(max-width:760px){.automation-matrix-head,.automation-matrix-row{grid-template-columns:minmax(0,1fr) 52px 52px}.automation-matrix-head span:nth-child(4),.automation-matrix-fleet{display:none}.automation-masterbar .automation-project-toolbar{margin-left:0;width:100%}}
 .automation-panel .usage-table{margin-top:10px}.automation-panel .usage-tables .usage-table{margin-top:0}
 /* The summary strip is a header for the two columns beneath it, not a cell in them. Left as
    an ordinary grid item it took one half-width column, which truncated four of its six labels

@@ -1,22 +1,20 @@
 import { expect, test } from 'playwright/test'
 
 /**
- * The automation dashboard's figures tables, measured in a real layout.
+ * The automation dashboard, measured in a real layout.
  *
  * Three regressions live here, and none of them is visible to a unit test.
  *
- * The first is truncation. These tables mix ten-figure token counts with sub-cent costs, and
- * printed at full precision in nowrap columns they overflowed every window; the ten-column
- * telemetry table was the one nobody could read. The second is the phone, where a nowrap table
- * inside a horizontal scroller can never show a column and the header naming it at the same
- * time. The third is the panel's own frame: its child count changes with the view, so the
- * fixed grid rows it used to declare fitted one view and drew the status line over the first
- * heading in the other.
+ * The first is truncation. The spend tables mix ten-figure token counts with sub-cent costs,
+ * and printed at full precision in nowrap columns they overflowed every window. The second is
+ * the phone, where a nowrap table inside a horizontal scroller can never show a column and the
+ * header naming it at the same time. The third is the panel's own frame: its child count
+ * changes with the view, so fixed grid rows fitted one view and drew the status line over the
+ * first heading in the others.
  */
 
-// Four flat views, no group rail: `attend` and `review` are gone, because the surfaces
-// under them had homes of their own (Alerts and Activity/Findings) and this dashboard was
-// drawing second copies. Nothing here has a sub-tab strip any more.
+// Three tabs, and the tab is the question: Policy (what may run, and where),
+// Usage (what it costs), Activity (what it did).
 const openTab = async (page: import('playwright/test').Page, tab: string) => {
   await page.goto('/automation-cost-harness.html')
   await page.waitForSelector('.automation-tabs button')
@@ -26,14 +24,13 @@ const openTab = async (page: import('playwright/test').Page, tab: string) => {
 /**
  * The spend view fetches when it mounts, which is when its tab is first selected.
  *
- * That is new: it used to be drawn from the dashboard's single startup load, so its rows
- * were on screen before any tab could be clicked. It is a shared component now
- * (`AutomationSpendView`) so that Resources can draw the identical table, and a shared
- * component owns its own data. Reading the table without waiting measures the frame
- * before the response lands and reports an empty table as a formatting regression.
+ * It is a shared component (`AutomationSpendView`) so the Usage dialog draws the identical
+ * table, and a shared component owns its own data. Reading the table without waiting
+ * measures the frame before the response lands and reports an empty table as a formatting
+ * regression.
  */
 const openSpend = async (page: import('playwright/test').Page) => {
-  await openTab(page, 'cost breakdown')
+  await openTab(page, 'Usage')
   await page.locator('.cost-table tbody tr').first().waitFor()
 }
 
@@ -117,35 +114,19 @@ test('no figures table overflows its panel at desktop width', async ({ page }) =
   for (const box of overflow) expect(box.scroll).toBeLessThanOrEqual(box.client + 1)
 })
 
-/** The status line used to be drawn over the first section heading in exactly this view. */
+/** The status line used to be drawn over the first section heading. */
 test('the panel frame holds every view', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  for (const tab of ['overview','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'] as const) {
+  for (const tab of ['Policy', 'Usage', 'Activity'] as const) {
     await openTab(page, tab)
     const [progress] = await boxes(page, '.usage-progress')
     const [main] = await boxes(page, '.automation-panel > main')
-    const [footer] = await boxes(page, '.automation-panel > footer')
+    const [panel] = await boxes(page, '.automation-panel')
     expect(main.y).toBeGreaterThanOrEqual(progress.bottom - 0.5)
-    expect(main.bottom).toBeLessThanOrEqual(footer.y + 0.5)
+    expect(main.bottom).toBeLessThanOrEqual(panel.bottom + 0.5)
     // And the body is the part that grew, so it is the part that scrolls.
     expect(main.height).toBeGreaterThan(200)
   }
-})
-
-/** Left as an ordinary grid cell the strip took a half-width column and truncated four of its
- *  six labels, then stretched to the height of the section beside it. */
-test('the summary strip spans the columns it heads', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'rules')
-
-  const [summary] = await boxes(page, '.usage-tables > .usage-summary')
-  const [tables] = await boxes(page, '.usage-tables')
-  expect(summary.width).toBeGreaterThan(tables.width - 2)
-
-  const clipped = await page.evaluate(() =>
-    [...document.querySelectorAll('.usage-summary article > span')]
-      .filter(element => element.scrollWidth > element.clientWidth).length)
-  expect(clipped).toBe(0)
 })
 
 test('at phone width every table row becomes a labelled card', async ({ page }) => {
@@ -173,74 +154,102 @@ test('at phone width every table row becomes a labelled card', async ({ page }) 
   await expect(page.locator('.cost-table thead')).toBeHidden()
 })
 
-test('the projects view answers what runs where, including "nothing"', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'projects')
-  const rows = page.locator('.automation-matrix tbody tr')
-  await expect(rows).toHaveCount(2)
-  await expect(rows.nth(0)).toContainText('swe-mux')
-  await expect(rows.nth(0)).toContainText('Loop detection')
-  // An opted-out Project is a row saying so, never a missing row: silence must read
-  // as "off", not as "covered".
-  await expect(rows.nth(1)).toContainText('nothing')
-  await rows.nth(1).getByRole('button',{name:'Edit policy'}).click()
-  await expect(page.locator('.automation-project-policy h3')).toHaveText('orca policy')
-  await expect(page.locator('.automation-project-policy .project-automation-list').first()).toBeVisible()
+test('at phone width the tab row moves to the bottom of the panel', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 })
+  await page.goto('/automation-cost-harness.html')
+  await page.waitForSelector('.automation-tabs button')
+  const [tabs] = await boxes(page, '.automation-panel > .automation-tabs')
+  const [main] = await boxes(page, '.automation-panel > main')
+  expect(tabs.y).toBeGreaterThan(main.y)
 })
 
-test('the projects view is the control map: selector, grouped switches, and toggles in one place', async ({ page }) => {
+test('the policy matrix draws Global and Project side by side, grouped by dependency', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  await openTab(page, 'projects')
-  // The Project selector is always visible on this view — the old design rendered it
-  // only on the read-only graph tab, so the projects view had a selection nobody could see.
-  await expect(page.locator('.automation-project-toolbar .dropdown-trigger')).toBeVisible()
-  // The dependency map is grouped, and each node carries its own switch: status and
-  // control are one surface, not two tabs.
-  await expect(page.locator('.project-automation-group')).toContainText([/Foundations/, /Deterministic checks/])
-  await expect(page.locator('.automation-project-policy .project-automation-list input[type=checkbox]').first()).toBeVisible()
+  await openTab(page, 'Policy')
+  await page.waitForSelector('.automation-matrix-grid')
+  // The Project selector is always visible on this view.
+  await expect(page.locator('.automation-masterbar .dropdown-trigger')).toBeVisible()
+  // The dependency map is grouped; the structure is the "needs X" story, so rows
+  // carry no per-row dependency prose.
+  await expect(page.locator('.automation-matrix-grid .project-automation-group')).toContainText([/Foundations/, /Deterministic checks/])
+  // Two switches per row: the install-wide ceiling and this Project's opt-in.
+  const row = page.locator('.automation-matrix-row', { hasText: 'Loop detection' })
+  await expect(row.locator('input[type=checkbox]')).toHaveCount(2)
+})
+
+test('a ceiling-blocked row greys the Project switch and keeps the Project choice', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'Policy')
+  await page.waitForSelector('.automation-matrix-grid')
+  const row = page.locator('.automation-matrix-row', { hasText: 'Doc-debt ledger' })
+  await expect(row).toHaveClass(/globally-off/)
+  // The Global cell stays operable (it is the switch that turns this back on);
+  // the Project cell is disabled but still shows the retained opt-in.
+  await expect(row.locator('input[type=checkbox]').nth(0)).toBeEnabled()
+  await expect(row.locator('input[type=checkbox]').nth(1)).toBeDisabled()
+  await expect(row.locator('input[type=checkbox]').nth(1)).toBeChecked()
+})
+
+test('a fresh install opens on the starting-set presets; a returning one gets the button', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'Policy')
+  // The renderer context has no localStorage history, so this IS the first run.
+  await expect(page.locator('.automation-presets h3')).toContainText('Welcome')
+  await expect(page.locator('.automation-preset')).toHaveCount(3)
+  await page.locator('.automation-preset-dismiss').click()
+  await expect(page.locator('.automation-presets')).toHaveCount(0)
+  await expect(page.locator('.automation-preset-toggle')).toContainText('Choose preset')
+  // Dismissal is durable: a reload lands on the matrix, not the welcome.
+  await openTab(page, 'Policy')
+  await expect(page.locator('.automation-presets')).toHaveCount(0)
 })
 
 test('the dashboard opens on the Project it was launched from', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await page.goto('/automation-cost-harness.html?project=p2')
-  await page.waitForSelector('.automation-tabs button')
-  await page.locator('.automation-tabs button', { hasText: 'projects' }).click()
+  await page.waitForSelector('.automation-matrix-grid')
   // Without the threaded Project this would land on p1, the first Project with
   // anything enabled — which is how you ended up editing the wrong Project's policy.
-  await expect(page.locator('.automation-project-policy h3')).toHaveText('orca policy')
+  await expect(page.locator('.automation-matrix-head span').nth(2)).toHaveText('orca')
 })
 
-test('global policy stays a compact page selector on a phone', async ({ page }) => {
+test('the install-wide limits live behind one disclosure on the Policy tab', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
-  await openTab(page, 'global policy')
-  await expect(page.locator('.automation-policy-cards > button')).toHaveText([
-    /Engine/,/Budgets/,/Schedules & landing/,/Scan timeline/,/Attention/,
-  ])
-  await page.locator('.automation-policy-cards > button',{hasText:'Scan timeline'}).click()
-  await expect(page.locator('.automation-policy-view > .usage-table h3')).toHaveText('Scan timeline')
-  const geometry=await page.locator('.automation-policy-view').evaluate(node=>({
-    width:node.getBoundingClientRect().width,
-    scrollWidth:node.scrollWidth,
+  await openTab(page, 'Policy')
+  const drawer = page.locator('.automation-limits-drawer')
+  await drawer.locator('summary').click()
+  await expect(drawer.locator('.automation-policy-view')).toBeVisible()
+  await expect(drawer.locator('h3').first()).toHaveText('Budgets & ceilings')
+  const geometry = await drawer.locator('.automation-policy-view').evaluate(node => ({
+    width: node.getBoundingClientRect().width,
+    scrollWidth: node.scrollWidth,
   }))
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(Math.ceil(geometry.width)+1)
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(Math.ceil(geometry.width) + 1)
 })
 
 test('the dashboard keeps no second copy of the surfaces that moved out', async ({ page }) => {
   await page.goto('/automation-cost-harness.html')
   await page.waitForSelector('.automation-tabs button')
   const tabs = await page.locator('.automation-tabs button').allInnerTexts()
-  // No separate read-only "control graph": the projects view draws the dependency map
-  // with the controls on it.
-  expect(tabs).toEqual(['overview','rules','projects','global policy','cost breakdown','learned fixes','diagnostics'])
+  // Activity may carry its unread badge in the same button, so the label is a
+  // prefix rather than the whole text.
+  expect(tabs).toHaveLength(3)
+  for (const [index, label] of ['Policy', 'Usage', 'Activity'].entries()) {
+    expect(tabs[index].trim().startsWith(label)).toBe(true)
+  }
   await expect(page.locator('.automation-subtabs')).toHaveCount(0)
-  // The way back to the two inboxes this dashboard used to duplicate is a permanent row,
-  // not an empty-state hint: "where did the attention inbox go" is asked by someone
-  // looking at a full one somewhere else.
-  //
-  // `Usage & spend` is a third kind of entry and rides the same row. It is not a surface
-  // this dashboard ever duplicated - it is the other half of the same question, since the
-  // spend table here is one of three pots and only Usage draws the other two, so "is this
-  // a lot" is answerable only over there.
-  const elsewhere = page.locator('.automation-elsewhere button')
-  await expect(elsewhere).toHaveText([/Attention inbox/, 'Run notes', 'Usage & spend'])
+  // The escape-link row is gone: alerts and spend are mirrored inside (the same
+  // AttentionInbox and AutomationSpendView components), and the footer motto with it.
+  await expect(page.locator('.automation-elsewhere')).toHaveCount(0)
+  await expect(page.locator('.automation-panel > footer')).toHaveCount(0)
+})
+
+test('the Activity tab mirrors the attention inbox and holds the diagnostics', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'Activity')
+  await expect(page.locator('.automation-activity-alerts h3')).toHaveText('Needs you')
+  // The same component the Alerts drawer mounts, over the same endpoints.
+  await expect(page.locator('.automation-activity-alerts .attention-inbox, .automation-activity-alerts .grant-gate, .automation-activity-alerts .attention-empty').first()).toBeVisible()
+  await expect(page.locator('.automation-diagnostics h3').first()).toHaveText('Diagnostics')
+  await expect(page.getByText('Historical event dry-run')).toBeVisible()
 })
