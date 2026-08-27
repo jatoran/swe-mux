@@ -78,7 +78,7 @@ def default_shell_executable() -> str:
     return "/bin/sh"
 
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -492,11 +492,13 @@ class BudgetSpec:
 #: The install's complete set of spending caps.
 #:
 #: The mode each one defaults to is the unit the pre-`Budget` build enforced:
-#: the automation ceilings and the scan-timeline daily budget checked tokens
-#: *and* dollars, which is `either`; the scan run budget checked tokens only;
-#: the assistant, read-aloud summaries, the Project card, and attention
-#: narration checked dollars only. Migration reads the mode from here, so no
-#: existing cap can silently widen.
+#: the automation ceilings checked tokens *and* dollars, which is `either`;
+#: the assistant, read-aloud summaries, and the Project card checked dollars
+#: only. Migration reads the mode from here, so no existing cap can silently
+#: widen. The scan timeline and attention narration once carried their own
+#: caps here; both now spend under `automation_daily_budget` and the global
+#: hourly call cap, and a config still naming the retired fields loads with
+#: them dropped.
 #:
 #: Rate limits are deliberately absent. `automation_hourly_call_cap`,
 #: `agent_message_hourly_budget`, `attention_daily_interrupt_budget`, and the
@@ -525,25 +527,6 @@ BUDGET_SPECS: tuple[BudgetSpec, ...] = (
         label="Per automation rule",
     ),
     BudgetSpec(
-        field="scan_timeline_daily_budget",
-        default=Budget(tokens=3_000_000, usd=5.0, mode="either"),
-        max_tokens=100_000_000,
-        max_usd=1_000.0,
-        legacy_tokens="scan_timeline_daily_token_budget",
-        legacy_usd="scan_timeline_daily_budget_usd",
-        min_tokens=512,
-        label="Scan timeline, daily",
-    ),
-    BudgetSpec(
-        field="scan_timeline_run_budget",
-        default=Budget(tokens=500_000, usd=None, mode="tokens"),
-        max_tokens=20_000_000,
-        max_usd=1_000.0,
-        legacy_tokens="scan_timeline_run_token_budget",
-        min_tokens=512,
-        label="Scan timeline, per conversation",
-    ),
-    BudgetSpec(
         field="assistant_daily_budget",
         default=Budget(tokens=None, usd=2.0, mode="usd"),
         max_tokens=100_000_000,
@@ -566,14 +549,6 @@ BUDGET_SPECS: tuple[BudgetSpec, ...] = (
         max_usd=100.0,
         legacy_usd="project_card_daily_budget_usd",
         label="Project context card, daily",
-    ),
-    BudgetSpec(
-        field="attention_narration_daily_budget",
-        default=Budget(tokens=None, usd=0.10, mode="usd"),
-        max_tokens=100_000_000,
-        max_usd=100.0,
-        legacy_usd="attention_narration_daily_budget_usd",
-        label="Attention narration, daily",
     ),
 )
 
@@ -830,6 +805,16 @@ class Config:
     )
     project_init_scripts: list[dict[str, Any]] = field(default_factory=list)
     automation_enabled: bool = False
+    # The install-wide ceiling over the per-Project automation opt-ins: an id
+    # mapped to False here is off in every Project, along with everything that
+    # depends on it, and the per-Project switch renders greyed rather than
+    # silently inert. Absent means allowed, so an empty map changes nothing.
+    # Three ids never appear here because they already have dedicated install
+    # switches (`scan_timeline_enabled`, `scheduled_runs_enabled`,
+    # `land_queue_enabled`) - one switch, one key. Unknown ids are scrubbed on
+    # load (a registry that retired an id must not brick the config) and
+    # refused on write (a typo must fail loudly, not silently allow).
+    automation_global_allow: dict[str, bool] = field(default_factory=dict)
     automation_retention_days: int = 90
     # Prompt-queue history (sent/cancelled/failed/stranded items and their
     # delivery audit) ages out on this window; pending items never do.
@@ -1061,7 +1046,14 @@ class Config:
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
-    automation_max_output_tokens: int = 256
+    # The one per-call output ceiling every automation runs under, including the
+    # scan timeline and attention narration since their dedicated ceilings were
+    # retired (schema 34 lifts an older config to the loosest of the three, so
+    # no feature that fit before stops fitting). Sized for the largest known
+    # consumer: the scan schema permits ~2,600 characters of prose across five
+    # fields, and a truncated strict JSON body is an unparseable response that
+    # costs a record.
+    automation_max_output_tokens: int = 1000
     # These are the shared ceilings over *every* automation. They were sized for
     # episodic observers that fire once per session, and a continuous sampler
     # (scan timeline) exhausted the per-rule token cap after ten calls costing
@@ -1093,36 +1085,14 @@ class Config:
     # Flash revision without silently changing model family.
     scan_timeline_enabled: bool = False
     scan_timeline_model: str = "deepseek/deepseek-v4-flash"
-    # Scan timeline samples continuously: an event debounce plus a three-minute
-    # heartbeat, per session, for as long as a run is enabled. Charging that to
-    # the shared `automation_rule_*` caps put it in the same envelope as the
-    # session titler, which fires once. It now carries its own daily token
-    # budget and hourly call cap and is exempt from the per-rule caps; the
-    # global automation ceilings above still apply as an emergency bound, and
-    # the dollar budgets (global, per-rule, and the Project's own) are the real
-    # ceiling. At the observed ~$0.08 per million tokens the daily token figure
-    # is about a quarter of a dollar.
-    #
-    # The daily budget enforces both axes (`either`), matching the two scalar
-    # settings it replaced. Its dollar half was once a per-Project field in a
-    # committed `.swe-mux/config.toml`, which meant the cap that could stop
-    # scanning lived in a file nobody opens, defaulted differently per checkout,
-    # and had to be raised once per Project; it is one global setting now,
-    # edited in Settings -> Automation.
-    #
-    # The per-conversation budget migrates as `tokens`, because tokens is the
-    # only unit it ever enforced. It can now be given a dollar figure too.
-    scan_timeline_daily_budget: Budget = field(
-        default_factory=lambda: BUDGET_FIELDS["scan_timeline_daily_budget"].default
-    )
-    scan_timeline_hourly_call_cap: int = 600
-    scan_timeline_run_budget: Budget = field(
-        default_factory=lambda: BUDGET_FIELDS["scan_timeline_run_budget"].default
-    )
-    # The schema permits ~2,600 characters of prose across five fields. 420
-    # output tokens could not hold its own worst case, and a truncated strict
-    # JSON body is an unparseable response that costs a record.
-    scan_timeline_max_output_tokens: int = 900
+    # The scan timeline spends under the global automation ceilings
+    # (`automation_daily_budget`, `automation_hourly_call_cap`,
+    # `automation_max_output_tokens`). It once carried its own daily budget,
+    # per-conversation budget, hourly cap, and output ceiling; those were
+    # retired in favour of one set of global bounds, and a config still naming
+    # them loads with the retired keys dropped. It stays exempt from the
+    # `automation_rule_*` per-rule caps: it samples continuously, and charging
+    # it to the same envelope as a rule that fires once starves the rules.
     # Phase 6.5 attention ranking. The daily budget is the hard bound on how many
     # times ranking may decide something is worth interrupting for; the hourly cap
     # is only a burst limiter beneath it. Cheap-blocking work (a permission
@@ -1137,12 +1107,10 @@ class Config:
     # next-breakpoint item learns the human just finished something.
     attention_breakpoint_markers: bool = True
     # Narration is the one model-cost part of the phase, off until asked for.
+    # It spends under the global automation ceilings; its dedicated daily
+    # budget and output ceiling were retired with the scan timeline's.
     attention_narration_enabled: bool = False
     attention_narration_model: str = ""
-    attention_narration_daily_budget: Budget = field(
-        default_factory=lambda: BUDGET_FIELDS["attention_narration_daily_budget"].default
-    )
-    attention_narration_max_output_tokens: int = 200
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
@@ -1289,6 +1257,22 @@ class Config:
         # to ask whether it is holding the shape or the mapping.
         for name, spec in BUDGET_FIELDS.items():
             setattr(self, name, coerce_budget(getattr(self, name), fallback=spec.default))
+        # Scrub the global-allow map on construction so a file naming an id the
+        # registry has since retired still loads (`load_config` validates the
+        # loaded instance, and an unknown id must not brick the whole config).
+        # `update_config` assigns *after* construction, so a typo written over
+        # the API still reaches `_validate` unscrubbed and fails loudly there.
+        if isinstance(self.automation_global_allow, dict):
+            from . import automation_registry as _registry
+
+            self.automation_global_allow = {
+                name: flag
+                for name, flag in self.automation_global_allow.items()
+                if isinstance(name, str)
+                and isinstance(flag, bool)
+                and name in _registry.REGISTRY
+                and name not in _registry.DEDICATED_INSTALL_SWITCHES
+            }
 
     @property
     def database_path(self) -> Path:
@@ -1613,12 +1597,9 @@ _RANGE_RULES: tuple[_Range, ...] = (
     _Range("automation_rule_hourly_call_cap", 1, 10000, "must be between 1 and 10000"),
     _Range("project_card_max_input_tokens", 512, 128000, "must be between 512 and 128000"),
     _Range("project_card_max_output_tokens", 128, 4096, "must be between 128 and 4096"),
-    _Range("scan_timeline_hourly_call_cap", 1, 100000, "must be between 1 and 100000"),
-    _Range("scan_timeline_max_output_tokens", 256, 8192, "must be between 256 and 8192"),
     _Range("attention_daily_interrupt_budget", 0, 100, "must be between 0 and 100"),
     _Range("attention_hourly_interrupt_cap", 0, 100, "must be between 0 and 100"),
     _Range("attention_incident_window_seconds", 60, 86400, "must be between 60 and 86400"),
-    _Range("attention_narration_max_output_tokens", 32, 2048, "must be between 32 and 2048"),
     _Range("openrouter_request_timeout_seconds", 1, 120, "must be between 1 and 120"),
     _Range("assistant_max_output_tokens", 128, 8192, "must be between 128 and 8192"),
     _Range("assistant_context_messages", 2, 200, "must be between 2 and 200"),
@@ -1857,6 +1838,28 @@ def _validate(config: Config) -> None:
             unknown = set(value) - set(HARNESSES)
             if unknown:
                 errors[field_name] = "unknown harnesses: " + ", ".join(sorted(unknown))
+    allow_map = config.automation_global_allow
+    if not isinstance(allow_map, dict) or any(
+        not isinstance(name, str) or not isinstance(flag, bool) for name, flag in allow_map.items()
+    ):
+        errors["automation_global_allow"] = "must map automation ids to booleans"
+    else:
+        from . import automation_registry as _registry
+
+        unknown_ids = set(allow_map) - set(_registry.REGISTRY)
+        switched = set(allow_map) & set(_registry.DEDICATED_INSTALL_SWITCHES)
+        if unknown_ids:
+            errors["automation_global_allow"] = "unknown automations: " + ", ".join(
+                sorted(unknown_ids)
+            )
+        elif switched:
+            # One switch, one key: these ids are governed by their dedicated
+            # install switches, and a second entry here would be a second owner.
+            errors["automation_global_allow"] = "governed by dedicated switches: " + ", ".join(
+                sorted(
+                    f"{name} ({_registry.DEDICATED_INSTALL_SWITCHES[name]})" for name in switched
+                )
+            )
     if not isinstance(config.project_ignore_patterns, list) or not all(
         isinstance(item, str) for item in config.project_ignore_patterns
     ):
@@ -2159,7 +2162,6 @@ SCHEMA_23_LEGACY_BUDGET_SCALARS: dict[str, float] = {
     "automation_daily_budget_usd": 2.0,
     "automation_rule_daily_token_budget": 50_000,
     "automation_rule_daily_budget_usd": 0.5,
-    "scan_timeline_run_token_budget": 100_000,
 }
 
 
@@ -2170,12 +2172,14 @@ def _migrate_budget_fields(
 
     The non-negotiable rule: a config written by the previous build must enforce
     exactly what it enforced before. That means the mode is dictated by the unit
-    the old code checked, never by what looks tidy - the automation and
-    scan-timeline daily ceilings checked tokens *and* dollars, so they arrive as
-    `either`; the four dollar caps arrive as `usd`; the scan run cap arrives as
-    `tokens`. Each spec's `default` carries both the mode and the value the old
-    scalar defaulted to, so a config that set one half of a pair keeps the other
-    half at the figure that was silently enforcing it all along.
+    the old code checked, never by what looks tidy - the automation daily
+    ceilings checked tokens *and* dollars, so they arrive as `either`; the
+    dollar caps arrive as `usd`. Each spec's `default` carries both the mode and
+    the value the old scalar defaulted to, so a config that set one half of a
+    pair keeps the other half at the figure that was silently enforcing it all
+    along. Caps retired outright (the scan timeline's and attention
+    narration's) are simply not visited: their keys, legacy or budget-shaped,
+    load as unknown fields and are dropped.
 
     A config already carrying the new table wins outright: it was written by this
     build or a later one, and the legacy keys beside it (if a rollback wrote any)
@@ -2381,6 +2385,24 @@ def load_config(path: Path | None = None) -> Config:
             # always works with no download, so an `edge` config lands there;
             # Kokoro stays a deliberate choice once its model is downloaded.
             cfg.tts_engine = "sapi"
+        if source_schema < 34:
+            # Schema 34 retired the scan timeline's and attention narration's
+            # dedicated per-call output ceilings; both features now run under
+            # `automation_max_output_tokens`. The global ceiling must therefore
+            # absorb the retired ones at the loosest of the three - the scan's
+            # was 900 by default, and a global ceiling left at the old 256 would
+            # truncate every scan response into an unparseable record. Lifting
+            # only, so a deliberately lowered global ceiling that already covers
+            # the retired ones is untouched, and a lowered *scan* ceiling still
+            # bounds what it bounded (now for everything).
+            retired_scan = _coerce_int(raw.get("scan_timeline_max_output_tokens"), 900) or 900
+            retired_narration = (
+                _coerce_int(raw.get("attention_narration_max_output_tokens"), 200) or 200
+            )
+            lifted_ceiling = max(cfg.automation_max_output_tokens, retired_scan, retired_narration)
+            if lifted_ceiling != cfg.automation_max_output_tokens:
+                cfg.automation_max_output_tokens = lifted_ceiling
+                migrated = True
         if source_schema < 33 and "tts_kokoro_lexicon" not in raw:
             # Schema 33 names the dictionary by its actual owner. It contains
             # Kokoro respellings and exact phoneme forms that no other provider

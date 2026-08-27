@@ -21,7 +21,7 @@ from .automation import (
 )
 from .background_tasks import background
 from .behavioral_consumers import ADAPTIVE_TITLE_CHECKPOINT_PREFIX
-from .budget import Budget, coerce_budget
+from .budget import coerce_budget
 from .budget import gauges as budget_gauges
 from .config import BUDGET_FIELDS
 from .errors import NotFound
@@ -461,23 +461,13 @@ class ScanTimelineService:
             self._schedule(session_id, "enabled", delay=0)
         return cast(dict[str, Any], row)
 
-    def _run_budget(self) -> Budget:
-        return coerce_budget(
-            getattr(self.config, "scan_timeline_run_budget", None),
-            fallback=BUDGET_FIELDS["scan_timeline_run_budget"].default,
-        )
-
-    def _daily_budget(self) -> Budget:
-        return coerce_budget(
-            getattr(self.config, "scan_timeline_daily_budget", None),
-            fallback=BUDGET_FIELDS["scan_timeline_daily_budget"].default,
-        )
-
-    def _hourly_call_cap(self) -> int:
-        return int(getattr(self.config, "scan_timeline_hourly_call_cap", 600))
-
     def _max_output_tokens(self) -> int:
-        return int(getattr(self.config, "scan_timeline_max_output_tokens", 900))
+        # The global per-call ceiling. The scan once carried its own
+        # (`scan_timeline_max_output_tokens`, retired with its budgets): the
+        # schema permits ~2,600 characters of prose across five fields, so the
+        # global default has to hold that worst case - a truncated strict JSON
+        # body is an unparseable response that costs a record.
+        return int(getattr(self.config, "automation_max_output_tokens", 1000))
 
     async def _grant_for(
         self, session_id: str, context: ScanContext
@@ -519,36 +509,20 @@ class ScanTimelineService:
     async def _gates(self, run_id: str) -> list[dict[str, Any]]:
         """Every quantitative cap that can stop a scan, with how close it is.
 
-        The drawer used to show a project dollar figure, an undenominated token
-        count, and the run token budget. None of those was the cap that
-        actually stopped scanning, so a timeline that had been dead for half an
-        hour looked like it had 58% of its budget left. Whatever binds has to
-        be visible, which means all of them have to be.
+        The caps are the global automation ceilings - the scan's dedicated
+        budgets were retired - so the gauges are the global daily budget and
+        the global hourly call cap, with the scan's own share of each drawn
+        beside the ceiling that actually binds. Whatever can stop scanning has
+        to be visible, which is why the informational scan-share rows stay.
         """
         rule_spend = await self.store.spend(rule_id=SCAN_RULE_ID)
         global_spend = await self.store.spend()
-        run_spend = (
-            await self.store.scan_run_spend(run_id) if run_id else {"tokens": 0, "cost_usd": 0.0}
-        )
         hour_ago = time.time() - 3600
-        calls = await self.store.observer_call_count(hour_ago, rule_id=SCAN_RULE_ID)
+        calls = await self.store.observer_call_count(hour_ago)
+        scan_calls = await self.store.observer_call_count(hour_ago, rule_id=SCAN_RULE_ID)
         # Only *enforced* axes are drawn. A budget in `tokens` mode still
         # remembers a dollar figure so switching modes does not lose it, and
         # showing that figure here would name a limit that cannot stop anything.
-        daily = budget_gauges(
-            self._daily_budget(),
-            rule_spend,
-            id_prefix="scan_daily",
-            token_label="Scan tokens today",
-            usd_label="Scan cost today",
-        )
-        run = budget_gauges(
-            self._run_budget(),
-            run_spend,
-            id_prefix="scan_run",
-            token_label="This conversation",
-            usd_label="This conversation cost",
-        )
         automation = budget_gauges(
             self.config.automation_daily_budget,
             global_spend,
@@ -556,18 +530,30 @@ class ScanTimelineService:
             token_label="All automation tokens",
             usd_label="All automation cost",
         )
+        scan_share = budget_gauges(
+            self.config.automation_daily_budget,
+            rule_spend,
+            id_prefix="scan_daily",
+            token_label="Scan tokens today",
+            usd_label="Scan cost today",
+        )
         return [
-            *[gauge for gauge in daily if gauge["unit"] == "tokens"],
-            *run,
+            *automation,
+            *scan_share,
+            {
+                "id": "automation_hourly_calls",
+                "label": "Automation calls this hour",
+                "unit": "calls",
+                "used": int(calls),
+                "limit": int(getattr(self.config, "automation_hourly_call_cap", 1200)),
+            },
             {
                 "id": "scan_hourly_calls",
                 "label": "Scans this hour",
                 "unit": "calls",
-                "used": int(calls),
-                "limit": self._hourly_call_cap(),
+                "used": int(scan_calls),
+                "limit": int(getattr(self.config, "automation_hourly_call_cap", 1200)),
             },
-            *[gauge for gauge in daily if gauge["unit"] == "usd"],
-            *automation,
         ]
 
     async def liveness(
@@ -670,9 +656,14 @@ class ScanTimelineService:
             **await self.liveness(session_id, gates=gates),
             "project_id": project_id or None,
             "model": str(getattr(self.config, "scan_timeline_model", DEFAULT_SCAN_MODEL)),
-            "daily_budget": self._daily_budget().as_dict(),
+            # The ceiling scanning actually stops at: the global automation
+            # budget (the scan's dedicated budgets were retired). `spend_today`
+            # stays the scan's own share so the pair reads as share-of-ceiling.
+            "daily_budget": coerce_budget(
+                self.config.automation_daily_budget,
+                fallback=BUDGET_FIELDS["automation_daily_budget"].default,
+            ).as_dict(),
             "spend_today": spend,
-            "run_budget": self._run_budget().as_dict(),
             "run_spend": run_spend,
             "gates": gates,
             # Phase 7.7: the adaptive-titler's own measurement. A stable-subject
@@ -1340,60 +1331,37 @@ class ScanTimelineService:
 
         max_output_tokens = self._max_output_tokens()
         global_spend = await self.store.spend()
-        rule_spend = await self.store.spend(rule_id=SCAN_RULE_ID)
-        run_spend = await self.store.scan_run_spend(context.agent_run_id)
         estimated_input_tokens = (
             transcript.estimated_tokens
             + max(1, len(project_context.encode("utf-8")) // 4)
             + 1_200
         )
         max_tokens = estimated_input_tokens + max_output_tokens
-        # Scan timeline is deliberately NOT charged against
-        # `automation_rule_daily_token_budget` / `automation_rule_hourly_call_cap`.
-        # Those bound an observer that fires once per session; this one samples
-        # continuously, and sharing the envelope stopped the whole feature after
-        # ten calls costing under half a cent. It carries its own token budget
-        # and call cap, and the global ceilings below still apply.
-        token_preflight = (
-            budget.would_exceed(
-                self.config.automation_daily_budget,
-                global_spend,
-                label="the global daily automation",
-                tokens=max_tokens,
-                phrasing="exhausted",
-            ),
-            budget.would_exceed(
-                self._daily_budget(),
-                rule_spend,
-                label="the daily Scan timeline",
-                tokens=max_tokens,
-                phrasing="exhausted",
-            ),
-            budget.would_exceed(
-                self._run_budget(),
-                run_spend,
-                label="the run Scan timeline",
-                tokens=max_tokens,
-                phrasing="exhausted",
-            ),
-        )
+        # The scan's dedicated budgets were retired: the global automation
+        # ceilings are the only ones consulted. It stays deliberately NOT
+        # charged against `automation_rule_daily_budget` /
+        # `automation_rule_hourly_call_cap` - those bound an observer that
+        # fires once per session; this one samples continuously, and sharing
+        # that envelope stopped the whole feature after ten calls costing
+        # under half a cent.
+        #
         # Tokens first, dollars after the catalog estimate exists below: the
-        # dollar half of each of these budgets needs a price this code has not
-        # looked up yet, and a token cap that has already run out should not pay
-        # for a catalog read to find that out.
-        for verdict in token_preflight:
-            if verdict.axis == "tokens":
-                self._skip(session_id, verdict.reason)
-                return None
+        # dollar half needs a price this code has not looked up yet, and a
+        # token cap that has already run out should not pay for a catalog read
+        # to find that out.
+        token_verdict = budget.would_exceed(
+            self.config.automation_daily_budget,
+            global_spend,
+            label="the global daily automation",
+            tokens=max_tokens,
+            phrasing="exhausted",
+        )
+        if token_verdict.axis == "tokens":
+            self._skip(session_id, token_verdict.reason)
+            return None
         hour_ago = time.time() - 3600
         if await self.store.observer_call_count(hour_ago) >= self.config.automation_hourly_call_cap:
             self._skip(session_id, "the global hourly observer call cap is reached")
-            return None
-        if (
-            await self.store.observer_call_count(hour_ago, rule_id=SCAN_RULE_ID)
-            >= self._hourly_call_cap()
-        ):
-            self._skip(session_id, "the hourly Scan timeline call cap is reached")
             return None
         catalog = await self.store.model_cache()
         metadata = next((item for item in catalog["models"] if item.get("id") == model), None)
@@ -1402,29 +1370,17 @@ class ScanTimelineService:
             estimated_cost = estimated_input_tokens * float(
                 metadata.get("prompt_price") or 0
             ) + max_output_tokens * float(metadata.get("completion_price") or 0)
-        # `automation_rule_daily_budget` is skipped entirely, on both axes: it
-        # bounds an episodic observer, and charging a continuous sampler to it
-        # stopped the whole feature after ten calls costing under half a cent.
-        # The ceilings that do apply are the scan's own budgets and the global
-        # automation one. The scan's dollar half was once per Project, which put
-        # the cap most likely to stop scanning inside a committed file nobody
-        # opens, with a different value in every checkout.
-        for candidate, spend, label in (
-            (self.config.automation_daily_budget, global_spend, "the global daily automation"),
-            (self._daily_budget(), rule_spend, "the daily Scan timeline"),
-            (self._run_budget(), run_spend, "the run Scan timeline"),
-        ):
-            verdict = budget.would_exceed(
-                candidate,
-                spend,
-                label=label,
-                tokens=max_tokens,
-                usd=estimated_cost,
-                phrasing="exhausted",
-            )
-            if verdict.axis == "usd":
-                self._skip(session_id, verdict.reason)
-                return None
+        dollar_verdict = budget.would_exceed(
+            self.config.automation_daily_budget,
+            global_spend,
+            label="the global daily automation",
+            tokens=max_tokens,
+            usd=estimated_cost,
+            phrasing="exhausted",
+        )
+        if dollar_verdict.axis == "usd":
+            self._skip(session_id, dollar_verdict.reason)
+            return None
 
         facts = await self.tier0.facts_for_run(
             context.agent_run_id,
@@ -1794,10 +1750,14 @@ class ScanTimelineService:
             "running_backfills": sum(not task.done() for task in self._backfill_tasks.values()),
             "last_skip_reasons": dict(self._skip_reasons),
             "catchup_depth": dict(self._catchup_depth),
+            # The global ceilings the scan runs under; its dedicated budgets
+            # were retired.
             "budgets": {
-                "daily": self._daily_budget().as_dict(),
-                "run": self._run_budget().as_dict(),
-                "hourly_calls": self._hourly_call_cap(),
+                "daily": coerce_budget(
+                    self.config.automation_daily_budget,
+                    fallback=BUDGET_FIELDS["automation_daily_budget"].default,
+                ).as_dict(),
+                "hourly_calls": int(getattr(self.config, "automation_hourly_call_cap", 1200)),
                 "max_output_tokens": self._max_output_tokens(),
             },
             "event_loop_running": bool(self._event_task and not self._event_task.done()),

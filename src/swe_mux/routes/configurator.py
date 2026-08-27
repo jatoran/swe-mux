@@ -16,6 +16,7 @@ from .. import (
 from .. import (
     app_keys as keys,
 )
+from ..automation_registry import effective_global_allow
 from ..automation_registry import resolve_config as resolve_automation_config
 from ..config import Config, update_config
 from ..configurator import (
@@ -183,8 +184,14 @@ async def _configurator_project_settings(
     # so this can never report a Project as enabled for something the consumers
     # are declining to run.
     readiness = await app[keys.LLM_READY]()
+    config = app[keys.CONFIG]
     resolution = resolve_automation_config(
-        opt_ins if isinstance(opt_ins, dict) else {}, llm_ready=readiness.ready
+        opt_ins if isinstance(opt_ins, dict) else {},
+        llm_ready=readiness.ready,
+        global_allow=effective_global_allow(
+            config.automation_global_allow,
+            scan_timeline_enabled=config.scan_timeline_enabled,
+        ),
     )
     return {
         "project": {"id": project.id, "name": project.name, "root": str(project.root)},
@@ -201,11 +208,14 @@ async def _configurator_project_settings(
             "effective": sorted(resolution.enabled),
             "blocked": {key: list(value) for key, value in resolution.blocked.items()},
             "unverified": sorted(resolution.unverified),
+            "globally_disabled": sorted(resolution.globally_disabled),
             "note": (
                 "`blocked` names dependencies that are still off: a consumer "
                 "there is inert rather than broken. `unverified` is held back by "
                 "something outside the graph (an unproven model provider), which "
-                "no automation opt-in can fix."
+                "no automation opt-in can fix. `globally_disabled` is turned off "
+                "by the install-wide ceiling, which only Automation policy can "
+                "lift."
             ),
         },
         "editable_fields": sorted(PROJECT_CONFIG_FIELDS),

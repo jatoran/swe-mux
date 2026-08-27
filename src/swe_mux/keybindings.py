@@ -35,7 +35,7 @@ KEYBINDING_COMMANDS = (
     ("settings.open", "Open Settings", "view"),
     ("usage.open", "Open usage analytics", "view"),
     ("usage.quota", "Open provider quota windows", "view"),
-    ("hooks.open", "Open hooks and notification settings", "view"),
+    ("hooks.open", "Open Automation dashboard", "view"),
     ("notifications.open", "Open notifications", "view"),
     ("notes.scratchpad", "Open global Scratchpad", "view"),
     ("notes.open", "Open current project's notes", "view"),

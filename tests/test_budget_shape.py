@@ -146,15 +146,14 @@ LEGACY_SEMANTICS: dict[str, tuple[tuple[str, ...], str]] = {
     "automation_rule_daily_budget": (
         ("automation_rule_daily_token_budget", "automation_rule_daily_budget_usd"), "either",
     ),
-    "scan_timeline_daily_budget": (
-        ("scan_timeline_daily_token_budget", "scan_timeline_daily_budget_usd"), "either",
-    ),
-    "scan_timeline_run_budget": (("scan_timeline_run_token_budget",), "tokens"),
     "assistant_daily_budget": (("assistant_daily_budget_usd",), "usd"),
     "tts_daily_budget": (("tts_daily_budget_usd",), "usd"),
     "project_card_daily_budget": (("project_card_daily_budget_usd",), "usd"),
-    "attention_narration_daily_budget": (("attention_narration_daily_budget_usd",), "usd"),
 }
+# The scan timeline's daily/run budgets and attention narration's daily budget
+# were retired (schema 34): both features spend under `automation_daily_budget`.
+# A config still naming them - budget-shaped or legacy scalar - loads with the
+# keys dropped, which `test_retired_caps_are_dropped_not_migrated` pins.
 
 
 def test_every_budget_is_inventoried_here_and_in_the_specs() -> None:
@@ -194,22 +193,44 @@ def test_a_previous_build_config_enforces_exactly_what_it_enforced_before(
         "automation_daily_budget_usd = 1.5\n"
         "automation_rule_daily_token_budget = 222\n"
         "automation_rule_daily_budget_usd = 2.5\n"
-        "scan_timeline_daily_token_budget = 3333\n"
-        "scan_timeline_daily_budget_usd = 3.5\n"
-        "scan_timeline_run_token_budget = 4444\n"
         "assistant_daily_budget_usd = 5.5\n"
         "tts_daily_budget_usd = 6.5\n"
-        "project_card_daily_budget_usd = 7.5\n"
-        "attention_narration_daily_budget_usd = 8.5\n",
+        "project_card_daily_budget_usd = 7.5\n",
     )
     assert config.automation_daily_budget == Budget(111, 1.5, "either")
     assert config.automation_rule_daily_budget == Budget(222, 2.5, "either")
-    assert config.scan_timeline_daily_budget == Budget(3333, 3.5, "either")
-    assert config.scan_timeline_run_budget == Budget(4444, None, "tokens")
     assert config.assistant_daily_budget == Budget(None, 5.5, "usd")
     assert config.tts_daily_budget == Budget(None, 6.5, "usd")
     assert config.project_card_daily_budget == Budget(None, 7.5, "usd")
-    assert config.attention_narration_daily_budget == Budget(None, 8.5, "usd")
+
+
+def test_retired_caps_are_dropped_not_migrated(tmp_path: Path) -> None:
+    """A config naming a retired scan/narration cap loads, minus those keys.
+
+    The features spend under `automation_daily_budget` now, so the retired keys
+    have nothing to migrate onto; the load must neither fail nor resurrect them
+    on the next save.
+    """
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 29\n"
+        "scan_timeline_daily_token_budget = 3333\n"
+        "scan_timeline_daily_budget_usd = 3.5\n"
+        "scan_timeline_run_token_budget = 4444\n"
+        "attention_narration_daily_budget_usd = 8.5\n"
+        "scan_timeline_hourly_call_cap = 77\n",
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert not hasattr(config, "scan_timeline_daily_budget")
+    assert not hasattr(config, "attention_narration_daily_budget")
+    # The next write serializes only known fields, so the retired keys go.
+    update_config(config, {"port": 8799})
+    written = path.read_text(encoding="utf-8")
+    assert "scan_timeline_daily" not in written
+    assert "scan_timeline_run" not in written
+    assert "attention_narration_daily" not in written
+    assert "scan_timeline_hourly_call_cap" not in written
 
 
 def test_half_a_pair_keeps_the_default_that_was_silently_enforcing_the_other_half(
@@ -249,10 +270,10 @@ def test_the_new_table_survives_a_save_and_reload_including_its_absent_axis(
     """
     path = tmp_path / "config.toml"
     config = load_config(path)
-    update_config(config, {"scan_timeline_run_budget": {"tokens": 900, "mode": "tokens"}})
+    update_config(config, {"automation_rule_daily_budget": {"tokens": 900, "mode": "tokens"}})
     written = path.read_text(encoding="utf-8")
-    assert "scan_timeline_run_budget" in written
-    assert load_config(path).scan_timeline_run_budget == Budget(900, None, "tokens")
+    assert "automation_rule_daily_budget" in written
+    assert load_config(path).automation_rule_daily_budget == Budget(900, None, "tokens")
 
 
 def test_the_schema_23_uplift_still_applies_through_the_new_shape(tmp_path: Path) -> None:
@@ -265,14 +286,14 @@ def test_the_schema_23_uplift_still_applies_through_the_new_shape(tmp_path: Path
     config = _legacy_config(
         tmp_path,
         "automation_daily_token_budget = 200000\n"  # untouched schema-22 default
-        "scan_timeline_run_token_budget = 123456\n",  # deliberate
+        "automation_rule_daily_token_budget = 123456\n",  # deliberate
         schema=22,
     )
     assert (
         config.automation_daily_budget.tokens
         == BUDGET_FIELDS["automation_daily_budget"].default.tokens
     )
-    assert config.scan_timeline_run_budget.tokens == 123_456
+    assert config.automation_rule_daily_budget.tokens == 123_456
 
 
 def test_a_budget_out_of_range_is_refused_with_the_axis_named(tmp_path: Path) -> None:

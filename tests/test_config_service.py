@@ -54,35 +54,58 @@ def test_public_config_describes_the_host_pty_for_xterm(tmp_path: Path) -> None:
         assert descriptor is None
 
 
-def test_scan_timeline_budgets_leave_the_token_axis_non_binding(tmp_path: Path) -> None:
-    """A continuous sampler needs headroom the episodic caps never gave it.
+def test_the_scan_timeline_runs_under_the_global_ceilings(tmp_path: Path) -> None:
+    """The scan's dedicated caps are gone; the global ones must accommodate it.
 
-    The run budget used to sit *above* the per-rule daily cap that also applied
-    to it, so it was unreachable by construction and the feature stopped after
-    ten calls costing under half a cent.
+    A continuous sampler needs headroom the episodic caps never gave it, and now
+    that the scan spends under `automation_daily_budget` and emits under
+    `automation_max_output_tokens`, those defaults have to hold its worst case:
+    a per-call output ceiling below ~900 tokens truncates the scan schema's own
+    prose budget into an unparseable strict-JSON body.
     """
     config = load_config(tmp_path / "config.toml")
 
-    assert config.scan_timeline_run_budget == Budget(tokens=500_000, usd=None, mode="tokens")
-    assert config.scan_timeline_daily_budget == Budget(
-        tokens=3_000_000, usd=5.0, mode="either"
-    )
-    assert config.scan_timeline_hourly_call_cap == 600
-    assert config.scan_timeline_max_output_tokens == 900
-    # One global dollar ceiling, editable in Settings -> Automation. It used to
-    # be a per-Project field in a committed file, which put the cap most likely
-    # to stop scanning somewhere nobody looks, with a different value per
-    # checkout. It must sit above what the daily token budget can cost, or the
-    # dollars bind first and the token budget becomes decoration.
-    #
-    # The global ceiling still applies to a scan, so it has to sit above the
-    # scan's own daily budget or it becomes the new invisible binding cap.
+    assert not hasattr(config, "scan_timeline_daily_budget")
+    assert not hasattr(config, "scan_timeline_run_budget")
+    assert not hasattr(config, "scan_timeline_hourly_call_cap")
+    assert not hasattr(config, "scan_timeline_max_output_tokens")
     assert config.automation_daily_budget.tokens is not None
-    assert config.scan_timeline_daily_budget.tokens is not None
-    assert config.scan_timeline_run_budget.tokens is not None
-    assert config.automation_daily_budget.tokens >= config.scan_timeline_daily_budget.tokens
-    assert config.automation_hourly_call_cap >= config.scan_timeline_hourly_call_cap
-    assert config.scan_timeline_daily_budget.tokens >= config.scan_timeline_run_budget.tokens
+    assert config.automation_max_output_tokens >= 900
+
+
+def test_the_schema_34_ceiling_lift_absorbs_the_retired_output_caps(tmp_path: Path) -> None:
+    """An upgraded config's global output ceiling covers what the retired caps did.
+
+    The scan enforced 900 through its own field; a global ceiling left at the
+    old 256 default would truncate every scan response on upgrade. The lift
+    takes the loosest of the three and never lowers a deliberate choice.
+    """
+    lifted = tmp_path / "lifted" / "config.toml"
+    lifted.parent.mkdir()
+    lifted.write_text(
+        "schema_version = 33\nautomation_max_output_tokens = 256\n", encoding="utf-8"
+    )
+    assert load_config(lifted).automation_max_output_tokens == 900
+
+    deliberate = tmp_path / "deliberate" / "config.toml"
+    deliberate.parent.mkdir()
+    deliberate.write_text(
+        "schema_version = 33\n"
+        "automation_max_output_tokens = 4096\n"
+        "scan_timeline_max_output_tokens = 900\n",
+        encoding="utf-8",
+    )
+    assert load_config(deliberate).automation_max_output_tokens == 4096
+
+    lowered_scan = tmp_path / "lowered" / "config.toml"
+    lowered_scan.parent.mkdir()
+    lowered_scan.write_text(
+        "schema_version = 33\n"
+        "automation_max_output_tokens = 256\n"
+        "scan_timeline_max_output_tokens = 300\n",
+        encoding="utf-8",
+    )
+    assert load_config(lowered_scan).automation_max_output_tokens == 300
 
 
 def test_untouched_legacy_automation_caps_are_lifted_on_upgrade(tmp_path: Path) -> None:
@@ -92,14 +115,12 @@ def test_untouched_legacy_automation_caps_are_lifted_on_upgrade(tmp_path: Path) 
         "schema_version = 22\n"
         "automation_rule_daily_token_budget = 50000\n"
         "automation_hourly_call_cap = 60\n"
-        "scan_timeline_run_token_budget = 100000\n"
         "automation_daily_token_budget = 123456\n",
         encoding="utf-8",
     )
     migrated = load_config(legacy)
     assert migrated.automation_rule_daily_budget.tokens == 4_000_000
     assert migrated.automation_hourly_call_cap == 1_200
-    assert migrated.scan_timeline_run_budget.tokens == 500_000
     # Not a schema-22 default, so it was a deliberate choice and survives.
     assert migrated.automation_daily_budget.tokens == 123_456
 

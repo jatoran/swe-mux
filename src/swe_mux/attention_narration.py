@@ -101,12 +101,14 @@ class AttentionNarrator:
             return None, "no_model"
         if self._failed_at and time.monotonic() - self._failed_at < RETRY_AFTER_FAILURE_SECONDS:
             return None, "failed"
+        # Narration's dedicated daily budget was retired; it spends under the
+        # global automation ceiling like every other observer.
         cap = coerce_budget(
-            getattr(self.config, "attention_narration_daily_budget", None),
-            fallback=BUDGET_FIELDS["attention_narration_daily_budget"].default,
+            getattr(self.config, "automation_daily_budget", None),
+            fallback=BUDGET_FIELDS["automation_daily_budget"].default,
         )
-        spend = await self.store.spend(rule_id=NARRATION_RULE_ID)
-        verdict = budget.spent_out(cap, spend, label="the daily attention-narration")
+        spend = await self.store.spend()
+        verdict = budget.spent_out(cap, spend, label="the global daily automation")
         if verdict.exhausted:
             log.info("attention narration skipped for %s: %s", item["id"], verdict.reason)
             return None, "budget"
@@ -127,9 +129,7 @@ class AttentionNarrator:
                 ],
                 schema_name="attention_narration_v1",
                 schema=NARRATION_SCHEMA,
-                max_tokens=int(
-                    getattr(self.config, "attention_narration_max_output_tokens", 200)
-                ),
+                max_tokens=int(getattr(self.config, "automation_max_output_tokens", 1000)),
             )
         except asyncio.CancelledError:
             await self.store.observer_finished(call_id, status="cancelled", error="cancelled")

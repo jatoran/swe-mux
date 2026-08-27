@@ -216,6 +216,42 @@ _AUTOMATIONS: tuple[Automation, ...] = (
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}
 
+#: Automations whose install-wide ceiling is a dedicated boolean `Config`
+#: switch rather than an `automation_global_allow` entry - one switch, one key.
+#: `config._validate` refuses a map entry for these ids, and the toggle surface
+#: renders their Global column from the named switch instead of the map.
+#: `scan_timeline_enabled` composes into the effective allow map
+#: (`effective_global_allow`), so its cascade reaches the timeline's
+#: dependents; the other two gate capabilities with no dependents and keep
+#: their separately-reported service checks (`scheduler.py`, `land_queue.py`).
+DEDICATED_INSTALL_SWITCHES: dict[str, str] = {
+    "scan_timeline": "scan_timeline_enabled",
+    "scheduled_runs": "scheduled_runs_enabled",
+    "land_queue": "land_queue_enabled",
+}
+
+
+def effective_global_allow(
+    allow_map: dict[str, bool] | None,
+    *,
+    scan_timeline_enabled: bool,
+) -> dict[str, bool]:
+    """The install-wide per-automation ceiling, with the dedicated switch folded in.
+
+    `automation_global_allow` never carries a `scan_timeline` entry (its ceiling
+    is `scan_timeline_enabled`), so composing the switch here is what lets one
+    resolution answer "is this allowed anywhere" for every id. Unknown ids are
+    dropped rather than trusted - the map is validated on write, but this is
+    also fed from test fixtures and older files.
+    """
+    effective = {
+        name: flag
+        for name, flag in (allow_map or {}).items()
+        if name in REGISTRY and name not in DEDICATED_INSTALL_SWITCHES
+    }
+    effective["scan_timeline"] = scan_timeline_enabled
+    return effective
+
 #: The inherited default template every resolution starts from. A Project's own
 #: map overrides it entry by entry, so `session_control = false` in one
 #: `.swe-mux/config.toml` still switches that Project off.
@@ -304,11 +340,18 @@ class Resolution:
     ids a grant can switch on, and there is no automation id whose enabling
     fixes an unverified endpoint. Merging them would produce a gate offering to
     turn on nothing.
+
+    `globally_disabled` holds the requested ids the install-wide ceiling
+    (`automation_global_allow` plus the dedicated switches) turns off - the id
+    itself or something in its dependency closure. Its own field for the same
+    one-actionable-answer reason: the fix is global policy, not a grant and not
+    a Project toggle, and an id here appears in none of the other three sets.
     """
 
     enabled: frozenset[str]
     blocked: dict[str, tuple[str, ...]]
     unverified: frozenset[str] = frozenset()
+    globally_disabled: frozenset[str] = frozenset()
 
     def is_enabled(self, automation_id: str) -> bool:
         return automation_id in self.enabled
@@ -332,7 +375,12 @@ def requested_from_config(
     return {key for key, value in merged.items() if value and key in REGISTRY}
 
 
-def resolve(requested: set[str], *, llm_ready: bool = True) -> Resolution:
+def resolve(
+    requested: set[str],
+    *,
+    llm_ready: bool = True,
+    global_allow: dict[str, bool] | None = None,
+) -> Resolution:
     """Resolve one Project's opt-in set into what actually runs.
 
     `llm_ready` is the install-wide answer to "is there a proven model provider",
@@ -343,11 +391,30 @@ def resolve(requested: set[str], *, llm_ready: bool = True) -> Resolution:
     switch off `catch_me_up` and `live_blockers` - which never call anything -
     the moment somebody rotated a key.
 
-    It defaults to `True` so that resolution stays a pure function of the DAG for
-    every caller that has no provider to consult (the registry payload, the
-    fleet matrix, the tests). The daemon's one gate passes the real answer.
+    `global_allow` is the install-wide ceiling (`effective_global_allow`), and
+    it subtracts *with* the subtree, deliberately unlike `llm_ready`: an
+    unverified provider is an outage to route around, while a ceiling entry is
+    the operator saying "not anywhere", and a dependent left running would be
+    running on a substrate the operator turned off. A requested id the ceiling
+    blocks - itself disallowed, or anything in its closure disallowed - lands in
+    `globally_disabled` and nowhere else.
+
+    Both default to permissive so that resolution stays a pure function of the
+    DAG for every caller that has no config to consult (the registry payload,
+    the fleet matrix, the tests). The daemon's one gate passes the real answers.
     """
     known = {automation_id for automation_id in requested if automation_id in REGISTRY}
+    globally_off = {
+        automation_id
+        for automation_id, allowed in (global_allow or {}).items()
+        if automation_id in REGISTRY and not allowed
+    }
+    globally_disabled = frozenset(
+        automation_id
+        for automation_id in known
+        if automation_id in globally_off or dependency_closure(automation_id) & globally_off
+    )
+    known -= globally_disabled
     enabled: set[str] = set()
     blocked: dict[str, tuple[str, ...]] = {}
     for automation_id in known:
@@ -366,7 +433,7 @@ def resolve(requested: set[str], *, llm_ready: bool = True) -> Resolution:
     if not llm_ready:
         unverified = frozenset(item for item in enabled if REGISTRY[item].needs_llm)
         enabled -= unverified
-    return Resolution(frozenset(enabled), blocked, unverified)
+    return Resolution(frozenset(enabled), blocked, unverified, globally_disabled)
 
 
 def resolve_config(
@@ -374,8 +441,13 @@ def resolve_config(
     defaults: dict[str, bool] | None = None,
     *,
     llm_ready: bool = True,
+    global_allow: dict[str, bool] | None = None,
 ) -> Resolution:
-    return resolve(requested_from_config(project_map, defaults), llm_ready=llm_ready)
+    return resolve(
+        requested_from_config(project_map, defaults),
+        llm_ready=llm_ready,
+        global_allow=global_allow,
+    )
 
 
 def llm_dependent_ids() -> frozenset[str]:

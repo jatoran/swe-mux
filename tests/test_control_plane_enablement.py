@@ -8,6 +8,7 @@ import pytest
 
 from swe_mux import app_keys as keys
 from swe_mux import automation_registry as registry
+from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent
 from swe_mux.observation import bounded_detail, parse_test_outcome, tool_result_evidence
@@ -96,6 +97,65 @@ def test_an_explicit_false_beats_the_default_on_template() -> None:
     resolution = registry.resolve_config({"session_control": False})
     assert not resolution.is_enabled("session_control")
     assert registry.resolve_config({}).is_enabled("session_control")
+
+
+# ---- The install-wide ceiling -------------------------------------------------
+
+
+def test_a_globally_disallowed_automation_is_off_with_its_dependents() -> None:
+    """The ceiling subtracts with the subtree, deliberately unlike `llm_ready`.
+
+    An unverified provider is an outage to route around; a ceiling entry is the
+    operator saying "not anywhere", and a dependent left running would be
+    running on a substrate the operator turned off.
+    """
+    requested = {"raw_store", "tier0", "provenance_graph", "observation_inbox"}
+    resolution = registry.resolve(requested, global_allow={"tier0": False})
+    assert resolution.globally_disabled == {"tier0", "provenance_graph"}
+    assert not resolution.is_enabled("tier0")
+    assert not resolution.is_enabled("provenance_graph")
+    # One actionable answer per switch: a ceiling-blocked id appears in no
+    # other set, and untouched ids resolve exactly as before.
+    assert "provenance_graph" not in resolution.blocked
+    assert resolution.is_enabled("raw_store")
+    assert resolution.is_enabled("observation_inbox")
+
+
+def test_an_allowing_or_absent_ceiling_changes_nothing() -> None:
+    requested = {"raw_store", "tier0", "provenance_graph"}
+    plain = registry.resolve(requested)
+    allowed = registry.resolve(requested, global_allow={"tier0": True})
+    assert plain.enabled == allowed.enabled
+    assert plain.globally_disabled == frozenset()
+    assert allowed.globally_disabled == frozenset()
+
+
+def test_the_scan_switch_composes_into_the_effective_ceiling() -> None:
+    # `scan_timeline_enabled` is the scan row's global toggle - one switch, one
+    # key - so the composed map is what cascades it over the timeline readers.
+    allow = registry.effective_global_allow({"doc_debt": False}, scan_timeline_enabled=False)
+    assert allow["scan_timeline"] is False
+    assert allow["doc_debt"] is False
+    requested = {"raw_store", "tier0", "scan_timeline", "catch_me_up"}
+    resolution = registry.resolve(requested, global_allow=allow)
+    assert resolution.globally_disabled == {"scan_timeline", "catch_me_up"}
+    on = registry.effective_global_allow(None, scan_timeline_enabled=True)
+    assert on["scan_timeline"] is True
+
+
+def test_the_map_never_carries_a_dedicated_switch_id() -> None:
+    # Their ceilings are the named Config booleans; a map entry would be a
+    # second owner, so composition drops one and `config._validate` refuses it.
+    allow = registry.effective_global_allow(
+        {"scheduled_runs": False, "land_queue": False, "scan_timeline": False},
+        scan_timeline_enabled=True,
+    )
+    assert allow == {"scan_timeline": True}
+    assert set(registry.DEDICATED_INSTALL_SWITCHES) == {
+        "scan_timeline",
+        "scheduled_runs",
+        "land_queue",
+    }
 
 
 # ---- Per-project config field ------------------------------------------------
@@ -805,7 +865,11 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
     def request(body: dict[str, object] | None = None) -> object:
         return SimpleNamespace(
             match_info={"project_id": "p1"},
-            app={keys.PROJECTS: SimpleNamespace(projects={"p1": project}), keys.EVENTS: Events()},
+            app={
+                keys.PROJECTS: SimpleNamespace(projects={"p1": project}),
+                keys.EVENTS: Events(),
+                keys.CONFIG: Config(data_dir=tmp_path),
+            },
             json=lambda: _resolved(body or {}),
         )
 
@@ -877,6 +941,7 @@ async def test_unticking_a_default_on_automation_persists_an_explicit_false(
             app={
                 keys.PROJECTS: SimpleNamespace(projects={"p1": project}),
                 keys.EVENTS: Events(),
+                keys.CONFIG: Config(data_dir=tmp_path),
             },
             json=resolved,
         )
@@ -927,13 +992,19 @@ async def test_the_project_matrix_reports_every_project_including_the_opted_out(
     await put_project_automations(  # type: ignore[arg-type]
         SimpleNamespace(
             match_info={"project_id": "p1"},
-            app={keys.PROJECTS: registry, keys.EVENTS: Events()},
+            app={
+                keys.PROJECTS: registry,
+                keys.EVENTS: Events(),
+                keys.CONFIG: Config(data_dir=tmp_path),
+            },
             json=body,
         )
     )
 
     response = await automation_project_matrix(  # type: ignore[arg-type]
-        SimpleNamespace(app={keys.PROJECTS: registry})
+        SimpleNamespace(
+            app={keys.PROJECTS: registry, keys.CONFIG: Config(data_dir=tmp_path)}
+        )
     )
     payload = json.loads(response.body)
     # The registry ships once, beside the rows, exactly as the per-Project read ships it.
@@ -946,6 +1017,62 @@ async def test_the_project_matrix_reports_every_project_including_the_opted_out(
     # its explicit map is what stays empty.
     assert rows["p2"]["enabled"] == ["session_control"]
     assert rows["p2"]["requested"] == {}
+    # The install-wide ceiling ships beside the rows: the stored map, the
+    # dedicated switches, and each entry's resolved `globally_allowed`.
+    assert payload["global_allow"] == {}
+    assert set(payload["install_switches"]) == {
+        "automation_enabled",
+        "scan_timeline_enabled",
+        "scheduled_runs_enabled",
+        "land_queue_enabled",
+    }
+    tier0_entry = next(item for item in payload["automations"] if item["id"] == "tier0")
+    assert tier0_entry["globally_allowed"] is True
+    assert tier0_entry["install_switch"] is None
+    scan_entry = next(
+        item for item in payload["automations"] if item["id"] == "scan_timeline"
+    )
+    assert scan_entry["install_switch"] == "scan_timeline_enabled"
+    # `scan_timeline_enabled` defaults off, and the resolved ceiling says so.
+    assert scan_entry["globally_allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_matrix_reports_a_ceiling_blocked_opt_in_as_globally_disabled(
+    tmp_path: Path,
+) -> None:
+    # A Project that opted in keeps its file untouched; the resolution says the
+    # ceiling - not the Project - is what turned the switch off.
+    from types import SimpleNamespace
+
+    from swe_mux.routes.automation import automation_project_matrix, put_project_automations
+
+    project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
+    registry = SimpleNamespace(
+        projects={"p1": project}, ordered_projects=lambda: [project]
+    )
+
+    class Events:
+        async def emit(self, kind: str, **_payload: object) -> None:
+            del kind
+
+    async def body() -> dict[str, object]:
+        return {"automations": {"tier0": True, "raw_store": True, "doc_debt": True}}
+
+    config = Config(data_dir=tmp_path, automation_global_allow={"doc_debt": False})
+    app = {keys.PROJECTS: registry, keys.EVENTS: Events(), keys.CONFIG: config}
+    await put_project_automations(  # type: ignore[arg-type]
+        SimpleNamespace(match_info={"project_id": "p1"}, app=app, json=body)
+    )
+    response = await automation_project_matrix(SimpleNamespace(app=app))  # type: ignore[arg-type]
+    payload = json.loads(response.body)
+    row = payload["projects"][0]
+    assert row["globally_disabled"] == ["doc_debt"]
+    assert "doc_debt" not in row["enabled"]
+    assert row["requested"]["doc_debt"] is True, "the Project's own choice is retained"
+    assert payload["global_allow"] == {"doc_debt": False}
+    doc_entry = next(item for item in payload["automations"] if item["id"] == "doc_debt")
+    assert doc_entry["globally_allowed"] is False
 
 
 @pytest.mark.asyncio
@@ -964,7 +1091,11 @@ async def test_an_unimplemented_automation_cannot_be_switched_on(tmp_path: Path)
     response = await put_project_automations(  # type: ignore[arg-type]
         SimpleNamespace(
             match_info={"project_id": "p1"},
-            app={keys.PROJECTS: SimpleNamespace(projects={"p1": project}), keys.EVENTS: None},
+            app={
+                keys.PROJECTS: SimpleNamespace(projects={"p1": project}),
+                keys.EVENTS: None,
+                keys.CONFIG: Config(data_dir=tmp_path),
+            },
             json=body,
         )
     )

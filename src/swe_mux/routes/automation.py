@@ -25,6 +25,11 @@ from ..automation import (
     parse_rules,
     serialize_rules,
 )
+from ..automation_registry import (
+    DEDICATED_INSTALL_SWITCHES,
+    dependency_closure,
+    effective_global_allow,
+)
 from ..automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from ..automation_registry import resolve_config as resolve_automation_config
 from ..automation_store import AutomationStore
@@ -921,8 +926,32 @@ async def patch_automation_notifications(request: web.Request) -> web.Response:
     return json_response({"ok": True, "changed": changed})
 
 
-def _automation_registry_payload() -> list[dict[str, Any]]:
-    """The enablement registry as every opt-in surface receives it."""
+def _global_allow(config: Config) -> dict[str, bool]:
+    """The install-wide ceiling as `resolve` consumes it."""
+    return effective_global_allow(
+        config.automation_global_allow,
+        scan_timeline_enabled=config.scan_timeline_enabled,
+    )
+
+
+def _automation_registry_payload(config: Config | None = None) -> list[dict[str, Any]]:
+    """The enablement registry as every opt-in surface receives it.
+
+    With a `config`, each entry also answers whether the install-wide ceiling
+    allows it anywhere at all (`globally_allowed` - the id itself and its whole
+    dependency closure), so a toggle surface and a grant gate render the ceiling
+    from the same resolution the daemon enforces. `install_switch` names the
+    dedicated `Config` boolean where one exists, because those rows' global
+    toggle writes that key and never an `automation_global_allow` entry.
+    """
+    allow = _global_allow(config) if config is not None else None
+
+    def allowed(automation_id: str) -> bool:
+        if allow is None:
+            return True
+        closure = {automation_id, *dependency_closure(automation_id)}
+        return all(allow.get(item, True) for item in closure)
+
     return [
         {
             "id": automation.id,
@@ -942,6 +971,8 @@ def _automation_registry_payload() -> list[dict[str, Any]]:
             # and to write an explicit `false` on untick, since deleting the
             # key would just fall back to the default it is trying to leave.
             "default_on": automation.default_on,
+            "install_switch": DEDICATED_INSTALL_SWITCHES.get(automation.id),
+            **({"globally_allowed": allowed(automation.id)} if allow is not None else {}),
         }
         for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
     ]
@@ -951,6 +982,7 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
     project,
     *,
     llm: LlmReadiness | None = None,
+    global_allow: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """One project's opt-in table, resolved against the registry DAG.
 
@@ -960,6 +992,11 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
     the reason verbatim: `unverified` says which switches are held back, and
     `llm.reason` is the sentence the surface renders instead of leaving them
     looking simply off.
+
+    `global_allow` is the install-wide ceiling, threaded on the same terms.
+    `globally_disabled` carries the requested ids it turns off, so the toggle
+    surface greys them with the right fix (global policy) instead of rendering
+    them as merely off for this Project.
     """
     identity = _registered_identity(project)
     config = await read_project_config(project.root, project=identity)
@@ -970,7 +1007,9 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         if key in AUTOMATION_REGISTRY
     }
     resolution = resolve_automation_config(
-        requested, llm_ready=llm.ready if llm is not None else True
+        requested,
+        llm_ready=llm.ready if llm is not None else True,
+        global_allow=global_allow,
     )
     return {
         "project_id": project.id,
@@ -980,6 +1019,7 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         "enabled": sorted(resolution.enabled),
         "blocked": {key: list(value) for key, value in resolution.blocked.items()},
         "unverified": sorted(resolution.unverified),
+        "globally_disabled": sorted(resolution.globally_disabled),
         "llm": llm.as_dict() if llm is not None else None,
         "scan_timeline_auto_enable": bool(values.get("scan_timeline_auto_enable", False)),
     }
@@ -995,8 +1035,11 @@ async def get_project_automations(request: web.Request) -> web.Response:
     a placeholder as ready to switch on.
     """
     project = _observations_project(request)
-    state = await _project_automation_state(project, llm=await _llm_readiness(request))
-    return json_response({**state, "automations": _automation_registry_payload()})
+    config: Config = request.app[keys.CONFIG]
+    state = await _project_automation_state(
+        project, llm=await _llm_readiness(request), global_allow=_global_allow(config)
+    )
+    return json_response({**state, "automations": _automation_registry_payload(config)})
 
 
 async def automation_project_matrix(request: web.Request) -> web.Response:
@@ -1010,15 +1053,31 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
     surface can never race an open Project editor.
     """
     llm = await _llm_readiness(request)
+    config: Config = request.app[keys.CONFIG]
+    allow = _global_allow(config)
     rows = [
         {
-            **await _project_automation_state(project, llm=llm),
+            **await _project_automation_state(project, llm=llm, global_allow=allow),
             "project_name": project.name,
         }
         for project in request.app[keys.PROJECTS].ordered_projects()
     ]
     return json_response(
-        {"automations": _automation_registry_payload(), "projects": rows}
+        {
+            "automations": _automation_registry_payload(config),
+            "projects": rows,
+            # The install-wide ceiling, as stored: the map the Global column
+            # writes, and the dedicated switches beside it. The per-entry
+            # `globally_allowed` above is the *resolved* reading (closure
+            # included); this is what the toggles edit.
+            "global_allow": dict(config.automation_global_allow),
+            "install_switches": {
+                "automation_enabled": config.automation_enabled,
+                "scan_timeline_enabled": config.scan_timeline_enabled,
+                "scheduled_runs_enabled": config.scheduled_runs_enabled,
+                "land_queue_enabled": config.land_queue_enabled,
+            },
+        }
     )
 
 

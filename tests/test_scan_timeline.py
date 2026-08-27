@@ -144,18 +144,19 @@ def fake_session(run_id: str = "run-1") -> SimpleNamespace:
 
 
 def config(tmp_path: Path, **overrides: Any) -> Config:
-    return Config(
-        data_dir=tmp_path,
-        scan_timeline_enabled=True,
-        scan_timeline_model=DEFAULT_SCAN_MODEL,
-        automation_daily_budget=Budget(tokens=10_000, usd=10.0, mode="either"),
+    values: dict[str, Any] = {
+        "data_dir": tmp_path,
+        "scan_timeline_enabled": True,
+        "scan_timeline_model": DEFAULT_SCAN_MODEL,
+        "automation_daily_budget": Budget(tokens=10_000, usd=10.0, mode="either"),
         # Deliberately tiny. Scan timeline must not consult these; a regression
         # that reconnects it to the per-rule caps fails here rather than in
         # production three hours into a session.
-        automation_rule_daily_budget=Budget(tokens=1, usd=0.0, mode="either"),
-        automation_rule_hourly_call_cap=1,
-        **overrides,
-    )
+        "automation_rule_daily_budget": Budget(tokens=1, usd=0.0, mode="either"),
+        "automation_rule_hourly_call_cap": 1,
+    }
+    values.update(overrides)
+    return Config(**values)
 
 
 async def build_service(
@@ -612,15 +613,20 @@ async def test_scan_ignores_the_per_rule_caps_and_reports_the_binding_gate(
         assert await service.scan_now("session-1", "test") is not None
         state = await service.snapshot("session-1")
         gates = {gate["id"]: gate for gate in state["gates"]}
-        assert gates["scan_daily_tokens"]["limit"] == 3_000_000
+        # The ceilings are the global automation ones (the scan's dedicated
+        # budgets were retired); the scan's own share is drawn beside them.
+        assert gates["automation_daily_tokens"]["limit"] == 10_000
+        assert gates["automation_daily_tokens"]["used"] > 0
+        assert gates["scan_daily_tokens"]["limit"] == 10_000
         assert gates["scan_daily_tokens"]["used"] > 0
-        assert gates["scan_hourly_calls"]["limit"] == 600
+        assert gates["scan_hourly_calls"]["limit"] == 1_200
+        assert gates["automation_hourly_calls"]["limit"] == 1_200
         # One global dollar budget, not a per-Project one. There is no
         # `project_daily_usd` gate any more, and nothing reads a Project file
         # to decide what a scan may cost.
         assert "project_daily_usd" not in gates
-        assert gates["scan_daily_usd"]["limit"] == 5.0
-        assert gates["scan_daily_usd"]["used"] > 0
+        assert gates["automation_daily_usd"]["limit"] == 10.0
+        assert gates["automation_daily_usd"]["used"] > 0
         assert state["skip_reason"] is None
     finally:
         await service.stop()
@@ -683,16 +689,16 @@ async def test_openrouter_still_falls_back_to_the_catalog_estimate(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_an_exhausted_scan_budget_names_itself_in_the_snapshot(tmp_path: Path) -> None:
+async def test_an_exhausted_global_budget_names_itself_in_the_snapshot(tmp_path: Path) -> None:
     service, store, _provider, _sessions = await build_service(
         tmp_path,
-        scan_timeline_daily_budget=Budget(tokens=512, usd=5.0, mode="either"),
+        automation_daily_budget=Budget(tokens=512, usd=5.0, mode="either"),
     )
     try:
         await service.set_enabled("session-1", True)
         assert await service.scan_now("session-1", "test") is None
         state = await service.snapshot("session-1")
-        assert state["skip_reason"] == "the daily Scan timeline token budget is exhausted"
+        assert state["skip_reason"] == "the global daily automation token budget is exhausted"
     finally:
         await service.stop()
         store.close()
@@ -703,7 +709,7 @@ async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
     """No Project file is read to decide what a scan may cost."""
     service, store, _provider, _sessions = await build_service(
         tmp_path,
-        scan_timeline_daily_budget=Budget(tokens=3_000_000, usd=0.0, mode="either"),
+        automation_daily_budget=Budget(tokens=3_000_000, usd=0.0, mode="either"),
     )
     try:
         # Straight to the store: `set_enabled` also schedules a background scan,
@@ -716,7 +722,7 @@ async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
         )
         assert await service.scan_now("session-1", "test") is None
         state = await service.snapshot("session-1")
-        assert state["skip_reason"] == "the daily Scan timeline dollar budget is exhausted"
+        assert state["skip_reason"] == "the global daily automation dollar budget is exhausted"
         assert state["daily_budget"] == {"tokens": 3_000_000, "usd": 0.0, "mode": "either"}
     finally:
         await service.stop()
@@ -726,7 +732,7 @@ async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
     generous.mkdir()
     service, store, _provider, _sessions = await build_service(
         generous,
-        scan_timeline_daily_budget=Budget(tokens=3_000_000, usd=25.0, mode="either"),
+        automation_daily_budget=Budget(tokens=3_000_000, usd=25.0, mode="either"),
     )
     try:
         await store.set_scan_run_enabled(
@@ -737,7 +743,7 @@ async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
         )
         assert await service.scan_now("session-1", "test") is not None
         gates = {gate["id"]: gate for gate in (await service.snapshot("session-1"))["gates"]}
-        assert gates["scan_daily_usd"]["limit"] == 25.0
+        assert gates["automation_daily_usd"]["limit"] == 25.0
     finally:
         await service.stop()
         store.close()
@@ -902,7 +908,7 @@ async def test_full_session_scan_stops_on_a_terminal_budget_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, store, _provider, _sessions = await build_service(
-        tmp_path, scan_timeline_run_budget=Budget(tokens=2_000, mode="tokens")
+        tmp_path, automation_daily_budget=Budget(tokens=2_000, usd=10.0, mode="either")
     )
     monkeypatch.setattr(
         "swe_mux.scan_timeline.parse_transcript_cached",
@@ -919,7 +925,7 @@ async def test_full_session_scan_stops_on_a_terminal_budget_gate(
         await service._backfill_tasks["run-1"]
         state = (await service.snapshot("session-1"))["backfill"]
         assert state["state"] == "partial"
-        assert state["reason"] == "the run Scan timeline token budget is exhausted"
+        assert state["reason"] == "the global daily automation token budget is exhausted"
         assert state["total_chunks"] == 3
         assert state["processed_chunks"] < state["total_chunks"]
         assert state["created_records"] == 0
