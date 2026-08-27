@@ -877,31 +877,40 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           </div>
           {expanded&&<div class="git-map-detail"><p class="git-map-path">{tree.path}</p>
             {tree.prunable!==null&&<p class="git-change-empty">Git cannot use this checkout: {tree.prunable||'the worktree registration is prunable'}.</p>}
-            {/* The Map's own reading has counts and no files, so a row that says "12
-                local" over nothing is waiting for its own read rather than reporting an
-                empty change set. Stated, because the two look identical. */}
-            {detailBusy===tree.path&&!treeDetail[tree.path]&&<p class="git-state">Reading this worktree…</p>}
-            {detailError&&expandedTree===tree.path&&!treeDetail[tree.path]&&<p class="git-state error" role="alert">{detailError}</p>}
-            {/* Landing is an act on the checkout in front of you, so the act is drawn on
-                the row. Only the act: everything Project-wide is in the strip above, and
-                a row that needs one sends the reader there rather than drawing a second
-                copy under every worktree. The main tree is the trunk these land *onto*
-                and is never a candidate.
-                Above the change groups rather than below them (operator decision
-                2026-08-22): those groups are unbounded - a branch with sixty changed
-                files pushed Land, and the live land state it reports, off the bottom of a
-                scroller, so the row's one action was reachable only by scrolling past the
-                thing it acts on. The removal control stays at the bottom, where a
-                destructive act is not the first thing under the cursor. */}
+            {/* Both acts, above everything that loads. Landing is an act on the checkout
+                in front of you, so the act is drawn on the row; only the act, because
+                everything Project-wide is in the strip above and a row that needs one
+                sends the reader there rather than drawing a second copy under every
+                worktree. The main tree is the trunk these land *onto* and is never a
+                candidate.
+                Above the change groups since 2026-08-22, because those groups are
+                unbounded - a branch with sixty changed files pushed Land, and the live
+                land state it reports, off the bottom of a scroller.
+                Remove joined it above them 2026-08-27 (operator decision). It had been
+                kept at the bottom so a destructive act was not the first thing under the
+                cursor, but the bottom of an unbounded list is not a fixed place: where
+                Remove landed depended on how many files the checkout happened to have,
+                and the row's two acts were separated by the thing they both act on. They
+                sit together now, and the confirm-then-force step is what keeps the
+                destructive one deliberate. */}
             {!tree.main&&!tree.bare&&!removing&&<GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand} onShowLanding={()=>setLandingOpen(true)}/>}
-            {tree.conflicted&&tree.conflicted.total>0&&<ReviewGroup id={`${tree.path}:conflicted`} title="CONFLICTS" summary={tree.conflicted} projectId={project.id} locator={{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:conflicted`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:conflicted`]:value}))} onReview={file=>startReview(tree.conflicted!,{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
-            {tree.unstaged&&tree.unstaged.total>0&&<ReviewGroup id={`${tree.path}:unstaged`} title="UNSTAGED" summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
-            {tree.staged&&tree.staged.total>0&&<ReviewGroup id={`${tree.path}:staged`} title="STAGED" summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
-            {branchRef&&tree.branchDelta&&tree.branchDelta.total>0&&<ReviewGroup id={`${tree.path}:branch`} title={`BRANCH - VS ${branchRef.toUpperCase()}`} summary={tree.branchDelta} projectId={project.id} locator={{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref}} openRoot={tree.path} preview={preview[`${tree.path}:branch`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:branch`]:value}))} onReview={file=>startReview(tree.branchDelta!,{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {/* A checkout being deleted is not something to land or to remove again, and
                 its own row is not where that is decided any more - the list said it. */}
             {!tree.main&&!tree.bare&&removing&&<p class="git-change-empty">This worktree is being removed.</p>}
             {!tree.main&&!tree.bare&&!removing&&<div class="git-map-actions">{removalBlocked?<p class="git-change-empty">{tree.locked!==null?'Git reports this worktree as locked.':`${attached.length} live session${attached.length===1?' uses':'s use'} this worktree.`}</p>:remove?.path===tree.path?<><button class="danger" disabled={busy} onClick={()=>void removeWorktree()}>{remove.force?'Force remove ✓':'Confirm remove ✓'}</button><label><input type="checkbox" checked={remove.force} onChange={event=>setRemove({path:tree.path,force:event.currentTarget.checked})}/> discard uncommitted files</label><button onClick={()=>setRemove(null)}>Cancel</button></>:<button onClick={()=>setRemove({path:tree.path,force:false})}>Remove worktree…</button>}</div>}
+            {/* The Map's own reading has counts and no files, so a row that says "12
+                local" over nothing is waiting for its own read rather than reporting an
+                empty change set. Stated, because the two look identical.
+                Drawn *here*, in the slot the change groups occupy, so the arriving lists
+                replace it in place. Above the acts it pushed them down the moment it
+                appeared and let them spring back when it went, which moved the Land
+                button out from under a pointer already on its way to it. */}
+            {detailBusy===tree.path&&!treeDetail[tree.path]&&<p class="git-state">Reading this worktree…</p>}
+            {detailError&&expandedTree===tree.path&&!treeDetail[tree.path]&&<p class="git-state error" role="alert">{detailError}</p>}
+            {tree.conflicted&&tree.conflicted.total>0&&<ReviewGroup id={`${tree.path}:conflicted`} title="CONFLICTS" summary={tree.conflicted} projectId={project.id} locator={{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:conflicted`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:conflicted`]:value}))} onReview={file=>startReview(tree.conflicted!,{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {tree.unstaged&&tree.unstaged.total>0&&<ReviewGroup id={`${tree.path}:unstaged`} title="UNSTAGED" summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {tree.staged&&tree.staged.total>0&&<ReviewGroup id={`${tree.path}:staged`} title="STAGED" summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {branchRef&&tree.branchDelta&&tree.branchDelta.total>0&&<ReviewGroup id={`${tree.path}:branch`} title={`BRANCH - VS ${branchRef.toUpperCase()}`} summary={tree.branchDelta} projectId={project.id} locator={{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref}} openRoot={tree.path} preview={preview[`${tree.path}:branch`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:branch`]:value}))} onReview={file=>startReview(tree.branchDelta!,{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
           </div>}
         </article>
       })}

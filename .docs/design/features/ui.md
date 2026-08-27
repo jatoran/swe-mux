@@ -1395,6 +1395,12 @@ Its rules, and what each one is defending:
   `parentElement`: shadow-DOM retargeting hides an embedded component's internal scroller from
   ordinary ancestor walks. This is how Continuity's command rail keeps horizontal touch drags
   inside the editor instead of turning them into swe-mux tab or panel gestures.
+  The generic `overflow-x` scan is deliberate and also a hazard worth naming, because it makes
+  **an accidental sideways overflow anywhere in a pane silently delete the close swipe for that
+  pane**, with nothing wrong in the gesture code and nothing to see but a dead gesture. Git's Log
+  did exactly this: one `min-width:max-content` widened the graph past its pane, the pane became a
+  horizontal scroller, and the swipe correctly yielded to it (`git.md`). Diagnose a dead swipe by
+  looking for the overflow first; the recognizer is rarely the thing that changed.
   Only the `touchmove` listener ever calls `preventDefault`, and a non-passive `touchmove`
   registered on `window` forces Chrome to route every touch through the main thread before it
   may scroll — on a busy pane that is enough to swallow the first drag on the rail. So

@@ -4681,11 +4681,28 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-graph-context b{color:var(--muted);font-weight:500;letter-spacing:.055em}
 .git-graph-context strong{overflow:hidden;text-overflow:ellipsis;color:var(--text);font-weight:500}
 .git-graph-context code{color:var(--muted);font:inherit}
-.git-graph{min-width:max-content;padding:5px 0;background:var(--bg)}
-.git-graph-row{display:grid;grid-template-columns:max-content minmax(220px,1fr);align-items:start;gap:7px;min-height:39px;padding:3px 9px}
+/* The graph fits its pane. It used to be `min-width:max-content`, which is the widest
+   thing any row wanted - and since a commit subject is `white-space:nowrap`, that is the
+   whole untruncated subject. So the ellipsis below could never fire (there was always
+   room, because the row made room), and the tab's own scroller (`.git-review-tab`)
+   scrolled sideways instead.
+   That cost two things beyond the look: the session-link button is the `max-content`
+   half of `.git-commit-head`, so it was pushed past the right edge and off a phone
+   screen entirely; and a scrollable-x ancestor vetoes the drawer's close swipe by
+   design (`pathOwnsHorizontalScroll` in `mobileGestures.ts`), which is why the gesture
+   went dead on Log and nowhere else. Both are the same line. */
+.git-graph{min-width:0;padding:5px 0;background:var(--bg)}
+/* `minmax(0,…)` on both tracks, so the row can actually be narrower than its contents
+   want. The lane column is still `max-content` in effect at any comfortable width - it
+   only gives when there is nothing left to give, which is the case the old floor turned
+   into a scrollbar. */
+.git-graph-row{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);align-items:start;gap:7px;min-height:39px;padding:3px 9px}
 .git-graph-row:hover{background:var(--panel2)}
 .git-graph-connector{height:11px;padding:0 9px;color:var(--muted);line-height:calc(11px*var(--ui-scale))}
-.git-graph-glyph{display:block;min-width:12px;white-space:pre;color:var(--muted);font-size:10px;line-height:calc(16px*var(--ui-scale))}
+/* Clipped rather than scrolled: a repository with forty live branches draws deep lane
+   art, and on a phone the choice is between losing the outermost lanes and losing the
+   commit subject. The lanes nearest the commit are the ones that carry meaning. */
+.git-graph-glyph{display:block;min-width:12px;overflow:hidden;white-space:pre;color:var(--muted);font-size:10px;line-height:calc(16px*var(--ui-scale))}
 .git-graph-glyph i{font-style:normal}
 .git-graph-glyph i.edge{opacity:.7}
 .git-graph-glyph i.node{font-size:11px;font-weight:700;text-shadow:0 0 6px currentColor}
@@ -4701,7 +4718,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-commit-title strong{color:var(--accent);font-size:8px;font-weight:400}
 .git-commit-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
 .git-commit-refs{display:flex;flex-wrap:wrap;gap:3px}
-.git-commit-refs em{--git-ref-color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;padding:0 3px;border:1px solid color-mix(in srgb,var(--git-ref-color) 45%,var(--line));color:var(--git-ref-color);font-size:7px;font-style:normal;white-space:nowrap}
+.git-commit-refs em{--git-ref-color:var(--muted);max-width:min(240px,100%);overflow:hidden;text-overflow:ellipsis;padding:0 3px;border:1px solid color-mix(in srgb,var(--git-ref-color) 45%,var(--line));color:var(--git-ref-color);font-size:7px;font-style:normal;white-space:nowrap}
 .git-commit-refs em.lane-0{--git-ref-color:var(--accent)}
 .git-commit-refs em.lane-1{--git-ref-color:var(--green)}
 .git-commit-refs em.lane-2{--git-ref-color:var(--amber)}
@@ -4727,6 +4744,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .git-add-form button,.git-map-actions button{min-height:36px;padding:0 12px}
   .git-map-summary{min-height:56px}
   .git-map-detail{padding-left:20px}
+  /* Log on a phone. Everything here buys width back for the commit subject, which is
+     the only part of the row that carries information a reader is scanning for.
+     The lane art keeps its shape and gives up its outermost columns first; the sha
+     gap halves; and the expanded body loses the 34px indent that existed to line up
+     under lane art the row no longer has room to draw in full. */
+  .git-graph-row{gap:5px;padding:3px 6px}
+  .git-graph-glyph{max-width:26vw}
+  .git-commit-title{gap:5px}
+  .git-commit-summary{gap:5px;padding:5px 6px}
+  .git-commit-detail{padding-left:12px}
+  .git-commit-refs em{max-width:min(150px,100%)}
   /* No rail on touch, so the strip is the only tab control. It remains one row and scrolls;
      the selected tab auto-scrolls into view while the close target stays fixed. */
   .drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px;max-width:none}
@@ -5003,7 +5031,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-review-commit{display:block;padding:0;border-bottom:1px solid var(--line)}
 .git-commit-summary{width:100%;display:grid;grid-template-columns:max-content minmax(0,1fr) 12px;gap:7px;align-items:start;padding:5px 9px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .git-commit-summary:hover{background:var(--panel2)}
-.git-commit-detail{min-width:330px;padding:6px 10px 10px 34px;background:var(--panel2)}
+/* No width floor: 330px is wider than the drawer gets on a phone, and this sits inside
+   the same pane the graph does. The message below wraps, so nothing here needs one. */
+.git-commit-detail{min-width:0;padding:6px 10px 10px 34px;background:var(--panel2)}
 /* The full commit message. `pre-wrap` keeps the author's own line and paragraph breaks and
    wraps only what overflows; `anywhere` is for the unbreakable token a message can carry
    (a path, a URL, a sha) that would otherwise push the drawer sideways. Not scrollable and

@@ -46,23 +46,31 @@ test('a Map row offers the land of the branch it is showing, and nothing Project
   // the live land state it reports, used to sit past the end of a scroller full of the
   // thing it acts on. Measured by document order rather than by pixels: the detail is a
   // scroller, so "further down the page" is the claim, not "lower on screen".
+  //
+  // Remove joined it above the groups 2026-08-27 (operator decision). It had been pinned
+  // to the bottom so a destructive act was not the first thing under the cursor, but the
+  // bottom of an unbounded list is not a fixed place — where Remove landed depended on
+  // how many files this checkout happened to have, and the row's two acts ended up
+  // separated by the thing they both act on. What keeps the destructive one deliberate is
+  // its confirm-then-force step, which is unchanged.
   const order = await page.evaluate(() => {
     const detail = document.querySelector('.git-map-detail')!
     const land = detail.querySelector('.git-land-row-section')!
+    const remove = detail.querySelector('.git-map-actions')!
     const groups = [...detail.querySelectorAll('.git-review-group')]
-    const last = groups[groups.length - 1]
     return {
       groups: groups.length,
-      // 4 === DOCUMENT_POSITION_FOLLOWING: every group comes after the Land row.
+      // 4 === DOCUMENT_POSITION_FOLLOWING: every group comes after both acts.
       allAfterLand: groups.every(group => !!(land.compareDocumentPosition(group) & 4)),
-      // The destructive control keeps the bottom, where it is not the first thing under
-      // the cursor when a row opens.
-      removeAfterGroups: !!(last.compareDocumentPosition(detail.querySelector('.git-map-actions')!) & 4),
+      allAfterRemove: groups.every(group => !!(remove.compareDocumentPosition(group) & 4)),
+      // Land first: it is the act a reader opens a branch row to reach.
+      landBeforeRemove: !!(land.compareDocumentPosition(remove) & 4),
     }
   })
   expect(order.groups).toBeGreaterThan(0)
   expect(order.allAfterLand).toBe(true)
-  expect(order.removeAfterGroups).toBe(true)
+  expect(order.allAfterRemove).toBe(true)
+  expect(order.landBeforeRemove).toBe(true)
 })
 
 test('the verification block exists once on the tab, in the strip above the map', async ({ page }) => {
