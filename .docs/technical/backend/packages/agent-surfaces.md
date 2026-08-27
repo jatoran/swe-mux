@@ -143,8 +143,10 @@ The persistent prompt queue.
 - The arming floor, and the two forms of receiver authorization that pass it: the standing `accept_agent_messages` grant for an `agent` sender, and `solicited_by` naming the target's own request for anything else. Recorded on the row (schema version 6) rather than inferred, because a message that arrived armed from a non-human sender has to be able to name what asked for it.
 - Event-driven stranding plus startup reconcile, and the delivery audit.
 - Seed-prompt staging (`stage_seed_argv`).
+- The **display projection** of a readiness verdict: `protected_reasons` (which reasons no per-send confirmation can override) and `delivery_summary` (the compact payload `GET /api/sessions`, the queue's target view, and the readiness watcher all publish).
+  It lives here rather than in `delivery_readiness.py` because the protected set is a *queue* rule - it is exactly what `send_next` refuses with, and one implementation is what keeps a surface from promising an override the daemon will not honour - and because `delivery_readiness.py` stays a leaf module.
 
-**Not:** *when* an automatic send happens (`auto_delivery.py`), who may address whom (`agent_messaging.py`), PTY ownership (delivery writes go through the injected operator-input helper), or aiohttp handlers.
+**Not:** *when* an automatic send happens (`auto_delivery.py`), who may address whom (`agent_messaging.py`), the classification itself (`delivery_readiness.py` - this projects a verdict, it never reaches one), PTY ownership (delivery writes go through the injected operator-input helper), or aiohttp handlers.
 
 ### `auto_delivery.py`
 
@@ -154,6 +156,19 @@ The reply window is deliberately *evidence*, not a second authority: it changes 
 It draws that evidence from two sources: the queue's own `open_reply_windows`, and a second one registered through `set_solicited_requests` (the land queue's `origin_windows`). The second is a callable rather than an import so nothing here knows what a land request is, and a source that raises is absent rather than fatal.
 
 **Not:** delivery itself - it calls `send_next` and cannot pass `confirm` - readiness evaluation, relay policy or the thread model it borrows the cap from (`agent_messaging.py`), or HTTP.
+
+### `readiness_watch.py`
+
+The display-only sibling of the controller above: a one-second loop that announces when a session's delivery readiness *changes*, so the surfaces that show it stop depending on an unrelated event happening to trigger a fleet refresh.
+
+- Why a loop and not an event subscriber: the clock-driven transitions (`operator_quiet` becoming true, a debounce elapsing, lifecycle evidence ageing out) have no event and never will, because each is an absence or a threshold rather than something that happened.
+- Edge-triggered on `(state, reasons)`, with a first sighting establishing the baseline silently - the client's REST load already carries that verdict.
+- Emitted through `EventBus.emit_transient`, so a per-second event type cannot evict the capped `events` history.
+- Gated on an `/events` subscriber existing at all, so a headless daemon skips the pass including its real cost.
+- Scoped to sessions with an attached terminal or a pending queue item: someone is looking, or someone is waiting on this exact verdict.
+- Evaluates with `adopt=False` and `record_metrics=False`. The first is a correctness requirement, not tuning: `evaluate` mutates, and one of its adoptions snapshots the live screen as the completion baseline, so an observer on a timer could otherwise decide the verdict it is meant to be observing. The second keeps the auto-delivery promotion statistics describing delivery attempts.
+
+**Not:** classification (`delivery_readiness.py`), the display payload's shape (`prompt_queue.delivery_summary`), anything that writes to a PTY, or HTTP - it publishes on the bus and the `/events` handler forwards.
 
 ### `agent_messaging.py`
 

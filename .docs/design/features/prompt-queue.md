@@ -156,6 +156,25 @@ separately opt-in.
   The pane header's `queue[:N]` chip focuses its named session before opening Queue, while `queue.open` and the rail open the focused session's queue.
   Queue has no application-wide or Project-wide mode.
   It live-updates from `mux:queue-changed`, re-dispatched from `queue_updated` and `queue_delivery` events.
+- **The Queue tab states whether its target will take a message, and why not, continuously.**
+  A strip under the header reads `deliverable`, `not deliverable — <reason>`, or `readiness unknown — <reason>`, and when it is not safe it also says what would clear it.
+  It is permanently on screen rather than behind a disclosure because that is the question the pane is opened to decide, and the alternative is learning the answer by pressing Send and reading back the name of the check that fired.
+  The vocabulary lives once, in `deliveryReadiness.ts`, and every surface that prints a daemon refusal reason goes through it - the queue's own refusal line, the send-to-agent dialog, the prompt library's staging note, and the per-message blocked marks all used to `join(', ')` the raw codes independently.
+  An unmapped code passes through as itself: the vocabulary is the daemon's and it grows, and a reader shown a code they can search for is better served than one shown nothing.
+  A frontend test reads the reason list out of `delivery_readiness.py`, so a new code lands as a failing test rather than as a raw identifier in front of a user.
+- **The strip is advisory and never disables the Send button.**
+  The daemon re-evaluates at send and its verdict is the only one that acts; the browser's copy can be stale, and a stale advisory that removed the operator's only override would be a false block with no way out - strictly worse than a wrong label, and the same failure mode the four corrections in `delivery-readiness.md` were about.
+  So the two-step is unchanged: the first press asks, the daemon refuses with reasons measured at that instant, and `Send anyway` confirms *that* refusal.
+  What the advisory adds is that a protection which cannot be overridden is named **before** the press, rather than being indistinguishable from an ordinary block until the button behaves differently.
+  `protected_reasons` in `prompt_queue.py` is the single implementation of that classification, shared by `send_next` and by the display payload.
+- **Readiness reaches the tab three ways, and the ordering between them is by `observed_at`.**
+  `GET /api/sessions` carries it on every session row; `GET /api/queue/messages` carries the target's own reading, so opening the tab never paints a verdict it corrects a moment later; and the daemon's readiness watcher pushes changes in between.
+  Neither of the first two is reliably the newer one, so the freshest stamp wins and an unstamped payload loses by construction.
+  A reading older than a few seconds renders its age, which is not decoration: `sessionSnapshots.ts` preserves the last known readiness across raw PTY snapshots, so without a stamp a minute-old verdict renders identically to a current one.
+- **The composer estimate narrates a block and never clears one.**
+  `terminal_input_after_completion` is the reason an operator is most likely to read as a bug: the composer really is empty, the session really does read idle, and the queue still refuses, because the guard counts keystrokes and backspaces advance the count too.
+  The strip is allowed to say "nothing is sitting in the composer now" beside it, using `unsent_input`, precisely because that is the fact making it look wrong - and it is allowed to do nothing else.
+  An estimate that concluded "empty" must never be an input to the verdict (`delivery-readiness.md`, and `composer_input.py`).
 - **The focused Queue composer is a named Conversation text sink.**
   Voice Send fills the composer at its caret but never stages, arms, delivers, or presses Enter; those remain explicit Queue acts.
 - **The fleet queue is a modal overlay** (`FleetQueue`) over the same message store, not a second drawer tab.

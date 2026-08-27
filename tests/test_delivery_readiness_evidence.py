@@ -452,3 +452,78 @@ def test_text_typed_after_completion_still_blocks() -> None:
     evaluation = tracker.evaluate(session)
     assert evaluation["delivery_state"] == "blocked"
     assert "terminal_input_after_completion" in evaluation["reasons"]
+
+
+def test_deleting_the_typed_text_does_not_clear_the_block() -> None:
+    """Backspaces advance the revision too, and that is the whole point.
+
+    The operator-visible shape of this is the confusing one: the composer really
+    is empty, the session really does read idle, and the queue still refuses. It
+    holds because the finer-grained composer estimate — which *would* say "empty
+    again" — is deliberately not an input here (`composer_input.py`): a gate may
+    only be relaxed by evidence that cannot be wrong in the unsafe direction, and
+    an estimate that concluded empty would authorize a send on top of text nothing
+    can see. It resets at the next completion boundary, not before.
+    """
+
+    session, tracker, clock = _idle_agent()
+    session.screen.feed(b"\x1b[?1049h")
+    session.input_revision += 5  # typed
+    session.input_revision += 5  # deleted it again
+    clock.advance(5.0)
+
+    assert "terminal_input_after_completion" in tracker.evaluate(session)["reasons"]
+
+    # A turn boundary is what clears it, and it clears completely.
+    tracker.observe(_event("turn_started"), session)
+    tracker.observe(_event("turn_ended", outcome="completed"), session)
+    clock.advance(5.0)
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+
+def test_a_read_only_evaluation_cannot_change_the_verdict_it_observes() -> None:
+    """`adopt=False` is what makes a readiness *watcher* safe to run on a timer.
+
+    `evaluate` mutates: it fills lifecycle gaps, and `_adopt_first_prompt_ready`
+    snapshots the live screen as `screen_at_completion` — the baseline every later
+    `screen_at_agent_prompt` check for that run compares against. So an observer
+    evaluating once a second would make the adoption fire at the earliest legal
+    instant rather than at the operator's first GET or send. Here that is the
+    difference between remembering a Claude session as having finished on the
+    normal screen (before it wrote `?1049h`) and on the alternate one, and the
+    first reading blocks the session for the rest of its run.
+    """
+
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    _started(session, tracker)
+    clock.advance(AGENT_FIRST_PROMPT_SETTLE_SECONDS + READINESS_DEBOUNCE_SECONDS + 1.0)
+
+    # The watcher looks first, while the CLI is still on the normal screen.
+    watched = tracker.evaluate(session, adopt=False)
+    assert watched["evidence"]["root_phase"] == "unknown"
+    assert watched["evidence"]["completion_screen"] is None
+
+    # The CLI enters the alternate screen, and only then does an operator path look.
+    session.screen.feed(b"\x1b[?1049h")
+    adopted = tracker.evaluate(session)
+    assert adopted["evidence"]["root_reason"] == "agent_started_awaiting_first_prompt"
+    assert adopted["evidence"]["completion_screen"] == "alternate"
+    # The adoption restarts the debounce, so `safe` is one settle away rather than
+    # immediate — and it arrives, which is what proves the watcher's earlier look
+    # neither adopted the normal screen nor consumed the adoption.
+    clock.advance(READINESS_DEBOUNCE_SECONDS + 0.1)
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+
+def test_a_read_only_evaluation_still_reports_the_current_verdict() -> None:
+    """Not adopting is not the same as declining to answer.
+
+    The watcher has to be able to say `safe` for an ordinary idle agent, or the
+    stream it feeds would report every session as permanently unknown.
+    """
+
+    session, tracker, _clock = _idle_agent()
+    session.screen.feed(b"\x1b[?1049h")
+    assert tracker.evaluate(session, adopt=False)["delivery_state"] == "safe"

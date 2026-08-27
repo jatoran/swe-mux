@@ -1169,11 +1169,19 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
                     getter.cancel()
                     break
                 live_event = getter.result()
+                if live_event.type in BROWSER_OMITTED_EVENT_TYPES:
+                    continue
+                if live_event.transient:
+                    # Never persisted, so it has no sequence number and must not
+                    # touch the resume cursor — advancing it here would skip real
+                    # durable events, and comparing against it would drop every
+                    # transient frame (they all carry seq 0). A reconnecting client
+                    # re-reads these facts from REST instead of resuming them.
+                    await ws.send_json(live_event.snapshot())
+                    continue
                 if live_event.seq <= last_sequence:
                     continue
                 last_sequence = live_event.seq
-                if live_event.type in BROWSER_OMITTED_EVENT_TYPES:
-                    continue
                 await ws.send_json(live_event.snapshot())
         finally:
             reader.cancel()

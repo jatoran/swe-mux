@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
 import { agentTargetName, agentTargets } from './agentTargets'
+import { wordReasons } from './deliveryReadiness'
 import { clampContextMenuLeft, fitScrollingMenuInViewport } from './menuPosition'
 import { subscribeToPromptLibraryChanges } from './promptLibraryEvents'
 import { promptTemplateExcerpt, promptTemplateRef, renderPromptTemplate, type PromptTemplate } from './promptTemplates'
@@ -197,7 +198,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     if (result.status === 'blocked') {
       // The message is staged (blocked) in the target's queue; the Queue panel and the
       // send dialog own the explicit confirmation flow.
-      setNote(`Queued but not delivered (${result.reasons.join(', ')}). Confirm from the Queue tab of this panel.`)
+      setNote(`Queued but not delivered: ${wordReasons(result.reasons)}. Confirm from the Queue tab of this panel.`)
       await recordUse(item)
       return
     }
