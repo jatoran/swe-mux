@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   SOFT_KEYBOARD_MIN_INSET_PX,
+  TOUCH_COMPAT_MOUSE_WINDOW_MS,
   VISIBLE_PAINTED_ROWS_WORTH_READING,
   clampPeekOffset,
   deepActiveElement,
@@ -9,10 +10,12 @@ import {
   nextPeekOffset,
   peekToggleVisible,
   raisesSoftKeyboard,
+  shouldHoldBridgeFocus,
   softKeyboardInputMode,
   softKeyboardInset,
   softKeyboardLost,
   softKeyboardVisualOffset,
+  touchCompatMouseEvent,
 } from '../src/mobileKeyboard.ts'
 import type { FocusedField, FocusScope } from '../src/mobileKeyboard.ts'
 
@@ -50,6 +53,20 @@ test('readonly fields and inputMode="none" opt out', () => {
   assert.equal(raisesSoftKeyboard({ tagName: 'TEXTAREA', readOnly: true }), false)
   assert.equal(raisesSoftKeyboard({ tagName: 'TEXTAREA', inputMode: 'none' }), false)
   assert.equal(raisesSoftKeyboard({ tagName: 'DIV', isContentEditable: true, inputMode: 'none' }), false)
+})
+
+test('xterm\'s helper textarea taking focus is a keyboard loss, not a keyboard move', () => {
+  // The invariant TerminalPane sets on a touch device: xterm's own helper textarea gets
+  // `inputmode="none"`, so the mux IME bridge is the only element that can raise a
+  // keyboard. Without it the helper reads as a field legitimately holding the keyboard —
+  // xterm's `mousedown` handler is `preventDefault(); this.focus()`, so any press reaching
+  // xterm lands focus there — and every predicate here answers "nothing was lost" while
+  // mobile input has quietly stopped being routed through the bridge.
+  const bridge = { tagName: 'TEXTAREA' }
+  const helper = { tagName: 'TEXTAREA', inputMode: 'none' }
+  assert.equal(softKeyboardLost(bridge, helper), true)
+  // What it would have answered without the invariant, which is why this is worth pinning.
+  assert.equal(softKeyboardLost(bridge, { tagName: 'TEXTAREA' }), false)
 })
 
 test('terminal action focus preserves keyboard visibility on coarse pointers', () => {
@@ -127,6 +144,73 @@ test('focus that moved to another text field kept the keyboard, so it stands', (
   assert.equal(softKeyboardLost(bridge, { tagName: 'DIV', isContentEditable: true }), false)
   // A readonly or `inputMode="none"` field raises nothing, so landing there is a loss.
   assert.equal(softKeyboardLost(bridge, { tagName: 'TEXTAREA', readOnly: true }), true)
+})
+
+test('a touch gesture owns the mouse events the platform replays after it', () => {
+  // In flight: the replay for a press this pane already handled as a pointer event.
+  assert.equal(touchCompatMouseEvent({ gestureActive: true, endedAt: null, now: 5_000 }), true)
+  // The common case — the replay lands a few milliseconds after the finger lifts.
+  assert.equal(touchCompatMouseEvent({ gestureActive: false, endedAt: 5_000, now: 5_010 }), true)
+})
+
+test('the compat-mouse window is measured from the end of a gesture, not its start', () => {
+  // The regression this encodes: the window used to run from the *start* of the gesture,
+  // which made it a cap on how long a hold was allowed to be. A 450ms long-press plus a
+  // careful selection drag outran it, the replayed press reached xterm's
+  // `preventDefault(); this.focus()`, and the keyboard came up on its own — so short
+  // gestures behaved and long ones did not, which is what read as intermittent.
+  const heldFor = 4_000
+  const endedAt = 1_000 + heldFor
+  assert.equal(touchCompatMouseEvent({ gestureActive: false, endedAt, now: endedAt + 10 }), true)
+  // Past the window it is a real mouse again, however the gesture went.
+  assert.equal(
+    touchCompatMouseEvent({ gestureActive: false, endedAt, now: endedAt + TOUCH_COMPAT_MOUSE_WINDOW_MS }),
+    false,
+  )
+})
+
+test('no touch gesture, or a clock that went backwards, means a real mouse', () => {
+  assert.equal(touchCompatMouseEvent({ gestureActive: false, endedAt: null, now: 5_000 }), false)
+  // A monotonic clock cannot do this, but a caller passing a wall clock could, and
+  // "the gesture ended in the future" must not suppress every press from here on.
+  assert.equal(touchCompatMouseEvent({ gestureActive: false, endedAt: 9_000, now: 5_000 }), false)
+  assert.equal(touchCompatMouseEvent({ gestureActive: false, endedAt: Number.NaN, now: 5_000 }), false)
+})
+
+test('the bridge refuses to be blurred while it is holding the keyboard through a gesture', () => {
+  const held = { holding: true, dismissalsAtGestureStart: 3, dismissals: 3 }
+  // The platform's own focus move as a touch resolves against non-editable content —
+  // relatedTarget is usually null for it, and the terminal body when it is not.
+  assert.equal(shouldHoldBridgeFocus({ ...held, incoming: null }), true)
+  assert.equal(shouldHoldBridgeFocus({ ...held, incoming: { tagName: 'DIV' } }), true)
+  // xterm's helper textarea, which `inputmode="none"` makes keyboard-neutral. Without that
+  // this would read as a legitimate field and the hold would stand down for it.
+  assert.equal(shouldHoldBridgeFocus({ ...held, incoming: { tagName: 'TEXTAREA', inputMode: 'none' } }), true)
+})
+
+test('the focus hold can only ever keep a keyboard, never raise one', () => {
+  // `holding` is set only when the bridge itself held the keyboard as the finger landed.
+  // With it false the hold is inert, which is what makes a gesture that began with the
+  // keyboard down incapable of opening one — the direction that had no guard at all.
+  assert.equal(shouldHoldBridgeFocus({
+    holding: false, dismissalsAtGestureStart: 3, dismissals: 3, incoming: null,
+  }), false)
+})
+
+test('a deliberate dismissal mid-gesture outranks holding the keyboard', () => {
+  // A mobile panel opened over the terminal and dismissed the keyboard on the way in. The
+  // swipe that opened it crossed this grid, so the pane sees a focus loss it would
+  // otherwise repair — and would slide the panel in over a keyboard it just closed.
+  assert.equal(shouldHoldBridgeFocus({
+    holding: true, dismissalsAtGestureStart: 3, dismissals: 4, incoming: null,
+  }), false)
+})
+
+test('focus heading for a real field is a move something made on purpose', () => {
+  const held = { holding: true, dismissalsAtGestureStart: 0, dismissals: 0 }
+  // Fighting this would trap focus on the terminal and take the keyboard with it.
+  assert.equal(shouldHoldBridgeFocus({ ...held, incoming: { tagName: 'INPUT', type: 'text' } }), false)
+  assert.equal(shouldHoldBridgeFocus({ ...held, incoming: { tagName: 'DIV', isContentEditable: true } }), false)
 })
 
 test('the keyboard inset is what the visual viewport lost, not a new layout height', () => {
