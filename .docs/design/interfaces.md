@@ -1952,6 +1952,15 @@ error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 Git review routes are derived, read-only tooling APIs except for the existing worktree create and remove mutations.
 Every review read is Project-scoped and rejects unlisted parameters instead of accepting caller-supplied repositories or arbitrary refs.
 
+`GET /git/worktrees` does not measure a repository on the read path: the daemon serves its last
+reading for that (Project, comparison ref, worktree scope) immediately and revalidates behind it.
+`fresh=1` opts back into waiting for a newly measured answer, and is what the explicit Refresh
+button sends. A revalidation that lands on a different reading than the one already served emits
+`git_overview_changed {project_id}` - the reading layer reporting that an answer it handed out is
+superseded, with no session and no working tree, which is why it is not a `git_changed`. A first
+computation and an unchanged revalidation emit nothing, so a quiet repository raises no events and
+the refetch this provokes cannot sustain itself.
+
 The session snapshot's `git` object and the `git_changed.git` event field carry the same shape, which describes the **checkout** a session is in and never the session:
 
 ```text

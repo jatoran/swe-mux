@@ -5,8 +5,9 @@ Design: `../../../design/features/git.md`, `../../../design/features/land-queue.
 
 ## Git tab
 
-`GitTab.tsx`, `gitWorktrees.ts`, `worktreeRemoval.ts`, `worktreeSelection.ts`, `gitReview.ts`,
-`GitFileRow.tsx`, `GitReviewModal.tsx`, `GitSessionLinks.tsx`, `LazyGitDiff.tsx`, `GitDiffView.tsx`
+`GitTab.tsx`, `gitTabCache.ts`, `gitWorktrees.ts`, `worktreeRemoval.ts`, `worktreeSelection.ts`,
+`gitReview.ts`, `GitFileRow.tsx`, `GitReviewModal.tsx`, `GitSessionLinks.tsx`, `LazyGitDiff.tsx`,
+`GitDiffView.tsx`
 
 Map, Log, and durable session-provenance orchestration.
 Mutations are limited to API-wrapped worktree add and remove, land *requests*, the one-key `[worktree] verify_command` write, and the gate approval.
@@ -45,11 +46,28 @@ Log draws TUI graph context, colored Git-authored lanes and nodes, semantic ref 
 ### What each reading fetches
 
 Map reads `detail=summary` and holds no per-file lists; an expanded row fetches its own full reading for that one checkout, and `filesOmitted` is what keeps "12 local over an empty list" from parsing as an empty change set.
-A refresh drops every expanded row's detail rather than redrawing it, because a refresh means the trees moved; the effect that fetches the open row runs again.
+A refresh **marks** every expanded row's detail stale rather than dropping it, and bumps `detailEpoch` to re-read the open one.
+Dropping it was the visible defect: a row with no detail falls back to the Map's own reading, which withholds every file list, so clearing it replaced the open row's contents with nothing for a whole round trip - and with a fleet working in the repository that fired every few seconds, so the list emptied and refilled while the reader was in it.
+The gate on "we have no detail for this path" went with it; keeping that gate is what would have made a retained-but-stale list never re-read.
+An open file preview survives a refresh for the same reason: closing it was a side effect of a background poll.
 
-The `mux:git-changed` listener is **filtered by Project and debounced**: the event is every session's five-second dirty tick, so an unfiltered handler re-read one Project's map on another Project's poll, ten times over for ten sessions in this one.
+The `mux:git-changed` listener is **filtered by Project and debounced**: the event is a session's dirty tick whenever that session's Git state moved, so an unfiltered handler re-read one Project's map on another Project's poll, ten times over for ten sessions in this one.
 An event naming no Project (a reconnect, a worktree act) is never filtered out, because treating unknown as "not mine" would stop the tab refreshing after a reconnect.
+`mux:git-overview-changed` rides the same listener and is the daemon reporting that a reading it served has been superseded by its own revalidation (`../../../design/features/git.md`).
 The provenance ledger is fetched only by Log and Provenance, never by Map, which drew none of it and fetched five hundred rows of it on every refresh.
+
+### What the tab remembers between mounts
+
+`gitTabCache.ts` holds the last overview, the unsearched graph, the unsearched ledger, and the reader's position - which worktree was expanded and what was typed in the Map filter - per Project, bounded at eight with least-recently-written eviction.
+
+It exists because the tab is not `keepMounted` and the drawer, not the tab, decides when it unmounts.
+The overview alone used to be kept, inline in `GitTab.tsx`, which left Log blank on every visit, refetched five hundred ledger rows, and collapsed the reader's expanded worktree - then charged a per-checkout read to open it again.
+Writes merge rather than replace, because the reading and the position arrive on different effects and replacing would mean whichever landed last won.
+
+A **search result is never cached**: a query's answer is a different question from the default reading, and painting one as the other is wrong rather than stale.
+
+The tab is also **one mount across its three segments** (`hasSharedSegmentBody` in `drawerSegments.ts`), because Map, Log, and Provenance are three readings of one component sharing a refresh listener, a comparison ref, a land queue, and a commit cache.
+`keepMounted` is the wrong instrument there: it would keep all three instances alive, each with its own `git_changed` listener, and turn one refresh into three.
 
 Each reading's search box belongs to that reading and is wired where the search is cheapest: Map filters the payload in the browser, Log and Provenance debounce at `HistoryBrowser`'s own 220 ms and ask the daemon.
 A refetch caused by the repository moving, or by loading more commits, is not a keystroke and waits for nothing.

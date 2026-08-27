@@ -447,14 +447,40 @@ uncommitted work together.
 ### Refresh and mutation boundary
 
 - Overview measurement is explicit drawer work with concurrency twelve (raised from four 2026-08-22: the reads are independent per-worktree queries, and at four a 25-worktree map paid ~0.7s of pure spawn serialization per request) and does not expand the five-second session monitor.
-- The Map additionally renders stale-while-revalidate: the last good overview per Project is kept module-scoped on the client and painted immediately on mount or Project switch, with the ordinary refresh revalidating it underneath - the tab is not `keepMounted`, so without this every open paid a blank round trip for an answer that rarely changed.
+  Twelve stays: measured 2026-08-27 across 44 checkouts, forty-four `git status` calls cost 298ms at twelve and 250ms at forty-four, and the measurement is now against work that runs *behind* a served reading rather than in front of one - background work should be polite.
+- **The read path does not measure a repository.** The daemon keeps its last reading per (Project, comparison ref, worktree scope) and serves it immediately, revalidating behind it; when the revalidation lands on a different answer it emits `git_overview_changed` and the client reads again, by which point the fresh reading is the cached one and that read is instant too.
+  So the staleness window is one revalidation, and it is spent showing a real map rather than a spinner.
+  The explicit Refresh button sends `fresh=1`, which is the one caller that asked to wait.
+- Nothing in that claims a stale reading is current, which is the distinction it turns on: the reading is served, revalidated, and corrected, and `git status --porcelain=v2` still runs live on every revalidation for the reason it always did (below).
+- A **worktree add or remove drops the cached reading** rather than revalidating it, because a registration change is not drift: it changes *which rows exist*, and a Map that re-listed a checkout the reader had just deleted would revive its row along with the Land and Remove controls on a registration Git no longer has.
+  A *failed* removal drops it too - repair, or a Git command interrupted partway, can have changed the row even though the request failed.
+- A failed revalidation leaves the previous reading in place, so a transient Git error cannot turn an answer the reader already has into a blocking read.
+- The client keeps its own copy of all three readings and the reader's position in them (`gitTabCache.ts`), painted immediately on mount or Project switch: the tab is not `keepMounted`, so without it every open paid a blank round trip for an answer that rarely changed.
+  A **search result is never cached** - a query's answer is a different question from the default reading, and painting one as the other would be wrong rather than stale.
 - Concurrent overview requests for the same Project root, comparison ref, and worktree scope share one daemon computation.
-  A timed-out or disconnected browser cannot create an overlapping Git-process storm by refreshing again.
+  A timed-out or disconnected browser cannot create an overlapping Git-process storm by refreshing again, and holding Refresh cannot start a second storm over the first.
 
 #### What the Map costs, and what it stops re-deriving
 
 The Map recomputed everything on every request, and at the fifty worktrees this repository reached that was around eight `git` subprocesses per checkout - four hundred process spawns for one read, with nothing retained between them (diagnosed 2026-08-21).
-Four things changed, and the ordering principle across all of them is that **nothing is memoized that could be wrong**.
+The ordering principle across all of it is that **nothing is memoized that could be wrong**.
+
+Re-measured 2026-08-27 at 41 checkouts, because the first round left the Map at ~700ms warm with its branch memo hitting **41 of 41** - the memo was working perfectly and was not the floor.
+The floor was in two places the first round did not look:
+
+- A **217ms preamble, on every request**, and paid again in full by every row expansion - which is why expanding one worktree cost 360ms when the work in it is one `git status`.
+  It was eight processes, mostly sequential: the tip dates of every listed head (88ms), the comparison resolution (50ms), the worktree listing (33ms), the repository identity (26ms), and the base's object ID (21ms).
+- **Two processes per checkout**, of which only one was a working-tree reading; the other was the identity guard, re-deriving a property of the registration.
+
+Four things changed for that second round, and the *fifth* is that none of it happens on the read path any more (above).
+
+- **A commit's date is read once and then remembered.** It is part of the object its oid names, so the key is the answer's own identity and the memo can never be stale: a commit whose date changed would be a different commit. This was the largest single item in the preamble, and a fleet's branch tips move far more slowly than the Map is read.
+- **One `for-each-ref` replaces the comparison's four-to-eight sequential probes.** It reports every branch and the commit each one names, so a branch in that listing needs no `check-ref-format`, no `rev-parse --verify`, and no separate read for its object ID. It is an accelerator and not a gate - a tag, a raw object ID, or a revision expression still falls through to the probes it always used, so the set of refs accepted as a comparison is unchanged. Reading it once also makes the three answers *consistent*: the object ID the branch memo is keyed on can no longer come from a different instant than the ref name it belongs to, which a concurrent `fetch` between two `rev-parse` calls could previously produce. The candidate cap stays a display budget for the dropdown; the object-ID map is uncapped, so an override naming the two hundred and first branch still resolves.
+- **`rev-parse` takes both identity flags at once.** Asking twice bought a second spawn and the possibility of two processes disagreeing about whether the folder is a repository at all.
+- **The per-checkout identity guard is memoized on the worktree listing's digest.** The guard exists so a broken nested worktree cannot inherit status from an enclosing repository, and it costs one `rev-parse --show-toplevel` per checkout to re-derive an answer that is a property of the registration. The digest of `git worktree list --porcelain` is the right invalidation because every way the answer can change is a way that listing changes: a registration added, removed, moved, or repaired rewrites the entry, and a checkout whose `.git` link is broken or replaced is reported `prunable` rather than as the same clean row. What is memoized is the **observation, never the verdict** - the comparison runs on every request, so a checkout that fails the guard keeps failing it.
+
+Measured after: the preamble is 4 processes cold and 3 warm, a warm whole-Project reading is 51 spawns rather than 91, and **a row expansion is 4 processes and ~126ms rather than ~50 and ~360ms**.
+The whole-Project reading is still several hundred milliseconds of Git, and that is fine now - it runs behind a reading the reader already has.
 
 - The **branch half is memoized on two object IDs**: `(worktree, HEAD, comparison oid)` -> the ahead/behind counts and the branch delta.
   Both readings are commit-to-commit, so nothing in a working tree can affect either; given the same two commits they are the same answer, and re-deriving it costs five subprocesses.
@@ -469,12 +495,20 @@ Four things changed, and the ordering principle across all of them is that **not
   A row draws counts; the files are needed on expand and nowhere else, and serving four lists of up to two hundred file records per worktree to draw a badge is the payload's real cost - one compression on the way out cannot recover, because gzip makes bytes smaller rather than absent.
   A withheld list is marked `files_omitted` rather than left empty, because "12 local" over an empty list is otherwise indistinguishable from an empty change set.
   An expanded row fetches its own full reading for that one checkout (`worktree=<path>`), which is one checkout's worth of Git rather than the Project's; a path Git does not list is refused rather than measured, and `main` is still read off the *full* listing so a single-row read cannot call every checkout the main one.
-- The overview is the daemon's first **conditional** response: a weak `ETag` over the exact bytes being served, plus `Cache-Control: no-cache`, which means "revalidate before every use" rather than "do not store" and is what makes a browser send `If-None-Match` at all.
+- **All three readings are conditional**: a weak `ETag` over the exact bytes being served, plus `Cache-Control: no-cache`, which means "revalidate before every use" rather than "do not store" and is what makes a browser send `If-None-Match` at all.
   The client code is unchanged - `fetch` turns the 304 back into a 200 from its own cache - so only the bytes on the wire go away.
-  The two readings never share a tag, so a client holding the summary is never told the full reading is unchanged.
+  Two readings never share a tag, so a client holding the summary is never told the full reading is unchanged, and a client holding a searched ledger is never told the unsearched one is.
+  The overview earned it first; the ledger has more to gain, because the unsearched ledger is the largest payload this daemon serves (measured 2026-08-27: 994KB, 140KB compressed, at 500 rows in this repository) and is append-mostly, so a revisit very often asks for bytes it already holds.
+  Its size is **not** a field to trim: the contributor paths that dominate it are drawn on the row and carried in the review packet.
 - Map refreshes on Git and worktree events, **filtered by Project and debounced**.
-  `git_changed` is raised by every session's five-second dirty tick, so an unfiltered listener re-read one Project's whole worktree map on another Project's poll, and ten sessions in one repository raised it ten times inside a few hundred milliseconds for one answer.
+  `git_changed` is raised by a session's five-second dirty tick whenever that session's Git state actually moved, so an unfiltered listener re-read one Project's whole worktree map on another Project's poll, and ten sessions in one repository raised it ten times inside a few hundred milliseconds for one answer.
   The event carries its Project; an event naming none (a reconnect, a worktree act) is never filtered out, because treating "unknown" as "not mine" would stop the tab refreshing after a reconnect.
+  `git_overview_changed` joins that listener and is the *daemon's* half: not an observation of a repository moving, but the reading layer reporting that an answer it already handed out has been superseded, which is what stops a client that arrived during a quiet moment from painting the cached reading and never learning the revalidation disagreed.
+- **Git is one mount across its three segments.** The drawer's default is one body per segment, which is right for unrelated panes and wrong here: Map, Log, and Provenance are one component reading one repository, sharing a refresh listener, a comparison ref, a land queue, and a commit cache, and mounting them separately meant switching to Log and back threw all of it away along with the reader's expanded worktree and filter.
+  `keepMounted` is the wrong instrument for it and would leave all three instances alive, each with its own `git_changed` listener, turning one refresh into three.
+- An expanded row's file lists are **marked stale, never dropped**.
+  A row with no detail falls back to the Map's own reading, which withholds every file list, so clearing the detail replaced the open row's contents with nothing for the length of a round trip - and with a fleet working in the repository that happened every few seconds, which is a file list that empties and refills while you are reading it.
+  An open file preview is left alone for the same reason: closing it was a side effect of a background poll rather than something the reader asked for.
 - The provenance ledger is fetched only by the readings that draw it - Log's per-commit session links and Provenance itself.
   Map draws none of it and used to fetch five hundred rows of it on every one of the refreshes above.
 - An open Log refreshes its graph while retaining immutable commit caches.
