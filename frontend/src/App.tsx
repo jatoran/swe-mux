@@ -2297,6 +2297,12 @@ export function App() {
           // raised by every session's five-second dirty tick, so an unfiltered listener
           // was re-reading one Project's whole worktree map on another Project's poll.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
+          // The daemon serves its last worktree reading immediately and revalidates
+          // behind it; this is that revalidation reporting that it disagreed. Its own
+          // event because it is not an observation of a repository moving - it is the
+          // reading layer superseding an answer it already handed out - and because
+          // only the Git tab has anything to do with it.
+          if(event.type==='git_overview_changed')window.dispatchEvent(new CustomEvent('mux:git-overview-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
           // Its own event rather than folding into `mux:git-changed`: a land step
           // changes the queue on a five-second cadence, and re-reading the whole
           // worktree overview and provenance ledger each time is not free.
