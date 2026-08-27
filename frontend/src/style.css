@@ -865,6 +865,12 @@ body {
 }
 .daemon-reload-modal .redeploy-interrupts strong { color:var(--text);font-size:11.5px;font-weight:600 }
 .daemon-reload-modal .redeploy-interrupts span { color:var(--muted);font-size:11px;line-height:1.5 }
+/* A holder of the app bundle, unlike a preview, really will refuse the redeploy,
+   so it is drawn as the refusal it is rather than as the same advisory amber. */
+.daemon-reload-modal .redeploy-blocked {
+  border-color:var(--red);
+  background:color-mix(in srgb,var(--panel) 90%,var(--red));
+}
 .daemon-reload-modal .modal-actions {
   display:flex;
   justify-content:flex-end;
