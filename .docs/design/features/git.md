@@ -258,6 +258,10 @@ uncommitted work together.
   Moving the act onto the row left the segment holding one Project-wide block, which is not a view.
 - Landing is split by what each part is a property of, and drawn in one place each.
   A worktree **row** owns the act: its collapsed reading carries any active request's state, queue position, and observed gate detail on a dedicated third line with a state-coloured leading rail; its expansion carries the Land button, Cancel, and what stopped the branch last time, drawn before the change groups so an unbounded file list cannot push them out of reach (`land-queue.md`).
+- **An expanded row draws its two acts first, then whatever is still loading, then the changes.** Land, then Remove, then the per-checkout read's placeholder, then the change groups.
+  Remove joined Land above the groups on 2026-08-27 (operator decision). It had been kept at the bottom so a destructive act was not the first thing under the cursor, but the bottom of an unbounded list is not a fixed place - where Remove landed depended on how many files that checkout happened to have, and the row's two acts were separated by the thing they both act on. The confirm-then-force step is what keeps the destructive one deliberate; its position never was.
+- The "Reading this worktree…" placeholder sits **in the slot the change groups occupy**, so the arriving lists replace it in place.
+  Above the acts it pushed them down the moment the row opened and let them spring back when the lists landed, which moved the Land button out from under a pointer already travelling to it.
   A compact **strip at the head of the map** owns everything Project-wide: its folded control is the three-cell operational pipeline, while the verification command with its approval and editor lives under `Verification settings`, followed by who besides the operator may start a land and the queue in run order with its history.
   Nothing Project-wide is drawn on a row - a fact true of the Project drawn on a row is drawn once per worktree, which is what the verification block did under each of eight expansions before it moved up.
   The strip keeps its three bounded pipeline cells visible while folded and puts configuration, authority, queue detail, and history behind a disclosure, so the tab still opens on a map; it opens itself only when a land is stuck on a human, and never merely because this repository has no verification command (`land-queue.md`).
@@ -396,6 +400,12 @@ uncommitted work together.
 - Commit decorations render in priority order as Project-root `HEAD`, comparison ref, checked-out worktree refs, tags, and muted other refs.
 - A commit at a registered checkout tip carries `MAIN TREE`, `WT <leaf>`, or a collapsed `<count> WORKTREES` marker derived by exact commit OID.
 - Ref and worktree markers wrap below the commit subject so narrow drawers retain identity instead of clipping it.
+- **The graph fits its pane, and the commit subject is what gives.** It is one elided line; the whole message is in the expansion.
+  This was one CSS declaration and it cost three separate things. `.git-graph` was `min-width:max-content`, which resolves to the widest thing any row wants - and a subject is `white-space:nowrap`, so that is the *whole untruncated subject*. The ellipsis could therefore never fire, because the row always made room.
+  What the extra width then did: the tab scrolled sideways; the session-link button, which is the `max-content` half of the commit head, was pushed past the right edge and off a phone screen entirely; and the drawer's close swipe went dead on Log alone, because a horizontally scrollable ancestor vetoes that gesture by design (`ui.md`, `mobileGestures.pathOwnsHorizontalScroll`).
+  The third one is worth stating on its own: **a layout that overflows sideways silently removes a gesture**, and the gesture's own code is correct and unchanged.
+- Lane art is **clipped rather than scrolled** when a row runs out of width, and on a phone it is capped at roughly a quarter of the row.
+  A repository with forty live branches draws deep lanes, and the choice there is between losing the outermost lanes and losing the commit subject; the lanes nearest the commit are the ones carrying meaning.
 - Connector-only rows are inert.
 - Expanding a commit lazily loads its typed file summary and reuses the shared file rows.
 - Expanding a commit also shows its whole message, subject and body, wrapped and unclamped; the collapsed row keeps the one elided subject line it has room for.
