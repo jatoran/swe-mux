@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
+from swe_mux.config import Config
 from swe_mux.project_files import (
     ProjectConfigConflict,
     read_project_config,
@@ -50,6 +51,8 @@ def _app(project: SimpleNamespace) -> dict[object, object]:
         keys.PROJECTS: SimpleNamespace(projects={project.id: project}),
         keys.EVENTS: _Events(),
         keys.HISTORY: _History(),
+        # The enablement read resolves against the install-wide ceiling now.
+        keys.CONFIG: Config(),
     }
 
 

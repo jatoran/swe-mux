@@ -2361,16 +2361,23 @@ that a different credential produced.
 
 `GET /api/automation/projects` is the read-only fleet aggregation of per-Project automation
 enablement: the registry (id, kind, label, `requires`, `implemented`, `spends`, `needs_llm`,
-`default_on`)
+`default_on`, `install_switch` — the dedicated Config switch that is this row's install
+ceiling, where one exists — and `globally_allowed`, the resolved install-wide ceiling over
+the id and its whole dependency closure)
 once, plus one row per registered Project in sidebar order — `project_id`, `project_name`,
 config `status`, the `requested` table, the resolved `enabled` list, `blocked`
 (id → missing dependencies), `unverified` (opted in, dependencies met, held back by an unproven
-model provider), the `llm` verdict the row was resolved under, and
-`scan_timeline_auto_enable`. `GET /api/projects/{project_id}/automations` carries the same
-fields for one Project. `unverified` is separate from `blocked` because `blocked` values are
+model provider), `globally_disabled` (opted in, turned off by the install-wide ceiling — its
+own field for the same one-actionable-answer reason: the fix is global policy, not a grant,
+and the Project's stored choice is retained), the `llm` verdict the row was resolved under, and
+`scan_timeline_auto_enable` — plus `global_allow` (the `automation_global_allow` map as
+stored, which the matrix's Global column writes through `PATCH /api/config`) and
+`install_switches` (`automation_enabled`, `scan_timeline_enabled`, `scheduled_runs_enabled`,
+`land_queue_enabled`). `GET /api/projects/{project_id}/automations` carries the same
+per-Project fields for one Project. `unverified` is separate from `blocked` because `blocked` values are
 ids a grant can switch on and no automation's enabling fixes an unproven endpoint. Projects that opted into nothing are listed rather than omitted.
-Drawn by the Automation dashboard's `projects` view; it has no write half — the
-guarded `PUT /api/projects/{project_id}/automations` stays the only editor.
+Drawn by the Automation dashboard's Policy matrix; the Project half's write stays the
+guarded `PUT /api/projects/{project_id}/automations`.
 
 `PUT /api/project/config` and `PUT /api/projects/{project_id}/automations` both take a
 **field-scoped** write - `changes`/`automations` plus `base`, the values the caller believed
@@ -2387,7 +2394,10 @@ that cannot work turns on the thing it needs without sending the reader to an ov
 plus `automations` (ids, whose dependency closure the daemon computes) and/or `values` (typed
 Project fields), and an optional `revision`. It is **additive only** — a `false`, a `draft`,
 or an `off` is refused with `grant_is_additive`, so no surface but the owning editor can take
-a permission away, which is what lets many surfaces grant while one owns each switch. Keys
+a permission away, which is what lets many surfaces grant while one owns each switch. An
+automation the install-wide ceiling turns off — itself or anything in its closure — is
+refused with `automation_globally_disabled` rather than granted-and-inert, unless the same
+act raises the blocking dedicated switch. Keys
 outside `GRANTABLE_INSTALL_KEYS` / `GRANTABLE_PROJECT_VALUES` are refused with `not_grantable`;
 both sets are validated against `Config` and `PROJECT_CONFIG_FIELDS` at import. The whole
 request is validated before the first write and a refusal writes nothing; the Project write

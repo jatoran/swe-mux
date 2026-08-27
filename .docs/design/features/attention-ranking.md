@@ -115,8 +115,7 @@ The one part of this feature that spends tokens, off by default (`attention_narr
 - Stateless and read-only: one call sees one normalized slice of one incident.
 - A slice never spans two agent runs. A "why" assembled across a `/clear` is a fabricated cause.
 - Every failure path records a typed status (`disabled`, `no_model`, `budget`, `failed`, `empty`) and keeps the deterministic summary. Failure never degrades to silence and never to a guess.
-- Metered on the shared ledger under `builtin:attention-narration` with its own daily budget (`attention_narration_daily_budget`), which takes tokens, dollars, or first-hit and defaults to the `usd` mode it enforced before the shared shape existed (`budgets.md`).
-- Bounded per call by `attention_narration_max_output_tokens` (default 200): a narration is a sentence or two, so this is a ceiling on one line rather than on a document. It is edited with the switch, the model, and the budget under Automation → Global policy → Attention.
+- Metered on the shared ledger under `builtin:attention-narration`, and enforced against the **global** automation caps: `automation_daily_budget` and the shared per-call `automation_max_output_tokens`. Its dedicated daily budget and output ceiling were retired with the scan timeline's (`budgets.md`); the switch and the read-only model row stay under Automation → Policy → Limits &amp; budgets → Attention.
 
 ## Delivery boundary
 

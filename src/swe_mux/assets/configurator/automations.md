@@ -16,6 +16,14 @@ session control, the land queue.
 Every automation is **per-Project opt-in**. Not install-wide. A Project that did not
 opt in runs nothing, and that is a literal statement rather than a default.
 
+Above the opt-ins sits an **install-wide ceiling**: an automation the operator
+disallowed globally (`automation_global_allow`, plus dedicated switches for the scan
+timeline, scheduled runs, and the land queue) is off in every Project along with
+everything that depends on it, however the Project's own map reads. A Project's
+settings report such an id under `globally_disabled` - the fix is the Automation
+workspace's Policy matrix, not a Project toggle and not a grant (grants refuse it
+with `automation_globally_disabled`).
+
 ## The rule that produces most of the confusion
 
 **A consumer only does anything when the full transitive closure of its dependencies
@@ -53,18 +61,19 @@ should never be delivered in the same tone.
 
 ## Where the controls are
 
-- **Settings → Automation** holds the install-wide switches and bounds: concurrency,
-  queue size, budgets, request timeouts.
-- **Manage projects** holds each Project's own opt-ins.
-- **The Automation dashboard** holds the rule corpus, live versus shadow state, the
-  per-Project matrix, spend, and runtime diagnostics.
+- **The Automation dashboard** is the one workspace, three tabs. Its **Policy** tab
+  holds the matrix - every automation's install-wide Global switch beside each
+  Project's opt-in, the starting-set presets, and (behind disclosures) the
+  install-wide budgets/bounds and the rule corpus with the rules.toml editor.
+  **Usage** is the spend breakdown; **Activity** is the attention inbox mirror,
+  the firing trail, learned fixes, and diagnostics.
+- **Settings → Automation** is a status portal that opens the workspace; it edits
+  nothing.
+- **Manage projects** keeps the agent-authority table and links to the matrix for
+  opt-ins.
 
-The split is deliberate: Settings owns bounds, the dashboard owns rules and runtime.
-
-The models each observer routes to live with the feature that owns them, not in one
-models page. Only the two *routed* defaults - the cheap and standard OpenRouter
-models - live under Settings → Accounts, and a feature's own model setting is edited
-with that feature.
+Every model setting is edited in Settings → Accounts → Models; each feature keeps a
+read-only row naming its resolved model with a link there.
 
 ## Diagnosing "it fired but nothing happened"
 

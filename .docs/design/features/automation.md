@@ -150,11 +150,12 @@ and the declared minimum observation capability.
   cancellable, retried for transient transport failures, and locally validated.
 - Routing may fall back between providers for the exact requested model when the provider
   supports the required schema parameters.
-- The Automation workspace owns every install-wide automation switch and bound: the `automation_enabled` master switch, `scan_timeline_enabled`, spending budgets, hourly caps, concurrency, queue depth, input/output limits, schedule and land-queue stops, attention policy, and retention.
-  Global policy is split into Engine, Budgets, Schedules and landing, Scan timeline, and Attention pages.
+- The Automation workspace owns every install-wide automation switch and bound: the `automation_enabled` master switch, the per-automation ceiling (`automation_global_allow` plus the dedicated switches, edited as the policy matrix's Global column - `automation-enablement.md`), spending budgets, hourly caps, concurrency, queue depth, input/output limits, attention policy, and retention.
+  The install limits render as one column behind the Policy tab's "Limits & budgets" disclosure (`AutomationPolicyView`).
   Each spending budget carries the shared `{tokens?, usd?, mode}` shape and is edited through one control; `design/features/budgets.md` owns that contract.
+  The scan timeline and attention narration have no dedicated budgets or ceilings: both spend under `automation_daily_budget`, the global hourly call cap, and `automation_max_output_tokens` (sized for the scan's worst case; schema 34 lifts an older config's ceiling to the loosest of the retired ones so nothing that fit before truncates).
   `automation_queue_size` is restart-scoped and says so on its control.
-  Provider credentials and routed model editing remain on Accounts, with read-only resolved-model rows linking there from Global policy.
+  Provider credentials and routed model editing remain on Accounts, with read-only resolved-model rows linking there from the limits view.
 - The same workspace owns the rule corpus and runtime: built-in and custom rule state, the canonical `rules.toml` editor, firings, cost, learned fixes, and diagnostics.
   Settings → Automation is a status portal into this workspace and renders no second copy of its policy controls.
   The turn summarizer was retired in Phase 7.7; the scan timeline is the single behavioral-summary producer.
@@ -167,7 +168,9 @@ and the declared minimum observation capability.
 
 ## Control-plane presentation
 
-- The modal draws seven flat views: **overview**, **rules**, **projects**, **global policy**, **cost breakdown**, **learned fixes**, and **diagnostics**.
+- The modal draws three tabs, and the tab is the question: **Policy** (what may run,
+  and where), **Usage** (what it costs), **Activity** (what it did). Top tab row on
+  desktop; at phone width the row orders to the bottom of the panel, under the thumb.
   A `?` in the header opens
   a nested help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer to it
   while open.
@@ -175,8 +178,7 @@ and the declared minimum observation capability.
   count varies by view: hard-coded row numbers fitted exactly one case and drew the status line
   over the first heading in the others.
 - **Automation is one workspace with several object types, not several destinations.**
-  The control map, executable rules, global policy, spend, learned fixes, and diagnostics stay distinct views because they answer different questions, but they share one top-level destination.
-  Settings → Automation reports engine, rule, queue, and runtime status and opens Global policy.
+  Settings → Automation reports engine, rule, queue, and runtime status and opens the workspace.
   It does not edit automation.
 - **The workspace opens on the Project the operator is standing in.**
   Every entry point (menu, palette, Findings, Usage) threads the active Project id;
@@ -184,22 +186,18 @@ and the declared minimum observation capability.
   falls back to the first Project with anything enabled.
   It used to open with no Project threaded at all, which meant editing whichever Project
   happened to sort first — a silent wrong-target edit.
-- **Overview is a status and routing page.**
-  It reports engine state, the selected Project's enabled count, enabled system rules, participating Projects, today's cost, and active runtime issues.
-  It links directly to each editing or review view rather than repeating their controls; the one control-shaped thing it draws is a Needs-review row when the engine is off, whose action is the link to Global policy.
-- **The `projects` view is the control map: it answers and edits what runs where, in one place.**
-  There is no separate read-only graph view — that design drew the whole dependency picture
-  on one tab with zero controls while the editor sat on another tab as a flat checkbox
-  list, the same objects from the same endpoint split across two surfaces.
-  The view is: a Project selector that is always visible; the selected Project's
-  dependency-grouped policy editor (`AutomationOptIns` — Foundations, Deterministic checks,
-  Capabilities, the Scan-timeline block, and Reads-the-timeline, each node carrying its own
-  revision-checked toggle, its `spends` chip, its requires line, and its blocked or
-  unverified state); and the fleet matrix below it.
-  The matrix reads `GET /api/automation/projects` — one row per registered Project with
-  enabled count, enabled labels, blocked count, and "nothing" for an opted-out Project,
-  which is listed rather than omitted so silence reads as off, never as covered — and each
-  row's Edit policy selects that Project in the editor above.
+- **Policy is the control map, and the matrix is the one editor.**
+  Every automation is a row carrying its install-wide Global switch (the ceiling -
+  `automation-enablement.md`) and the selected Project's opt-in side by side, plus a
+  fleet count of the Projects it actually runs in, grouped by dependency layer so the
+  structure is the "needs X" story. A ceiling-blocked row greys the Project cell and
+  keeps the Project's stored choice. The master switch reads "Global Automation";
+  beside it, the three starting-set presets (expanded as the welcome on a first run, a
+  "Choose preset" button after) apply through the ordinary grant. The install limits
+  (`AutomationPolicyView`) and the rule corpus sit behind disclosures on the same tab.
+  The matrix reads `GET /api/automation/projects` — one row per registered Project,
+  where an opted-out Project is a listed row rather than a missing one, so silence
+  reads as off, never as covered.
   The general Projects registry links here instead of rendering a second automation editor.
 - **The `rules.toml` editor is the dashboard's, not Settings'.** A rule's definition, its
   live/shadow state, and the firings it produces are one object; the previous arrangement put
@@ -208,24 +206,21 @@ and the declared minimum observation capability.
   `GET /api/automation/rules` on open, saves through validate-then-write
   (`PUT /api/automation/rules?validate=1`, then the write), and the rules text is no longer
   part of the Settings bundle or its Save.
-- **Three views left, on one rule: the pipeline produces exactly two things, and each gets
-  exactly one home.** An event becomes an attention item or a run note (the help panel says so
-  in as many words), and this dashboard was drawing a second copy of both.
-  Its `attention` view drew the same ranked inbox and the same records as the drawer's Alerts
-  tab; its `notes` view drew the same `/api/annotations` table as Activity → Findings with a
-  different filter, so a run note visible in one could be missing from the other. Both are
-  **links** now, in a permanent `Read elsewhere` row rather than an empty-state hint — "where
-  did the attention inbox go" is asked by someone looking at a full one somewhere else. Findings
-  grew a source filter (deterministic / observer / all) to cover what this dashboard's copy
-  showed.
-  Its `health` view was three unrelated things under one name and was split three ways: the
-  explainer of what the deterministic checks watch folded into the help panel, where every other
-  explanation of this pipeline already lived; the observed-workload telemetry moved out,
-  following the cost column that had already left it on that reasoning, and now lives in
-  Resources → Fleet activity; and the away report moved to Alerts, which is the inbox it
-  summarizes (`ui.md`).
-  What is left is what only this dashboard can do: configure the pipeline, account for what it
-  spent, run bounded knowledge batches, and show its own diagnostics.
+- **The pipeline produces exactly two things, and mirroring is done with components, never
+  copies.** An event becomes an attention item or a run note (the help panel says so in as
+  many words). Run notes keep exactly one home - Activity → Findings, which carries the
+  source filter (deterministic / observer / all) - and this dashboard renders no
+  annotations table. Attention items have two surfaces: the Alerts drawer tab, and the
+  dashboard's Activity tab, and the second is the **same `AttentionInbox` component over
+  the same endpoints**, so read state, actions, and ordering cannot disagree - the same
+  rule `AutomationSpendView` already carries for spend. A hand-rolled second inbox is the
+  drift the contract tests refuse.
+  The old `health` view stays split three ways: the deterministic-checks explainer lives in
+  the help panel, the observed-workload telemetry in Resources → Fleet activity, and the
+  away report with the Alerts drawer (`ui.md`).
+  Activity holds what only this dashboard can show beside the mirrored inbox: the
+  firing/observer-call trail, learned fixes and the bounded knowledge batches, and the
+  runtime diagnostics.
 - **The spend view is mirrored into Usage → Automation as the same component**, not as a second
   view over one endpoint (`AutomationSpendView`). Both readings are legitimate and neither is
   the real one: from here you ask which rule burned this, and the rules are beside it; from
@@ -310,7 +305,7 @@ and the declared minimum observation capability.
 - The status strip's `calls today` reads the ledger, like the two spend tiles beside it. It
   previously summed the lifetime observer-call status counts, which was neither today's figure
   nor a count of anything the reader had asked for.
-- Rules is the complete effective inventory: the global-switch status row, built-in system observers, and canonical `rules.toml` rules with their editor, with an at-a-glance status strip for automation state, observer counts, and daily spend.
+- The Policy tab's "Rules & observers" disclosure is the complete effective inventory: built-in system observers and canonical `rules.toml` rules with their editor.
   Disabled controls and built-ins remain visible.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
   owning config setting. The titler toggles on `observer_titler_enabled`; stall, approval, and
@@ -322,17 +317,17 @@ and the declared minimum observation capability.
 - `Run notes` is the user-facing label for persisted annotations. `Attention` contains
   notification records that may require user action.
 - Attention records are **dismissible from the surface that lists them** — the drawer's
-  Alerts tab, which is now the only one — individually (`PATCH
+  Alerts tab and the dashboard's Activity mirror, which share one component and therefore
+  one behaviour — individually (`PATCH
   /api/automation/notifications/{id}`) or all at once (`PATCH /api/automation/notifications`,
   which returns how many open records it closed). Dismissing sets `read_at`; it deletes
   nothing, so the history stays readable and retention still owns removal. Records survive
   90 days (`automation_retention_days`), which is far longer than a surface with no clear
   can stay useful.
-- Diagnostics is the last view, and only that: it carried a header toggle *as
-  well* while it was the one view outside the tab row, which left one of four choices with
-  two controls and no way to tell which was authoritative. Provider traces, event dry-run,
-  queue state, firings/observer-call traces, and research-only injection evidence are
-  developer-grade, so it sits last rather than first.
+- Diagnostics is the last section of Activity, and only that. Provider traces, event
+  dry-run, queue state, firings/observer-call traces, and research-only injection
+  evidence are developer-grade, so they sit last rather than first, with the deepest
+  tools behind their own disclosures.
 - Injection diagnostics use the provider-neutral `safe|blocked|unknown` delivery-readiness
   contract, expose bounded reasons/parser coverage, and are permanently unauthorized in this
   phase. They never write the PTY; see `delivery-readiness.md`.

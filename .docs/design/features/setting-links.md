@@ -171,7 +171,7 @@ only route to the owning overlay.
 | Schedule tab (row, `automation_disabled`) | `scheduled_runs` | Project | grant (inline) |
 | Scan timeline (either switch off) | `scan_timeline_enabled` + `scan_timeline` | install + Project | grant, both in one act |
 | Scan timeline (unarmed run) | `scan_timeline_auto_enable` | Project | grant (inline) |
-| Automation workspace (Global policy) | `automation_enabled`, `scan_timeline_enabled` | install | owner |
+| Automation workspace (Policy matrix) | `automation_enabled`, `automation_global_allow`, the dedicated install switches, every Project opt-in | install + Project | owner — the one surface that may also switch off |
 | Project settings (spending-limits prose) | `automation_daily_budget` | install | link to Automation policy (a value, not a switch) |
 | Change map | `code_graph` | Project | grant |
 | Findings pane (no detectors) | the four detectors | Project | grant, all four in one act |
@@ -196,10 +196,15 @@ Every automation is off for a new Project, which is correct as a rule and made e
 surface in the drawer inert on the first day.
 Two things address that without weakening the rule:
 
-- **Named starting sets at Project creation.** Three checkboxes on the creation form, each a
-  set served by `GET /api/grants` (`project_starting_sets`) and applied through the ordinary
+- **Named starting sets at Project creation, and as preset cards on the policy matrix.**
+  Three checkboxes on the creation form (greyed, with the reason, when the install-wide
+  ceiling blocks part of a set), and the same three sets as cards at the head of the
+  Automation Policy matrix - expanded as the welcome on a first run, behind a
+  "Choose preset" button after. Each is
+  served by `GET /api/grants` (`project_starting_sets`) and applied through the ordinary
   `POST /api/grants` - the ticked sets go as **one** POST, so the daemon computes the
-  dependency closure, writes the Project file once, and leaves one audit record.
+  dependency closure, writes the Project file once, and leaves one audit record. Turning
+  a set *off* is the matrix's own editor write, never a grant.
   None is an inherited default template: each is written into that Project's own
   `.swe-mux/config.toml`, so "nothing runs on a Project that did not opt in" stays literally
   true and no existing Project changes behaviour because a constant did.
@@ -259,9 +264,15 @@ POST /api/grants     {install?: {key: true}, project_id?, automations?: [id],
                      → {applied: {install, automations, values}, spends, config, project?}
 ```
 
-`GET` is the contract both ends check.
+`GET` is the contract both ends check; with the registry payload it carries each
+automation's `globally_allowed` (the resolved install-wide ceiling over the id and its
+closure), so a gate and the creation form grey a switch the daemon would refuse rather
+than offering it.
 `POST` refuses with `not_grantable`, `grant_is_additive`, `unknown_automation`,
-`automation_not_implemented`, `revision_conflict`, `project_config_malformed`, or
+`automation_not_implemented`, `automation_globally_disabled` (the install ceiling turns
+the id or its closure off, and a grant reporting success against it would offer to turn
+on nothing - unless the same act raises the blocking dedicated switch),
+`revision_conflict`, `project_config_malformed`, or
 `project_config_read_only`, and applies nothing when it refuses.
 
 ## Implementation pointers

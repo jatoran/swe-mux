@@ -2,10 +2,11 @@
 
 ## What it is
 
-Per-project opt-in for control-plane automations, gated by a dependency graph. Every
-automation is enabled explicitly per Project; a consumer cannot run unless the full
-transitive closure of the substrate it depends on is also enabled. Nothing runs on a
-Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_PLANE_ROADMAP.md`.
+Per-project opt-in for control-plane automations, gated by a dependency graph and an
+install-wide ceiling. Every automation is enabled explicitly per Project; a consumer
+cannot run unless the full transitive closure of the substrate it depends on is also
+enabled, and nothing the ceiling disallows runs anywhere. Nothing runs on a Project
+that did not opt in. Roadmap/vision context: `../../development/CONTROL_PLANE_ROADMAP.md`.
 
 ## Key concepts
 
@@ -99,8 +100,27 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   deps, and substrate depending on a consumer.
 - **Resolution**: a requested opt-in set → `enabled` (deps satisfied) + `blocked`
   (id → missing transitive deps, for UI prompting) + `unverified` (deps satisfied, held
-  back by something outside the DAG). Disabling a substrate node cascades
+  back by something outside the DAG) + `globally_disabled` (turned off by the
+  install-wide ceiling). Disabling a substrate node cascades
   its dependents to blocked (effectively off).
+- **Install-wide ceiling (`automation_global_allow`)**: a `Config` map of automation id →
+  bool, absent meaning allowed. An id it turns off is off in every Project along with
+  everything in whose dependency closure it sits, however the Project's own map reads -
+  the operator's "not anywhere". Deliberately unlike `llm_ready`, which subtracts only the
+  model-backed leaves: an unverified provider is an outage to route around, while the
+  ceiling is a standing decision, and a dependent left running would be running on a
+  substrate the operator turned off. Three ids never appear in the map because they have
+  dedicated install switches (`DEDICATED_INSTALL_SWITCHES`: `scan_timeline` →
+  `scan_timeline_enabled`, `scheduled_runs` → `scheduled_runs_enabled`, `land_queue` →
+  `land_queue_enabled`) - one switch, one key; `config._validate` refuses a map entry for
+  them. `scan_timeline_enabled` composes into the effective ceiling
+  (`effective_global_allow`), so switching it off cascades over the timeline's readers;
+  the other two gate capabilities with no dependents and keep their separately-reported
+  service checks. Unknown ids scrub on load (a retired registry id must not brick the
+  config) and refuse on write (a typo must fail loudly). A ceiling-blocked id lands in
+  `globally_disabled` and in none of the other three sets - one actionable answer, and the
+  answer is global policy. The Project's own opt-in is retained on disk; the matrix greys
+  it rather than unticking it.
 - **Verified-provider gate (Phase 15)**: `resolve(requested, llm_ready=...)` subtracts the
   `needs_llm` automations from `enabled` into `unverified` when the install has no proven
   model provider. Three things about that shape are deliberate:
@@ -133,25 +153,33 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 
 ## Toggle surface
 
-The editor is the control map: switches render grouped by dependency layer (Foundations,
-Deterministic checks, Capabilities, the Scan-timeline block, Reads-the-timeline), so the
-structure the retired read-only graph view drew is on the same surface as the toggles.
-Toggling a consumer shows the substrate it needs as a dependency line rather than a flat
-checkbox, because a consumer whose substrate is off would otherwise read as
-enabled-and-working:
+The editor is the policy matrix (`frontend/src/AutomationMatrix.tsx`, on the Automation
+workspace's Policy tab): every automation is one row carrying its install-wide Global
+switch and the selected Project's opt-in side by side, plus a fleet count of the Projects
+it actually runs in. Rows render grouped by dependency layer (Foundations, Deterministic
+checks, Capabilities, Reads the timeline), so the structure IS the "needs X" story and
+rows carry no per-row dependency prose. It is the one surface that may turn an automation
+off in either scope, which is what keeps every grant gate additive-only.
 
 - Enabling a consumer enables its whole transitive closure in the same action.
 - Disabling substrate disables everything that reads from it, rather than leaving dependents
   enabled-but-inert.
+- A Project cell whose row the install ceiling blocks greys with the Global cell beside it
+  as the fix; the Project's stored choice is retained, never rewritten by the ceiling.
 - Unimplemented ids render disabled and labelled, never as ready to switch on.
 - The file remains the source of truth; the editor is a two-way view over it and the write
   is revision-checked like every other project-config write.
-- `scan_timeline` also carries `scan_timeline_auto_enable` and the Project context editor in
-  this editor, because both are Project-wide and the per-run toggle in the drawer is not.
+- The scan row also carries `scan_timeline_auto_enable` and the Project context editor,
+  because both are Project-wide and the per-run toggle in the drawer is not.
 - An automation that spends is chipped as such. Marked rather than unmarked: most of the list
   is free, and a chip on every row would say nothing.
-- Spending limits are **not** per-project. Scan timeline's budgets are global policy
-  (Automation → Global policy → Scan timeline); this editor is opt-in only. A `scan_timeline_daily_budget_usd`
+- The three starting sets render as preset cards at the head of the matrix: expanded as the
+  welcome on a first run (a device-local seen flag), a "Choose preset" button after. Turning
+  a set on goes through the ordinary grant; turning it off is this editor's own write and
+  clears exactly the ids the set named, leaving the substrate under them.
+- Spending limits are **not** per-project, and the scan timeline no longer has dedicated
+  ones anywhere: it spends under the global automation budget, hourly call cap, and
+  per-call output ceiling (`budgets.md`). A `scan_timeline_daily_budget_usd`
   left in an existing Project file parses, is ignored, and is dropped on the next write.
   Project permission never enables a run; the current conversation must still be enabled from
   its Timeline tab.
@@ -185,7 +213,12 @@ Every opt-in above can also be switched on from the surface that needs it, throu
 `POST /api/grants`. That path is additive only - it can never turn an automation off - so the
 editor here remains the single owner of withdrawal. The dependency closure is computed by the
 daemon rather than sent by the caller, and the whole grant lands or none of it does.
-The contract, the disclosures, and the refusals: `setting-links.md`.
+An automation the install ceiling turns off is **refused** (`automation_globally_disabled`)
+rather than granted-and-inert - unlike an unverified provider, which is disclosed and granted
+anyway, the ceiling is the operator's standing decision and a gate reporting success against
+it would offer to turn on nothing. A grant that raises the blocking dedicated switch in the
+same act is not refused, because the act itself lifts the ceiling (the one-act scan-timeline
+gate depends on this). The contract, the disclosures, and the refusals: `setting-links.md`.
 
 ## First-use starting sets
 
@@ -228,8 +261,11 @@ POST /api/grants   {install?, project_id?, automations?, values?, revision?}
 ```
 
 `GET` returns the registry (id, kind, label, `requires`, `implemented`, `spends`,
-`needs_llm`), the project's `requested` table, and the resolution (`enabled`, `blocked` →
-missing dependencies, `unverified` → held back by the provider, plus the `llm` verdict and
+`needs_llm`, `default_on`, `install_switch` → the dedicated Config switch where one
+exists, `globally_allowed` → the resolved install ceiling over the id and its closure),
+the project's `requested` table, and the resolution (`enabled`, `blocked` →
+missing dependencies, `unverified` → held back by the provider, `globally_disabled` →
+turned off by the install ceiling, plus the `llm` verdict and
 its reason so the surface states it rather than paraphrasing). `PUT`
 replaces the opt-in table through the ordinary project-config write, and takes the same two
 guard shapes that write does (`features/projects.md`): `base` - what the caller believed
@@ -245,16 +281,19 @@ again. The typed project config endpoints (`GET|PUT /api/project/config`) still 
 same table.
 `GET /api/automation/projects` is the fleet aggregation of the same per-Project
 resolution — one row per registered Project, including Projects that opted into nothing —
-drawn by the Automation workspace's `projects` view so "what runs where" is answerable from
-the surface named Automation.
-Selecting a row renders the revision-checked per-Project policy editor below the matrix; the general Projects registry links here instead of drawing a second editor.
+plus the ceiling as stored (`global_allow`) and the four dedicated switches
+(`install_switches`), drawn by the Automation workspace's Policy tab so "what runs where"
+is answerable and editable from the surface named Automation. The matrix's Project column
+is the revision-checked per-Project editor; the general Projects registry links here
+instead of drawing a second one.
 
 ## Key files
 
 - Registry + DAG + resolver: `src/swe_mux/automation_registry.py`
 - Per-project config field (parse/serialize/validate, `project_automations`): `src/swe_mux/project_files.py`
 - Gate wiring + toggle routes: `src/swe_mux/server.py`
-- Toggle surface: `frontend/src/ProjectsManager.tsx`
+- Toggle surface (the matrix): `frontend/src/AutomationMatrix.tsx`; agent-authority
+  table: `frontend/src/ProjectsManager.tsx`
 
 ## Relates to
 

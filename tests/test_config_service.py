@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from swe_mux.budget import Budget
 from swe_mux.config import (
     BUILTIN_THEME_PAIRS,
     DEFAULT_PROJECT_IGNORE_PATTERNS,
