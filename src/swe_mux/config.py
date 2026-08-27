@@ -799,6 +799,22 @@ class Config:
     usage_commands: dict[str, list[str]] = field(default_factory=default_usage_commands)
     default_shell_profile: str = "default"
     shell_profiles: list[LaunchProfile] = field(default_factory=list)
+    # Whether a shell pane's PATH begins with `~/.mux/bin`, so that typing an
+    # agent's name in a terminal launches it *through* mux and promotes the pane
+    # (`backends.md`, "A plain terminal promotes itself").
+    #
+    # On by default, because that promotion is what makes a typed launch a
+    # first-class session rather than an unnamed shell. It is a setting because
+    # the trade is real and was previously unavoidable: the shim inserts two
+    # processes between the shell and the CLI, and someone using swe-mux purely as
+    # a terminal multiplexer is paying for a feature they are not using — `claude`
+    # in their terminal should be able to mean *their* `claude`.
+    #
+    # Turning it off changes only what a shell's PATH advertises. Agents mux
+    # launches itself never go through a shim (they are spawned straight into the
+    # pseudoconsole), so no harness, hook, or MCP wiring depends on this; a typed
+    # launch simply stays a shell until the transcript detector notices it.
+    agent_shims_on_shell_path: bool = True
     pinned_directories: list[str] = field(default_factory=list)
     project_ignore_patterns: list[str] = field(
         default_factory=lambda: list(DEFAULT_PROJECT_IGNORE_PATTERNS)

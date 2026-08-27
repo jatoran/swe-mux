@@ -23,6 +23,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "agent_message_max_thread_turns": 40,
   "agent_message_pending_per_target": 5,
   "agent_messaging_enabled": true,
+  "agent_shims_on_shell_path": true,
   "agent_spawn_hourly_budget": 10,
   "approval_allow_all_permitted": true,
   "approval_auto_enabled": false,

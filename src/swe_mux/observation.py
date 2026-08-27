@@ -235,6 +235,14 @@ SUBAGENT_QUIET_SECONDS = 120.0
 # the stopped agent's last PostToolUse can land after its stop, and re-opening
 # on that straggler would flap a correctly cleared annotation for a full TTL.
 SUBAGENT_REOPEN_GRACE_SECONDS = 10.0
+# The other half of that rule, in the other direction: a `SubagentStop` that
+# would zero the count this soon after one of the fleet's own tool hooks is
+# contradicted by that hook, and holds the annotation at one agent until the
+# proof of life itself goes stale rather than clearing outright. Sized against
+# the measured async cadence (a stop every ~15 s, tool hooks 1-4 s before each),
+# and it is also the whole lingering cost: a fleet that really did end keeps the
+# annotation this long past its last tool call, never the full quiet TTL.
+SUBAGENT_LIVENESS_HOLD_SECONDS = 30.0
 STANDING_DETAIL_MAX_CHARS = 120
 # Both launch shapes bind a task id from the *result* text: an explicit
 # `run_in_background` launch, and a foreground command the CLI moved to the
@@ -245,6 +253,17 @@ _BACKGROUND_TASK_ID = re.compile(
 _TASK_NOTIFICATION_TOOL_USE = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
 _TASK_NOTIFICATION_TASK = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
 _TASK_NOTIFICATION_MARKER = "<task-notification>"
+# An async `Agent` launch acks in seconds and the agent then runs for minutes, so
+# its tool_result is a *launch*, not a completion. The marker says which shape the
+# result is; the id it carries is the same one the later `<task-notification>`
+# reports as its `<task-id>`, which is what binds the two ends together.
+_ASYNC_AGENT_LAUNCH_MARKER = "Async agent launched successfully"
+_ASYNC_AGENT_ID = re.compile(r"agentId:\s*([A-Za-z0-9_-]+)")
+# Last-resort classifier for a completion whose launch this run never tracked
+# (daemon restart mid-fleet). Structural matching against the launch registry
+# runs first; this only decides which tier an *unknown* id belongs to, and when
+# the CLI rewords it the fallback is the pre-existing behaviour, not a new one.
+_TASK_NOTIFICATION_AGENT = re.compile(r"<summary>\s*Agent\b")
 
 
 def _publish_update(session: Session) -> None:
@@ -3473,25 +3492,108 @@ def _standing_detail(value: Any) -> str | None:
     return text[:STANDING_DETAIL_MAX_CHARS] or None
 
 
-def _refresh_subagents(
-    session: Session,
-    *,
-    source: str,
-    evidence: str,
-    now: float,
-    count: int | None = None,
-    create: bool = True,
-) -> bool:
-    """Refresh (or, when ``create``, open) the subagents annotation.
+def _subagent_launches(session: Session) -> dict[str, dict[str, Any]]:
+    """Subagent launches this run: tool_use id -> ``{"async": bool, "agent_id": str|None}``.
 
-    ``create=False`` is the refresh-only tier: once lifecycle hooks own the
-    count, transcript records for the same subagent arrive *later* on their
-    slower channel, and letting a trailing Task tool_result re-open an
-    annotation the hooks already cleared flaps it (observed live 2026-07-31:
-    cleared by SubagentStop, re-added by the trailing completion record).
+    A registry rather than a counter, because one launch is announced by two
+    tiers - the `Agent`/`Task` tool_use record and the CLI's `SubagentStart`
+    hook - and a counter cannot tell a second announcement from a second agent.
+
+    Its reason to exist is the **async** launch. Such a launch acks in seconds
+    ("Async agent launched successfully", carrying the `agentId`) and the agent
+    then runs for minutes; the only record of its end is the
+    `<task-notification>` naming the same tool_use id. Both ends are in the root
+    transcript, so this registry counts the async fleet exactly - which matters
+    because the lifecycle hooks do not: measured live 2026-08-27, three async
+    agents produced 3 `SubagentStart` and 11 `SubagentStop` hooks, the first stop
+    32 s after launch and 3.5 minutes before any agent finished.
     """
-    if not create and _standing_activity_count(session, "subagents") == 0:
-        return False
+    state = _observation_state(session)
+    launches = state.setdefault("subagent_launches", {})
+    return launches  # type: ignore[no-any-return]
+
+
+def _subagent_closed(session: Session) -> set[str]:
+    """Launch identifiers already closed this run (tool_use ids and agent ids).
+
+    One async completion is announced up to three times (the `queue-operation`
+    enqueue, its `attachment` mirror, and the `user` message when it reaches the
+    model), so closes must be idempotent per launch - the same rule the
+    background-task tier keeps, against the same records. It also keeps the
+    *classification* of those repeats stable after the first one removed the
+    registry entry that identified them.
+    """
+    state = _observation_state(session)
+    closed = state.setdefault("subagent_closed", set())
+    return closed  # type: ignore[no-any-return]
+
+
+def _subagent_hook_count(session: Session) -> int:
+    """Live subagents according to the lifecycle hooks: starts - stops, floor 0.
+
+    Kept in run state rather than read back off the annotation, because the
+    annotation is also where the liveness tiers heal a lost count to 1: reading
+    it back is what let a single `SubagentStop` after such a heal erase a whole
+    fleet. Seeded from the annotation once per run, so a count adopted across a
+    daemon restart is still the count the first stop decrements.
+    """
+    state = _observation_state(session)
+    value = state.get("subagent_hook_count")
+    if not isinstance(value, int) or isinstance(value, bool):
+        value = _standing_activity_count(session, "subagents")
+        state["subagent_hook_count"] = value
+    return value
+
+
+def _adjust_subagent_hook_count(session: Session, delta: int) -> None:
+    _observation_state(session)["subagent_hook_count"] = max(
+        0, _subagent_hook_count(session) + delta
+    )
+
+
+def _subagent_count(session: Session) -> int:
+    """Effective live-subagent count: tracked launches are a floor under the hooks.
+
+    `max`, not a sum: both tiers describe the same fleet, and each is blind where
+    the other is not. The hooks see every subagent, async or not, and mis-count
+    the async ones downward; the registry sees only launches this run's
+    transcript carried, and counts those exactly.
+    """
+    return max(len(_subagent_launches(session)), _subagent_hook_count(session))
+
+
+def _settle_subagents(
+    session: Session, *, source: str, evidence: str, now: float, hold: bool = False
+) -> bool:
+    """Re-derive the annotation from the tiers after a lifecycle change.
+
+    ``hold`` is the liveness guard, and it is only ever for a lifecycle *claim*
+    that would zero the count. A `SubagentStop` seconds after one of the fleet's
+    own tool hooks is contradicted by that hook, so the annotation drops to one
+    agent and expires with the proof of life instead of vanishing outright.
+    A positive completion never holds: it is the evidence, and a tool the agent
+    ran on its way to finishing does not contradict it.
+    """
+    count = _subagent_count(session)
+    if count <= 0 and hold:
+        liveness = _observation_state(session).get("subagent_liveness_ts")
+        fresh = (
+            isinstance(liveness, int | float)
+            and not isinstance(liveness, bool)
+            and now - float(liveness) < SUBAGENT_LIVENESS_HOLD_SECONDS
+        )
+        if fresh:
+            return set_standing_activity(
+                session,
+                "subagents",
+                source=source,
+                evidence=f"{evidence}:contradicted",
+                expires_at=float(liveness) + SUBAGENT_LIVENESS_HOLD_SECONDS,  # type: ignore[arg-type]
+                count=1,
+                now=now,
+            )
+    if count <= 0:
+        return clear_standing_activity(session, "subagents", evidence=evidence, now=now)
     return set_standing_activity(
         session,
         "subagents",
@@ -3503,11 +3605,120 @@ def _refresh_subagents(
     )
 
 
-def _drop_subagent(session: Session, *, source: str, evidence: str, now: float) -> bool:
-    count = _standing_activity_count(session, "subagents") - 1
-    if count <= 0:
-        return clear_standing_activity(session, "subagents", evidence=evidence, now=now)
-    return _refresh_subagents(session, source=source, evidence=evidence, now=now, count=count)
+def _refresh_subagents(
+    session: Session,
+    *,
+    source: str,
+    evidence: str,
+    now: float,
+    create: bool = True,
+) -> bool:
+    """Refresh (or, when ``create``, open) the annotation from a subagent's own activity.
+
+    ``create=False`` is the refresh-only tier: once lifecycle hooks own the
+    count, transcript records for the same subagent arrive *later* on their
+    slower channel, and letting a trailing record re-open an annotation the
+    hooks already cleared flaps it (observed live 2026-07-31: cleared by
+    SubagentStop, re-added by the trailing completion record).
+
+    Healing to 1 when every tier reads zero is deliberate and is the only thing
+    that speaks for a fleet whose launches were never seen (a daemon restart
+    mid-run): activity from a subagent proves at least one is alive, and one is
+    the only honest number available.
+    """
+    existing = _standing_activity_count(session, "subagents")
+    if existing == 0 and not create:
+        return False
+    return set_standing_activity(
+        session,
+        "subagents",
+        source=source,
+        evidence=evidence,
+        expires_at=now + SUBAGENT_QUIET_SECONDS,
+        count=max(_subagent_count(session), existing, 1),
+        now=now,
+    )
+
+
+def _open_subagent_launch(
+    session: Session, *, tool_use_id: str, evidence: str, now: float, create: bool = True
+) -> bool:
+    """Track one `Agent`/`Task` launch, whichever tier later counts the same agent.
+
+    Refuses an id this run already closed, for the reason the background tier
+    refuses one: launch and completion can be read in either order across a
+    daemon restart, and a resurrected open would hold the annotation for a full
+    TTL against an agent that is gone.
+
+    ``create=False`` still registers the launch - the registry is what binds an
+    async ack and its completion to this id - but will not *open* an annotation
+    the lifecycle hooks have already cleared: while hooks own the count, a launch
+    the transcript delivers late is a record of an agent they have retired, and
+    re-opening on it is the trailing-record flap under another name.
+    """
+    if not tool_use_id or tool_use_id in _subagent_closed(session):
+        return False
+    _subagent_launches(session).setdefault(tool_use_id, {"async": False, "agent_id": None})
+    if not create and _standing_activity_count(session, "subagents") == 0:
+        return False
+    return _settle_subagents(session, source="transcript", evidence=evidence, now=now)
+
+
+def _mark_subagent_launch_async(
+    session: Session, *, tool_use_id: str, agent_id: str | None, evidence: str, now: float
+) -> bool:
+    """Record that a launch is async, and bind the agent id its completion will name."""
+    launches = _subagent_launches(session)
+    if not tool_use_id or tool_use_id in _subagent_closed(session):
+        return False
+    entry = launches.setdefault(tool_use_id, {"async": False, "agent_id": None})
+    entry["async"] = True
+    if agent_id:
+        entry["agent_id"] = agent_id
+    return _settle_subagents(session, source="transcript", evidence=evidence, now=now)
+
+
+def _close_subagent_launch(
+    session: Session,
+    *,
+    evidence: str,
+    now: float,
+    tool_use_id: str | None = None,
+    task_id: str | None = None,
+    unmatched_decrements: bool = False,
+) -> bool:
+    """Close one launch by whichever identifier the record names.
+
+    ``unmatched_decrements`` is for a completion whose launch this run never
+    tracked. It decrements the hook tier - the only count there is in that case -
+    and is passed only where a second tier is not already counting the same
+    ending: a synchronous completion while lifecycle hooks own the count is
+    followed by that agent's own `SubagentStop`, and subtracting for both would
+    take two agents off the board for one that finished.
+    """
+    identifiers = {value for value in (tool_use_id, task_id) if value}
+    if not identifiers:
+        return False
+    closed = _subagent_closed(session)
+    if identifiers & closed:
+        return False
+    closed |= identifiers
+    launches = _subagent_launches(session)
+    matched = next(
+        (
+            key
+            for key, entry in launches.items()
+            if key in identifiers or (entry.get("agent_id") or "") in identifiers
+        ),
+        None,
+    )
+    if matched is not None:
+        launches.pop(matched, None)
+    elif unmatched_decrements:
+        _adjust_subagent_hook_count(session, -1)
+    else:
+        return False
+    return _settle_subagents(session, source="transcript", evidence=evidence, now=now)
 
 
 def _background_open(session: Session) -> dict[str, str | None]:
@@ -3666,7 +3877,6 @@ def _extract_standing_tool_use(
     raw_input = block.get("input")
     tool_input: dict[str, Any] = raw_input if isinstance(raw_input, dict) else {}
     now = _standing_now(session, event)
-    state = _observation_state(session)
     changed = False
     if name == "ScheduleWakeup":
         if tool_input.get("stop"):
@@ -3744,19 +3954,15 @@ def _extract_standing_tool_use(
                 session, evidence="transcript:TaskStop", now=now, task_id=task_id
             )
     elif name in {"Task", "Agent"}:
-        # Fallback tier: hooks own the count once a SubagentStart has arrived
-        # this run; transcript launches then only refresh recency.
-        hooks_seen = bool(state.get("subagent_hooks_seen"))
-        launch_count: int | None = (
-            None if hooks_seen else _standing_activity_count(session, "subagents") + 1
-        )
-        changed = _refresh_subagents(
+        # Registered by tool_use id rather than counted, so the CLI's
+        # `SubagentStart` for the same agent cannot count it a second time. The
+        # two tiers are combined with `max`, never summed.
+        changed = _open_subagent_launch(
             session,
-            source="transcript",
+            tool_use_id=str(block.get("id") or ""),
             evidence="transcript:Task",
             now=now,
-            count=launch_count,
-            create=not hooks_seen,
+            create=not _observation_state(session).get("subagent_hooks_seen"),
         )
     if changed:
         _publish_update(session)
@@ -3792,17 +3998,26 @@ def _extract_standing_tool_result(
             )
     elif tool in {"Task", "Agent"}:
         state = _observation_state(session)
-        if state.get("subagent_hooks_seen"):
-            changed = _refresh_subagents(
+        if _ASYNC_AGENT_LAUNCH_MARKER in detail:
+            # Not a completion. The CLI acks an async launch within seconds and
+            # the agent then runs for minutes, writing nothing into this
+            # transcript; reading this as the agent's end is what let a fleet of
+            # three read as "ready · turn complete" while it worked.
+            agent = _ASYNC_AGENT_ID.search(detail)
+            changed = _mark_subagent_launch_async(
                 session,
-                source="transcript",
-                evidence="transcript:Task:completed",
+                tool_use_id=tool_use_id,
+                agent_id=agent.group(1) if agent else None,
+                evidence="transcript:Task:async_launch",
                 now=now,
-                create=False,
             )
         else:
-            changed = _drop_subagent(
-                session, source="transcript", evidence="transcript:Task:completed", now=now
+            changed = _close_subagent_launch(
+                session,
+                evidence="transcript:Task:completed",
+                now=now,
+                tool_use_id=tool_use_id,
+                unmatched_decrements=not state.get("subagent_hooks_seen"),
             )
     if changed:
         _publish_update(session)
@@ -3832,10 +4047,31 @@ def _claude_task_notification_text(event: dict[str, Any]) -> str:
     return ""
 
 
+def _task_notification_tier(
+    session: Session, *, identifiers: set[str], text: str
+) -> str:
+    """Which annotation a `<task-notification>` is about: `subagents` or `background_tasks`.
+
+    Both a background shell and an async agent announce their end in this record
+    shape, and the tiers must not read each other's: an agent's completion
+    subtracting from the background count is a running shell erased on paper.
+
+    Structural first - an id this run tracked as a launch (or already closed as
+    one) settles it whatever the wording says. The summary shape is consulted
+    only for an id neither tier knows, where the alternative is guessing.
+    """
+    launches = _subagent_launches(session)
+    if identifiers & set(launches) or identifiers & _subagent_closed(session):
+        return "subagents"
+    if any((entry.get("agent_id") or "") in identifiers for entry in launches.values()):
+        return "subagents"
+    return "subagents" if _TASK_NOTIFICATION_AGENT.search(text) else "background_tasks"
+
+
 def _extract_standing_task_notifications(
     session: Session, event: dict[str, Any], text: str
 ) -> None:
-    """Close background launches named by a `<task-notification>` body.
+    """Close the launch named by a `<task-notification>` body, in whichever tier owns it.
 
     Idempotent per task, because one completion arrives on up to three carriers.
     """
@@ -3845,7 +4081,26 @@ def _extract_standing_task_notifications(
     changed = False
     tool_use_ids = _TASK_NOTIFICATION_TOOL_USE.findall(text)
     task_ids = _TASK_NOTIFICATION_TASK.findall(text)
+    tier = _task_notification_tier(
+        session, identifiers=set(tool_use_ids) | set(task_ids), text=text
+    )
     for tool_use_id in tool_use_ids:
+        if tier == "subagents":
+            changed = (
+                _close_subagent_launch(
+                    session,
+                    evidence="transcript:task_notification",
+                    now=now,
+                    tool_use_id=tool_use_id,
+                    # An agent's end is announced here and nowhere else this tier
+                    # can see, so an untracked one still has to come off the
+                    # hook count - unlike a synchronous completion, which its own
+                    # `SubagentStop` also reports.
+                    unmatched_decrements=True,
+                )
+                or changed
+            )
+            continue
         changed = (
             _close_background_task(
                 session, evidence="transcript:task_notification", now=now,
@@ -3855,6 +4110,18 @@ def _extract_standing_task_notifications(
         )
     if not tool_use_ids:
         for task_id in task_ids:
+            if tier == "subagents":
+                changed = (
+                    _close_subagent_launch(
+                        session,
+                        evidence="transcript:task_notification",
+                        now=now,
+                        task_id=task_id,
+                        unmatched_decrements=True,
+                    )
+                    or changed
+                )
+                continue
             changed = (
                 _close_background_task(
                     session, evidence="transcript:task_notification", now=now, task_id=task_id
@@ -3892,6 +4159,15 @@ def _apply_subagent_hook(session: Session, event_type: str) -> None:
     flap a correctly cleared annotation for a full TTL, the exact failure the
     trailing-transcript rule pins. A genuinely live agent keeps streaming tool
     hooks, so it re-creates the annotation one grace window later at most.
+
+    What a ``SubagentStop`` is *not* is proof that an agent is gone. Measured
+    live 2026-08-27: three async agents produced 11 stops, the first 32 s after
+    launch and 3.5 minutes before any of them finished, so the count zeroed and
+    the annotation was cleared and re-healed at 1 every ~15 s for as long as the
+    fleet ran. Two rules answer that, and both live here: the count is owned by
+    a counter of its own (never read back off the annotation a heal has already
+    rewritten), and a stop that would zero it while the fleet's own tool hooks
+    are still arriving is held rather than believed.
     """
     if getattr(session, "observation_replay", False):
         return
@@ -3900,19 +4176,18 @@ def _apply_subagent_hook(session: Session, event_type: str) -> None:
     changed = False
     if event_type == "SubagentStart":
         state["subagent_hooks_seen"] = True
-        changed = _refresh_subagents(
-            session,
-            source="hook",
-            evidence="hook:SubagentStart",
-            now=now,
-            count=_standing_activity_count(session, "subagents") + 1,
+        _adjust_subagent_hook_count(session, 1)
+        changed = _settle_subagents(
+            session, source="hook", evidence="hook:SubagentStart", now=now
         )
     elif event_type == "SubagentStop":
         state["subagent_stop_ts"] = now
-        changed = _drop_subagent(
-            session, source="hook", evidence="hook:SubagentStop", now=now
+        _adjust_subagent_hook_count(session, -1)
+        changed = _settle_subagents(
+            session, source="hook", evidence="hook:SubagentStop", now=now, hold=True
         )
     else:
+        state["subagent_liveness_ts"] = now
         stop_ts = state.get("subagent_stop_ts")
         recent_stop = (
             isinstance(stop_ts, (int, float))
@@ -5305,28 +5580,33 @@ def _omp_content_text(content: Any) -> str:
     return ""
 
 
-def _omp_note_task_start(session: Session, event: dict[str, Any]) -> None:
+def _omp_note_task_start(session: Session, event: dict[str, Any], call_id: str) -> None:
+    """One omp `task` fan-out call opens a subagent, keyed by its call id.
+
+    Keyed rather than counted for the reason every tier here is: a call and its
+    result name the same id, so the pair cannot drift the way a bare +1/-1 can.
+    """
     if getattr(session, "observation_replay", False):
         return
-    changed = _refresh_subagents(
+    if _open_subagent_launch(
         session,
-        source="transcript",
+        tool_use_id=call_id,
         evidence="transcript:omp:task",
         now=_standing_now(session, event),
-        count=_standing_activity_count(session, "subagents") + 1,
-    )
-    if changed:
+    ):
         _publish_update(session)
 
 
-def _omp_note_task_end(session: Session, event: dict[str, Any]) -> None:
+def _omp_note_task_end(session: Session, event: dict[str, Any], call_id: str) -> None:
     if getattr(session, "observation_replay", False):
         return
-    if _drop_subagent(
+    if _close_subagent_launch(
         session,
-        source="transcript",
         evidence="transcript:omp:task_result",
         now=_standing_now(session, event),
+        tool_use_id=call_id,
+        # omp has no lifecycle hooks, so nothing else reports this ending.
+        unmatched_decrements=not _observation_state(session).get("subagent_hooks_seen"),
     ):
         _publish_update(session)
 
@@ -5394,7 +5674,7 @@ async def _omp_tool_call(
         parser_version=OBSERVATION_SCHEMA_VERSION,
     )
     if name == "task":
-        _omp_note_task_start(session, event)
+        _omp_note_task_start(session, event, call_id)
         await events.emit(
             "subagent_activity",
             session_id=session.record.id,
@@ -5433,7 +5713,7 @@ async def _omp_tool_result(
         detail=bounded_detail(detail),
     )
     if tool == "task":
-        _omp_note_task_end(session, event)
+        _omp_note_task_end(session, event, call_id)
         await events.emit(
             "subagent_activity",
             session_id=session.record.id,

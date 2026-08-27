@@ -50,6 +50,17 @@ Its one non-obvious rule: a bracketed paste does not protect its own first chara
 `terminalActions.ts` carries the request/acknowledgement contract for those insertions and `insertionRefusal`, the pure predicate that refuses one into a session showing an approval or a question - the same three sub-reasons `prompt_queue.PROTECTED_AWAITING_REASONS` names, because typed text there answers the dialog rather than filling a composer.
 The refusal is why insertion is acknowledged at all: a dispatch-and-forget reported every insert as done, including the ones that never happened.
 
+## Which backend the input rules answer for
+
+`inputBackend.ts`, `consoleContention.ts`
+
+`resolveInputBackend` is the pane's *input-encoding* backend, which leads `session.backend` by the length of an unpromoted agent launch (measured ~10 s on the frozen app).
+For that window a pane spawned as a shell still reads as `shell`, so Shift+Enter inserts nothing, a multi-line paste has its newlines rewritten to carriage returns, and the leading-newline repair is skipped - all while an agent's composer is on screen and the CLI is running its terminal capability probes.
+It resolves against `session.agent_launch_pending`, refuses two candidates rather than guessing between them (a measured harness's byte sequences applied to a different harness's composer), and is used *only* for encoding: everything the promotion actually changes stays keyed on `backend`, because those need a bound conversation and this is only evidence one is coming.
+
+`consoleContention.ts` turns the daemon's standing verdict into the pane's highest-priority notice and into `agentOutlivesPane`, which is the one that changes what an action does rather than what a message says.
+The wording names the shell rather than the launch chain: the operator's repair is the same whichever link failed, and describing wrapper processes to someone whose terminal has stopped working explains nothing they can act on.
+
 ## Multi-device terminal input
 
 `inputOwnership.ts`, `terminalLetterbox.ts`, `terminalWheelPacing.ts`

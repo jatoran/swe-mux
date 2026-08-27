@@ -58,6 +58,10 @@ It refuses a source that is too large, a cut at byte zero, and an id that alread
 
 Provider hook and transcript normalization, root-turn state, supervisor-resumable 5 s approval stabilization with immediate delivery blocking, first and latest user-request capture, immediate `transcript_message` fanout, and standing-activity evidence including the three carriers one background-task completion rides, closed idempotently per task.
 
+Both running-work tiers count by **registry, not by increment**: `background_open` for shells and `subagent_launches` for `Agent`/`Task` calls, each keyed by tool_use id, so a launch announced twice (a transcript record and a lifecycle hook) is still one launch and a completion names the launch it closes.
+For subagents that registry is combined with a hook counter of its own (`subagent_hook_count`) using `max`, because `SubagentStop` fires while an async agent is still working and the annotation is not a place to keep a count (`design/features/status-detection.md`).
+The two tiers must not read each other's completions: a `<task-notification>` is routed by the registry that holds its id before any wording is consulted.
+
 It also owns which conversation a hook speaks for: the payload-only scope rules (`hook_event_scope`) and the session-aware refinement that recognises a thread this session's own agent spawned (`note_child_thread`, `session_hook_event_scope`).
 On that sits the foreign-conversation filter and the turn-end gate that keeps a subagent thread from binding this pane's identity or closing its root turn (`root_conversation_evidence_refusal`).
 

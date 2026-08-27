@@ -618,6 +618,13 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
         if isinstance(observation_state, dict) and kind in {"", "background_tasks"}:
             observation_state.get("background_open", {}).clear()
             observation_state.get("background_labels", {}).clear()
+        if isinstance(observation_state, dict) and kind in {"", "subagents"}:
+            # Both tiers, or the retraction does not hold: the launch registry and
+            # the hook counter each re-derive the count the next time any evidence
+            # arrives, so leaving either would put back what the user just said is
+            # wrong.
+            observation_state.get("subagent_launches", {}).clear()
+            observation_state["subagent_hook_count"] = 0
         session.publish_update()
     return json_response(
         {
@@ -1136,6 +1143,30 @@ async def demote_session(request: web.Request) -> web.Response:
     return json_response(demoted.record.snapshot())
 
 
+async def report_session_shim(request: web.Request) -> web.Response:
+    """Ingest one lifecycle report from `~/.mux/bin/<harness>` (`agent_launcher`).
+
+    Diagnostics, not identity: nothing here promotes, demotes, or transitions a
+    session. The single fact the daemon *acts* on is the child pid, which turns a
+    shell prompt under a promoted pane from a guess into a measurement
+    (`console_contention.py`). Everything else lands as a durable event so a launch
+    incident can be read back from `GET /api/events?session=<id>` instead of from a
+    live process walk.
+
+    Same per-session secret as promote/demote, because it comes from the same
+    process over the same ingress and needs no second credential.
+    """
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    supplied = request.headers.get("X-Mux-Hook-Secret", "")
+    if not secrets.compare_digest(supplied, session.hook_secret):
+        raise web.HTTPForbidden(text="invalid hook secret")
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="shim report must be an object")
+    await request.app[keys.SESSIONS].record_shim_report(session.record.id, body)
+    return json_response({"ok": True})
+
+
 ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/sessions", list_sessions),
     web.post("/api/sessions", spawn_session),
@@ -1157,4 +1188,5 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/sessions/{sid}/media", upload_session_media),
     web.post("/api/sessions/{sid}/promote", promote_session),
     web.post("/api/sessions/{sid}/demote", demote_session),
+    web.post("/api/sessions/{sid}/shim-report", report_session_shim),
 )

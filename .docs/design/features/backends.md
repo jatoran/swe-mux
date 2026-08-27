@@ -275,6 +275,55 @@ The guarded assertions themselves did not move: a real turn still has to produce
 - Shell child PATH begins with generated shims that resolve the real executable before
   PATH modification, assign/retain the native ID, inject hooks, then POST promotion
   with the inherited per-session secret.
+  The shim also adds the colour-forcing pair (`FORCE_COLOR`/`CLICOLOR_FORCE`) to the CLI's
+  environment.
+  A shell's own environment deliberately omits it - a shell must keep pipe semantics - and
+  that environment is fixed at spawn, so promotion cannot repair it; without this an agent
+  typed into a terminal renders monochrome while the same agent from the Run menu does not.
+- **Whether shims are on a terminal's PATH at all is a setting**
+  (`agent_shims_on_shell_path`, Settings → Terminals; on by default).
+  Off, `claude` in a terminal means that user's own `claude` and the pane stays a shell,
+  which is the right trade for someone using swe-mux purely as a terminal multiplexer.
+  Only what a shell's PATH advertises changes: the shims are still written, so `MUX_*_EXE`
+  and the per-harness settings paths stay readable and turning it back on needs no restart,
+  and an inherited shim directory is stripped rather than passed through (a daemon relaunched
+  from inside a session carries one on its own PATH and would otherwise reinstate the feature
+  silently).
+  Agents mux launches itself never go through a shim, so no harness, hook, or MCP wiring
+  depends on this.
+- **The launch chain a typed agent goes through has one invariant: every link blocks until
+  the CLI exits.**
+  On the frozen desktop app that chain is `shell -> cmd.exe -> swe-mux.exe -> <cli>`, four
+  processes attached to one pseudoconsole, and the shell only stays out of the way while all
+  of them are waiting.
+  Measured 2026-08-27, the chain holds when nothing interrupts it (a 4 s child kept the whole
+  chain waiting 4.3 s), so the hazard is never "the wrapper is in the way" - it is a middle
+  link stopping early while the CLI keeps the console.
+  When one does, the shell prints a prompt, its line editor starts reading, and the two split
+  the user's keystrokes: the observed symptom is an agent composer that shows none of what was
+  typed, the agent's own mouse reports echoed as literal text, and the shell's history
+  prediction painting over the agent's UI.
+  `agent_launcher` therefore holds `CTRL_C_EVENT`/`CTRL_BREAK_EVENT` and lets the CLI decide
+  (`CTRL_CLOSE_EVENT` and the logoff/shutdown events are passed through - they are real
+  terminations with a deadline).
+  That hold is defence in depth rather than a fix for a measured failure: an injected `0x03`
+  was measured *not* to become a control event through mux's own pseudoconsole
+  (winpty/OpenConsole headless passes it through as a key event), so it is not how the
+  observed incident happened, and `tests/test_shim_console_handoff.py` skips rather than
+  claiming otherwise on such a host.
+- **The shim reports its own lifecycle** to `MUX_SHIM_URL`
+  (`POST /api/sessions/{id}/shim-report`, same per-session hook secret): `started` (resolved
+  executable, argv *flag names only*, parent pid, whether the process is frozen, whether it has
+  a console, the kind and console-ness of each std handle, and the milliseconds spent in the
+  bundle's own bootstrap - measured at ~300 ms warm and 43 s cold), `child_started` (the CLI's
+  pid), and `exited` (exit code, which path got there, and whether the child outlived the
+  wrapper).
+  It exists because the shim previously emitted nothing at all - `_promote`/`_demote` are
+  fire-and-forget - so an incident left no record that the wrapper had started, what it
+  resolved, which child it spawned, or how it died.
+  No argument *value* is ever reported (an agent command line can carry a prompt), and the
+  daemon re-filters the payload against a closed key set before recording it.
+  The one field it acts on is `child_pid`; see `sessions.md` § Console contention.
 - Promotion is accepted only while the root session is a shell (plus exact idempotent
   repeats). A direct Claude/Codex root owns its provider for the entire PTY lifetime, and an
   already-promoted shell owns its active lifecycle until the matching demotion. Therefore
@@ -296,7 +345,9 @@ The guarded assertions themselves did not move: a real turn still has to produce
 - Claude receives atomically generated per-session hook settings for `SessionStart`,
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
   `PermissionRequest`, `Notification`, `SubagentStart`, `SubagentStop`, `Stop`, and
-  `SessionEnd`. The subagent pair drives the `subagents` standing-activity count
+  `SessionEnd`. The subagent pair feeds the `subagents` standing-activity count but does not
+  own it: `SubagentStop` fires every time an async agent comes to rest and long before it
+  finishes, so the transcript's launch/completion pair is counted alongside it
   (`status-detection.md`). The settings directory is removed when its owning terminal ends.
 - When mux MCP is registered, the same generated Claude settings allow only the closed read-tool set without a permission prompt.
   `notify` and `request_spawn` are deliberately absent from that allowlist and retain Claude's normal tool approval.

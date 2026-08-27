@@ -78,6 +78,15 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Terminals', setting: 'claude_max_columns',
     label: 'Claude width limit', where: 'Settings → Terminals',
   },
+  // Whether typing an agent's name in a terminal launches it through mux. Linked
+  // from the console-contention notice because that notice is the one moment a
+  // user is looking at the consequence of this setting being on, and "why is my
+  // shell fighting my agent" has no other answer they could reach.
+  'terminals.agentShims': {
+    surface: 'settings', section: 'Terminals', setting: 'agent_shims_on_shell_path',
+    label: 'Launch agents through swe-mux when typed in a terminal',
+    where: 'Settings → Terminals',
+  },
   'projects.newProjectParent': {
     surface: 'settings', section: 'Projects', setting: 'new_project_parent',
     label: 'Default parent folder for new projects', where: 'Settings → Projects',
