@@ -26,16 +26,25 @@ def no_real_bundle_scan(monkeypatch: Any) -> None:
     that exercise the gate override this stub with their own holders.
     """
     monkeypatch.setattr(system_routes, "bundle_lock_holders", lambda _bundle: [])
+    # Scans are cached for 15s and keyed per data dir, so a stub from a finished
+    # test could otherwise answer for the next one within the same worker.
+    system_routes.reset_bundle_holder_scans()
 
 
 class FakeRequest:
     def __init__(
-        self, app: dict[str, Any], body: Any = None, *, remote: str = "127.0.0.1"
+        self,
+        app: dict[str, Any],
+        body: Any = None,
+        *,
+        remote: str = "127.0.0.1",
+        query: dict[str, str] | None = None,
     ) -> None:
         self.app = app
         self._body = body
         self.remote = remote
         self.headers: dict[str, str] = {}
+        self.query: dict[str, str] = dict(query or {})
 
     async def json(self) -> Any:
         if self._body is None:
@@ -152,6 +161,136 @@ async def test_redeploy_refused_while_the_bundle_is_held(
     )
     assert response.status == 202
     assert spawned
+
+
+async def test_the_status_endpoint_scans_only_when_asked(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The wait loop polls this every two seconds; the scan takes seconds.
+
+    Measured on the primary host 2026-08-27: 7.8s cold, 2.7s warm. Running it on
+    every status read would cost more than the redeploy being reported on, so it
+    is opt-in - and `bundle_holders: null` says "not scanned", which is not the
+    same answer as an empty list.
+    """
+    scans: list[Path] = []
+    monkeypatch.setattr(
+        system_routes, "bundle_lock_holders", lambda bundle: scans.append(bundle) or []
+    )
+    quiet = await system_routes.daemon_redeploy_status(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    assert scans == []
+    assert _payload(quiet)["bundle_holders"] is None
+    assert _payload(quiet)["bundle_holders_note"] == ""
+
+    asked = await system_routes.daemon_redeploy_status(  # type: ignore[arg-type]
+        FakeRequest(_app(tmp_path), query={"holders": "1"})
+    )
+    assert len(scans) == 1
+    assert _payload(asked)["bundle_holders"] == []
+
+
+async def test_the_dialogs_scan_is_the_one_the_accept_waits_on(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The press must not pay for a scan the dialog already ran.
+
+    This is the whole reason the confirm dialog asks for `holders=1`: the
+    seconds-long process walk happens while the operator is reading the dialog,
+    and the accept that follows reuses it instead of starting a second one.
+    """
+    holders = [{"pid": 4321, "name": "node.exe", "via": "cwd", "path": "dist/swe-mux"}]
+    scans: list[Path] = []
+
+    def scan(bundle: Path) -> list[dict[str, Any]]:
+        scans.append(bundle)
+        return holders
+
+    monkeypatch.setattr(system_routes, "bundle_lock_holders", scan)
+    app = _app(tmp_path)
+    dialog = await system_routes.daemon_redeploy_status(  # type: ignore[arg-type]
+        FakeRequest(app, query={"holders": "1"})
+    )
+    assert _payload(dialog)["bundle_holders"] == holders
+    assert "pid 4321 node.exe" in _payload(dialog)["bundle_holders_note"]
+
+    accepted = await system_routes.daemon_redeploy(FakeRequest(app))  # type: ignore[arg-type]
+    assert accepted.status == 409
+    assert _payload(accepted)["error"] == "bundle_in_use"
+    # One scan, two consumers.
+    assert len(scans) == 1
+
+
+async def test_a_scan_older_than_the_window_is_run_again(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The cache is a latency fix, not a source of truth about the bundle.
+
+    A holder that appears after the scan would be missed, so the reuse window is
+    short by construction and everything past it rescans - the swap's own rename
+    retry and rollback stay the backstop rather than becoming the first line of
+    defence.
+    """
+    scans: list[Path] = []
+    monkeypatch.setattr(
+        system_routes, "bundle_lock_holders", lambda bundle: scans.append(bundle) or []
+    )
+    monkeypatch.setattr(system_routes, "BUNDLE_HOLDER_CACHE_SECONDS", 0.0)
+    app = _app(tmp_path)
+    for _ in range(2):
+        await system_routes.daemon_redeploy_status(  # type: ignore[arg-type]
+            FakeRequest(app, query={"holders": "1"})
+        )
+    assert len(scans) == 2
+
+
+async def test_a_failed_scan_is_never_cached_as_an_answer(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """"Nobody holds the bundle" and "the scan did not finish" are opposites.
+
+    Caching the second as the first would let a doomed swap through for the whole
+    reuse window, on a gate whose entire job is to refuse before minutes of build.
+    """
+    attempts: list[Path] = []
+
+    def scan(bundle: Path) -> list[dict[str, Any]]:
+        attempts.append(bundle)
+        if len(attempts) == 1:
+            raise OSError("process enumeration failed")
+        return []
+
+    monkeypatch.setattr(system_routes, "bundle_lock_holders", scan)
+    app = _app(tmp_path)
+    with pytest.raises(OSError):
+        await system_routes.daemon_redeploy_status(  # type: ignore[arg-type]
+            FakeRequest(app, query={"holders": "1"})
+        )
+    retried = await system_routes.daemon_redeploy_status(  # type: ignore[arg-type]
+        FakeRequest(app, query={"holders": "1"})
+    )
+    assert len(attempts) == 2
+    assert _payload(retried)["bundle_holders"] == []
+
+
+async def test_two_daemons_never_read_each_others_scan(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A scan belongs to a daemon instance, keyed by its data dir.
+
+    An isolated second daemon (a different `~/.mux`) targets its own bundle, and
+    one instance's answer standing in for another's is exactly the confusion the
+    data-dir key exists to prevent.
+    """
+    scans: list[Path] = []
+    monkeypatch.setattr(
+        system_routes, "bundle_lock_holders", lambda bundle: scans.append(bundle) or []
+    )
+    for data_dir in (tmp_path / "primary", tmp_path / "isolated"):
+        data_dir.mkdir()
+        await system_routes.daemon_redeploy_status(  # type: ignore[arg-type]
+            FakeRequest(_app(data_dir), query={"holders": "1"})
+        )
+    assert len(scans) == 2
 
 
 async def test_redeploy_single_flight_lock(tmp_path: Path) -> None:

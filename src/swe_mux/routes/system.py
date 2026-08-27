@@ -10,6 +10,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -443,6 +444,102 @@ def _redeploy_interruptions(request: web.Request) -> dict[str, Any]:
     }
 
 
+#: How long a bundle-holder scan may be reused, and the reason there is a cache
+#: at all.
+#:
+#: The scan walks every process on the host reading its exe and cwd, which
+#: measured 7.8s cold and 2.7s warm on the primary host (2026-08-27). It used to
+#: run only on the accept path, so pressing "Rebuild + redeploy" spent that whole
+#: window doing nothing observable - the UI could not show a progress chip
+#: because nothing had told it a redeploy existed yet. The confirm dialog now
+#: starts the scan while the operator is still reading it (`?holders=1`), and the
+#: accept that follows joins that same scan instead of starting a second one.
+#:
+#: The window is bounded because a holder that appears inside it is missed: 15s
+#: covers reading a dialog, and the swap's own rename retry and rollback stay the
+#: backstop they were designed to be rather than becoming the first line of
+#: defence. A stale answer in the other direction (a holder that has since
+#: exited) refuses a redeploy that would have worked, which the operator resolves
+#: by retrying - the recoverable side of the trade.
+BUNDLE_HOLDER_CACHE_SECONDS = 15.0
+
+#: In-flight or recently finished scans, keyed by (data dir, bundle): a scan
+#: belongs to a daemon instance rather than to this module, so two daemons on
+#: different config never read each other's answer.
+_BUNDLE_HOLDER_SCANS: dict[tuple[str, str], tuple[float, asyncio.Task[list[dict[str, Any]]]]] = {}
+
+
+def reset_bundle_holder_scans() -> None:
+    """Forget every cached scan. For tests; the daemon never needs it."""
+    _BUNDLE_HOLDER_SCANS.clear()
+
+
+def _scan_unusable(task: asyncio.Task[list[dict[str, Any]]]) -> bool:
+    """Whether a finished scan produced nothing a caller may act on.
+
+    A failed or cancelled scan must not be cached as an answer: "nobody holds
+    the bundle" and "the scan did not complete" are opposite facts, and reusing
+    the second as the first for 15s would let a doomed swap through.
+    """
+    if not task.done():
+        return False
+    if task.cancelled():
+        return True
+    return task.exception() is not None
+
+
+async def _scan_bundle_holders(bundle: Path) -> list[dict[str, Any]]:
+    started = time.monotonic()
+    holders = await asyncio.to_thread(bundle_lock_holders, bundle)
+    log.info(
+        "redeploy bundle scan: %d holder(s) of %s in %dms",
+        len(holders),
+        bundle,
+        round((time.monotonic() - started) * 1000),
+    )
+    return holders
+
+
+async def _bundle_holders(
+    config: Config, bundle: Path, *, max_age: float | None = None
+) -> list[dict[str, Any]]:
+    """Processes anchoring `bundle`, reusing a scan begun up to `max_age` ago.
+
+    Single-flight as well as cached: an accept that arrives while the dialog's
+    scan is still running waits out the remainder of that scan rather than
+    starting a second full walk of the process table.
+    """
+    window = BUNDLE_HOLDER_CACHE_SECONDS if max_age is None else max_age
+    key = (str(getattr(config, "data_dir", "")), str(bundle))
+    now = time.monotonic()
+    for stale_key, (started, task) in list(_BUNDLE_HOLDER_SCANS.items()):
+        if task.done() and now - started > window:
+            del _BUNDLE_HOLDER_SCANS[stale_key]
+    entry = _BUNDLE_HOLDER_SCANS.get(key)
+    if entry is not None:
+        started, task = entry
+        if not _scan_unusable(task) and (not task.done() or now - started <= window):
+            log.debug("redeploy bundle scan reused for %s", bundle)
+            # Shielded: this waiter may be a request the client has abandoned,
+            # and cancelling the awaited task would throw away a scan the next
+            # request is about to need - while its thread ran on regardless.
+            return await asyncio.shield(task)
+        del _BUNDLE_HOLDER_SCANS[key]
+    task = asyncio.ensure_future(_scan_bundle_holders(bundle))
+    _BUNDLE_HOLDER_SCANS[key] = (now, task)
+    return await asyncio.shield(task)
+
+
+def _wants_bundle_holders(request: web.Request) -> bool:
+    """Whether this status read asked for the seconds-long holder scan.
+
+    Off by default and deliberately opt-in: the redeploy wait loop polls this
+    endpoint every two seconds, and a scan on that path would cost more than the
+    redeploy it is reporting on.
+    """
+    return str(request.query.get("holders", "")).strip().casefold() in {"1", "true", "yes"}
+
+
 def _redeploy_last_result(config: Config) -> dict[str, Any] | None:
     """The previous redeploy's machine-readable outcome, or None.
 
@@ -537,7 +634,10 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         # Refuse with the holders named instead of failing after minutes of
         # build (measured live 2026-08-02: two redeploys died at this rename).
         bundle = frozen_bundle_root() or (root / "dist" / "swe-mux")
-        holders = await asyncio.to_thread(bundle_lock_holders, bundle)
+        # Joins the scan the confirm dialog started as it opened, when there is
+        # one: this is the last thing standing between the press and the 202 the
+        # UI needs in order to say anything at all.
+        holders = await _bundle_holders(config, bundle)
         if holders:
             return json_response(
                 {
@@ -692,10 +792,25 @@ async def daemon_redeploy_status(request: web.Request) -> web.Response:
     While the build stage runs this daemon is still alive, so the UI can
     detect an early build failure (running=false without ever losing the
     daemon) and surface the log instead of waiting out a reconnect window.
+
+    `?holders=1` additionally runs the seconds-long bundle-holder scan, which
+    the confirm dialog asks for once as it opens: it warns before the operator
+    commits instead of refusing after they have, and it warms the scan the
+    accept will otherwise have to wait out.
     """
     config: Config = request.app[keys.CONFIG]
     pid = _redeploy_lock_pid(config)
     tail = _redeploy_log_tail(config, running=pid is not None)
+    # `None` and `[]` are different answers and are kept apart: "not scanned"
+    # must never render as "scanned, nothing holds it".
+    holders: list[dict[str, Any]] | None = None
+    if _wants_bundle_holders(request):
+        bundle = frozen_bundle_root()
+        if bundle is None:
+            source = redeploy_source_root()
+            bundle = None if source is None else source / "dist" / "swe-mux"
+        if bundle is not None:
+            holders = await _bundle_holders(config, bundle)
     response = json_response(
         {
             "running": pid is not None,
@@ -711,6 +826,10 @@ async def daemon_redeploy_status(request: web.Request) -> web.Response:
             # before you commit, which is the only moment the answer can change
             # what you do.
             "interrupted": _redeploy_interruptions(request),
+            # Only present when `?holders=1` asked for it; null means "not
+            # scanned", which is not the same as an empty list.
+            "bundle_holders": holders,
+            "bundle_holders_note": describe_holders(holders) if holders else "",
             "available": redeploy_source_root() is not None and shutil.which("uv") is not None,
         }
     )
