@@ -118,8 +118,17 @@ tests/.phase2-*.db*
 # playwright-cli session output (snapshots, console logs) from driving the live UI
 .playwright-cli/
 
+# Operator scratch at the repo root. It has held real secrets (a Tailscale cert/key
+# pair sat in .tmp/tailscale-cert-check/ and was tracked until this rule landed), so
+# nothing under it belongs in a public clone.
 .tmp/
 .swe-mux/
+
+# One-off UI mockups dropped at the repo root while designing a surface. They are a
+# scratch artifact of the design pass, not a source file: nothing imports them, no
+# build reads them, and they rot the moment the real component changes.
+/sidebar-row-mockup.html
+
 # Smart Turn v3 weights, fetched by tools/fetch_smart_turn.py (BSD-2-Clause, ~8 MB).
 # An experiment behind frontend/smart-turn-lab.html; a binary this size does not
 # belong in git history, and the lab tells you how to fetch it when it is absent.
