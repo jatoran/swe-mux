@@ -1,0 +1,340 @@
+# Release automation for swe-mux: build, validate, publish, announce.
+#
+# One workflow rather than four, because the four steps are one release unit -
+# a wheel that reached PyPI but never got its hashes into the update manifest is
+# a release that silently cannot be upgraded to, and splitting them across
+# workflows is how that state becomes reachable.
+#
+# The trigger is a `v*` tag push. `workflow_dispatch` exists for exactly one
+# reason: publishing an alpha to TestPyPI first, which Roadmap Phase 11 requires
+# before the real name is reserved on PyPI. That path deliberately stops after
+# publishing - it creates no GitHub Release and touches no update manifest,
+# because a validation run must not tell every installed copy that a new version
+# is out.
+#
+# Nothing here holds a credential. Publishing uses PyPI Trusted Publishing over
+# OIDC (`id-token: write`), so there is no API token in the repository, in an
+# environment, or in this file - which is the whole point: a token that does not
+# exist cannot leak, and a compromised workflow file cannot mint one because the
+# identity is bound to this repository, this workflow, and this environment on
+# PyPI's side. The only credential referenced anywhere is `github.token`, the
+# per-run automatic token, which is not a stored secret and expires with the job.
+#
+# The build runs on ubuntu even though swe-mux is Windows-first: the wheel is
+# pure Python and platform-independent, so building it on the cheapest runner is
+# free, and building it on Windows would only make the artifact's provenance
+# harder to reproduce. Correctness on Windows is `ci.yml`'s question, and a tag
+# is only pushed to a commit that already passed it.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      index:
+        description: "Which package index to publish to"
+        type: choice
+        default: testpypi
+        options: [testpypi, pypi]
+
+# Least privilege by default; each job widens only what it needs. The publish
+# jobs need `id-token: write` and nothing else - notably not `contents: write`,
+# so a compromised publish step cannot rewrite the repository it published from.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.artifacts.outputs.version }}
+      wheel: ${{ steps.artifacts.outputs.wheel }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend
+        run: npm --prefix frontend ci
+
+      # This step is load-bearing, not a convenience. `src/swe_mux/static`'s
+      # hashed assets and `index.html` are gitignored build output, and
+      # `[tool.hatch.build.targets.wheel] artifacts` is what pulls them into the
+      # wheel anyway. So a wheel built from a bare checkout installs cleanly,
+      # starts the daemon, and serves no UI at all - the failure is silent, it
+      # only appears in a browser, and no test catches it. Building the frontend
+      # immediately before `uv build`, in the same checkout, is what makes the
+      # bundle provably the same revision as the Python code beside it.
+      - name: Build frontend into the package
+        run: npm --prefix frontend run build
+
+      # Both artifacts, always. Known gap, recorded rather than hidden: the
+      # `artifacts` glob above is a wheel-target setting, so the sdist carries no
+      # frontend bundle and a wheel rebuilt from it would be UI-less. The sdist
+      # is published for auditability and for distro packagers who build the
+      # frontend themselves; `pip install swe-mux` resolves the wheel. Closing it
+      # belongs to `pyproject.toml`, not to this workflow.
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Identify the artifacts
+        id: artifacts
+        run: |
+          wheel=$(ls dist/*.whl)
+          version=$(basename "$wheel" | cut -d- -f2)
+          echo "wheel=$wheel" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Built $wheel (version $version)"
+
+      # A tag and the version it claims to be are two independent facts, and they
+      # have disagreed in every project that did not check. The manifest, the
+      # release page, and the download URLs are all keyed by the tag while the
+      # installed package reports the metadata version, so a mismatch makes the
+      # update check compare the wrong pair of numbers forever.
+      - name: Tag agrees with package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="${{ steps.artifacts.outputs.version }}"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${version}" >&2
+            exit 1
+          fi
+
+      # The single gate between a build and an index that never forgets it. The
+      # script owns what "valid" means (frontend bundle present and from this
+      # revision, metadata, licence files, entry points) and exits non-zero when
+      # it is not; this workflow deliberately knows none of those rules, so
+      # tightening them is a change to one file and not to the release pipeline.
+      - name: Validate the release artifact
+        run: uv run python packaging/verify_release_artifact.py "${{ steps.artifacts.outputs.wheel }}"
+
+      # Uploaded once and downloaded by every later job, so the bytes that are
+      # published, attached to the Release, and hashed into the update manifest
+      # are provably the same bytes. Rebuilding per job would give three
+      # artifacts that only probably agree.
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Two publish jobs rather than one with a computed index URL. The URL decides
+  # where a package permanently lands, so it is written literally in the job that
+  # uses it and guarded by a literal condition - an expression that silently
+  # evaluates to the wrong one publishes to the wrong index, and PyPI does not
+  # let you take a filename back.
+  publish-testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.index == 'testpypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The environment name is half of the trusted-publisher identity on
+    # TestPyPI's side; renaming it here without renaming it there fails the
+    # exchange rather than publishing to the wrong place.
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/swe-mux
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    needs: build
+    if: github.event_name == 'push' || inputs.index == 'pypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/swe-mux
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # No `repository-url`: the action's default is PyPI, and stating it would
+      # be a second place for the two to drift apart.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # GitHub Releases is the distribution channel for the frozen desktop app and
+  # the fallback for the update check when the site is unreachable, so the same
+  # artifacts live in both places on purpose.
+  github-release:
+    needs: [build, publish-pypi]
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.index != 'testpypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # `gh` rather than a third-party release action: it ships on the runner, it
+      # authenticates with the automatic token, and it is one fewer external
+      # action with write access to this repository's releases.
+      #
+      # Create-if-missing rather than create: a tag pushed from a local checkout
+      # has no release yet, while a tag pushed after a draft release was prepared
+      # by hand does, and both are normal. `--clobber` makes a re-run of a failed
+      # publish idempotent instead of erroring on an already-uploaded asset.
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          prerelease=""
+          if printf '%s' "$VERSION" | grep -Eq '(a|b|rc)[0-9]+$'; then
+            prerelease="--prerelease"
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes $prerelease
+          fi
+          gh release upload "$TAG" dist/* --clobber
+
+  # The update-check endpoint. See the comment on the write step for the path
+  # contract; it is the one thing here that installed copies depend on.
+  update-manifest:
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Shared with `pages.yml`. Both workflows deploy the same site, and Pages
+    # serves whichever deployment finished last - so a site commit landing during
+    # a release would otherwise publish a site with no `version.json` in it.
+    # `cancel-in-progress: false` because the loser here must wait, not be
+    # dropped: a cancelled release deployment leaves the manifest a version
+    # behind with nothing reporting it.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      # `master`, not the tag. The site is not versioned with the package: it
+      # carries the current landing page, docs and changelog, and deploying the
+      # tag's copy would silently roll back every site edit made since the tag
+      # was cut. Only the manifest below is tag-derived.
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # **Path contract: `https://swemux.dev/version.json`** (`site/version.json`
+      # in the deploy root, and `<pages-url>/version.json` before the custom
+      # domain is live). The in-app update check polls exactly this URL, so it is
+      # a published interface: the path never moves, and `schema` is bumped
+      # rather than a field being repurposed, because an old installed build will
+      # be reading it years from now and cannot be asked to change first.
+      #
+      # Every field is derived from the artifacts that were just published rather
+      # than from the tag alone. The hashes in particular are not decoration: the
+      # frozen-app updater verifies a downloaded artifact's SHA-256 against this
+      # file before staging a swap, so a manifest with a guessed or stale hash
+      # turns every update into a refusal.
+      #
+      # Written by the runner's own `python3` rather than assembled from shell
+      # and `jq`: this step runs only on a tag, so a quoting mistake in it would
+      # surface for the first time during a real release, and a script that can
+      # be run and read as one piece is the version of that risk worth taking.
+      - name: Write the update manifest
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import datetime
+          import hashlib
+          import json
+          import os
+          import pathlib
+
+          tag = os.environ["TAG"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+
+          artifacts = [
+              {
+                  "name": path.name,
+                  "url": f"{base}/{path.name}",
+                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+              }
+              for path in sorted(pathlib.Path("dist").iterdir())
+              if path.is_file()
+          ]
+          if not artifacts:
+              raise SystemExit("no artifacts to describe; refusing to publish an empty manifest")
+
+          now = datetime.datetime.now(datetime.timezone.utc)
+          manifest = {
+              "schema": 1,
+              "version": os.environ["VERSION"],
+              "tag": tag,
+              "published": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "changelog": f"https://github.com/{repo}/releases/tag/{tag}",
+              "artifacts": artifacts,
+          }
+
+          out = pathlib.Path("site/version.json")
+          out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          print(out.read_text(encoding="utf-8"))
+          PY
+
+      # Also attached to the Release, and this is what makes the manifest survive
+      # an ordinary site commit: `pages.yml` deploys from a checkout of master,
+      # where `site/version.json` does not exist (it is generated, never
+      # committed), so without a copy to restore from, the next documentation
+      # typo fix would delete the update endpoint. The Release asset is the one
+      # durable copy and this is its only writer.
+      - name: Attach the manifest to the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" site/version.json --clobber
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
