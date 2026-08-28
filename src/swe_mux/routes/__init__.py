@@ -61,6 +61,7 @@ from . import (
     support,
     system,
     terminal,
+    update,
     usage,
     voice,
 )
@@ -70,6 +71,7 @@ from . import (
 #: and session domains, then the agent-facing ingress, and the WebSockets last.
 ORDER = (
     system,
+    update,
     settings,
     automation,
     attention,

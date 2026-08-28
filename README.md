@@ -4,7 +4,7 @@
 
 swe-mux is a local, browser-based terminal multiplexer and control plane for the coding-agent CLIs you already run.
 It owns the pseudoterminals, so Claude Code, Codex, opencode, and any other CLI or shell run in a real terminal exactly as they do outside it, while swe-mux adds the layer around them: sessions that outlive the app, one status vocabulary across vendors, a queue for work you stage while an agent is mid-turn, parallel git worktrees with a verification-gated landing path, a record of which agent wrote which commit, and the whole workspace reachable from a phone.
-It runs entirely on your machine and has no server, no account, and no telemetry.
+It runs entirely on your machine and has no server, no account, and no telemetry - the one request it makes on its own behalf is a daily, disableable check for a newer release, described under "Local-only" below.
 
 <!-- TODO(release): hero demo - drop the hero video/GIF here. Asset does not exist yet; the operator
      records it. Per site/README.md section 2, this is the desktop workspace at full width (sidebar,
@@ -60,6 +60,12 @@ Native transcripts are never moved, rewritten, or deleted; the searchable copy i
 There is no swe-mux server, no swe-mux account, and no telemetry.
 Your agent CLIs keep talking to their own vendors under your own subscription, and swe-mux proxies nothing and resells nothing.
 Three optional features do reach the network, each off until you turn it on: control-plane summarization and voice summaries call an OpenRouter-compatible endpoint with your own key, web push is delivered through your browser vendor's push service with an encrypted payload, and experimental Edge TTS is described in "Not affiliated with the agent vendors" below.
+
+One request swe-mux makes on its own behalf, and it is the single exception to the sentence above.
+Once a day the daemon fetches `https://swemux.dev/version.json` to see whether a newer release exists, and shows a dismissible banner if one does.
+Nothing downloads and nothing installs.
+It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of your machine or your copy - the server learns nothing an IP address does not already say.
+Turn it off in Settings → Diagnostics → Software updates (`update_check_enabled`), and no request is made at all.
 
 ## Install
 

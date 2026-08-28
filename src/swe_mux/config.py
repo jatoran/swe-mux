@@ -651,6 +651,16 @@ class Config:
     # console). Runtime changes go through POST /api/debug/log-level or a
     # config-file edit; neither requires a restart.
     log_level: str = "INFO"
+    # Whether the daemon may ask https://swemux.dev/version.json once a day
+    # whether a newer release exists (`update_check.py`). On by default and
+    # deliberately visible in Settings, because it is the **only** request
+    # swe-mux makes on its own behalf and the README's no-telemetry claim is
+    # written around it: the fetch carries no query string, no custom header, no
+    # cookie, and no install id, so it is byte-identical for every install. Off
+    # means nothing leaves the machine at all - not a reduced check, not a
+    # deferred one. Read live at each check, so a toggle takes effect without a
+    # restart.
+    update_check_enabled: bool = True
     terminal_renderer: str = "auto"
     # Desktop width envelope for Claude panes, in columns. Claude Code's live-region
     # renderer can leave stale and duplicated cells across large column changes, so a

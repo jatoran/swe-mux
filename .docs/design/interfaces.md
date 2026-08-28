@@ -104,6 +104,104 @@ Settings → Diagnostics → **Logging** edits the persisted `log_level` through
 survives a restart; it sits beside the diagnostics bundle because that bundle carries the log
 it decides the contents of, which makes "set DEBUG, reproduce, export" one pass.
 
+## Release update check
+
+```text
+GET  /api/update
+POST /api/update/check     (X-Mux-User-Gesture: update-check)
+POST /api/update/dismiss   {version: str}
+```
+
+Whether a newer swe-mux release exists. **Detection and presentation only**:
+nothing here downloads an artifact, verifies a hash, or installs anything, and
+the frozen-app staged-swap updater is a separate item (`ROADMAP.md` Phase 11,
+"Update propagation").
+
+The daemon fetches `https://swemux.dev/version.json` - the manifest
+`.github/workflows/release.yml` writes and documents as a published interface -
+at most once a day, from a supervised background loop
+(`update_check.py`, `/api/diagnostics/background` names it `update-check`).
+**This is the only outbound request swe-mux makes on its own behalf**, which is
+what keeps the README's no-telemetry claim true rather than approximately true:
+it is a plain `GET` of one file that is byte-identical for every install, with no
+query string, no custom header, no cookie jar (`DummyCookieJar`, so a
+`Set-Cookie` from the site cannot become an install id on the next day's
+request), and no body. `update_check_enabled` (Settings → Diagnostics →
+**Software updates**, on by default) gates it, and off means *no request is
+made*, under any caller including the explicit one below.
+
+The interval is enforced against a wall-clock timestamp persisted in
+`<data_dir>/update-check.json`, so a daemon restarting in a loop still makes at
+most one request a day; a timestamp dated in the *future* (a clock wound back) is
+treated as due, because one extra request is the recoverable side of that trade
+and the other reading would stop checking until wall time caught up. The loop
+takes its first look 60s after the runtime is built, so a start is never
+accompanied by a network call.
+
+`GET` never reaches the network. It reports what the last check found - so
+mounting the banner, refreshing a phone, or polling this endpoint costs nothing
+and can never be the reason a request hangs - and returns
+`{enabled, status, current_version, checked_at, next_check_at, interval_seconds,
+update_available, latest, dismissed[], banner, manifest_url}`. `latest` is
+`{version, tag, published, changelog, source}` or `null`, where `source` is
+`manifest` or `github`.
+
+`status` is the daemon's own word and is never collapsed into a boolean, because
+`never_checked` ("we have not looked") and `unreachable`/`malformed`/
+`unsupported_schema`/`incomparable` ("we looked and could not tell") are
+different facts that would otherwise render identically: `ok`, `never_checked`,
+`disabled`, `unreachable` (offline, DNS, a non-200), `malformed` (HTML from a
+captive portal, or JSON that is not a manifest), `unsupported_schema` (a
+`schema` this build has never heard of), `incomparable` (the fetch and the
+schema were fine and the version string was not one), and `unavailable` (a
+runtime with no checker, answered as a quiet 200 rather than a 404 so a passive
+banner never has to render an HTTP error). **Every one of them is a logged
+non-event**: nothing here raises on a UI path.
+
+`schema` is honoured rather than assumed. An unrecognized value degrades to
+"cannot tell" **before any field is read** - a future manifest may repurpose
+`version`, and a build installed today will still be reading this file in three
+years and cannot be asked to change first. `artifacts` is read past on purpose:
+it exists for the updater, and a check that neither downloads nor verifies has
+no use for a hash.
+
+When the manifest produces no answer - for *any* reason, not only an unreachable
+one - the check falls back to `https://api.github.com/repos/OWNER/swe-mux/releases/latest`
+(60 requests/hour unauthenticated is ample for a daily check). It sends only
+`Accept: application/vnd.github+json`, which is content negotiation rather than
+identification. A fallback that also fails leaves the *manifest's* reason in
+place, because that is the one an operator can act on, and the answer is never
+worse than `unknown`.
+
+The comparison is PEP 440, not a string compare: `0.10.0` is newer than `0.9.0`,
+`0.1.0` is not newer than itself, `1.0` and `1.0.0` are one version, a `v` prefix
+is stripped, a local segment is ignored, and a prerelease sorts below its own
+release (`1.0.0rc1 < 1.0.0`) while still being newer than the release before it.
+An unparseable version on either side answers "cannot tell" rather than "older".
+`update_check.parse_version`/`is_newer` are pure and are where this is pinned.
+
+`POST /api/update/check` is the only handler that may reach the network, and it
+requires the explicit-action header for the same reason the firewall repair and
+mobile-voice endpoints do - nothing a background poll or a stray reload can
+trigger should be able to make this request. It skips the interval, never the
+switch: with the check disabled it returns `409 update_check_disabled` (naming
+the setting) and makes no request.
+
+`POST /api/update/dismiss` records one declined version. Per version, so
+declining `0.2.0` does not hide `0.3.0` a month later - that difference is the
+whole distinction between dismissing an update and turning the feature off - and
+stored beside the daemon's state rather than in a browser, because the *install*
+is what gets updated and declining on the desktop must not leave the phone
+nagging about the same release.
+
+The surface is one dismissible strip in the app shell's banner row
+(`UpdateBanner.tsx`, `.release-update-banner`), carrying the version and a link
+to the release notes. It is a row of chrome rather than an overlay, so it cannot
+cover a terminal or arrive on top of a turn; `role="status"` with
+`aria-live="polite"` is the same promise for a screen reader. It is **not** the
+`.ui-update-banner` strip beside it, which says this browser tab is behind the
+daemon it is already talking to and reloads itself.
+
 ## Daemon self-restart
 
 ```text

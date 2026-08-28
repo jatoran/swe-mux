@@ -186,6 +186,7 @@ from .tailscale import (
     is_tailscale_ip,
 )
 from .tier0_store import Tier0Context, Tier0Store
+from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
 from .usage import UsageManager
 from .voice import (
     VoiceService,
@@ -1911,6 +1912,14 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         decision_store=telemetry,
     )
     background.start(PUSH_SENDER_LOOP, push_sender.run)
+    # The one outbound request swe-mux makes on its own behalf, and the only
+    # loop here whose first iteration is deliberately delayed: the interval is
+    # persisted, so a restart cannot turn into a request loop, and the delay
+    # keeps a start from being accompanied by a network call on a machine whose
+    # link comes up after the daemon does. Off entirely under
+    # `update_check_enabled`, which it re-reads at every check.
+    update_checker = UpdateChecker(config)
+    update_checker.start()
     history_search_maintenance_task = asyncio.create_task(
         history.maintain_message_search_indexes(), name="history-message-search-maintenance"
     )
@@ -2042,6 +2051,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             keys.RECONCILE_TASK: reconcile_task,
             keys.HISTORY_SEARCH_MAINTENANCE_TASK: history_search_maintenance_task,
             keys.PROMPT_QUEUE_STORE: prompt_queue_store,
+            keys.UPDATE_CHECK: update_checker,
         },
     )
     # The startup duration nobody could see. The listeners are already bound by
@@ -2112,6 +2122,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         RETENTION_LOOP,
         STATE_WATCHDOG_LOOP,
         PUSH_SENDER_LOOP,
+        UPDATE_CHECK_LOOP,
     ):
         await background.stop(loop_name)
     # Stopped in the order they were started, each skipped when the build never

@@ -49,6 +49,13 @@ Also holds `PACKAGE_DIR`, the package-anchored checkout root the redeploy resolv
 
 **Not:** the restart's successor-spawn policy beyond spawning it, or the redeploy build itself (`packaging/redeploy_desktop.py`).
 
+### `routes/update.py`
+
+`GET /api/update` (the last check's answer; reads state and never reaches the network), `POST /api/update/check` (the one handler that may, behind the `update-check` gesture header and refused with `409 update_check_disabled` while the switch is off), and `POST /api/update/dismiss`.
+A runtime with no checker published answers a quiet 200 carrying `status: "unavailable"` rather than a 404, because every consumer is a passive banner.
+
+**Not:** the interval, the schema handling, or the comparison (`update_check.py`); anything that downloads or installs.
+
 ### `routes/settings.py`
 
 `/api/config` and its reset, the settings bundle, keybindings, meta-hooks, and `/api/settings`.

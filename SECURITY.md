@@ -64,6 +64,17 @@ Host and Origin authorities that would accompany them.
 An SSH local forward whose browser-facing address is loopback (`ssh -L 9876:127.0.0.1:8765 host`)
 is supported, and confers the same authority to whoever the SSH account admits.
 
+One request leaves the machine that the operator did not configure: the daily release
+check, a `GET` of `https://swemux.dev/version.json` (falling back to the GitHub Releases
+API) that reports whether a newer version exists and downloads nothing.
+It carries no query string, no custom header, no cookie, and no identifier of the machine
+or the install, so it is byte-identical for every copy of swe-mux and conveys nothing
+beyond the fact that some address asked for a public file.
+It is disabled by `update_check_enabled` in Settings → Diagnostics, and disabled means no
+request is made at all.
+A way to make that request carry install-identifying data, or to make it happen with the
+setting off, is in scope below.
+
 Two consequences define scope.
 **Exposing the daemon to an untrusted network is outside the supported configuration**, so a
 report whose precondition is such an exposure describes the documented behaviour of a
@@ -96,6 +107,9 @@ A vulnerability is something that breaks the boundary above **as designed**:
   firewall repair path or the desktop elevation path.
 - A vulnerable dependency that swe-mux actually redistributes in the desktop bundle or resolves
   into the wheel's install closure.
+- Making the release update check identify the install - a query string, a header, a cookie,
+  or any per-machine value on the request - or making it fire while `update_check_enabled`
+  is off. The no-telemetry property is a design commitment, not a side effect.
 
 ### Out of scope
 

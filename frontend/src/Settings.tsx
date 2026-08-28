@@ -58,6 +58,10 @@ import { includeSelectedModel, type ModelOption } from './modelFilter'
 import { ModelRoutingSummary } from './ModelRoutingSummary'
 import { EdgeTtsSettings, type EdgeProviderStatus } from './EdgeTtsSettings'
 import {
+  fetchUpdateStatus, lastCheckedLabel, requestUpdateCheck, updateStatusSummary,
+  type UpdateStatus,
+} from './updateCheck'
+import {
   customProviderOverride, MODEL_ROUTES, resolveRoute, type ModelRoutingConfig,
 } from './modelRouting'
 
@@ -68,6 +72,7 @@ type Config = {
   session_recovery_checkpoint_bytes:number;session_recovery_retention_days:number
   session_recovery_max_sessions:number
   log_level:'DEBUG'|'INFO'|'WARNING'|'ERROR'
+  update_check_enabled:boolean
   terminal_renderer:'auto'|'dom'|'webgl'
   harness_args:Record<string,string[]>
   harness_enabled:Record<string,boolean>
@@ -362,6 +367,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [diagnosticsMessage,setDiagnosticsMessage]=useState('')
   const [diagnosticsText,setDiagnosticsText]=useState('')
   const [connectPhoneOpen,setConnectPhoneOpen]=useState(false)
+  // The release update check. Read passively on mount - the daemon already holds
+  // the answer, so opening Settings costs nothing; only the button reaches out.
+  const [updateStatus,setUpdateStatus]=useState<UpdateStatus|null>(null)
+  const [updateBusy,setUpdateBusy]=useState(false)
+  const [updateError,setUpdateError]=useState('')
+  useEffect(()=>{void fetchUpdateStatus().then(setUpdateStatus).catch(()=>{})},[])
+  const updateSummary=updateStatusSummary(updateStatus)
+  const updateChecked=lastCheckedLabel(updateStatus)
+  const checkForUpdates=async()=>{
+    if(updateBusy)return
+    setUpdateBusy(true);setUpdateError('')
+    try{setUpdateStatus(await requestUpdateCheck())}
+    catch(cause){setUpdateError(cause instanceof Error?cause.message:String(cause))}
+    finally{setUpdateBusy(false)}
+  }
   const [prerequisites,setPrerequisites]=useState<Prerequisite[]|null>(null)
   // Placeholder for the assistant's new-project location: the parent directory most
   // of the registered projects already live in. A hint only - never written back.
@@ -2154,6 +2174,26 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               {!prereq.present&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
             </li>)}</ul></div>
             :<p>Prerequisite status is unavailable.</p>}
+          </section>
+
+          {/* Above Rebuild and reload because it is the question that comes first:
+              "is there anything new", then "put it on this machine". It is also the
+              one place in the app that has to be honest about an outbound request,
+              which is why the switch is here in full rather than as a link. */}
+          <section><h3>Software updates</h3>
+          <p>Once a day the daemon asks <code>{updateStatus?.manifest_url||'https://swemux.dev/version.json'}</code> whether a newer release exists, and shows a dismissible banner if one does. <strong>Nothing downloads and nothing installs.</strong></p>
+          <p class="profile-hint">This is the only request swe-mux makes on its own behalf. It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of this machine. Turning it off means no request is made at all.</p>
+          <label class="check" data-setting="update_check_enabled"><span>Check for new releases</span><input type="checkbox" checked={draft.update_check_enabled} onChange={e=>change('update_check_enabled',e.currentTarget.checked)}/><small>At most one check a day, remembered across restarts.</small></label>
+          <div class="settings-config-actions"><div>
+            <p>{updateSummary||' '}</p>
+            {updateChecked&&<p class="profile-hint">Last checked {updateChecked}.</p>}
+            {updateStatus?.latest?.changelog&&updateStatus.update_available
+              ?<p><a href={updateStatus.latest.changelog} target="_blank" rel="noreferrer">Release notes for {updateStatus.latest.version}</a></p>
+              :null}
+          </div>
+            <div><button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy?'Checking…':'Check now'}</button></div>
+          </div>
+          {updateError&&<p aria-live="polite">{updateError}</p>}
           </section>
 
           {/* The same three commands the app menu carries, reachable from Settings
