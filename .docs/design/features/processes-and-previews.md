@@ -493,6 +493,16 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   inside the directory reaches outside it. A leading `/` on a tail is the route separator,
   not an escape; it resolves inside the directory as an ordinary hit or miss. Responses are
   capped at `PREVIEW_RESPONSE_BYTES` and carry `Cache-Control: no-cache`.
+- **The route-separator strip runs before the absolute-path check, so what "absolute" means
+  here is per-host.** On POSIX a tail naming an absolute path is already root-relative by the
+  time `project_path` looks, so it is *re-rooted* under the served directory and hits or
+  misses there - the same treatment `/app.css` gets, and never a followed path. Only a
+  Windows drive-lettered tail is still absolute at that point and is refused outright. The
+  containment is identical either way and the exception is not, which is what made
+  `test_an_absolute_tail_is_refused` a Windows-only assertion until the first public Linux
+  and macOS CI run caught it (2026-08-27): a proxy tail arrives as a URL path, where a
+  leading `/` carries no filesystem meaning to distinguish the two cases, so the guarantee
+  to assert is that the named file never comes back.
 - **Web content types are stated, not guessed.** On Windows `mimetypes` consults the
   registry, where `.js` is routinely `text/plain` and `.css` sometimes is; combined with the
   `X-Content-Type-Options: nosniff` every response carries, that renders the page unstyled

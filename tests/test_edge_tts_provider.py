@@ -13,10 +13,12 @@ from swe_mux import app_keys as keys
 from swe_mux.config import load_config, update_config
 from swe_mux.edge_tts_provider import (
     EDGE_RISK_ACK_VERSION,
+    EDGE_TTS_VERSION,
     EdgeTtsError,
     EdgeTtsProvider,
     EdgeVoiceCatalog,
     _safe_error_message,
+    managed_interpreter,
     normalize_edge_voices,
 )
 from swe_mux.routes.voice import edge_provider_install
@@ -202,12 +204,16 @@ async def test_managed_install_stages_verifies_and_activates(
     assert json.loads(provider.install_state_path.read_text(encoding="utf-8"))["status"] == "ready"
 
 
-async def test_failed_repair_keeps_the_working_managed_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = load_config(tmp_path / "config.toml")
-    integration = tmp_path / "integrations" / "edge-tts"
-    python = integration / "current" / "Scripts" / "python.exe"
+def install_a_working_managed_environment(integration: Path) -> Path:
+    """A previously successful managed install, laid out the way this host's uv would.
+
+    The interpreter path comes from the provider's own owner of that layout rather than
+    from a literal, because a hard-coded `current/Scripts/python.exe` describes nothing
+    that exists on POSIX - so the environment reads as absent and every assertion about
+    keeping it passes vacuously on the host that has it and fails on the one that does not.
+    """
+
+    python = managed_interpreter(integration / "current")
     python.parent.mkdir(parents=True)
     python.write_bytes(b"working")
     (integration / "install.json").write_text(
@@ -215,13 +221,22 @@ async def test_failed_repair_keeps_the_working_managed_environment(
             {
                 "schema_version": 1,
                 "status": "ready",
-                "version": "7.2.8",
+                "version": EDGE_TTS_VERSION,
                 "installed_at": 1.0,
                 "updated_at": 1.0,
             }
         ),
         encoding="utf-8",
     )
+    return python
+
+
+async def test_failed_repair_keeps_the_working_managed_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(tmp_path / "config.toml")
+    integration = tmp_path / "integrations" / "edge-tts"
+    install_a_working_managed_environment(integration)
     provider = EdgeTtsProvider(config)
     monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
 
@@ -242,6 +257,58 @@ async def test_failed_repair_keeps_the_working_managed_environment(
     assert "registry unavailable" in str(managed["last_install_error"])
     assert provider.managed_python().read_bytes() == b"working"
     assert provider.python() == str(provider.managed_python())
+
+
+async def test_a_failure_after_activation_restores_the_previous_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The swap itself must be survivable, not only the staging that precedes it.
+
+    The repair test above never reaches `_activate_managed`, so it says nothing about the
+    directory renames - which are the part whose semantics differ between hosts.
+    """
+
+    config = load_config(tmp_path / "config.toml")
+    integration = tmp_path / "integrations" / "edge-tts"
+    install_a_working_managed_environment(integration)
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        if argv[1] == "venv":
+            staged_python = provider.managed_python(Path(argv[-1]))
+            staged_python.parent.mkdir(parents=True)
+            staged_python.write_bytes(b"staged")
+
+    async def invoke(
+        executable: str, operation: str, *_arguments: str, **_options: Any
+    ) -> dict[str, Any]:
+        del executable, operation
+        return {"ok": True, "version": EDGE_TTS_VERSION}
+
+    write_state = provider._write_install_state
+    refused = False
+
+    def refuse_the_first_success_write(state: dict[str, Any]) -> None:
+        nonlocal refused
+        if state.get("status") == "ready" and not refused:
+            refused = True
+            raise OSError("no space left on device")
+        write_state(state)
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_invoke_unlocked", invoke)
+    monkeypatch.setattr(provider, "_write_install_state", refuse_the_first_success_write)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    managed = provider.managed_status()
+    assert managed["status"] == "ready"
+    assert "no space left on device" in str(managed["last_install_error"])
+    assert provider.managed_python().read_bytes() == b"working"
+    assert not (integration / "previous").exists()
+    assert not list(integration.glob(".staging-*"))
 
 
 async def test_managed_install_endpoint_requires_an_explicit_gesture() -> None:

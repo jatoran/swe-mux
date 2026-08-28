@@ -141,16 +141,26 @@ Nothing here can be delegated to an agent, because it needs a machine that is no
 - [ ] Browser pass: Chrome and Edge as primary, then Firefox, then mobile Safari and Chrome. Document what is supported rather than implying universality.
 - [ ] Confirm the Tailscale setup flow shows the phone URL with a copy button and the PWA install instruction, rather than assuming the operator derives it.
 
-## 8.5 First public CI run: two findings
+## 8.5 First public CI run: three findings
 
 The repository went public on 2026-08-27 and CI ran on a machine that was not the dev host for the first time.
-It found two real things, which is what that run is for.
+It found three real things, which is what that run is for.
 
 **Fixed: the main `mypy` pass was host-dependent.**
 `[tool.mypy]` inherited its platform from the host, so `uv run mypy` asked a different question on every runner and could not be green on all of them at once.
 Five modules reach Win32 directly (`desktop.py`, `agent_launcher.py`, `ghost_windows.py`, `file_manager.py`, `timer_resolution.py`) and are absent from the per-platform `ignore_errors` override, because on Windows they typecheck normally.
 Both POSIX legs failed with the same 35 errors, reproduced locally with `uv run mypy --platform linux`.
 Fixed by pinning `platform = "win32"`, which keeps those five fully checked everywhere rather than silencing them; the `--platform linux` pass in `mypy-platform.toml` still owns the POSIX side.
+
+**Fixed: an Edge TTS test asserted its invariant vacuously on Windows and failed on POSIX.**
+`test_edge_tts_provider.py::test_failed_repair_keeps_the_working_managed_environment` builds a previously working managed install and then fails a repair, to prove the working environment is kept and the status stays `ready`.
+Its fixture wrote that environment's interpreter to a literal `current/Scripts/python.exe`, which is a path that exists on no POSIX host.
+So on Linux and macOS there was no working environment to keep, the provider correctly degraded to `error`, and the test read as a provider defect while the provider was right.
+The reverse is the part worth remembering: on Windows the assertion passed while never once exercising the case where the environment is *absent*.
+The provider itself is unchanged in behavior.
+`managed_interpreter(root)` is now a module-level function that `EdgeTtsProvider.managed_python` delegates to, so a test asks the provider where the interpreter goes instead of restating it, and the fixture is correct on both hosts by construction.
+Reproduced and confirmed green on Linux with `tools/linux_container_verify.sh`.
+The same run also added coverage the suite did not have: a failure *after* `_activate_managed` has already swapped `current`, which is the half of the design whose directory renames actually differ between hosts and which the repair test never reaches.
 
 **Open, and deliberately not guessed at: one supervisor test fails on the GitHub Windows runner.**
 `test_pty_supervisor.py::test_supervisor_process_outlives_client_and_reaps_on_command` asserts the supervisor anchors its cwd in the data dir, which exists so a supervisor spawned from `dist/` cannot lock the app tree against a rebuild.
@@ -201,6 +211,27 @@ The copy runs after the suite, so the path lengths the test actually used are un
 Do not weaken the assertion to make the badge green, and do not edit `supervisor.py` on a hypothesis: a supervisor change reaps every live session and needs the deliberate out-of-band update flow in the root `CLAUDE.md`.
 If the probe and psutil disagree on the next red run, the fix is in the test's instrument and no supervisor change is warranted.
 If they agree, the timeline names the culprit and a supervisor-side fix can be written against evidence.
+
+## 8.6 First Linux CI run: a test fake that only drifts on one host
+
+`tests/test_processes_phase4.py::test_restore_skips_already_exited_durable_evidence` failed on Linux only, with `AttributeError: 'types.SimpleNamespace' object has no attribute 'agent_run_id'`.
+Windows and macOS passed.
+
+**Why one host.**
+The session fake carried `pid=10`, and `ProcessInspector._collect_session` walks that pid on the real host.
+Windows allocates pids in multiples of four and can never issue 10, so `_tree_handles` returned nothing and the walk gave up at its second line - the whole body below it, including the `session.record.agent_run_id` read, had never executed on the dev host.
+On a Linux CI runner pid 10 is a live kernel thread, so the same walk ran to completion, attributed a kernel thread to the fake session, and reached a field the fake had never grown.
+The platform seam is not in `processes.py`; it is the host's pid allocation policy, reached through a magic number in a fixture.
+
+**The fix, in two parts.**
+The fake's `record` is now a real `SessionRecord` rather than a `SimpleNamespace`, so no field the code under test adds later can be missing from it.
+That is construction rather than detection, which matters here because `[tool.mypy]` has `packages = ["swe_mux"]` and does not typecheck `tests/` at all - a *typed* hand-built fake would still have been checked by nothing.
+And the fake's pid is now `SessionRecord`'s own `-1` "no root process" sentinel, which `_collect_session` short-circuits on identically everywhere, so no test in that file measures whichever machine it lands on.
+
+**`tools/linux_container_verify.sh` returned a false green on this.**
+A container has its own pid namespace and starts at pid 1 with a handful of processes, so pid 10 is as absent in there as it is on Windows and the failing test passed.
+Reproducing it needed `--pid=host`, which is now documented in that script's header.
+That is the second thing a container hides after the WSL kernel note already there: it is a different Linux **machine**, not just a different libc, and a test that reads the host's process table sees a nearly empty one.
 
 ## 9. Known gaps deliberately not assigned to an agent
 
