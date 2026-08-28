@@ -58,6 +58,10 @@ import { includeSelectedModel, type ModelOption } from './modelFilter'
 import { ModelRoutingSummary } from './ModelRoutingSummary'
 import { EdgeTtsSettings, type EdgeProviderStatus } from './EdgeTtsSettings'
 import {
+  fetchUpdateStatus, lastCheckedLabel, requestUpdateCheck, updateStatusSummary,
+  type UpdateStatus,
+} from './updateCheck'
+import {
   customProviderOverride, MODEL_ROUTES, resolveRoute, type ModelRoutingConfig,
 } from './modelRouting'
 
@@ -68,6 +72,7 @@ type Config = {
   session_recovery_checkpoint_bytes:number;session_recovery_retention_days:number
   session_recovery_max_sessions:number
   log_level:'DEBUG'|'INFO'|'WARNING'|'ERROR'
+  update_check_enabled:boolean
   terminal_renderer:'auto'|'dom'|'webgl'
   harness_args:Record<string,string[]>
   harness_enabled:Record<string,boolean>
@@ -188,7 +193,19 @@ type VoiceStatusInfo = {
   providers?:{sapi?:{available:boolean;diagnostic?:string|null};kokoro?:{available:boolean;diagnostic?:string|null};edge?:EdgeProviderStatus}
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
+  stt_models?:WhisperModelInfo[]
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]
+}
+
+// Same four states as the Kokoro model, deliberately: every asset swe-mux fetches
+// on demand reports one vocabulary. `backend_installed` is the *other* kind of
+// absence — the `voice-local` extra itself missing — which no download fixes.
+type WhisperModelInfo = {
+  model:string
+  status:'not_downloaded'|'downloading'|'ready'|'error'
+  backend_installed:boolean
+  path?:string|null; size_hint?:string|null; approximate_mb?:number|null
+  elapsed_seconds?:number|null; error?:string|null
 }
 
 type AutomationStatus={enabled:boolean;diagnostic?:string;rules:Array<{id:string;name:string;enabled:boolean;shadow:boolean;revision:string}>;queue:{size:number;capacity:number;dropped:number};legacy:{active:boolean;diagnostic?:string;migration:string};repository_rules:Array<{project_scope_id:string;path:string;valid:boolean;diagnostic?:string;execution:string}>}
@@ -362,6 +379,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [diagnosticsMessage,setDiagnosticsMessage]=useState('')
   const [diagnosticsText,setDiagnosticsText]=useState('')
   const [connectPhoneOpen,setConnectPhoneOpen]=useState(false)
+  // The release update check. Read passively on mount - the daemon already holds
+  // the answer, so opening Settings costs nothing; only the button reaches out.
+  const [updateStatus,setUpdateStatus]=useState<UpdateStatus|null>(null)
+  const [updateBusy,setUpdateBusy]=useState(false)
+  const [updateError,setUpdateError]=useState('')
+  useEffect(()=>{void fetchUpdateStatus().then(setUpdateStatus).catch(()=>{})},[])
+  const updateSummary=updateStatusSummary(updateStatus)
+  const updateChecked=lastCheckedLabel(updateStatus)
+  const checkForUpdates=async()=>{
+    if(updateBusy)return
+    setUpdateBusy(true);setUpdateError('')
+    try{setUpdateStatus(await requestUpdateCheck())}
+    catch(cause){setUpdateError(cause instanceof Error?cause.message:String(cause))}
+    finally{setUpdateBusy(false)}
+  }
   const [prerequisites,setPrerequisites]=useState<Prerequisite[]|null>(null)
   // Placeholder for the assistant's new-project location: the parent directory most
   // of the registered projects already live in. A hint only - never written back.
@@ -1990,12 +2022,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Talk &amp; dictation</h3>
           <p><strong>Talk means you speak to swe-mux.</strong> It owns microphone capture, dictation, wake words, and voice commands.</p>
           <label class="check" data-setting="stt_enabled"><span>Enable Talk &amp; dictation</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
-          {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">The first Talk downloads the local Whisper speech model (several hundred MB) plus the browser voice-activity runtime. It runs once, then transcription is offline.</p>}
+          {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">Local dictation needs a speech model on this machine. It is downloaded once, only when you press Download below, and transcription is offline afterwards. The browser's voice-activity runtime is served by swe-mux itself and downloads nothing.</p>}
           <label>Daemon transcription engine<Dropdown value={draft.stt_engine} onChange={value=>change('stt_engine',value as Config['stt_engine'])} options={[{value:'whisper',label:'Whisper Turbo (local, recommended)'},{value:'sapi',label:'Windows Speech Recognition (legacy)'}]}/></label>
           <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /><small>A first-use choice, not a fixed assumption: set the language and model that match how you speak.</small></label>
           {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
+          {draft.stt_engine==='whisper'&&<WhisperModelPanel initial={voiceInfo?.stt_models||null}/>}
           <p>Talk keeps listening across pauses. Wake-word commands act immediately; other speech becomes dictation. Raw audio is deleted after transcription.</p>
           <h4>Wake words</h4>
           <p>Comma-separated spellings the recognizer may produce. Test them under Diagnostics.</p>
@@ -2154,6 +2187,26 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               {!prereq.present&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
             </li>)}</ul></div>
             :<p>Prerequisite status is unavailable.</p>}
+          </section>
+
+          {/* Above Rebuild and reload because it is the question that comes first:
+              "is there anything new", then "put it on this machine". It is also the
+              one place in the app that has to be honest about an outbound request,
+              which is why the switch is here in full rather than as a link. */}
+          <section><h3>Software updates</h3>
+          <p>Once a day the daemon asks <code>{updateStatus?.manifest_url||'https://swemux.dev/version.json'}</code> whether a newer release exists, and shows a dismissible banner if one does. <strong>Nothing downloads and nothing installs.</strong></p>
+          <p class="profile-hint">This is the only request swe-mux makes on its own behalf. It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of this machine. Turning it off means no request is made at all.</p>
+          <label class="check" data-setting="update_check_enabled"><span>Check for new releases</span><input type="checkbox" checked={draft.update_check_enabled} onChange={e=>change('update_check_enabled',e.currentTarget.checked)}/><small>At most one check a day, remembered across restarts.</small></label>
+          <div class="settings-config-actions"><div>
+            <p>{updateSummary||' '}</p>
+            {updateChecked&&<p class="profile-hint">Last checked {updateChecked}.</p>}
+            {updateStatus?.latest?.changelog&&updateStatus.update_available
+              ?<p><a href={updateStatus.latest.changelog} target="_blank" rel="noreferrer">Release notes for {updateStatus.latest.version}</a></p>
+              :null}
+          </div>
+            <div><button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy?'Checking…':'Check now'}</button></div>
+          </div>
+          {updateError&&<p aria-live="polite">{updateError}</p>}
           </section>
 
           {/* The same three commands the app menu carries, reachable from Settings
@@ -2427,6 +2480,61 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
       {status==='error'&&model?.error&&` · ${model.error}`}
     </p>
     {status!=='ready'&&status!=='downloading'&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':'Download Kokoro voices (~106 MB)'}</button>}
+  </div>
+}
+
+/**
+ * The STT half of the first-use asset contract, and the deliberate sibling of
+ * `KokoroModelPanel`: the same `not_downloaded → downloading → ready | error`
+ * vocabulary, so an operator learns one shape for every model swe-mux fetches.
+ *
+ * Two things it does NOT do, both on purpose. It never starts a download on
+ * mount — the whole defect this closes is that the first press of Talk fetched
+ * gigabytes with no one asking — and it draws no percentage while downloading,
+ * because `faster_whisper.download_model` disables the hub's progress hook and
+ * there is nothing to read. Elapsed seconds is a reading; a bar would be fiction.
+ */
+function WhisperModelPanel({initial}:{initial:WhisperModelInfo[]|null}){
+  const [models,setModels]=useState<WhisperModelInfo[]|null>(initial)
+  const [busy,setBusy]=useState('')
+  const refresh=()=>void api<{models:WhisperModelInfo[]}>('GET','/api/voice/models/whisper')
+    .then(payload=>setModels(payload.models)).catch(()=>{})
+  useEffect(()=>{setModels(initial);refresh()},[initial])
+  useEffect(()=>{
+    const handler=(raw:Event)=>{
+      const detail=(raw as CustomEvent).detail as Partial<WhisperModelInfo>
+      if(detail?.model&&detail.status&&models?.some(entry=>entry.model===detail.model))refresh()
+    }
+    window.addEventListener('mux:voice-model',handler)
+    return()=>window.removeEventListener('mux:voice-model',handler)
+  },[models])
+  useEffect(()=>{
+    if(!models?.some(entry=>entry.status==='downloading'))return
+    const timer=setInterval(refresh,2000)
+    return()=>clearInterval(timer)
+  },[models])
+  const download=async(model:string)=>{
+    setBusy(model)
+    try{await api('POST','/api/voice/models/whisper/download',{model});refresh()}
+    catch{/* surfaced by the next status refresh */}
+    finally{setBusy('')}
+  }
+  if(!models?.length)return null
+  return <div class="kokoro-model-panel">
+    {models.map(entry=>{
+      const size=entry.size_hint?` · ${entry.size_hint}`:''
+      return <p key={entry.model} aria-live="polite">
+        <span class={`state-dot ${entry.status==='ready'?'idle':entry.status==='downloading'?'running':'stopped'}`}/>
+        Speech model {entry.model}::{entry.backend_installed?entry.status:'faster-whisper not installed'}
+        {entry.status==='downloading'&&` · downloading${size}${entry.elapsed_seconds?` · ${Math.round(entry.elapsed_seconds)}s elapsed`:''}`}
+        {entry.status==='not_downloaded'&&entry.backend_installed&&` · nothing has been downloaded${size}`}
+        {entry.status==='error'&&entry.error&&` · ${entry.error}`}
+        {entry.backend_installed&&entry.status!=='ready'&&entry.status!=='downloading'&&
+          <button disabled={busy===entry.model} onClick={()=>void download(entry.model)}>
+            {entry.status==='error'?'Retry download':`Download ${entry.model}${entry.size_hint?` (${entry.size_hint})`:''}`}
+          </button>}
+      </p>
+    })}
   </div>
 }
 

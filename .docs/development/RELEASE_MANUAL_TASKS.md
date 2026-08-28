@@ -11,9 +11,9 @@ Do the agent work first, land it, then rewrite, then push.
 
 These are cheap to make and several tasks are stalled behind them.
 
-- [ ] **The GitHub owner.** Personal account or a new organization.
-      Recommendation: a new org, because it costs nothing, makes the project look like a project rather than a side folder, and transfers to a company later without moving the URL that every blog post and awesome-list entry will already point at.
-      Agents have written `https://github.com/OWNER/swe-mux` with `TODO(release): OWNER` markers throughout; find them with `grep -rn "TODO(release): OWNER"` and replace once decided.
+- [x] **The GitHub owner.** Decided 2026-08-27: `jatoran`, at `https://github.com/jatoran/swe-mux`, created and empty.
+      A sweep replaces the `OWNER` placeholders once the last agent branch lands; find any survivors with `grep -rn "TODO(release): OWNER"` and `grep -rn "github.com/OWNER"`.
+      If the project later moves to an organization, GitHub redirects the old path, so this is not a one-way door.
 - [ ] **History: rewrite or fresh start.** Task 3 covers the rewrite. Recommendation is rewrite, for the reasons recorded there.
 - [ ] **Windows code signing.** Azure Trusted Signing (~$10/month, the cheap modern path), an OV certificate (~$100-400/year, reputation accrues with downloads), or ship unsigned and document the SmartScreen warning on the download page.
       Unsigned PyInstaller executables are the single largest source of "is this malware" reports at launch.
@@ -73,7 +73,10 @@ Only choose it if the rewrite verification above turns up something unexpected.
 
 ## 4. Create and configure the public repository
 
-- [ ] Create the repo under the chosen owner. Do not initialize it with any files.
+- [x] Repo created at `https://github.com/jatoran/swe-mux`, empty, no initial files.
+- [ ] **Do not push yet.** The leaked keypair is untracked at HEAD but is still in the history, so the first push publishes it in the object graph regardless of what the working tree looks like.
+      Task 3 (the rewrite) has to happen first, and task 3 has to happen after the last agent branch lands.
+      Nothing is lost by the wait: an empty repository is not a signal anyone reads.
 - [ ] Push the cleaned history.
 - [ ] Set the description and topics for discovery: `claude-code`, `ai-agents`, `agent-orchestration`, `coding-agents`, `codex`, `terminal-multiplexer`, `self-hosted`.
 - [ ] Enable **secret scanning** and **push protection** (Settings, Code security). Expect the synthetic `ghp_`/`sk-ant-` test fixtures to be flagged; dismiss them as test data rather than editing the tests.
@@ -135,7 +138,10 @@ Recorded so they are decisions rather than oversights.
   The running frozen app still carries the old inline `av` stub, including a defect W5 found and fixed: refusing every attribute meant `repr()` of the stub module raised, so any log line or traceback mentioning `av` raised from inside the stub and buried the real diagnostic.
   Run `uv run python packaging/redeploy_desktop.py` from the primary checkout once the release branch settles.
 
-- **`mux doctor` requires a running daemon.** It issues `GET /api/diagnostics/doctor`, so it cannot diagnose the single most likely new-user failure, which is the daemon not starting. Worth a daemon-less local mode before launch, but it is a feature change rather than release prep.
+- ~~**`mux doctor` requires a running daemon.**~~ **Closed 2026-08-27 (W10).** It now falls back to a local report (`src/swe_mux/doctor_local.py`) when the daemon is unreachable, covering the install-integrity faults that stop a daemon starting: the Python floor, the package's import graph, the config file, the frontend bundle in the installed package, the data directory, `mux.db`, the configured port, the host PTY backend, the frozen supervisor bundle, prerequisites, harness detection, and each optional extra.
+  A daemon that answers is byte-for-byte unaffected.
+  The status vocabulary gained `unchecked` so a check that did not run reads as neither healthy nor unavailable, and exit codes compose the existing two: `1` for a failing local check, `3` (daemon unreachable) for a clean degraded report, never `0`.
+  Contract: `design/interfaces.md`, "`mux doctor` without a running daemon".
 - **Phase 16 first-run blockers are still open** (mobile tour stranding at step 10 of 14, the unskippable provider login at step 5, and the stacked harness dialog over the tour blur). These break a brand-new user's guided first run and should land before any announcement, though not necessarily before the repository is public.
 - **`site/index.html` is 883 lines of hand-authored markup** with its own check tooling. It is in good shape; it needs the placeholder URLs and the screenshot recapture, not a rewrite.
 

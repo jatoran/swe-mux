@@ -28,6 +28,7 @@ import { LazyChangeMap } from './LazyChangeMap'
 import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
 import { FleetQueue } from './FleetQueue'
 import { ContinuityBanner } from './ContinuityBanner'
+import { UpdateBanner } from './UpdateBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { Dropdown } from './Dropdown'
 import { folderNameFromPath } from './pathNames'
@@ -7244,6 +7245,12 @@ export function App() {
     {!mobileWorkspace&&<RedeployChip state={redeploy} />}
 
     <ContinuityBanner />
+    {/* A release update, which is a different thing from the UI-build strip below:
+        that one says this browser tab is behind the daemon it is already talking to
+        and reloads itself, while this says the installed swe-mux is behind the
+        published one and never installs anything. Both are rows of chrome, so
+        neither covers a terminal. */}
+    <UpdateBanner />
     {uiUpdateAvailable && <div class="ui-update-banner" role="status" aria-live="polite">
       <strong>UI update ready</strong>
       <span>This device will reload when the page is hidden.</span>

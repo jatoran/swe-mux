@@ -101,6 +101,22 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   and the Connect-a-phone modal both carry a line that any tailnet device reaches the daemon with
   full terminal and code-execution authority and no login, so the listener must not be enabled on a
   shared tailnet.
+- **Outbound, and the one exception to "no telemetry".** Everything above is about who may
+  reach *in*. The daemon makes exactly one request *out* on its own behalf: the release
+  update check (`update_check.py`, `GET /api/update`, `design/interfaces.md`), a daily
+  `GET` of `https://swemux.dev/version.json` with a GitHub Releases fallback.
+  The README and `SECURITY.md` both say the project has no telemetry, and this is what
+  keeps that literally true rather than approximately true: the request carries no query
+  string, no custom header, no cookie jar, no body, and no identifier of this machine or
+  install, so it is byte-identical for every copy of swe-mux on earth and the server
+  learns nothing from it that an IP address does not already say.
+  It is gated by `update_check_enabled` (Settings → Diagnostics → **Software updates**,
+  on by default), and off means no request is made at all - not a reduced one, not a
+  deferred one. Nothing downloads or installs.
+  Every other outbound path in the app belongs to a feature the operator turned on and
+  points at a service they configured: the OpenRouter-compatible endpoint for
+  summarization and the assistant, the browser vendor's web-push service, and experimental
+  Edge TTS. The agent CLIs' own traffic is theirs, under the operator's own subscription.
 - Browser control validates Host plus the full Origin authority, including an explicit
   port, on mutations and WebSocket upgrades. Responses carry CSP, nosniff, referrer,
   permissions, opener, and resource policy headers.
@@ -204,6 +220,9 @@ the Serve route is shared regardless of which port or data directory a daemon us
 - Tailscale inspection, connection-state classifier, and bounded Serve setup:
   `src/swe_mux/tailscale.py`
 - Windows Defender Firewall inspect and repair (platform-gated): `src/swe_mux/windows_firewall.py`
+- The single outbound request and its switch: `src/swe_mux/update_check.py`,
+  `src/swe_mux/routes/update.py`, `frontend/src/UpdateBanner.tsx`,
+  `frontend/src/updateCheck.ts`
 - Diagnostics export bundle: `src/swe_mux/server.py` (`diagnostics_export`), `src/swe_mux/cli.py`
   (`mux doctor --export`)
 - Settings/status and browser redirect: `frontend/src/Settings.tsx`,
