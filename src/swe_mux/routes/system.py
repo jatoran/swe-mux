@@ -509,16 +509,24 @@ async def _bundle_holders(
     scan is still running waits out the remainder of that scan rather than
     starting a second full walk of the process table.
     """
+    # The age comparison is half-open (`< window` reuses, `>= window` evicts) so
+    # that `max_age=0` means "never reuse" rather than "reuse anything from the
+    # same clock tick". The distinction is not academic on Windows, where
+    # `time.monotonic()` advances in 15.625 ms steps: under `<=`, two back-to-back
+    # calls land on an identical reading, age computes as exactly 0.0, and a
+    # caller that asked for no caching silently got some - which reproduced as a
+    # load-dependent failure that only passed when a tick boundary happened to
+    # fall between the two calls. For any real window the boundary is measure-zero.
     window = BUNDLE_HOLDER_CACHE_SECONDS if max_age is None else max_age
     key = (str(getattr(config, "data_dir", "")), str(bundle))
     now = time.monotonic()
     for stale_key, (started, task) in list(_BUNDLE_HOLDER_SCANS.items()):
-        if task.done() and now - started > window:
+        if task.done() and now - started >= window:
             del _BUNDLE_HOLDER_SCANS[stale_key]
     entry = _BUNDLE_HOLDER_SCANS.get(key)
     if entry is not None:
         started, task = entry
-        if not _scan_unusable(task) and (not task.done() or now - started <= window):
+        if not _scan_unusable(task) and (not task.done() or now - started < window):
             log.debug("redeploy bundle scan reused for %s", bundle)
             # Shielded: this waiter may be a request the client has abandoned,
             # and cancelling the awaited task would throw away a scan the next
