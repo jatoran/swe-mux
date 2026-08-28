@@ -70,7 +70,18 @@
   their CLI and not to this drawer.
 - Changing trusted task imports, the Project Run menu, or task launch:
   `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
-  `technical/backend/packages.md`, `technical/frontend/packages.md`
+  `technical/backend/packages.md`, `technical/frontend/packages.md`.
+  **`.swe-mux/` and `.vscode/` are untracked as of 2026-08-28** and `.gitignore` now ignores
+  each of them whole. Nothing under either - including the repository-authored
+  `actions.toml`, `project-context.md`, and `prompts/`, which used to be deliberate
+  exceptions - is carried in the repository any more; they are per-machine state. Read any
+  doc that names those paths as describing the *format* a checkout may carry, never as a
+  claim that this repository supplies one: a fresh clone declares no actions, imports no VS
+  Code tasks, and starts with no project context.
+  One consequence is unresolved and belongs to whoever touches this next:
+  `tests/test_project_actions_v2.py::test_this_repository_ships_actions_that_parse` reads the
+  repository's own `.swe-mux/actions.toml` off disk, so it passes on a machine that has one
+  and fails on a clean checkout.
 - Changing panes, tabs, splits, drag/drop, or the mobile workspace projection:
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
