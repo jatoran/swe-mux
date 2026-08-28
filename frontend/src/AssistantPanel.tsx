@@ -8,6 +8,7 @@ import {
   beginTurnSpeech, cancelTurnSpeech, endTurnSpeech, speakAnnouncement, speakTurnText,
 } from './assistantSpeech'
 import { playEarcon } from './earcons'
+import { SettingLink } from './SettingLink'
 import type { VoiceBodyVariant } from './voiceDock'
 
 /**
@@ -341,7 +342,12 @@ export function AssistantPanel({
     return variant === 'peek'
       ? <div class="assistant-panel peek disabled"><p>The assistant is off.</p></div>
       : <div class="assistant-panel disabled">
-        <p>The assistant is off. Enable it in Settings → Assistant to converse with the fleet.</p>
+        {/* The switch is named by the target registry rather than by a sentence. This
+            state used to read "Enable it in Settings → Assistant", a tab that does not
+            exist, so the reader who most needed the switch was the one sent nowhere.
+            `SettingLink` opens the panel, scrolls to the control and flashes it. */}
+        <p>The assistant is off, so it cannot answer questions or act on the fleet.</p>
+        <SettingLink target="assistant.enable" />
       </div>
   }
   if (variant === 'peek') {

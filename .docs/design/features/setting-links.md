@@ -57,6 +57,14 @@ Everything here is that pattern generalised.
 
 - **A gated surface never renders as merely empty.** "No findings", "nothing ranked", "no
   clipboard entries" must be reachable only when the thing that produces them is actually on.
+- **The switch is named by the registry, never by a sentence.** A hardcoded path in prose is
+  checked by nothing and is wrong silently and forever: the assistant's off state told every
+  reader to "enable it in Settings → Assistant" for the whole life of that surface, and there
+  has never been an Assistant tab. `SETTING_TARGETS` resolves a section through
+  `tabForSection`, and `frontend/test/settingTargets.test.ts` fails the day a target stops
+  resolving or its `data-setting` mark is renamed. This applies to a **refusal** as much as to
+  a gate: a disabled command's `disabledReason` reads the same `where` string, so the palette
+  and the panel cannot explain the same refusal differently.
 - **A grant only ever turns something on.** There is no revoking from a gate.
   Withdrawal stays with the owning editor, which is what keeps "one owner per switch" true
   while many surfaces can grant. `plan_grant` refuses a `false`, a `draft`, or an `off`
@@ -185,6 +193,8 @@ only route to the owning overlay.
 | Usage dashboard | `ccusage_enabled` | install | grant |
 | Read-aloud operational view | `tts_enabled` | install | compact grant |
 | Talk toggle | `stt_enabled` | install | link |
+| Assistant panel (off) | `assistant_enabled` | install | link |
+| Run menu (no agent enabled) | `harness_enabled` | install | link (a set, not a switch) |
 | Claude width notice | `claude_max_columns` | install | link (a value, not a switch) |
 | Files tab header (`ignores`) | `project_ignore_patterns` | install | link (a header control, not a gate; a value, not a switch) |
 | Automation Project policy (model-backed row, provider unproven) | `llm_provider` | install | link (a value, not a switch) |

@@ -4,7 +4,8 @@ import { api } from './api'
 import { Dropdown } from './Dropdown'
 import { fitScrollingMenuInViewport } from './menuPosition'
 import type { LaunchProfile, Project, ProjectAction, ProjectActionCatalog, ProjectActionDiff, ProjectBackend, Session } from './types'
-import { promptDeliveryHarnesses } from './harnessRegistry'
+import { allHarnessesIncludingDisabled, promptDeliveryHarnesses } from './harnessRegistry'
+import { SettingLink } from './SettingLink'
 import { harnessMark } from './harnessIcons'
 import { isAbsolutePath } from './gitWorktrees'
 import { normalizeWorktreeBranchInput, worktreePathForBranch } from './worktreeLaunch'
@@ -236,6 +237,17 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
             separates them is which CLI they start, which is exactly what the mark says. A
             profile row wears its harness's mark for the same reason - "Claude (plan)" is a
             Claude launch, and the label is what tells the two apart. */}
+        {/* The 2026-08-20 usability audit's handed-off finding, still open when it was
+            re-checked in Phase 16: with no harness enabled this section rendered Shell and
+            "Custom terminal…" and nothing else, so a launcher whose whole subject is
+            starting an agent silently claimed there were none to start. An empty list must
+            say which kind of empty it is - the rule the Agent Environment tab already
+            carries - and it needs a route to the switch rather than the name of a tab.
+            Registered-but-none-enabled and nothing-registered-at-all are different facts
+            and read differently here. */}
+        {!harnesses.length&&<p class="run-menu-empty">{allHarnessesIncludingDisabled().length
+          ?<>No agent is enabled for launching, so only a shell can start here. Agents follow CLI detection until you choose otherwise. <SettingLink target="harnesses.enabled" variant="link">Choose which agents appear</SettingLink></>
+          :<>This daemon reported no agent harnesses at all, which usually means it is still starting. Reload the UI if it persists.</>}</p>}
         {harnesses.map(harness=><Fragment key={harness.name}>
           <button role="menuitem" aria-label={`Start ${harness.display_name} session`} disabled={!!busy} onClick={()=>onLaunch(harness.name)}><span class="run-menu-mark" aria-hidden="true">{harnessMark(harness.name)}</span><div><strong>{harness.display_name}</strong>{defaultProfileLabel(harness.name)&&<em>{defaultProfileLabel(harness.name)}</em>}</div></button>
           {profilesFor(harness.name).map(profile=><button role="menuitem" key={profile.id} aria-label={`Start ${harness.display_name} session using ${profile.label}`} disabled={!!busy} title={profile.args.join(' ')} onClick={()=>onLaunch(harness.name,profile.id)}><span class="run-menu-mark" aria-hidden="true">{harnessMark(harness.name)}</span><div><strong>{profile.label}</strong><em>{profile.args.join(' ')||harness.display_name}</em></div></button>)}

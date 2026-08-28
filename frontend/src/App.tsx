@@ -99,7 +99,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, SpendIcon, TrashIcon, TrashSweepIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
+import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HelpIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, SpendIcon, TrashIcon, TrashSweepIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -168,6 +168,8 @@ import { HarnessSetup } from './HarnessSetup'
 import { ActionEditorModal } from './ActionEditorModal'
 import { GuidedTutorial } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, firstRunSurface, mobileTutorialChrome, resetTutorial, shouldStartTutorial, type TutorialStepId } from './tutorial'
+import { HelpModal } from './HelpModal'
+import { HELP_TOPICS, helpCommandId, helpTopicForDrawer } from './helpTopics'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { eventRequiresFleetRefresh } from './eventRefresh'
@@ -706,6 +708,10 @@ export function App() {
   // Which MenuGroup is expanded in the app menu; null collapses every group.
   const [menuGroup,setMenuGroup]=useState<string|null>(null)
   const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
+  // The help surface. `null` is closed; `''` opens the index; a topic id opens that topic.
+  // One piece of state rather than an open flag beside a selection, so "open help" and
+  // "open help about the scan timeline" cannot disagree about whether it is up.
+  const [helpTopicOpen,setHelpTopicOpen]=useState<string|null>(null)
   const [processSession, setProcessSession] = useState<Session | null>(null)
   const [processFleet,setProcessFleet]=useState<FleetSnapshot|null>(null)
   const [previews, setPreviews] = useState<Record<string, Preview>>({})
@@ -3719,9 +3725,14 @@ export function App() {
     setTutorialOpen(false)
   }
   const startTutorial=()=>{
+    // Help is where the tour is offered from, and the tour coaches over the live app
+    // rather than over a modal, so the modal has to go before the walk starts.
+    setHelpTopicOpen(null)
     resetTutorial()
     setTutorialOpen(true)
   }
+  /** Open help on one topic, or on the index with `''`. */
+  const openHelp=(topic:string)=>{setMainMenuOpen(false);setPaletteOpen(false);setHelpTopicOpen(topic)}
   const navigateTutorial=(step:TutorialStepId)=>{
     if(step!=='feature-menu')setMainMenuOpen(false)
     if(step!=='run-choice')setRunMenu(null)
@@ -5525,6 +5536,32 @@ export function App() {
     // disabled reason is the same sentence the button's tooltip carries, so the
     // two entry points never explain the same refusal differently.
     { id: 'configurator.open', label: 'Ask an agent about swe-mux (settings, diagnostics, how it works)', category: 'view', available: configuratorLaunch.enabled, disabledReason: configuratorLaunch.reason, run: () => void launchConfigurator() },
+    // Help, as a command rather than only as a control. Before this it was reachable from
+    // nowhere: there was no `help.*` command, no docs link, and the tour was behind one
+    // section of one Settings tab. A recovery path nobody can find is not a recovery path.
+    //
+    // The spoken aliases deliberately avoid the bare word "help", which `voiceQueries.ts`
+    // already owns for the *voice command catalog*. Two surfaces answering one phrase is
+    // worse than either of them, and the catalog is the older meaning.
+    { id: 'help.open', label: 'Open help (how swe-mux works)', category: 'view', available: true, run: () => openHelp(''), voice:{
+      phrases:['open help','show help','open the help panel','how does this work','explain this app'],
+    } },
+    // The tour's own entry. `resetTutorial` first, because the walk is armed by the absence
+    // of the completion mark - running it without clearing that leaves the next reload
+    // offering it again, and completing it re-marks it either way.
+    { id: 'tutorial.start', label: 'Take the guided tour', category: 'view', available: true, run: () => startTutorial(), voice:{
+      phrases:['take the tour','start the tour','run the tutorial','show me around','start the guided tour'],
+    } },
+    // One per topic, so a surface is reachable by its own name from the palette and by
+    // voice - the same rule `drawerSegments.ts` enforces for a folded-in segment.
+    ...HELP_TOPICS.map(topic => ({
+      id: helpCommandId(topic.id),
+      label: `Help: ${topic.title}`,
+      category: 'view' as const,
+      available: true,
+      run: () => openHelp(topic.id),
+      voice: { phrases: [`help with ${topic.title.toLowerCase()}`, `explain ${topic.title.toLowerCase()}`] },
+    })),
     { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionEditor },
     // Two dialogs. The ids are unchanged so keybindings and menu rows that already name a
     // surface keep working and keep landing on it — `usage.open` most of all, which has
@@ -5797,7 +5834,10 @@ export function App() {
     // Opening the panel is the dock's floor event here: raise to full without
     // ever collapsing, the dock-era spelling of the old setAssistantOpen(true).
     { id:'assistant.newConversation',label:'Start a new assistant conversation',category:'voice',
-      available:!!assistantInfo?.enabled,disabledReason:'Enable the assistant in Settings → Assistant first',
+      // The refusal names the switch's real home from the target registry, so it cannot
+      // drift the way the hardcoded "Settings → Assistant" it replaces did - that tab has
+      // never existed. `settingTargets.test.ts` fails when the section stops resolving.
+      available:!!assistantInfo?.enabled,disabledReason:`Turn the assistant on first: ${settingTarget('assistant.enable').where}`,
       run:()=>{setVoicePanelMode('chat');dispatchVoiceDock({kind:'floor',state:'full'});void startNewDialog().catch(()=>{})},voice:{
       phrases:NEW_CONVERSATION_PHRASES,
       execute:async()=>{
@@ -7514,6 +7554,7 @@ export function App() {
         presentation={renderedDrawerPresentation}
         transientTab={transientDrawerTab||undefined}
         onSegment={selectDrawerTabSegment}
+        onHelp={openHelp}
         sectionReveal={drawerSectionReveal||undefined}
         onLayout={layout=>commitDrawerLayout(layout)}
         // The drag ghost's pointer-up also fires a click on the tab it started from, which
@@ -8052,6 +8093,10 @@ export function App() {
       <button class="menu-row" onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}><span class="menu-row-icon" aria-hidden="true"><SearchIcon/></span><span class="menu-row-label">Command palette</span><span class="menu-hint">ctrl alt p</span></button>
       <div class="context-rule"/>
       <button class="menu-row" onClick={() => runNamedCommand('settings.open')}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">Settings</span></button>
+      {/* Last row, and the only one that answers "what is any of this". It is repeated
+          as a palette command and a voice phrase rather than living only here, because
+          the person who needs it is the person who does not know this menu exists. */}
+      <button class="menu-row" onClick={() => runNamedCommand('help.open')}><span class="menu-row-icon" aria-hidden="true"><HelpIcon/></span><span class="menu-row-label">Help</span></button>
     </div>}
 
     {sidebarOpen && <button class="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
@@ -8202,6 +8247,14 @@ export function App() {
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 
     {firstRun === 'tutorial' && <GuidedTutorial hasProject={projects.length>0} onNavigate={navigateTutorial} onExit={closeTutorial} onComplete={closeTutorial}/>}
+
+    {helpTopicOpen !== null && <HelpModal
+      initialTopic={helpTopicOpen || null}
+      onClose={()=>setHelpTopicOpen(null)}
+      onStartTutorial={startTutorial}
+      onOpenConfigurator={()=>{setHelpTopicOpen(null);void launchConfigurator()}}
+      configurator={{enabled:configuratorLaunch.enabled,reason:configuratorLaunch.reason}}
+    />}
 
     {/* One stack, not two independently anchored toasts: both used to be pinned
         to the same corner and would render exactly on top of each other. */}
