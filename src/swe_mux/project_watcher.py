@@ -32,6 +32,52 @@ MAX_WATCHED_KEYS = 256
 WATCH_FAILURE_COOLDOWN_SECONDS = 30.0
 
 
+def watched_entry_path(
+    root: Path,
+    directory: Path,
+    changed_path: str,
+    patterns: tuple[str, ...],
+) -> str | None:
+    """Project one raw watchfiles change onto a Project-relative *entry* path.
+
+    Returns `None` for anything that is not an entry of `directory`: a path that
+    resolves outside the Project, an ignored path, and the watched directory's
+    own node.
+
+    That last exclusion is what makes the three hosts agree. `watchfiles`
+    documents only "the path of the file that changed" and normalizes nothing
+    across backends - it hands Rust `notify`'s events straight through - so the
+    granularity is whatever the OS reports. Linux inotify and Windows
+    `ReadDirectoryChangesW` report the entry that changed. macOS FSEvents
+    reports at directory granularity and additionally fires for the directory
+    whose own node changed, and writing an entry bumps its parent's mtime, so a
+    write to `src/main.py` under a watch on `src` reports both `src/main.py`
+    *and* `src`.
+
+    The directory's own node is never a member of its own contents, and this
+    watch is non-recursive and exists to report contents, so that second event
+    carries nothing the first does not - it is derived from it. Dropping it
+    removes the platform difference rather than teaching each consumer about it.
+
+    Entries that merely *happen* to be directories are kept. A new subfolder
+    inside a watched directory is real content, it is how the file tree learns
+    the folder exists, and inotify reports exactly that path - so filtering on
+    "is a directory" rather than on "is *this* directory" would trade a macOS-only
+    redundancy for a lost event on every host.
+    """
+
+    try:
+        target = Path(changed_path).resolve()
+        relative = target.relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return None
+    if os.path.normcase(str(target)) == os.path.normcase(str(directory)):
+        return None
+    if ignored_project_path(relative, patterns):
+        return None
+    return relative
+
+
 @dataclass(slots=True)
 class WatchLease:
     project_id: str
@@ -188,12 +234,11 @@ class ProjectFileWatcher:
         root = Path(project_root).resolve()
         directory = project_path(root, relative_path)
 
+        def entry(changed_path: str) -> str | None:
+            return watched_entry_path(root, directory, changed_path, patterns)
+
         def visible(_change: Change, changed_path: str) -> bool:
-            try:
-                relative = Path(changed_path).resolve().relative_to(root).as_posix()
-            except (OSError, ValueError):
-                return False
-            return not ignored_project_path(relative, patterns)
+            return entry(changed_path) is not None
 
         try:
             async for changes in awatch(
@@ -205,14 +250,11 @@ class ProjectFileWatcher:
                 recursive=False,
                 ignore_permission_denied=True,
             ):
-                paths: list[str] = []
-                for _change, changed_path in changes:
-                    try:
-                        relative = Path(changed_path).resolve().relative_to(root).as_posix()
-                    except (OSError, ValueError):
-                        continue
-                    if not ignored_project_path(relative, patterns):
-                        paths.append(relative)
+                paths = [
+                    relative
+                    for relative in (entry(changed_path) for _change, changed_path in changes)
+                    if relative is not None
+                ]
                 if paths:
                     unique = sorted(set(paths))
                     await self.events.emit(

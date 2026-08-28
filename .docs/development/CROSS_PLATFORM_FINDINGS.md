@@ -306,6 +306,22 @@ Neither is *confirmed on macOS*, because no macOS host was available and none ca
 The next `macos-latest` run is what closes them, and `continue-on-error` stays until it does.
 The general lesson matches the target-order section below: a POSIX implementation verified only on Linux is verified on the shell and the scheduler Linux happens to have.
 
+**3. A file watch had no defined event granularity, so it had whatever the host's notification API happened to give it.**
+`test_project_watcher_emits_changes_only_for_an_open_directory` failed on `['src', 'src/main.py'] == ['src/main.py']`: writing one file into a watched directory reported the file *and* the directory.
+This is a third instance of the same shape as the two above rather than a fourth kind of problem - a contract that was never stated, satisfied by accident on the hosts that had run.
+`watchfiles` documents its change paths only as "the path of the file that changed" and hands Rust `notify`'s events through unchanged, so it guarantees no granularity and normalizes nothing across backends.
+Linux inotify and Windows `ReadDirectoryChangesW` report the entry that changed; macOS FSEvents reports at directory granularity and additionally fires for a directory whose own node changed, and writing an entry bumps its parent's mtime.
+So the extra event is *derived from* the file event and carries nothing it does not.
+
+The scope question came before the fix, because it decides the layer.
+The watch is non-recursive and exists to report a directory's contents, and a directory's own node is not one of its contents - it is an entry of its parent, which the file browser watches separately, because it leases `['', ...expanded]`.
+So the self-event is never meaningful to any consumer and the normalization belongs in `project_watcher.watched_entry_path`, not in the test.
+Filtering *all* directory-valued paths would have been the wrong reading of the same failure: a new subfolder inside a watched directory is real content, is how the tree learns the folder exists, and is reported at exactly that path on every host - so that filter would have traded a macOS-only redundancy for a lost event everywhere.
+Nothing downstream was mis-handling the extra event as a file, so this was noise rather than corruption (the file browser's worst case was refreshing the parent it had already refreshed); the defect is the undefined contract, which is what makes the next difference the one that does corrupt something.
+
+Verified by execution on Windows and in the Linux container, where the normalization is a no-op and the suite still passes, plus a direct unit test of the projection that asserts the macOS shape on every host without needing a macOS backend to produce it.
+**Not confirmed on macOS**, for the same reason as the two above; the next `macos-latest` run is what closes it.
+
 ### Native-platform CI
 
 - Run import and non-PTY tests first on Windows, Linux, and macOS.

@@ -649,6 +649,13 @@ include a registered Project nested below another Git root.
   leases; closed, collapsed, expired, and ignored directories consume no watcher.
 - Watch events invalidate visible resource state. They do not bypass revision checks or turn
   filesystem changes into Git behavior.
+- A watch reports the *entries* of its directory, and never that directory's own node.
+  `watchfiles` documents only "the path of the file that changed" and normalizes nothing across
+  backends, so the granularity is whatever the host reports: inotify and `ReadDirectoryChangesW`
+  report the entry, while macOS FSEvents reports at directory granularity and also fires for the
+  directory whose mtime the write bumped. `watched_entry_path` drops that companion so every host
+  emits one shape. An entry that merely happens to *be* a directory is kept - a new subfolder is
+  how the tree learns the folder exists, and it is reported at exactly that path everywhere.
 
 ## View lifetime
 
