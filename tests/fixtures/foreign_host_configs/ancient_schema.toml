@@ -1,0 +1,19 @@
+# A config.toml from before `harness.host_executable` existed (it landed
+# 2026-08-17) and from before the `harness_exe` map replaced the per-harness
+# `<name>_exe` keys. This is the shape the reported install upgraded *from* -
+# its `config.toml.bak` was dated 2026-08-16 - so the Windows-shaped names
+# arrive through the legacy migration rather than out of a stored map, and a
+# reconciliation that only looked at `harness_exe` as written would miss them.
+#
+# Deliberately left at schema 15 so it keeps exercising every migration between
+# then and now. Renumbering it to the current SCHEMA_VERSION would leave a file
+# that tests nothing and says nothing about it.
+schema_version = 15
+host = "127.0.0.1"
+port = 8765
+shell_exe = "powershell.exe"
+claude_exe = "claude.exe"
+codex_exe = "codex.exe"
+claude_args = ["--dangerously-skip-permissions"]
+ccusage_claude_command = ["npx.cmd", "--no-install", "ccusage@17.1.5", "daily", "--json"]
+worktree_root = "C:\\Users\\operator\\.mux\\worktrees"
