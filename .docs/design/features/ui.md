@@ -970,6 +970,10 @@ Its rules, and what each one is defending:
   Fixed query and navigation grammar comes from the same reference used by spoken help, while current Project, session, panel, launch, status, and approval aliases come from the live command registry.
   Guarded aliases remain listed while unavailable and name the state they require.
 - Appearance exposes one palette picker for the shared browser chrome and xterm theme.
+  **A fresh install lands on Tokyo Night** (`Config.theme`, `src/swe_mux/config.py`).
+  Moving that default cannot repaint an install that already exists, and needs no migration to say so: `_serialize` writes every field of the config unconditionally, so any machine that has ever run swe-mux carries its own `theme` on disk and `load_config`'s field-copy loop restores it.
+  An operator who deliberately chose `dark` and one who never touched the setting are the same fact on disk, and neither is a request for whatever the current build prefers.
+  A theme reachable this way is held to a higher contrast bar than one somebody picked: `railGlassContrast.test.ts` requires 4.5:1 through the rail's glass over both a white and a black terminal buffer for every palette a fresh install can land on, where the rest of the catalogue keeps the 3:1 large-text floor.
   Every option shows the same six fixed-width color swatches, so palette comparison does not depend on label length.
   The custom listbox supports pointer selection, Up/Down/Home/End navigation, Enter/Space selection, and layered Escape dismissal.
   **Highlighting a theme applies it to the whole window immediately**, by arrow key or by
@@ -1881,7 +1885,8 @@ Its rules, and what each one is defending:
   Panel, chips, and rows are translucent over a backdrop blur, with borders and text at full opacity.
   Two measured opacities rather than one, because one could not serve both masters (proven live 2026-08-22: any single value that kept labels readable over a white buffer read as a solid panel over the dark terminals the app actually runs on).
   `--rail-glass-field` is the panel field - the surface between and behind the text-bearing pieces - pinned at or below 50% because it is what makes the glass visibly glass; `--rail-glass` is every surface a label sits on (grid chips, drop-up rows, sticky bars, the popover footer), and those composite over the field so text sits on both layers together.
-  The floors, asserted from the real compositing math and from composited pixels (`test/railGlassContrast.test.ts`, `test/renderer/rail-overflow.spec.ts`): the shipped default/dark/light palettes keep a hard 4.5:1 through the glass on both extremes, every theme keeps the 3:1 large-text floor, and both layers are held under 95% so a later "fix" cannot buy contrast by quietly going opaque.
+  The floors, asserted from the real compositing math and from composited pixels (`test/railGlassContrast.test.ts`, `test/renderer/rail-overflow.spec.ts`): every palette a fresh install can land on - the `:root` default, Tokyo Night, dark, and light - keeps a hard 4.5:1 through the glass on both extremes, every theme keeps the 3:1 large-text floor, and both layers are held under 95% so a later "fix" cannot buy contrast by quietly going opaque.
+  That first list is named rather than counted, and moving `Config.theme` means moving it too.
   Universal 4.5:1 is deliberately not asserted - holding it forced the opacity that deleted the feature.
   A browser without `backdrop-filter` falls back to near-solid, because unblurred glass is a flat wash of whatever pixel happens to be behind each letter — neither the look nor a contrast anyone can reason about.
 - **On a phone a rail overlay takes half the screen and goes to the screen's trailing edge**, whichever control opened it.
@@ -3201,14 +3206,18 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   The indicator is deliberately **not** multiplied by `--ui-scale`, matching every other icon and touch target.
 - **Size is the one part of the row configuration split desktop from mobile.**
   The layout is shared because the same person wants the same facts in the same order on both screens; a physical size is the one property a shared layout cannot express, because the two screens are held at different distances.
-  Mobile's default is **larger** than desktop's (17px against 15px): a phone row is read at arm's length, is never hovered for the tooltip that would confirm it, and competes with a touch target rather than with a dense scannable list.
+  Neither default is derived from the other (21px desktop, 17px mobile): a phone row is read at arm's length and is never hovered for the tooltip that would confirm it, but it also has far less row width to spend on the gutter the indicator sits in.
   Both values live in the single `sessionRows` blob as `dotSizeDesktop`/`dotSizeMobile` rather than in a second settings profile, so editing either is one write from either device.
+  `style.css` carries its own copy of both figures as the `--session-dot` fallback for a page whose settings have not resolved, or whose daemon is unreachable, so the two must stay equal - a fresh install would otherwise draw one size before the settings load and another after, which is a visible jump on every boot.
+  `sessionRowFields.test.ts` asserts the equality rather than leaving it to the comment that used to state it.
   `sessionRowPrefs.applySessionDotSize` publishes the resolved value as `--session-dot` on the root element and re-resolves when a window crosses the device-class breakpoint, exactly as chrome scale does.
   Handing the number to `StateIndicator` as a prop instead would resize the glyph and leave the gutter, the thread, and the row height behind.
   A stored size outside the bounds is **clamped**, not discarded: a blob from a build with wider bounds should render at the nearest size this one can draw rather than silently reset and look like a lost setting.
 - **The row never prints the state word.**
   The indicator already carries it, so `working`, `ready`, and `turn complete` are duplication rather than information.
   The `state` field exists for anyone who wants it back but is defined as never notable, so it renders only in `always` mode.
+  The shipped default nevertheless *places* it, in `notable` - so it draws nothing at all, and turning it on is a mode switch on a field already in position rather than a drag out of the unplaced pool.
+  Placed-but-silent is a deliberate position for a field whose rendering is decided by a setting elsewhere, and the reason to prefer it is asymmetry: promoting a placed field is one click, while finding an unplaced one means knowing it exists.
 - **Placement and visibility are one decision.**
   A field placed in no section is off; there is no separate enable flag, and therefore no "enabled but nowhere" state.
 - **Presence-only marks live in a flag strip pinned to the top line's right edge.**
@@ -3240,7 +3249,12 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   An ended session has no composer and is never marked.
 - **Every placed field is `when notable` or `always`.**
   Notability is per field: a branch that differs from the project's most common branch, a diff with changed lines, a queue with items, a model that differs from the project default, an account when more than one is live, a duration past its per-state threshold.
-  The default configuration is almost entirely `when notable`, so a quiet fleet shows a title and a duration and anything visible has earned its place.
+  The default configuration is `always` for exactly two of them - the duration on the bottom line's left and the model on its right - and `when notable` for everything else, so a quiet fleet shows a title, a time, and a model, and anything else visible has earned its place.
+- **The shipped default is a transcription of the layout swe-mux is operated with, not a conservative guess at one.**
+  The guess it replaced made every bottom-line field conditional, on the reasoning that a row where nothing is drawn unless it matters is the least noisy row available.
+  Used daily that turned out to optimise the wrong axis: a row is read as *one shape per session* down a list rather than as a sentence, and a bottom line whose every token is conditional has a different shape on every row and a different shape on the same row a minute later.
+  Two `always` fields at the two ends fix that - the time and the model form columns, and the conditional fields between them read as deviations from a shape the eye already has.
+  Three consequences are deliberate and are the ones to check before moving any of it: `duration` and `model` are the two widest always-on tokens the row can hold, so the line runs closer to its width budget than the old default did and the ladder collapses a long worktree to its `⌂` at the sidebar's own default width (`session-row-layout.spec.ts` measures exactly this); `gitGlyphs` is **on**, because a bottom line of short near-identical tokens is where a mark earns its two characters; and `context` is **not** placed, so switching the context rendering away from the indicator arc to `gauge` or `percent` needs the field placed by hand first.
 - Read-only model labels use the shared compact presentation rule, while tooltips, accessibility labels, configuration controls, session comparisons, and API values retain the exact provider identifier.
   The rule removes the provider path and a leading vendor-brand token (`claude-`, `gpt-`) and touches nothing else, because every surface that prints a model draws the session's provider mark beside it.
   A token that names a model *family* — `codex`, `kimi`, `o3`, `sonnet` — is not branding and stays.
@@ -3325,10 +3339,17 @@ The layout is user-configurable in Settings → Appearance → Session rows.
 
 Mobile shares the one layout rather than keeping a second one.
 `mobileFields` decides whether the phone renders the configured sections or identity only — indicator, provider mark, title, and the flag strip.
+It defaults to **on**, so a phone draws the same bottom line the desktop does; the identity-only projection is the fallback for a layout too wide to be worth carrying to a phone, not the phone's normal state.
 The strip survives the identity projection because a phone is where an unsent draft is most likely to have been left behind, and a projection that dropped the marks would be silent on exactly the device that stages text and walks away.
 Both screens want the same information in the same order; only how much of it fits differs.
 
+There is consequently no such thing as a separate "mobile default" to decide.
+The `sessionRows` domain lives in ONE canonical settings bucket (`sessionRowPrefs.ts` pins it to `desktop`), a phone reads that same bucket, and the two values that genuinely are per device class — `dotSizeMobile` and `mobileFields` — are fields *inside* it.
+A change to the shipped default therefore reaches both device classes by construction, and a second default under the mobile profile would be a bucket nothing reads.
+
 The stored layout is versioned, because changing the shipped default reaches nobody who has ever opened the settings — a stored blob is authoritative and an unplaced field is off.
+That is exactly the guarantee a default *rewrite* wants, and why one does not bump the version: a device that has configured its rows keeps what it configured, and only a device with no stored blob sees the new layout.
+A version bump is for the opposite case, a new field that must reach layouts already saved.
 Version 2 introduced the flag strip: it moves already-placed flags into the strip and places `draft`, which nobody could have declined because it did not exist.
 Version 3 places `voice`, for the same reason and beside `approvals`, the other standing mode in the strip.
 A flag the user had removed stays removed: a migration relocates a choice, it does not re-impose one, and each step runs only for a blob written before it — a layout from a later build runs none of them.

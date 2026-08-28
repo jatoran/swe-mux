@@ -352,6 +352,95 @@ for (const width of [420, 240, 180]) {
   })
 }
 
+/**
+ * The shipped default, drawn rather than asserted as an object.
+ *
+ * A default that renders wrong is worse than the one it replaced, and everything
+ * that could go wrong here is invisible to the unit suite: whether the always-on
+ * time and model actually line up into two columns down the sidebar, whether the
+ * glyph-decorated worktree fits between them at the width the sidebar is usually
+ * left at, and whether the 21px indicator drives a row tall enough to hold both
+ * lines. So it is measured in a browser, at the width a person really uses.
+ */
+async function defaultRows(page: Page, width: number) {
+  await resizeSidebar(page, width)
+  return page.evaluate(() => {
+    const read = (id: string) => {
+      const row = document.querySelector(`[data-row="${id}"]`)!
+      const line = row.querySelector('.row-line.bottom')!
+      const section = (side: string) => {
+        const element = line.querySelector(`.row-section.${side}`) as HTMLElement | null
+        if (!element) return null
+        const rect = element.getBoundingClientRect()
+        return {
+          // Normalized because `innerText` breaks each inline token onto its own
+          // line; the assertion is about which tokens drew and in what order.
+          text: element.innerText.replace(/\s+/g, ' ').trim(),
+          x: rect.x, right: rect.right, width: rect.width,
+        }
+      }
+      return {
+        left: section('left'), right: section('right'),
+        row: row.getBoundingClientRect(),
+        top: row.querySelector('.row-line.top')!.getBoundingClientRect(),
+        bottom: line.getBoundingClientRect(),
+      }
+    }
+    return { working: read('working'), ready: read('ready'), standing: read('standing') }
+  })
+}
+
+test('the shipped default draws two columns with the conditional fields between them', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
+  await page.goto('/session-row-harness.html')
+
+  // Roomy first, so the assertion is about what the layout *says* rather than
+  // about the width ladder.
+  const wide = await defaultRows(page, 420)
+
+  // Left: the always-on time, then the worktree carrying its glyph, then the
+  // queue depth — and no state word, because `state` ships placed in the mode
+  // that never draws. The branch is absent because it is not placed at all.
+  expect(wide.working.left!.text).toBe('22m · ⌂ feat-tokenizer-rewrite · ⋮2')
+  expect(wide.working.left!.text).not.toContain('working')
+  expect(wide.working.left!.text).not.toContain('feat-tokenizer ')
+  // Right: the model, always, on every row that has one.
+  expect(wide.working.right!.text).toBe('5-codex')
+  expect(wide.ready.right!.text).toBe('opus')
+  expect(wide.standing.right!.text).toBe('opus')
+  // A ready row still draws its time, which is the point of `always`: the column
+  // exists on every row rather than appearing when a session happens to be slow.
+  expect(wide.ready.left!.text).toBe('1m12')
+
+  // The column the always-on model buys: every row's right section ends on the
+  // same edge, and none of them collides with the left.
+  const rights = [wide.working, wide.ready, wide.standing].map(row => row.right!.right)
+  for (const edge of rights) expect(Math.abs(edge - rights[0])).toBeLessThanOrEqual(0.5)
+  for (const row of [wide.working, wide.ready, wide.standing]) {
+    expect(row.left!.right).toBeLessThanOrEqual(row.right!.x + 0.5)
+  }
+
+  // At the sidebar's own default width the line is over budget, and what gives is
+  // the worktree's value rather than the model or the time: the ladder collapses
+  // it to its mark and every placed fact is still on the row. This is the whole
+  // reason the default may hold three left-hand fields at all.
+  const snug = await defaultRows(page, 254)
+  expect(snug.working.left!.text).toBe('22m · ⌂ · ⋮2')
+  expect(snug.working.right!.text).toBe('5-codex')
+  expect(snug.working.left!.right).toBeLessThanOrEqual(snug.working.right!.x + 0.5)
+
+  // The 21px indicator drives the row's height, so both lines must still fit
+  // inside the row rather than the row clipping one of them.
+  for (const row of [snug.working, snug.ready, snug.standing]) {
+    expect(row.top.height).toBeGreaterThan(0)
+    expect(row.bottom.height).toBeGreaterThan(0)
+    expect(row.row.height).toBeGreaterThanOrEqual(row.top.height + row.bottom.height - 0.5)
+  }
+  const dot = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--session-dot').trim())
+  expect(dot).toBe('21px')
+})
+
 test('a title too long for the sidebar ellipsizes rather than pushing the flags out', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 600 })
   await page.goto('/session-row-harness.html')

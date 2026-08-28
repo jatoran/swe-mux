@@ -709,7 +709,13 @@ class Config:
     reconcile_external_history: bool = True
     startup_cwd: str = ""
     history_limit: int = 200
-    theme: str = "dark"
+    # Reached only by an install with no `config.toml` at all: `_serialize` writes
+    # every field unconditionally, so any existing install already has its own
+    # `theme` on disk and `load_config`'s field-copy loop restores it. Flipping
+    # this default therefore cannot repaint a machine that has ever run swe-mux -
+    # neither one that chose `dark` nor one that simply never touched the setting -
+    # and needs no migration to say so.
+    theme: str = "tokyo-night"
     # Drawer tab strips and the desktop right rail independently render either
     # their compact icon or short registry title. These presentation-only
     # settings apply live in every connected browser.

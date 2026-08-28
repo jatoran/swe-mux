@@ -5311,7 +5311,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    other icon and touch target, the indicator stays put while type and row
    heights scale. `--session-line-box` is, because the type inside that line is. */
 :root{
-  --session-dot:15px;
+  --session-dot:21px;
   /* The title line's own line box, which the indicator's box is floored at and
      the row height is derived from. An indicator *smaller* than the line it is
      aligned to top-aligns inside it and sits visibly above the name — the
@@ -5392,11 +5392,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* The blank bottom line is kept on desktop — constant row height is what makes
    the list scannable — but dropped on mobile, where vertical space is the
    scarce resource and identity-only rows are the point. */
-/* Mobile runs the indicator *larger* than desktop, not smaller. It is read at
-   arm's length, it is never hovered for the tooltip that would confirm it, and
-   on a phone it is competing with a touch target rather than with a dense
-   scannable list. The thread, the gutter column, and the row height follow
-   automatically, being expressed in the same variable. */
+/* The two device classes size the indicator independently: it is read at arm's
+   length on a phone and never hovered for the tooltip that would confirm it, but
+   it also has far less row width to spend on the gutter it sits in, so neither
+   figure is derived from the other. The thread, the gutter column, and the row
+   height follow automatically, being expressed in the same variable. */
 @media(max-width:760px){
   :root{--session-dot:17px}
   .row-line.bottom.empty{display:none;min-height:0}
