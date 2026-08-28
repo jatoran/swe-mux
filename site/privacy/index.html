@@ -81,7 +81,7 @@ body {
 
 /* Everything terminal-shaped keeps the monospace face. Prose does not. */
 h1, h2, h3, h4,
-.kick, .name, .secnav, .util, .grouplabel, .half h3,
+.kick, .name, .secnav, .util, .menu, .grouplabel, .half h3,
 .tag, .flat b, .ic-tab, .ic-os, .ic-body, .ic-copy, .copy, .code pre, code, kbd {
   font-family: var(--mono);
 }
@@ -99,7 +99,11 @@ code { color: var(--fg); font-size: 0.915em; }
 
 /* --------------------------------------------------------------- statusbar */
 .bar { position: sticky; top: 0; z-index: 40; background: var(--panel); border-bottom: 1px solid var(--line); }
-.bar .wrap { display: flex; align-items: center; gap: 14px; height: 44px; font-size: 12px; }
+/* Direct child, not descendant. The menu panel is inside `.bar` and uses `.wrap`
+   for the same gutters as everything else, so a descendant selector made it a
+   second 44px-tall flex row and laid the menu's links out sideways across the
+   hero. */
+.bar > .wrap { display: flex; align-items: center; gap: 14px; height: 44px; font-size: 12px; }
 .bar .name { color: var(--green); font-weight: 600; flex: none; white-space: nowrap; }
 /* Wordmark. Two files rather than a CSS filter, because the mark's green must
    darken for the light theme while the letterforms go to ink; no filter does both. */
@@ -118,6 +122,19 @@ footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { displ
 .bar nav.secnav::-webkit-scrollbar { display: none; }
 .bar nav.secnav a { color: var(--fg-3); border: 0; white-space: nowrap; }
 .bar nav.secnav a:hover { color: var(--fg); }
+/* Every page in the bar is a real page. The eight in-page section anchors this
+   nav used to carry are gone from every width: an anchor is a position in a
+   document rather than a destination, and mixed with real pages it made the bar
+   mean two things at once. `tools/check.mjs` asserts they cannot come back.
+   The nav keeps its scroll-fade, and the padding gives the gradient empty space
+   to fall on once the last item is scrolled out; without it that item sits
+   permanently under the gradient at wide widths. */
+.pagenav { padding-right: 15px; }
+.pagenav a[aria-current="page"] { color: var(--fg); }
+.pagenav /* A non-breaking space, because a trailing one in `content` is collapsed away
+   at the start of a block-level line box and the marker ends up wedged against
+   the word. */
+a[aria-current="page"]::before { content: "\25B8\00A0"; color: var(--green); }
 
 .util { flex: none; margin-left: auto; display: flex; align-items: center; gap: 2px;
         padding-left: 12px; border-left: 1px solid var(--line); }
@@ -134,8 +151,59 @@ footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { displ
 :root[data-theme="light"] .util .sun  { display: block; }
 .util .sun { display: none; }
 .util .moon { display: block; }
-@media (max-width: 720px) { .util .lbl { display: none; } .util a, .util button { padding: 6px; } }
-@media (max-width: 460px) { .brand img { height: 16px; } .bar .wrap { gap: 10px; } }
+/* Install is the one call to action the chrome carries, and the one fragment
+   link left in it. It is drawn as a control rather than as a quieter nav link
+   because it is the thing a convinced reader is looking for, and it is what
+   keeps the narrow bar's two links worth having. */
+.util a.cta { color: var(--fg); border-color: var(--line-2); }
+.util a.cta:hover { color: var(--green); border-color: var(--green); }
+
+/* The hamburger and the panel it opens are the narrow-width nav. Above the
+   breakpoint the page nav is drawn in full and the button is not rendered at
+   all, so the site never offers the same links twice in one bar. Below it the
+   bar keeps `install` and `github`, and the menu holds everything including
+   those two, so nothing is reachable only by remembering it is there. */
+.util .burger { display: none; }
+.menu, .menu[hidden] { display: none; }
+.menu .wrap { padding-top: 2px; padding-bottom: 13px; }
+.menu nav { display: flex; flex-direction: column; }
+.menu a { display: block; font-size: 13px; color: var(--fg-2); border: 0;
+          border-top: 1px solid var(--line); padding: 10px 0; }
+.menu a:first-child { border-top: 0; }
+.menu a:hover { color: var(--fg); }
+.menu a[aria-current="page"] { color: var(--fg); }
+.menu /* A non-breaking space, because a trailing one in `content` is collapsed away
+   at the start of a block-level line box and the marker ends up wedged against
+   the word. */
+a[aria-current="page"]::before { content: "\25B8\00A0"; color: var(--green); }
+/* The utility links sit under a heavier rule rather than in a second list, so
+   the menu stays one focus ring travelling down one column. */
+.menu a.sep { margin-top: 9px; border-top: 1px solid var(--line-2); }
+.menu a.sep, .menu a.sep ~ a { color: var(--fg-3); }
+.menu a.sep:hover, .menu a.sep ~ a:hover { color: var(--fg); }
+
+/* An explicit focus ring. The menu is opened and dismissed by keyboard, and the
+   user-agent default is a thin dark outline that disappears against `--panel`
+   in the dark theme. */
+.util a:focus-visible, .util button:focus-visible, .menu a:focus-visible {
+  outline: 2px solid var(--green); outline-offset: 1px;
+}
+
+@media (max-width: 860px) {
+  .util .lbl { display: none; }
+  .util a, .util button { padding: 6px; }
+  .util a.cta { padding: 6px 8px; }
+  .bar nav.secnav.pagenav { display: none; }
+  /* The adjacent-sibling rule above still matches a nav that is not drawn, so
+     the utility group has to take the auto margin back or it sits mid-bar. */
+  .bar nav.secnav + .util { margin-left: auto; }
+  .util .burger { display: flex; }
+  .menu:not([hidden]) { display: block; }
+  .brand img { height: 15px; }
+}
+/* The wordmark is the widest thing in the bar, and at 360 it was crowding the
+   two links and the menu button it now shares the row with. */
+@media (max-width: 460px) { .brand img { height: 13px; } .bar > .wrap { gap: 10px; } }
 
 /* ------------------------------------------------------------ install call */
 .ic { border: 1px solid var(--line-2); background: var(--panel); max-width: 780px;
@@ -175,9 +243,10 @@ footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { displ
 .hero .kick { color: var(--fg-3); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 20px; }
 .hero h1 { font-size: clamp(22px, 4.4vw, 38px); letter-spacing: -0.02em; line-height: 1.26; margin-bottom: 22px; }
 .hero h1 .dim { color: var(--fg-3); }
-.cur { display: inline-block; width: .55em; height: 1em; background: var(--green); vertical-align: -.13em; margin-left: .18em; animation: blink 1.15s steps(1) infinite; }
-@keyframes blink { 50% { opacity: 0 } }
-@media (prefers-reduced-motion: reduce) { .cur { animation: none } }
+/* A static block cursor. It used to blink, which put the only moving thing on
+   the page directly beside the headline and pulled the eye off the words it was
+   there to end. Steady, it still reads as a terminal caret. */
+.cur { display: inline-block; width: .55em; height: 1em; background: var(--green); vertical-align: -.13em; margin-left: .18em; }
 .hero .sub { color: var(--fg-2); font-size: clamp(15px, 2vw, 19px); line-height: 1.45;
              max-width: 72ch; margin-bottom: 24px; padding-left: 14px;
              border-left: 1px solid var(--line-2); text-wrap: pretty; }
@@ -316,6 +385,14 @@ footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
 footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 22px 44px; }
 footer h4 { margin: 0 0 5px; color: var(--fg-3); font-size: 12px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
 footer .todo { color: var(--orange); }
+/* Icon only, at the weight of the text beside it rather than as a badge. Inline
+   SVG like the bar's GitHub mark, because nothing on this site loads from a
+   third-party host and a social button is the classic way that rule breaks. */
+footer .social { margin-top: 11px; display: flex; gap: 12px; }
+footer .social a { display: inline-flex; color: var(--fg-3); border: 0; }
+footer .social a:hover { color: var(--cyan); }
+footer .social a:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+footer .social svg { width: 15px; height: 15px; fill: currentColor; display: block; }
 .colophon { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
             font-family: var(--mono); font-size: 12.5px; color: var(--fg-3); }
 .colophon .h { color: var(--fg-4); user-select: none; margin-right: 2px; }
@@ -393,12 +470,10 @@ table td:first-child { font-family: var(--mono); color: var(--fg); font-size: 12
 table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 .tablewrap { overflow-x: auto; }
 
-/* The bar's nav keeps `index.html`'s scroll-fade for narrow screens, but this
-   nav is short and its last item would sit under the fade at every width. The
-   padding gives the gradient empty space to fall on once it is scrolled out. */
-.pagenav { padding-right: 15px; }
-.pagenav a[aria-current="page"] { color: var(--fg); }
-.pagenav a[aria-current="page"]::before { content: "\25B8 "; color: var(--green); }
+/* `.pagenav` used to be defined here, when it was what separated a sub-page's
+   bar from the landing page's. Both bars are now the same component, so its
+   rules live in `index.html`'s stylesheet with the rest of the chrome and reach
+   every page through `index_style()`. Nothing about the bar is defined twice. */
 
 /* `.rel:first-of-type` does not do this: `:first-of-type` counts elements of the
    same tag, and the first `div` in a page is the kick line. */
@@ -548,14 +623,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <img class="dark" src="../img/logo.png" width="640" height="73" alt="" />
       <img class="lite" src="../img/logo-light.png" width="640" height="73" alt="" />
     </a>
-    <nav class="secnav pagenav">
+    <nav class="secnav pagenav" aria-label="Pages">
       <a href="../">home</a>
       <a href="../docs/">docs</a>
+      <a href="../blog/">blog</a>
       <a href="../changelog/">changelog</a>
       <a href="../roadmap/">roadmap</a>
       <a href="../acknowledgements/">acknowledgements</a>
     </nav>
     <div class="util">
+      <a class="cta" href="../#install">install</a>
       <a href="https://github.com/jatoran/swe-mux" aria-label="Source on GitHub" title="Source on GitHub">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         <span class="lbl">github</span>
@@ -564,6 +641,23 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <svg class="moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7Z"/></svg>
         <svg class="sun" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.6A3.4 3.4 0 1 0 8 11.4 3.4 3.4 0 0 0 8 4.6Zm0-4.6h0a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V.7A.7.7 0 0 1 8 0Zm0 13.3a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V14a.7.7 0 0 1 .7-.7ZM16 8a.7.7 0 0 1-.7.7H14a.7.7 0 0 1 0-1.4h1.3A.7.7 0 0 1 16 8ZM2.7 8a.7.7 0 0 1-.7.7H.7a.7.7 0 0 1 0-1.4H2a.7.7 0 0 1 .7.7Zm10.96-5.66a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0ZM4.28 11.72a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0Zm9.38 1.94a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 1 1 1-1l.94.94a.7.7 0 0 1 0 1ZM4.28 4.28a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 0 1 1-1l.94.94a.7.7 0 0 1 0 1Z"/></svg>
       </button>
+      <button type="button" id="menubtn" class="burger" aria-label="Menu" aria-expanded="false" aria-controls="menu" title="Menu">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3.4h13V5h-13Zm0 3.8h13v1.6h-13Zm0 3.8h13v1.6h-13Z"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="menu" id="menu" hidden>
+    <div class="wrap">
+      <nav aria-label="Menu">
+        <a href="../">home</a>
+        <a href="../docs/">docs</a>
+        <a href="../blog/">blog</a>
+        <a href="../changelog/">changelog</a>
+        <a href="../roadmap/">roadmap</a>
+        <a href="../acknowledgements/">acknowledgements</a>
+        <a class="sep" href="../#install">install</a>
+        <a href="https://github.com/jatoran/swe-mux">github</a>
+      </nav>
     </div>
   </div>
 </div>
@@ -753,7 +847,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div>
         <h4>pages</h4>
-        <div><a href="../">home</a> &middot; <a href="../docs/">docs</a></div>
+        <div><a href="../">home</a> &middot; <a href="../docs/">docs</a>
+        &middot; <a href="../blog/">blog</a></div>
         <div><a href="../changelog/">changelog</a> &middot; <a href="../roadmap/">roadmap</a>
         &middot; <a href="../acknowledgements/">acknowledgements</a></div>
       </div>
@@ -765,9 +860,15 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div><code>.docs/design/00_OVERVIEW.md</code></div>
       </div>
       <div>
-        <h4>license</h4>
+        <h4>legal</h4>
         <div><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></div>
         <div><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
+        <div><a href="../privacy/">Privacy</a> &middot; <a href="../terms/">Terms</a></div>
+        <div class="social">
+          <a href="https://x.com/swemux" rel="me" aria-label="swe-mux on X" title="swe-mux on X">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817-5.966 6.817H1.68l7.73-8.835L1.254 2.25h6.826l4.713 6.231ZM17.083 19.77h1.833L7.084 4.126H5.117Z"/></svg>
+          </a>
+        </div>
       </div>
     </div>
     <p class="colophon"><span class="h">#</span> This page is generated by
@@ -791,6 +892,64 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     apply(next);
     try { localStorage.setItem('swemux-theme', next); } catch (e) {}
   });
+})();
+
+/* ------------------------------------------------------------------- menu */
+(function () {
+  var btn = document.getElementById('menubtn');
+  var menu = document.getElementById('menu');
+  if (!btn || !menu) return;
+  var links = function () { return menu.querySelectorAll('a[href]'); };
+  var isOpen = function () { return btn.getAttribute('aria-expanded') === 'true'; };
+
+  function open(next) {
+    btn.setAttribute('aria-expanded', String(next));
+    if (next) menu.removeAttribute('hidden');
+    else menu.setAttribute('hidden', '');
+  }
+
+  btn.addEventListener('click', function () {
+    var next = !isOpen();
+    open(next);
+    /* Opening moves focus into the menu, so a keyboard user is where the menu
+       is rather than one Tab behind it. */
+    if (next && links()[0]) links()[0].focus();
+  });
+
+  /* Escape closes and returns focus to the button that opened it. Closing
+     without the second half drops focus onto the document, which puts a
+     keyboard user back at the top of the page. */
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || !isOpen()) return;
+    open(false);
+    btn.focus();
+  });
+
+  /* Tab off the last item returns to the button rather than continuing into the
+     page underneath, which is covered by the panel and cannot be read. */
+  menu.addEventListener('keydown', function (e) {
+    var list = links();
+    if (e.key !== 'Tab' || e.shiftKey || !list.length) return;
+    if (document.activeElement !== list[list.length - 1]) return;
+    e.preventDefault();
+    btn.focus();
+  });
+
+  /* A same-page link (install) navigates without unloading, so nothing else
+     would close the menu over the target it just scrolled to. */
+  menu.addEventListener('click', function (e) {
+    if (e.target.closest('a[href]')) open(false);
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!isOpen() || btn.contains(e.target) || menu.contains(e.target)) return;
+    open(false);
+  });
+
+  /* Widening past the breakpoint draws the full nav and stops rendering the
+     button, so an open menu would be left behind with no way to dismiss it. */
+  var wide = window.matchMedia('(min-width: 861px)');
+  wide.addEventListener('change', function (e) { if (e.matches) open(false); });
 })();
 </script>
 
