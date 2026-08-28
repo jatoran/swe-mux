@@ -43,7 +43,14 @@ test('the overview shows three pots, each stamped with its basis, and no total',
   expect(boxes[0].right).toBeLessThanOrEqual(boxes[1].left + 1)
 
   // Nothing anywhere on the surface sums them, and the surface says so.
-  await expect(page.locator('.usage-pots-caveat')).toContainText('never added together')
+  //
+  // Asserted once, on the segment footer, because that is where the statement now
+  // lives: the Settings overhaul retired the separate `.usage-pots-caveat` element
+  // and moved the wording into `USAGE_SEGMENTS[].footer` (`usageSegments.ts`), which
+  // carries `NEVER_SUMMED` on every segment rather than only under the tiles. The
+  // spec kept asserting the retired element and its retired phrasing ("never added
+  // together"), so it went red the first time this suite ran on CI - the invariant
+  // was intact the whole time and only its rendering had moved.
   await expect(page.locator('.usage-panel > footer')).toContainText('never summed')
 })
 
