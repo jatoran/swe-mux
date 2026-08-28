@@ -19,6 +19,17 @@
 #
 # The mount is read-only and the tree is copied in, because the suite writes under
 # tests/ and the host checkout must not be touched by a verification run.
+#
+# The container also has its own **PID namespace**, and that has already produced a
+# false green here. It starts at pid 1 with a handful of processes, so a small pid a
+# test names is absent in here and present on a CI runner, which is a whole VM with
+# kernel threads at pids 2..~20. `tests/test_processes_phase4.py` named pid 10, whose
+# absence on Windows was the only reason a session fake never reached the process
+# walk; the first public Linux CI run failed on it and a plain run of this script
+# passed, because in here pid 10 does not exist either. So for anything near process
+# discovery, share the host's namespace:
+#
+#   docker run --rm --pid=host -v "$PWD:/repo:ro" python:3.12-slim bash /repo/tools/linux_container_verify.sh
 set -euo pipefail
 
 apt-get update -qq >/dev/null 2>&1

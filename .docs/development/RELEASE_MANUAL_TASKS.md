@@ -166,6 +166,27 @@ What is known and what is not, kept separate on purpose:
 Do not weaken the assertion to make the badge green, and do not edit `supervisor.py` on a hypothesis: a supervisor change reaps every live session and needs the deliberate out-of-band update flow in the root `CLAUDE.md`.
 The next step is evidence, not a patch - surface the supervisor's own log file as a CI artifact on failure, then decide.
 
+## 8.6 First Linux CI run: a test fake that only drifts on one host
+
+`tests/test_processes_phase4.py::test_restore_skips_already_exited_durable_evidence` failed on Linux only, with `AttributeError: 'types.SimpleNamespace' object has no attribute 'agent_run_id'`.
+Windows and macOS passed.
+
+**Why one host.**
+The session fake carried `pid=10`, and `ProcessInspector._collect_session` walks that pid on the real host.
+Windows allocates pids in multiples of four and can never issue 10, so `_tree_handles` returned nothing and the walk gave up at its second line - the whole body below it, including the `session.record.agent_run_id` read, had never executed on the dev host.
+On a Linux CI runner pid 10 is a live kernel thread, so the same walk ran to completion, attributed a kernel thread to the fake session, and reached a field the fake had never grown.
+The platform seam is not in `processes.py`; it is the host's pid allocation policy, reached through a magic number in a fixture.
+
+**The fix, in two parts.**
+The fake's `record` is now a real `SessionRecord` rather than a `SimpleNamespace`, so no field the code under test adds later can be missing from it.
+That is construction rather than detection, which matters here because `[tool.mypy]` has `packages = ["swe_mux"]` and does not typecheck `tests/` at all - a *typed* hand-built fake would still have been checked by nothing.
+And the fake's pid is now `SessionRecord`'s own `-1` "no root process" sentinel, which `_collect_session` short-circuits on identically everywhere, so no test in that file measures whichever machine it lands on.
+
+**`tools/linux_container_verify.sh` returned a false green on this.**
+A container has its own pid namespace and starts at pid 1 with a handful of processes, so pid 10 is as absent in there as it is on Windows and the failing test passed.
+Reproducing it needed `--pid=host`, which is now documented in that script's header.
+That is the second thing a container hides after the WSL kernel note already there: it is a different Linux **machine**, not just a different libc, and a test that reads the host's process table sees a nearly empty one.
+
 ## 9. Known gaps deliberately not assigned to an agent
 
 Recorded so they are decisions rather than oversights.
