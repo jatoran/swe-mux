@@ -7,6 +7,8 @@
  *  - every image resolves and no request 404s
  *  - every relative link points at a file that exists
  *  - every `data-todo` placeholder is one the site documents
+ *  - the docs browser: its sidebar, its search, its prev/next chain, and that
+ *    no page in it links back into `.docs/`
  *  - the install callout swaps command, note, tab state and platform lights
  *  - the theme toggle round-trips
  *
@@ -14,7 +16,8 @@
  * from the directory rather than listed: a new page is covered by existing, and
  * cannot be added without also being checked. It is cross-checked against
  * `tools/build.py`'s own list so a page that stops being generated is noticed
- * here too.
+ * here too - and, for the docs sub-pages, against the generated search index,
+ * which is the registry those are declared from.
  *
  * Playwright is not a dependency of the site; it is borrowed from the app's
  * frontend workspace, which is why it is resolved explicitly rather than imported.
@@ -34,14 +37,29 @@ const fail = (msg) => { failures++; console.log('  FAIL ' + msg) }
 
 // The landing page, plus every generated sub-page directory. Discovered, not
 // listed: a page nobody added here is a page nobody checks.
+//
+// It walks TWO levels rather than one, because `/docs/` is a documentation
+// browser and its pages live at `docs/<slug>/index.html`. A one-level walk would
+// have checked the docs index and silently skipped every page under it, which is
+// the whole of the documentation.
+const SKIP = new Set(['img', 'tools', 'content'])
+function discover(dir, prefix, depth) {
+  const found = []
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (!e.isDirectory() || SKIP.has(e.name)) continue
+    const here = join(dir, e.name)
+    const name = `${prefix}${e.name}/index.html`
+    if (existsSync(join(here, 'index.html'))) found.push({ name, file: join(here, 'index.html') })
+    if (depth > 1) found.push(...discover(here, `${prefix}${e.name}/`, depth - 1))
+  }
+  return found
+}
 const PAGES = [
   { name: 'index.html', file: join(site, 'index.html') },
-  ...readdirSync(site, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && existsSync(join(site, e.name, 'index.html')))
-    .filter((e) => e.name !== 'img' && e.name !== 'tools' && e.name !== 'content')
-    .map((e) => ({ name: `${e.name}/index.html`, file: join(site, e.name, 'index.html') })),
+  ...discover(site, '', 2),
 ]
 const url = (p) => pathToFileURL(p.file).href
+const DOCS = PAGES.filter((p) => p.name.startsWith('docs/'))
 
 // Every placeholder value the site is allowed to carry. Mirrors TODO_VALUES in
 // `tools/build.py` and the list in `README.md` section 11; an unfilled URL that
@@ -70,10 +88,16 @@ const PENDING_PAGES = new Set([
 ])
 const pendingSeen = new Set()
 
+// Each top-level page directory has to be one `build.py` declares, so a
+// directory holding an `index.html` nothing generates cannot ship. The docs
+// sub-pages are registered from `docs_content.py` rather than written out here,
+// so they are cross-checked against the generated search index instead - see the
+// `docs browser` section, which is a stronger check than this substring one.
 const built = readFileSync(join(here, 'build.py'), 'utf8')
 for (const page of PAGES) {
-  const dir = page.name.split('/')[0]
-  if (dir !== 'index.html' && !built.includes(`"${dir}": (`)) {
+  const parts = page.name.split('/')
+  if (parts.length !== 2) continue
+  if (!built.includes(`"${parts[0]}": (`)) {
     fail(`${page.name} exists but build.py does not generate it`)
   }
 }
@@ -162,28 +186,177 @@ for (const rel of PENDING_PAGES) {
   }
 }
 
-// -------------------------------------------------------------- fragments
-// The `/docs/#<slug>` fragments are a published URL contract (README.md section
-// 10): the in-app help modals link to them. A link whose target `id` vanished is
-// silent at runtime, so it is checked here instead.
-console.log('docs fragments')
+// ----------------------------------------------------------- docs browser
+// `/docs/` is a documentation browser rather than one anchored page: a
+// persistent sidebar, one URL per topic, search, and prev/next.
+//
+// This replaced a `docs fragments` section that asserted `.doclist li[id] >= 20`
+// and no dangling fragments. Those assumptions died with the index it was
+// written against, and the rule that made them worth having did not: a
+// navigation surface whose targets silently stopped existing is invisible at
+// runtime and obvious here. So each of its questions has a successor, and the
+// two the restructure actually created are asserted too.
+//
+//  - every sidebar link resolves to a page that exists      (was: no dangling #)
+//  - the sidebar is IDENTICAL on every docs page            (new)
+//  - every docs page is in the search index, and vice versa (was: >= 20 entries)
+//  - no docs page links to a `.docs/**.md` blob             (new - the point of
+//    the whole package, and the regression most likely to creep back in one
+//    "just this one reference" link at a time)
+//  - prev/next forms one chain over that same order         (new)
+//  - search finds a known string and lands on a real page   (new)
+console.log('docs browser')
 {
-  const docs = PAGES.find((p) => p.name === 'docs/index.html')
-  if (!docs) fail('there is no docs page')
+  const index = DOCS.find((p) => p.name === 'docs/index.html')
+  if (!index) fail('there is no docs index')
+  else if (DOCS.length < 10) fail(`only ${DOCS.length} docs pages; expected the browser`)
+
+  // The sidebar's hrefs are relative, so they necessarily read differently from
+  // `/docs/` and from `/docs/<slug>/`. What has to be identical is where they
+  // LAND, so every comparison here is over the resolved target rather than over
+  // the attribute - comparing the attribute would have been a check that could
+  // only ever pass by accident.
+  const target = (page, href) =>
+    relative(site, resolve(dirname(page.file), href.replace(/[#?].*$/, ''), 'index.html'))
+      .split(sep)
+      .join('/')
+
+  // The sidebar's own order, read off the index page once. Every later
+  // assertion is made against this, so a page missing from it fails everywhere
+  // rather than being quietly excused.
+  const p0 = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  await p0.goto(url(index), { waitUntil: 'load' })
+  const order = (
+    await p0.evaluate(() =>
+      [...document.querySelectorAll('.dsnav a')].map((a) => a.getAttribute('href')))
+  ).map((href) => target(index, href))
+  await p0.close()
+  if (order.length !== DOCS.length) {
+    fail(`the sidebar lists ${order.length} pages but ${DOCS.length} exist on disk`)
+  }
+  for (const name of order) {
+    if (!existsSync(join(site, name))) fail(`the sidebar links to ${name}, which does not exist`)
+  }
+  for (const page of DOCS) {
+    if (!order.includes(page.name)) fail(`${page.name} exists but no sidebar link reaches it`)
+  }
+
+  // The generated search index, read as a file rather than in a browser: it is
+  // the registry the docs sub-pages are declared from, so it stands in for the
+  // `build.py` substring check the top-level pages get.
+  const indexFile = join(site, 'docs', 'search-index.js')
+  let indexed = []
+  if (!existsSync(indexFile)) fail('docs/search-index.js is missing; run site/tools/build.py')
   else {
+    const src = readFileSync(indexFile, 'utf8')
+    const body = src.slice(src.indexOf('window.__MUXDOCS =') + 18).replace(/;\s*$/, '')
+    indexed = JSON.parse(body)
+    const onDisk = DOCS.filter((p) => p.name !== 'docs/index.html')
+      .map((p) => p.name.replace(/^docs\//, '').replace(/index\.html$/, ''))
+    const inIndex = indexed.map((r) => r.u)
+    for (const u of onDisk) if (!inIndex.includes(u)) fail(`docs/${u} is not in the search index`)
+    for (const u of inIndex) if (!onDisk.includes(u)) fail(`search index carries docs/${u}, which does not exist`)
+  }
+
+  let steps = 0
+  let checkedLinks = 0
+  for (const page of DOCS) {
     const p = await browser.newPage({ viewport: { width: 1280, height: 900 } })
-    await p.goto(url(docs), { waitUntil: 'load' })
+    await p.goto(url(page), { waitUntil: 'load' })
     const r = await p.evaluate(() => ({
-      entries: document.querySelectorAll('.doclist li[id]').length,
+      nav: [...document.querySelectorAll('.dsnav a')].map((a) => a.getAttribute('href')),
+      current: [...document.querySelectorAll('.dsnav a[aria-current="page"]')].length,
+      // Every link on the page, so the `.docs/` ban covers prose as well as
+      // chrome. It is the ban that has to hold everywhere, not on the parts
+      // somebody remembered.
+      links: [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')),
       dangling: [...document.querySelectorAll('a[href^="#"]')]
         .map((a) => a.getAttribute('href').slice(1))
         .filter((id) => id && !document.getElementById(id)),
+      prev: document.querySelector('.dsstep a[rel="prev"]')?.getAttribute('href') ?? null,
+      next: document.querySelector('.dsstep a[rel="next"]')?.getAttribute('href') ?? null,
+      search: !!document.getElementById('dsq'),
     }))
-    for (const id of r.dangling) fail(`docs: "#${id}" has no element with that id`)
-    if (r.entries < 20) fail(`docs: only ${r.entries} anchored entries, expected the full index`)
-    console.log(`  ${r.entries} anchored entries, ${r.dangling.length} dangling fragments`)
     await p.close()
+
+    if (!r.search) fail(`${page.name}: no search control`)
+    if (r.current !== 1) fail(`${page.name}: ${r.current} sidebar links marked aria-current`)
+    for (const id of r.dangling) fail(`${page.name}: "#${id}" has no element with that id`)
+    checkedLinks += r.links.length
+    for (const href of r.links) {
+      if (/\.docs\//.test(href)) {
+        fail(`${page.name}: links into .docs/ ("${href}"); write the page instead`)
+      }
+    }
+    const nav = r.nav.map((href) => target(page, href))
+    if (nav.join('|') !== order.join('|')) {
+      fail(`${page.name}: its sidebar reaches a different set of pages from the docs index's`)
+    }
+
+    // Prev and next, checked against the sidebar's own order. Deriving the
+    // expectation from the nav rather than from a list here is what makes this
+    // survive a page being inserted, and resolving both sides means a chain
+    // that walks the right pages by the wrong route still passes, which is
+    // correct - the route is not the contract.
+    const at = order.indexOf(page.name)
+    if (at > 0) {
+      steps++
+      const wantPrev = at === 1 ? null : order[at - 1]
+      const wantNext = at === order.length - 1 ? null : order[at + 1]
+      const gotPrev = r.prev === null ? null : target(page, r.prev)
+      const gotNext = r.next === null ? null : target(page, r.next)
+      if (gotPrev !== wantPrev) fail(`${page.name}: prev reaches ${gotPrev}, expected ${wantPrev}`)
+      if (gotNext !== wantNext) fail(`${page.name}: next reaches ${gotNext}, expected ${wantNext}`)
+    } else if (r.prev || r.next) {
+      fail(`${page.name}: the docs index carries a prev/next step and should not`)
+    }
   }
+
+  // Search, driven the way a reader drives it. A prebuilt index is only useful
+  // if the script over it actually resolves, ranks, and links - and none of
+  // that is visible from reading the JSON.
+  const from = DOCS.find((p) => p.name === 'docs/install/index.html') ?? index
+  const s = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  await s.goto(url(from), { waitUntil: 'load' })
+  await s.fill('#dsq', 'tailscale')
+  await s.waitForSelector('#dsr a', { timeout: 5000 }).catch(() => {})
+  const hits = await s.evaluate(() => ({
+    loaded: Array.isArray(window.__MUXDOCS),
+    links: [...document.querySelectorAll('#dsr a')].map((a) => a.getAttribute('href')),
+    status: document.getElementById('dsstatus')?.textContent ?? '',
+  }))
+  if (!hits.loaded) fail('search: the index script did not load')
+  if (!hits.links.length) fail('search: "tailscale" returned nothing')
+  // The phone page is where Tailscale is explained, so it has to be in there.
+  if (!hits.links.some((h) => h.startsWith('../phone/'))) {
+    fail(`search: "tailscale" did not return the phone page (got ${hits.links})`)
+  }
+  for (const href of hits.links) {
+    if (!existsSync(join(site, target(from, href)))) {
+      fail(`search: result "${href}" resolves to a missing page`)
+    }
+  }
+  // `/` focuses the box, which is the shortcut a reader tries first.
+  await s.evaluate(() => document.getElementById('dsq').blur())
+  await s.keyboard.press('/')
+  const focused = await s.evaluate(() => document.activeElement === document.getElementById('dsq'))
+  if (!focused) fail('search: "/" did not focus the search box')
+  // Arrow-down out of the box has to land on a result, or the list is
+  // mouse-only.
+  await s.keyboard.press('ArrowDown')
+  const onResult = await s.evaluate(() => document.activeElement?.closest('#dsr') !== null)
+  if (!onResult) fail('search: ArrowDown did not move focus into the results')
+  await s.close()
+
+  // Phrased as what was inspected rather than as a verdict, because `fail()`
+  // only counts: a summary claiming "no links into .docs/" would print directly
+  // under the FAIL saying otherwise.
+  console.log(
+    `  ${DOCS.length} pages: ${order.length} sidebar targets compared on each, ` +
+      `${indexed.length} indexed, ${steps} prev/next steps, ` +
+      `${checkedLinks} hrefs read for .docs/ blobs, ` +
+      `search returned ${hits.links.length} results for "tailscale" (${hits.status})`,
+  )
 }
 
 // ---------------------------------------------------------- install callout
@@ -268,7 +441,12 @@ console.log('bar and menu')
   // page's bar used to carry are what this assertion exists to keep out: an
   // anchor is a position in a document rather than a destination, and a bar
   // holding both means two things at once.
-  const ALLOWED_FRAGMENT = /^(\.\.\/)?#install$/
+  //
+  // `(\.\.\/)*` rather than `?` because a documentation page is two directories
+  // below the deploy root and reaches the landing page's install callout with
+  // `../../#install`. The depth is a property of the page, not a second kind of
+  // link, and the assertion is about the fragment either way.
+  const ALLOWED_FRAGMENT = /^(\.\.\/)*#install$/
   let labels = null
   for (const page of PAGES) {
     const b = await browser.newPage({ viewport: { width: 390, height: 844 } })

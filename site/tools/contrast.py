@@ -44,14 +44,24 @@ style = re.search(r"<style>\n(.*?)\n</style>", h, re.S)
 if not style:
     raise SystemExit("site/index.html has no <style> block")
 
-pages = sorted(p for p in SITE.glob("*/index.html") if p.parent.name not in {"img", "tools"})
+# Two levels, not one: the documentation browser is one page per topic under
+# `docs/<slug>/`, so a one-level glob would have measured `/docs/` and silently
+# skipped the twenty-two pages beneath it. `content/` holds sources rather than
+# pages and `img/`/`tools/` hold neither.
+SKIP = {"img", "tools", "content"}
+pages = sorted(
+    p
+    for p in SITE.glob("**/index.html")
+    if p != SITE / "index.html" and not (set(p.relative_to(SITE).parts) & SKIP)
+)
 print(f"stylesheet  ({len(pages) + 1} pages)")
 drifted = []
 for page in pages:
+    name = page.relative_to(SITE).as_posix()
     if style.group(1) not in page.read_text(encoding="utf-8"):
-        drifted.append(page.parent.name + "/index.html")
+        drifted.append(name)
     else:
-        print(f"  {page.parent.name}/index.html  inherits index.html's tokens")
+        print(f"  {name}  inherits index.html's tokens")
 for name in drifted:
     print(f"  FAIL {name} does not carry index.html's stylesheet; run site/tools/build.py")
 

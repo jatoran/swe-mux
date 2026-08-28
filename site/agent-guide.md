@@ -8,8 +8,9 @@ Canonical sources, in order of authority.
 If this file and one of these disagree, the source below wins and this file is stale:
 
 - `https://github.com/jatoran/swe-mux` - the repository. `README.md` is the install reference.
-- `https://swemux.dev/docs/` - the published documentation index.
-- `https://github.com/jatoran/swe-mux/blob/master/.docs/development/OPERATOR_LIFECYCLE.md` - install, upgrade, uninstall, and recovery in full.
+- `https://swemux.dev/docs/install/` - the published install page.
+- `https://swemux.dev/docs/troubleshooting/` - what actually goes wrong, and what to do about it.
+- `https://swemux.dev/docs/` - the documentation home, with a page per topic and a search box.
 
 This file was last revised on 2026-08-28, against swe-mux 0.1.0.
 
@@ -124,8 +125,9 @@ mux doctor
 It reports on the daemon, the supervisor process, the frontend build, which agent CLIs it can detect, the tailnet listener, and the background loops.
 Read its output to the user rather than summarizing it as "fine": it is the one command that distinguishes "installed" from "working", and its exit code is meaningful.
 
-If the daemon will not start, or the page loads with no UI, the recovery procedures are in `OPERATOR_LIFECYCLE.md` (linked at the top of this file).
+If the daemon will not start, or the page loads with no UI, the recovery procedures are at `https://swemux.dev/docs/troubleshooting/`.
 Do not guess at them.
+The blank-page case in particular is not a bug and has a one-command fix, so read it rather than reinstalling.
 
 ## 5. The concepts to explain, in this order
 
@@ -195,10 +197,12 @@ There is no analytics, no crash reporting, and no account.
 
 ## 9. Where to go next
 
-- `https://swemux.dev/docs/` - the documentation index, including quick starts and per-feature pages.
+- `https://swemux.dev/docs/` - the documentation home. One page per topic, with a sidebar and a search box.
+- `https://swemux.dev/docs/first-session/` - the next thing to do, once the install is verified.
+- `https://swemux.dev/docs/troubleshooting/` - every recovery procedure named above.
+- `https://swemux.dev/docs/data/` - where every file goes, what is worth backing up, and what an uninstall leaves.
 - `https://swemux.dev/privacy/` - what the software and the website collect, stated precisely.
 - `https://swemux.dev/compare/` - how swe-mux differs from the neighbouring tools, including where it loses.
-- `https://github.com/jatoran/swe-mux/blob/master/.docs/development/OPERATOR_LIFECYCLE.md` - upgrade, uninstall, and every recovery procedure.
 - `https://github.com/jatoran/swe-mux/issues` for bugs, and the Ideas discussions for feature requests.
 
 ## 10. Rules for you

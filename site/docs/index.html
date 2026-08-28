@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Docs · swe-mux</title>
-<meta name="description" content="Index of swe-mux&#x27;s design documentation: sessions and terminals, the workbench, the control plane, queues and landing, voice, and the technical reference." />
+<meta name="description" content="swe-mux documentation: install it, run a first agent session, reach it from a phone, and a page for every surface, setting, and command." />
 <meta name="color-scheme" content="dark" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
@@ -613,6 +613,126 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
               letter-spacing: 0.06em; margin-top: 4px; }
 .post .prose, .post .bullets, .post table { max-width: 74ch; }
 .post h3 { margin-top: 24px; font-size: clamp(15px, 2vw, 17px); }
+
+/* -------------------------------------------------------- the docs browser
+
+   A persistent sidebar, one URL per page, search, and prev/next. Two columns
+   above 900px and one below it, and the sidebar is ONE list in the markup
+   rather than a desktop copy and a mobile copy - a second copy is how a page
+   ends up in one nav and not the other.
+
+   `minmax(0, 1fr)` on the content track is load-bearing: a `<pre>` inside a
+   grid item has a min-content width equal to its longest line, so without it
+   an install command pushes the whole page sideways and `tools/check.mjs`
+   fails at 360. */
+.docsgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px 0; }
+@media (min-width: 900px) {
+  .docsgrid { grid-template-columns: 224px minmax(0, 1fr); gap: 0 clamp(30px, 4vw, 58px);
+              align-items: start; }
+  /* 45px clears the 44px sticky bar with the hairline under it. */
+  .dsaside { position: sticky; top: 45px; max-height: calc(100vh - 60px);
+             overflow-y: auto; overscroll-behavior: contain;
+             padding: clamp(30px, 5vw, 54px) 0 20px; }
+  .dsbody { padding-top: clamp(30px, 5vw, 54px); }
+}
+.page.docs { padding-top: 0; }
+@media (max-width: 899px) { .dsaside { padding-top: clamp(28px, 6vw, 40px); } }
+@media (max-width: 899px) { .dsbody { padding-top: 4px; } }
+
+.dsvh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+        overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Search. The control is `position: relative` because the result list hangs
+   under it, and the list is in flow on the aside rather than absolutely
+   positioned so it cannot overlap the nav it sits above at any width. */
+.dsearch { position: relative; }
+.dsearch input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+  font-family: var(--mono); color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 0; padding: 8px 30px 8px 11px;
+  appearance: none;
+}
+.dsearch input::placeholder { color: var(--fg-3); }
+.dsearch input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+/* The `/` hint, drawn as a key. `--fg-3` rather than `--fg-4`, because `--fg-4`
+   does not clear AA and is restricted to borders and inert markers. */
+.dskey { position: absolute; right: 9px; top: 8px; pointer-events: none;
+         font-family: var(--mono); font-size: 11px; color: var(--fg-3);
+         border: 1px solid var(--line-2); padding: 0 5px; line-height: 1.45; }
+.dsearch input:focus + .dskey { display: none; }
+.dsr { margin-top: 8px; border: 1px solid var(--line-2); background: var(--panel); }
+.dsr[hidden] { display: none; }
+.dsr a { display: block; border: 0; padding: 9px 11px; border-top: 1px solid var(--line); }
+.dsr a:first-child { border-top: 0; }
+.dsr a:hover, .dsr a:focus-visible { background: var(--panel-2); outline: 0; }
+.dsr a:focus-visible { box-shadow: inset 2px 0 0 var(--green); }
+.dsr .t { display: block; font-family: var(--mono); font-size: 12.5px; color: var(--fg);
+          font-weight: 600; overflow-wrap: anywhere; }
+.dsr a:hover .t, .dsr a:focus-visible .t { color: var(--cyan); }
+.dsr .d { display: block; margin-top: 3px; font-size: 12.5px; line-height: 1.5;
+          color: var(--fg-2); overflow-wrap: anywhere; }
+.dsnone { margin: 0; padding: 10px 11px; font-size: 12.5px; color: var(--fg-2); }
+
+/* The sidebar. A disclosure below 900px, always open above it. */
+.dsnavbtn { display: block; width: 100%; margin-top: 12px; text-align: left; cursor: pointer;
+            font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em;
+            text-transform: uppercase; color: var(--fg-2); background: var(--panel);
+            border: 1px solid var(--line-2); padding: 9px 12px; }
+.dsnavbtn::before { content: "\25B8"; color: var(--green); display: inline-block;
+                    width: 15px; transition: transform 0.12s linear; }
+.dsnavbtn[aria-expanded="true"]::before { transform: rotate(90deg); }
+.dsnavbtn:hover { color: var(--fg); }
+.dsnavbtn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+@media (min-width: 900px) { .dsnavbtn { display: none; } }
+.dsnav { margin-top: 14px; display: flex; flex-direction: column; }
+.dsnav[hidden] { display: none; }
+.dsnav a { border: 0; color: var(--fg-2); font-size: 13.5px; line-height: 1.4;
+           padding: 6px 0 6px 11px; border-left: 1px solid var(--line);
+           overflow-wrap: anywhere; }
+.dsnav a:hover { color: var(--fg); border-left-color: var(--line-2); }
+.dsnav a:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.dsnav a[aria-current="page"] { color: var(--green); border-left-color: var(--green); }
+.dsgroup { margin: 18px 0 5px; font-family: var(--mono); font-size: 11px;
+           letter-spacing: 0.13em; text-transform: uppercase; color: var(--fg-3); }
+.dsnav > a:first-child + .dsgroup { margin-top: 14px; }
+
+/* Page body. The first section gets no top margin, because the heading list
+   above it already separates it from the lede. */
+.dsbody .docsec:first-of-type { margin-top: clamp(26px, 4vw, 36px); }
+.dsbody .prose, .dsbody .bullets, .dsbody .steps, .dsbody .flat, .dsbody .lede,
+.dsbody .note, .dsbody .proof { max-width: 76ch; }
+.dsbody .prose + .prose, .dsbody .prose + .note { margin-top: 12px; }
+.dsbody .code, .dsbody .tablewrap { margin-top: 14px; }
+.dsbody .head + .prose, .dsbody .head + .bullets, .dsbody .head + .flat,
+.dsbody .head + .steps { margin-top: 12px; }
+.dsbody .flat li { grid-template-columns: 180px minmax(0, 1fr); }
+@media (max-width: 760px) { .dsbody .flat li { grid-template-columns: minmax(0, 1fr); } }
+.dsbody .docsec .kbd, .dsbody kbd {
+  font-family: var(--mono); font-size: 0.86em; color: var(--fg);
+  border: 1px solid var(--line-2); background: var(--panel-2); padding: 1px 5px;
+  white-space: nowrap;
+}
+
+/* Previous and next. A grid rather than `space-between`, so a page with only a
+   next link keeps it on the right where every other page draws it. */
+.dsstep { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px;
+          margin-top: clamp(40px, 6vw, 62px); padding-top: 20px;
+          border-top: 1px solid var(--line-2); }
+.dsstep a { border: 0; display: block; padding: 12px 14px; border: 1px solid var(--line);
+            background: var(--panel); }
+.dsstep a:hover { border-color: var(--line-2); }
+.dsstep a:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.dsstep a.next { text-align: right; }
+.dsstep .l { display: block; font-family: var(--mono); font-size: 11px;
+             letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); }
+.dsstep .t { display: block; margin-top: 4px; font-size: 14px; color: var(--fg);
+             overflow-wrap: anywhere; }
+.dsstep a:hover .t { color: var(--cyan); }
+@media (max-width: 560px) {
+  .dsstep { grid-template-columns: minmax(0, 1fr); }
+  .dsstep a.next { text-align: left; }
+  .dsstep .gap { display: none; }
+}
 </style>
 </head>
 <body>
@@ -663,437 +783,130 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 </div>
 
 <main>
-<section class="page">
+<section class="page docs">
   <div class="wrap">
-    <div class="kick">install it, use it, then read why</div>
-    <h1>Documentation</h1>
-    <div class="lede"><p>Three things live on this page. <b>Quick starts</b> for the four tasks a new install hits first. <b>Features and settings</b>, which says what each part does and which screen its controls are on. And the <b>reference index</b>, generated from the design documents in the repository rather than rewritten beside them.</p><p>The reference documents are written for whoever maintains a subsystem next. They state invariants and the decisions already made, which is what you want when a behaviour surprises you and not what you want in your first ten minutes. For that, start above and keep <code>mux doctor</code> to hand.</p></div>
-    <div class="agentbox">
-      <div class="relhead"><h2>Have an agent set it up</h2><span class="fill"></span></div>
-      <p class="prose">Paste this to Claude Code, Codex, or any agent that can fetch a URL. It reads a guide written for that job: install, first run, the concepts worth explaining, and what leaves the machine.</p>
-      <div class="code"><pre>Help me understand and set up swe-mux. Read https://swemux.dev/agent-guide.md first, then walk me through it step by step.</pre></div>
-      <p class="note">The guide is <a href="../agent-guide.md"><code>https://swemux.dev/agent-guide.md</code></a>, and it is plain Markdown rather than a page, so an agent gets the text and not a layout. Reading it costs nothing and it will tell your agent to ask before it installs anything.</p>
-    </div>
-    <nav class="toc" aria-label="Documentation sections">
-      <a href="#sec-quickstart">quick starts</a>
-      <a href="#guide-sessions">sessions, terminals, and status</a>
-      <a href="#guide-workbench">projects and the workbench</a>
-      <a href="#guide-queue">queues, messaging, and landing</a>
-      <a href="#guide-git">git and history</a>
-      <a href="#guide-control-plane">the control plane</a>
-      <a href="#guide-voice">voice, alerts, and the assistant</a>
-      <a href="#guide-accounts">accounts, usage, and running it</a>
-      <a href="#sec-overview">reference: overview</a>
-      <a href="#sec-sessions">reference: sessions and terminals</a>
-      <a href="#sec-workbench">reference: projects and the workbench</a>
-      <a href="#sec-history">reference: history and transcripts</a>
-      <a href="#sec-control-plane">reference: the control plane</a>
-      <a href="#sec-queues">reference: queues, messaging, and landing</a>
-      <a href="#sec-voice">reference: voice, assistant, and alerts</a>
-      <a href="#sec-accounts">reference: accounts, usage, and budgets</a>
-      <a href="#sec-running">reference: running it</a>
-      <a href="#sec-reference">reference: technical reference</a>
-    </nav>
-    <div class="docsec" id="sec-quickstart">
-      <div class="head"><span class="n">#</span><h2>Quick starts</h2><span class="fill"></span></div>
-      <p class="prose">Four tasks, in the order a new install hits them. Every command here is one that exists today; where a claim is about a default, the default is the one shipping.</p>
-      <div class="rel" id="quickstart-install">
-        <div class="relhead"><h2>Install it, and see the workspace</h2><span class="fill"></span></div>
-        <p class="prose">Ten minutes, and it needs no checkout and no Node. The published wheel is pure Python and already carries the built frontend.</p>
-        <ol class="steps">
-          <li><span>Check you have <b>Python 3.12 or newer</b>: <code>python --version</code>.</span></li>
-          <li><span>Install it. <code>uv tool install swe-mux</code> is the recommended form and leaves <code>mux</code>, <code>muxd</code>, and <code>swe-mux</code> on your PATH globally. <code>pipx install swe-mux</code> does the same without uv.</span></li>
-          <li><span><b>On Windows, take the desktop extra instead:</b> <code>uv tool install "swe-mux[desktop]"</code>. That is what adds the native window and the tray icon; without it the <code>swe-mux</code> command exists and fails on a missing import.</span></li>
-          <li><span>Start the daemon: <code>muxd</code>. On Windows with the extra, <code>swe-mux</code> opens the same thing in a window.</span></li>
-          <li><span>Open <code>http://127.0.0.1:8765</code>.</span></li>
-          <li><span>Create a Project and point it at a folder you already work in. Nothing else works until there is one, and nothing is spawned until you ask for it.</span></li>
-        </ol>
-        <p class="proof"><b>It worked when</b> Run <code>mux doctor</code>. It is read-only, and it reports on the daemon, the supervisor, the frontend build, the agent CLIs it can detect, the tailnet listener, and the background loops. It is the command that tells installed from working.</p>
+    <div class="docsgrid">
+    <div class="dsaside">
+      <div class="dsearch" data-base="">
+        <label class="dsvh" for="dsq">Search the documentation</label>
+        <input type="search" id="dsq" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="dsr" aria-expanded="false" aria-describedby="dskey" />
+        <div class="dskey" id="dskey" aria-hidden="true">/</div>
+        <p class="dsvh" id="dsstatus" role="status" aria-live="polite"></p>
+        <div class="dsr" id="dsr" hidden></div>
       </div>
-      <div class="rel" id="quickstart-session">
-        <div class="relhead"><h2>Run your first agent session</h2><span class="fill"></span></div>
-        <p class="prose">There is no special ritual for starting an agent. You open a terminal and type the command you already type.</p>
-        <ol class="steps">
-          <li><span>With a Project selected, press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>. That opens a real terminal at the Project's root.</span></li>
-          <li><span>Type <code>claude</code>, <code>codex</code>, or whichever CLI you use, normally. swe-mux puts its own launchers first on that terminal's PATH, so the ordinary command <b>promotes the terminal in place</b>: same pane, same scrollback, now carrying a transcript, a status, a queue, and a context meter.</span></li>
-          <li><span>Give it something to do, then watch the session's status. Working, ready, awaiting approval, and blocked mean the same thing whichever vendor's CLI produced them.</span></li>
-          <li><span>While it is mid-turn, open the <b>Queue</b> tab in the utility drawer and stage your next message. It is durable and head-of-line, and <b>automatic delivery is off by default</b>: a queued message waits for you to send it.</span></li>
-          <li><span>Use the <b>Run</b> menu for anything you did not want to type: another agent, a shell, a worktree session, or a task imported from the repository.</span></li>
-        </ol>
-        <p class="proof"><b>It worked when</b> The pane's status strip stops saying <em>working</em> and the transcript tab has something in it. If a session sits on <em>awaiting</em>, that is the agent waiting on you rather than a stall.</p>
+      <button type="button" id="dsnavbtn" class="dsnavbtn" hidden aria-expanded="true" aria-controls="dsnav">All documentation</button>
+      <nav class="dsnav" id="dsnav" aria-label="Documentation">
+        <a href="./" aria-current="page">Overview</a>
+        <div class="dsgroup">Getting started</div>
+        <a href="install/">Install</a>
+        <a href="first-session/">Your first session</a>
+        <a href="phone/">Reach it from your phone</a>
+        <a href="agent-setup/">Have an agent set it up</a>
+        <div class="dsgroup">Concepts</div>
+        <a href="projects/">Projects and Groups</a>
+        <a href="sessions/">Sessions, terminals, and harnesses</a>
+        <a href="status/">Session status</a>
+        <a href="control-plane/">What the control plane is</a>
+        <div class="dsgroup">Working in it</div>
+        <a href="workspace/">Panes, tabs, and the drawer</a>
+        <a href="queue/">The prompt queue</a>
+        <a href="git/">Git, worktrees, and landing</a>
+        <a href="notes-files/">Notes, files, and previews</a>
+        <a href="history/">History and transcripts</a>
+        <a href="voice/">Voice and the assistant</a>
+        <a href="automation/">Automation and alerts</a>
+        <a href="usage/">Accounts, usage, and budgets</a>
+        <div class="dsgroup">Reference</div>
+        <a href="settings/">Settings reference</a>
+        <a href="cli/">Command line reference</a>
+        <a href="keyboard/">Keyboard and the command palette</a>
+        <a href="data/">Where data lives, and what leaves the machine</a>
+        <div class="dsgroup">Help</div>
+        <a href="troubleshooting/">Troubleshooting</a>
+        <a href="contributing/">Developing swe-mux</a>
+      </nav>
+      <script>(function () {
+  var btn = document.getElementById('dsnavbtn');
+  var nav = document.getElementById('dsnav');
+  if (!btn || !nav) return;
+  btn.hidden = false;
+  function set(open) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    nav.hidden = !open;
+  }
+  var narrow = window.matchMedia('(max-width: 899px)');
+  set(!narrow.matches);
+  btn.addEventListener('click', function () {
+    set(btn.getAttribute('aria-expanded') !== 'true');
+  });
+  narrow.addEventListener('change', function (e) { set(!e.matches); });
+})();</script>
+    </div>
+    <article class="dsbody">
+      <div class="kick">install it, use it, then read why</div>
+      <h1>Documentation</h1>
+      <div class="lede"><p>Written for somebody <b>using</b> swe-mux. Start at <a href="install/">Install</a> and read forward, or search - every page is its own URL and the sidebar is on all of them.</p></div>
+      <div class="agentbox">
+        <div class="relhead"><h2>Have an agent set it up</h2><span class="fill"></span></div>
+        <p class="prose">Paste this to Claude Code, Codex, or any agent that can fetch a URL. It reads a guide written for that job: install, first run, the concepts worth explaining, and what leaves the machine.</p>
+        <div class="code"><pre>Help me understand and set up swe-mux. Read https://swemux.dev/agent-guide.md first, then walk me through it step by step.</pre></div>
+        <p class="note">The guide is <a href="../agent-guide.md"><code>https://swemux.dev/agent-guide.md</code></a>, and it is plain Markdown rather than a page, so an agent gets the text and not a layout. Reading it costs nothing and it will tell your agent to ask before it installs anything.</p>
       </div>
-      <div class="rel" id="quickstart-cli">
-        <div class="relhead"><h2>Add an agent CLI</h2><span class="fill"></span></div>
-        <p class="prose">swe-mux does not install, manage, authenticate, or proxy your agent CLIs. It finds the ones you already have.</p>
-        <ol class="steps">
-          <li><span>Install the CLI the vendor's own way, outside swe-mux, and log into it there. Your subscription and your agreement stay with that vendor.</span></li>
-          <li><span>Check swe-mux can see it: <code>mux harnesses</code> lists every harness in the registry with its detection state, and Settings, Harnesses shows the same thing with the executable each one resolved to.</span></li>
-          <li><span>If it resolved to the wrong binary, or to none, set the path for that harness in Settings, Harnesses. That is the usual fix on a machine with several installs.</span></li>
-          <li><span>Open a terminal in a Project and run it. A harness the registry knows gets normalized status, transcripts, history, and account switching on top.</span></li>
-          <li><span><b>A CLI the registry has never heard of still works.</b> It runs in a real pseudoterminal exactly as it does outside swe-mux; what it does not get is the layer.</span></li>
-        </ol>
-        <p class="proof"><b>It worked when</b> <code>mux harnesses</code> shows it detected, and typing its command in a Project terminal produces an agent session rather than a plain shell.</p>
+      <div class="docsec">
+        <div class="head"><span class="n">#</span><h2>Getting started</h2><span class="fill"></span></div>
+        <p class="prose">Installing it, getting a first agent session running, and reaching it from a phone. About half an hour end to end, and none of it needs a checkout.</p>
+        <ul class="flat">
+          <li><b><a href="install/">Install</a></b><span>Install swe-mux from PyPI with uv, pipx, or pip, on Windows, Linux, or macOS. What each method leaves you with, and the two things no method does.</span></li>
+          <li><b><a href="first-session/">Your first session</a></b><span>Create a Project, open a terminal, and promote it into an agent session by typing the command you already type. What to expect the first time.</span></li>
+          <li><b><a href="phone/">Reach it from your phone</a></b><span>The phone client is the same application over your own Tailscale tailnet: no relay, no swe-mux login. How to set it up, and what the access boundary actually is.</span></li>
+          <li><b><a href="agent-setup/">Have an agent set it up</a></b><span>Paste one line into Claude Code, Codex, or any agent that can fetch a URL, and it reads a guide written for walking a person through installing swe-mux.</span></li>
+        </ul>
       </div>
-      <div class="rel" id="quickstart-phone">
-        <div class="relhead"><h2>Reach it from your phone</h2><span class="fill"></span></div>
-        <p class="prose">The phone client is the same application, not a companion, and it goes over your own tailnet with no relay and no swe-mux login.</p>
-        <ol class="steps">
-          <li><span>Install Tailscale on the host machine and on the phone, on the same tailnet.</span></li>
-          <li><span>Leave the daemon running. It listens on loopback and on the machine's detected Tailscale address; <code>muxd --local-only</code> is how you stop that.</span></li>
-          <li><span>On the phone, open the machine's <code>.ts.net</code> hostname over HTTPS. Turn <b>Use Tailscale DNS</b> on, and leave Android's Private DNS off or automatic: the certificate is bound to the hostname, so the raw <code>100.x</code> address cannot serve HTTPS.</span></li>
-          <li><span>Install it to the home screen when the browser offers. It is a progressive web app, so it gets its own window and can receive push.</span></li>
-          <li><span><b>HTTPS is not optional if you want the microphone or the clipboard</b>, because browsers restrict both outside a secure context. swe-mux puts Tailscale Serve on 443 in front of the daemon for exactly this.</span></li>
-        </ol>
-        <p class="proof"><b>It worked when</b> The workspace renders on the phone with your Projects in it. Understand the consequence before you leave it running: <b>Tailscale policy is the entire access boundary</b>, and any device your tailnet admits has terminal and code-execution authority on that host.</p>
+      <div class="docsec">
+        <div class="head"><span class="n">#</span><h2>Concepts</h2><span class="fill"></span></div>
+        <p class="prose">The four ideas the rest of the application is built on. Worth reading once, in order, because every later page assumes them.</p>
+        <ul class="flat">
+          <li><b><a href="projects/">Projects and Groups</a></b><span>A Project binds a folder to sessions, layout, notes, files, history, and its own settings. What that means in practice, and which switches are per-Project.</span></li>
+          <li><b><a href="sessions/">Sessions, terminals, and harnesses</a></b><span>A session is one pseudoterminal with a process in it. What swe-mux owns, what survives a restart, and what a recognised harness gets that an unrecognised one does not.</span></li>
+          <li><b><a href="status/">Session status</a></b><span>Working, ready, awaiting, blocked: one status vocabulary across every vendor's CLI, how it is read, and why awaiting is the one to watch.</span></li>
+          <li><b><a href="control-plane/">What the control plane is</a></b><span>The layer that decides which session you look at next: deterministic facts, model-free detectors, attention ranking with an interrupt budget. Off by default, per Project.</span></li>
+        </ul>
       </div>
+      <div class="docsec">
+        <div class="head"><span class="n">#</span><h2>Working in it</h2><span class="fill"></span></div>
+        <p class="prose">What each surface does and where its controls are, one page per subsystem.</p>
+        <ul class="flat">
+          <li><b><a href="workspace/">Panes, tabs, and the drawer</a></b><span>The workspace is a mixed tree of panes, tabs, and splits, with a utility drawer beside it. What each drawer tab acts on, and how the phone projects the same tree.</span></li>
+          <li><b><a href="queue/">The prompt queue</a></b><span>Stage ordered messages against a session that is mid-turn. Durable, head-of-line, and with automatic delivery off by default. What turning it on actually means.</span></li>
+          <li><b><a href="git/">Git, worktrees, and landing</a></b><span>Status and diff review beside the terminal, a worktree map, commit-level provenance split into committer and contributor, and a land queue that fast-forwards only.</span></li>
+          <li><b><a href="notes-files/">Notes, files, and previews</a></b><span>Project-owned notes in a real Markdown editor, a bounded file tree with editors, leased watches, and dev-server previews proxied so a phone never needs a raw port.</span></li>
+          <li><b><a href="history/">History and transcripts</a></b><span>One search and one resume across every supported harness, read from the vendors' own transcript files, which are never moved, rewritten, or deleted.</span></li>
+          <li><b><a href="voice/">Voice and the assistant</a></b><span>Read aloud in three policy layers, hands-free conversation with local transcription and wake words, and an assistant whose confirmation floor is not configurable.</span></li>
+          <li><b><a href="automation/">Automation and alerts</a></b><span>Model-backed observers that watch a run and report, an attention inbox with a hard daily interrupt budget, and push notifications to the device you are actually at.</span></li>
+          <li><b><a href="usage/">Accounts, usage, and budgets</a></b><span>Switching between provider accounts you own, the three spend pots that are never summed, where a model call goes, and what a cap can and cannot enforce.</span></li>
+        </ul>
+      </div>
+      <div class="docsec">
+        <div class="head"><span class="n">#</span><h2>Reference</h2><span class="fill"></span></div>
+        <p class="prose">Every setting, every command, every default chord, and every file swe-mux writes.</p>
+        <ul class="flat">
+          <li><b><a href="settings/">Settings reference</a></b><span>Every Settings tab, what it owns, and the rule that decides whether a switch is global, per Project, or per device.</span></li>
+          <li><b><a href="cli/">Command line reference</a></b><span>Every mux subcommand, every muxd flag, the exit-code contract scripts branch on, and how the CLI resolves which daemon to talk to.</span></li>
+          <li><b><a href="keyboard/">Keyboard and the command palette</a></b><span>Every default chord, the command palette that reaches the rest, and how rebinding and mobile gestures work.</span></li>
+          <li><b><a href="data/">Where data lives, and what leaves the machine</a></b><span>The data directory and what each part of it holds, exactly which network requests swe-mux makes, what is worth backing up, and what an uninstall leaves behind.</span></li>
+        </ul>
+      </div>
+      <div class="docsec">
+        <div class="head"><span class="n">#</span><h2>Help</h2><span class="fill"></span></div>
+        <p class="prose">What actually goes wrong, and what to do about it.</p>
+        <ul class="flat">
+          <li><b><a href="troubleshooting/">Troubleshooting</a></b><span>The things that actually go wrong: a blank page, nothing on PATH, a daemon that will not start, sessions that look lost, a phone that cannot use the microphone.</span></li>
+          <li><b><a href="contributing/">Developing swe-mux</a></b><span>Maintainer material: running from a checkout, the verification gate a change has to pass, the DCO sign-off, and the extra rules a dependency change carries.</span></li>
+        </ul>
+      </div>
+      <p class="note">Changing swe-mux rather than using it? <a href="contributing/">Developing swe-mux</a> is the maintainer page, and it is the only one here that sends you into the repository.</p>
+    </article>
     </div>
-    <div class="docsec" id="guide-sessions">
-      <div class="head"><span class="n">#</span><h2>Sessions, terminals, and status</h2><span class="fill"></span></div>
-      <p class="prose">Everything else is built on swe-mux owning the pseudoterminal rather than wrapping the program inside it.</p>
-      <ul class="flat">
-        <li><b>Sessions that outlive the app</b><span>A supervisor process separate from the daemon and the UI holds every terminal, so restarting the daemon or rebuilding the desktop app leaves the agents working. Reconnecting replays only the bytes you missed. A session whose process did end stays readable rather than disappearing. <span class="src">Settings, Terminals &middot; <a href="#sessions">reference</a></span></span></li>
-        <li><b>One status vocabulary</b><span>Working, ready, awaiting approval, or blocked, meaning the same thing across vendors. It is read from provider hooks, the transcript, the terminal, and the CLI's own state files, and every transition is kept. <b>Awaiting is the one to watch</b>: it means the agent is waiting on you. <span class="src">the session's status strip &middot; <a href="#status-detection">reference</a></span></span></li>
-        <li><b>Approvals</b><span>When a harness asks permission, the decision is made from its structured request rather than from what is on screen, and there is a floor no configuration can reach past. swe-mux never decides to deny; that stays yours. <span class="src">Settings, Prompt queue, Approvals &middot; <a href="#approvals">reference</a></span></span></li>
-        <li><b>Multi-device terminals</b><span>One session can be attached from several devices at once. Exactly one connection may write, and the terminal size is arbitrated rather than fought over, so the phone does not reflow the desktop. <span class="src">Settings, Terminals &middot; <a href="#terminal-input">reference</a></span></span></li>
-        <li><b>Launch profiles</b><span>Named shell and agent launches: which executable, which arguments, which working directory. A WSL distro shell is a profile like any other, and the WSL agent bridge reports whether the distro can actually reach the daemon rather than assuming it. <span class="src">Settings, Harnesses &middot; <a href="#launch-profiles">reference</a></span></span></li>
-      </ul>
-    </div>
-    <div class="docsec" id="guide-workbench">
-      <div class="head"><span class="n">#</span><h2>Projects and the workbench</h2><span class="fill"></span></div>
-      <p class="prose">A Project binds a folder to everything else: sessions, layout, notes, files, history, and its own settings.</p>
-      <ul class="flat">
-        <li><b>Projects and Groups</b><span>Point a Project at a folder you already work in. Groups are optional sidebar organization above them. Most per-Project switches live here rather than globally, which is what lets the control plane be on for one repository and off for the rest. <span class="src">Settings, Projects &middot; <a href="#projects">reference</a></span></span></li>
-        <li><b>Panes, tabs, and splits</b><span>A mixed workspace of panes, tabs, and splits, with drag and drop. Desktop split geometry is durable Project state; the phone renders a single-pane projection of the same tree rather than a second layout. <span class="src">the workspace itself &middot; <a href="#workspace-layout">reference</a></span></span></li>
-        <li><b>Notes, files, and watches</b><span>Project-owned notes in a real Markdown editor, a file browser with editors, ignore rules, and leased non-recursive watches. Notes and files both open into a pane rather than only into the drawer. <span class="src">the Notes and Files drawer tabs &middot; <a href="#project-resources">reference</a></span></span></li>
-        <li><b>The Run menu and imported tasks</b><span>Starts an agent, a shell, a worktree session, or a task discovered in the repository: VS Code tasks, root <code>package.json</code> scripts, and <code>.swe-mux/actions.toml</code>. <b>An imported task stays inert until its exact current bytes are approved</b>, and any edit revokes that. <span class="src">the Run menu, and Settings, Projects &middot; <a href="#project-actions">reference</a></span></span></li>
-        <li><b>Processes and previews</b><span>Whatever your sessions started, and what each one is serving. A local dev server is proxied through the daemon's own URL, HMR included, so a phone never needs a raw port. Static documents in the checkout can be previewed the same way under a sandbox policy. <span class="src">the Processes drawer tab &middot; <a href="#processes-and-previews">reference</a></span></span></li>
-        <li><b>Prompt templates</b><span>Saved reusable messages. Selecting one <b>inserts and never submits</b>, which is deliberate: a template is text, not an action. <span class="src">the Actions drawer tab &middot; <a href="#prompt-library">reference</a></span></span></li>
-      </ul>
-    </div>
-    <div class="docsec" id="guide-queue">
-      <div class="head"><span class="n">#</span><h2>Queues, messaging, and landing</h2><span class="fill"></span></div>
-      <p class="prose">Getting work to an agent that is busy, and getting a finished branch onto the trunk, without either of them happening behind your back.</p>
-      <ul class="flat">
-        <li><b>The prompt queue</b><span>Stage ordered messages against a session that is mid-turn. It is durable, head-of-line, and bound to the conversation rather than to the pane. <b>Automatic delivery is off by default</b>, and when you do turn it on it waits for a readiness gate and a stability window rather than for a binary done signal. <span class="src">the Queue drawer tab, and Settings, Prompt queue &middot; <a href="#prompt-queue">reference</a></span></span></li>
-        <li><b>Auto-delivery, when you want it</b><span>Per-conversation, with quiet hours, an emergency pause, an expiry on each item, and a cap on consecutive sends. It is the setting to understand before turning on, and the defaults are the conservative ones. <span class="src">Settings, Prompt queue, Auto-delivery &middot; <a href="#auto-delivery">reference</a></span></span></li>
-        <li><b>Agent-to-agent messages</b><span>One session can put a message into another's queue. <b>A non-human sender's write ends at a human</b> unless the receiving session granted it standing permission or itself asked the question being answered. <span class="src">the Fleet Queue, and Settings, Prompt queue, Agent messaging &middot; <a href="#agent-messaging">reference</a></span></span></li>
-        <li><b>The land queue</b><span>Landing a finished worktree branch, one at a time: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only. Git refuses a fast-forward that would lose work, which is what makes the last step safe for a machine. A conflict or a failed gate goes back to the branch's own agent as a message. <span class="src">the Git drawer tab, Map &middot; <a href="#land-queue">reference</a></span></span></li>
-        <li><b>Scheduled runs</b><span>Cron, interval, or one-off. A schedule is a deferred press of a button you could have pressed yourself, so it goes through the ordinary spawn, resume, and queue paths and grows no second authority. Definitions stay on the machine rather than in the repository, so they do not arm themselves in every clone. <span class="src">the Schedule drawer tab &middot; <a href="#scheduled-runs">reference</a></span></span></li>
-      </ul>
-    </div>
-    <div class="docsec" id="guide-git">
-      <div class="head"><span class="n">#</span><h2>Git and history</h2><span class="fill"></span></div>
-      <p class="prose">What changed, who changed it, and being able to go back to the conversation that produced it.</p>
-      <ul class="flat">
-        <li><b>The worktree map</b><span>One row per worktree, with its files, its changes, and the live sessions standing in it. Creating and removing worktrees is here, and removal is declined rather than forced wherever Git itself would refuse. <span class="src">the Git drawer tab, Map &middot; <a href="#git">reference</a></span></span></li>
-        <li><b>Commit provenance</b><span>Which session and which conversation produced a commit, split into committer and contributor, with a confidence. It is drawn from deterministic capture rather than from the agent's account of its own work, which is what makes it worth reading after a batch landing. <span class="src">the Git drawer tab, Provenance &middot; <a href="#tier0-facts">reference</a></span></span></li>
-        <li><b>Cross-vendor history</b><span>One search and one resume across every supported harness. Native transcript directories are reconciled at startup and <b>never moved, rewritten, or deleted</b>. A Claude transcript is read as the branching graph it actually is, so a retry does not silently join two conversations. <span class="src">the History browser &middot; <a href="#history">reference</a></span></span></li>
-      </ul>
-    </div>
-    <div class="docsec" id="guide-control-plane">
-      <div class="head"><span class="n">#</span><h2>The control plane</h2><span class="fill"></span></div>
-      <p class="prose">The part that decides what you look at. <b>It is off by default, per Project</b>, and nothing in it can type, approve, or spawn.</p>
-      <ul class="flat">
-        <li><b>Deterministic facts</b><span>Content hashes computed at the tool boundary rather than by reading the file back, parsed test outcomes, git tree hashes, and write-then-read lineage. This is the substrate everything else reads, and it is evidence rather than the agent's own account. <span class="src">Settings, Automation &middot; <a href="#tier0-facts">reference</a></span></span></li>
-        <li><b>Model-free detectors</b><span>Loops and stalls, claims declared but not verified, documentation debt, and provenance gaps. No model runs, so they cost nothing per session and cannot hallucinate a finding. <span class="src">the Activity drawer tab, Findings &middot; <a href="#deterministic-consumers">reference</a></span></span></li>
-        <li><b>Attention ranking</b><span>Ranked items with <b>a hard daily interrupt budget</b>, four a day by default. Incidents merge rather than repeat, demotion rules are mined and expire, and the count of what was suppressed is always shown rather than hidden. <span class="src">the Alerts drawer tab &middot; <a href="#attention-ranking">reference</a></span></span></li>
-        <li><b>Automation observers</b><span>Model-backed observers that watch a run and report. They <b>can never type, approve, spawn, execute a script, or change a Project</b>, which is structural rather than a policy setting. Every one is gated by a per-Project opt-in and an install-wide ceiling, and each carries a budget. <span class="src">the Automation dashboard, Policy &middot; <a href="#automation">reference</a></span></span></li>
-        <li><b>The scan timeline</b><span>A narration of what a session did during a run, with per-run grants and budgets, so it is readable later without re-reading the transcript. No scan can be triggered from an agent-facing tool, because a read costs nothing and a scan spends your budget. <span class="src">the Activity drawer tab, Timeline &middot; <a href="#scan-timeline">reference</a></span></span></li>
-        <li><b>The code graph</b><span>A tree-sitter structural graph of the repository, behind blast-radius, navigation, context, and test-gap reads, and behind the per-session change map. <span class="src">the Activity drawer tab, Changes &middot; <a href="#code-graph">reference</a></span></span></li>
-        <li><b>What agents can read back</b><span>A per-session MCP server that lets an agent pull from the control plane: sibling status, prior resolutions, dead ends, provenance, Project notes. Its writes are bounded to staging a message, drafting a spawn request for a human, arming a watch, and interrupting or ending a session behind a per-Project grant. <span class="src">Settings, Automation &middot; <a href="#mux-mcp">reference</a></span></span></li>
-      </ul>
-    </div>
-    <div class="docsec" id="guide-voice">
-      <div class="head"><span class="n">#</span><h2>Voice, alerts, and the assistant</h2><span class="fill"></span></div>
-      <p class="prose">Driving it without a keyboard, and being told when something needs you.</p>
-      <ul class="flat">
-        <li><b>Read aloud</b><span>A summarized or verbatim slice of the last turn, spoken by the OS voice engine, a local model, or an explicitly acknowledged external provider. One policy in three layers: a master switch, per-session generation, and a per-device autoplay rule where the focused session plays and every other one holds its clip rather than talking over you. <span class="src">Settings, Voice, Read aloud &middot; <a href="#voice">reference</a></span></span></li>
-        <li><b>Hands-free conversation</b><span>Browser capture, on-device voice activity detection, and local transcription, with configurable wake words and a fixed set of commands. Spoken navigation addresses Projects and sessions by number. It needs a secure context, which on a phone means the HTTPS step in the quick start above. <span class="src">Settings, Voice, Talk &amp;amp; dictation &middot; <a href="#voice">reference</a></span></span></li>
-        <li><b>The Mux assistant</b><span>Ask for something in words. The model proposes names, deterministic code resolves and executes them through the paths a button would have used, and <b>the confirmation floor for a consequential action is not configurable</b>. <span class="src">Settings, Voice, Mux assistant &middot; <a href="#assistant">reference</a></span></span></li>
-        <li><b>Alerts and push</b><span>Web push to a phone, with per-device preferences, plus sounds. Device presence decides which device you are actually at, once, for the whole application, rather than each feature guessing separately. <span class="src">Settings, Alerts &middot; <a href="#notifications">reference</a></span></span></li>
-      </ul>
-    </div>
-    <div class="docsec" id="guide-accounts">
-      <div class="head"><span class="n">#</span><h2>Accounts, usage, and running it</h2><span class="fill"></span></div>
-      <p class="prose">Where the money and the network boundaries are.</p>
-      <ul class="flat">
-        <li><b>Provider accounts</b><span>Save, relabel, reauthenticate, switch, and remove Claude and Codex logins, with subscription-window polling. Only authentication is copied and switching is always an explicit act. It is for <b>one person switching between accounts they own and pay for</b>, not pooling. <span class="src">Settings, Accounts, Provider accounts &middot; <a href="#provider-accounts">reference</a></span></span></li>
-        <li><b>Where a model call goes</b><span>Every model setting is edited in one place and each feature shows a read-only row naming the model it resolved to. Changing endpoint is the operation that touches all of them at once, which is why they are together rather than beside the features they serve. <span class="src">Settings, Accounts, Models &middot; <a href="#usage">reference</a></span></span></li>
-        <li><b>Usage, and the three pots</b><span>Agent spend, metered automation spend, and provider quota. <b>They are never summed</b>, because one is a subscription reconstructed from transcripts, one is a key billed by the call, and one is not money at all. Every figure carries the basis it was drawn on. <span class="src">Settings, Usage &middot; <a href="#usage">reference</a></span></span></li>
-        <li><b>Budgets</b><span>A cap is tokens, dollars, or both, per feature. A dollar cap cannot bind against a provider that reports no cost, so absent cost is recorded as unmeasured rather than as zero and totals drawn over it read as a floor. <span class="src">Settings, Usage &middot; <a href="#budgets">reference</a></span></span></li>
-        <li><b>Remote access</b><span>Loopback plus an optional Tailscale listener carrying the same UI and API. There is no swe-mux login, so <b>Tailscale policy is the entire access boundary</b>. Binding <code>0.0.0.0</code>, a LAN interface, port forwarding, and Funnel are unsupported rather than merely discouraged. <span class="src">Settings, Remote &middot; <a href="#remote-access">reference</a></span></span></li>
-        <li><b>The desktop shell and updates</b><span>On Windows, a native window, a tray supervisor, login startup, and a frozen bundle that can rebuild and redeploy itself while live sessions keep running. The daily release check is one request for a static file and one switch turns it off; installing an update is a separate act that verifies a hash before staging anything. <span class="src">Settings, Diagnostics &middot; <a href="#desktop-shell">reference</a></span></span></li>
-      </ul>
-    </div>
-    <div class="sub-h">Reference</div>
-    <p class="prose">The design documents themselves, in the repository where they are already public. Each entry is the document's own title and its own opening line; nothing here is written for this page. Paths under each title are relative to <code>.docs/</code>, and a bare filename means <code>.docs/design/features/</code>. The link is the whole path.</p>
-    <div class="docsec" id="sec-overview">
-      <div class="head"><span class="n">#</span><h2>Overview</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="architecture">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/architecture.md">Architecture</a><span class="src">design/architecture.md</span></div>
-          <span class="d"></span>
-        </li>
-        <li id="data-model">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/data-model.md">Data model</a><span class="src">design/data-model.md</span></div>
-          <span class="d">Durable data and ownership.</span>
-        </li>
-        <li id="interfaces">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/interfaces.md">Interfaces</a><span class="src">design/interfaces.md</span></div>
-          <span class="d">All JSON APIs are rooted at <code>/api</code>. PTY and event streams use <code>/pty/{session_id}</code> and <code>/events</code> WebSockets.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-sessions">
-      <div class="head"><span class="n">#</span><h2>Sessions and terminals</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="sessions">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/sessions.md">Sessions and terminals</a><span class="src">sessions.md</span></div>
-          <span class="d">Daemon-owned interactive ConPTY processes with immutable Project ownership, bounded replay, and reattachable browser viewports.</span>
-        </li>
-        <li id="session-recovery">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/session-recovery.md">Cold and inactive session recovery</a><span class="src">session-recovery.md</span></div>
-          <span class="d">Durable per-session state that outlives both the daemon and the PTY supervisor, so sessions whose processes died without anyone recording it come back as visible, dead, resumable rows instead of vanishing.</span>
-        </li>
-        <li id="terminal-input">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/terminal-input.md">Multi-device terminal input</a><span class="src">terminal-input.md</span></div>
-          <span class="d">One session can be attached from several devices at once, and two of the things they share cannot be shared: who may type into the PTY, and how big it is.</span>
-        </li>
-        <li id="launch-profiles">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/launch-profiles.md">Launch profiles</a><span class="src">launch-profiles.md</span></div>
-          <span class="d">A launch profile is a named executable/argv/environment definition for one backend.</span>
-        </li>
-        <li id="backends">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/backends.md">Backend detection and observation</a><span class="src">backends.md</span></div>
-          <span class="d">Adapters isolate spawn/resume syntax, transcript discovery, hook wiring, and graceful exit.</span>
-        </li>
-        <li id="status-detection">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/status-detection.md">Agent status detection and regression defense</a><span class="src">status-detection.md</span></div>
-          <span class="d">The user-visible session status (<code>starting | running | working | idle | awaiting | exited | crashed</code>, plus the <code>awaiting</code> sub-reason <code>approval | question | elicitation | rate_limit</code>) is a contract, not a heuristic: every state names the positive evidence that may set it, every transition is ledgered with that evidence and a proven/inferred classification, and the whole surface is reproduced from the golden corpus so status regressions fail CI.</span>
-        </li>
-        <li id="delivery-readiness">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/delivery-readiness.md">Evidence replay and delivery readiness</a><span class="src">delivery-readiness.md</span></div>
-          <span class="d">The versioned replay corpus provides a deterministic regression boundary around every observed harness and a provider-neutral, read-only delivery classification.</span>
-        </li>
-        <li id="approvals">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/approvals.md">Control-plane approvals</a><span class="src">approvals.md</span></div>
-          <span class="d">A per-conversation switch deciding what swe-mux answers on the agent's behalf when the harness asks for tool permission.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-workbench">
-      <div class="head"><span class="n">#</span><h2>Projects and the workbench</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="projects">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/projects.md">Projects and Groups</a><span class="src">projects.md</span></div>
-          <span class="d">Projects are the durable catalog of canonical folders swe-mux can own.</span>
-        </li>
-        <li id="project-resources">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/project-resources.md">Project resources</a><span class="src">project-resources.md</span></div>
-          <span class="d">Safe access to Project-owned notes, the global Scratchpad, a bounded Project file tree, revision-checked text editing, ignore patterns, host file-manager reveal, and leased filesystem watches.</span>
-        </li>
-        <li id="project-actions">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/project-actions.md">Project Actions</a><span class="src">project-actions.md</span></div>
-          <span class="d">The Project-level <b>Run</b> menu is the single launch surface for a new Claude, Codex, shell, custom terminal, worktree session, or an explicitly selected repository task.</span>
-        </li>
-        <li id="project-card">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/project-card.md">Project context card</a><span class="src">project-card.md</span></div>
-          <span class="d">Project context is one user-owned Markdown file at <code>&lt;project&gt;/.swe-mux/project-context.md</code>.</span>
-        </li>
-        <li id="workspace-layout">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/workspace-layout.md">Workspace panes and tabs</a><span class="src">workspace-layout.md</span></div>
-          <span class="d">One Project-owned mixed-view workspace.</span>
-        </li>
-        <li id="ui">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/ui.md">Browser shell and interaction</a><span class="src">ui.md</span></div>
-          <span class="d">The Project-first browser shell around the mixed-view workspace: persistent app identity, active-Project navigation, provider/resource status, viewport overlays, settings, focus, and responsive controls.</span>
-        </li>
-        <li id="prompt-library">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/prompt-library.md">Universal prompt library</a><span class="src">prompt-library.md</span></div>
-          <span class="d">Global and Project-scoped reusable text templates that can fill a focused terminal without submitting, executing, or becoming automation.</span>
-        </li>
-        <li id="processes-and-previews">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/processes-and-previews.md">Process ownership and previews</a><span class="src">processes-and-previews.md</span></div>
-          <span class="d">Per-session descendant attribution and bounded resource/listener snapshots.</span>
-        </li>
-        <li id="git">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/git.md">Git awareness and worktrees</a><span class="src">git.md</span></div>
-          <span class="d">Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.</span>
-        </li>
-        <li id="agent-context">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/agent-context.md">Agent Context</a><span class="src">agent-context.md</span></div>
-          <span class="d">Read-only Project/global agent instructions, memory, and manual Project-root sync.</span>
-        </li>
-        <li id="agent-environment">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/agent-environment.md">Agent Environment</a><span class="src">agent-environment.md</span></div>
-          <span class="d">Passive session CLI tools, extensions, policies, and configuration inventory.</span>
-        </li>
-        <li id="configurator">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/configurator.md">Configurator agent</a><span class="src">configurator.md</span></div>
-          <span class="d">A button that opens an ordinary agent session pointed at swe-mux itself.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-history">
-      <div class="head"><span class="n">#</span><h2>History and transcripts</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="history">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/history.md">History and events</a><span class="src">history.md</span></div>
-          <span class="d">SQLite indexes durable Claude/Codex run lifetimes and append-only daemon events.</span>
-        </li>
-        <li id="transcript-branches">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/transcript-branches.md">Transcript branches</a><span class="src">transcript-branches.md</span></div>
-          <span class="d">A Claude transcript is an append-only <b>DAG</b>, not a list of turns.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-control-plane">
-      <div class="head"><span class="n">#</span><h2>The control plane</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="tier0-facts">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/tier0-facts.md">Tier 0 deterministic facts</a><span class="src">tier0-facts.md</span></div>
-          <span class="d">Durable, no-model capture of deterministic facts about agent sessions (file writes, commands, tests, git, tools) with pointers back to the immutable event log.</span>
-        </li>
-        <li id="deterministic-consumers">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/deterministic-consumers.md">Deterministic control-plane consumers</a><span class="src">deterministic-consumers.md</span></div>
-          <span class="d">The first layer that turns captured Tier 0 facts into user-visible judgements, and it is deliberately <b>model-free</b>: every detector is a query over deterministic facts, spends no tokens, and writes nothing but annotations.</span>
-        </li>
-        <li id="code-graph">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/code-graph.md">Code-structure graph</a><span class="src">code-graph.md</span></div>
-          <span class="d">A deterministic, always-fresh graph of how the code connects: who imports whom, who calls whom, where each symbol is defined.</span>
-        </li>
-        <li id="attention-ranking">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/attention-ranking.md">Attention ranking</a><span class="src">attention-ranking.md</span></div>
-          <span class="d">The layer that decides which of many concurrent sessions actually needs the human, and when.</span>
-        </li>
-        <li id="fleet-intelligence">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/fleet-intelligence.md">Fleet attention and intelligence</a><span class="src">fleet-intelligence.md</span></div>
-          <span class="d">Explainable cross-session evidence, attention routing, lineage, and user-confirmed review built on normalized events and read-only observer results.</span>
-        </li>
-        <li id="scan-timeline">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/scan-timeline.md">Scan timeline</a><span class="src">scan-timeline.md</span></div>
-          <span class="d">The scan timeline is a read-only, run-scoped semantic index over bounded transcript deltas and deterministic Tier 0 facts.</span>
-        </li>
-        <li id="operational-telemetry">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/operational-telemetry.md">Durable operational evidence</a><span class="src">operational-telemetry.md</span></div>
-          <span class="d">Durable, bounded observations for process identity, provider quota movement, reset evidence, quota/activity correlation, explicit context compaction, and explicit tool/skill activity.</span>
-        </li>
-        <li id="automation">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/automation.md">Universal hooks and OpenRouter observers</a><span class="src">automation.md</span></div>
-          <span class="d">Asynchronous, harness-neutral rules over normalized persisted mux events.</span>
-        </li>
-        <li id="automation-enablement">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/automation-enablement.md">Automation enablement</a><span class="src">automation-enablement.md</span></div>
-          <span class="d">Per-project opt-in for control-plane automations, gated by a dependency graph and an install-wide ceiling.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-queues">
-      <div class="head"><span class="n">#</span><h2>Queues, messaging, and landing</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="prompt-queue">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/prompt-queue.md">Persistent manual prompt queue</a><span class="src">prompt-queue.md</span></div>
-          <span class="d">Durable, ordered messages staged against a target agent run, delivered through one typed operation, surviving daemon and browser restarts without duplicate delivery.</span>
-        </li>
-        <li id="auto-delivery">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/auto-delivery.md">Gated auto-delivery</a><span class="src">auto-delivery.md</span></div>
-          <span class="d">A bounded controller that presses "send next" on a session's prompt queue when - and only when - delivery readiness has been continuously <code>safe</code> for a held window.</span>
-        </li>
-        <li id="agent-messaging">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/agent-messaging.md">Agent messaging, the fleet queue, and drafted spawns</a><span class="src">agent-messaging.md</span></div>
-          <span class="d">Bounded messaging <em>between sessions that already exist</em>, plus a way for an agent to ask a human to create one.</span>
-        </li>
-        <li id="land-queue">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/land-queue.md">Land queue</a><span class="src">land-queue.md</span></div>
-          <span class="d">Serialized, deterministic landing of a finished worktree branch onto its Project's trunk.</span>
-        </li>
-        <li id="scheduled-runs">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/scheduled-runs.md">Scheduled runs</a><span class="src">scheduled-runs.md</span></div>
-          <span class="d">A schedule does one of two things in one Project on its own, on a cron expression, on an interval, or once at a time.</span>
-        </li>
-        <li id="mux-mcp">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/mux-mcp.md">mux MCP: the agent return path (reads + bounded writes and session control)</a><span class="src">mux-mcp.md</span></div>
-          <span class="d">A streamable-HTTP MCP endpoint (<code>POST /mcp</code>) hosted in the daemon that gives every spawned agent session visibility into the fleet - sibling sessions, their live status, bounded transcript reads, indexed search over conversation history, exact Agent Context sources, Project notes, cross-session memory reads, and request outcomes, plus the bounded write tools added in Phase 5 and the session-control tools added in Phase 7.6.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-voice">
-      <div class="head"><span class="n">#</span><h2>Voice, assistant, and alerts</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="voice">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/voice.md">Read aloud and hands-free conversation</a><span class="src">voice.md</span></div>
-          <span class="d">Optional per-session reply synthesis (TTS, "read aloud") plus a workspace-level, browser-captured Conversation mode (STT, "hands-free"), isolated from history, Project, and transcript correctness.</span>
-        </li>
-        <li id="assistant">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/assistant.md">The Mux assistant</a><span class="src">assistant.md</span></div>
-          <span class="d">A conversational operator for the whole workspace: the control plane given a chat surface and, behind the voice grammar's fallback tier, a voice.</span>
-        </li>
-        <li id="notifications">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/notifications.md">Session and reset alerts</a><span class="src">notifications.md</span></div>
-          <span class="d">Alerts are normalized root-session events delivered through an optional sound channel in a live tab and an optional Web Push channel that can reach a locked phone.</span>
-        </li>
-        <li id="device-presence">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/device-presence.md">Device presence</a><span class="src">device-presence.md</span></div>
-          <span class="d">Which device class the human is actually using right now, tracked per client connection and aggregated to <code>desktop</code> / <code>mobile</code>.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-accounts">
-      <div class="head"><span class="n">#</span><h2>Accounts, usage, and budgets</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="provider-accounts">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/provider-accounts.md">Provider accounts</a><span class="src">provider-accounts.md</span></div>
-          <span class="d">App-owned credential snapshots for harnesses that explicitly declare provider-account management, reconciled against one live system login per provider.</span>
-        </li>
-        <li id="usage">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/usage.md">Usage analytics</a><span class="src">usage.md</span></div>
-          <span class="d">Optional cached historical token and cost summaries collected by the locally installed <code>ccusage</code> CLI.</span>
-        </li>
-        <li id="budgets">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/budgets.md">Spending budgets</a><span class="src">budgets.md</span></div>
-          <span class="d">Every model-cost ceiling in the install has one shape, one editor, and one enforcement path.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-running">
-      <div class="head"><span class="n">#</span><h2>Running it</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="remote-access">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/remote-access.md">Remote access</a><span class="src">remote-access.md</span></div>
-          <span class="d">The same browser/API surface over localhost or a policy-controlled direct Tailscale listener, with optional Tailscale Serve for browser-recognized HTTPS.</span>
-        </li>
-        <li id="desktop-shell">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/desktop-shell.md">Windows desktop shell</a><span class="src">desktop-shell.md</span></div>
-          <span class="d">An optional Windows WebView2 window and system-tray supervisor around the same Preact/aiohttp surface used by ordinary desktop and mobile browsers.</span>
-        </li>
-      </ul>
-    </div>
-    <div class="docsec" id="sec-reference">
-      <div class="head"><span class="n">#</span><h2>Technical reference</h2><span class="fill"></span></div>
-      <ul class="doclist">
-        <li id="technical-index">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/00_INDEX.md">Technical documentation</a><span class="src">technical/00_INDEX.md</span></div>
-          <span class="d">Implementation-facing rules supplement the product/design contracts in <code>../design/</code>. Read the design feature first, then the relevant technical page before changing code.</span>
-        </li>
-        <li id="technical-backend-packages">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/backend/packages.md">Backend package responsibilities</a><span class="src">technical/backend/packages.md</span></div>
-          <span class="d">Where daemon code lives and how to modify it. The map is split by domain so a change touches one file; this page is the index, the dependency rules, and the composition boundary.</span>
-        </li>
-        <li id="technical-backend-sqlite">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/backend/sqlite.md">Shared SQLite concurrency</a><span class="src">technical/backend/sqlite.md</span></div>
-          <span class="d">Shared SQLite operation rules.</span>
-        </li>
-        <li id="technical-frontend-packages">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/frontend/packages.md">Frontend package responsibilities</a><span class="src">technical/frontend/packages.md</span></div>
-          <span class="d">Where browser code lives and how to modify it. The map is split by domain so a change touches one file; this page is the index and the shared rules.</span>
-        </li>
-        <li id="technical-frontend-workspace-state">
-          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/frontend/workspace-state.md">Workspace state and persistence</a><span class="src">technical/frontend/workspace-state.md</span></div>
-          <span class="d"></span>
-        </li>
-      </ul>
-    </div>
-    <p class="note">Not everything under <code>.docs/</code> is listed here. Left out, each with its reason: <code>features/meta-hooks.md</code>, a compatibility engine for a retired hook contract, not a feature; <code>features/observations.md</code>, storage compatibility for a user surface that was retired; <code>features/ghost-windows.md</code>, an internal remediation sweep with no user-facing control; <code>features/setting-links.md</code>, the internal mechanism behind a switched-off surface. Development notes, audits, and the internal plan are unlisted too; the <a href="../roadmap/">roadmap page</a> is the public projection of the last of those.</p>
   </div>
 </section>
 </main>
@@ -1212,6 +1025,161 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
      button, so an open menu would be left behind with no way to dismiss it. */
   var wide = window.matchMedia('(min-width: 861px)');
   wide.addEventListener('change', function (e) { if (e.matches) open(false); });
+})();
+
+/* ----------------------------------------------------------------- search */
+(function () {
+  var box = document.querySelector('.dsearch');
+  if (!box) return;
+  var input = document.getElementById('dsq');
+  var out = document.getElementById('dsr');
+  var status = document.getElementById('dsstatus');
+  var base = box.getAttribute('data-base') || '';
+  var loading = false;
+
+  function load() {
+    if (loading || window.__MUXDOCS) return;
+    loading = true;
+    var s = document.createElement('script');
+    s.src = base + 'search-index.js';
+    s.onload = function () { run(); };
+    document.head.appendChild(s);
+  }
+
+  // A window around the first hit, snapped to word boundaries at both ends.
+  // Slicing on raw offsets opens a snippet mid-word ('...ding. Attention'),
+  // which reads as a rendering fault rather than as a truncation.
+  function snippet(body, term) {
+    var at = body.toLowerCase().indexOf(term);
+    if (at < 0) return body.slice(0, body.indexOf(' ', 120) + 1 || 120) + '\u2026';
+    var from = Math.max(0, at - 55);
+    var to = Math.min(body.length, from + 165);
+    if (from > 0) {
+      var space = body.indexOf(' ', from);
+      from = space >= 0 && space < at ? space + 1 : from;
+    }
+    if (to < body.length) {
+      var end = body.lastIndexOf(' ', to);
+      to = end > at ? end : to;
+    }
+    return (from ? '\u2026' : '') + body.slice(from, to).trim() +
+      (to < body.length ? '\u2026' : '');
+  }
+
+  function rank(query) {
+    var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    var hits = [];
+    (window.__MUXDOCS || []).forEach(function (page) {
+      var title = page.t.toLowerCase();
+      var body = page.b.toLowerCase();
+      var score = 0;
+      var heading = null;
+      for (var i = 0; i < terms.length; i++) {
+        var term = terms[i];
+        var here = 0;
+        if (title.indexOf(term) >= 0) here += 8;
+        for (var j = 0; j < page.h.length; j++) {
+          if (page.h[j][0].toLowerCase().indexOf(term) >= 0) {
+            here += 4;
+            if (!heading) heading = page.h[j];
+            break;
+          }
+        }
+        if (body.indexOf(term) >= 0) here += 1;
+        if (!here) return;
+        score += here;
+      }
+      hits.push({ page: page, score: score, heading: heading, term: terms[0] });
+    });
+    hits.sort(function (a, b) { return b.score - a.score; });
+    return hits.slice(0, 8);
+  }
+
+  function run() {
+    var query = input.value.trim();
+    if (!query) {
+      out.hidden = true;
+      out.textContent = '';
+      input.setAttribute('aria-expanded', 'false');
+      status.textContent = '';
+      return;
+    }
+    if (!window.__MUXDOCS) { load(); return; }
+    var hits = rank(query);
+    out.textContent = '';
+    if (!hits.length) {
+      var none = document.createElement('p');
+      none.className = 'dsnone';
+      none.textContent = 'No page matches "' + query + '".';
+      out.appendChild(none);
+    }
+    hits.forEach(function (hit) {
+      var a = document.createElement('a');
+      a.href = base + hit.page.u + (hit.heading ? '#' + hit.heading[1] : '');
+      var t = document.createElement('span');
+      t.className = 't';
+      t.textContent = hit.page.t + (hit.heading ? '  \u203a  ' + hit.heading[0] : '');
+      var d = document.createElement('span');
+      d.className = 'd';
+      d.textContent = snippet(hit.page.b, hit.term);
+      a.appendChild(t);
+      a.appendChild(d);
+      out.appendChild(a);
+    });
+    out.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    status.textContent = hits.length + (hits.length === 1 ? ' result' : ' results');
+  }
+
+  input.addEventListener('focus', load);
+  input.addEventListener('input', run);
+
+  function results() { return [].slice.call(out.querySelectorAll('a')); }
+
+  input.addEventListener('keydown', function (e) {
+    var found = results();
+    if (e.key === 'ArrowDown' && found.length) { e.preventDefault(); found[0].focus(); }
+    else if (e.key === 'Enter' && found.length) { e.preventDefault(); found[0].click(); }
+    else if (e.key === 'Escape') { input.value = ''; run(); input.blur(); }
+  });
+
+  out.addEventListener('keydown', function (e) {
+    var found = results();
+    var at = found.indexOf(document.activeElement);
+    if (at < 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      found[Math.min(at + 1, found.length - 1)].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (at === 0) input.focus(); else found[at - 1].focus();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      input.focus();
+      input.value = '';
+      run();
+    }
+  });
+
+  // `/` is the shortcut every documentation site has, so it is the one people
+  // try. Never while a field is focused, because then it is a character.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== '/' || e.ctrlKey || e.altKey || e.metaKey) return;
+    var el = document.activeElement;
+    var tag = el && el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable)) return;
+    e.preventDefault();
+    input.focus();
+    input.select();
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!box.contains(e.target)) {
+      out.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+  });
 })();
 </script>
 
