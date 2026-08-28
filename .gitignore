@@ -4,13 +4,21 @@ Thumbs.db
 desktop.ini
 
 # === VS Code ===
+# All of it, including tasks.json: the Run menu can import VS Code tasks
+# (`design/features/project-actions.md`), but this repository no longer carries its own
+# copy - the file is per-machine editor state, not something a clone should inherit.
 .vscode/*
-!.vscode/tasks.json
 *.code-workspace
 
 # === Git ===
 .git/
 .claude/worktrees/
+# Personal Claude Code settings: permission allow-rules and other per-machine
+# choices. Untracked today, but nothing was stopping it being added, and this
+# repository is public - an allow-rule list is one operator's trust decisions,
+# not something a clone should inherit. `.claude/settings.json` (team-wide,
+# committed on purpose) is deliberately NOT ignored.
+.claude/settings.local.json
 .agents/worktrees/
 .codex/worktrees/
 # Codex also registers worktrees at the bare path, not only under `.codex/`.
@@ -83,26 +91,36 @@ _agents-orchestrator/
 .tmp-cmux/
 .trash/
 
+# === Operator-private notes ===
+# Account setup, infrastructure configuration, and anything else that is about
+# running this project rather than about the code. The repository is public, so
+# this is the only place in the tree where "nobody else will read this" is true.
+# It is NOT for secrets: keys and passwords belong in a password manager, and a
+# gitignore rule is one `git add -f` away from not protecting them.
+.private/
+
 # === Project-local swe-mux state ===
-# Runtime state the daemon writes as ordinary operation, as opposed to the
-# repository-authored files beside it (`actions.toml`, `project-context.md`,
-# `prompts/`), which stay tracked because a human wrote them for this repository.
-.swe-mux/notes/
-.swe-mux/attachments/
-# The observation inbox: spawn, control, and land approval rows. Pure per-machine
-# runtime state with no meaning in a clone, appended to whenever an agent asks for
-# something, so tracking it makes every such request a working-tree change.
-.swe-mux/observations.json
-# Preview screenshots, generated on demand.
-.swe-mux/preview-shots/
-# Typed Project config. The *format* is portable by design and a clone is meant to
-# be able to carry one (`.docs/design/features/automation-enablement.md`), but this
-# repository does not commit its own: the daemon rewrites the file whenever an
-# automation is toggled or a grant changes, so every switch flipped in the UI showed
-# up as a pending commit. A clone therefore starts with no opt-ins, which is the
-# correct default for automations anyway - none of them should arm themselves in a
-# checkout nobody has configured.
-.swe-mux/config.toml
+# The whole directory, as of 2026-08-28. It used to be a split: the daemon's own runtime
+# writes were ignored one path at a time while the repository-authored files beside them
+# (`actions.toml`, `project-context.md`, `prompts/`) stayed tracked because a human wrote
+# them for this repository. That split is gone - `.swe-mux/` is now treated as per-machine
+# state end to end and nothing under it is carried in the repository.
+#
+# The reasoning that produced the individual rules still holds and is why the directory rule
+# is the right generalisation rather than a shortcut:
+#   - `notes/`, `attachments/`, and `preview-shots/` are generated on demand.
+#   - `observations.json` is the observation inbox (spawn, control, and land approval rows):
+#     pure per-machine runtime state with no meaning in a clone, appended to whenever an
+#     agent asks for something, so tracking it made every such request a working-tree change.
+#   - `config.toml` is typed Project config whose *format* is portable by design, and a clone
+#     is meant to be able to carry one (`.docs/design/features/automation-enablement.md`) -
+#     but the daemon rewrites the file whenever an automation is toggled or a grant changes,
+#     so every switch flipped in the UI showed up as a pending commit. A clone therefore
+#     starts with no opt-ins, which is the correct default for automations anyway.
+# The same churn argument now covers the authored files too: they are one operator's local
+# setup rather than something a public clone should inherit. The cost is that a fresh clone
+# gets no declared Project Actions and no project context; both are authored in the UI.
+.swe-mux/
 
 # === Test / verification scratch ===
 # Throwaway working directories written by live-agent and identity tests and by
@@ -122,7 +140,6 @@ tests/.phase2-*.db*
 # pair sat in .tmp/tailscale-cert-check/ and was tracked until this rule landed), so
 # nothing under it belongs in a public clone.
 .tmp/
-.swe-mux/
 
 # One-off UI mockups dropped at the repo root while designing a surface. They are a
 # scratch artifact of the design pass, not a source file: nothing imports them, no
