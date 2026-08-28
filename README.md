@@ -34,21 +34,46 @@ Installing an update is a separate act you take: `mux update --install <version>
 <!-- TODO(release): desktop download - there is no signed release artifact yet. Link it here and say
      which Windows builds and architectures it is signed for. -->
 
-swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so this needs no Node and no checkout:
+swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so this needs no Node and no checkout.
+Every install below writes the same three commands: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
 
 ```
+# Recommended. Isolated environment, and all three commands on your PATH globally.
 uv tool install swe-mux
+
+# Windows: the `desktop` extra is what adds the native window and the tray icon.
 uv tool install "swe-mux[desktop]"
+
+# The same isolated, on-PATH install, without uv.
+pipx install swe-mux
+
+# NOT the same act. Installs into whichever environment is currently active and
+# puts nothing on PATH globally, so `mux` works only inside that environment.
+pip install swe-mux
 ```
-
-The second form is the Windows one: the `desktop` extra adds the native window and the tray icon and wants the WebView2 Runtime.
-It is Windows-only by declaration: `pystray` and `pywebview` both carry a `win32`-only platform marker in `pyproject.toml`, so on Linux and macOS the extra resolves to nothing and the daemon plus a browser is the whole product.
-`pipx install swe-mux` and `pipx install "swe-mux[desktop]"` do the same thing without uv.
-
-Both put the CLI on your PATH globally, which is the point of them.
-`pip install swe-mux` is a different act: it installs into an environment you already have, and leaves `mux` reachable only inside that environment.
 
 Then run `muxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop window on Windows.
+`mux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
+
+**No Python install of any kind creates a desktop shortcut or a Start Menu entry.**
+Wheels have no post-install hook and pip runs no install-time code, so that is structural rather than a step somebody forgot: start swe-mux from a terminal.
+
+**On Windows, take the `desktop` extra.**
+Without it you still get a `swe-mux` command, and it fails on a missing import rather than opening a window.
+The extra wants the WebView2 Runtime, and it is Windows-only by declaration - `pystray` and `pywebview` both carry a `win32`-only platform marker in `pyproject.toml` - so on Linux and macOS it resolves to nothing and the daemon plus a browser is the whole product.
+
+If nothing is on your PATH afterwards, which is the ordinary outcome of `pip install` and whose `WARNING: The scripts ... are installed in '...' which is not on PATH` scrolls past unread:
+
+```
+# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `muxd`.
+python -m swe_mux
+
+# Where the three executables went (a `Scripts` directory on Windows).
+python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+
+# Every file this install wrote, those three included.
+pip show -f swe-mux
+```
 
 To run from a checkout instead, which is what you want if you are changing it:
 
@@ -56,14 +81,11 @@ To run from a checkout instead, which is what you want if you are changing it:
 git clone https://github.com/jatoran/swe-mux
 cd swe-mux
 uv sync --extra desktop
-npm --prefix frontend ci
-npm --prefix frontend run build
+npm --prefix frontend ci        # only the source flow needs Node
+npm --prefix frontend run build # a fresh clone serves no UI until this runs once
 uv run --extra desktop swe-mux
 ```
 
-Only the source flow needs Node: the frontend build output is gitignored, so a fresh clone serves no UI until that build runs once.
-
-Three entry points are installed either way - `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray) - and `mux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
 Upgrades are `uv tool upgrade swe-mux` or `pipx upgrade swe-mux`; the full install, upgrade, uninstall and recovery reference is [`.docs/development/OPERATOR_LIFECYCLE.md`](.docs/development/OPERATOR_LIFECYCLE.md).
 
 Build the Windows distributable with `uv sync --extra desktop --extra voice-local --group package`, then `uv run --extra desktop --extra voice-local --group package python packaging/build_desktop.py`.
@@ -72,7 +94,7 @@ Packaging rules: [`.docs/design/features/desktop-shell.md`](.docs/design/feature
 
 ### Requirements
 
-- Python 3.12 or newer, and either [uv](https://docs.astral.sh/uv/) or pipx to install with.
+- Python 3.12 or newer, and [uv](https://docs.astral.sh/uv/) or pipx to install with, or pip if you are installing into an environment you already keep.
 - Node 22.6 or newer, only to build the frontend from source. The published wheel carries it already and needs no Node.
 - At least one agent CLI, already installed and logged in. swe-mux does not install, manage, or proxy them.
 - Optionally Tailscale, to reach the daemon from a phone.
