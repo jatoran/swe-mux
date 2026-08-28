@@ -2883,7 +2883,17 @@ stays recorded as unproven rather than claimed.
   **The safety property that needed enforcing:** `assign()` refuses a pid whose process
   group is the daemon's own. That happens when a child was started without `setsid`, and
   owning it would make session cleanup signal the daemon, the supervisor, and every sibling
-  session - turning a cleanup bug into a whole-app kill.)
+  session - turning a cleanup bug into a whole-app kill.
+  **The half that was missing until the first macOS CI run (2026-08-27):** nothing ordered
+  `assign()` against the `setsid` it depends on. That call runs in the child after the fork,
+  so a parent reading `getpgid(child)` straight back from `pty.fork()` can get its own group
+  and refuse a perfectly good session. `pty_backend_posix.spawn` now waits for the child to
+  leave the daemon's group before returning, which is what makes the two halves actually
+  designed against each other rather than merely documented as such. It was never
+  macOS-only - measured on a contended 8-core Linux host, ownership was refused in 21, 36 and
+  33 of 40 spawns without the wait and 0 of 40 with it; macOS surfaced it because a
+  three-core runner under `pytest -n auto` is contended permanently. See
+  `CROSS_PLATFORM_FINDINGS.md` § What the first macOS run actually found.)
 - [x] Add a cross-platform process-inspection boundary for descendants, resources,
   signals/termination, anomaly evidence, and listener ownership.
   (Already largely satisfied and now confirmed rather than assumed: `processes.py` is

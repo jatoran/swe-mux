@@ -119,6 +119,87 @@ def test_a_posix_pty_runs_a_child_in_its_own_session_and_is_owned() -> None:
 
 
 @POSIX_ONLY
+def test_the_pty_parent_waits_for_the_child_to_leave_its_process_group() -> None:
+    """The synchronisation the test above needs, proven without racing for it.
+
+    `setsid` runs in the child after the fork, so the parent can read its *own*
+    group back from `getpgid(child)` and conclude the child is unownable. The test
+    above only catches that when the scheduler happens to lose the race - which is
+    never on an idle host and often on a loaded CI runner, i.e. exactly the shape
+    that reads as a flake. Here the race is scripted instead: the group flips only
+    on the third read, so a `spawn` that read once and believed the answer fails
+    this deterministically on every host.
+    """
+    from swe_mux import pty_backend_posix
+
+    own = os.getpgid(0)
+    answers = [own, own, own + 1]
+    reads: list[int] = []
+
+    def scripted_getpgid(pid: int) -> int:
+        if pid == 0:
+            return own
+        reads.append(pid)
+        return answers[min(len(reads), len(answers)) - 1]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pty_backend_posix.os, "getpgid", scripted_getpgid)
+        pty_backend_posix._await_own_session(4242)
+
+    assert reads == [4242, 4242, 4242]
+
+
+@POSIX_ONLY
+def test_the_pty_parent_stops_waiting_for_a_child_that_is_already_gone() -> None:
+    """A failed exec must not cost a five-second stall on every session start."""
+    from swe_mux import pty_backend_posix
+
+    own = os.getpgid(0)
+    reads: list[int] = []
+
+    def dead_getpgid(pid: int) -> int:
+        if pid == 0:
+            return own
+        reads.append(pid)
+        raise ProcessLookupError(pid)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pty_backend_posix.os, "getpgid", dead_getpgid)
+        pty_backend_posix._await_own_session(4242)
+
+    # Once, not once per poll until the deadline: a vanished child is an answer.
+    assert reads == [4242]
+
+
+@POSIX_ONLY
+def test_the_pty_parent_gives_up_rather_than_blocking_a_session_start_forever() -> None:
+    """A starved child degrades to an unowned session, never to a hung spawn.
+
+    `ProcessGroupReaper.assign` refuses this pid loudly a moment later, which is
+    the report worth having; a `spawn` that never returned would take the session
+    with it.
+    """
+    from swe_mux import pty_backend_posix
+
+    own = os.getpgid(0)
+    reads: list[int] = []
+
+    def stuck_getpgid(pid: int) -> int:
+        if pid != 0:
+            reads.append(pid)
+        return own
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pty_backend_posix, "_SESSION_WAIT_SECONDS", 0.05)
+        patch.setattr(pty_backend_posix.os, "getpgid", stuck_getpgid)
+        pty_backend_posix._await_own_session(4242)
+
+    # It gave up, and it gave up after waiting rather than on the first look -
+    # the deadline is a deadline, not a shortcut back to reading the group once.
+    assert len(reads) > 1
+
+
+@POSIX_ONLY
 def test_a_posix_pty_round_trips_output_and_reports_its_exit_code() -> None:
     import time
 

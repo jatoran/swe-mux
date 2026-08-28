@@ -24,9 +24,18 @@
 #
 # macOS is `continue-on-error`. That is a deliberate, visible statement rather than
 # a way to ignore failures: every POSIX path is written and typechecked for macOS,
-# but nothing has ever run there, so the first red is expected to be about the
-# runner rather than about a regression. It is wired up now so the gap is measured
+# but nothing had ever run there, so the first red was expected to be about the
+# runner rather than about a regression. It is wired up so the gap is measured
 # instead of assumed, and the flag comes off the moment it passes once.
+#
+# It has now run once (2026-08-27) and produced exactly the two findings it was
+# built to produce, both since fixed: an unsynchronised read of a PTY child's
+# process group that any contended POSIX host loses, and a test fixture that
+# assumed `/bin/sh` forks a lone `-c` command, which dash does and the bash macOS
+# ships as `/bin/sh` does not. Neither could be confirmed without a macOS host,
+# so the flag stays until a run is green. See
+# `.docs/development/CROSS_PLATFORM_FINDINGS.md` § What the first macOS run
+# actually found.
 name: ci
 
 on:
@@ -178,7 +187,7 @@ jobs:
         include:
           - os: ubuntu-latest
             unproven: false
-          # Implemented and typechecked, never executed. See the header.
+          # Run once, two findings fixed but unconfirmed there. See the header.
           - os: macos-latest
             unproven: true
     steps:
