@@ -143,10 +143,17 @@ jobs:
           path: ${{ runner.temp }}/supervisor-logs
           if-no-files-found: ignore
 
+      # 22, not 20: `npm test` runs `node --experimental-strip-types test/all.ts`,
+      # and that flag does not exist before Node 22.6 - on 20 the runner answered
+      # `node: bad option` and the suite never started. It went unnoticed because
+      # every earlier CI run failed before reaching this step, and because the
+      # development host is on 22. `frontend/package.json` now declares the
+      # matching `engines.node` so the requirement lives with the script that
+      # needs it rather than only here.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
