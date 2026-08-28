@@ -52,8 +52,11 @@ uv tool install swe-mux
 mux doctor
 ```
 
-Or grab the desktop app from the releases page.
-[verify: exact commands against the shipped artifact]
+On Windows, `uv tool install "swe-mux[desktop]"` instead, for the native window and the tray icon.
+`pipx` works the same way if you don't run uv.
+
+Verified 2026-08-28 against the published 0.1.0 wheel by running each command into a throwaway environment.
+[verify: whether a signed desktop artifact exists by the time this posts - the v0.1.0 release page carries only the wheel, the sdist, and `version.json`, so "grab the desktop app from the releases page" is not yet a sentence this post can contain]
 
 ## Why open source
 

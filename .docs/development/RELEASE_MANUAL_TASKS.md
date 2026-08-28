@@ -115,9 +115,17 @@ Agent W2 writes the deploy workflow; the account-side setup is yours.
 
 ## 6. PyPI
 
-- [ ] Register the `swe-mux` name on PyPI. Do this early; names are first-come.
-- [ ] Configure **Trusted Publishing** (PyPI, Publishing, add a GitHub publisher naming the owner, repo, and the release workflow filename W2 creates). No long-lived API token is stored anywhere.
+**Done 2026-08-28: `swe-mux` 0.1.0 is published.**
+`https://pypi.org/pypi/swe-mux/json` answers 200 and lists `swe_mux-0.1.0-py3-none-any.whl` and `swe_mux-0.1.0.tar.gz`.
+
+- [x] Register the `swe-mux` name on PyPI. Do this early; names are first-come.
+- [x] Configure **Trusted Publishing** (PyPI, Publishing, add a GitHub publisher naming the owner, repo, and the release workflow filename W2 creates). No long-lived API token is stored anywhere.
+      Proven by the publish itself: `release.yml`'s `publish-pypi` job holds no credential, so a wheel on PyPI means the OIDC exchange worked.
 - [ ] Do the same on TestPyPI, and validate an alpha there before the first real publish.
+      Left open deliberately rather than closed by the PyPI publish: it is a different index, a different trusted-publisher identity, and the `publish-testpypi` job that uses it has still never run.
+
+The half of this that install documentation *can* answer is now answered: `uv tool install swe-mux`, `pipx install swe-mux`, and `pip install swe-mux` were each executed against the published wheel on 2026-08-28 and each produced working `mux`/`muxd`/`swe-mux` entry points.
+That is not a substitute for § 8 below, which needs a machine that is not the development host.
 
 ## 7. Screenshots and demo assets
 

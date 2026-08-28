@@ -15,14 +15,22 @@ requires-python = ">=3.12"
 # The operating-system entries are the honest half. Windows is the proving
 # platform - it is where the frozen desktop app ships, where ConPTY is the PTY
 # backend, and where the full CI gate runs. Linux runs the daemon and the suite
-# from source on the POSIX seam, so it is claimed. macOS is implemented and
-# typechecked but has never been exercised (its CI leg is `continue-on-error`),
-# so it is not claimed, and `Operating System :: OS Independent` would be false
-# about all three.
+# from source on the POSIX seam, so it is claimed. macOS is implemented,
+# typechecked, and now exercised - its leg runs the whole suite and the install
+# smoke - but that leg is `continue-on-error`, so it is not *required* to pass
+# and the classifier stays off: a claim an installer can check has to rest on a
+# check that can fail the build. `Operating System :: OS Independent` would be
+# false about all three, which is a different point and still holds: the wheel
+# is pure Python and installs anywhere, while the product is not equally proven
+# anywhere.
 #
 # `Development Status :: 3 - Alpha` matches the distribution rather than the
-# feature set: the code is used daily, but no clean-machine install of this wheel
-# has been proven yet (`.docs/development/ROADMAP.md` Phase 11).
+# feature set. Since 2026-08-28 the wheel installs cleanly from PyPI - CI
+# install-smokes it on all three hosts and it was installed by hand into a
+# throwaway environment on each of `uv tool`, `pipx`, and `pip` - but that is an
+# install, not a *clean machine*: nobody has yet run this on hardware that is not
+# the development host, and no CI job on any host starts a daemon
+# (`.docs/development/RELEASE_MANUAL_TASKS.md` § 8).
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",

@@ -154,7 +154,7 @@ footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { displ
 .ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
 .ic-os span.on { color: var(--cyan); }
 .ic-os span.on::before { content: "▸ "; color: var(--green); }
-.ic-os span.soon em { font-style: normal; color: var(--fg-4);
+.ic-os span.qual em { font-style: normal; color: var(--fg-4);
                       text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
 .ic-body { display: flex; align-items: center; gap: 11px; padding: 14px 15px; min-width: 0; }
 .ic-body .p { color: var(--green); flex: none; user-select: none; }
@@ -305,6 +305,11 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
         background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-3); padding: 2px 6px; cursor: pointer; }
 .copy:hover { color: var(--fg); }
 .note { font-size: 13.5px; color: var(--fg-3); margin-top: 12px; line-height: 1.55; }
+/* A subheading inside a section, for the one section that has two flows in it.
+   Reuses `--fg-3`, which `tools/contrast.py` already audits, rather than
+   introducing a colour the table would not know about. */
+.sub-h { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3);
+         margin: clamp(24px, 3.5vw, 34px) 0 12px; }
 
 footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
          padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }
@@ -540,6 +545,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <li><span>Web push notifications with per-device preferences, and device presence that decides which device the operator is at once for the whole application.</span></li>
         <li><span>A Windows desktop shell: a WebView2 window, a system tray supervisor, login startup, and a frozen <code>onedir</code> bundle that can rebuild and redeploy itself while preserving live sessions.</span></li>
         <li><span>A progressive web app manifest and service worker for phone installation.</span></li>
+        <li><span>A daily release check against a static <code>version.json</code>, which is the only request swe-mux makes on its own behalf: it carries nothing identifying the install, it downloads nothing, and <code>update_check_enabled</code> turns it off entirely.</span></li>
+        <li><span>An updater for the frozen desktop app (<code>mux update --install &lt;version&gt;</code>, <code>POST /api/update/install</code>) that downloads a release only on an explicit act naming a version, verifies its SHA-256 against the published manifest before staging anything, and reuses the redeploy's staged swap so live sessions survive. It refuses, rather than installs, a release that would require a new PTY supervisor - that upgrade ends every live session and is an announced, deliberate act.</span></li>
       </ul>
       <div class="subgroup">Operations</div>
       <ul class="bullets">

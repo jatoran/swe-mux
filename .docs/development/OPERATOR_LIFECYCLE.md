@@ -3,18 +3,27 @@
 The reference for someone who has swe-mux installed and needs to change it, understand where its state lives, or find out why it stopped working.
 It is not a feature tour; `design/00_OVERVIEW.md` is the map of what the product does.
 
-Two facts govern everything here and are stated once rather than repeated.
+Three facts govern everything here and are stated once rather than repeated.
 
-**swe-mux is not published to a package index yet.**
-`RELEASE_MANUAL_TASKS.md` § 6 still holds "register the `swe-mux` name on PyPI" as an open operator task, and `RELEASING.md` § 5 requires a TestPyPI alpha before the first real publish.
-The `uv tool` and `pipx` commands below are therefore documented against the package metadata in `pyproject.toml` rather than exercised end to end.
-A source install is the only path that works today, and it is the one this document treats as primary.
+**swe-mux 0.1.0 is on PyPI, published 2026-08-28.**
+`.github/workflows/release.yml` put it there over PyPI Trusted Publishing on a `v*` tag, so no API token exists anywhere to leak.
+The artifacts are `swe_mux-0.1.0-py3-none-any.whl` and `swe_mux-0.1.0.tar.gz`; `https://pypi.org/pypi/swe-mux/json` answers 200.
+The `uv tool`, `pipx`, and `pip` commands below were **executed** against that published wheel on 2026-08-28 rather than transcribed from `pyproject.toml`: each installed into a throwaway environment, put `mux`, `muxd`, and `swe-mux` on that environment's bin directory, and answered `--help` with exit 0.
+An installed copy reports `0.1.0` and carries `swe_mux/static/index.html` with its 39 hashed JS assets, so it serves the interface without Node ever being present.
+A package install is now the primary path, and the source install is for people changing swe-mux rather than running it.
 
-**The platform matrix is Windows-proving, Linux-from-source, macOS newly exercised.**
+**The platform matrix is: the wheel installs on all three hosts, and the daemon is proven only on Windows.**
 That is drawn from `.github/workflows/ci.yml` rather than from any summary, including this one.
 The `verify` job runs on `windows-latest` and carries the full gate plus the wheel build, artifact validation, install smoke, and the Playwright renderer suite.
-The `platform` job is a matrix of `ubuntu-latest` (`unproven: false`, blocking) and `macos-latest` (`unproven: true`, so `continue-on-error` is true for that leg).
-`pyproject.toml` declares `Operating System :: Microsoft :: Windows` and `Operating System :: POSIX :: Linux` and deliberately no macOS classifier and no `OS Independent`.
+The `platform` job is a matrix of `ubuntu-latest` (`unproven: false`, blocking) and `macos-latest` (`unproven: true`, so `continue-on-error` is true for that leg), and since 2026-08-28 both legs also build the wheel, validate it, and run the install smoke.
+So "the wheel builds and installs and the CLI runs" is a question CI asks on all three hosts, and it was answered green on all three on 2026-08-28.
+Read the badge for today's answer rather than this sentence: those steps sit after the suite in the job, so a test failure on a leg skips them, and a skipped step is not a passing one.
+
+**What is proven nowhere is a running daemon.**
+`install_smoke.py` says so in its own docstring and means it: it starts no daemon and binds no port, because the daemon owns a fixed port and a single data directory and a CI job that started one would be a second writer against whatever else is running.
+No other CI job starts one either, on any host.
+Do not let "installs and the CLI runs" be read as "verified working end to end" - they are different claims, and only the first one has evidence.
+`pyproject.toml` declares `Operating System :: Microsoft :: Windows` and `Operating System :: POSIX :: Linux` and deliberately no macOS classifier and no `OS Independent`, which is the same distinction expressed in metadata.
 
 ---
 
@@ -29,23 +38,7 @@ The `platform` job is a matrix of `ubuntu-latest` (`unproven: false`, blocking) 
 - At least one agent CLI, already installed and logged in.
   swe-mux detects and observes them; it does not install, manage, or proxy them.
 
-### From source
-
-```
-git clone https://github.com/jatoran/swe-mux
-cd swe-mux
-uv sync --extra desktop
-npm --prefix frontend ci
-npm --prefix frontend run build
-uv run --extra desktop swe-mux
-```
-
-For a headless daemon plus an ordinary browser, which is the Linux shape, run `uv run muxd` and open <http://127.0.0.1:8765>.
-
-`npm --prefix frontend run build` is not optional on a fresh clone.
-Its output lands in `src/swe_mux/static/` and is gitignored, so a checkout that has never run it serves the API and no interface at all.
-
-### From a package index, once published
+### From PyPI
 
 ```
 uv tool install swe-mux
@@ -57,7 +50,34 @@ pipx install swe-mux
 pipx install "swe-mux[desktop]"
 ```
 
-Both install the three entry points declared in `[project.scripts]`: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the Windows desktop window and tray).
+Either installs the three entry points declared in `[project.scripts]`: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
+Take the bracketed form on Windows and the plain one elsewhere; the Extras table below says why.
+
+**`uv tool install` is not `uv add`, and the difference is the whole point of this section.**
+`uv tool install` and `pipx install` give the package its own environment and put its console scripts on your PATH, so `mux` is a command you can run anywhere.
+`uv add swe-mux` and `pip install swe-mux` install it into an environment you already have, which makes `import swe_mux` work there and leaves `mux` reachable only from inside that environment.
+Both are legitimate; they answer different questions, and reaching for the second while wanting the first is the confusion this paragraph exists to prevent.
+
+**There is no `--extra` flag on `uv tool install`.**
+Extras are named in the requirement itself, which is why the second command above is `"swe-mux[desktop]"` and not `uv tool install swe-mux --extra desktop`.
+The quotes are for the shell, which would otherwise glob or mangle the brackets.
+
+### From source
+
+```
+git clone https://github.com/jatoran/swe-mux
+cd swe-mux
+uv sync --extra desktop
+npm --prefix frontend ci
+npm --prefix frontend run build
+uv run --extra desktop swe-mux
+```
+
+For a headless daemon plus an ordinary browser, which is the Linux and macOS shape, run `uv run muxd` and open <http://127.0.0.1:8765>.
+
+`npm --prefix frontend run build` is not optional on a fresh clone.
+Its output lands in `src/swe_mux/static/` and is gitignored, so a checkout that has never run it serves the API and no interface at all.
+This is the one respect in which a source install is harder than a package install: the published wheel carries that bundle already.
 
 ### The desktop app
 
@@ -472,7 +492,7 @@ Project *content* is not in here and is not swe-mux's to back up: Projects point
 
 - `README.md` — the product-facing quickstart and platform statement.
 - `RELEASING.md` — the release procedure, including the TestPyPI validation that must precede a PyPI publish.
-- `RELEASE_MANUAL_TASKS.md` — the operator acts that are deliberately not automated, including PyPI name registration and Trusted Publishing setup.
+- `RELEASE_MANUAL_TASKS.md` — the operator acts that are deliberately not automated. § 6 (PyPI name registration and Trusted Publishing) is done as of 2026-08-28; § 8, clean-machine validation, is not.
 - `SECURITY.md` — the trust boundary: a local daemon on loopback and optionally a tailnet, where any admitted device holds code-execution authority.
 - `CROSS_PLATFORM_FINDINGS.md` — what each platform claim rests on.
 - `design/features/session-recovery.md` — cold and inactive sessions in full.

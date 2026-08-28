@@ -154,7 +154,7 @@ footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { displ
 .ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
 .ic-os span.on { color: var(--cyan); }
 .ic-os span.on::before { content: "▸ "; color: var(--green); }
-.ic-os span.soon em { font-style: normal; color: var(--fg-4);
+.ic-os span.qual em { font-style: normal; color: var(--fg-4);
                       text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
 .ic-body { display: flex; align-items: center; gap: 11px; padding: 14px 15px; min-width: 0; }
 .ic-body .p { color: var(--green); flex: none; user-select: none; }
@@ -305,6 +305,11 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
         background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-3); padding: 2px 6px; cursor: pointer; }
 .copy:hover { color: var(--fg); }
 .note { font-size: 13.5px; color: var(--fg-3); margin-top: 12px; line-height: 1.55; }
+/* A subheading inside a section, for the one section that has two flows in it.
+   Reuses `--fg-3`, which `tools/contrast.py` already audits, rather than
+   introducing a colour the table would not know about. */
+.sub-h { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3);
+         margin: clamp(24px, 3.5vw, 34px) 0 12px; }
 
 footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
          padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }

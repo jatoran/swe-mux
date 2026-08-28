@@ -86,12 +86,16 @@ jobs:
       - name: Build frontend into the package
         run: npm --prefix frontend run build
 
-      # Both artifacts, always. Known gap, recorded rather than hidden: the
-      # `artifacts` glob above is a wheel-target setting, so the sdist carries no
-      # frontend bundle and a wheel rebuilt from it would be UI-less. The sdist
-      # is published for auditability and for distro packagers who build the
-      # frontend themselves; `pip install swe-mux` resolves the wheel. Closing it
-      # belongs to `pyproject.toml`, not to this workflow.
+      # Both artifacts, always. The gap this comment used to record - an sdist
+      # with no frontend bundle, from which a rebuilt wheel would be UI-less -
+      # was closed in `pyproject.toml` by giving `[tool.hatch.build.targets.sdist]`
+      # the same `artifacts` glob as the wheel target, exactly where the old
+      # comment said the fix belonged. It turned out to be load-bearing rather
+      # than tidy: a bare `uv build` builds the sdist first and then builds the
+      # wheel *from that sdist*, so the missing glob was silently shipping a
+      # UI-less wheel from this very step. The sdist is still published for
+      # auditability and for distro packagers; `pip install swe-mux` resolves
+      # the wheel.
       - name: Build wheel and sdist
         run: uv build
 

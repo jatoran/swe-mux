@@ -155,12 +155,26 @@ console.log('docs fragments')
 console.log('install callout')
 const p = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 await p.goto(url(PAGES[0]), { waitUntil: 'networkidle' })
+// swe-mux is on PyPI as a pure-Python `py3-none-any` wheel, so every method
+// works on every host and the row is lit the same way throughout. That makes the
+// per-method set a weak assertion on its own, which is why the two below it are
+// the ones carrying weight now.
 const EXPECT = {
-  powershell: ['windows'],
-  curl: ['linux'],
-  uv: ['windows', 'linux'],
-  source: ['windows', 'linux'],
+  uv: ['windows', 'linux', 'macos'],
+  pipx: ['windows', 'linux', 'macos'],
+  pip: ['windows', 'linux', 'macos'],
+  source: ['windows', 'linux', 'macos'],
 }
+
+// Hosts an install command is allowed to name. The callout shipped
+// `get.swe-mux.dev` one-liners for a domain that was never registered - note the
+// hyphen, which the real `swemux.dev` does not have - and no gate noticed,
+// because nothing here had ever looked at what the command actually fetched.
+// A one-liner that 404s is the worst thing this box can contain, so the rule is
+// an allowlist rather than a spell-check: a new install host has to be added
+// here deliberately, by someone who knows it resolves.
+const INSTALL_HOSTS = new Set(['github.com'])
+
 let lastCmd = null
 for (const [method, os] of Object.entries(EXPECT)) {
   await p.click(`.ic-tab[data-m="${method}"]`)
@@ -174,12 +188,36 @@ for (const [method, os] of Object.entries(EXPECT)) {
   if (r.on.join() !== os.join()) fail(`${method}: platforms lit ${r.on}, expected ${os}`)
   if (!r.cmd || r.cmd === lastCmd) fail(`${method}: command did not change`)
   if (!r.note) fail(`${method}: note is empty`)
+  for (const url of r.cmd.match(/https?:\/\/[^\s|'"]+/g) ?? []) {
+    const host = new URL(url).host
+    if (!INSTALL_HOSTS.has(host)) {
+      fail(`${method}: command fetches from "${host}", which is not a host this project publishes`)
+    }
+  }
   lastCmd = r.cmd
 }
-// macOS is deliberately never lit while the port is unverified; see README.md.
-const macosLit = await p.evaluate(() => !!document.querySelector('.ic-os span[data-os="macos"].on'))
-if (macosLit) fail('macos is lit, but the macOS port is not verified yet')
-console.log(`  ${Object.keys(EXPECT).length} methods checked, macos correctly unlit`)
+
+// macOS is lit on every method, because the wheel installs there and CI proves
+// it. It carries a qualifier anyway, because its CI leg is still
+// `continue-on-error` and no CI job on any host starts a daemon. Both halves are
+// asserted: dropping the light would understate a platform that works, and
+// dropping the marker would overstate one that is not required to pass.
+const macos = await p.evaluate(() => {
+  const el = document.querySelector('.ic-os span[data-os="macos"]')
+  return el && { lit: el.classList.contains('on'), qualifier: el.querySelector('em')?.textContent }
+})
+if (!macos) fail('the macos platform indicator is gone from the install callout')
+else {
+  if (!macos.lit) fail('macos is unlit, but the wheel installs there and CI smokes it')
+  if (!macos.qualifier) fail('macos is lit with no qualifier, but its CI leg is still unproven')
+}
+// Phrased as what was inspected rather than as a verdict: `fail()` only counts,
+// it does not stop, so a summary that claimed "no foreign install hosts" would
+// print directly under the FAIL saying otherwise.
+console.log(
+  `  ${Object.keys(EXPECT).length} methods, their install hosts, and the macos ` +
+    `indicator (lit, marked "${macos?.qualifier}") inspected`,
+)
 await p.close()
 
 // ------------------------------------------------------------------- theme
