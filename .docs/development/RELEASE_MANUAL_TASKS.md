@@ -141,16 +141,26 @@ Nothing here can be delegated to an agent, because it needs a machine that is no
 - [ ] Browser pass: Chrome and Edge as primary, then Firefox, then mobile Safari and Chrome. Document what is supported rather than implying universality.
 - [ ] Confirm the Tailscale setup flow shows the phone URL with a copy button and the PWA install instruction, rather than assuming the operator derives it.
 
-## 8.5 First public CI run: two findings
+## 8.5 First public CI run: three findings
 
 The repository went public on 2026-08-27 and CI ran on a machine that was not the dev host for the first time.
-It found two real things, which is what that run is for.
+It found three real things, which is what that run is for.
 
 **Fixed: the main `mypy` pass was host-dependent.**
 `[tool.mypy]` inherited its platform from the host, so `uv run mypy` asked a different question on every runner and could not be green on all of them at once.
 Five modules reach Win32 directly (`desktop.py`, `agent_launcher.py`, `ghost_windows.py`, `file_manager.py`, `timer_resolution.py`) and are absent from the per-platform `ignore_errors` override, because on Windows they typecheck normally.
 Both POSIX legs failed with the same 35 errors, reproduced locally with `uv run mypy --platform linux`.
 Fixed by pinning `platform = "win32"`, which keeps those five fully checked everywhere rather than silencing them; the `--platform linux` pass in `mypy-platform.toml` still owns the POSIX side.
+
+**Fixed: an Edge TTS test asserted its invariant vacuously on Windows and failed on POSIX.**
+`test_edge_tts_provider.py::test_failed_repair_keeps_the_working_managed_environment` builds a previously working managed install and then fails a repair, to prove the working environment is kept and the status stays `ready`.
+Its fixture wrote that environment's interpreter to a literal `current/Scripts/python.exe`, which is a path that exists on no POSIX host.
+So on Linux and macOS there was no working environment to keep, the provider correctly degraded to `error`, and the test read as a provider defect while the provider was right.
+The reverse is the part worth remembering: on Windows the assertion passed while never once exercising the case where the environment is *absent*.
+The provider itself is unchanged in behavior.
+`managed_interpreter(root)` is now a module-level function that `EdgeTtsProvider.managed_python` delegates to, so a test asks the provider where the interpreter goes instead of restating it, and the fixture is correct on both hosts by construction.
+Reproduced and confirmed green on Linux with `tools/linux_container_verify.sh`.
+The same run also added coverage the suite did not have: a failure *after* `_activate_managed` has already swapped `current`, which is the half of the design whose directory renames actually differ between hosts and which the repair test never reaches.
 
 **Open, and deliberately not guessed at: one supervisor test fails on the GitHub Windows runner.**
 `test_pty_supervisor.py::test_supervisor_process_outlives_client_and_reaps_on_command` asserts the supervisor anchors its cwd in the data dir, which exists so a supervisor spawned from `dist/` cannot lock the app tree against a rebuild.
