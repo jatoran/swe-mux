@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import type { Session } from '../src/types.ts'
 import {
@@ -1063,22 +1062,6 @@ test('the default indicator size differs per device class, and mobile is not sim
   for (const size of [base.dotSizeDesktop, base.dotSizeMobile]) {
     assert.ok(size >= DOT_SIZE_MIN && size <= DOT_SIZE_MAX, `${size} must be a size the panel can set`)
   }
-})
-
-test('the stylesheet declares the same default indicator sizes the model does', () => {
-  // `style.css` carries its own copy of both figures, and says so: they are what
-  // an unreachable daemon and a page that has not yet resolved its settings fall
-  // back to. Nothing checked the equality, so moving the default in TypeScript
-  // alone would give a fresh install one size before the settings load and
-  // another after — a visible jump on every boot, and invisible to every other
-  // test here.
-  const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
-  const desktop = /:root\{[^}]*--session-dot:(\d+)px/.exec(css)
-  const mobile = /@media\(max-width:760px\)\{\s*:root\{--session-dot:(\d+)px\}/.exec(css)
-  assert.ok(desktop, 'the root block must declare --session-dot')
-  assert.ok(mobile, 'the mobile breakpoint must declare --session-dot')
-  assert.equal(Number(desktop[1]), DEFAULT_DOT_SIZE_DESKTOP)
-  assert.equal(Number(mobile[1]), DEFAULT_DOT_SIZE_MOBILE)
 })
 
 test('a stored indicator size is clamped rather than discarded', () => {

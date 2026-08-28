@@ -1,4 +1,7 @@
 import { expect, test, type Page } from 'playwright/test'
+import {
+  DEFAULT_DOT_SIZE_DESKTOP, DEFAULT_DOT_SIZE_MOBILE,
+} from '../../src/sessionRowConfig'
 
 /**
  * The state indicator's placement is pure CSS, so nothing else can catch it.
@@ -438,8 +441,33 @@ test('the shipped default draws two columns with the conditional fields between 
   }
   const dot = await page.evaluate(() =>
     getComputedStyle(document.documentElement).getPropertyValue('--session-dot').trim())
-  expect(dot).toBe('21px')
+  expect(dot).toBe(`${DEFAULT_DOT_SIZE_DESKTOP}px`)
 })
+
+/**
+ * `style.css` keeps its own copy of both default indicator sizes, deliberately:
+ * they are what a page whose settings have not resolved — or whose daemon is
+ * unreachable — falls back to, and no stored blob is available at that moment.
+ *
+ * Nothing checked the two copies against each other, so moving the default in
+ * TypeScript alone would give a fresh install one size before its settings load
+ * and another after: a visible jump on every boot, and invisible to every unit
+ * test, because the fallback is precisely the state where the model is not
+ * consulted. Asserted here rather than by matching the stylesheet's text, since
+ * a browser can simply be asked what the declaration resolved to.
+ */
+for (const [label, width, expected] of [
+  ['desktop', 900, DEFAULT_DOT_SIZE_DESKTOP],
+  ['mobile', 700, DEFAULT_DOT_SIZE_MOBILE],
+] as const) {
+  test(`the ${label} stylesheet fallback is the ${label} default the model ships`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 600 })
+    await page.goto('/session-row-harness.html')
+    const dot = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--session-dot').trim())
+    expect(dot).toBe(`${expected}px`)
+  })
+}
 
 test('a title too long for the sidebar ellipsizes rather than pushing the flags out', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 600 })
