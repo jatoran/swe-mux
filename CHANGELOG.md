@@ -152,6 +152,15 @@ macOS is implemented and typechecked but has never been executed.
 - A Windows desktop shell: a WebView2 window, a system tray supervisor, login startup, and a
   frozen `onedir` bundle that can rebuild and redeploy itself while preserving live sessions.
 - A progressive web app manifest and service worker for phone installation.
+- A daily release check against a static `version.json`, which is the only request swe-mux
+  makes on its own behalf: it carries nothing identifying the install, it downloads nothing,
+  and `update_check_enabled` turns it off entirely.
+- An updater for the frozen desktop app (`mux update --install <version>`,
+  `POST /api/update/install`) that downloads a release only on an explicit act naming a
+  version, verifies its SHA-256 against the published manifest before staging anything, and
+  reuses the redeploy's staged swap so live sessions survive. It refuses, rather than
+  installs, a release that would require a new PTY supervisor - that upgrade ends every live
+  session and is an announced, deliberate act.
 
 #### Operations
 

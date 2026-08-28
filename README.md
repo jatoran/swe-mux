@@ -27,6 +27,7 @@ Three optional features reach the network and each is off until you turn it on: 
 
 The one request swe-mux makes on its own behalf is a daily fetch of `https://swemux.dev/version.json` to check for a newer release - nothing downloads, and the file is identical for every install, with no query string, header, cookie, or identifier on it.
 Settings → Diagnostics → Software updates (`update_check_enabled`) turns it off entirely.
+Installing an update is a separate act you take: `mux update --install <version>` downloads that release, checks its SHA-256 against the published manifest before anything is staged, and refuses rather than installs if the release would need a new PTY supervisor - which would end your live sessions.
 
 ## Install
 

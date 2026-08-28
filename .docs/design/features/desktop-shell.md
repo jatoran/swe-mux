@@ -82,19 +82,40 @@ continues to own every terminal.
 
 ## Security boundary
 
-- **The packaged app makes one outbound request of its own, and it is not an updater.**
-  The daemon's daily release check (`update_check.py`, `design/interfaces.md`, and the
-  outbound bullet in `remote-access.md`) runs in the frozen build exactly as it does from
-  source, carries nothing that identifies the machine, and is off entirely under
+- **The packaged app makes one outbound request of its own, and it is still not an
+  updater.** The daemon's daily release check (`update_check.py`, `design/interfaces.md`,
+  and the outbound bullet in `remote-access.md`) runs in the frozen build exactly as it
+  does from source, carries nothing that identifies the machine, and is off entirely under
   `update_check_enabled`. It **detects and presents**; it downloads nothing, verifies no
-  hash, and touches no bundle. That distinction matters most here, because this is the
-  only place in the project where a real staged swap exists: the redeploy machinery
-  (`packaging/redeploy_desktop.py`, `POST /api/daemon/redeploy`) builds locally and is
-  triggered by an explicit press, and the frozen-app *updater* that would download a
-  release artifact, verify its SHA-256 against the manifest, and reuse that swap is a
-  separate, later item (`ROADMAP.md` Phase 11, "Update propagation"). A banner from the
-  check and a redeploy from the tray are two unrelated acts today, and the banner never
-  starts one.
+  hash, and touches no bundle.
+  The **updater** (`update_install.py`, `POST /api/update/install`, `mux update --install`)
+  is the deliberate half and is a separate act in every sense: it runs only on an explicit
+  press carrying `X-Mux-User-Gesture: update-install`, and only when that press *names the
+  version it means*, so a manifest that moved between the banner and the button is refused
+  rather than silently installed. Nothing about the passive check changed; a banner still
+  starts nothing.
+  **What the updater downloads is verified before it is staged, and the check is the point
+  of the manifest's hashes.** The artifact's SHA-256 is computed over the bytes as they
+  arrive, the file is written under a `.part` name, and only a matching digest promotes it
+  to a name the swap can see - so a partial, corrupted, or substituted download is never a
+  file the staged swap can find. A hash comes from the *manifest* only: the GitHub
+  Releases fallback publishes none, so a release discovered that way can be announced and
+  can never be installed.
+- **The updater refuses a release that would need a new PTY supervisor, and that refusal is
+  the feature.** The swap preserves sessions only because the supervisor outlives it, and
+  refreshing `dist/swe-mux-supervisor/` reaps every live session (see the supervisor rules
+  in the root `CLAUDE.md`). So each bundle declares the supervisor protocol its daemon
+  speaks in `bundle.json` (`bundle_metadata.py`, written by `build_desktop.describe_bundle`),
+  the running supervisor declares its own in `<data_dir>/supervisor.json`, and a difference
+  stops the install with the manual flow named in the message.
+  Three details are load-bearing. It compares the **protocol**, not a source hash:
+  `build_desktop.supervisor_source_hash()` mixes in the *build machine's* pywinpty/psutil/
+  PyInstaller versions, so hashes never match across a release and comparing them would
+  refuse every update forever. It compares with `!=` rather than `>`, because the
+  supervisor's `hello` refuses any mismatch and a downgrade strands the fleet exactly as a
+  bump does. And an archive whose metadata is **missing or unreadable** is refused too -
+  "cannot tell whether this reaps your sessions" is not a case to guess at, and it is
+  precisely what an archive built before this contract looks like.
 - `<data_dir>/desktop-control.token` is random, user-local control material.
 - The token reaches the child only through `SWE_MUX_DESKTOP_CONTROL_TOKEN`.
 - `/api/desktop/shutdown` is absent as authority for standalone daemons, rejects non-loopback
@@ -259,6 +280,34 @@ continues to own every terminal.
   The successor serves it as `last_result`, which is what lets the reconnecting UI say that a
   rollback happened: the app comes back looking entirely normal, so otherwise nothing would tell
   the operator their change never shipped.
+- **The updater is that same script with a download where the build was**, and nothing
+  else. `packaging/redeploy_desktop.py --from-archive <zip> [--archive-sha256 <hex>]`
+  verifies and extracts a release archive into `dist/.staging` instead of running
+  PyInstaller; every step after it - the bundle-holder gate, the detach-stop, the swap, the
+  health wait, the rollback to `dist/swe-mux.prev`, the `redeploy-result.json` record - is
+  the same code and carries the same guarantees. Two things follow from the reuse being
+  real rather than described: a failed download or a rejected archive leaves the running app
+  completely untouched, because the refusal happens before anything stops; and the script
+  re-checks the SHA-256 itself, because it is separately invocable with any path a person
+  can type and a guarantee that only holds when the right caller invoked you is not one.
+  The build-extras preflight is skipped for an archive install: the released bundle already
+  satisfies the LGPL relink obligation that check protects, and requiring a local build
+  environment would refuse exactly the install that needs none.
+- **Every built bundle describes itself in `bundle.json`** at its root (schema, version,
+  `supervisor_protocol`, platform, build stamp), written by `build_desktop.describe_bundle`
+  after the license verification. Every bundle, not only released ones: the updater refuses
+  an archive it cannot interrogate, so a bundle built without it is one nobody can update
+  to - and a staged redeploy's tree becomes the next `dist/swe-mux`.
+- **The release artifact's *name* is a contract**, because the manifest says only what an
+  artifact is called, where it is, and what it hashes to - the updater has to recognize its
+  own platform's bundle by name alone. `swe-mux-<version>-<platform>-<arch>.zip` on Windows
+  (`.tar.gz` elsewhere), containing exactly one top-level `swe-mux/` directory.
+  `packaging/package_desktop_release.py` is its only writer and derives the name from
+  `update_install.release_archive_name`, so the two halves cannot drift into a release no
+  installed copy can find; it prints the SHA-256 the manifest step needs. A release that
+  publishes nothing matching the name is reported as "no desktop bundle for this platform"
+  rather than guessed at, which is also today's honest answer: `release.yml` publishes the
+  wheel and sdist and does not yet build a desktop bundle (`ROADMAP.md` Phase 11).
 - Clients are told about a redeploy rather than discovering it as failed requests.
   The daemon emits `daemon_redeploy_started` when it accepts one or is asked to announce a
   terminal-launched one (`POST /api/daemon/redeploy/announce`, loopback-only and refused unless
@@ -319,6 +368,12 @@ continues to own every terminal.
 - Package metadata: `pyproject.toml`, `uv.lock`
 - Bundle entries/spec: `packaging/desktop_entry.py`, `packaging/swe_mux.spec`
 - Reproducible build: `packaging/build_desktop.py`
+- Release archive writer (the artifact-name contract): `packaging/package_desktop_release.py`
+- Frozen-app updater: `src/swe_mux/update_install.py`, `src/swe_mux/routes/update.py`
+- Bundle self-description and archive rules: `src/swe_mux/bundle_metadata.py`,
+  `src/swe_mux/bundle_archive.py`
+- Shared redeploy launch (endpoint and updater): `src/swe_mux/redeploy_launch.py`
+- Updater tests: `tests/test_update_install.py`
 - Closure license gate and notice generation: `packaging/license_audit.py`,
   `packaging/third_party_licenses.json`, `THIRD-PARTY-NOTICES.md`
 - Lifecycle tests: `tests/test_desktop.py`

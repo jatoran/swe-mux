@@ -3766,13 +3766,54 @@ No update server: static manifest plus GitHub Releases covers the whole loop.
   Deliberately not done: the frozen-app updater below, and any prerelease-channel policy -
   the manifest carries no severity or channel, so the banner states a version and nothing
   else.)
-- [ ] The frozen-app updater reuses the redeploy machinery's staged swap
+- [x] The frozen-app updater reuses the redeploy machinery's staged swap
   (`packaging/redeploy_desktop.py`): download the release artifact, verify its SHA-256 against
   the manifest, stage, healthcheck, swap, roll back on failure - sessions preserved through
   the supervisor exactly as redeploy preserves them today, with the download replacing the
   local PyInstaller build.
+  (Done 2026-08-28. `src/swe_mux/update_install.py` + `bundle_metadata.py` +
+  `bundle_archive.py` + `redeploy_launch.py`, `packaging/redeploy_desktop.py --from-archive`,
+  `packaging/package_desktop_release.py`, `POST /api/update/install`, `mux update`; contract in
+  `design/interfaces.md`, mechanics in `design/features/desktop-shell.md`.
+  **The reuse is literal, which is what makes the guarantees transferable.** The script grew
+  one flag and nothing else: `--from-archive` verifies and extracts into `dist/.staging`
+  exactly where PyInstaller used to write, and the bundle-holder gate, detach-stop, swap,
+  health wait, rollback to `dist/swe-mux.prev` and `redeploy-result.json` record are the same
+  code. So "a failure leaves the running app untouched" needed no new argument - the refusal
+  happens before anything stops.
+  **The supervisor question could not be answered from anything that already existed.** The
+  incoming bundle had to declare what it needs, so every build now writes `bundle.json`
+  (schema, version, `supervisor_protocol`, platform) and the updater reads it *out of the
+  archive*, without extracting and without executing a freshly downloaded binary. It is the
+  protocol rather than the supervisor source hash because
+  `build_desktop.supervisor_source_hash()` mixes in the build machine's own
+  pywinpty/psutil/PyInstaller versions - hashes never match across a release, and comparing
+  them would refuse every update forever. `!=` rather than `>`, because `hello` refuses any
+  mismatch. Missing or unreadable metadata refuses too: "cannot tell whether this reaps your
+  sessions" is not a case to guess at.
+  **Two consent gates, answering different questions**: the explicit-gesture header (nothing a
+  poll can trigger may replace the application) and the *named version* (the manifest moves,
+  and consent was about the number on the button). Hence `artifacts` is re-fetched at install
+  time rather than read from the check's cached snapshot - the release workflow uploads with
+  `--clobber`, so a day-old hash describes a file that may have been replaced.
+  Deliberately not done, and each is a real limit rather than an omission: **no desktop
+  artifact is published yet**, so on today's releases the updater correctly answers
+  `no_artifact` - `release.yml` builds the wheel and sdist, and the artifact *name* contract
+  (`swe-mux-<version>-<platform>-<arch>.zip`, one top-level `swe-mux/`) now exists with a
+  single writer (`package_desktop_release.py`) for whoever adds that job. **The handoff needs
+  the source checkout**, because the swap script lives in `packaging/` and is not carried in
+  the bundle; a frozen app deployed away from its checkout is refused with `no_swap_tool`,
+  the same limit `POST /api/daemon/redeploy` already has. Closing it means a self-contained
+  applier inside the bundle, which cannot rename the directory it is running from and is
+  therefore a second swap implementation - not worth having two until there is a released
+  bundle to test one against. And there is **no UI surface**: the banner still only announces,
+  and the install is reached from `mux update --install` or the endpoint.)
   A release that requires a supervisor update keeps its reap-everything semantics and says so
   in its release notes rather than hiding it in the updater.
+- [ ] Publish the desktop bundle as a release artifact: a Windows job in `release.yml` that
+  builds `dist/swe-mux` plus the supervisor bundle, runs `packaging/package_desktop_release.py`,
+  and uploads the result so the manifest step hashes it. This is the half that turns the
+  updater on; everything downstream of the artifact already exists and is tested.
 
 ### Demo environment and launch assets
 

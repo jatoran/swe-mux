@@ -116,7 +116,20 @@ Its contract:
 - Publish to **TestPyPI first**, then to PyPI, through PyPI Trusted Publishing (OIDC). No
   long-lived repository token exists, so there is nothing to rotate or leak.
 - Attach the frozen Windows desktop bundle to a GitHub Release whose body is the new
-  `CHANGELOG.md` section.
+  `CHANGELOG.md` section. **The bundle's filename is a contract, not a convenience**: the
+  in-app updater recognizes its own platform's artifact by name alone, so it must be built by
+  `packaging/package_desktop_release.py` (`swe-mux-<version>-<platform>-<arch>.zip`, one
+  top-level `swe-mux/` directory carrying the `bundle.json` the updater reads). An artifact
+  named anything else is invisible to every installed copy, which reports "no desktop bundle
+  for this platform" rather than installing the wrong thing.
+  Today `release.yml` publishes only the wheel and sdist; the desktop job is the open half
+  (`.docs/development/ROADMAP.md` Phase 11).
+- **A release that changes `supervisor.PROTOCOL_VERSION` must say so in its release notes**,
+  because the updater refuses to install it: swapping the app bundle alone would leave a
+  daemon that cannot talk to the running supervisor, and refreshing the supervisor reaps
+  every live session. Such a release is a deliberate, announced, sessions-lost upgrade. The
+  updater reads the incoming bundle's declared protocol out of the archive and stops before
+  anything is staged; it never decides this quietly.
 - Write `version.json` into the static site (latest version, artifact URLs and hashes, and a
   changelog pointer). That file is the in-app update-check endpoint; the site workflow deploys
   `site/` to GitHub Pages from the same repository.

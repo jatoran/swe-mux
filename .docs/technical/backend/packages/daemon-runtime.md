@@ -209,7 +209,34 @@ And `UpdateChecker`, which owns the daily interval persisted in `<data_dir>/upda
 It is the **only** module that reaches the network on swe-mux's own behalf.
 `update_check_enabled` gates it, and off means no request is made at all - which `tests/test_update_check.py` proves by counting fetches.
 
-**Not:** downloading, hash-verifying, staging, or installing anything (that is the future frozen-app updater over the redeploy machinery); raising on any path; blocking startup - the loop is supervised as `update-check` and takes its first look 60s in.
+**Not:** downloading, hash-verifying, staging, or installing anything (`update_install.py`); raising on any path; blocking startup - the loop is supervised as `update-check` and takes its first look 60s in.
+It parses the manifest's `artifacts` for that module but neither persists nor serves them: a stored hash is a claim about bytes nobody is holding, and the release workflow re-uploads with `--clobber`.
+
+### `update_install.py`
+
+The frozen-app updater, in five steps.
+Install-kind detection (`sys.frozen` plus the executable's own directory, never the presence of a `dist/` beside a checkout) and the release-artifact naming contract (`release_archive_name`, `release_platform_tag`).
+Then the streaming bounded download hashed as it arrives, the promotion of a `.part` file only on a matching digest, the supervisor-protocol gate, and the handoff to `packaging/redeploy_desktop.py --from-archive`.
+Its refusal vocabulary is closed and durable in `<data_dir>/update-install.json`, because the daemon does not survive the swap it starts.
+Every phase transition is logged with the attempt's `install_id` and persisted at the moment of decision.
+
+**Not:** the swap (`packaging/redeploy_desktop.py`, unchanged except for the flag), the archive's shape rules or extraction (`bundle_archive.py`), what a bundle claims about itself (`bundle_metadata.py`), or the decision that an update exists at all (`update_check.py`).
+It never updates `dist/swe-mux-supervisor/`: that reaps every live session, so a release needing it is refused with the manual flow named.
+
+### `bundle_metadata.py` / `bundle_archive.py`
+
+What a built bundle says about itself (`bundle.json`: schema, version, `supervisor_protocol`, platform, build stamp) and the rules for reading a release archive.
+Split from the updater because two processes need them - the daemon interrogates the archive before deciding anything, and the redeploy script re-validates and extracts it minutes later in its own process, so a rule enforced in only one of them is a rule the other does not have.
+An archive is exactly one top-level `swe-mux/` directory; an absolute path, a drive letter, a `..` segment, or a second root is refused rather than normalized, because a hash proves which file arrived and nothing about what extracting it would write.
+
+**Not:** deciding what to do about a mismatch (that is the updater's refusal, with the message an operator can act on).
+
+### `redeploy_launch.py`
+
+How `packaging/redeploy_desktop.py` gets started, shared by `POST /api/daemon/redeploy` and the updater's handoff.
+Three things: the source-checkout resolution (`redeploy_source_root`, with `PACKAGE_DIR` anchored on the package rather than counted from a file), the atomically claimed `redeploy.lock` naming the script process, and the detached breakaway spawn with the parent-Claude markers scrubbed and the cwd kept out of `dist/`.
+
+**Not:** whether a redeploy may run - the preconditions differ between the two callers (a bundle-holder scan for one, a supervisor-protocol gate for the other), so each owns its own refusals.
 
 ## Operator surfaces
 

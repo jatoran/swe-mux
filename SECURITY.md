@@ -72,6 +72,14 @@ request is made at all.
 A way to make that request carry install-identifying data, or to make it happen with the
 setting off, is in scope below.
 
+Installing an update is a separate request that only an explicit action makes: it downloads
+the release artifact the manifest names, and verifies that artifact's SHA-256 against the
+manifest before anything is staged.
+That check is a security boundary rather than an integrity nicety - an unverified download
+that reached the staged swap would replace the application - so a way to make an artifact be
+staged without matching the published hash, or to make an install start without the explicit
+action, is in scope below.
+
 Two consequences define scope.
 **Exposing the daemon to an untrusted network is outside the supported configuration**, so a
 report whose precondition is such an exposure describes the documented behaviour of a
@@ -107,6 +115,9 @@ A vulnerability is something that breaks the boundary above **as designed**:
 - Making the release update check identify the install - a query string, a header, a cookie,
   or any per-machine value on the request - or making it fire while `update_check_enabled`
   is off. The no-telemetry property is a design commitment, not a side effect.
+- Getting an artifact staged by the updater without matching the SHA-256 the manifest
+  publishes, or getting an install to start without the explicit action that authorizes one.
+  The verification is what stands between a network position and replacing the application.
 
 ### Out of scope
 

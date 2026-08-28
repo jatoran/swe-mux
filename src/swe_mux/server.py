@@ -187,6 +187,7 @@ from .tailscale import (
 )
 from .tier0_store import Tier0Context, Tier0Store
 from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
+from .update_install import UpdateInstaller
 from .usage import UsageManager
 from .voice import (
     VoiceService,
@@ -1920,6 +1921,12 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # `update_check_enabled`, which it re-reads at every check.
     update_checker = UpdateChecker(config)
     update_checker.start()
+    # No loop and no task: an install happens only when someone presses the
+    # button, so this costs nothing until then. It is constructed here rather
+    # than lazily in the route so that its durable state is loaded - and a
+    # download abandoned by a restart is reported as abandoned - by the first
+    # read rather than by the first install.
+    update_installer = UpdateInstaller(config)
     history_search_maintenance_task = asyncio.create_task(
         history.maintain_message_search_indexes(), name="history-message-search-maintenance"
     )
@@ -2052,6 +2059,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             keys.HISTORY_SEARCH_MAINTENANCE_TASK: history_search_maintenance_task,
             keys.PROMPT_QUEUE_STORE: prompt_queue_store,
             keys.UPDATE_CHECK: update_checker,
+            keys.UPDATE_INSTALL: update_installer,
         },
     )
     # The startup duration nobody could see. The listeners are already bound by
@@ -2125,6 +2133,11 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         UPDATE_CHECK_LOOP,
     ):
         await background.stop(loop_name)
+    # An in-flight download is cancelled and *awaited*, not abandoned: it holds a
+    # socket and an open `.part` file, and a task still running when the loop
+    # closes is the failure mode that reddens whichever test happens to be
+    # running when the collector gets to it.
+    await _stop_handle(app.get(keys.UPDATE_INSTALL), "update_install")
     # Stopped in the order they were started, each skipped when the build never
     # got far enough to construct it. `history_backfills`/`history_scan` lead
     # because they own cancellable scans over the stores closed further down.

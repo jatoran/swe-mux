@@ -16,6 +16,12 @@ where a dead daemon means no way back in).
    The supervisor bundle is rebuilt only if its sources changed AND no
    supervisor is running; otherwise it is skipped with a warning (refreshing
    it requires ``muxd --shutdown`` first, which reaps sessions).
+   ``--from-archive`` replaces this step and nothing else: a downloaded release
+   archive is verified and extracted into the same staging tree, and every step
+   below runs identically. That is the whole of the frozen-app updater's use of
+   this script (`swe_mux/update_install.py`) — the download stands where the
+   PyInstaller build stands, and the guarantees on either side of it are the
+   ones already proven here.
 3. Stop — ask the desktop-managed daemon to shut down with detach intent
    (sessions stay up), then terminate remaining ``swe-mux.exe`` processes
    (the WebView shell). ``swe-mux-supervisor.exe`` is never touched.
@@ -67,6 +73,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import build_desktop  # noqa: E402 - sibling packaging module
 
+from swe_mux.bundle_archive import (  # noqa: E402
+    ArchiveError,
+    extract_bundle,
+    file_digest,
+    read_archive_metadata,
+)
 from swe_mux.bundle_locks import (  # noqa: E402
     REDEPLOY_LOCK_NAME,
     bundle_lock_holders,
@@ -543,6 +555,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-launch", action="store_true", help="rebuild but do not relaunch")
     parser.add_argument("--skip-build", action="store_true", help="bounce processes only")
     parser.add_argument(
+        "--from-archive",
+        type=Path,
+        default=None,
+        help=(
+            "install a downloaded release archive instead of building: extract it "
+            "into dist/.staging and run the ordinary staged swap (the frozen-app "
+            "updater's path)"
+        ),
+    )
+    parser.add_argument(
+        "--archive-sha256",
+        default="",
+        help=(
+            "expected SHA-256 of --from-archive; verified again here so this script "
+            "carries its own guarantee rather than inheriting its caller's"
+        ),
+    )
+    parser.add_argument(
         "--skip-frontend",
         action="store_true",
         help="backend-only redeploy: bundle the already-built src/swe_mux/static as-is",
@@ -599,7 +629,11 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
     # which silently collects nothing when the package is absent. Without this,
     # the failure surfaces minutes later inside `verify_bundle_licenses`, and a
     # redeploy started from the UI reports it only as a generic build failure.
-    if not args.skip_build:
+    # An archive install builds nothing, so the build environment's completeness
+    # is not its problem: the released bundle already satisfies the LGPL relink
+    # obligation this check exists to protect, and demanding a local build
+    # environment would refuse exactly the install that needs none.
+    if not args.skip_build and args.from_archive is None:
         missing = build_desktop.missing_extra_distributions()
         if missing:
             extras = " ".join(
@@ -666,8 +700,12 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
     if not args.skip_build and abort_if_bundle_held(args, when="the swap would fail"):
         return 2
 
-    # -- rebuild (staged; the old app keeps running and serving) ------------
-    if not args.skip_build:
+    # -- stage (staged; the old app keeps running and serving) --------------
+    if not args.skip_build and args.from_archive is not None:
+        staged = stage_from_archive(args, outcome)
+        if staged:
+            return staged
+    elif not args.skip_build:
         skip_supervisor = False
         if not build_desktop.supervisor_bundle_current() and supervisor is not None:
             log(
@@ -695,11 +733,15 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
                 code=1,
             )
             return 1
+    # Both staging paths answer to these, and the wording stays "staged" rather
+    # than "built": an archive that extracted without an exe is exactly as unusable
+    # as a build that produced none, and it must fail here, before anything stops.
+    if not args.skip_build:
         if not (STAGED_APP / "swe-mux.exe").is_file():
-            log("ABORT: staged build produced no swe-mux.exe; the running app was never touched")
+            log("ABORT: nothing staged a swe-mux.exe; the running app was never touched")
             outcome.record(
                 OUTCOME_BUILD_FAILED,
-                "The build produced no executable. The current app is untouched.",
+                "The staged bundle carries no executable. The current app is untouched.",
                 code=1,
             )
             return 1
@@ -817,6 +859,73 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
         code=1,
     )
     return 1
+
+
+def stage_from_archive(args, outcome: Outcome) -> int:  # noqa: ANN001 - argparse.Namespace
+    """Verify and extract a release archive into `dist/.staging`. 0 means staged.
+
+    Stands exactly where the PyInstaller build stands, and gives the same two
+    guarantees the build gives: it happens while the old app is still serving, and
+    a failure here has touched nothing. Everything after it - the stop, the swap,
+    the health wait, the rollback to `dist/swe-mux.prev` - is unchanged and
+    unaware that a download rather than a build produced the tree.
+
+    The hash is re-checked here even though the daemon's updater already verified
+    it. That is not distrust of the caller; it is that this script is separately
+    invocable with any path a person can type, and a guarantee that only holds
+    when you were called by the right process is not a guarantee. Passing no
+    `--archive-sha256` is allowed and says so out loud, because a maintainer
+    installing a locally-built archive has nothing to check against.
+    """
+    archive = Path(args.from_archive)
+    if not archive.is_file():
+        log(f"ABORT: {archive} does not exist; nothing was touched")
+        outcome.record(
+            OUTCOME_REFUSED,
+            f"The release archive {archive.name} was not found. Nothing was changed.",
+            code=2,
+        )
+        return 2
+    expected = str(args.archive_sha256 or "").strip().lower()
+    if expected:
+        actual = file_digest(archive)
+        if actual != expected:
+            log(f"ABORT: {archive.name} does not match the expected SHA-256; nothing was touched")
+            outcome.record(
+                OUTCOME_REFUSED,
+                f"{archive.name} does not match the SHA-256 it was supposed to have, "
+                "so it was not staged. Nothing was changed.",
+                code=2,
+            )
+            return 2
+        log(f"{archive.name} matches the expected SHA-256")
+    else:
+        log(f"WARNING: no --archive-sha256 given for {archive.name}; extracting unverified")
+    try:
+        metadata = read_archive_metadata(archive)
+        log(
+            f"staging swe-mux {metadata.version} ({metadata.platform}, supervisor "
+            f"protocol {metadata.supervisor_protocol}) from {archive.name}"
+        )
+        extract_bundle(archive, STAGING_ROOT)
+    except ArchiveError as exc:
+        log(f"ABORT: {exc.message}; nothing was touched")
+        outcome.record(
+            OUTCOME_REFUSED,
+            f"{exc.message} Nothing was changed.",
+            code=2,
+        )
+        return 2
+    except OSError as exc:
+        log(f"ABORT: could not extract {archive.name} ({exc}); nothing was touched")
+        outcome.record(
+            OUTCOME_BUILD_FAILED,
+            f"The release archive could not be extracted ({exc}). The current app is "
+            "untouched.",
+            code=1,
+        )
+        return 1
+    return 0
 
 
 def abort_if_bundle_held(args, *, when: str) -> bool:  # noqa: ANN001 - argparse.Namespace

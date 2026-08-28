@@ -90,6 +90,7 @@ if TYPE_CHECKING:
     from .supervisor_client import SupervisorClient
     from .tier0_store import Tier0Store
     from .update_check import UpdateChecker
+    from .update_install import UpdateInstaller
     from .usage import UsageManager
     from .voice import VoiceService, VoiceStore
     from .worktree_verify import VerifyApprovalStore
@@ -193,6 +194,7 @@ STORAGE_USAGE: web.AppKey[StorageUsage] = web.AppKey("storage_usage")
 TELEMETRY: web.AppKey[OperationalTelemetryStore] = web.AppKey("telemetry")
 TIER0: web.AppKey[Tier0Store] = web.AppKey("tier0")
 UPDATE_CHECK: web.AppKey[UpdateChecker] = web.AppKey("update_check")
+UPDATE_INSTALL: web.AppKey[UpdateInstaller] = web.AppKey("update_install")
 USAGE: web.AppKey[UsageManager] = web.AppKey("usage")
 VERIFY_APPROVALS: web.AppKey[VerifyApprovalStore] = web.AppKey("verify_approvals")
 VOICE: web.AppKey[VoiceService] = web.AppKey("voice")

@@ -45,16 +45,18 @@ Resolving a request to the thing it names: the Project behind `{project_id}`, th
 ### `routes/system.py`
 
 The app shell (`/`, the manifest, the service worker), `/api/health`, the harness registry, the runtime log level, desktop shutdown, daemon restart, the frozen-app redeploy, and remote, firewall, and WSL-bridge status.
-Also holds `PACKAGE_DIR`, the package-anchored checkout root the redeploy resolves from.
+The checkout resolution, the lock claim, and the detached spawn moved to `redeploy_launch.py` when the updater became a second caller of the same script; this module keeps the preconditions and the HTTP shapes.
 
 **Not:** the restart's successor-spawn policy beyond spawning it, or the redeploy build itself (`packaging/redeploy_desktop.py`).
 
 ### `routes/update.py`
 
-`GET /api/update` (the last check's answer; reads state and never reaches the network), `POST /api/update/check` (the one handler that may, behind the `update-check` gesture header and refused with `409 update_check_disabled` while the switch is off), and `POST /api/update/dismiss`.
-A runtime with no checker published answers a quiet 200 carrying `status: "unavailable"` rather than a 404, because every consumer is a passive banner.
+`GET /api/update` (the last check's answer; reads state and never reaches the network), `POST /api/update/check` (behind the `update-check` gesture header and refused with `409 update_check_disabled` while the switch is off), and `POST /api/update/dismiss`.
+Plus `GET /api/update/install` (the attempt's phase; polled during a download, so it reads state only) and `POST /api/update/install`, which needs the `update-install` gesture header **and** a named version, so what installs is what the operator was shown.
+Every refusal that needs no network is answered as a `409` to that request rather than left for a poll to find.
+A runtime with no checker or installer published answers a quiet 200 rather than a 404, because every consumer is a passive banner.
 
-**Not:** the interval, the schema handling, or the comparison (`update_check.py`); anything that downloads or installs.
+**Not:** the interval, the schema handling, or the comparison (`update_check.py`); the download, the hash check, the supervisor gate, or the handoff (`update_install.py`).
 
 ### `routes/settings.py`
 

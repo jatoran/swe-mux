@@ -351,7 +351,9 @@ def _redeploy_module() -> Any:
     import importlib.util
     import sys
 
-    root = system_routes.PACKAGE_DIR.parents[1]
+    from swe_mux import redeploy_launch
+
+    root = redeploy_launch.PACKAGE_DIR.parents[1]
     sys.path.insert(0, str(root / "packaging"))
     try:
         spec = importlib.util.spec_from_file_location(
