@@ -241,6 +241,19 @@ python_version = "3.12"
 strict = true
 packages = ["swe_mux"]
 ignore_missing_imports = true
+# Pinned rather than inherited from the host, because without it this pass asks a
+# different question on every runner and cannot be green on all of them at once.
+# Five modules reach Win32 directly through `ctypes.WinDLL`/`windll` and `winreg`
+# (`desktop.py`, `agent_launcher.py`, `ghost_windows.py`, `file_manager.py`,
+# `timer_resolution.py`). They are not in the per-platform override below because
+# on Windows they typecheck normally - which is why this went unnoticed while
+# Windows was the only host that ever ran mypy. The first CI run on Linux found
+# all 35 errors immediately.
+# `win32` is the right pin rather than an arbitrary one: it is the proving
+# platform, and pinning it keeps those five fully checked everywhere instead of
+# silencing them with `ignore_errors`. The POSIX side loses nothing, because the
+# `--platform linux` pass in `mypy-platform.toml` is what owns it.
+platform = "win32"
 
 # The per-platform implementation modules are uncheckable in this pass, because
 # mypy resolves `os.killpg`, `pty.fork`, and `ctypes.windll` against the typeshed
