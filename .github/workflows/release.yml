@@ -127,6 +127,33 @@ jobs:
       - name: Validate the release artifact
         run: uv run python packaging/verify_release_artifact.py "${{ steps.artifacts.outputs.wheel }}"
 
+      # The second half of the same gate, and a different question. The artifact
+      # check above proves the wheel is internally well-formed without ever
+      # looking at the tag or the source; this one proves the tag, the tree, and
+      # the wheel describe *one* release - the versions in `pyproject.toml`,
+      # `__init__.py`, the reporting routes and the wheel's metadata; a changelog
+      # entry that is not still under `## [Unreleased]`; publishable
+      # `[project.urls]`; the entry points README and RELEASING tell a user to
+      # run; and the per-store schema stamps.
+      #
+      # The tag is passed explicitly rather than left to the script's
+      # `$GITHUB_REF_NAME` fallback, because the `workflow_dispatch` path has no
+      # tag at all and would otherwise skip this entirely. An alpha published to
+      # TestPyPI is still a published artifact, so it is validated against the
+      # tag the tree claims it would be cut as.
+      - name: Validate the release unit
+        env:
+          VERSION: ${{ steps.artifacts.outputs.version }}
+          WHEEL: ${{ steps.artifacts.outputs.wheel }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          case "$tag" in
+            v*) ;;
+            *) tag="v${VERSION}" ;;
+          esac
+          echo "Validating the release unit as $tag"
+          uv run python packaging/verify_release_unit.py --tag "$tag" "$WHEEL"
+
       # Uploaded once and downloaded by every later job, so the bytes that are
       # published, attached to the Release, and hashed into the update manifest
       # are provably the same bytes. Rebuilding per job would give three
