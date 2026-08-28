@@ -115,6 +115,11 @@ def build_wheel(
     html: str | None = None,
     static_assets: tuple[str, ...] = (ENTRY_JS, ENTRY_CSS),
     shipped: tuple[str, ...] = SHIPPED_IN_WHEEL,
+    # A distribution is expected to carry no sidecars since 2026-08-28, but the
+    # default here stays `True`: the checks this file exercises must keep working
+    # for a wheel that has them, because that is what a regressed `artifacts`
+    # pattern would produce and it is the case worth still being right about.
+    sidecars: bool = True,
 ) -> Path:
     """Write a wheel-shaped zip. Every knob here is one way a release goes wrong."""
     members: dict[str, str] = {
@@ -140,9 +145,12 @@ def build_wheel(
         members["swe_mux/static/index.html"] = index_html() if html is None else html
         for name in static_assets:
             members[f"swe_mux/static/assets/{name}"] = f"/* {name} */\n"
-            # The compression postbuild writes a `.gz` beside every asset; they
-            # are in the wheel too and must not be counted as .js entry points.
-            members[f"swe_mux/static/assets/{name}.gz"] = "\x1f\x8b"
+            if sidecars:
+                # A `.gz` beside an asset must never be counted as the `.js` it
+                # compresses. The wheel no longer carries them, but this fixture
+                # keeps producing them because that is the shape the check has to
+                # stay right about if the packaging exclusion ever regresses.
+                members[f"swe_mux/static/assets/{name}.gz"] = "\x1f\x8b"
     elif html is not None:
         members["swe_mux/static/index.html"] = html
 
@@ -281,7 +289,13 @@ def test_an_index_with_no_assets_beside_it_fails(tmp_path: Path, source_assets: 
 def test_gz_sidecars_alone_do_not_satisfy_the_asset_check(
     tmp_path: Path, source_assets: Path
 ) -> None:
-    """`.js.gz` is not a `.js`; a tree of only sidecars serves nothing."""
+    """`.js.gz` is not a `.js`; a tree of only sidecars serves nothing.
+
+    Still the right question after 2026-08-28, when the wheel stopped carrying
+    sidecars at all: what keeps them out is a pattern in `pyproject.toml`, and a
+    pattern can regress. The failure this guards against is a `.gz` being counted
+    as the file it compresses, which is independent of how many of them ship.
+    """
     wheel = build_wheel(
         tmp_path / "gz-only.whl",
         with_frontend=False,
@@ -290,6 +304,31 @@ def test_gz_sidecars_alone_do_not_satisfy_the_asset_check(
     )
     report = run(wheel, source_assets)
     assert verdict(report, "frontend-assets") is False
+    # The count is reported so a reader can tell "no assets at all" from "only
+    # sidecars", which are different builds gone wrong in different ways.
+    assert "1 of them precompressed sidecars" in message(report, "frontend-assets")
+
+
+def test_the_sidecar_count_is_reported_rather_than_failed(
+    tmp_path: Path, source_assets: Path
+) -> None:
+    """A shipped sidecar is a size question, and this gate answers correctness ones.
+
+    The wheel is expected to carry none - `build_support.precompress_static` makes
+    them on first daemon start, which is worth 35% of the download - but a wheel
+    that carries some is still a *correct* wheel, so it passes and says so. The
+    mechanism that keeps them out is asserted where it lives
+    (`test_desktop.py::test_a_distribution_carries_no_precompressed_sidecar`).
+    """
+    report = run(build_wheel(tmp_path / "with-gz.whl"), source_assets)
+    assert verdict(report, "frontend-assets") is True
+    assert "precompressed sidecar(s) - a distribution is expected to carry none" in message(
+        report, "frontend-assets"
+    )
+
+    report = run(build_wheel(tmp_path / "no-gz.whl", sidecars=False), source_assets)
+    assert verdict(report, "frontend-assets") is True
+    assert "no precompressed sidecars" in message(report, "frontend-assets")
 
 
 def test_a_stale_index_beside_fresh_assets_fails_the_join(

@@ -153,7 +153,17 @@ Strict production build-id parsing from the served `index.html`, plus stat-keyed
 
 ### `build_support.py`
 
-Lock-safe staged frontend publication for desktop packaging.
+Lock-safe staged frontend publication for desktop packaging, and the gzip sidecars the static tree is served from.
+
+`precompress_static` is the daemon's `static-precompress` startup phase, in a thread because it is CPU-bound.
+It exists because a distribution carries no `.gz` at all - they were 4.43 MiB of a 12.70 MiB wheel, re-compressing what the zip container had already compressed - while aiohttp's `add_static` does no on-the-fly compression, so without them a phone over Tailscale fetches the 10.7 MiB ONNX runtime uncompressed.
+Measured: 2.02 s for all 40 on the first start after an install, 0.03 s and no writes on every start after that.
+Whether a sidecar is current is a **content** question and never a timestamp one: gzip records the CRC-32 and the length of what it was made from, so eight bytes off the sidecar against one CRC pass over the source settles it exactly, with no manifest to drift and no dependence on a host's timer granularity.
+A sidecar whose source is gone is swept; a tree it cannot write is counted and logged, never raised, because a read-only install is a slower UI and not a daemon that refuses to start.
+The temporary carries the pid, so two daemons sharing one source tree cannot interleave into one file.
+
+`frontend/scripts/compress-static.mjs` is the *other* producer and is not redundant: it keeps a `npm run build` from leaving the previous build's `index.html.gz` beside fresh content-hashed assets, which is a blank screen on a daemon nothing in that loop restarts.
+`test_desktop.py::test_the_python_and_node_precompressors_agree_on_the_rule` compares the two definitions of which files earn one.
 
 **Not:** Vite compilation, or runtime asset serving.
 
@@ -289,6 +299,9 @@ Its exit code composes the existing two rather than adding a scheme - `1` for a 
 Where this copy of swe-mux is installed and whether its commands can be reached: the install method (frozen, `uv tool`, `pipx`, virtual environment, system), the launcher directory, the tool-owned shim directory when one of ours is actually in it, and per command both its own path and what the bare name resolves to on `PATH`.
 It is the single source for the first-run hint `muxd` prints, `python -m swe_mux --where`, the `install.location` / `install.path` rows in `doctor_local.py`, and the target `shortcuts.py` points at, so the four cannot disagree about one filesystem.
 Every input is an argument with a live default - platform, `PATH`, scripts directory, environment, and the existence probe - so a Windows layout is described and asserted from any host.
+`extra_install_command` is the other thing it answers, added 2026-08-28: the command that adds an optional extra to *this* copy.
+Every diagnostic used to say `uv sync --extra <name>`, which needs a `pyproject.toml` and a `uv.lock` beside it - so the one audience most likely to read it, somebody who installed from PyPI and is looking at a capability that is simply not there, could not run it at all, and a remedy that cannot be run ends the search instead of continuing it.
+`source_checkout` is what `_detect_kind` cannot answer, because a `uv sync`ed checkout and a `pip install swe-mux` into a virtualenv are both `INSTALL_VENV` and take opposite advice; it is decided by layout (`<root>/src/swe_mux` beside a `pyproject.toml`), which is the only thing that actually differs.
 
 **Not:** changing anything, probing whether swe-mux *works*, or collapsing "the launcher is absent" into "the launcher is unreachable", which are different faults with different fixes.
 Nor reporting an install that shipped no commands as reachable: `all()` over an empty set is vacuously true and would answer the question backwards.

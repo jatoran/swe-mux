@@ -290,21 +290,45 @@ def _static_asset_names(names: Sequence[str]) -> list[str]:
 
 
 def _check_frontend_assets(contents: WheelContents) -> Check:
+    """A `.js.gz` is not a `.js`; a tree of only sidecars serves nothing.
+
+    That distinction has been load-bearing since this check was written and it did
+    not stop being so when the wheel stopped carrying sidecars (2026-08-28,
+    `.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 1): the exclusion is a
+    pattern in `pyproject.toml`, and a pattern can regress. If it ever does, the
+    thing that must not happen is a `.gz` being counted as the file it compresses -
+    which is exactly what an `endswith(".js")` test on the sidecar's own name would
+    do wrong if it were written as a substring search. So the sidecars are counted
+    and reported separately rather than lumped into a total, and a tree holding
+    only them still fails.
+    """
     assets = _static_asset_names(contents.names)
     scripts = [name for name in assets if name.endswith(".js")]
+    sidecars = [name for name in assets if name.endswith(".gz")]
     if not scripts:
         return Check(
             "frontend-assets",
             False,
             f"{STATIC_ASSETS}/ contains no .js file "
-            f"({len(assets)} entries under it in total).",
+            f"({len(assets)} entries under it in total, {len(sidecars)} of them "
+            "precompressed sidecars, which serve nothing on their own).",
             f"The frontend bundle is missing from the wheel: {_BUILD_FRONTEND}.",
         )
+    # A distribution is expected to carry none: the daemon regenerates them on
+    # first start (`build_support.precompress_static`), which is worth 35% of the
+    # download. Reported as a count rather than as a failure, because an extra file
+    # is a size question and this gate answers correctness ones.
+    extra = (
+        f", plus {len(sidecars)} precompressed sidecar(s) - a distribution is "
+        "expected to carry none"
+        if sidecars
+        else ", and no precompressed sidecars, which is what a distribution should carry"
+    )
     return Check(
         "frontend-assets",
         True,
         f"{len(scripts)} .js asset(s) under {STATIC_ASSETS}/ "
-        f"({len(assets)} entries including stylesheets and .gz sidecars).",
+        f"({len(assets)} entries including stylesheets{extra}).",
     )
 
 

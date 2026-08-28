@@ -123,7 +123,11 @@ install-wide, so the tab edits them directly for the focused session.
   It is edited in Settings → Voice → Spoken summary and indexed from
   Settings → Accounts → Models.
 - **The on-device speech closure sits behind the `voice-local` extra** (`pyproject.toml`):
-  onnxruntime, faster-whisper, misaki, spaCy, `en_core_web_sm`, and num2words.
+  onnxruntime, faster-whisper, misaki, spaCy, num2words, and the numpy/ctranslate2 those two
+  are used through.
+  `en_core_web_sm` is deliberately *not* in that list any more - it is unpublishable, so it is
+  declared in the `g2p-model` dependency group and downloaded at first use; see the G2P store
+  below.
   Roughly 400 MB of wheels for a capability the OS voice engine and the browser's own speech
   stack already cover in degraded form, so a plain `uv sync` leaves it out.
   Every call site imports lazily and answers with a typed diagnostic naming the extra, so an
@@ -187,6 +191,30 @@ install-wide, so the tab edits them directly for the focused session.
   loaded. Settings → Voice → TTS provider owns the download with visible progress
   (`voice_model_progress` events); `kokoro` is selectable but reports itself unavailable
   until the model is `ready`. English voices only, because the phonemizer is English-only.
+- **The G2P's spaCy model is downloaded too, since 2026-08-28, and for a packaging reason
+  rather than a size one** (`voice_models.SpacyModelStore`).
+  `en-core-web-sm` is published as a GitHub release asset and exists on no index, so declaring
+  it in the `voice-local` extra put a bare unresolvable `Requires-Dist` in the wheel and made
+  `pip install "swe-mux[voice-local]"` fail outright for every downstream user of 0.1.0
+  ([`../../development/DEPENDENCY_AUDIT_2026-08-28.md`](../../development/DEPENDENCY_AUDIT_2026-08-28.md) § 4).
+  It now lives in the unpublished `g2p-model` dependency group - which keeps the development
+  checkout, both CI legs and the desktop build resolving it exactly as before - and an
+  installed copy acquires it the way it already acquires the Kokoro weights: pinned URL,
+  SHA-256 verified, unpacked whole (`.dist-info` included) under
+  `<data_dir>/voice-models/spacy/site`, which `activate()` puts on `sys.path` so
+  `spacy.load("en_core_web_sm")` resolves without the daemon writing into its own environment.
+  It is **its own store and its own row**, reported beside the weights in Settings → Voice and
+  as a distinct `voice_g2p` optional-asset row, because `installed` (the environment resolves
+  the distribution) and `downloaded` (this daemon fetched it) are one working state reached two
+  ways and only the second is anything an operator can act on.
+  One press acquires both: `POST /api/voice/models/kokoro/download` starts each store, and the
+  `voice_model_progress` events carry `model: "kokoro"` or `model: "g2p"` so the panel can tell
+  them apart.
+  The refusal in `kokoro_tts._ensure_g2p` is load-bearing rather than defensive: misaki's
+  `G2P.__init__` reads `if not spacy.util.is_package(name): spacy.cli.download(name)`, which
+  shells out to `pip install` from inside the synthesis path - into the venv of a source
+  checkout, and into nothing at all in a frozen app - so an absent model has to be a typed
+  `KokoroError` naming the remedy before `en.G2P` is ever constructed.
 - **Phonemization is lexicon-only misaki with `fallback=None`, and no espeak-ng package may
   enter the closure** (`kokoro_tts.py`). The engine refuses to construct if an espeak wrapper
   is importable. Out-of-vocabulary words go through a repair ladder — project lexicon

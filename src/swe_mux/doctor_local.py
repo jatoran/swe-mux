@@ -83,18 +83,25 @@ MINIMUM_PYTHON = (3, 12)
 # interpreter - so whether `edge_tts` resolves *in this environment* says nothing
 # about whether the feature works, and a row asserting otherwise would be a
 # confident wrong answer.
-_EXTRAS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+#
+# The install command is NOT a fourth column here any more, and that is the point
+# of the change: it used to read `uv sync --extra voice-local`, which is a
+# source-checkout command needing a `pyproject.toml` and a `uv.lock` beside it. The
+# audience most likely to read this row is somebody who installed from PyPI and is
+# looking at a capability that is simply not there, and a remedy they cannot run
+# ends their search rather than continuing it. `install_location.
+# extra_install_command` derives one that this copy of swe-mux can actually run
+# (`.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 4).
+_EXTRAS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "desktop",
         "Desktop shell (tray + WebView)",
         ("pystray", "webview"),
-        "uv sync --extra desktop",
     ),
     (
         "voice-local",
         "On-device speech (Kokoro TTS + Whisper dictation)",
         ("faster_whisper", "onnxruntime", "misaki"),
-        "uv sync --extra voice-local",
     ),
 )
 
@@ -198,7 +205,7 @@ def _extra_probe() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """
     return tuple(
         (name, tuple(module for module in modules if not _module_resolves(module)))
-        for name, _, modules, _ in _EXTRAS
+        for name, _, modules in _EXTRAS
     )
 
 
@@ -773,10 +780,15 @@ def _extras_checks() -> list[dict[str, Any]]:
     and each row carries the exact install command so the next step is not a
     documentation hunt.
     """
+    from .install_location import detect_install_location, extra_install_command
+
     frozen = bool(getattr(sys, "frozen", False))
     probed = dict(_extra_probe())
+    # Resolved once: it reads the filesystem and the environment, and every row
+    # is about the same installation.
+    location = detect_install_location()
     checks: list[dict[str, Any]] = []
-    for name, label, _modules, install in _EXTRAS:
+    for name, label, _modules in _EXTRAS:
         if name == "desktop" and not IS_WINDOWS:
             # The extra's own markers are `sys_platform == 'win32'`, so it resolves
             # to nothing elsewhere; "not installed" would read as a fixable gap.
@@ -814,13 +826,13 @@ def _extras_checks() -> list[dict[str, Any]]:
                 severity="optional",
                 detail=f"The {name} extra is not installed (missing "
                 f"{', '.join(missing)}); this capability is unavailable.",
-                # Extras are fixed at build time in the frozen app, so `uv sync`
-                # there would be advice about a different installation.
+                # Extras are fixed at build time in the frozen app, so an install
+                # command there would be advice about a different installation.
                 remedy=(
                     "Rebuild the desktop app with this extra installed in the build "
                     "environment."
                     if frozen
-                    else install
+                    else extra_install_command(name, location)
                 ),
             )
         )
@@ -853,19 +865,31 @@ def _optional_asset_rows_local(config: Config | None) -> list[dict[str, Any]]:
 
     voice: dict[str, Any] = {}
     if config is not None:
-        from .voice_models import KokoroModelStore, WhisperModelStore
+        from .voice_models import KokoroModelStore, SpacyModelStore, WhisperModelStore
 
         voice = {
             "tts_enabled": config.tts_enabled,
             "tts_engine": config.tts_engine,
             "stt_enabled": config.stt_enabled,
             "stt_engine": config.stt_engine,
-            "kokoro": KokoroModelStore(config.data_dir).status(),
+            # Same nesting the daemon report uses (`VoiceService.kokoro_model_status`),
+            # because `optional_asset_rows` reads the G2P state out of the Kokoro
+            # entry and the two reports must not describe it differently.
+            "kokoro": {
+                **KokoroModelStore(config.data_dir).status(),
+                "g2p": SpacyModelStore(config.data_dir).status(),
+            },
             "whisper": WhisperModelStore().statuses(
                 config.stt_whisper_model, config.stt_routing_model
             ),
         }
-    return optional_asset_rows(capture=capture_capability().as_dict(), voice=voice)
+    from .install_location import extra_install_command
+
+    return optional_asset_rows(
+        capture=capture_capability().as_dict(),
+        voice=voice,
+        voice_local_install=extra_install_command("voice-local"),
+    )
 
 
 def _optional_asset_local_checks(config: Config | None) -> list[dict[str, Any]]:

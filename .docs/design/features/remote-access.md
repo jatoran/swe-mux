@@ -143,8 +143,14 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   through a loopback peer, which covers the local Tailscale Serve proxy without trusting a
   direct tailnet client's header.
 - Dynamic JSON and text responses of at least 1 KiB negotiate compression.
-  Production frontend builds also create gzip siblings for eligible static assets, which
-  aiohttp serves according to `Accept-Encoding`.
+  Eligible static assets get a gzip sibling, which aiohttp's `FileResponse` serves according to `Accept-Encoding`; `add_static` does no on-the-fly compression, so a missing sibling means the file goes out uncompressed and nothing says so.
+- **The sibling has two producers and one rule, because it is required at run time and not worth shipping.**
+  Measured 2026-08-28: the 40 sidecars were 4.43 MiB of a 12.70 MiB wheel, every one of them beside its own plain sibling in the same archive - 35% of the download spent re-compressing what the zip container had already compressed ([`../../development/DEPENDENCY_AUDIT_2026-08-28.md`](../../development/DEPENDENCY_AUDIT_2026-08-28.md) § 1).
+  So a distribution carries none (a negated `artifacts` pattern in `pyproject.toml`), and they are made instead:
+  - `frontend/scripts/compress-static.mjs` writes them at build time, which is what stops a `npm run build` leaving the *previous* build's `index.html.gz` beside fresh content-hashed assets. That is a blank screen rather than a slow page, on a daemon nothing in that loop restarts.
+  - `build_support.precompress_static` writes them at daemon start, as the `static-precompress` phase. This is the one an installed copy ever runs: measured 2.02 s for all 40 on the first start after an install or an upgrade, and a 0.03 s pass that writes nothing on every start after that.
+  Which files earn a sidecar is stated twice and asserted rather than remembered (`test_desktop.py::test_the_python_and_node_precompressors_agree_on_the_rule`).
+  Whether an existing sidecar is current is a **content** question, never a timestamp one: gzip records the CRC-32 and the length of what it was made from, so eight bytes off the sidecar against one CRC pass over the source settles it, and this host's 1 ms timer against a bare runner's 15.625 ms cannot come into it.
 - The root document uses `Cache-Control: no-cache, must-revalidate` because it names content-addressed assets and carries the production UI identity.
   Hashed `/assets/` responses use a one-year immutable cache because a changed payload receives a changed filename.
 - The three Git readings - `GET /api/git/worktrees`, `/api/git/graph`, and `/api/git/provenance` - are the **conditional** API responses: a weak `ETag` over the exact bytes served, with `Cache-Control: no-cache`.
@@ -221,7 +227,9 @@ the Serve route is shared regardless of which port or data directory a daemon us
 - Listener/config policy: `src/swe_mux/config.py`, `src/swe_mux/__main__.py`
 - Browser boundary and status route: `src/swe_mux/server.py`
 - Traffic accounting and dynamic compression: `src/swe_mux/network_usage.py`
-- Static precompression: `frontend/scripts/compress-static.mjs`
+- Static precompression: `frontend/scripts/compress-static.mjs` (build time),
+  `src/swe_mux/build_support.py` (`precompress_static`, the `static-precompress` daemon phase),
+  `pyproject.toml` (the negated `artifacts` pattern that keeps them out of a distribution)
 - Tailscale inspection, connection-state classifier, and bounded Serve setup:
   `src/swe_mux/tailscale.py`
 - Windows Defender Firewall inspect and repair (platform-gated): `src/swe_mux/windows_firewall.py`

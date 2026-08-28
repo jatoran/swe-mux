@@ -637,7 +637,8 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
         missing = build_desktop.missing_extra_distributions()
         if missing:
             extras = " ".join(
-                f"--extra {extra}" for extra in build_desktop.REQUIRED_BUILD_EXTRAS
+                [f"--extra {extra}" for extra in build_desktop.REQUIRED_BUILD_EXTRAS]
+                + [f"--group {group}" for group in build_desktop.REQUIRED_BUILD_GROUPS]
             )
             log(
                 "ABORT: the build environment is missing "

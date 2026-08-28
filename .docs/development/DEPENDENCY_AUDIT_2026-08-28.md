@@ -7,6 +7,42 @@ published artifact.
 This is a report.
 It changes no dependency, no lockfile, and no source file.
 
+**What was done with it (WP-DEPFIX, 2026-08-28).**
+Recorded here rather than by editing the findings, because the measurements below are the evidence
+the changes were made against and rewriting them would destroy it.
+Read the numbers in § 1-§ 11 as the *before* state.
+
+| Finding | Outcome |
+| --- | --- |
+| S1, stop shipping the 40 `.gz` sidecars | **Done.** A negated `artifacts` pattern in `pyproject.toml` keeps them out of the wheel and the sdist, and `build_support.precompress_static` regenerates them as the daemon's `static-precompress` startup phase. Measured after: 12.70 -> 8.26 MiB of members (-35.0%), 346 -> 306 entries. `frontend/scripts/compress-static.mjs` is deliberately **kept** as the build-time producer, because a `npm run build` that left the previous build's `index.html.gz` beside fresh content-hashed assets is a blank screen on a daemon nothing in that loop restarts; the two definitions of which files earn a sidecar are compared by a test rather than trusted. |
+| S2, declare `cryptography` and `py-vapid` | **Done**, in `dependencies`. No change to the resolved closure - both were already installed transitively - which is the point. |
+| S3, declare `numpy` and `ctranslate2` | **Done**, in `voice-local`. Same reasoning, same absence of size cost. |
+| S4, make `swe-mux[voice-local]` installable | **Done.** `en-core-web-sm` left published metadata for the unpublished `g2p-model` dependency group, and an installed copy fetches it at first use (`voice_models.SpacyModelStore`). `doctor_local`'s remedy is now derived from how this copy was installed rather than being a fixed `uv sync` command. |
+| D1, move `mcp` to an extra | **Refused by the operator.** The MCP surface works out of the box and stays in base dependencies; the 38 MiB and 20 s are accepted. Do not re-propose it. |
+| D2, `pillow` out of base | Not done, per the recommendation. |
+| D3, how `voice-local` gets its spaCy model | Decided: the first option (runtime acquisition), for the reasons § 10 gives. |
+| D4, browser-voice assets to first-use download | Not done, per the recommendation - S1 first, and it is now measured. |
+| D5, `http-ece`'s missing wheel | Not done; upstream. |
+
+**One thing this report understated, found while acting on it.**
+§ 4 treats the broken declaration as a metadata defect, which it is - but the runtime half is
+sharper than "the extra does not install". misaki's `en.G2P.__init__` reads
+`if not spacy.util.is_package(name): spacy.cli.download(name)`, and `spacy.cli.download` shells out
+to `pip install`. So on any install where the model is absent, the *first spoken sentence* would
+have triggered a pip install from inside the synthesis path, on a worker thread - into the venv of
+a source checkout, and into nothing at all in a frozen app, which has no pip to reach.
+Making the model optional without also refusing that path would have replaced a broken install with
+a silent one. `kokoro_tts._ensure_g2p` now raises a typed `KokoroError` before `en.G2P` is
+constructed at all.
+
+**And one thing it got right that is worth restating.**
+§ 8's note that moving something out of `DISTRIBUTED_EXTRAS` narrows the audited closure applies to
+dependency *groups* too, which the walk did not read at all. `g2p-model` is unpublished and
+redistributed at the same time - `packaging/swe_mux.spec` collects it into
+`_internal/en_core_web_sm/` - so `license_audit.DISTRIBUTED_GROUPS` and
+`build_desktop.REQUIRED_BUILD_GROUPS` both name it, and the generated notices and sidecar came back
+byte-identical, which is the check that the closure did not move.
+
 ## What the numbers say in one paragraph
 
 The 13.3 MB wheel is not a Python dependency problem.

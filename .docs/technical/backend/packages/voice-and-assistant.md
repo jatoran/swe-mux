@@ -83,7 +83,7 @@ The direct-onnxruntime Kokoro-82M engine: espeak-free misaki G2P (`fallback=None
 
 ## `voice_models.py`
 
-Both on-demand speech models, under one `not_downloaded`/`downloading`/`ready`/`error` vocabulary, because an operator should learn one shape for every asset swe-mux fetches.
+All three on-demand speech models, under one `not_downloaded`/`downloading`/`ready`/`error` vocabulary, because an operator should learn one shape for every asset swe-mux fetches.
 
 `KokoroModelStore` (TTS) is the pinned, per-file SHA-256-verified download under `<data_dir>/voice-models/kokoro`: a state whose `error` can never load, progress callbacks, and restart-interruption detection.
 It hand-rolls the transfer, which is why it can report bytes.
@@ -93,10 +93,20 @@ The cache is authoritative for `ready` - the hub writes atomically, and that res
 It reports **no** byte progress: `faster_whisper.download_model` disables the hub's progress hook, so there is nothing to observe, and a proportion derived from an expected total would be an estimate presented as a reading.
 `WHISPER_APPROXIMATE_MB` gives the operator the rough cost before they press Download, labelled approximate, and an unlisted name reports no size rather than a guessed one.
 
-The rule both stores enforce: **a download happens only from an explicit act.**
+`SpacyModelStore` (the Kokoro G2P's spaCy model) is the newest of the three and is here for a **packaging** reason rather than a size one.
+`en-core-web-sm` is published as a GitHub release asset and exists on no index, so declaring it in the `voice-local` extra put a bare unresolvable `Requires-Dist` in the wheel and made `pip install "swe-mux[voice-local]"` fail outright for every downstream user of 0.1.0 (`development/DEPENDENCY_AUDIT_2026-08-28.md` § 4).
+It is declared in the unpublished `g2p-model` dependency group and acquired here: pinned URL, SHA-256 verified in memory before anything touches disk, unpacked whole into `<data_dir>/voice-models/spacy/site` and swapped into place.
+`activate()` puts that directory on `sys.path` rather than writing into `site-packages`, because spaCy resolves a bare model name through `importlib.metadata.distribution` and not through importability - so the `.dist-info` has to come along, and a package directory alone would import and still not load.
+It short-circuits when the environment already resolves the distribution, which is why a source checkout and the frozen bundle are untouched by any of this.
+`_source()` is derived from whether that entry is on `sys.path`, never remembered: `installed` and `downloaded` are one working state reached two ways, and a flag set at one moment reported the wrong one the first time it was written.
+
+The refusal it depends on lives in `kokoro_tts._ensure_g2p`: misaki's `G2P.__init__` reads `if not spacy.util.is_package(name): spacy.cli.download(name)`, which shells out to `pip install` from inside the synthesis path - into the venv of a source checkout, and into nothing at all in a frozen app.
+That is what makes an absent model a reported state rather than an unrequested install.
+
+The rule all three stores enforce: **a download happens only from an explicit act.**
 `VoiceService._require_whisper_weights` refuses transcription rather than letting `WhisperModel(name)` fetch the weights inside the decode path, and `_ensure_whisper_model` skips an absent *routing* model instead of constructing it, because construction is the download.
 
-The third first-use asset, the browser-side Silero VAD, is deliberately not here and does not download: its WASM runtime and ONNX model are emitted into the frontend bundle by Vite and served same-origin by this daemon.
+The fourth first-use asset, the browser-side Silero VAD, is deliberately not here and does not download: its WASM runtime and ONNX model are emitted into the frontend bundle by Vite and served same-origin by this daemon.
 
 **Not:** bundling models, loading them (`kokoro_tts.py`), any unpinned Kokoro revision, or downloading anything a human did not ask for.
 

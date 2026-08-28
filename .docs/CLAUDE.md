@@ -205,6 +205,25 @@
   through it, so `build_desktop.verify_build_extras_installed` and the
   `redeploy_desktop` preflight both refuse a build without it rather than shipping
   a bundle whose `_internal/num2words/` is missing.
+  A second rule, added 2026-08-28 after `swe-mux[voice-local]` turned out to be
+  **uninstallable by anyone** for the whole life of 0.1.0
+  (`development/DEPENDENCY_AUDIT_2026-08-28.md` § 4): **a `[tool.uv.sources]` entry is a
+  property of this repository's resolution and is not carried in a wheel's `Requires-Dist`,
+  so nothing that needs one may be a published requirement.** `en-core-web-sm` exists on no
+  index and was declared in the extra, so pip and uv both refused the whole extra outright -
+  and no gate, no test and no CI job noticed, because nothing anywhere installs an extra from
+  an index. It now lives in the `g2p-model` PEP 735 dependency **group**, which a wheel never
+  carries, and an installed copy acquires it at first use (`voice_models.SpacyModelStore`).
+  Three consequences follow and each is enforced rather than remembered. A group that ships
+  has to be named in `license_audit.DISTRIBUTED_GROUPS` *and* in
+  `build_desktop.REQUIRED_BUILD_GROUPS`, or the audited closure and the bundle stop describing
+  each other. A direct URL is not an escape hatch, because PyPI rejects a distribution whose
+  `Requires-Dist` contains one. And `tests/test_dependency_declarations.py` asserts the rule
+  from both sides - no published requirement may name a `[tool.uv.sources]` entry, and every
+  published requirement must have resolved from a registry in `uv.lock`.
+  The same document's § 5 and § 6 are worth reading before removing anything: `tzdata` is
+  imported nowhere and must never be removed on that evidence, while `cryptography`,
+  `py-vapid`, `numpy`, and `ctranslate2` were imported directly and declared nowhere.
 - Changing the project's own license, trademark posture, contribution terms, or how swe-mux
   describes its relationship to the agent vendors: `LICENSE`, `NOTICE`, `TRADEMARK.md`,
   `CONTRIBUTING.md`, `README.md`, `site/index.html`,

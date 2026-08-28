@@ -49,6 +49,7 @@ from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
 from .behavioral_consumers import BehavioralConsumerService
+from .build_support import precompress_static
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
 from .config import Config
@@ -751,11 +752,49 @@ async def _restore_durable_sessions(
         log.exception("could not sweep orphan recovery directories")
 
 
+def _precompress_frontend(frontend_dir: Path) -> None:
+    """Refresh the static tree's gzip sidecars, and say what that cost.
+
+    Reported at INFO only when it did something, because the steady state is a
+    no-op and a line on every start would train a reader to skip it. A failure is
+    a WARNING and never an exception: a static tree on a read-only filesystem
+    means larger downloads, which is not a reason to refuse to start.
+    """
+    result = precompress_static(frontend_dir)
+    if result.failed:
+        log.warning(
+            "could not precompress %d static asset(s) under %s; they will be served "
+            "uncompressed",
+            result.failed,
+            frontend_dir,
+        )
+    if result.changed:
+        log.info(
+            "precompressed %d static asset(s) in %.2fs (%d already current, %d orphan "
+            "sidecar(s) removed, %d -> %d bytes)",
+            result.written,
+            result.seconds,
+            result.kept,
+            result.orphans_removed,
+            result.source_bytes,
+            result.encoded_bytes,
+        )
+
+
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline
 ) -> None:
     config: Config = app[keys.CONFIG]
     background.start(LIFECYCLE_HEARTBEAT_LOOP, lambda: _lifecycle_heartbeat_loop(config.data_dir))
+    # First, because it is the UI's own readiness and depends on nothing else
+    # here. The wheel and the sdist deliberately carry no precompressed sidecars
+    # (they were 35% of the download, re-compressing what the archive had already
+    # compressed), so the daemon makes them instead: a measured 0.93 s once, after
+    # an install or an upgrade, and a stat-and-CRC pass that writes nothing on
+    # every start after that. In a thread because it is CPU-bound and this path
+    # must not block the event loop the health endpoint answers on.
+    timeline.mark("static-precompress")
+    await asyncio.to_thread(_precompress_frontend, app[keys.FRONTEND_DIR])
     # `PRAGMA quick_check` reads every page of the database and eleven stores
     # share `mux.db`, so this used to be paid eleven times, on the event loop,
     # inside whichever store constructor happened to touch the file first: 11.5s

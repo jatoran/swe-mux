@@ -38,6 +38,7 @@ from swe_mux.sqlite_store import (
     verify_database,
 )
 from swe_mux.startup_phases import UNNAMED_PHASE, StartupTimeline
+from tests.support.settle import until
 
 # --------------------------------------------------------------- the timeline
 
@@ -269,6 +270,17 @@ async def test_the_daemon_answers_its_phase_while_the_runtime_is_still_building(
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
+        # The build reaches `database-integrity` through earlier phases that do
+        # real work off the loop (`static-precompress` reads and CRCs the whole
+        # served frontend tree), so the phase this test holds open is not
+        # necessarily the one in flight the instant the listener opens. Waiting
+        # for the condition rather than asserting on a race is the rule CLAUDE.md
+        # records: a fixed sleep here would redden the gate over machine load.
+        timeline: StartupTimeline = app[keys.STARTUP]
+        await until(
+            lambda: timeline.snapshot()["phase"] == "database-integrity",
+            what="the build to reach database-integrity",
+        )
         health = await client.get("/api/health")
         assert health.status == 503
         payload = await health.json()

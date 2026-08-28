@@ -391,7 +391,49 @@ def test_an_absent_extra_is_unavailable_and_carries_its_install_command(
     # Not installed is not broken, so it must not read as a warning.
     assert voice["status"] == "unavailable"
     assert voice["severity"] == "optional"
+    # This runs from the repository, so the source-checkout command is the right
+    # answer here. What it must NOT be any more is that command *unconditionally*:
+    # `test_an_absent_extra_remedy_is_runnable_by_whoever_reads_it` below covers
+    # the installed shapes, which is where the old fixed string was unrunnable.
     assert voice["remedy"] == "uv sync --extra voice-local"
+
+
+def test_an_absent_extra_remedy_is_runnable_by_whoever_reads_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A PyPI install cannot run `uv sync`, and used to be told to.
+
+    `swe-mux[voice-local]` is exactly the row this matters for: the reader is
+    someone whose dictation does nothing, and the one line the report gives them
+    has to be a command their installation actually accepts. The remedy is now
+    derived from how this copy got here (`install_location.extra_install_command`),
+    so the assertion is that a `pipx` install is told about `pipx`.
+    """
+    from swe_mux.install_location import detect_install_location
+
+    # A pipx layout: the marker file at the environment root is what identifies
+    # it, and the package sits in site-packages rather than beside a pyproject.
+    root = tmp_path / "pipx-venv"
+    (root / "Lib" / "site-packages" / "swe_mux").mkdir(parents=True)
+    (root / "pipx_metadata.json").write_text("{}", encoding="utf-8")
+    location = detect_install_location(
+        frozen=False,
+        package_dir=root / "Lib" / "site-packages" / "swe_mux",
+        prefix=str(root),
+        base_prefix=str(tmp_path / "python"),
+        scripts_dir=root / "Scripts",
+        path="",
+        home=tmp_path / "home",
+        environ={},
+        windows=True,
+    )
+    monkeypatch.setattr(doctor_local, "_module_resolves", lambda _: False)
+    monkeypatch.delattr(doctor_local.sys, "frozen", raising=False)
+    monkeypatch.setattr(
+        "swe_mux.install_location.detect_install_location", lambda **_: location
+    )
+    checks = {check["id"]: check for check in doctor_local._extras_checks()}
+    assert checks["extra.voice-local"]["remedy"] == 'pipx install --force "swe-mux[voice-local]"'
 
 
 def test_preview_capture_is_reported_once_by_the_asset_row_that_knows_more() -> None:
@@ -401,7 +443,7 @@ def test_preview_capture_is_reported_once_by_the_asset_row_that_knows_more() -> 
     installed and has no Chromium" and carries the right command for each; a
     second `extra.preview-capture` row would answer half that question twice.
     """
-    assert "preview-capture" not in {name for name, _, _, _ in doctor_local._EXTRAS}
+    assert "preview-capture" not in {name for name, _, _ in doctor_local._EXTRAS}
 
 
 def test_a_present_extra_reports_ok(monkeypatch: pytest.MonkeyPatch) -> None:

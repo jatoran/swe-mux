@@ -75,6 +75,21 @@ NOTICES = ROOT / "THIRD-PARTY-NOTICES.md"
 # explicitly and the artifact half rejects it if it appears under `_internal/`.
 DISTRIBUTED_EXTRAS = ("desktop", "voice-local")
 
+# Dependency *groups* whose packages are redistributed in the desktop bundle.
+# Groups are normally the opposite of that - `pyinstaller` is GPL-2.0-with-
+# exception and is a build tool that never reaches a user, which is why
+# `python_closure` excludes groups by default and says so.
+#
+# `g2p-model` is the exception and needs naming rather than assuming. It holds
+# `en-core-web-sm`, which is a group member only because it cannot be published
+# in `Requires-Dist` at all (it exists on no index; see the note on
+# `voice-local` in `pyproject.toml`), and `packaging/swe_mux.spec` collects it
+# into `_internal/en_core_web_sm/`. So it is unpublished and shipped at the same
+# time, and a walk that could not see it would report a bundle it does not
+# describe - the same failure `DISTRIBUTED_EXTRAS` exists to prevent for
+# `voice-local`'s LGPL `num2words`.
+DISTRIBUTED_GROUPS = ("g2p-model",)
+
 # The environments swe-mux is distributed for. A dependency counts as shipped if
 # it is reachable on ANY of them, because the Linux artifact carries Linux-only
 # packages whether or not the audit runs on Windows. `requires-python = ">=3.12"`
@@ -265,7 +280,9 @@ def python_closure(lock_path: Path = UV_LOCK) -> dict[str, str]:
 
     Dev groups are excluded deliberately: `pyinstaller` is GPL-2.0-with-exception
     and is a build tool that is never distributed, so including it would make the
-    gate cry wolf on the one copyleft package that genuinely cannot matter.
+    gate cry wolf on the one copyleft package that genuinely cannot matter. The
+    named exceptions are `DISTRIBUTED_GROUPS`, which are groups whose members do
+    ship - see that constant for why one exists at all.
     """
     data = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     packages = {entry["name"]: entry for entry in data.get("package", [])}
@@ -288,6 +305,18 @@ def python_closure(lock_path: Path = UV_LOCK) -> dict[str, str]:
             for dep in optional.get(extra, [])
             if _reachable(dep.get("marker"))
         ]
+    # uv records PEP 735 groups under `dev-dependencies`, resolving
+    # `include-group` before it writes them, so a group that includes another
+    # arrives here already flattened.
+    groups = root.get("dev-dependencies", {})
+    for group in DISTRIBUTED_GROUPS:
+        members = groups.get(group)
+        if members is None:
+            raise SystemExit(
+                f"{lock_path} has no dev-dependency group {group!r}; "
+                "DISTRIBUTED_GROUPS names a group that no longer exists."
+            )
+        seeds += [dep["name"] for dep in members if _reachable(dep.get("marker"))]
 
     seen: dict[str, str] = {}
     queue = list(seeds)

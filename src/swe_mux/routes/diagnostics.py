@@ -730,6 +730,7 @@ def _optional_asset_report(app: web.Application) -> list[dict[str, Any]]:
     establish, and a diagnostics read is the last place to break it.
     """
     from ..doctor import optional_asset_rows
+    from ..install_location import extra_install_command
     from ..preview_capture import capture_capability
     from ..voice import COMMAND_PROFILE
 
@@ -742,11 +743,15 @@ def _optional_asset_report(app: web.Application) -> list[dict[str, Any]]:
         "stt_engine": config.stt_engine,
     }
     if voice_service is not None:
-        voice["kokoro"] = voice_service.kokoro_models.status()
+        voice["kokoro"] = voice_service.kokoro_model_status()
         voice["whisper"] = voice_service.whisper_models.statuses(
             config.stt_whisper_model, voice_service.decode_model(COMMAND_PROFILE)
         )
-    return optional_asset_rows(capture=capture_capability().as_dict(), voice=voice)
+    return optional_asset_rows(
+        capture=capture_capability().as_dict(),
+        voice=voice,
+        voice_local_install=extra_install_command("voice-local"),
+    )
 
 
 def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:
