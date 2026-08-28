@@ -1,0 +1,93 @@
+# Redraws the roadmap page's "Most requested" block from the Ideas discussions.
+#
+# Feature requests for swe-mux are GitHub Discussions in the `Ideas` category and
+# a thumbs-up on one is a vote. `site/tools/ideas.py` reads them into
+# `site/content/ideas.json` and `site/tools/build.py` renders the page from that;
+# this workflow is only the clock and the commit.
+#
+# It writes data, never markup. Everything about how the block reads lives in
+# `site/content/roadmap.html` and `site/tools/build.py`, which change through the
+# ordinary site gates - an unattended job that could write HTML onto a published
+# page is a second author for that page, and it is the one nobody reviews.
+#
+# Daily is ample. Votes accumulate over weeks, the page carries no timestamp, and
+# a shorter interval would buy nothing but commits.
+#
+# The built-in `GITHUB_TOKEN` and nothing else. Reading public discussions needs
+# no secret and no PAT, so there is no stored credential on this path at all.
+name: ideas
+
+on:
+  schedule:
+    # 06:17 UTC. Off the hour on purpose: the top of every hour is when GitHub's
+    # scheduler is most congested and a cron there is the one that slips.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  # `contents: write` pushes the regenerated page. `actions: write` dispatches
+  # `pages.yml`; see the deploy step for why that is needed rather than relying
+  # on the push.
+  contents: write
+  actions: write
+
+# Its own group, not `pages`: that group belongs to the deployment itself, which
+# runs inside `pages.yml`. Two of these overlapping would race on one branch.
+concurrency:
+  group: ideas
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `setup-python`: the runner image ships a 3.12, this reads the API
+      # through `urllib` and writes JSON, and neither `ideas.py` nor `build.py`
+      # imports anything outside the standard library.
+      - name: Read the top-reacted Ideas discussions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 site/tools/ideas.py
+
+      - name: Regenerate the site pages
+        run: python3 site/tools/build.py
+
+      # `git diff` over the whole tree rather than over the two files this is
+      # expected to touch: if a third page moves, that is a stale generated page
+      # somebody committed without regenerating, and committing it here quietly
+      # is how it stays unnoticed. It is reported and still committed, because
+      # leaving master with a page `build.py --check` fails on is worse.
+      - name: Commit the regenerated page
+        id: commit
+        run: |
+          if git diff --quiet -- site/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing changed; no commit and no deployment."
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git diff --stat -- site/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- site/
+          git commit -m "Refresh the roadmap's most-requested block from Ideas votes"
+          git push
+
+      # A push made with `GITHUB_TOKEN` deliberately does not start another
+      # workflow run, which is what stops a committing job from triggering
+      # itself. `pages.yml` is path-filtered on `site/**` and would otherwise
+      # have deployed this - so without an explicit dispatch the regenerated page
+      # sits on master until somebody else edits the site, and the block silently
+      # runs days behind the votes it claims to show.
+      #
+      # `workflow_dispatch` is the documented exception to that rule: it always
+      # creates a run, `GITHUB_TOKEN` or not. `pages.yml` already accepts it, so
+      # nothing there changes and there is exactly one deployment definition.
+      - name: Deploy the regenerated page
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref master

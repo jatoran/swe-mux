@@ -1,0 +1,117 @@
+# The form behind Discussions -> Ideas, which is where feature requests for
+# swe-mux go. The filename is the category's slug and that is the whole binding:
+# rename the category and this file stops being used, silently.
+#
+# It asks for the problem and not the solution, on purpose. Two proposed
+# implementations cannot be weighed against each other - whoever reads them has
+# to reverse-engineer the need out of each one first, and half the time the need
+# is already met by something the author did not know was there. Stating the
+# problem also lets a request be answered by the roadmap's "deliberately not on
+# the roadmap" section, which is the cheapest answer available and impossible to
+# give to a request that never said what it was for.
+#
+# A design is still welcome; it is the last field rather than the first one, and
+# it is optional.
+#
+# Nothing here is required except the three fields that make a request weighable
+# at all. Every extra required field is a person who closes the tab.
+title: "[Idea] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time.
+
+        Two things worth checking first, because both save you writing:
+
+        - [Deliberately not on the roadmap](https://swemux.dev/roadmap/#not-planned).
+          These are boundaries rather than gaps, and a request inside one gets a reason
+          rather than a queue place.
+        - The [existing ideas](https://github.com/jatoran/swe-mux/discussions/categories/ideas).
+          If yours is already there, a thumbs-up on it counts for more than a second thread.
+
+        **Bugs go in [issues](https://github.com/jatoran/swe-mux/issues), not here.**
+        Something that is meant to work and does not is a bug even if the fix is a feature.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: >-
+        The task, not the feature. What were you working on when this came up, and what
+        were you trying to get done?
+      placeholder: >-
+        I run four agents across two repositories and I need to know which one has been
+        stuck the longest before I pick which pane to look at.
+    validations:
+      required: true
+
+  - type: textarea
+    id: friction
+    attributes:
+      label: What makes that hard today?
+      description: >-
+        What you actually do instead, and where it costs you. Concrete beats general: the
+        step you repeat, the thing you have to remember, the state you cannot see.
+      placeholder: >-
+        I click through every pane in turn. Nothing on the sidebar tells me how long a
+        session has been waiting, so I find the stalled one last about as often as first.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What have you tried?
+      description: >-
+        Anything in swe-mux, another tool, or a script of your own. If you found something
+        that half works, say what it does not cover.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does this come up?
+      description: How often the problem costs you something, not how much you want the fix.
+      options:
+        - Several times a day
+        - Most days
+        - Occasionally
+        - Once, but it cost me something I could not recover
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Where you hit it
+      description: >-
+        Optional, and only if it matters to the problem. Operating system, whether you were
+        on a phone or a desktop, which agent CLI.
+      placeholder: Windows 11, phone over Tailscale, Claude Code
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: If you already have a design in mind
+      description: >-
+        Optional, and deliberately last. A specific proposal is useful once the problem
+        above is on the page; without it there is nothing to check the proposal against.
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        What happens next: a thumbs-up on this discussion is a vote, and the open ideas
+        with the most of them are drawn on the [roadmap](https://swemux.dev/roadmap/),
+        refreshed once a day.
+
+        **A vote is a signal, not a commitment.** It says what to look at first and
+        nothing more. If this is accepted it becomes an issue at that point and carries
+        this discussion across with it.
