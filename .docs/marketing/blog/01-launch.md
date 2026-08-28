@@ -63,7 +63,7 @@ Verified 2026-08-28 against the published 0.1.0 wheel by running each command in
 I built this for myself and it's better with more hands on it.
 Apache 2.0, DCO sign-off, no CLA - the core can't be relicensed out from under you, which is deliberate.
 
-Repo: github.com/[org]/swe-mux
+Repo: github.com/jatoran/swe-mux
 Site and docs: swemux.dev
 
 If you run more than one agent, try it and tell me where it breaks.

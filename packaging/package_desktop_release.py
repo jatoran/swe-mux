@@ -21,6 +21,12 @@ refused by the updater rather than installed, because it is the only thing that
 answers whether the release needs a new PTY supervisor - and installing one that
 does would reap every live session.
 
+The *container* comes from the name too, and for the same reason: a `.tar.gz`
+name written as a zip is an archive the reader refuses on the far side of a
+several-hundred-megabyte download. `bundle_archive.archive_suffix` decides which
+one the name asks for and this script writes that, so the writer cannot produce a
+format its own name denies.
+
 Deliberately **not** part of `build_desktop.py`: a local build is for running on
 this machine, a release archive is for handing to other people, and folding the
 second into the first would make every developer build pay for a
@@ -31,19 +37,40 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tarfile
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from swe_mux.bundle_archive import ARCHIVE_ROOT, file_digest  # noqa: E402
+from swe_mux.bundle_archive import (  # noqa: E402
+    ARCHIVE_ROOT,
+    TAR_GZ_SUFFIX,
+    archive_suffix,
+    file_digest,
+)
 from swe_mux.bundle_metadata import BUNDLE_METADATA_NAME, read_bundle_metadata  # noqa: E402
 from swe_mux.update_install import release_archive_name, release_platform_tag  # noqa: E402
 
 
+def _members(bundle_root: Path) -> Iterator[tuple[Path, str]]:
+    """Every file in the bundle, as `(path, name-inside-the-archive)`.
+
+    Directories are skipped in both formats, so the two containers carry the
+    identical member set and `validate_members` reads the same list either way.
+    A symlink is *not* a directory for this purpose even when it points at one:
+    it is stored as the link it is, which is what keeps a POSIX bundle's shape.
+    """
+    for path in sorted(bundle_root.rglob("*")):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        yield path, f"{ARCHIVE_ROOT}/{path.relative_to(bundle_root).as_posix()}"
+
+
 def build_archive(bundle_root: Path, destination: Path) -> Path:
-    """Zip `bundle_root` as `swe-mux/...` into `destination`, returning the path.
+    """Pack `bundle_root` as `swe-mux/...` into `destination`, returning the path.
 
     Written to a `.part` and renamed, for the same reason the updater downloads
     to one: a half-written archive under the real name is a file some later step
@@ -68,11 +95,14 @@ def build_archive(bundle_root: Path, destination: Path) -> Path:
     archive = destination / release_archive_name(metadata.version, metadata.platform)
     partial = archive.with_name(f"{archive.name}.part")
     partial.unlink(missing_ok=True)
-    with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(bundle_root.rglob("*")):
-            if path.is_dir():
-                continue
-            bundle.write(path, f"{ARCHIVE_ROOT}/{path.relative_to(bundle_root).as_posix()}")
+    if archive_suffix(archive) == TAR_GZ_SUFFIX:
+        with tarfile.open(partial, "w:gz") as tar:
+            for path, name in _members(bundle_root):
+                tar.add(path, arcname=name, recursive=False)
+    else:
+        with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for path, name in _members(bundle_root):
+                bundle.write(path, name)
     partial.replace(archive)
     return archive
 

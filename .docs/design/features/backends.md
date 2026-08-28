@@ -228,8 +228,15 @@ Exempting a harness means changing its descriptor, never weakening a test.
 | Live (store) | Does a store-backed CLI's exact measurement still read? | `tests/test_live_agent_conformance.py` store canary, marker-gated; opencode runs `opencode run` into an isolated store and asserts `session_measurements` |
 | Live (automations) | Does a real run's facts drive the detectors and memory tools? | `tests/test_live_automations.py`, marker-gated; `test_every_fact_producing_harness_is_covered_by_the_automations_canary` runs without credentials |
 | Live (MCP wire) | Does a real session obey the control tools through `/mcp`? | `tests/test_live_mcp_control.py`, marker-gated; `test_every_mcp_capable_agent_harness_is_covered_by_the_control_canary` runs without credentials |
+| Live (daemon) | Does a daemon start on this host, serve a terminal, and stop clean? | `tests/test_live_daemon.py` (`live_daemon`), run in CI on `ubuntu-latest` and `windows-latest`; `tests/test_live_daemon_guards.py` runs in the default tier |
 
-The live tiers are excluded from `.worktree-verify` and CI because they need an authenticated CLI and consume quota.
+`live_daemon` is the one live tier that is **not** about a harness and **not** gated on credentials.
+Its session half spawns a `shell` backend rather than an agent precisely so it needs no provider, no credential and no quota, which is what lets a public runner run it.
+It covers the daemon itself: every startup phase `/api/health` reports reaching `ready`, the shims and per-adapter hook/MCP artifacts landing on disk, a real pseudoterminal spawned through `POST /api/sessions` and driven over the `/pty/{sid}` websocket, `DELETE /api/sessions/{sid}` reaping the child, and the real `muxd` entry point starting as a subprocess and exiting zero with no orphans and an empty `crash.log`.
+It is held off the macOS leg while that leg is `continue-on-error`, and it is excluded from `.worktree-verify` because it binds ports and spawns shells and landing is meant to be cheap.
+The startup-phase assertion is derived from `server.py` by an AST walk rather than from a copied list, so a phase added later is covered the day it lands; `test_the_startup_phase_derivation_actually_finds_phases` is the self-check that keeps that derivation from passing vacuously.
+
+The harness live tiers are excluded from `.worktree-verify` and CI because they need an authenticated CLI and consume quota.
 Each is derived from a declared capability rather than a per-harness skip, so a new harness either joins its tier or states on its descriptor why it cannot, and the coverage guard fails until it does.
 The four derivations partition the harnesses.
 A transcript-file harness (`transcript_dialect` set and `reports_transcript_path` true) is driven by the transcript canary; a store-backed harness (`measurement_source == "database"`, so opencode) is driven by the store canary instead, because it writes no file to replay.
@@ -330,10 +337,28 @@ The guarded assertions themselves did not move: a real turn still has to produce
   diagnostic or nested `claude`/`codex` invocations cannot promote and then demote their
   parent agent session.
 - Executable resolution supports native binaries and package-manager shims. A stale
-  configured `codex.exe` falls back through Windows PATHEXT to an installed `codex.cmd`;
-  direct ConPTY sessions and nested shell launches resolve npm Codex shims to their underlying
+  configured `codex.exe` falls back to its suffix-stripped form - through Windows PATHEXT to
+  an installed `codex.cmd`, or to a bare extensionless `codex` on POSIX. That recovery is
+  **unconditional**, and was Windows-only until 2026-08-28: the guard pointed exactly the
+  wrong way, since an `.exe` suffix is at least plausible on Windows and certainly wrong on
+  POSIX, so the one host that could not launch `codex.exe` at all was the one host that never
+  attempted the repair. A config authored on Windows and carried to WSL Ubuntu produced
+  `Could not start codex: [Errno 2] No such file or directory: 'codex.exe'` with a working
+  `codex` on the same PATH.
+  Direct ConPTY sessions and nested shell launches resolve npm Codex shims to their underlying
   `node.exe` + `codex.js` entrypoint so JSON config remains one exact argv value. Other
   `.cmd`/`.bat` targets use `COMSPEC`, while `.exe` targets remain direct argv launches.
+- **A refusal and an absence are different answers, and are reported as such.**
+  `shim_paths.resolve_executable` returns one of `found`, `not_found`, `mux_shim`, or
+  `windows_interop`, each carrying the path it refused; `which_real` is the same call with
+  the reason dropped, for the callers that only need to know whether anything is launchable.
+  The distinction is not cosmetic: on WSL Ubuntu the only reachable `codex` was the Windows
+  one at `/mnt/c/.../npm/codex`, mux refused it correctly, and then reported it as a missing
+  file - which sent an operator looking for an install that was never the problem. The
+  message now names the binary that was found, says it was refused and why, and says to
+  install the Linux build inside the distribution. A refusal reaches `daemon.log` at WARNING
+  once per distinct `(command, reason, path)`; a find or a plain absence is DEBUG, because
+  detection re-resolves every registered harness on every registry read.
   Resolution never returns a mux agent shim (identified by content marker, `shim_paths.py`):
   a daemon relaunched from inside a session inherits the session's shim-first PATH, which
   would otherwise wire `MUX_*_EXE` and account login/status commands back at the shim and

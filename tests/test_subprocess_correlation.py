@@ -164,7 +164,7 @@ async def test_the_git_poll_mints_an_id_for_its_own_iteration() -> None:
 
 
 async def test_a_provider_cli_run_carries_the_operation(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     seen: list[str | None] = []
 
@@ -173,18 +173,18 @@ async def test_a_provider_cli_run_carries_the_operation(
         return _outcome(b"ok")
 
     monkeypatch.setattr(provider_accounts, "run_bounded", fake_run_bounded)
-    manager = cast(
-        Any,
-        provider_accounts.ProviderAccountManager.__new__(provider_accounts.ProviderAccountManager),
+    # A real manager over a temporary data dir and home rather than a bare
+    # `__new__` with one method stubbed on: `_run_command` resolves the configured
+    # executable now (so its failures can say *why* nothing was launchable), and a
+    # half-built instance answered that with `AttributeError`. Nothing about this
+    # test wanted a partial object; it wanted a run it could observe.
+    manager = provider_accounts.ProviderAccountManager(
+        tmp_path / "data", EventBus(), home=tmp_path / "home"
     )
-    manager._spawn_command = lambda _provider, args: ["claude", *args]
 
     with bound_request_id("req-login"):
         assert (
-            await provider_accounts.ProviderAccountManager._run_command(
-                manager, "claude", ["auth", "status"], timeout_seconds=5
-            )
-            == "ok"
+            await manager._run_command("claude", ["auth", "status"], timeout_seconds=5) == "ok"
         )
 
     assert seen == ["req-login"]

@@ -30,7 +30,7 @@ swe-mux is what I built for myself over the past months, now open source (Apache
 Windows-first (Linux from source; WSL bridge for Claude living inside WSL).
 It also runs Codex and opencode side by side with Claude, which is genuinely useful for cross-checking.
 
-Repo: github.com/[org]/swe-mux - would honestly appreciate people trying the install on a clean machine and telling me where it falls over.
+Repo: github.com/jatoran/swe-mux - would honestly appreciate people trying the install on a clean machine and telling me where it falls over.
 
 ---
 

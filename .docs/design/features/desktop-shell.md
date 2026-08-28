@@ -306,8 +306,99 @@ continues to own every terminal.
   `update_install.release_archive_name`, so the two halves cannot drift into a release no
   installed copy can find; it prints the SHA-256 the manifest step needs. A release that
   publishes nothing matching the name is reported as "no desktop bundle for this platform"
-  rather than guessed at, which is also today's honest answer: `release.yml` publishes the
-  wheel and sdist and does not yet build a desktop bundle (`ROADMAP.md` Phase 11).
+  rather than guessed at.
+- **A release carries two desktop artifacts, and they answer different questions.** The
+  portable archive above is what the *in-app updater* downloads and hands to the staged
+  swap; `swe-mux-<version>-<platform>-<arch>-setup.exe` is the Windows installer, and it is
+  the only artifact usable by someone who does not already have Python.
+  `update_install.release_installer_name` names it and answers `None` off Windows rather
+  than inventing a name no release will carry. The two names are deliberately unable to
+  collide under any version string, because the updater looks its own artifact up by
+  *exact* name.
+- **The container a release archive is in comes from its name, and the reader honours both.**
+  `_ARCHIVE_SUFFIX` has always said `.zip` on Windows and `.tar.gz` on macOS and Linux;
+  until 2026-08-28 `bundle_archive.py` could open only zips, so the POSIX half was a promise
+  no reader could keep and the first POSIX desktop release would have been announced and then
+  refused at install. Closed by teaching the reader, not by pointing POSIX at `.zip`: a zip
+  cannot carry what a POSIX bundle needs, because `ZipFile.extractall` does not restore the
+  mode bits it stores and the extracted `swe-mux` binary would arrive without its executable
+  bit. A tarball is extracted under `filter="data"` (the interpreter's own refusal of
+  absolute paths, `..` escapes, links leaving the tree, and special files), with
+  `validate_members` still running first and independently. Both formats now also bound the
+  *uncompressed* size: `update_install`'s ceiling bounds the download, which for a gzip
+  stream says nothing about what extracting it would write.
+
+### The Windows installer
+
+`packaging/installer/swe-mux.iss` (Inno Setup 6) compiled by `packaging/build_installer.py`.
+It exists because a wheel cannot fix the gap it fixes: wheels have no post-install hook - PEP
+427 deliberately dropped `bdist_wininst`'s shortcut machinery - so a `pip install` leaves a
+person with no shortcut, no tray, and no idea where anything went.
+
+- **It is per-user (`PrivilegesRequired=lowest`) and never elevates, and there is no
+  override.** Every piece of state swe-mux owns is per-user already: the data directory, the
+  `HKCU\...\Run` login registration, a loopback daemon under the signed-in account, and
+  `automation.secrets.json`'s current-user DPAPI blobs. A per-machine install would put the
+  bundles where a standard user cannot write - which is exactly the tree a staged swap
+  renames - trading one elevation prompt now for an update path that needs one every time.
+  `{autopf}` under `lowest` is `%LOCALAPPDATA%\Programs`.
+- **The layout inside `{app}` is a contract with the running daemon.**
+  `supervisor_client.dedicated_supervisor_exe()` resolves the supervisor as
+  `<exe>\..\..\swe-mux-supervisor\swe-mux-supervisor.exe`, so the installer reproduces
+  `dist/`'s shape exactly: `{app}\swe-mux\swe-mux.exe` beside
+  `{app}\swe-mux-supervisor\swe-mux-supervisor.exe`. Flattening them into `{app}` resolves
+  one directory too high and the daemon falls back to `--supervisor-child`, silently
+  re-creating the file-lock collision the separate bundle exists to prevent.
+- **An upgrade deletes the old bundles before writing the new ones** (`[InstallDelete]`), and
+  keeps one `AppId`. A PyInstaller onedir tree is not additive: a dependency dropped between
+  releases leaves an importable stale `.pyd` behind, and copying over the top produces a tree
+  that is neither version. `CloseApplications=yes` lets Restart Manager close whatever holds a
+  file under `{app}` first, because a running app locks its own `.exe`.
+- **The Ready page states what an upgrade costs.** Replacing the bundles closes the PTY
+  supervisor, and that ends every live terminal session - the deliberate out-of-band act the
+  supervisor-update flow exists to make explicit. Restart Manager offers to close the
+  processes; it does not say that. `UpdateReadyMemo` appends the warning only when a previous
+  version is installed, so a fresh install is not warned about sessions it does not have.
+- **The optional login task writes the tray's own registry value, not a second mechanism.**
+  Same key and same value name as `desktop.RUN_KEY`/`RUN_VALUE`, and the `.iss` reproduces
+  `desktop.startup_command()`'s `list2cmdline` quoting and argument order, because
+  `startup_enabled` compares the value *exactly*. A Startup-folder shortcut would have been
+  the easy alternative and is the wrong one: it autostarts the app while the tray's checkbox
+  reports that nothing does. `tests/test_windows_installer.py` pins the reproduction against
+  the Python side. The one case the two can disagree is a `MUX_DATA_DIR` written with a
+  leading `~`, which the installer takes literally; the cost is a checkbox that reads off
+  until it is clicked once, never a missing or duplicated registration.
+- **The uninstaller removes that value only when it names `{app}`**, rather than using
+  `uninsdeletevalue`: the tray can turn the toggle on after install, and one install's
+  uninstaller must not strip another's login entry.
+- **`packaging/swe-mux.ico` is gitignored build output**, rendered by `build_desktop` from
+  `desktop.create_tray_image` on every build. A fresh clone has none, so `build_installer.py`
+  refuses with the command that makes it rather than letting ISCC report a bare "The system
+  cannot find the file specified" and a line number.
+- **Every comment in the `[Code]` section is `//`, never `{ ... }`.** Pascal's brace comment
+  ends at its first `}` and this script's comments are about `{app}`, so a braced one
+  terminates mid-sentence and the prose after it compiles as code - reported by ISCC as
+  `'BEGIN' expected` on the line *after* the comment. A test fails on the comment instead.
+- **Signing is a hook and not a step.** No certificate exists yet
+  (`RELEASE_MANUAL_TASKS.md` § 1), so nothing signs and nothing fails when nothing is
+  configured: the `.iss`'s `SignTool`/`SignedUninstaller` pair is behind `#ifdef SignTool`,
+  and `build_installer.py` emits both the `/S<name>=` registration and the `/DSignTool=`
+  symbol only when `SWE_MUX_SIGNTOOL` is set. Turning signing on is one environment variable
+  and no file change. The *payload* executables are a separate question and belong to
+  `build_desktop.py`; an installer signed around unsigned binaries still raises SmartScreen
+  on first launch.
+- **An installer-managed install cannot use the in-app updater, and says so rather than
+  failing oddly.** `redeploy_launch.redeploy_source_root()` requires
+  `packaging/redeploy_desktop.py` and `pyproject.toml` beside the bundle, which an installed
+  copy has neither of, so `UpdateInstaller._preflight` refuses with `no_swap_tool` before
+  anything is downloaded. Upgrading such an install means running the new installer, which is
+  what the Add/Remove Programs entry and the same-`AppId` in-place upgrade are for.
+- `release.yml`'s `build-desktop` job builds both artifacts on `windows-latest` and uploads
+  them as the `desktop` artifact; `github-release` and `update-manifest` download it into the
+  same `dist/` the wheel lands in, so the manifest step's directory enumeration picks both up
+  with real hashes and no name list to keep in step. Inno Setup ships on the runner image
+  (its own image test asserts `Get-Command iscc` resolves); the workflow installs it only if
+  a future image drops it.
 - Clients are told about a redeploy rather than discovering it as failed requests.
   The daemon emits `daemon_redeploy_started` when it accepts one or is asked to announce a
   terminal-launched one (`POST /api/daemon/redeploy/announce`, loopback-only and refused unless
@@ -369,6 +460,8 @@ continues to own every terminal.
 - Bundle entries/spec: `packaging/desktop_entry.py`, `packaging/swe_mux.spec`
 - Reproducible build: `packaging/build_desktop.py`
 - Release archive writer (the artifact-name contract): `packaging/package_desktop_release.py`
+- Windows installer: `packaging/installer/swe-mux.iss`, `packaging/build_installer.py`
+- Installer tests: `tests/test_windows_installer.py`
 - Frozen-app updater: `src/swe_mux/update_install.py`, `src/swe_mux/routes/update.py`
 - Bundle self-description and archive rules: `src/swe_mux/bundle_metadata.py`,
   `src/swe_mux/bundle_archive.py`

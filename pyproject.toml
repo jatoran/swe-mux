@@ -227,6 +227,7 @@ markers = [
   "live_automations: runs a real agent whose facts drive Tier 0 -> detectors -> mux memory tools in-process",
   "live_mcp: drives an isolated daemon on an ephemeral port and a real agent's session through the /mcp wire",
   "live_edge_tts: sends a fixed non-sensitive sentence to the unofficial Microsoft Edge TTS service",
+  "live_daemon: starts a real daemon on an ephemeral port and drives a shell session end to end",
   "conpty: real Windows ConPTY integration test; spawns a live shell (Windows-only)",
 ]
 

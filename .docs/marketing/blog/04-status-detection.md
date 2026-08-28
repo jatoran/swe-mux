@@ -54,4 +54,4 @@ None of that is buildable on vibes.
 The unglamorous layer is the load-bearing one.
 It usually is.
 
-swe-mux is open source (Apache 2.0): github.com/[org]/swe-mux.
+swe-mux is open source (Apache 2.0): github.com/jatoran/swe-mux.
