@@ -4193,7 +4193,54 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-collapse{flex:none;width:19px;height:19px;display:grid;place-items:center;padding:0;border:1px solid transparent;background:transparent;color:var(--muted);font:13px 'Cascadia Mono',Consolas,monospace;line-height:1;cursor:pointer}
 .drawer-collapse:hover,.drawer-collapse:focus-visible{border-color:var(--accent);color:var(--text);outline:0}
 @media(max-width:760px){.drawer-collapse{width:34px;height:34px;border-color:var(--line);background:var(--panel2);font-size:15px}}
+/* The in-context help control. Same box as the collapse button beside it, because they are
+   the same kind of thing - one chrome affordance each, at the end of the heading row - and
+   two different sizes there would read as two importances. Only drawn for a tab that has a
+   registered help topic (`helpTopics.ts`), so it is never a control that explains nothing. */
+.drawer-help{flex:none;width:19px;height:19px;display:grid;place-items:center;padding:0;border:1px solid transparent;background:transparent;color:var(--muted);font:12px 'Cascadia Mono',Consolas,monospace;line-height:1;cursor:pointer}
+.drawer-help:hover,.drawer-help:focus-visible{border-color:var(--accent);color:var(--text);outline:0}
+@media(max-width:760px){.drawer-help{width:34px;height:34px;border-color:var(--line);background:var(--panel2);font-size:14px}}
 .drawer-pane-heading+.drawer-status,.drawer-pane-heading+.clipboard-disabled{padding-left:9px}
+
+/* Help. A two-column reader on desktop that becomes one scrolling column on a phone, which
+   is the same shape Settings takes and for the same reason: a topic list beside a topic is
+   a luxury of width, and the topic is what was asked for. */
+.help-layer{align-items:stretch}
+.help-modal{width:min(940px,96vw);max-height:min(86vh,900px);display:flex;flex-direction:column;overflow:hidden}
+.help-body{display:grid;grid-template-columns:230px 1fr;gap:0;min-height:0;flex:1}
+.help-nav{display:flex;flex-direction:column;gap:7px;padding:12px;border-right:1px solid var(--line);overflow:auto;min-height:0}
+.help-action{text-align:left;padding:7px 9px;font-size:12px}
+.help-search input{width:100%}
+.help-topic-list{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:2px}
+.help-topic-link{width:100%;text-align:left;padding:5px 8px;border:1px solid transparent;background:transparent;color:var(--muted);font-size:12px;cursor:pointer}
+.help-topic-link:hover,.help-topic-link:focus-visible{border-color:var(--line);color:var(--text);outline:0}
+.help-topic-link.active{border-color:var(--accent);color:var(--text)}
+.help-content{padding:14px 18px;overflow:auto;min-height:0}
+.help-content h3{margin:0 0 6px;font-size:15px}
+.help-content h4{margin:14px 0 4px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.help-content p{margin:0 0 9px;line-height:1.5}
+.help-content ul{margin:0 0 9px;padding-left:20px;line-height:1.5}
+.help-blurb{color:var(--text)}
+/* Deliberately quiet and deliberately present: the reader is being told this text is the
+   design document rather than a summary of it, which is the whole anti-drift claim. */
+.help-source{font-size:11px;color:var(--muted)}
+.help-source code{font-size:11px}
+.help-doc-section p,.help-doc-section li{color:var(--muted)}
+.help-more{margin-top:14px;font-size:12px}
+.help-index-row{display:flex;flex-direction:column;gap:3px;width:100%;text-align:left;padding:9px 10px;margin-bottom:6px;border:1px solid var(--line);background:transparent;color:var(--text);cursor:pointer}
+.help-index-row:hover,.help-index-row:focus-visible{border-color:var(--accent);outline:0}
+.help-index-row span{color:var(--muted);font-size:12px;line-height:1.45}
+.help-empty{color:var(--muted);font-size:12px}
+@media(max-width:760px){
+  .help-modal{width:100vw;max-height:100dvh;height:100dvh}
+  .help-body{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .help-nav{border-right:0;border-bottom:1px solid var(--line);max-height:44vh}
+  /* One column means the topic list is *above* the topic rather than beside it, so leaving
+     it drawn puts eleven rows between the reader and the thing they asked for. The list
+     folds away once a topic is chosen and "← All topics" is how it comes back - the same
+     index/detail move the drawer's navigators make on a phone. */
+  .help-modal.topic-open .help-topic-list,.help-modal.topic-open .help-search{display:none}
+}
 
 /* One segmented control, wherever a surface shows more than one view of itself.
    `DrawerSegmentControl.tsx` draws it in the drawer, the Resources dialog draws it over its

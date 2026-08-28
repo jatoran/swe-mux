@@ -4717,19 +4717,82 @@ Three defects each end or corrupt a brand-new user's guided first run.
 The largest gap past minute ten: 106 commands, 206 config keys, 17 settings tabs, 11 side-panel
 tabs, and no `help.*` command, no docs link, and a tour reachable only from Settings → General.
 
-- [ ] The tour becomes a registered command (palette + voice), because a recovery path nobody
+- [x] The tour becomes a registered command (palette + voice), because a recovery path nobody
   can find is not a recovery path.
-- [ ] Complex tabs (scan timeline first, then the surfaces the audit lists) get an in-context
+  (Done 2026-08-28, WP-P16. `tutorial.start`, with spoken aliases ("take the tour", "show me
+  around"), beside `help.open` and one `help.topic.<id>` per topic. The tour is also the first
+  control in the Help modal, above the topic list, because it is the only thing there that
+  *does* something rather than explaining something.
+  The bare word "help" is deliberately **not** a spoken alias: `voiceQueries.ts` has owned it
+  for the voice command catalog since Phase 10.6, and two surfaces answering one phrase is
+  worse than either of them. The aliases are "open help", "show help", "how does this work".)
+- [x] Complex tabs (scan timeline first, then the surfaces the audit lists) get an in-context
   help control opening a modal built from the tab's own feature doc, so the help cannot drift
   from the design document that defines the surface.
   The continuity project's generated-tutorial-from-docs pattern is the reference: the same two
   inputs exist here (48 feature docs + the command registry).
-- [ ] The website-docs half of the operator's Release note is explicitly deferred to the
+  (Done 2026-08-28, WP-P16. Ten topics, each generated from the `##` sections of the feature
+  doc that defines its surface, and nine of the eleven drawer tabs carry the `?` control.
+  **The generation is the point and its shape was forced by packaging.** The obvious build-time
+  import of `.docs/*.md` is unbuildable: `.docs/` is carried in neither the wheel nor the
+  PyInstaller bundle, and the node test runner resolves no `?raw` specifier, so the module
+  would break the unit suite and ship a UI with no help. So it follows
+  `harnessRegistrySeed.ts` instead - `frontend/scripts/build-help-content.mts` writes
+  `frontend/src/helpContent.generated.ts` into the tree, and freshness is a test
+  (`frontend/test/helpTopics.test.ts` regenerates in memory and compares) rather than a
+  convention.
+  **The extractor is shared rather than reimplemented in the test**, because a second copy
+  could agree with itself while disagreeing with what ships. A renamed `##` yields no lines,
+  which would render a heading over nothing, so empty is asserted to be impossible rather than
+  left as the failure mode.
+  **One authored sentence per topic survives**, and it is the one concession: a feature doc is
+  written for whoever implements the surface, and a reader who has just opened a panel needs a
+  plain sentence before "Tier 1 substrate". The blurb says what the surface is for; the
+  generated body says what it is, and the modal names its source file on the page so the
+  distinction is legible rather than implied.
+  The in-context control is drawn from the registry (`helpTopicForDrawer(tab, segment)`), never
+  per tab, so a tab with no topic gets no control instead of an empty modal. Verified in a
+  browser at 1280x860 and 390x780: `frontend/test/renderer/help.spec.ts` reads the first
+  sentence of `scan-timeline.md` **off disk** and asserts the modal contains it, rather than
+  pasting a third copy of it into the spec.)
+- [x] The website-docs half of the operator's Release note is explicitly deferred to the
   release track; this phase ships only the in-app half, so the two are not coupled.
+  (Held as stated, 2026-08-28. Each topic links to `https://swemux.dev/docs/<slug>/`, the URL
+  contract `site/README.md` already publishes, and nothing in this phase touches `site/`.
+  **The slug is mapped, not derived, and that is the interesting part.** The obvious
+  `/docs/<topic.id>/` was written first and was measured wrong: a topic is keyed by the
+  feature doc that generated its body, the site is keyed by twenty-two reader-facing pages,
+  and only one of the ten ids happens to be a slug - so nine links would have gone straight to
+  a 404. That is the same dead end as the assistant's "Settings → Assistant", arrived at from
+  the opposite direction, which is why the mapping is explicit and
+  `frontend/test/helpTopics.test.ts` reads the slug list out of `site/tools/docs_content.py`
+  rather than trusting it. A renamed page fails a test here instead of 404-ing for a reader.
+  The retired `/docs/#<slug>` fragment form is asserted *absent* rather than merely unused.)
 
 ### Stale guidance
 
-- [ ] The tour no longer describes the removed `Utilities` menu group.
+- [x] The tour no longer describes the removed `Utilities` menu group.
+  (Done 2026-08-28, WP-P16, and the correction is the smaller half.
+  The `feature-menu` step now names the eight viewer rows, the four configuration rows, the
+  `Maintenance` group and the new `Help` row, which is what that menu actually contains; the
+  `welcome` and `ready` steps stop implying Settings → General is the only door to the tour.
+  **The mechanism is the deliverable.** A string inside a JSX body is invisible to every test
+  in this suite, which is why this claim survived months past the unfolding that made it false,
+  and why `ui.md`'s tab count was wrong in four places for the same reason. So
+  `frontend/test/tourChrome.test.ts` closes it three ways, and the split between them is
+  deliberate:
+  every `[data-tutorial="…"]` in the step list is **derived** from the tour and checked against
+  the components, so a spotlight on a mark nobody renders fails with nothing to maintain;
+  every Settings path and menu-row name is **declared** (`TUTORIAL_CHROME_CLAIMS` in
+  `tutorial.ts`) and checked in *both* directions, so the declaration cannot rot into a list of
+  names the copy stopped using; and every `Settings →` the copy contains must be declared,
+  which is what stops a fourth one arriving unchecked.
+  Declaration is not laziness here: there is no way to derive "this sentence names a menu row"
+  from prose, and a renderer harness cannot answer it either, because mounting `App` needs a
+  daemon and the two components are never on screen together. That is recorded as its reason
+  in `sourceText.test.ts` rather than as an unexplained entry.
+  Both guards were self-checked against a deliberate break before being believed - a bogus
+  `Utilities` claim and a renamed anchor each failed with the message that names them.)
 - [x] `ui.md` states the real side-panel tab count (the code has 11; the doc says 14/12 in two
   places).
   (Done 2026-08-28, W21. Four occurrences, not two: "fourteen tabs", "`Panels · N of 14`", and
@@ -4741,12 +4804,37 @@ tabs, and no `help.*` command, no docs link, and a tour reachable only from Sett
 The audit routed two findings to the then-in-flight grant-gates session rather than acting on
 them; grant-gates has since landed, and nobody has checked whether they landed with it.
 
-- [ ] The Project Run menu no longer silently drops every agent row when no harness is enabled -
+- [x] The Project Run menu no longer silently drops every agent row when no harness is enabled -
   it says why the rows are missing, or shows them gated.
-- [ ] The assistant's off-state names the switch's real home (section 4 of Settings → Voice),
+  (**Checked 2026-08-28 (WP-P16) and found still open**: grant-gates did not cover it.
+  `ProjectRunMenu` maps `promptDeliveryHarnesses()`, which is enablement-filtered, so with no
+  agent enabled the NEW SESSION block rendered `Shell` and `Custom terminal…` and nothing else -
+  a launcher whose whole subject is starting an agent quietly claiming there were none.
+  Fixed here, on the Agent Environment rule that an absent capability must say *which kind* of
+  absent it is: registered-but-none-enabled and nothing-registered-at-all now read differently,
+  and the first routes to the switch through a `SettingLink` (`harnesses.enabled`) rather than
+  naming a tab in prose. It is a **link** and not a grant on purpose - which agents appear is a
+  set, and a gate can honestly offer "turn this on", never "install a CLI you may not have".)
+- [x] The assistant's off-state names the switch's real home (section 4 of Settings → Voice),
   not the nonexistent "Settings → Assistant" tab.
-- [ ] Whichever of the two grant-gates did not in fact cover becomes work in this phase, not a
+  (**Checked 2026-08-28 (WP-P16) and found still open** in five places, two of which are the
+  interesting ones. `AssistantPanel`'s off state and the `assistant.newConversation` command's
+  `disabledReason` both hardcoded the dead tab; both now read the target registry
+  (`assistant.enable` → Settings → Voice → Mux assistant), so `settingTargets.test.ts` fails
+  the day that stops resolving and the panel and the palette cannot explain one refusal two
+  ways. The panel offers a real `SettingLink`, which scrolls the switch into view and flashes
+  it, where the sentence it replaces offered nothing to press.
+  **Three copies remain and are out of this package's ownership**: `assistant.py` (twice) and
+  `routes/assistant.py` raise `AssistantError` strings carrying the same dead tab name. They
+  are daemon-side and reach the operator through the assistant's own error path. That is
+  recorded rather than fixed, because `src/swe_mux/` belonged to a sibling package this day;
+  the fix is one string each and the registry already holds the right words.)
+- [x] Whichever of the two grant-gates did not in fact cover becomes work in this phase, not a
   new report.
+  (Both did not, and both were done here rather than re-reported. Recorded because the shape
+  is worth keeping: the finding said "grant-gates has since landed, and nobody has checked" -
+  and the answer to "did that land cover this" was **no** in both cases, which is exactly why
+  the criterion asks for a pointer rather than for a belief.)
 
 ### Phase 16 exit criteria
 
@@ -4755,10 +4843,29 @@ them; grant-gates has since landed, and nobody has checked whether they landed w
   (Met by the three First-run blockers above, W21. The walk is asserted at a 390x780 viewport in
   `test/renderer/tutorial-steps.spec.ts`; the sequencing and the mobile anchor table are asserted
   as pure functions in `test/tutorial.test.ts`.)
-- [ ] "Help" is speakable and palettable, the tour is re-openable from it, and the scan
+- [x] "Help" is speakable and palettable, the tour is re-openable from it, and the scan
   timeline's help modal opens from the tab and matches its feature doc.
-- [ ] The tour and `ui.md` describe only chrome that exists.
-- [ ] Both handed-off findings are verified fixed, with a pointer to where.
+  (Met 2026-08-28, WP-P16. `help.open` + `tutorial.start` + `help.topic.<id>`, each with spoken
+  aliases and a palette entry; the tour is the first control in the modal; the Activity tab's
+  Timeline segment carries the `?`. "Matches its feature doc" is literal rather than reviewed -
+  the body is generated from `scan-timeline.md` and
+  `frontend/test/renderer/help.spec.ts` reads that file's first sentence **off disk** and
+  asserts the rendered modal contains it. Asserted at 1280x860 and 390x780.)
+- [x] The tour and `ui.md` describe only chrome that exists.
+  (Met 2026-08-28. The tour half is enforced by `frontend/test/tourChrome.test.ts` rather than
+  corrected; `ui.md`'s tab count was the W21 half, and its tour and Help sections were rewritten
+  here to describe what now ships.
+  One honest limit: the guard covers what the tour *declares* it names - anchors, Settings
+  paths, menu rows, menu groups. A sentence that describes a behaviour rather than naming a
+  control ("closing a live terminal asks for confirmation") is still prose nothing checks, and
+  the way to bring one under the guard is to make it name something.)
+- [x] Both handed-off findings are verified fixed, with a pointer to where.
+  (Met 2026-08-28. Neither had in fact been fixed by grant-gates; both are fixed here and each
+  is recorded above with what was wrong, where the fix is, and which test now fails if it
+  regresses. The pointer for the Run menu is `ProjectRunMenu.tsx` + the `harnesses.enabled`
+  target; for the assistant, `AssistantPanel.tsx`, `App.tsx`'s `assistant.newConversation`, and
+  the `assistant.enable` target, all held by `frontend/test/settingTargets.test.ts` - with the
+  three daemon-side copies named as still open.)
 
 ## Phase 17 - Subagent visibility: nested child rows and on-demand transcript panes (deferred)
 

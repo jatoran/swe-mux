@@ -280,7 +280,14 @@ Recorded so they are decisions rather than oversights.
   A daemon that answers is byte-for-byte unaffected.
   The status vocabulary gained `unchecked` so a check that did not run reads as neither healthy nor unavailable, and exit codes compose the existing two: `1` for a failing local check, `3` (daemon unreachable) for a clean degraded report, never `0`.
   Contract: `design/interfaces.md`, "`mux doctor` without a running daemon".
-- **Phase 16 first-run blockers are still open** (mobile tour stranding at step 10 of 14, the unskippable provider login at step 5, and the stacked harness dialog over the tour blur). These break a brand-new user's guided first run and should land before any announcement, though not necessarily before the repository is public.
+- ~~**Phase 16 first-run blockers are still open**~~ **All three closed 2026-08-28 (W21), and re-verified 2026-08-28 (WP-P16) by running the tests rather than by reading the roadmap.**
+  The mobile tour no longer strands: `frontend/test/renderer/tutorial-steps.spec.ts` walks the whole tour to `Finish` at a 390x780 viewport over a page carrying **none** of its anchors, which is every step in its worst case at once, and `mobileTutorialChrome('resources')` now returns `'side-panel'` rather than opening the navigation sidebar that never carried the Notes control.
+  The provider login at step 5 is skippable and its copy agrees with the harness panel, asserted in the same spec by reading the card rather than by index.
+  The two first-run surfaces cannot stack, because `firstRunSurface` is one total function whose 16-input truth table is asserted in `frontend/test/tutorial.test.ts`.
+  Measured on this branch: 7/7 renderer tests and 6/6 unit tests pass.
+  The rest of Phase 16 - the help surface, the tour's stale prose, and the two handed-off usability findings - closed on the same day (WP-P16), so all four exit criteria are now met.
+  Read those criteria before repeating a blocker claim: a release document that overstates open work is read by the person deciding whether to announce, and costs them the same day a document that overstates completion would.
+  One residue is recorded there rather than here: three daemon-side error strings still name a nonexistent "Settings → Assistant" tab (`assistant.py` twice, `routes/assistant.py` once). It is one string each and it reaches an operator only through the assistant's own error path.
 - **`site/index.html` is 883 lines of hand-authored markup** with its own check tooling. It is in good shape; it needs the placeholder URLs and the screenshot recapture, not a rewrite.
 
 ## Agent work packages

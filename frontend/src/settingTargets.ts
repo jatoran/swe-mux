@@ -74,6 +74,23 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Voice', setting: 'stt_enabled',
     label: 'Enable microphone input', where: 'Settings → Voice',
   },
+  // The assistant's own master switch. It is the fourth section of the Voice tab rather
+  // than a tab of its own, and every off-state used to say "Settings → Assistant" - a tab
+  // that has never existed, so the one user who needed the switch was sent nowhere. That
+  // is exactly what this table exists to stop: a link resolves against `settingsTabs` and
+  // `settingTargets.test.ts` fails when it stops resolving, where a hardcoded name in prose
+  // fails silently and forever.
+  'assistant.enable': {
+    surface: 'settings', section: 'Voice', setting: 'assistant_enabled',
+    label: 'Enable the Mux assistant', where: 'Settings → Voice → Mux assistant',
+  },
+  // Which agent CLIs appear in the launchers. A *set* rather than a switch, so it stays a
+  // link: the Run menu's empty agent list routes here rather than offering to enable a
+  // harness the machine may not have installed.
+  'harnesses.enabled': {
+    surface: 'settings', section: 'Harnesses', setting: 'harness_enabled',
+    label: 'Which agents appear in launchers', where: 'Settings → Harnesses',
+  },
   'terminals.claudeWidth': {
     surface: 'settings', section: 'Terminals', setting: 'claude_max_columns',
     label: 'Claude width limit', where: 'Settings → Terminals',

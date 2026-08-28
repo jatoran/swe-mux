@@ -89,6 +89,15 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'drawerTabs.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'findings.test.ts': ['composition-root', 'component-jsx'],
   'grants.test.ts': ['component-jsx', 'cross-language-contract'],
+  //: `registry` because a feature doc is read as the list of what a help topic says - the
+  //: whole point of generating that content is that no second copy of it exists to assert
+  //: against. `build-artifact` for the freshness half: `helpContent.generated.ts` is a
+  //: committed build output, and whether it still matches the docs is a fact about the
+  //: build rather than about behaviour. `cross-language-contract` for the third read:
+  //: every topic's "read more" link names a page slug that `site/tools/docs_content.py`
+  //: declares, and the slug crosses no wire - the only thing the two sides share is that
+  //: Python file, so a renamed page has to fail here or it fails as a 404 for a reader.
+  'helpTopics.test.ts': ['registry', 'build-artifact', 'cross-language-contract'],
   'historyBrowser.test.ts': ['component-jsx', 'stylesheet'],
   'llmProvider.test.ts': ['component-jsx', 'cross-language-contract'],
   'modelRouting.test.ts': ['component-jsx'],
@@ -123,6 +132,13 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   //: unit tests for each of their pure helpers stayed green.
   'terminalPaneInputBackend.test.ts': ['negative-invariant'],
   'terminalViewport.test.ts': ['composition-root', 'component-jsx'],
+  //: The one entry a renderer harness is *not* owed. The assertion compares prose in one
+  //: component against chrome another component renders - the tour saying "Utilities"
+  //: against `App.tsx`'s menu rows - and the two are never mounted together, because
+  //: mounting `App` needs a daemon. `negative-invariant` is the third: the retired
+  //: `Utilities` group has to be absent from both files, and absence over a whole file
+  //: is not observable from a mount.
+  'tourChrome.test.ts': ['component-jsx', 'composition-root', 'negative-invariant'],
   'testRegistry.test.ts': ['registry'],
   'transcriptAudio.test.ts': ['component-jsx', 'stylesheet'],
   'voiceDock.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
