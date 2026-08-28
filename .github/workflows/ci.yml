@@ -96,6 +96,44 @@ jobs:
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
           -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts"
 
+      # The supervisor is a separate process that logs to its own file rather
+      # than to stdout, so when a supervisor test goes red on a runner the CI
+      # log contains nothing about why - the absence of a warning proves
+      # nothing, which is exactly what stalled the cwd-anchor finding in
+      # RELEASE_MANUAL_TASKS.md § 8.5.
+      #
+      # The cwd-anchor assertion now builds its own report inline (see
+      # `_cwd_anchor_report` in `tests/test_pty_supervisor.py`), because an
+      # answer that travels with the failure beats one that travels with the
+      # run. This step is for every other way that file can go red - a connect
+      # timeout or a hung spawn produces no assertion message at all.
+      #
+      # Copied rather than uploaded in place: pytest's basetemp lives under the
+      # user TEMP, not the workspace, and the copy happens after the run so the
+      # path lengths the test actually used are left alone.
+      - name: Collect supervisor logs
+        if: failure()
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP 'supervisor-logs'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'pytest-of-*' -ErrorAction SilentlyContinue |
+            Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'supervisor*.log*' -or $_.Name -eq 'crash.log' } |
+            ForEach-Object {
+              $flat = $_.FullName.Substring($env:TEMP.Length).TrimStart('\') -replace '[\\/]', '_'
+              Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $dest $flat) -ErrorAction SilentlyContinue
+            }
+          Get-ChildItem -LiteralPath $dest | Format-Table -AutoSize
+
+      - name: Upload supervisor logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervisor-logs
+          path: ${{ runner.temp }}/supervisor-logs
+          if-no-files-found: ignore
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
