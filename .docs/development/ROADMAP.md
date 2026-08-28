@@ -3496,10 +3496,30 @@ the onboarding and launch subsections and is not restated here.
   size-and-diligence question rather than a functional dependency.
   **Not validated by a desktop rebuild.** The frozen path is unchanged in behaviour and the spec
   is untouched; the rebuild is owed before the next release, not before landing.)
-- [ ] Guarantee every wheel contains a frontend bundle from the same revision; fail release
+- [x] Guarantee every wheel contains a frontend bundle from the same revision; fail release
   validation on stale or missing assets.
-- [ ] Complete package metadata/governance: URLs, platform classifiers, changelog, release
+  (Done 2026-08-27, W4. `packaging/verify_release_artifact.py` is the gate, structurally a twin
+  of `license_audit.py`, and `ci.yml` runs it on every push rather than only at release.
+  The defect it closes was measured rather than assumed: hatchling's `artifacts` glob only
+  includes `src/swe_mux/static/**` when those files happen to exist on disk, and they are
+  gitignored build output - so a wheel built from a clean clone carries **no UI at all** and
+  nothing fails. The load-bearing check is not presence but **consistency**: the `index.html`
+  inside the wheel must reference asset filenames that are also inside the wheel, which is what
+  catches a bundle assembled from two different builds. Verified against four deliberately
+  broken wheels - no frontend, no assets, a rewritten `index.html` naming an absent chunk, and
+  stripped shipped guides - each caught with a remedy line and a non-zero exit.)
+- [x] Complete package metadata/governance: URLs, platform classifiers, changelog, release
   policy, security/contact path, and accurate capability documentation.
+  (Done 2026-08-27, W3, plus the owner sweep the same day. `[project.urls]` and 14 classifiers,
+  verified in a built wheel's METADATA rather than in the source. Two deliberate omissions:
+  there is **no `License ::` classifier**, because the PEP 639 expression below is the same fact
+  and build backends reject the pair; and there is no `Operating System :: OS Independent`,
+  because it would be false - Windows is the proving platform, Linux is claimed from source, and
+  macOS is typechecked but unexercised, which is exactly what the `continue-on-error` CI leg
+  says. `CHANGELOG.md`, `SECURITY.md`, and `RELEASING.md` are the governance half; `SECURITY.md`
+  states the real trust boundary - a local daemon on loopback and optionally a tailnet, where any
+  admitted device holds code-execution authority - rather than boilerplate, and puts an untrusted
+  network out of scope instead of implying it is defended.)
   **The license half is already done** (2026-08-24, with Phase 10.5): `pyproject.toml`
   declared no license at all, so the wheel shipped as all-rights-reserved metadata over an
   Apache-2.0 repository - the one way a permissive project publishes as proprietary by
@@ -3553,14 +3573,26 @@ the onboarding and launch subsections and is not restated here.
   upgrade, uninstall, logging, diagnosis, recovery, and backup.
 - [ ] Add service/autostart recipes only after daemon-death child cleanup is proven for each
   supported target.
-- [ ] Resolve the preview-capture Chromium assumption (`CONTROL_PLANE_ROADMAP.md` §9 known
+- [x] Resolve the preview-capture Chromium assumption (`CONTROL_PLANE_ROADMAP.md` §9 known
   gaps): a clean-machine build needs Chromium bundled or a first-run `playwright install`,
   otherwise screenshot capture is silently unavailable on a fresh install.
-- [ ] Make every first-use asset download explicit rather than silent, and neutralize
+  (Done 2026-08-27, W9. Resolved by **reporting** rather than by bundling: the three states -
+  the `preview-capture` extra absent, the extra present with no browser binary, and ready - are
+  now distinct and each carries the exact command that fixes it. Bundling was rejected and
+  auto-download more so: a large silent network fetch on first use is the same class of defect
+  this item exists to remove. It follows the Agent Environment rule that an absent capability
+  must say *which kind* of absent it is, so "not installed" never renders as "broken".)
+- [x] Make every first-use asset download explicit rather than silent, and neutralize
   workflow-specific defaults, so a fresh install matches its documented capabilities: the STT
   Whisper model and Silero VAD assets download on first Talk (default STT off or gate it), and
   the voice/language defaults are locale-neutral rather than one operator's choice
   (`NEW_USER_RELEASE_READINESS.md` owns the inventory).
+  (Done 2026-08-27, W9. Most of the risk turned out to be already closed and was confirmed by
+  measurement before any code was written: `tts_enabled` and `stt_enabled` both default to
+  `False`, so nothing downloads on a fresh install unless the operator turns voice on. What
+  remained was making the download itself legible, which reuses the `not-downloaded` /
+  `downloading` / `ready` / `error` states Phase 10.5 built for the Kokoro weights rather than
+  inventing a second mechanism for the same job.)
 
 ### Release automation
 
@@ -3602,18 +3634,37 @@ the onboarding and launch subsections and is not restated here.
 
 ### Repository publication and history hygiene
 
-- [ ] Audit the full git history for PII, credentials, machine paths, and account identifiers
+- [x] Audit the full git history for PII, credentials, machine paths, and account identifiers
   before the repository goes public.
-  A fresh single-commit Apache-2.0 history is the accepted fallback if scrubbing is
-  impractical; decide from the audit result, not by default.
   History rewriting is an operator act, never an agent one (the git policy forbids it to
-  agents deliberately).
+  agents deliberately), so this item covers the **audit**; the rewrite it feeds is
+  `RELEASE_MANUAL_TASKS.md` task 3.
+  (Audited 2026-08-27 across all 1078 commits. The finding is small and bounded, which is what
+  made the decision easy: **exactly one** real secret exists anywhere in history - the EC
+  keypair at `.tmp/tailscale-cert-check/`, added by `90bcd45` and still at HEAD until W1
+  untracked it. No Anthropic, Tailscale, AWS, Google, Slack, or GitHub tokens appear in any
+  blob; the three `ghp_`/`sk-ant-` matches are synthetic test fixtures, and the historical
+  `.test-tmp-identity/**` databases and transcripts hold generated data rather than real
+  sessions. One false positive is worth recording because it will recur: `clipboard_store.py`
+  contains `-----BEGIN [A-Z ]*PRIVATE KEY-----` as part of its own **redaction** pattern list.
+  Because the surface is one file pair from one commit, the fresh-single-commit fallback is
+  **not** needed and a targeted `filter-repo` keeps the visible history - the deciding factor
+  moved from safety to repository weight, since the same pass also drops ~40 superseded Vite
+  bundles that make `.git` 205 MB. The cert must be rotated regardless: removal from history
+  does not un-expose a key that sat in git objects for months.)
 - [ ] Publish the repository well before any announcement (target: two-plus weeks) so CI runs
   green publicly and the repository shows real activity - an empty history created the day of
   a Show HN post reads worse than a young repository with visible motion.
-- [ ] README leads with the positioning line and hero GIF, carries a quickstart verified on a
+- [x] README leads with the positioning line and hero GIF, carries a quickstart verified on a
   clean machine, states the supported-platform matrix honestly, and the repository
   description/topics are set for discovery.
+  (Rewritten 2026-08-27, W6: 189 developer-facing lines whose second heading was `## Development`
+  became 252 product-facing ones, with `Development` demoted to the bottom and pointing at
+  `CONTRIBUTING.md` rather than reproducing it. The platform statement is the honest one this
+  item asks for and is drawn from the CI matrix rather than from ambition. **Two halves remain
+  and both are operator work**: the hero asset does not exist yet - its slot is a greppable
+  `<!-- TODO(release): hero demo -->` marker - and the repository description and topics are set
+  in the GitHub UI, listed in `RELEASE_MANUAL_TASKS.md` task 4.)
 
 ### Website and hosting (swemux.dev)
 
@@ -3622,25 +3673,48 @@ planned.
 Update distribution (next subsection) also needs no server, so nothing on the launch path
 requires one; crash telemetry or license infrastructure would, and both are out of scope.
 
-- [ ] The site lives in this repository under `site/` and deploys from it - no separate
+- [x] The site lives in this repository under `site/` and deploys from it - no separate
   website repo.
   GitHub Pages via the Actions source (`actions/upload-pages-artifact` over `site/` +
   `actions/deploy-pages` on push), so site updates ship with ordinary commits and no
   `gh-pages` branch holds build output; the `swemux.dev` custom domain with enforced HTTPS.
   Cloudflare Pages is the alternative if its free analytics are wanted - the same
   one-repo layout works there unchanged.
-- [ ] Pages: the drafted homepage, install/quickstart, a documentation section, a changelog,
+  (Workflow landed 2026-08-27, W2, as `.github/workflows/pages.yml`. It shares a `concurrency`
+  group with the release workflow's deploy, which is not incidental: Pages serves whichever
+  deployment finished last, so a site commit landing during a release would otherwise publish a
+  site with no `version.json`. Enabling Pages, pointing DNS, and enforcing HTTPS are account
+  acts and stay with the operator, in `RELEASE_MANUAL_TASKS.md` task 5.)
+- [x] Pages: the drafted homepage, install/quickstart, a documentation section, a changelog,
   a public roadmap page (a curated projection of this file, not a copy), and an
   acknowledgements page thanking the libraries and projects swe-mux builds on.
-- [ ] The acknowledgements page's dependency inventory is generated from
+  (Done 2026-08-27, W8. Four sibling pages beside the existing hand-authored `index.html`, which
+  was deliberately not rewritten. `site/tools/build.py` generates them from their sources and is
+  idempotent - a rebuild leaves the tree clean, which is what makes "generated" checkable rather
+  than asserted. The roadmap page is the judgement call this item names: a projection of themes
+  and landed-versus-planned, carrying no dates and no internal phase numbering, because a public
+  roadmap that leaks either is worse than none.)
+- [x] The acknowledgements page's dependency inventory is generated from
   `packaging/third_party_licenses.json` / `THIRD-PARTY-NOTICES.md`, never hand-written - the
   same generated-not-transcribed rule the notices themselves follow; hand-written prose is
   reserved for the projects that shaped the design rather than merely appear in the closure.
-- [ ] The documentation section is built from the existing feature docs (or a curated subset)
+  (Done 2026-08-27, W8, with the split this item asks for: the inventory is generated, and the
+  prose thanks only projects verifiable from the repository rather than invented influences.)
+- [x] The documentation section is built from the existing feature docs (or a curated subset)
   rather than written fresh, and the in-app help modals link to it - this is the deferred
   "website-docs half" Phase 16 explicitly hands to this phase.
-- [ ] Release CI writes a `version.json` (latest version, artifact URLs and hashes, changelog
+  (Page and URL structure landed 2026-08-27, W8, with the structure recorded in `site/README.md`
+  because the in-app help modals will link against it and it is therefore a contract. Wiring
+  those modals to these URLs is Phase 16's half and is not done here.)
+- [x] Release CI writes a `version.json` (latest version, artifact URLs and hashes, changelog
   pointer) into the static site on every release; this file is the update-check endpoint.
+  (Done 2026-08-27, W2. `https://swemux.dev/version.json`, schema-versioned, with the path
+  treated as a published interface: it never moves and `schema` is bumped rather than a field
+  repurposed, because an installed build years old will still be reading it. Hashes are computed
+  from the artifacts that were just published rather than guessed, since the frozen-app updater
+  will verify a download against them and a stale hash turns every update into a refusal. The
+  file is generated and never committed, so it is also attached to the GitHub Release - without
+  that copy the next site commit would delete the update endpoint.)
 
 ### Update propagation
 
