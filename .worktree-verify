@@ -3,6 +3,13 @@
 # Mirrors CLAUDE.md § Verification. Live-agent marks are excluded (they need a
 # real provider session and are not appropriate for an automated landing gate).
 #
+# `live_daemon` is excluded for a different reason and is worth stating so nobody
+# "fixes" it back in: it needs no provider and would run fine here, but it starts
+# a daemon and spawns real shells, and landing is meant to be cheap. CI runs it
+# on ubuntu-latest and windows-latest on every push, which is where a host-shaped
+# regression has to be caught anyway. Run it by hand with
+# `uv run pytest tests/test_live_daemon.py -m live_daemon`.
+#
 # This is safe to run in several worktrees at once. Measured 2026-07-29, three
 # concurrent runs took 58/58/62s versus about 60s solo, with 996 passing in each.
 # CLAUDE.md records why the suite is parallel-safe.
@@ -24,7 +31,7 @@ step "pytest"
 #
 # `--durations=25` stays on so a test that grows slow is visible in the gate's
 # own output rather than only in a run someone thought to ask for.
-uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts"
+uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
 
 step "ruff"
 uv run ruff check src/swe_mux tests packaging
