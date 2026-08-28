@@ -6,6 +6,8 @@ import os
 import threading
 import time
 from collections.abc import Mapping
+from concurrent.futures import Future, InvalidStateError
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 from .host_platform import IS_WINDOWS
@@ -46,6 +48,86 @@ _READ_POLL_RECENT_SECONDS = 0.01
 _READ_POLL_DEEP_IDLE_SECONDS = 0.04
 _READ_ACTIVE_WINDOW_SECONDS = 0.25
 _READ_DEEP_IDLE_AFTER_SECONDS = 5.0
+
+
+def submit_queue_put(
+    queue: asyncio.Queue[bytes],
+    loop: asyncio.AbstractEventLoop,
+    payload: bytes,
+) -> Future[None] | None:
+    """Hand ``payload`` to ``queue`` from a non-loop thread, creating no orphan coroutine.
+
+    ``asyncio.run_coroutine_threadsafe`` is the obvious call here and is the wrong
+    one, for one structural reason: it takes an *already constructed* coroutine, so
+    ``queue.put(payload)`` is built on the calling thread and only then handed over.
+    The reader thread that calls this is a daemon thread which outlives the loop it
+    feeds, and two teardown orderings leave that coroutine with nobody to await it:
+
+      * the scheduling call raises ``RuntimeError`` because the loop is already
+        closed, and the coroutine built for it is dropped by the guard; or
+      * the callback is accepted because the loop is not closed *yet*, and the loop
+        stops before running it, so the coroutine dies inside an abandoned closure
+        without ever being wrapped in a task.
+
+    Python reports either as ``RuntimeWarning: coroutine 'Queue.put' was never
+    awaited`` when the collector reaches it, from a finalizer, so it arrives as an
+    *unraisable* exception attributed to whatever happens to be running at that
+    moment rather than to the session that tore down. Under the suite's
+    ``filterwarnings = ["error"]`` that fails an unrelated test. Both orderings need
+    a loaded host to lose the race, which is why this first surfaced on 2026-08-27
+    on shared CI runners and never on the development host.
+
+    Building the coroutine *inside* the scheduled callback removes the orphan by
+    construction: the coroutine exists only on the loop thread, at a moment the loop
+    is provably running it, and a callback the loop never reaches drops a closure,
+    which needs no finalizer. Returns ``None`` when the loop is already closed -
+    there is nothing to deliver and no future worth handing back.
+
+    The returned future keeps ``run_coroutine_threadsafe``'s contract, because both
+    call sites depend on all of it: ``result(timeout=...)`` raises ``TimeoutError``
+    while the put is still queued, ``cancel()`` from this thread cancels the queued
+    put on the loop, and a failed put surfaces as that future's exception.
+    """
+    handoff: Future[None] = Future()
+
+    def _settle(task: asyncio.Task[None]) -> None:
+        # On the loop thread. `cancel()` from the reader thread can land between
+        # any two statements here, so every transition is attempted rather than
+        # guarded by a check that would immediately be stale.
+        with suppress(InvalidStateError):
+            if task.cancelled():
+                handoff.cancel()
+            elif (error := task.exception()) is not None:
+                handoff.set_exception(error)
+            else:
+                handoff.set_result(None)
+
+    def _start() -> None:
+        if handoff.cancelled():
+            return
+        try:
+            task = loop.create_task(queue.put(payload))
+        except RuntimeError as exc:
+            # The loop was closed between accepting this callback and running it.
+            with suppress(InvalidStateError):
+                handoff.set_exception(exc)
+            return
+
+        def _forward_cancel(_: Future[None]) -> None:
+            # Fires on whichever thread completed the handoff, so the cancel has
+            # to cross back to the loop the way any foreign-thread call does.
+            if handoff.cancelled():
+                with suppress(RuntimeError):
+                    loop.call_soon_threadsafe(task.cancel)
+
+        task.add_done_callback(_settle)
+        handoff.add_done_callback(_forward_cancel)
+
+    try:
+        loop.call_soon_threadsafe(_start)
+    except RuntimeError:
+        return None
+    return handoff
 
 
 def read_poll_interval(idle_seconds: float) -> float:
@@ -281,9 +363,8 @@ class PtyHost:
         queue, loop = self._queue, self._loop
         if queue is None or loop is None:
             return
-        try:
-            future = asyncio.run_coroutine_threadsafe(queue.put(b""), loop)
-        except RuntimeError:
+        future = submit_queue_put(queue, loop, b"")
+        if future is None:
             # The event loop is already closed; there is nobody left to tell.
             return
         waited = 0.0
@@ -325,7 +406,12 @@ class PtyHost:
         gone, a stop was requested, or the loop itself is unusable.
         """
         assert self._queue is not None and self._loop is not None
-        future = asyncio.run_coroutine_threadsafe(self._queue.put(payload), self._loop)
+        future = submit_queue_put(self._queue, self._loop, payload)
+        if future is None:
+            # The event loop is already closed (daemon teardown, or a test whose
+            # loop went away while this reader was still draining) - nothing can
+            # be delivered, so stop reading rather than spin.
+            return False
         while True:
             try:
                 future.result(timeout=_QUEUE_PUT_POLL_SECONDS)

@@ -11,16 +11,27 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from typing import Any
 
 import psutil
 import pytest
 
 from swe_mux import bounded_subprocess
-from swe_mux.bounded_subprocess import bounded_read, run_bounded
+from swe_mux.bounded_subprocess import bounded_read, release_subprocess_transport, run_bounded
 
 
 def python_argv(source: str) -> tuple[str, ...]:
     return (sys.executable, "-c", source)
+
+
+def transport_closed(process: asyncio.subprocess.Process) -> bool:
+    """The private flag `BaseSubprocessTransport.__del__` itself branches on.
+
+    There is no public reading of it, and the whole point of the assertions below is
+    that the finalizer never has anything to do.
+    """
+    transport: Any = process._transport
+    return bool(transport._closed)
 
 
 @pytest.fixture(autouse=True)
@@ -237,6 +248,76 @@ async def test_stdin_is_closed_so_a_prompting_program_fails_instead_of_hanging()
 
     assert outcome.timed_out is False
     assert b"''" in outcome.stdout
+
+
+async def test_releasing_closes_a_transport_asyncio_would_have_left_open() -> None:
+    """The finalizer this avoids runs whenever the collector gets there, not here.
+
+    asyncio closes a subprocess transport only once every pipe has disconnected and
+    the exit has been delivered. A child still running has done neither, so this is
+    the state every abandoned run ends in - and `BaseSubprocessTransport.__del__`
+    then calls `close()` against a loop that is gone by then, raising
+    `RuntimeError: Event loop is closed` out of a finalizer and failing whichever
+    test happened to be running.
+    """
+    process = await asyncio.create_subprocess_exec(
+        *python_argv("import time\ntime.sleep(120)\n"),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    child = psutil.Process(process.pid)
+    # No await between the spawn and here: the child is provably still running, so
+    # nothing can have closed the transport yet.
+    assert transport_closed(process) is False
+
+    release_subprocess_transport(process)
+
+    assert transport_closed(process) is True
+    # Closing an unfinished transport also kills the child it was still holding.
+    assert await _has_gone(child)
+
+
+async def test_releasing_tolerates_a_process_with_no_transport() -> None:
+    """`_transport` is private, so its absence must degrade rather than raise."""
+    release_subprocess_transport(object())  # type: ignore[arg-type]
+
+
+async def test_the_runner_leaves_no_open_transport_behind() -> None:
+    """The invariant, held for a completed run as well as an abandoned one.
+
+    A completed run gets this from asyncio itself today, which is exactly why it is
+    asserted: the guarantee callers depend on is `run_bounded`'s, not a detail of
+    when `_maybe_close_transport` happens to fire.
+    """
+    spawned: list[asyncio.subprocess.Process] = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def recording_exec(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_exec(*args, **kwargs)
+        spawned.append(process)
+        return process
+
+    original = bounded_subprocess.asyncio.create_subprocess_exec
+    bounded_subprocess.asyncio.create_subprocess_exec = recording_exec  # type: ignore[assignment]
+    try:
+        finished = await run_bounded(
+            python_argv("print('done')\n"), label="finished", timeout_seconds=60, output_limit=1024
+        )
+        abandoned = await run_bounded(
+            python_argv("import time\nprint('before', flush=True)\ntime.sleep(120)\n"),
+            label="abandoned",
+            timeout_seconds=1.0,
+            output_limit=1024,
+        )
+    finally:
+        bounded_subprocess.asyncio.create_subprocess_exec = original  # type: ignore[assignment]
+
+    assert finished.exit_code == 0
+    assert abandoned.timed_out is True
+    assert len(spawned) == 2
+    for process in spawned:
+        assert transport_closed(process) is True
 
 
 async def test_repeated_warnings_for_one_label_are_rate_limited() -> None:
