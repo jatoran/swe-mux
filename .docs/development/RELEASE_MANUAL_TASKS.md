@@ -124,20 +124,45 @@ Nothing here can be delegated to an agent, because it needs a machine that is no
 
 Recorded so they are decisions rather than oversights.
 
+- **PyAV is out of this project's closure, but not out of a downstream `pip install`.**
+  W5 landed the fix and proved by measurement that transcription works with no `av` installed at all, so swe-mux imports the real package on no code path.
+  The limit is structural rather than an oversight: a uv override governs this repository's resolution, its lockfile, its builds, and the license gate, but it is not carried in the published wheel's `Requires-Dist`.
+  A downstream `pip install swe-mux[voice-local]` therefore still resolves `faster-whisper`'s own declared `av>=11`.
+  There is no PEP 508 mechanism to exclude a transitive dependency from published metadata; closing the last inch needs `faster-whisper` to make `av` optional upstream, or an override on the installing side.
+  What remains for that user is disk size and diligence, not function.
+  Decide before publishing whether to document this in `SECURITY.md`/`RELEASING.md` or to raise it upstream with `faster-whisper`.
+- **A desktop redeploy is owed before release, though not before landing.**
+  The running frozen app still carries the old inline `av` stub, including a defect W5 found and fixed: refusing every attribute meant `repr()` of the stub module raised, so any log line or traceback mentioning `av` raised from inside the stub and buried the real diagnostic.
+  Run `uv run python packaging/redeploy_desktop.py` from the primary checkout once the release branch settles.
+
 - **`mux doctor` requires a running daemon.** It issues `GET /api/diagnostics/doctor`, so it cannot diagnose the single most likely new-user failure, which is the daemon not starting. Worth a daemon-less local mode before launch, but it is a feature change rather than release prep.
 - **Phase 16 first-run blockers are still open** (mobile tour stranding at step 10 of 14, the unskippable provider login at step 5, and the stacked harness dialog over the tour blur). These break a brand-new user's guided first run and should land before any announcement, though not necessarily before the repository is public.
 - **`site/index.html` is 883 lines of hand-authored markup** with its own check tooling. It is in good shape; it needs the placeholder URLs and the screenshot recapture, not a rewrite.
 
 ## Agent work packages
 
-Running in parallel worktrees, each committing to its own branch and stopping short of landing.
-The orchestrating session lands them serially.
+All six ran in parallel worktrees and **all six are landed on master** as of 2026-08-27.
 
-| ID | Scope | Owns |
+| ID | Scope | Outcome |
 |---|---|---|
-| W1 | Untrack `.tmp/`, `.verify/`, `.trash/`, stray root files | git index, `.gitignore` |
-| W2 | CI marker-drift fix, release workflow, Pages deploy workflow | `.github/workflows/` |
-| W3 | `[project.urls]`, classifiers, CHANGELOG, SECURITY, RELEASING | `pyproject.toml` `[project]`, new root docs |
-| W4 | Release artifact validation gate for the frontend bundle | `packaging/verify_release_artifact.py` + tests |
-| W5 | Remove GPL `av` from the wheel install closure | dependencies, `[tool.uv]`, `license_audit.py` |
-| W6 | Public-facing README rewrite | `README.md` |
+| W1 | Untrack `.tmp/`, `.verify/`, `.trash/`, stray root files | Landed. The leaked keypair is untracked at HEAD and still on disk; history removal remains task 3. |
+| W2 | CI marker-drift fix, release workflow, Pages deploy workflow | Landed. `ci.yml` was missing `not live_edge_tts` and would have gone red on all three runners the first time it ran in public. |
+| W3 | `[project.urls]`, classifiers, CHANGELOG, SECURITY, RELEASING | Landed. Verified present in a built wheel's METADATA. |
+| W4 | Release artifact validation gate for the frontend bundle | Landed. Verified to fail on four separate stripped wheels and to exit non-zero. |
+| W5 | Remove GPL `av` from the wheel install closure | Landed, with the scope limit recorded above. |
+| W6 | Public-facing README rewrite | Landed. |
+
+Post-landing gate on master, all green: 5316 passed / 17 skipped, ruff clean, mypy clean over 224 files, frontend `tsc` / `check:tests` / `npm test` all exit 0, and a wheel built from master passes `verify_release_artifact.py`.
+
+One pre-existing flake was found and fixed while landing.
+`test_redeploy_endpoint.py::test_a_scan_older_than_the_window_is_run_again` failed intermittently under load because the bundle-holder scan reused a cached scan whenever `now - started <= window`, and Windows advances `time.monotonic()` in 15.625 ms steps.
+Two back-to-back calls with `max_age=0` land on an identical reading, so a caller asking for no caching silently got some.
+The comparison is now half-open, so `max_age=0` means "never reuse" regardless of clock resolution.
+
+## Sync command
+
+Use the full form; the short one silently strips PyInstaller and breaks the desktop build:
+
+```
+uv sync --extra desktop --extra voice-local --group dev --group package
+```
