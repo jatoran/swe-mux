@@ -81,7 +81,12 @@ _FUNCTION_ALLOWLIST: dict[str, str] = {
     "agent_launcher.py::_omp": "one harness's own launch argv",
     "agent_launcher.py::_pi": "one harness's own launch argv",
     "agent_launcher.py::_opencode": "one harness's own launch argv",
-    "agent_launcher.py::_launch": "names the family whose resolver needs its JS entrypoint",
+    # Moved off `_launch` when the argv construction was split out of it, so the
+    # exemption still sits on the function that actually names a harness rather
+    # than on the one that used to.
+    "agent_launcher.py::_child_argv": (
+        "names the family whose resolver needs its JS entrypoint"
+    ),
     "agent_launcher.py::main": "retires the per-session artifacts two harnesses materialize",
     "agent_skills.py::_claude_inventory": "one harness's own skill roots",
     "agent_skills.py::_codex_inventory": "one harness's own skill roots",
