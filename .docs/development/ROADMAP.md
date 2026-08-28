@@ -3508,6 +3508,39 @@ the onboarding and launch subsections and is not restated here.
   `LICENSE`, `NOTICE`, and `THIRD-PARTY-NOTICES.md` under `dist-info/licenses/`, so an
   installed copy answers the question without the repository. URLs, classifiers, changelog,
   release policy, and the security contact remain open.
+- [x] **Make `mux doctor` answer when the daemon does not** (W10, 2026-08-27).
+  The consolidated Phase 7 report issues `GET /api/diagnostics/doctor`, so it presupposed exactly
+  the thing a broken install does not have.
+  That made the one diagnostic command the project ships useless for the single most likely
+  new-user failure - the daemon not starting - which answered a connection error and nothing else.
+  An unreachable daemon now produces a **local** report (`src/swe_mux/doctor_local.py`) over the
+  install-integrity faults that stop a daemon starting: the Python floor, `swe_mux.server`'s own
+  import graph, the config file (whose load failure the CLI otherwise swallows into a silent
+  loopback fallback), the frontend bundle in the installed package, the data directory's existence
+  and writability, whether `mux.db` opens, whether the configured port is already held, whether
+  this host's PTY backend imports, the frozen app's supervisor bundle, the prerequisite tools,
+  harness detection, and each optional extra with its install command.
+  A daemon that answers is byte-for-byte unaffected, an HTTP error is deliberately not a fallback
+  trigger (a daemon answered, so it is a daemon fault), and `--export` has no local form because
+  every section of that bundle is daemon state.
+  Three decisions are load-bearing.
+  **`unchecked` is its own status**: folding a skipped check into `ok` claims health nobody
+  measured and folding it into `unavailable` claims a capability was measured absent, so each turns
+  a degraded report into a confident wrong one - worse than the connection error it replaced. Every
+  skipped check is emitted as a row naming what is unknown and why, counted separately in the
+  summary, marked `[????]` rather than reusing `[n/a ]`.
+  **One implementation per check**: prerequisites and harness rows come from the daemon report's
+  own builders over the same detection functions, not a second copy that can disagree; what is not
+  re-answered locally is anything reading daemon runtime state.
+  **Exit codes compose the two that existed** rather than adding a scheme: `1` for a failing local
+  check, `3` (daemon unreachable) for a clean degraded report, so a degraded report never exits `0`
+  and a script gating on `mux doctor` keeps working.
+  The supervisor bundle is checked for *presence only*: `supervisor_bundle_current()` reports
+  "stale" when PyInstaller is merely absent, and acting on that answer reaps every live session, so
+  a check that can report a false stale is worse than no check.
+  Contract in `design/interfaces.md`; anti-drift guard in `tests/test_doctor_local.py`, which
+  reconciles every category the remote builder emits against what the local report answers or
+  declares unchecked, and pins the daemon report's rendered bytes.
 - [ ] Test wheel/sdist install, upgrade, uninstall, config/database migration/backup,
   embedded frontend, and `mux`/`muxd` on clean machines without source checkout or Node.js.
 - [ ] Validate `uv tool install swe-mux` and `pipx install swe-mux`; document clean install,

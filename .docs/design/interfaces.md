@@ -1795,6 +1795,7 @@ Each check is `{id, category, title, status, severity, detail, remedy}`; `status
 Every failed check carries a concrete `remedy`.
 Each `observation_freshness[]` row is one agent session whose observation the daemon can no longer trust - `{id, name, backend, reason, since, seconds_stale, diagnostic, delivery_blocking}` - drawn from the same `observation_stale_since`/`observation_stale_reason` fields the per-session state-log exposes (`features/status-detection.md`).
 Like `export`, the report is built from already-sanitized sources and content-free rows, so it never includes a secret, terminal bytes, prompt or message content, or a credential.
+This endpoint is what `mux doctor` reads when a daemon answers, and it is unchanged by the CLI's daemon-less fallback: `unchecked` never appears here and the payload carries no `mode` field (see "`mux doctor` without a running daemon" under CLI).
 
 ## Configurator agent
 
@@ -2537,3 +2538,48 @@ name, `6` not found, `1` a `doctor` report with a failing check.
 `mux doctor` prints the consolidated diagnostics report from `GET /api/diagnostics/doctor` (see
 Delivery diagnostics); `mux doctor --export` prints the full `GET /api/diagnostics/export` bundle
 as JSON.
+
+### `mux doctor` without a running daemon
+
+`mux doctor` is the one command that answers when the daemon does not.
+When `GET /api/diagnostics/doctor` cannot be reached it prints the **local** report
+(`src/swe_mux/doctor_local.py`) instead of a bare connection error, because the daemon failing to
+start is the single most likely new-user failure and was precisely the case the command could not
+diagnose.
+A daemon that *answers* is unaffected: the remote report, its payload, and its rendered bytes are
+exactly what they were.
+An HTTP error is not a fallback trigger - a daemon answered, so it is a daemon fault rather than an
+install fault - and `--export` has no local form at all, since every section of that bundle is
+daemon state; it still exits `3`, naming `mux doctor` as the command that does answer.
+
+The local report runs the checks that are answerable from the machine alone: the Python floor, the
+package's own import graph, the config file, the frontend bundle in the installed package, the data
+directory's existence and writability, whether `mux.db` opens, whether the configured port is
+already held, whether this host's PTY backend imports, the frozen app's supervisor bundle, the
+prerequisite tools, harness detection, and the presence of each optional extra with the command to
+install it.
+Prerequisites and harness detection are produced by the daemon report's own builders over the same
+detection functions, so there is one implementation of those rows rather than two that can
+disagree.
+
+Its report shape is the daemon report's, plus three fields: `mode: "local"`, `complete: false`, and
+a `daemon` block recording the unreachable URL and the transport failure.
+`ok` keeps its meaning from the daemon report - no check *failed* - and is deliberately not
+overloaded to mean "everything is fine"; `complete` and the summary's `unchecked` count say that.
+
+The status vocabulary gains **`unchecked`** beside `ok`/`warn`/`fail`/`unavailable`, for a check
+that did not run, and keeping it distinct is the point rather than a detail.
+Folding a skipped check into `ok` claims health nobody measured, and folding it into `unavailable`
+claims a capability was measured absent when it was not measured at all; either turns a degraded
+report into a confident wrong one, which is worse than the connection error it replaced.
+So every check the local report does not run is emitted as an `unchecked` row naming what is
+unknown *and why* - some need daemon runtime state, and some (remote access, the firewall, the WSL
+bridge) are simply not the question while nothing is listening - the summary counts them
+separately, and the renderer marks them `[????]` rather than reusing `[n/a ]`.
+`unchecked` never appears in a daemon report, which has an answer for everything it runs.
+
+Exit codes compose the two meanings that already existed rather than adding a scheme.
+A failing local check is still `1`, because a named broken check is the more actionable fact; a
+local report with nothing failing is `3`, which is exactly what `3` already meant.
+A degraded report therefore never exits `0`, and a script gating on `mux doctor` keeps working
+unchanged.

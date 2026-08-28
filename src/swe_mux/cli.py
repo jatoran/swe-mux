@@ -14,6 +14,14 @@ Design rules this file keeps (ROADMAP Phase 7, "Practical CLI control"):
 - **Actionable exit codes.** 0 success, 2 usage (argparse), 3 daemon unreachable,
   4 daemon HTTP error, 5 ambiguous name, 6 not found, 1 a `doctor` report with a
   failing check. Scripts branch on these, never on prose.
+  `doctor` is the one command that answers when the daemon does not: an
+  unreachable daemon produces the **local** report (`doctor_local`) rather than a
+  bare connection error, and its exit code composes the two existing meanings
+  rather than adding a scheme. A local check failed is still `1`, because a named
+  broken check is the more actionable fact; a local report with nothing failing is
+  `3`, which is exactly what `3` already meant - the daemon is unreachable. A
+  degraded report therefore never exits `0`, and a script gating on `mux doctor`
+  keeps working unchanged.
 - **Human tables by default, `--json` for machines.** Default output is a table a
   person reads; `--json` prints the raw daemon payload verbatim. Scripts never
   parse the human prose.
@@ -33,6 +41,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -52,11 +61,18 @@ DEFAULT_URL = "http://127.0.0.1:8765"
 
 
 class CliError(Exception):
-    """A CLI-level failure carrying the process exit code to report it with."""
+    """A CLI-level failure carrying the process exit code to report it with.
 
-    def __init__(self, message: str, code: int) -> None:
+    ``reason`` is the bare transport failure ("[WinError 10061] ..."), kept beside
+    the human message so a consumer that re-renders the failure - the local doctor
+    report's preamble - can state the cause without also restating the advice the
+    message already gives.
+    """
+
+    def __init__(self, message: str, code: int, *, reason: str = "") -> None:
         super().__init__(message)
         self.code = code
+        self.reason = reason
 
 
 def resolve_base_url(explicit: str | None) -> str:
@@ -100,6 +116,7 @@ def request(
             f"cannot reach the mux daemon at {base}: {exc.reason}. "
             "Is it running? Set MUX_URL or pass --url to point elsewhere.",
             EXIT_CONNECTION,
+            reason=str(exc.reason),
         ) from exc
 
 
@@ -240,24 +257,82 @@ def _render_harnesses(result: Any) -> str:
 
 
 def _render_doctor(result: Any) -> str:
+    """Render either doctor report.
+
+    One renderer for both, because two would drift and the local report is read in
+    exactly the situation where a formatting difference reads as a different
+    product. The local-only parts - the preamble, the `????` mark, the `unchecked`
+    tally - are all conditioned on facts the daemon report does not carry, so the
+    bytes it produces are unchanged by their existence.
+    """
     if not isinstance(result, dict):
         return json.dumps(result, indent=2)
     checks = result.get("checks") or []
     summary = result.get("summary") or {}
-    mark = {"ok": "OK  ", "warn": "WARN", "fail": "FAIL", "unavailable": "n/a "}
+    # `????` rather than a reuse of `n/a `: "not measured" and "measured absent"
+    # are different facts and must not render the same.
+    mark = {
+        "ok": "OK  ",
+        "warn": "WARN",
+        "fail": "FAIL",
+        "unavailable": "n/a ",
+        "unchecked": "????",
+    }
+    local = result.get("mode") == "local"
     lines: list[str] = []
+    if local:
+        daemon = result.get("daemon") or {}
+        lines += [
+            f"mux could not reach the swe-mux daemon at {daemon.get('url')}"
+            + (f": {daemon.get('detail')}" if daemon.get("detail") else "")
+            + ".",
+            "This is the LOCAL report: only the checks answerable from this machine ran.",
+            "[????] marks a check that did NOT run - nothing is known about it either way.",
+            "",
+        ]
     for check in checks:
         status = str(check.get("status"))
         lines.append(f"[{mark.get(status, status)}] {check.get('title')}: {check.get('detail')}")
         remedy = check.get("remedy")
         if remedy and status in {"warn", "fail"}:
             lines.append(f"         -> {remedy}")
+    label = "swe-mux doctor (local, no daemon)" if local else "swe-mux doctor"
     header = (
-        f"swe-mux doctor: {summary.get('ok', 0)} ok, {summary.get('warn', 0)} warn, "
+        f"{label}: {summary.get('ok', 0)} ok, {summary.get('warn', 0)} warn, "
         f"{summary.get('fail', 0)} fail, {summary.get('unavailable', 0)} unavailable"
     )
-    verdict = "healthy" if result.get("ok") else "PROBLEMS FOUND"
+    unchecked = int(summary.get("unchecked", 0) or 0)
+    if unchecked:
+        header += f", {unchecked} unchecked"
+    if local:
+        verdict = (
+            "PROBLEMS FOUND"
+            if not result.get("ok")
+            else "no local problem found; the daemon is still not running"
+        )
+    else:
+        verdict = "healthy" if result.get("ok") else "PROBLEMS FOUND"
     return "\n".join([*lines, "", f"{header} - {verdict}"])
+
+
+def local_doctor_report(*, base: str, detail: str) -> dict[str, Any]:
+    """The degraded report, built when no daemon answered at ``base``.
+
+    A thin seam over `doctor_local` so the fallback is one call in `dispatch` and
+    the checks themselves are testable without going through argparse. Imported
+    lazily because the local report imports most of the package to *check* that it
+    imports, which every other `mux` subcommand has no reason to pay for.
+    """
+    from . import doctor_local
+
+    config, config_error = doctor_local.load_config_for_doctor()
+    return doctor_local.build_local_doctor_report(
+        config=config,
+        config_error=config_error,
+        unreachable_url=base,
+        unreachable_detail=detail,
+        now=time.time(),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -404,8 +479,28 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
     if args.command == "doctor":
         if args.export:
             # The export bundle is an artifact to copy, not a table; always JSON.
-            return request("GET", "/api/diagnostics/export", base=base), None
-        return request("GET", "/api/diagnostics/doctor", base=base), _render_doctor
+            # It has no local equivalent - every one of its sections is daemon
+            # state - so an unreachable daemon still fails here, with a pointer at
+            # the command that does answer.
+            try:
+                return request("GET", "/api/diagnostics/export", base=base), None
+            except CliError as exc:
+                if exc.code != EXIT_CONNECTION:
+                    raise
+                raise CliError(
+                    f"{exc} The export bundle is daemon state and has no local form; "
+                    "run `mux doctor` (without --export) for the local report.",
+                    EXIT_CONNECTION,
+                ) from exc
+        try:
+            return request("GET", "/api/diagnostics/doctor", base=base), _render_doctor
+        except CliError as exc:
+            if exc.code != EXIT_CONNECTION:
+                # An HTTP error means a daemon answered; it is a daemon fault, not
+                # an install fault, and the local report would answer the wrong
+                # question about it.
+                raise
+            return local_doctor_report(base=base, detail=exc.reason), _render_doctor
     if args.command == "history-duplicates":
         dry = args.action != "repair"
         # The endpoint's dry run reports the merge itself (keeper + learned values),
@@ -439,8 +534,15 @@ def main(argv: list[str] | None = None) -> int:
     # doctor is the one command whose exit code reflects the daemon's health, not
     # just whether the request succeeded, so a script can gate on `mux doctor`.
     if args.command == "doctor" and not getattr(args, "export", False):
-        if isinstance(result, dict) and not result.get("ok", True):
-            return EXIT_DOCTOR_FAIL
+        if isinstance(result, dict):
+            if not result.get("ok", True):
+                return EXIT_DOCTOR_FAIL
+            # A local report with nothing failing still ran a fraction of the
+            # checks against a daemon that is not there, so it must not exit as
+            # though everything passed. 3 is not a new code: it is what "daemon
+            # unreachable" has always meant, which is exactly what happened.
+            if result.get("mode") == "local":
+                return EXIT_CONNECTION
     return EXIT_OK
 
 
