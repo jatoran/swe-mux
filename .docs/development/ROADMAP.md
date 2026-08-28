@@ -3634,8 +3634,50 @@ the onboarding and launch subsections and is not restated here.
   an upgrade destroys rows, now recorded as an asserted exemption rather than as a surprise.)
 - [ ] Validate a TestPyPI alpha before reserving/publishing the PyPI package. Production
   publishing uses Trusted Publishing and no long-lived repository token.
-- [ ] Validate tag, source, frontend bundle, wheel/sdist metadata, migrations, documented
+- [x] Validate tag, source, frontend bundle, wheel/sdist metadata, migrations, documented
   commands, and capability/version diagnostics as one release unit.
+  (Done 2026-08-28. `packaging/verify_release_unit.py`, wired into `release.yml` beside the
+  existing artifact validation and before every publish path. The gap it closes is
+  **coherence**, which nothing covered: `verify_release_artifact.py` proves a wheel is
+  internally well-formed without ever looking at the tag or the tree, so a `v0.2.0` tag over a
+  `pyproject.toml` still saying `0.1.0` builds a perfectly valid wheel of the wrong version -
+  and because the update manifest is keyed by the tag while the installed package reports its
+  metadata version, every install would then be told a newer version exists forever.
+  Eleven checks, each a disagreement *between* the three: the tag against `[project] version`
+  and `__version__`; the six version literals `RELEASING.md` tabulates plus
+  `frontend/package.json`; a `CHANGELOG.md` entry that exists, is written, is not still under
+  `## [Unreleased]`, and whose foot links name the tag; the wheel's METADATA name and version;
+  `[project.urls]` absolute, https, placeholder-free, and actually carried into the artifact;
+  every entry point `README.md` and `RELEASING.md` tell a user to run, resolved through
+  `[project.scripts]` and on into the wheel's `entry_points.txt`; and the schema stamps.
+  Three decisions worth not re-deriving.
+  **The tag is required, not optional.** With no tag there is nothing to compare against, so a
+  run without one would have to report a pass it did not earn; `--tag` is mandatory (falling
+  back to `$GITHUB_REF_NAME` only when that names a tag) and refusing is exit 2. Before
+  tagging, the operator passes the tag they are about to cut, which is the last point a
+  mismatch is fixable.
+  **Migration contiguity is not checkable and is not faked.** Migrations here are
+  `PRAGMA table_info` column-add lists with no version attached to any step, so nothing maps a
+  version onto the steps that produce it and a contiguity check would either always pass or
+  assert an invention. What `.docs/technical/backend/sqlite.md` *does* state is checked: no
+  module executes `PRAGMA user_version` (read as syntax rather than text, so the three modules
+  that name it in a comment explaining why they do not are not violations), each store key is
+  stamped by exactly one module, and the stamped value is that module's own `*_SCHEMA_VERSION`
+  constant and at least 1 - because 0 is what an unstamped database already reads as. The
+  composition none of that can see stays `tests/test_migration_compatibility.py`'s.
+  **The documented-command scan uses a closed external allowlist**, the same shape
+  `license_audit.py` uses, because guessing which bare word is a third-party tool is how a
+  check starts reporting on text it did not understand. Unfenced inline code needs an argument
+  to count as an instruction (`verify`, `desktop`, `master` are nouns in these documents), and
+  HTML comments are stripped first so README's `TODO(release)` block does not gate the release
+  on a command the project deliberately is not yet giving.
+  Two halves of the item remain and are recorded rather than hidden. The **frontend bundle** is
+  `verify_release_artifact.py`'s and is deliberately not duplicated - both run in `release.yml`
+  and two answers that only probably agree is worse than one. The **sdist** is validated by
+  neither; `release.yml` already records why it carries no frontend, and closing that belongs
+  to `pyproject.toml`. `RELEASING.md` step 1's `TODO(release)` sweep is also deliberately not a
+  check: the tree legitimately carries those markers today, so requiring their absence would be
+  red on a healthy checkout, which is how a gate gets skipped.)
 - [ ] Decide Windows code signing before the first public binary: Azure Trusted Signing
   (cheapest), an OV certificate, or unsigned with the SmartScreen warning documented on the
   download page.
@@ -4606,20 +4648,55 @@ but reading.
 
 Three defects each end or corrupt a brand-new user's guided first run.
 
-- [ ] The tour must not strand on mobile: step `resources` is click-gated on
+- [x] The tour must not strand on mobile: step `resources` is click-gated on
   `[data-tutorial="project-notes"]`, which only the desktop launcher rail or an already-open
   side panel carries, and an action step renders its hint instead of Next - so on a phone the
   only control at step 10 of 14 is Exit.
   `navigateTutorial` already opens the sidebar for other mobile steps; this step follows suit,
   and the same fix covers the desktop case of a hidden Notes tab.
-- [ ] Step 5 must not demand a real provider login unskippably, while the harness panel one
+  (Done 2026-08-28, W21, in two halves because the anchor and the dead end are separate faults.
+  The **anchor**: `navigateTutorial` was already listing `resources` among its mobile steps and
+  opening the *navigation sidebar* for it - the wrong panel, which has never carried a Notes
+  control. The mapping is now one table, `mobileTutorialChrome` in `tutorial.ts`, so a step
+  cannot be added to the walk and forgotten; `resources` returns `'side-panel'` and the step
+  opens the panel without selecting Notes inside it, because selecting it would answer the
+  step's own question.
+  The **dead end** is the more general fault and the anchor fix does not reach it: a hidden
+  Notes tab still leaves no anchor on either layout, and unhiding a tab behind the user's back
+  is not something a tour may do. Every action step now renders a skip beside its hint.
+  `test/renderer/tutorial-steps.spec.ts` walks the tour at a phone and a desktop viewport over
+  a page carrying **none** of its anchors - every step in its worst case at once - and asserts
+  it still reaches Finish.)
+- [x] Step 5 must not demand a real provider login unskippably, while the harness panel one
   screen earlier calls CLI login a later step.
   The step becomes skippable and its copy agrees with the harness panel.
-- [ ] The two first-run surfaces must not render stacked: the harness dialog (z-140) sits over
+  (Done 2026-08-28, W21. Skippable by the rule above, with `I'll do this later` rather than the
+  generic label, because a named answer is a choice and a generic dismissal is not. The copy now
+  states the same fact the harness panel does - mux reads Claude's and Codex's own login files,
+  so the switcher is empty until each CLI has been signed in - and says the step is not required
+  to carry on, which is true: the session the tour goes on to start is a Shell.
+  The gate and the spotlight are untouched for the user who does want to do it now.)
+- [x] The two first-run surfaces must not render stacked: the harness dialog (z-140) sits over
   the tour's blur (z-120), so the first frame is a dialog on a doubly-dimmed app with an
   invisible tour card beneath it.
   One surface leads and the other waits; which leads is the implementer's call, stated in the
   code.
+  (Done 2026-08-28, W21. **The harness panel leads.** It decides what the launchers contain and
+  the tour walks the user into one of those launchers two steps in, so touring first shows a Run
+  menu that is about to change; and it is a bounded modal with three explicit exits, where a
+  fourteen-step walk merely gets interrupted.
+  Both render sites now read one total function, `firstRunSurface` in `tutorial.ts`, so "exactly
+  one of them, ever" is a property of the function rather than of two conditions that have to
+  agree - the defect was precisely two independent conditions that happened to be true together.
+  The tour additionally waits for the first `/api/config` call to **settle** rather than to
+  succeed. Without that the suppression begins one fetch too late, which is exactly the frames
+  the damage was done in; and settling rather than succeeding is what stops an unreachable daemon
+  from suppressing the tour forever.
+  `Configure in Settings…` suppresses the tour for that session without marking it complete:
+  declining the panel is not declining the tour, and silently consuming a first-run walk the user
+  never saw is the more expensive mistake.
+  Not covered by a test: that `App.tsx`'s two render sites read that function. The function's own
+  16-input truth table is asserted, and the wiring is one expression at each site.)
 
 ### A help surface that exists
 
@@ -4639,8 +4716,11 @@ tabs, and no `help.*` command, no docs link, and a tour reachable only from Sett
 ### Stale guidance
 
 - [ ] The tour no longer describes the removed `Utilities` menu group.
-- [ ] `ui.md` states the real side-panel tab count (the code has 11; the doc says 14/12 in two
+- [x] `ui.md` states the real side-panel tab count (the code has 11; the doc says 14/12 in two
   places).
+  (Done 2026-08-28, W21. Four occurrences, not two: "fourteen tabs", "`Panels · N of 14`", and
+  two "twelve" readings of the launcher rail. The rendered count itself has always been derived
+  from `DRAWER_TABS.length`, so only the prose was ever wrong.)
 
 ### Verify the handed-off findings
 
@@ -4656,8 +4736,11 @@ them; grant-gates has since landed, and nobody has checked whether they landed w
 
 ### Phase 16 exit criteria
 
-- [ ] A first run on a phone reaches the end of the tour without stranding, skipping a provider
+- [x] A first run on a phone reaches the end of the tour without stranding, skipping a provider
   login it does not have, or opening under a stacked dialog.
+  (Met by the three First-run blockers above, W21. The walk is asserted at a 390x780 viewport in
+  `test/renderer/tutorial-steps.spec.ts`; the sequencing and the mobile anchor table are asserted
+  as pure functions in `test/tutorial.test.ts`.)
 - [ ] "Help" is speakable and palettable, the tour is re-openable from it, and the scan
   timeline's help modal opens from the tab and matches its feature doc.
 - [ ] The tour and `ui.md` describe only chrome that exists.

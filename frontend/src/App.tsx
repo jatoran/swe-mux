@@ -166,8 +166,8 @@ import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { HarnessSetup } from './HarnessSetup'
 import { ActionEditorModal } from './ActionEditorModal'
-import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
-import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
+import { GuidedTutorial } from './GuidedTutorial'
+import { completeTutorial, emitTutorialAction, firstRunSurface, mobileTutorialChrome, resetTutorial, shouldStartTutorial, type TutorialStepId } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { eventRequiresFleetRefresh } from './eventRefresh'
@@ -687,6 +687,11 @@ export function App() {
   // and it has to be able to work that drawer the way it works the workspace sidebar.
   const [settingsNavOpen, setSettingsNavOpen] = useState(false)
   const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
+  // False until the first `/api/config` call settles, either way. Whether the first-run
+  // harness panel is going to lead is a fact only the daemon holds, and it arrives after
+  // the first paint - so the tour waits for it rather than painting a card that a dialog
+  // is about to cover. See the sequencing note at the tutorial's render site.
+  const [firstRunResolved, setFirstRunResolved] = useState(false)
   const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
   // user left off" - Settings remembers its own last tab, so an unqualified open must
@@ -1793,6 +1798,8 @@ export function App() {
     api<AppConfig>('GET','/api/config')
       .then(config=>applyConfig(config,includeTheme))
       .catch(()=>{})
+      // Settled, not succeeded: an unreachable daemon must not suppress the tour forever.
+      .finally(()=>setFirstRunResolved(true))
 
   const scheduleUiScalePersist = (scale:UiScale):void => {
     const field=uiScaleConfigKey(currentProfile())
@@ -3705,6 +3712,8 @@ export function App() {
     return()=>window.removeEventListener(OPEN_SETTING_EVENT,onOpenSetting)
   })
 
+  // Which of the two first-run surfaces may be on screen. One decision, one owner.
+  const firstRun=firstRunSurface({tutorialArmed:tutorialOpen,configResolved:firstRunResolved,harnessSetupNeeded,settingsOpen})
   const closeTutorial=()=>{
     completeTutorial()
     setTutorialOpen(false)
@@ -3717,9 +3726,27 @@ export function App() {
     if(step!=='feature-menu')setMainMenuOpen(false)
     if(step!=='run-choice')setRunMenu(null)
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setTabMenu(null);setNoteMenu(null)
+    // One table (`mobileTutorialChrome`) decides which collapsed panel a step's anchor is
+    // behind on a phone, so a step cannot be added to the walk and forgotten here - which
+    // is how `resources` came to open the navigation sidebar, a panel that has never
+    // carried its Notes anchor, and stranded the tour at step 10 of 14 with only Exit.
+    // The two panels are mutually exclusive on a phone rather than merely both openable:
+    // the side panel is an overlay at z-60 over a z-59 scrim and the navigation sidebar is
+    // at z-46, so a sidebar anchor under an open side panel is spotlit and unclickable.
+    // A step naming one therefore shuts the other; a step naming neither leaves both as
+    // the user left them, so the Notes panel they were just asked to open survives the
+    // explanatory step that follows.
+    const revealMobileChrome=(id:TutorialStepId)=>{
+      if(!mobileWorkspace)return
+      const chrome=mobileTutorialChrome(id)
+      if(chrome==='sidebar'){setClipboardOpen(false);setSidebarOpen(true)}
+      // Never `showDrawerTab('notes')`: the step asks the user to open Notes, and
+      // pre-selecting it would answer its own question.
+      if(chrome==='side-panel'){setSidebarOpen(false);setClipboardOpen(true)}
+    }
     if(step==='welcome'||step==='projects'){
       setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
-      if(step==='projects'&&mobileWorkspace)setSidebarOpen(true)
+      revealMobileChrome(step)
       return
     }
     if(step==='project-add'||step==='project-open'){
@@ -3735,10 +3762,7 @@ export function App() {
       setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
       const first=projectsRef.current[0]
       if(first&&!projectsRef.current.some(project=>project.id===projectId))setProjectId(first.id)
-      // `configurator` joins the mobile list because its anchor is in the sidebar
-      // footer, which is behind the drawer on a phone: without this the step
-      // spotlights a control the user cannot see.
-      if(mobileWorkspace&&(step==='resources'||step==='features'||step==='feature-menu'||step==='configurator'))setSidebarOpen(true)
+      revealMobileChrome(step)
     }
   }
 
@@ -8129,7 +8153,18 @@ export function App() {
 
     {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
-    {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
+    {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so
+        "exactly one of them, ever" is a property of the function rather than of two
+        conditions that have to agree. The harness panel leads and the tour waits; the
+        reasoning is on the function. */}
+    {firstRun === 'harness' && <HarnessSetup
+      onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}}
+      // Handing off to Settings → Agents is a choice to configure by hand, so the tour must
+      // not open on top of that. It is suppressed for this session only and NOT marked
+      // complete: declining the harness panel is not declining the tour, and silently
+      // consuming a first-run walk the user never saw is the more expensive mistake.
+      onConfigureMore={()=>{setHarnessSetupNeeded(false); setTutorialOpen(false); openSettings('Agents')}}
+    />}
 
     {actionEditorOpen && <ActionEditorModal projectId={active?.project_id || activeProject?.id} onClose={() => setActionEditorOpen(false)} />}
 
@@ -8166,7 +8201,7 @@ export function App() {
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 
-    {tutorialOpen&&<GuidedTutorial hasProject={projects.length>0} onNavigate={navigateTutorial} onExit={closeTutorial} onComplete={closeTutorial}/>}
+    {firstRun === 'tutorial' && <GuidedTutorial hasProject={projects.length>0} onNavigate={navigateTutorial} onExit={closeTutorial} onComplete={closeTutorial}/>}
 
     {/* One stack, not two independently anchored toasts: both used to be pinned
         to the same corner and would render exactly on top of each other. */}

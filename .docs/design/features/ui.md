@@ -755,6 +755,7 @@ Its rules, and what each one is defending:
   Where the dollar axis is enforced against a provider that reports no cost, the control says the cap cannot bind there and names first-hit as the configuration that still bounds it - a warning drawn at the moment the choice is made rather than discovered later as spend that never approached a limit.
 - Harnesses is the per-harness section: an enable toggle, the detected executable path (read-only), the executable override, default arguments as a command line, and the width envelope where the harness declares it. It lists every registered harness including disabled ones (`allHarnessesIncludingDisabled`), because a section that hid a disabled harness could not re-enable it. The enable toggle is three-state: leaving a harness untouched follows detection, and a `follow detection` control clears an explicit choice. A disabled harness is only hidden from the launchers; it stays spawnable and its history stays searchable (`features/backends.md`). The tab also holds native-history reconcile: the startup toggle, a `Scan now` control with progress and cancel, and the browser's page size (`features/history.md`). That is history indexing rather than harness configuration, but the scan is scoped to exactly the enabled harnesses, so the two are read together or not at all.
 - The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Harnesses rather than duplicating the per-harness editors.
+  It **leads** the first run and the guided tour waits behind it, never beside it; the ordering and its reasoning live under "Guided first-run tutorial" below.
 - Git exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
   The same Settings tab owns the machine-wide `Show swe-mux repository setup prompts` switch and a reset for recorded Project decisions.
@@ -1203,6 +1204,24 @@ Its rules, and what each one is defending:
 - A versioned device-local completion marker opens the tutorial on the first browser/WebView
   visit. Finish and **Exit tour** both suppress later automatic runs; Settings reset removes the
   marker and starts immediately.
+- **The two first-run surfaces are drawn from one decision** (`firstRunSurface` in `tutorial.ts`),
+  so "exactly one of them, ever" is a property of a total function rather than of two conditions
+  that have to agree.
+  They used to be decided independently and both were live on a fresh install - the tour opens
+  synchronously from `localStorage`, the harness panel a config fetch later, and that panel's
+  backdrop stacks over the tour's blur - so the product's first frame was a dialog on a
+  doubly-dimmed app with an invisible tour card beneath it.
+  **The harness panel leads.** It decides what the launchers contain and the tour walks the user
+  into one of those launchers two steps in, so touring first shows a Run menu that is about to
+  change; it is also a bounded modal with three explicit exits, where a fourteen-step walk merely
+  gets interrupted.
+  The tour additionally waits for the first `/api/config` call to *settle* rather than to succeed,
+  because whether the panel is needed is a daemon fact that arrives after the first paint -
+  suppressing one fetch too late is exactly when the damage was done, and an unreachable daemon
+  must not suppress the tour forever.
+  The panel's `Configure in Settings…` suppresses the tour for that session **without** marking it
+  complete: declining the panel is not declining the tour, and silently consuming a first-run walk
+  the user never saw is the more expensive mistake.
 - The action-driven walkthrough covers the real Projects registry and creation form,
   provider-native Claude/Codex login or current-login capture, Run menu, shell launch, pane/tab
   lifetime, second-tab creation, tab movement, pane-edge splitting, Project notes, menu browsers,
@@ -1211,14 +1230,35 @@ Its rules, and what each one is defending:
   launcher rail's button while the drawer is closed, and the drawer's own pane strip while it is
   open. Exactly one carries the anchor at a time, which a click-gated step requires.
   It opens the Project-owned collection and teaches note creation independently of sessions.
+- **One table decides which collapsed chrome a step's anchor is behind on the mobile layout**
+  (`mobileTutorialChrome` in `tutorial.ts`), so a step cannot be added to the walk and forgotten.
+  Four steps are behind the navigation sidebar; the notes step is behind the **side panel**, which
+  is a different panel and was the defect: a phone has no launcher rail, so with the side panel
+  shut the step had no anchor at all and, carrying an action, no Next either - the tour ended at
+  step 10 of 14 with nothing but Exit.
+  The step opens the panel rather than selecting Notes inside it, because selecting it would
+  answer the step's own question.
+  The two panels are mutually exclusive on a phone rather than merely both openable - the side
+  panel is an overlay above the navigation sidebar's stacking level, so a sidebar anchor under an
+  open side panel is spotlit and unclickable - so a step naming one shuts the other, and a step
+  naming neither leaves both as the user left them.
 - Highlighted product controls replace **Next** for action steps. Transparent blockers leave only
   the spotlight opening and tutorial card interactive; Project creation, account save, terminal
   launch, and layout drops advance only after their ordinary operation reports success.
+- **Every action step also carries a skip beside its hint**, and this is a floor rather than a
+  convenience: a step whose gate the user cannot satisfy - a Notes tab they have hidden, a
+  provider CLI they have not installed - otherwise leaves abandonment as the only way past it.
+  The spotlight and the gate stay for the user who does want to do the thing now; the wording of
+  the skip is per-step where the generic one reads wrongly ("I'll do this later" on accounts).
 - Both the Run step and the second-tab step drive the real Run menu, since tab strips have no
   new-tab button to point at; the second-tab step's spotlight returns to Run.
-- Run requires opening the actual menu and selecting Shell. Account setup requires either
-  **sign in + save** or **save current login** to complete successfully. Failures remain on the
-  current step with the owning feature's normal error surface.
+- Run requires opening the actual menu and selecting Shell.
+  Account setup **offers** either **sign in + save** or **save current login** and is skippable,
+  because the first-run harness panel one surface earlier calls CLI login a later step and two
+  first-run surfaces contradicting each other about whether a thing is required now is worse than
+  either answer alone.
+  Nothing later in the walk needs a provider account: the session it starts is a Shell.
+  Failures remain on the current step with the owning feature's normal error surface.
 - Drag coaching is gesture-aware. Before movement, only the source tab is marked. After the
   pointer gesture crosses the real five-pixel drag threshold, the spotlight moves to the tab bar
   or a right-edge split zone; the native insertion/split preview remains visible and unobscured.
@@ -2357,12 +2397,12 @@ Its rules, and what each one is defending:
 - **Hidden is one global set, device-local, exactly like the arrangement it filters.**
   Visibility *is* arrangement: which tabs exist is not a property that may vary by Project while their position, stack membership, and split ratio do not.
   Per-Project visibility would also be the only structural property that changes as you switch Projects, which is what would let a split pane hold content on one Project and nothing on the next.
-  Device-local means a phone can carry a tighter rail than the desktop, which is where the cost of fourteen tabs is actually paid.
+  Device-local means a phone can carry a tighter rail than the desktop, which is where the cost of eleven tabs is actually paid.
   It is read synchronously at startup so no tab is drawn and then taken away again.
 - **Hiding is a render filter and never a layout mutation.**
   Layout normalization keeps every registered tab in the tree exactly once and re-inserts a missing one at its *canonical* position, so removing a hidden tab from the layout would silently discard wherever the user had dragged it the moment they showed it again.
 - **The way back is where the way out was.**
-  Right-clicking any tab — or long-pressing one on mobile, which already opens this menu — offers `Hide <tab>` flat, and a `Panels · N of 14` group holding the full checklist and `Show all`.
+  Right-clicking any tab — or long-pressing one on mobile, which already opens this menu — offers `Hide <tab>` flat, and a `Panels · N of 11` group holding the full checklist and `Show all`.
   The count is on the group header, so a rail missing something says so without being opened.
   The same checklist is mirrored in Settings → Appearance → Right sidebar, which is the reachable path on mobile and the searchable one everywhere.
   Settings alone would have been the wrong home: the rail is where a missing tab is noticed, and a settings page is not where anyone looks for chrome they removed by right-clicking.
@@ -2754,14 +2794,14 @@ Its rules, and what each one is defending:
   is what the closed sidebar looks like. It is desktop-only, holds the workspace's last column while
   the drawer is closed, and is replaced by the drawer itself on open.
   Keeping it beside an open drawer duplicated that drawer's own tab strip: with the default
-  single-stack layout the two lists are the same twelve icons, and the rail spent a column
+  single-stack layout the two lists are the same eleven icons, and the rail spent a column
   restating what the strip already said.
   The rail's width stays reserved in both states and is handed to the drawer on open, so the
   Project workspace is exactly as wide either way and opening the drawer sends no larger reflow to
   the PTYs than it did when the rail stayed put.
   What the rail uniquely provides — discoverability without a menu or a chord, and the Alerts unread
   badge — only matters while the drawer is closed, which is precisely when it is drawn.
-  The cost is a split drawer, where the rail was the one place all twelve tabs appeared together and
+  The cost is a split drawer, where the rail was the one place all eleven tabs appeared together and
   each pane strip shows only its own subset. The per-tab palette commands, their voice phrases, and
   pane tab cycling all still reach any tab, and a rail that appears and disappears with split
   geometry would be harder to predict than one that simply means "collapsed".
