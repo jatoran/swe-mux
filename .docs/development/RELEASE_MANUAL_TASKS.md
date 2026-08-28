@@ -19,16 +19,29 @@ These are cheap to make and several tasks are stalled behind them.
       Unsigned PyInstaller executables are the single largest source of "is this malware" reports at launch.
       This can be deferred past the source release but not past the first desktop binary.
 
-## 2. Rotate the leaked Tailscale certificate
+## 2. The leaked Tailscale certificate: already rotated, no action needed
 
-Do this first and independently of everything else.
-`.tmp/tailscale-cert-check/key.pem` is a real EC private key that has been in git objects since commit `90bcd45`.
-Removing it from history does not un-expose it.
+Identified 2026-08-27 rather than assumed, and the identification is what closes this item.
 
-- [ ] Revoke and reissue the Tailscale cert for the affected host.
-- [ ] Confirm nothing in the running install still references the old keypair.
+`.tmp/tailscale-cert-check/` holds a **Let's Encrypt TLS certificate** for `desktop-dnld8aa.taild42d36.ts.net`, obtained with `tailscale cert`, plus its EC private key.
+It is **not** a Tailscale node key, so it carries no device identity and nothing about it can affect tailnet membership or connections.
 
-Agent W1 untracks the file at HEAD; that is not a substitute for rotation.
+Tailscale already replaced it on its own:
+
+| | serial | issued | expires |
+|---|---|---|---|
+| leaked (commit `90bcd45`) | `051328FE...` | 2026-06-25 | 2026-09-23 |
+| live on `:443` now | `062C3366...` | 2026-08-24 | 2026-11-22 |
+
+The listener presents the newer certificate, so the leaked key is superseded and expires on its own within weeks.
+Its exploitation would require both tailnet access and an active MITM against a name that resolves only inside the tailnet.
+
+- [x] Rotation: done automatically by Tailscale Serve on 2026-08-24. No manual act.
+- [ ] Optional and low value: revoke the old certificate with Let's Encrypt.
+      It expires 2026-09-23 regardless, and Let's Encrypt retired OCSP in 2025, so revocation is barely checked by anything.
+
+The file is also **no longer on disk**: W1 staged its removal with `git rm --cached`, and the fast-forward that landed that commit applied the deletion to the primary working tree as well.
+It remains in history until task 3 runs, which is the only reason the identification above was still possible.
 
 ## 3. Git history rewrite
 
@@ -36,22 +49,27 @@ Agent W1 untracks the file at HEAD; that is not a substitute for rotation.
 `git filter-repo` rewrites all refs, which orphans worktrees and invalidates branch state.
 Confirm first that `git branch --no-merged master` is empty and every `.claude/worktrees/*` checkout is either landed or expendable.
 
-The measured facts this plan is built on, so it is not re-derived:
+The measured facts this plan is built on, so it is not re-derived. Two of them were revised on 2026-08-27 after measurement, and both revisions shrink the job:
 
-- The entire private-key surface across 1078 commits is one keypair from one commit (`90bcd45`, `.tmp/tailscale-cert-check/`).
+- The entire private-key surface across 1108 commits is one keypair from one commit (`90bcd45`, `.tmp/tailscale-cert-check/`).
   No Anthropic, Tailscale, AWS, Google, Slack, or GitHub tokens exist anywhere in history.
   The three `ghp_`/`sk-ant-` matches in `tests/` are obviously-synthetic fixtures and are fine to keep.
-- `.git` is 205 MB, dominated by roughly forty superseded 1.2 MB Vite bundles and 1.1 MB WASM blobs under `src/swe_mux/static/assets/`, committed before that path was gitignored.
+- **`.git` is 79 MB, not the 205 MB recorded earlier**; Git garbage-collected during the release-prep work.
+  79 MB is an unremarkable clone, so dropping the superseded Vite bundles is no longer a reason to run this and the path list below is narrowed to the leak.
+- **The leak sits at commit 14 of 1108** (2026-07-20, eight days after the first commit), so any filter rewrites 1094 commits regardless of how narrow the path list is.
+  The scope of the rewrite is therefore fixed and total; only the payload changes.
+  `filter-repo` preserves messages, authors, and dates, so the published history still shows 1108 commits across six weeks - only the SHAs differ.
+- Every worktree and branch is expendable, verified rather than assumed: all 59 worktrees are clean and all 160 branches are merged into `master`.
+  Nothing is lost by orphaning them, which is what the rewrite does.
 - The historical `.test-tmp-identity/**/*.db` and `*.jsonl` blobs contain synthetic test data, not real transcripts. They are clutter, not a leak.
 
-Recommended single pass, which fixes the leak and the bloat together:
+Recommended pass, narrowed to the leak and the scratch directories:
 
 ```
 git clone --no-local D:/PROJECTS/swe-mux D:/PROJECTS/swe-mux-clean
 cd D:/PROJECTS/swe-mux-clean
 git filter-repo \
   --path .tmp --path .verify --path .trash \
-  --path src/swe_mux/static/assets \
   --path .test-tmp-identity \
   --path test-tmp-codex \
   --invert-paths
