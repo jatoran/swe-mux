@@ -575,7 +575,7 @@ def _unreadable(wheel: Path, detail: str, remedy: str) -> Report:
     return Report(wheel=str(wheel), ok=False, checks=[check], evidence=_empty_evidence())
 
 
-def render(report: Report) -> str:
+def render(report: Report, *, subject: str = "Release artifact") -> str:
     """Human output: every verdict, then the failures again with their remedies.
 
     The passing lines are not noise. This runs in a release pipeline where the
@@ -583,8 +583,12 @@ def render(report: Report) -> str:
     validator that prints nothing on success cannot be distinguished from one
     that silently skipped its checks - which is the exact class of failure it
     exists to catch in the artifact.
+
+    `subject` names what was checked, because `install_smoke.py` renders its own
+    report through this function: two readers of one CI log need to be able to
+    tell which of the two failed without matching check names against a script.
     """
-    lines = [f"Release artifact check: {report.wheel}"]
+    lines = [f"{subject} check: {report.wheel}"]
     for check in report.checks:
         lines.append(f"  {'PASS' if check.ok else 'FAIL'}  {check.name}: {check.detail}")
     failures = report.failures
@@ -593,8 +597,7 @@ def render(report: Report) -> str:
         return "\n".join(lines)
     lines.append("")
     lines.append(
-        f"Release artifact validation FAILED "
-        f"({len(failures)} of {len(report.checks)} checks):"
+        f"{subject} validation FAILED ({len(failures)} of {len(report.checks)} checks):"
     )
     for check in failures:
         lines.append(f"  - {check.name}: {check.detail}")
