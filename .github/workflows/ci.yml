@@ -153,8 +153,14 @@ jobs:
       - name: Install frontend
         run: npm --prefix frontend ci
 
+      # `run check`, not `exec tsc -- --noEmit`: under `--prefix` the latter does
+      # not forward the flag, so tsc typechecks nothing, prints its help text and
+      # exits 1. That went unnoticed until the first public CI run, because every
+      # earlier run failed at pytest and skipped every step after it. Running the
+      # package script also restores the `precheck` xterm patch verification that
+      # `exec` bypassed, and matches the `check:tests` step below.
       - name: Frontend typecheck
-        run: npm --prefix frontend exec tsc -- --noEmit
+        run: npm --prefix frontend run check
 
       - name: Frontend test typecheck (unit suites + renderer harnesses)
         run: npm --prefix frontend run check:tests
