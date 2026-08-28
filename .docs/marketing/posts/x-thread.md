@@ -52,7 +52,7 @@ The project runs zero servers. There is nothing to breach and nothing to shut do
 Open source, Apache 2.0, DCO (no CLA - the core can't be relicensed, ever, by anyone).
 Windows-first, Linux from source, roadmap is public.
 
-Repo: github.com/[org]/swe-mux
+Repo: github.com/jatoran/swe-mux
 Site: swemux.dev
 
 Break it and tell me how.

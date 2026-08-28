@@ -45,5 +45,5 @@ Agents already decoupled my output from my typing speed.
 This decouples it from my location.
 An eight-hour agent workload needs maybe twenty minutes of human judgment scattered through the day, and there's no reason those twenty minutes have to happen in a chair.
 
-swe-mux is open source (Apache 2.0): github.com/[org]/swe-mux.
+swe-mux is open source (Apache 2.0): github.com/jatoran/swe-mux.
 Setup for the phone path is in the docs - it's Tailscale plus one toggle, not a networking project.

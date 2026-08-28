@@ -21,7 +21,7 @@ The demo-able moments, since that's what matters for video:
 - Driving the whole fleet from a phone, then by voice ("which sessions need me")
 
 90-second demo: [video URL]
-Repo: github.com/[org]/swe-mux
+Repo: github.com/jatoran/swe-mux
 
 If it's a fit, I'm glad to do a walkthrough call, give you a guided setup, or just answer questions async.
 No expectations either way - the tool is free and so is this email.

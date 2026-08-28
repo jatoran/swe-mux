@@ -5,9 +5,11 @@ Each outlet gets its own blurb at its own length; none of them gets the launch p
 
 ## Console.dev
 
-They feature two dev tools a week and have a submission form (console.dev - "Submit a tool").
+Weekly, roughly 2-3 reviewed tools plus 5-6 beta releases per issue, published Thursdays.
 Their format is a short description plus what they call "interesting" about it.
 They favor tools with strong engineering opinions.
+
+**Read the [selection criteria](https://console.dev/selection-criteria) before writing the submission**, because one of them is a hard gate: they list only early access, alpha, or beta releases, and "any GA or stable releases are not eligible" - the release must be pre-1.0 or carry a beta/preview label somewhere discoverable. swe-mux at **0.1.0** clears this, so say the version plainly in the submission. Their other questions are whether the primary user is a developer, whether an individual can self-serve without talking to anyone, whether it belongs in a regular-use toolset, and whether it makes developers better. The self-serve question is a strength here rather than a hurdle: there is no signup at all, which is worth stating rather than leaving them to discover.
 
 **Description (~50 words):**
 
@@ -33,7 +35,10 @@ Fully local with a phone/voice client; Apache 2.0.
 
 ## Changelog News
 
-Pitch email to their news submission address; they favor a story over a product.
+Submission needs an account (<https://changelog.com/news/submit>), and the profile is used for attribution.
+Their guidelines welcome your own work - "if your fellow devs will find it interesting, submit it" - and explicitly reject how-to guides, tutorials, and "commercial products/services".
+swe-mux is free and Apache-2.0 so it is not excluded, but that exclusion is the reason to pitch the **engineering story** rather than the product, which is what the draft below already does.
+"Keep it positive. Keep it hacker."
 
 **Subject:** An agent-fleet runtime where sessions survive their own redeploy
 
@@ -47,4 +52,4 @@ Two angles that might fit Changelog News beyond "new tool":
 2. The merge-safety model for letting agents land their own branches: fast-forward-only trunk, human-approved gate commands hashed by content so an agent can't approve its own gate.
    Write-up: [blog 03 URL]
 
-Repo: github.com/[org]/swe-mux - happy to provide anything else useful.
+Repo: github.com/jatoran/swe-mux - happy to provide anything else useful.
