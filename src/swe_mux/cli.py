@@ -13,7 +13,8 @@ Design rules this file keeps (ROADMAP Phase 7, "Practical CLI control"):
   and lists the candidates rather than picking one.
 - **Actionable exit codes.** 0 success, 2 usage (argparse), 3 daemon unreachable,
   4 daemon HTTP error, 5 ambiguous name, 6 not found, 1 a `doctor` report with a
-  failing check. Scripts branch on these, never on prose.
+  failing check or a local command that could not do what was asked. Scripts
+  branch on these, never on prose.
   `doctor` is the one command that answers when the daemon does not: an
   unreachable daemon produces the **local** report (`doctor_local`) rather than a
   bare connection error, and its exit code composes the two existing meanings
@@ -52,6 +53,11 @@ from .harness import agent_harnesses
 # reused here. Scripts branch on these; they are part of the CLI contract.
 EXIT_OK = 0
 EXIT_DOCTOR_FAIL = 1
+#: The same code, under the name that says what it means for a command that
+#: does its work on this machine instead of asking the daemon for it. Kept as an
+#: alias rather than a seventh number: "swe-mux could not do what you asked" is
+#: one meaning, and splitting it would make scripts branch on two.
+EXIT_LOCAL_FAIL = 1
 EXIT_CONNECTION = 3
 EXIT_HTTP = 4
 EXIT_AMBIGUOUS = 5
@@ -478,10 +484,83 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    shortcut = sub.add_parser(
+        "install-shortcut",
+        parents=[common],
+        help="create Start Menu and Desktop shortcuts for the desktop app (Windows)",
+        description=(
+            "Create the shortcuts a wheel install structurally cannot: pip and uv "
+            "write launchers into a scripts directory and have no hook that runs "
+            "afterwards, so nothing reaches the Start Menu. Idempotent - a second "
+            "run reports `unchanged` and rewrites nothing."
+        ),
+    )
+    shortcut.add_argument(
+        "--startup",
+        action="store_true",
+        help="also add a run-at-login shortcut in shell:startup (starts in the tray)",
+    )
+    shortcut.add_argument(
+        "--no-desktop", action="store_true", help="skip the Desktop shortcut"
+    )
+    shortcut.add_argument(
+        "--no-start-menu", action="store_true", help="skip the Start Menu shortcut"
+    )
+    shortcut.add_argument(
+        "--remove",
+        action="store_true",
+        help=(
+            "remove every shortcut this command creates, including a run-at-login "
+            "entry added by an earlier run"
+        ),
+    )
+
     resume = sub.add_parser("resume", parents=[common], help="resume a history entry")
     resume.add_argument("id", help="history entry id")
     resume.add_argument("--project", required=True)
     return parser
+
+
+def install_shortcut_command(args: argparse.Namespace) -> tuple[Any, Any]:
+    """Run `install-shortcut` here, without asking a daemon anything.
+
+    The only subcommand that touches no HTTP at all, and deliberately so: the
+    person who needs it is the one whose install produced no way to start a
+    daemon in the first place, so requiring one would make the command useless
+    exactly where it is the answer.
+
+    A refusal is reported, not raised, when it is a fact about the host - POSIX
+    has no shell links, and saying so cleanly is the specified behaviour - while
+    a shortcut that was attempted and failed becomes a non-zero exit through
+    `main`, so a script can tell "not applicable here" from "it went wrong".
+    """
+    from . import shortcuts
+    from .config import load_config
+
+    slots = []
+    if not args.no_start_menu:
+        slots.append(shortcuts.SLOT_START_MENU)
+    if not args.no_desktop:
+        slots.append(shortcuts.SLOT_DESKTOP)
+    if args.startup:
+        slots.append(shortcuts.SLOT_STARTUP)
+    if not slots and not args.remove:
+        raise CliError(
+            "nothing to do: --no-start-menu and --no-desktop leave no shortcut to "
+            "create. Add --startup, or drop one of them.",
+            EXIT_LOCAL_FAIL,
+        )
+    try:
+        config = load_config()
+    except Exception as exc:  # noqa: BLE001 - a broken config is the expected caller
+        raise CliError(
+            f"the swe-mux config did not load ({type(exc).__name__}: {exc}), so there "
+            "is no data directory to anchor a shortcut in. Run `mux doctor` for the "
+            "local report.",
+            EXIT_LOCAL_FAIL,
+        ) from exc
+    report = shortcuts.apply_shortcuts(config=config, slots=slots, remove=args.remove)
+    return report.as_dict(), lambda _: shortcuts.render_report(report)
 
 
 def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
@@ -593,6 +672,8 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
                 None,
             )
         return request("GET", "/api/provider-accounts", base=base), None
+    if args.command == "install-shortcut":
+        return install_shortcut_command(args)
     if args.command == "resume":
         body = {"project_id": args.project}
         return request("POST", f"/api/history/{args.id}/resume", body, base=base), None
@@ -609,6 +690,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mux: {exc}", file=sys.stderr)
         return exc.code
     _print(result, getattr(args, "json", False), human)
+    if args.command == "install-shortcut" and isinstance(result, dict):
+        # An unsupported host is not a failure - nothing was asked of it that it
+        # could have done - so only a shortcut that was attempted and did not
+        # land exits non-zero. Gating on `supported` too would make the command
+        # red on every POSIX machine that merely asked.
+        if result.get("supported") and not result.get("ok", True):
+            return EXIT_LOCAL_FAIL
     # doctor is the one command whose exit code reflects the daemon's health, not
     # just whether the request succeeded, so a script can gate on `mux doctor`.
     if args.command == "doctor" and not getattr(args, "export", False):
