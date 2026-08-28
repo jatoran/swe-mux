@@ -3508,6 +3508,45 @@ the onboarding and launch subsections and is not restated here.
   `LICENSE`, `NOTICE`, and `THIRD-PARTY-NOTICES.md` under `dist-info/licenses/`, so an
   installed copy answers the question without the repository. URLs, classifiers, changelog,
   release policy, and the security contact remain open.
+- [x] **Make `mux doctor` answer when the daemon does not** (W10, 2026-08-27).
+  The consolidated Phase 7 report issues `GET /api/diagnostics/doctor`, so it presupposed exactly
+  the thing a broken install does not have.
+  That made the one diagnostic command the project ships useless for the single most likely
+  new-user failure - the daemon not starting - which answered a connection error and nothing else.
+  An unreachable daemon now produces a **local** report (`src/swe_mux/doctor_local.py`) over the
+  install-integrity faults that stop a daemon starting: the Python floor, `swe_mux.server`'s own
+  import graph, the config file (whose load failure the CLI otherwise swallows into a silent
+  loopback fallback), the frontend bundle in the installed package, the data directory's existence
+  and writability, whether `mux.db` opens, whether the configured port is already held, whether
+  this host's PTY backend imports, the frozen app's supervisor bundle, the prerequisite tools,
+  harness detection, W9's first-use asset inventory, and each optional extra with its install
+  command.
+  Reconciled with W9 rather than run beside it: its asset probes turned out to need no daemon
+  (`capture_capability()` is an import plus a filesystem read, and both model stores answer from a
+  data directory), so the local report builds the same rows through `optional_asset_rows` and drops
+  its own `preview-capture` extras row, whose question that capability row already answers in more
+  detail.
+  A daemon that answers is byte-for-byte unaffected, an HTTP error is deliberately not a fallback
+  trigger (a daemon answered, so it is a daemon fault), and `--export` has no local form because
+  every section of that bundle is daemon state.
+  Three decisions are load-bearing.
+  **`unchecked` is its own status**: folding a skipped check into `ok` claims health nobody
+  measured and folding it into `unavailable` claims a capability was measured absent, so each turns
+  a degraded report into a confident wrong one - worse than the connection error it replaced. Every
+  skipped check is emitted as a row naming what is unknown and why, counted separately in the
+  summary, marked `[????]` rather than reusing `[n/a ]`.
+  **One implementation per check**: prerequisites and harness rows come from the daemon report's
+  own builders over the same detection functions, not a second copy that can disagree; what is not
+  re-answered locally is anything reading daemon runtime state.
+  **Exit codes compose the two that existed** rather than adding a scheme: `1` for a failing local
+  check, `3` (daemon unreachable) for a clean degraded report, so a degraded report never exits `0`
+  and a script gating on `mux doctor` keeps working.
+  The supervisor bundle is checked for *presence only*: `supervisor_bundle_current()` reports
+  "stale" when PyInstaller is merely absent, and acting on that answer reaps every live session, so
+  a check that can report a false stale is worse than no check.
+  Contract in `design/interfaces.md`; anti-drift guard in `tests/test_doctor_local.py`, which
+  reconciles every category the remote builder emits against what the local report answers or
+  declares unchecked, and pins the daemon report's rendered bytes.
 - [ ] Test wheel/sdist install, upgrade, uninstall, config/database migration/backup,
   embedded frontend, and `mux`/`muxd` on clean machines without source checkout or Node.js.
 - [ ] Validate `uv tool install swe-mux` and `pipx install swe-mux`; document clean install,
@@ -3525,8 +3564,32 @@ the onboarding and launch subsections and is not restated here.
 
 ### Release automation
 
-- [ ] Add final Windows/Linux/macOS CI for ruff, mypy, pytest, frontend typecheck/test/build,
+- [x] Add final Windows/Linux/macOS CI for ruff, mypy, pytest, frontend typecheck/test/build,
   artifact-install smoke, browser smoke, platform PTY cleanup, and migration compatibility.
+  (Done 2026-08-27. The three-runner matrix, the frontend legs, the browser smoke, and the
+  POSIX platform job with its PTY-cleanup coverage were already in `ci.yml`; the two that were
+  not are now.
+  **Artifact-install smoke.** `verify` builds the wheel immediately after the frontend
+  production build, validates it with `packaging/verify_release_artifact.py`, then installs it
+  with `packaging/install_smoke.py` into a throwaway virtualenv with no checkout on `sys.path`
+  and no Node, and asks the *installed* copy whether `mux`/`muxd` run, whether `swe_mux`
+  imports, and whether the packaged UI is reachable from `swe_mux.__file__`. The isolation is
+  the point and is not trusted: `import-isolation` reads the imported package's own `__file__`
+  back out of the child and fails unless it resolves inside the virtualenv, because a checkout
+  satisfies every other check by itself. Nothing starts a daemon or binds a port. Measured on
+  the primary Windows host: 1.5s to build, 0.3s to validate, 7.7s to install against an empty
+  `UV_CACHE_DIR` (161 MB downloaded), so the 30-minute timeout is untouched.
+  **Migration compatibility** is deliberately a test rather than a CI step, so it runs on all
+  three runners instead of one: `tests/test_migration_compatibility.py` opens a `mux.db`
+  generated by the store code of a real older revision (`tests/support/legacy_database.py`
+  extracts it with `git archive` and runs it on a clean interpreter, so the fixture is that
+  build's own output rather than a hand-written imitation) and asserts it is migrated forward
+  rather than quarantined - every table, column and index a fresh install has, the rows, a
+  write naming the migrated columns, and the recorded versions. Its own guard fails if the
+  fixture is ever regenerated from HEAD. It found two real facts while being written: the
+  `idx_history_messages_time` index arrives with post-startup search maintenance rather than at
+  connect, and `VoiceStore._migrate` deliberately discards pre-schema-3 clips - the one place
+  an upgrade destroys rows, now recorded as an asserted exemption rather than as a surprise.)
 - [ ] Validate a TestPyPI alpha before reserving/publishing the PyPI package. Production
   publishing uses Trusted Publishing and no long-lived repository token.
 - [ ] Validate tag, source, frontend bundle, wheel/sdist metadata, migrations, documented

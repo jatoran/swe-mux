@@ -536,11 +536,36 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   to the clipboard (never sends to an agent, never writes a PTY). Full capture or a
   drag-selected region.
 - Server-side rendering uses the optional `preview-capture` extra (Playwright + Chromium).
-  Absent, the endpoint returns a typed `{available: false, reason, install}` — an optional
+  Absent, the endpoint returns a typed `{available: false, state, reason, remedy}` — an optional
   integration, never a failure. Any render error returns `{available: true, error}` (502),
   not a 500. Rendering uses `wait_until="load"` (an HMR dev server never reaches
   `networkidle`) and points Playwright at the standard per-user browser cache so a frozen
   desktop build resolves the browser installed by `playwright install`.
+- **The two halves of that backend fail separately, so they are never reported together.**
+  The Python package can be absent (`extra_missing`) or present with no browser binary under it
+  (`browser_missing`), and a fresh install can be in either.
+  They need different commands, so one "capture unavailable" sent an operator who had already
+  installed the extra to install it again and get nowhere.
+  `state` is the machine-readable discriminator and `remedy` is the command for *that half only*
+  — this is the discipline `design/features/agent-environment.md` states for an empty MCP
+  catalog: an absent capability must say which kind of absent it is.
+  `remedy` is `null` where no command on this machine helps, which is the honest answer on the
+  packaged desktop app: `preview-capture` is outside `DISTRIBUTED_EXTRAS`
+  (`packaging/license_audit.py`), so the bundle carries no Playwright and a `uv sync` against the
+  source tree cannot reach its interpreter.
+- **Nothing installs or downloads either half.** `playwright install chromium` is a large network
+  fetch, and a daemon that runs it because someone pressed Capture is the silent first-use cost
+  this reporting exists to remove.
+  Detection is two local reads (an import, and a scan of the browsers roots), so an operator who
+  runs the remedy sees the state change on the next press with no daemon restart.
+  The scan can be wrong in one direction — a browsers root this host uses that it does not know
+  about — so a launch that fails with Playwright's own missing-executable error is promoted to
+  the same `browser_missing` state rather than surfacing as an unactionable capture failure.
+- The state is also a row in the consolidated `mux doctor` report
+  (`optional_asset:preview_capture`, plus a `capabilities.optional_assets` entry), at severity
+  `optional` so an uninstalled optional feature never fails the report. That is the *proactive*
+  surface; pressing Capture is still what probes, because a probe on every preview list would
+  import Playwright on a polling path.
 - Region clip coordinates are page pixels captured from the top of the page: the iframe
   omits `allow-same-origin`, so the preview scroll position cannot be read.
 - The PNG is saved into the owning Project's `.swe-mux/preview-shots/` (falling back to the
@@ -574,6 +599,8 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   (`_register_static_preview`, `_serve_static_preview`, `static_preview_content_type`),
   `frontend/src/staticPreview.ts` (the client-side entry allowlist),
   `tests/test_static_preview.py`
-- Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`
-- Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`
+- Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`, `frontend/src/previewCapture.ts`
+  (the pure unavailable-state wording), `frontend/test/previewCapture.test.ts`
+- Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`,
+  `tests/test_first_use_assets.py`
 - Terminal-link routing: `frontend/src/TerminalPane.tsx`, `frontend/src/previewLinks.ts`

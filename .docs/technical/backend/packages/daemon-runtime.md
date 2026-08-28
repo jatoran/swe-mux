@@ -227,8 +227,23 @@ The pure assembly behind `mux doctor` and `GET /api/diagnostics/doctor`.
 
 **Not:** fetching anything (the server handler gathers the payloads), any mutation, new detection logic, or printing secrets or terminal or message content.
 
+### `doctor_local.py`
+
+The degraded `mux doctor` report, run by the CLI when no daemon answers.
+It covers the install-integrity faults that stop a daemon starting: the Python floor, `swe_mux.server`'s import graph, the config file, the frontend bundle in the installed package, the data directory, `mux.db`, the configured port, the host PTY backend, the frozen supervisor bundle, and each optional extra.
+Prerequisite, harness, and first-use-asset rows are produced by `doctor.py`'s own builders over the same detection functions, so there is one implementation of them rather than two that can disagree.
+The asset probes need no daemon even though the route reads them off the live `VoiceService`: `capture_capability()` is an import plus a filesystem read, and both model stores answer from a data directory.
+Every check it does not run is emitted as an `unchecked` row naming what is unknown and why - a status that exists because "not measured" is neither healthy nor absent, and collapsing it into either is what turns a degraded report into a confident wrong one.
+
+**Not:** anything reading daemon runtime state (that is what the `unchecked` rows are for), a second copy of a check `doctor.py` already builds, or any write into the data directory beyond a removed temporary file proving it is writable.
+Nor a bind test for the port probe - it is a TCP connect, because `SO_REUSEADDR` would let a diagnostic take a port from its owner.
+Nor a supervisor-bundle *currency* check: `supervisor_bundle_current()` reports a false stale without PyInstaller, and acting on that answer reaps every live session.
+
 ### `cli.py`
 
 The `mux` control surface: config-based URL resolution with `MUX_URL` precedence, stable-id/name/prefix session resolution with ambiguity conflicts, actionable exit codes, human tables with an explicit `--json`, registry-driven harness choices, and the scriptable spawn, ls, kill, resume, reload, and doctor operations routed through the daemon's typed endpoints.
+`doctor` is the one command that answers when the daemon does not: an unreachable daemon falls back to `doctor_local`, rendered by the same `_render_doctor`.
+Its local-only preamble, `[????]` mark, and `unchecked` tally are each conditioned on a field the daemon payload does not carry, so the bytes that path prints are unchanged.
+Its exit code composes the existing two rather than adding a scheme - `1` for a failing local check, `3` for a clean degraded one, never `0`.
 
 **Not:** new client-side authorization or business logic, since actions route through the daemon ops; browser presentation actions; or accepting or printing a provider secret.
