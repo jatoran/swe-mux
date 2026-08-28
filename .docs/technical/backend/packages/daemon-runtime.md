@@ -220,7 +220,8 @@ The pure assembly behind `mux doctor` and `GET /api/diagnostics/doctor`.
 
 The degraded `mux doctor` report, run by the CLI when no daemon answers.
 It covers the install-integrity faults that stop a daemon starting: the Python floor, `swe_mux.server`'s import graph, the config file, the frontend bundle in the installed package, the data directory, `mux.db`, the configured port, the host PTY backend, the frozen supervisor bundle, and each optional extra.
-Prerequisite and harness rows are produced by `doctor.py`'s own builders over the same detection functions, so there is one implementation of them rather than two that can disagree.
+Prerequisite, harness, and first-use-asset rows are produced by `doctor.py`'s own builders over the same detection functions, so there is one implementation of them rather than two that can disagree.
+The asset probes need no daemon even though the route reads them off the live `VoiceService`: `capture_capability()` is an import plus a filesystem read, and both model stores answer from a data directory.
 Every check it does not run is emitted as an `unchecked` row naming what is unknown and why - a status that exists because "not measured" is neither healthy nor absent, and collapsing it into either is what turns a degraded report into a confident wrong one.
 
 **Not:** anything reading daemon runtime state (that is what the `unchecked` rows are for), a second copy of a check `doctor.py` already builds, or any write into the data directory beyond a removed temporary file proving it is writable.

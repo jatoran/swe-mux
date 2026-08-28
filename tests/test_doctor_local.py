@@ -386,7 +386,16 @@ def test_an_absent_extra_is_unavailable_and_carries_its_install_command(
     assert voice["status"] == "unavailable"
     assert voice["severity"] == "optional"
     assert voice["remedy"] == "uv sync --extra voice-local"
-    assert "playwright install" in checks["extra.preview-capture"]["remedy"]
+
+
+def test_preview_capture_is_reported_once_by_the_asset_row_that_knows_more() -> None:
+    """W9's capability row subsumes an extras row, so there must not be both.
+
+    `capture_capability()` separates "the extra is missing" from "the extra is
+    installed and has no Chromium" and carries the right command for each; a
+    second `extra.preview-capture` row would answer half that question twice.
+    """
+    assert "preview-capture" not in {name for name, _, _, _ in doctor_local._EXTRAS}
 
 
 def test_a_present_extra_reports_ok(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,6 +411,35 @@ def test_a_frozen_app_is_not_told_to_uv_sync(monkeypatch: pytest.MonkeyPatch) ->
     checks = {check["id"]: check for check in doctor_local._extras_checks()}
     assert "uv sync" not in checks["extra.voice-local"]["remedy"]
     assert "Rebuild" in checks["extra.voice-local"]["remedy"]
+
+
+def test_the_first_use_assets_are_reported_without_a_daemon(tmp_path: Path) -> None:
+    """W9's rows need no `VoiceService`; the local report builds the same ones.
+
+    `capture_capability()` is an import plus a filesystem read and both model
+    stores answer from a data directory, so the daemon-side gatherer is the only
+    part that needed a running process.
+    """
+    checks = doctor_local._optional_asset_local_checks(_config(tmp_path))
+    ids = {check["id"] for check in checks}
+    assert "optional_asset:preview_capture" in ids
+    assert any(check_id.startswith("optional_asset:voice_whisper:") for check_id in ids)
+    # None of these is a fault, however absent: severity is optional throughout.
+    assert {check["severity"] for check in checks} == {"optional"}
+
+
+def test_a_failing_asset_probe_says_so_rather_than_reporting_absence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """This report runs on broken installs, so a raise must not become "absent"."""
+
+    def _boom(_config: Any) -> Any:
+        raise RuntimeError("huggingface_hub is half-installed")
+
+    monkeypatch.setattr(doctor_local, "_optional_asset_rows_local", _boom)
+    checks = doctor_local._optional_asset_local_checks(_config(tmp_path))
+    assert [check["status"] for check in checks] == ["unchecked"]
+    assert "huggingface_hub" in checks[0]["detail"]
 
 
 def test_the_config_loader_returns_its_failure_instead_of_raising(
@@ -489,6 +527,15 @@ def _remote_sources() -> dict[str, Any]:
                 "installed": True,
                 "harnesses": [{"name": _AGENT}],
                 "reasons": [],
+            }
+        ],
+        "optional_assets": [
+            {
+                "id": "preview_capture",
+                "label": "Preview capture (Playwright + Chromium)",
+                "state": "ready",
+                "detail": "installed",
+                "remedy": None,
             }
         ],
     }

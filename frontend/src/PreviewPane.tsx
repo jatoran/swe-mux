@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { captureUnavailableNote, type CaptureResult } from './previewCapture'
 import { copyPreparedText } from './terminalClipboard'
 import { isStaticPreview, previewLabel, type Preview } from './processFleet'
 
-type CaptureResult = { available: boolean; path?: string; region?: boolean; reason?: string; install?: string; error?: string }
 type Rect = { x: number; y: number; w: number; h: number }
 type Clip = { x: number; y: number; width: number; height: number }
 
@@ -51,7 +51,7 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
     try {
       const result = await api<CaptureResult>('POST', `/api/previews/${encodeURIComponent(preview.id)}/capture`,
         { viewport, width, ...(opts ? { height: opts.height, clip: opts.clip } : {}) })
-      if (!result.available) { setNote(`${result.reason||'Capture unavailable.'} Enable with: ${result.install||''}`); return }
+      if (!result.available) { setNote(captureUnavailableNote(result)); return }
       if (result.error || !result.path) { setNote(result.error || 'Capture failed.'); return }
       const scope = result.region ? 'selected region of the' : 'current'
       await copyReference(`Here is the ${scope} ${isStatic?label:`${preview.host}:${preview.port}`} preview at ${width}px width — screenshot saved at ${result.path}. Please read that image file.`)
