@@ -18,16 +18,35 @@ Nothing here starts a daemon, binds a port, or spawns anything.
 from __future__ import annotations
 
 import logging
-from pathlib import Path, PureWindowsPath
+import os
+from pathlib import Path
 
 import pytest
 
 from swe_mux import __main__ as daemon_main
 from swe_mux import install_location
 from swe_mux.config import Config
+from swe_mux.host_platform import IS_WINDOWS
 
-_ROOT = PureWindowsPath(r"C:\Users\ada\AppData\Roaming\uv\tools\swe-mux")
-_SCRIPTS = _ROOT / "Scripts"
+# A uv tool install as uv lays one out on *this* host. Shaped for the running
+# platform, never always for Windows: `install_location` joins and splits paths
+# with `pathlib` and `os.path`, which render for the host, so a Windows string on
+# a Linux runner is one relative filename and the hint below then describes
+# nothing. Its module docstring has the full account.
+if IS_WINDOWS:
+    _HOME = Path(r"C:\Users\ada")
+    _ROOT = _HOME / "AppData" / "Roaming" / "uv" / "tools" / "swe-mux"
+    _SCRIPTS = _ROOT / "Scripts"
+    _BASE_PREFIX = r"C:\Python312"
+    _NOISE = r"C:\Windows"
+    _EXE = ".exe"
+else:
+    _HOME = Path("/home/ada")
+    _ROOT = _HOME / ".local" / "share" / "uv" / "tools" / "swe-mux"
+    _SCRIPTS = _ROOT / "bin"
+    _BASE_PREFIX = "/usr"
+    _NOISE = "/usr/bin"
+    _EXE = ""
 
 
 def _use_install(monkeypatch: pytest.MonkeyPatch, *, reachable: bool) -> None:
@@ -41,23 +60,27 @@ def _use_install(monkeypatch: pytest.MonkeyPatch, *, reachable: bool) -> None:
     monkeypatch.setattr(install_location, "detect_install_location", lambda: location)
 
 
+def _key(entry: str) -> str:
+    text = os.path.normpath(entry)
+    return text.casefold() if IS_WINDOWS else text
+
+
 def _install(*, reachable: bool) -> object:
     present = {str(_ROOT / "uv-receipt.toml")} | {
-        str(_SCRIPTS / f"{name}.exe") for name in ("mux", "muxd", "swe-mux")
+        str(_SCRIPTS / f"{name}{_EXE}") for name in ("mux", "muxd", "swe-mux")
     }
-    normalized = {str(PureWindowsPath(entry)).casefold() for entry in present}
+    normalized = {_key(entry) for entry in present}
     return install_location.detect_install_location(
         frozen=False,
-        executable=str(_SCRIPTS / "python.exe"),
-        package_dir=Path(str(_ROOT)),
+        executable=str(_SCRIPTS / f"python{_EXE}"),
+        package_dir=_ROOT,
         prefix=str(_ROOT),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(_SCRIPTS)),
-        path=str(_SCRIPTS) if reachable else r"C:\Windows",
-        home=Path(r"C:\Users\ada"),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=_SCRIPTS,
+        path=str(_SCRIPTS) if reachable else _NOISE,
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=lambda candidate: str(PureWindowsPath(str(candidate))).casefold() in normalized,
+        exists=lambda candidate: _key(str(candidate)) in normalized,
     )
 
 

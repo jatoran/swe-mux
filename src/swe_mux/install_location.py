@@ -17,12 +17,23 @@ rather than by four separate guesses at the same filesystem.
 
 Two rules it keeps.
 
-**Every input is an argument with a live default.** The answers that matter are
-the Windows ones, and the gate that has to prove them runs on three hosts; a
-platform branch whose non-development side is never asserted is exactly the class
-of bug this package is cleaning up after. So
-``detect_install_location(windows=True, path=..., exists=...)`` describes a
-Windows install from a Linux runner exactly, and the tests do that.
+**Every input is an argument with a live default.** A platform branch whose
+non-development side is never asserted is exactly the class of bug this package
+is cleaning up after, so the whole world this reads - ``PATH``, the scripts
+directory, the environment, the existence probe, the platform flag - is
+injectable and every diagnostic below can be asserted without a real install.
+
+What that does *not* buy is describing a foreign platform. This module joins,
+splits, and compares paths with ``pathlib`` and ``os.path``, which render and
+normalize for the host that is **running**: ``os.pathsep`` is ``;`` on Windows
+and ``:`` elsewhere, and only ``ntpath`` collapses backslashes. So a Windows path
+string handed in on a Linux runner is one relative filename, and every answer
+derived from it is wrong. ``windows=`` selects the platform's *rules* - the
+launcher suffix, the case rule in `_same_path`, ``setx`` versus ``export`` - and
+the paths it is given must be shaped for the host. Passing ``windows=True`` with
+Windows paths from a Linux runner is what put thirteen tests red on both POSIX
+legs of the first public CI runs while the Windows gate stayed green;
+``tests/test_install_location.py`` records the correction.
 
 **"Not found" is never reported as "not on PATH".** A launcher that is missing
 from the scripts directory and a launcher that is present but unreachable are
