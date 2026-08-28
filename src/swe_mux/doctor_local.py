@@ -187,6 +187,135 @@ def _package_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _extra_probe() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Each optional extra, with the modules of it that did not resolve.
+
+    Shared by `_extras_checks`, which reports each extra as its own row with its
+    own install command, and by `_install_location_check`, which names the
+    resolved set in one line beside the install method. Two questions, one probe:
+    a second list of extras beside `_EXTRAS` is a second list to keep right, and
+    the copy is what drifts.
+    """
+    return tuple(
+        (name, tuple(module for module in modules if not _module_resolves(module)))
+        for name, _, modules, _ in _EXTRAS
+    )
+
+
+def _install_location_check() -> dict[str, Any]:
+    """How swe-mux got onto this machine, and where it put itself.
+
+    First of the whole report, ahead of the Python floor, because it is the first
+    thing that goes wrong on a clean machine and the only one whose symptom is
+    *nothing at all*: `pip install swe-mux` succeeds, and then there is no
+    command, no window, and no error to search for. Every other check here
+    presupposes the user found a way to run something.
+
+    Never a failure. An install that is not on `PATH` is complete and correct -
+    the launchers exist and work when named in full - so this is a `warn` with
+    the command that fixes it, and `install.path` below carries that half. This
+    row is pure description and always passes.
+    """
+    from .install_location import detect_install_location, installed_version
+
+    location = detect_install_location()
+    resolved = [name for name, missing in _extra_probe() if not missing]
+    version = installed_version()
+    return _check(
+        id="install.location",
+        category="install",
+        title="Install location",
+        status="ok",
+        severity="info",
+        detail=(
+            f"swe-mux {version or '(version metadata unavailable)'} installed by "
+            f"{location.label}; package at {location.package_dir}, launchers in "
+            f"{location.bin_dir}. Optional extras resolved: "
+            f"{', '.join(resolved) if resolved else 'none'}."
+        ),
+    )
+
+
+def _install_path_check() -> dict[str, Any]:
+    """Whether the commands this install shipped can be reached by name.
+
+    The failure the whole work package exists for: an operator installed swe-mux
+    on a clean Windows machine and found nothing on `PATH`, no shortcut, and no
+    command that would tell them why. This is that question, asked out loud.
+
+    `warn`, never `fail`: nothing is broken, and calling a working install broken
+    would push someone into reinstalling over a `PATH` entry. A launcher that is
+    absent entirely *is* a fault, and is reported as one, because that is a
+    different thing from an unreachable one.
+    """
+    from .install_location import INSTALL_FROZEN, detect_install_location
+
+    location = detect_install_location()
+    if location.kind == INSTALL_FROZEN:
+        return _check(
+            id="install.path",
+            category="install",
+            title="Commands on PATH",
+            status="ok",
+            severity="info",
+            detail="Frozen desktop app: it is launched from its own executable and "
+            "the tray, so no scripts directory needs to be on PATH.",
+        )
+    if not location.installed:
+        return _check(
+            id="install.path",
+            category="install",
+            title="Commands on PATH",
+            status="fail",
+            severity="critical",
+            detail=f"None of the mux, muxd, or swe-mux launchers are present in "
+            f"{location.bin_dir}. This install shipped no commands at all.",
+            remedy="Reinstall swe-mux (`uv tool install swe-mux`, `pipx install "
+            "swe-mux`, or `pip install swe-mux`).",
+        )
+    unreachable = location.unreachable
+    if not unreachable:
+        return _check(
+            id="install.path",
+            category="install",
+            title="Commands on PATH",
+            status="ok",
+            severity="info",
+            detail="mux, muxd, and swe-mux all resolve from PATH to this install.",
+        )
+    shadowed = [command for command in unreachable if command.resolved is not None]
+    if shadowed:
+        # A *different* swe-mux earlier on PATH is its own fault and needs its own
+        # sentence: the commands work, they are simply not these commands, which
+        # is how someone ends up debugging a version they are not running.
+        names = ", ".join(f"{command.name} -> {command.resolved}" for command in shadowed)
+        return _check(
+            id="install.path",
+            category="install",
+            title="Commands on PATH",
+            status="warn",
+            severity="critical",
+            detail=f"PATH resolves these names to a different install than this one "
+            f"({names}). Commands typed by name will not run the copy this report "
+            "describes.",
+            remedy=f"Put {location.bin_dir} ahead of the other entry on PATH, or "
+            "remove the other install.",
+        )
+    names = ", ".join(command.name for command in unreachable)
+    return _check(
+        id="install.path",
+        category="install",
+        title="Commands on PATH",
+        status="warn",
+        severity="critical",
+        detail=f"{names} exist in {location.bin_dir}, but that directory is not on "
+        "PATH, so typing them does nothing. The install is complete; it is only "
+        "unreachable by name.",
+        remedy="; ".join(location.path_fix_lines())
+        + f". Until then: {location.module_fallback}",
+    )
+
+
 def _source_checkout_root() -> Path | None:
     """The repository root when this package is imported from a source checkout.
 
@@ -645,8 +774,9 @@ def _extras_checks() -> list[dict[str, Any]]:
     documentation hunt.
     """
     frozen = bool(getattr(sys, "frozen", False))
+    probed = dict(_extra_probe())
     checks: list[dict[str, Any]] = []
-    for name, label, modules, install in _EXTRAS:
+    for name, label, _modules, install in _EXTRAS:
         if name == "desktop" and not IS_WINDOWS:
             # The extra's own markers are `sys_platform == 'win32'`, so it resolves
             # to nothing elsewhere; "not installed" would read as a fixable gap.
@@ -662,7 +792,7 @@ def _extras_checks() -> list[dict[str, Any]]:
                 )
             )
             continue
-        missing = [module for module in modules if not _module_resolves(module)]
+        missing = list(probed[name])
         if not missing:
             checks.append(
                 _check(
@@ -832,15 +962,17 @@ def collect_local_checks(
 ) -> list[dict[str, Any]]:
     """Run every machine-only check, in the order a reader should meet them.
 
-    Ordered by what has to be true first: the interpreter, then the package, then
-    the frontend it serves, then the state it writes, then the port it binds, then
-    the backend it spawns on. A reader stops at the first `FAIL` and that is the
-    one to fix.
+    Ordered by what has to be true first: where the install is and whether it can
+    be reached at all, then the interpreter, then the package, then the frontend
+    it serves, then the state it writes, then the port it binds, then the backend
+    it spawns on. A reader stops at the first `FAIL` and that is the one to fix.
     """
     from .harness import detect_installations_with_versions, public_harness_registry
     from .prerequisites import detect_prerequisites
 
     checks: list[dict[str, Any]] = [
+        _install_location_check(),
+        _install_path_check(),
         _python_check(),
         _imports_check(),
         _config_check(config, config_error),
@@ -918,6 +1050,7 @@ def build_local_doctor_report(
                 "frozen": bool(getattr(sys, "frozen", False)),
             },
             "source_checkout": _source_checkout_root() is not None,
+            "install": _install_capabilities(),
         },
         "checks": rows,
     }
@@ -928,13 +1061,33 @@ def _installed_version() -> str | None:
 
     Read from installed metadata rather than hardcoded: this report exists to
     describe *the copy on the machine*, and a constant compiled into the source
-    would describe the copy the source came from.
+    would describe the copy the source came from. Delegated so the report and
+    `python -m swe_mux --where` cannot disagree about which copy is running.
+    """
+    from .install_location import installed_version
+
+    return installed_version()
+
+
+def _install_capabilities() -> dict[str, Any]:
+    """The machine-readable half of the two install rows.
+
+    `--json` consumers get the same facts the prose rows carry, so a script does
+    not have to parse an English sentence to learn where swe-mux is or whether it
+    is reachable. Best-effort: a probe that raises must not take down a report
+    whose whole audience is broken installs.
     """
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        from .install_location import detect_install_location
 
-        return version("swe-mux")
-    except PackageNotFoundError:
-        return None
-    except Exception:  # noqa: BLE001 - metadata is best-effort in a frozen build
-        return None
+        location = detect_install_location()
+    except OSError as exc:
+        return {"kind": None, "detail": f"{type(exc).__name__}: {exc}"}
+    return {
+        "kind": location.kind,
+        "label": location.label,
+        "scripts_dir": str(location.bin_dir),
+        "on_path": location.on_path,
+        "unreachable": [command.name for command in location.unreachable],
+        "module_fallback": location.module_fallback,
+    }
