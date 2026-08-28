@@ -484,7 +484,12 @@ Project *content* is not in here and is not swe-mux's to back up: Projects point
 - **`automation.secrets.json` on Windows.** The values are current-user DPAPI blobs, bound to the Windows account that wrote them. A data directory copied from another machine or another account produces a decryption failure, not corruption. Re-enter the keys on the new host.
 - **`push-vapid.pem` paired with subscriptions from a different key.** An unreadable PEM is regenerated and every existing subscription is dropped, so restore the pair or neither.
 - **`tls/`.** Tailscale certificate material is hostname-bound.
-- **Absolute paths in config.** `worktree_root`, `harness_exe` overrides, and Project roots are paths on the machine that wrote them.
+- **Absolute paths in config**, with one half now handled and the other half not, and the line between them is the *host* rather than the machine.
+  A stored value shaped for a **different host** is re-derived on the next load and written back: `shell_exe`, `harness_exe`, `shell_profiles`, `data_dir`, `worktree_root`, `new_project_parent`, `startup_cwd`, `tts_edge_python`, `pinned_directories`, and the `ccusage` commands.
+  So a `config.toml` written on Windows and loaded on Linux no longer launches `claude.exe`, and one written on Linux and loaded on Windows no longer refuses to load at all over a `worktree_root` that Windows does not read as absolute.
+  The rule is *shape*, never whether a path exists, so a directory that is simply missing today is never rewritten - and neither is a deliberate override this host could run (`claude.cmd` on Windows, `/usr/local/bin/claude` on Linux).
+  What that leaves is a **same-host** move: `D:\PROJECTS` restored onto another Windows machine is a valid Windows path to nothing, and nothing can tell it from a correct one. Fix those by hand in Settings.
+  Project roots are not in `config.toml` at all - they live in `mux.db` and none of this reaches them.
 
 ---
 
