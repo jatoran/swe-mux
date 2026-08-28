@@ -225,10 +225,14 @@ state, so the file exists only in a checkout whose operator authored one, and a 
 of this repository declares no actions at all.
 `tests/test_project_actions_v2.py::test_this_repository_ships_actions_that_parse` reads that
 file from the repository root and is the only fixture exercising the format against real
-commands rather than a string written inside a test - which means it now depends on a file
-the repository does not supply, and fails on a clean checkout.
-Deciding what that test should become (drop it, skip when the file is absent, or move the
-worked example into a tracked fixture that is not a live Project Actions source) is open.
+commands rather than a string written inside a test, so it was re-scoped rather than deleted
+with its subject. It now has three outcomes, and the distinction between them is the design:
+**absent** skips with a reason (a clone has no actions file, so there is no subject),
+**present and well-formed** passes the full guard, and **present and malformed** still fails -
+which is the case that costs someone something, because a broken actions.toml breaks the Run
+menu on the machine that has it. The skip must never widen to cover the third case; an
+`except` around the read, or a truthiness check on the parse result, would turn a real
+failure into a silent pass.
 
 ## The agent surface
 
