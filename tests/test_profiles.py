@@ -37,6 +37,12 @@ def profile(profile_id: str = "pwsh") -> LaunchProfile:
 def test_profile_config_round_trips_all_runtime_fields(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
     configured = profile()
+    # A stored executable shaped for another host is re-derived on load, so a
+    # round-trip fixture has to name one this host could start - otherwise this
+    # would be asserting the exact survival `tests/test_foreign_host_config.py`
+    # exists to prevent. Every other field is unchanged, which is what is under
+    # test here.
+    configured.executable = "pwsh.exe" if sys.platform == "win32" else "pwsh"
     update_config(
         config,
         {

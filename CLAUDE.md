@@ -198,7 +198,19 @@ directory rather than each having their own:
   `test_pty_supervisor.py`) both restore it in a `finally`, and a worker is its own process,
   so the mutation cannot reach another worker even in between.
 - The supervisor tests' discovery file and its socket are per-`tmp_path`; nothing in the
-  suite binds a fixed port.
+  suite binds a **fixed** port.
+  That claim was narrowed on 2026-08-28 and the narrowing is the point.
+  It used to read "no test binds a port", which the `live_daemon` tier made false: it stands up
+  a daemon in process and, once, as a real `muxd` subprocess.
+  What makes it still sufficient is that every one of those ports is OS-allocated (`bind` on
+  `:0`, released and immediately re-taken) and every data directory is under `tmp_path`, so two
+  workers - or two worktrees, or a worktree and CI - cannot collide with each other or with the
+  operator's daemon on 8765 and `~/.mux`.
+  A test that hardcodes a port number is what would break this, not a test that binds one.
+
+Re-read that list before adding a tier that starts anything.
+It is written to be re-audited rather than trusted, and this passage has already been wrong
+once.
 
 If any of those stops being true, a verification lock is a stopgap.
 Fix the isolation instead, because serialised verification is the largest cost in parallel work.
@@ -223,11 +235,32 @@ thing to reach for when the queue is not enabled.
 
 Backend: `uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent
 and not live_subagent and not live_telemetry and not live_quota and not live_automations
-and not live_mcp and not live_edge_tts"`, `uv run ruff check
+and not live_mcp and not live_edge_tts and not live_daemon"`, `uv run ruff check
 src/swe_mux tests packaging`, `uv run mypy`.
 Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
 These are exactly what `.worktree-verify` runs.
+
+**That `-m` expression exists in three files and they must agree.**
+`.worktree-verify`, `.github/workflows/ci.yml` (twice), and this paragraph.
+Drift between them was itself one of the CI bugs found in the week of 2026-08-27 - `ci.yml` was
+missing `not live_edge_tts` and would have gone red on all three runners against Microsoft's
+hosted endpoint - so the agreement is now asserted rather than remembered
+(`tests/test_live_daemon_guards.py`), and that guard runs in the default tier.
+Adding a live mark means editing all three and adding it to `LIVE_MARKS` there.
+
+**`live_daemon` is the one live tier CI runs, and it is not in the landing gate.**
+It needs no provider, no credential and no quota, because its session half spawns a **shell**
+rather than an agent - which is what lets it run on a public runner and answer the question
+none of the other 5400 tests do: does a daemon start on this host, serve a terminal, and stop
+without leaving processes behind.
+It runs on `ubuntu-latest` and `windows-latest` on every push, in ~40s.
+It is **held off macOS deliberately** until that leg stops being `continue-on-error`: a new
+tier added under that flag goes red beside an already-red leg, and its first real regression
+would be indistinguishable from the noise.
+`.worktree-verify` deselects it like every sibling, because it binds ports and spawns shells
+and landing is meant to be cheap; run it by hand with
+`uv run pytest tests/test_live_daemon.py -m live_daemon`.
 
 **Two ratchets are on, and both start from a clean floor.**
 `filterwarnings = ["error", ...]` in `pyproject.toml` makes a new warning fail the run; there

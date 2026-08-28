@@ -169,6 +169,101 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # The desktop artifacts, on Windows because they are Windows binaries and
+  # PyInstaller cross-compiles nothing. Independent of `build` rather than
+  # downstream of it: they share no bytes - the wheel is a source distribution of
+  # the same tree, the bundles are a frozen interpreter with that tree inside -
+  # so serialising them would only add ten minutes to every release. `build`'s
+  # tag-agrees-with-version check still gates the release as a whole, because
+  # `github-release` needs both.
+  #
+  # Skipped on the TestPyPI dispatch path for the same reason `github-release`
+  # is: that path publishes a wheel for validation and deliberately creates no
+  # Release, so there is nowhere for a 400 MB installer to go.
+  build-desktop:
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.index != 'testpypi'
+    runs-on: windows-latest
+    # PyInstaller collects spaCy, misaki, tree-sitter grammars and the WebView2
+    # stack; the app bundle alone is several minutes, and the installer's
+    # `lzma2/max` pass over the result is several more.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend
+        run: npm --prefix frontend ci
+
+      # The full build closure, and every part of it is load-bearing.
+      # `desktop` is the tray and the WebView; `voice-local` reaches the LGPL
+      # `num2words` that `verify_bundle_licenses` requires as readable source
+      # under `_internal/`; `package` is PyInstaller itself. The short form of
+      # this command is the documented trap - it silently strips PyInstaller.
+      - name: Install the build closure
+        run: uv sync --extra desktop --extra voice-local --group package
+
+      # Builds the frontend into the package, runs PyInstaller for both
+      # `dist/swe-mux` and `dist/swe-mux-supervisor`, verifies the bundle's
+      # license posture, and writes `bundle.json`. Nothing here passes
+      # `--skip-supervisor`: the installer carries both bundles, and a runner has
+      # no live supervisor whose exe could be locked against the rebuild.
+      - name: Build the desktop bundles
+        run: uv run python packaging/build_desktop.py
+
+      # The artifact the in-app updater consumes. Its name is
+      # `update_install.release_archive_name`, derived rather than spelled out,
+      # so this step cannot publish something no installed copy will look for.
+      - name: Package the portable archive
+        run: uv run python packaging/package_desktop_release.py --bundle dist/swe-mux --out dist/release
+
+      # Inno Setup ships on the `windows-latest` image (the image's own test
+      # asserts `Get-Command iscc` resolves), so this normally prints a version
+      # and moves on. The install is the fallback for an image that drops it -
+      # written as a conditional rather than an unconditional install because
+      # paying two minutes of Chocolatey on every release to guard against a
+      # change that has not happened is the wrong trade.
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          if (Get-Command iscc -ErrorAction SilentlyContinue) {
+            iscc /? | Select-Object -First 2
+          } else {
+            Write-Host "Inno Setup is not on this image; installing it"
+            choco install innosetup --no-progress -y
+            "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Append
+          }
+
+      # No signing: `SWE_MUX_SIGNTOOL` is unset here and the script says so and
+      # builds unsigned. There is deliberately no secret and no conditional
+      # signing step, because a step that fails when a certificate has not been
+      # bought is a red release for a decision nobody has made yet
+      # (`RELEASE_MANUAL_TASKS.md` § 1).
+      - name: Build the Windows installer
+        run: uv run python packaging/build_installer.py --dist dist --out dist/release
+
+      # Uploaded under its own name and downloaded beside the wheel by both later
+      # jobs. Separate from the `dist` artifact rather than merged into it
+      # because the two are produced by two jobs on two operating systems, and an
+      # artifact written by both would be a race.
+      - name: Upload the desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop
+          path: dist/release/
+          if-no-files-found: error
+
   # Two publish jobs rather than one with a computed index URL. The URL decides
   # where a package permanently lands, so it is written literally in the job that
   # uses it and guarded by a literal condition - an expression that silently
@@ -221,7 +316,7 @@ jobs:
   # the fallback for the update check when the site is unreachable, so the same
   # artifacts live in both places on purpose.
   github-release:
-    needs: [build, publish-pypi]
+    needs: [build, build-desktop, publish-pypi]
     if: startsWith(github.ref, 'refs/tags/v') && inputs.index != 'testpypi'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -233,6 +328,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: dist
+          path: dist/
+
+      # Into the *same* directory, so the `gh release upload dist/*` below needs
+      # no second invocation and the manifest job's `Path("dist").iterdir()`
+      # enumerates every published artifact without knowing any of their names.
+      # That enumeration is why nothing downstream had to learn about the
+      # installer: adding a file here adds a manifest entry.
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop
           path: dist/
 
       # `gh` rather than a third-party release action: it ships on the runner, it
@@ -292,6 +397,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: dist
+          path: dist/
+
+      # The desktop archive and installer, into the same `dist/` the wheel landed
+      # in. The manifest step enumerates that directory rather than listing names,
+      # so both appear in `version.json` with real hashes by construction - which
+      # is what the in-app updater needs: it looks its own platform's archive up
+      # by name and refuses to install anything whose SHA-256 it cannot check.
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop
           path: dist/
 
       # **Path contract: `https://swemux.dev/version.json`** (`site/version.json`

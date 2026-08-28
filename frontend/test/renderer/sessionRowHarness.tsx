@@ -60,23 +60,34 @@ const base: SessionRowConfig = {
   ...defaultSessionRowConfig(),
   dotShape: (params.get('shape') || 'hexagon') as DotShape,
 }
-const LAYOUTS: Record<string, SessionRowConfig['bottom']> = {
+// Both width-ladder layouts turn `gitGlyphs` off, unlike the shipped default the
+// harness otherwise renders. The decoration is two more characters on every git
+// token, and these two layouts exist so a spec can assert exactly which rung a
+// named value is on at a named sidebar width — arithmetic the mark would silently
+// shift. Whether the glyph is drawn is asserted in the unit suite, where it costs
+// nothing to state directly.
+const LAYOUTS: Record<string, Partial<SessionRowConfig>> = {
   'worktree-model': {
-    ...base.bottom,
-    left: [{ id: 'worktree', mode: 'always' }],
-    right: [{ id: 'model', mode: 'always' }],
+    gitGlyphs: false,
+    bottom: {
+      ...base.bottom,
+      left: [{ id: 'worktree', mode: 'always' }],
+      right: [{ id: 'model', mode: 'always' }],
+    },
   },
   crowded: {
-    ...base.bottom,
-    left: [
-      { id: 'worktree', mode: 'always' }, { id: 'branch', mode: 'always' },
-      { id: 'diff', mode: 'always' }, { id: 'detail', mode: 'always' },
-    ],
-    right: [{ id: 'model', mode: 'always' }, { id: 'duration', mode: 'always' }],
+    gitGlyphs: false,
+    bottom: {
+      ...base.bottom,
+      left: [
+        { id: 'worktree', mode: 'always' }, { id: 'branch', mode: 'always' },
+        { id: 'diff', mode: 'always' }, { id: 'detail', mode: 'always' },
+      ],
+      right: [{ id: 'model', mode: 'always' }, { id: 'duration', mode: 'always' }],
+    },
   },
 }
-const layout = LAYOUTS[params.get('layout') || '']
-const config: SessionRowConfig = layout ? { ...base, bottom: layout } : base
+const config: SessionRowConfig = { ...base, ...LAYOUTS[params.get('layout') || ''] }
 
 // The budget the app measures off its own probe. The spec drives the sidebar's
 // width directly, so the harness re-measures on every resize the same way — a
