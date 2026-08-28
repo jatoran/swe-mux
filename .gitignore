@@ -13,6 +13,12 @@ desktop.ini
 # === Git ===
 .git/
 .claude/worktrees/
+# Personal Claude Code settings: permission allow-rules and other per-machine
+# choices. Untracked today, but nothing was stopping it being added, and this
+# repository is public - an allow-rule list is one operator's trust decisions,
+# not something a clone should inherit. `.claude/settings.json` (team-wide,
+# committed on purpose) is deliberately NOT ignored.
+.claude/settings.local.json
 .agents/worktrees/
 .codex/worktrees/
 # Codex also registers worktrees at the bare path, not only under `.codex/`.
