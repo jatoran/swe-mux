@@ -21,7 +21,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -48,7 +48,27 @@ const url = (p) => pathToFileURL(p.file).href
 // is not one of these is a placeholder nobody wrote down. A value leaves this
 // list the moment its URL is decided, because a placeholder standing in for
 // something known is just a dead link.
-const TODO_VALUES = new Set(['blog URL'])
+// Empty, and kept: the last entry left when the blog got a decided address.
+// See TODO_VALUES in `tools/build.py` for why an undecided URL and an unwritten
+// page are tracked by two different mechanisms.
+const TODO_VALUES = new Set([])
+
+// Pages the chrome links to that another branch owns and has not landed yet.
+// This is not a second placeholder mechanism: a `data-todo` link points at `#`
+// and is a URL nobody has decided, while these are decided URLs whose file
+// arrives with the branch that writes the page. Recording them is what lets the
+// two branches land in either order without a red gate in between.
+//
+// It is a debt list, so it is checked in both directions. An entry whose file
+// now exists is checked like any other link, and an entry that no page links to
+// is a line nobody removed - that one fails, because a permanent exemption is
+// how a broken link becomes permanent too.
+const PENDING_PAGES = new Set([
+  'blog/index.html', // wp-site-pages
+  'privacy/index.html', // wp-site-pages
+  'terms/index.html', // wp-site-pages
+])
+const pendingSeen = new Set()
 
 const built = readFileSync(join(here, 'build.py'), 'utf8')
 for (const page of PAGES) {
@@ -117,15 +137,30 @@ for (const page of PAGES) {
       continue
     }
     if (/^([a-z]+:|#|\/\/)/.test(href)) continue
+    // Strip the fragment BEFORE the trailing-slash test, not after: `../#install`
+    // is a link to a directory and would otherwise be resolved as a file named
+    // `install`, which happens to exist as a directory and so passes for the
+    // wrong reason.
+    const path = href.replace(/[#?].*$/, '')
+    if (!path) continue
     linkCount++
     const from = dirname(page.file)
-    const target = resolve(from, href.replace(/[#?].*$/, ''))
-    const wanted = href.endsWith('/') || href === '..' ? join(target, 'index.html') : target
-    if (!existsSync(wanted)) fail(`${page.name}: link "${href}" resolves to a missing ${wanted}`)
+    const target = resolve(from, path)
+    const wanted = path.endsWith('/') || path === '..' ? join(target, 'index.html') : target
+    if (existsSync(wanted)) continue
+    const rel = relative(site, wanted).split(sep).join('/')
+    if (PENDING_PAGES.has(rel)) pendingSeen.add(rel)
+    else fail(`${page.name}: link "${href}" resolves to a missing ${wanted}`)
   }
   await p.close()
 }
 console.log(`  ${linkCount} relative links resolved`)
+for (const rel of PENDING_PAGES) {
+  if (!existsSync(join(site, rel))) {
+    if (pendingSeen.has(rel)) console.log(`  pending: ${rel} is linked and not written yet`)
+    else fail(`PENDING_PAGES lists ${rel}, which no page links to; remove the entry`)
+  }
+}
 
 // -------------------------------------------------------------- fragments
 // The `/docs/#<slug>` fragments are a published URL contract (README.md section
@@ -219,6 +254,117 @@ console.log(
     `indicator (lit, marked "${macos?.qualifier}") inspected`,
 )
 await p.close()
+
+// ------------------------------------------------------------ bar and menu
+// The header and footer exist in two places - `tools/build.py`'s `shell()` for
+// the generated pages, and `index.html`'s hand-written copy for the landing page
+// - and if they stop agreeing the site reads as two sites. Discipline is not
+// what keeps them together; this is. Everything here runs on EVERY page, so a
+// change made to one copy and not the other fails rather than ships.
+console.log('bar and menu')
+{
+  // `install` is a call to action rather than a nav entry, and is the one
+  // fragment link the chrome is allowed. The eight section anchors the landing
+  // page's bar used to carry are what this assertion exists to keep out: an
+  // anchor is a position in a document rather than a destination, and a bar
+  // holding both means two things at once.
+  const ALLOWED_FRAGMENT = /^(\.\.\/)?#install$/
+  let labels = null
+  for (const page of PAGES) {
+    const b = await browser.newPage({ viewport: { width: 390, height: 844 } })
+    await b.goto(url(page), { waitUntil: 'load' })
+
+    const shape = await b.evaluate(() => {
+      const chrome = [...document.querySelectorAll('.bar a[href], .menu a[href]')]
+      return {
+        fragments: chrome.map((a) => a.getAttribute('href')).filter((h) => h.includes('#')),
+        menu: [...document.querySelectorAll('.menu a[href]')].map((a) => a.textContent.trim()),
+        burger: !!document.getElementById('menubtn'),
+        controls: document.getElementById('menubtn')?.getAttribute('aria-controls'),
+        hidden: document.getElementById('menu')?.hasAttribute('hidden'),
+        privacy: !!document.querySelector('footer a[href$="privacy/"]'),
+        terms: !!document.querySelector('footer a[href$="terms/"]'),
+        x: document.querySelector('footer .social a[href*="x.com"]')?.getAttribute('href'),
+      }
+    })
+    for (const h of shape.fragments) {
+      if (!ALLOWED_FRAGMENT.test(h)) fail(`${page.name}: in-page anchor "${h}" in the chrome`)
+    }
+    if (!shape.burger) fail(`${page.name}: no menu button`)
+    if (shape.controls !== 'menu') fail(`${page.name}: menu button controls "${shape.controls}"`)
+    if (shape.hidden !== true) fail(`${page.name}: the menu is not closed on load`)
+    if (!shape.privacy || !shape.terms) fail(`${page.name}: the footer is missing privacy/terms`)
+    if (shape.x !== 'https://x.com/swemux') fail(`${page.name}: footer X link is "${shape.x}"`)
+    if (labels === null) labels = shape.menu
+    else if (shape.menu.join('|') !== labels.join('|')) {
+      fail(`${page.name}: menu is [${shape.menu}], but ${PAGES[0].name} has [${labels}]`)
+    }
+
+    // Open by pointer, dismiss by keyboard, which is the pair that has to work:
+    // a menu that opens and cannot be closed without a mouse is a trap on a
+    // page whose whole nav is behind it.
+    await b.click('#menubtn')
+    // "It draws something" is not enough, and this is the shape that proved it:
+    // `.wrap` is used by the menu panel and by the 44px bar row above it, and one
+    // descendant selector made the panel a second bar row that laid its links
+    // out sideways across the hero. The panel had a positive height throughout.
+    // So the geometry is asserted: the panel starts below the row, every item is
+    // inside the panel, and the items are stacked rather than in a line.
+    const open = await b.evaluate(() => {
+      const menu = document.getElementById('menu').getBoundingClientRect()
+      const row = document.querySelector('.bar > .wrap').getBoundingClientRect()
+      const items = [...document.querySelectorAll('.menu a[href]')].map((a) => a.getBoundingClientRect())
+      return {
+        expanded: document.getElementById('menubtn').getAttribute('aria-expanded'),
+        focused: document.activeElement === document.querySelector('.menu a[href]'),
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        under: menu.top >= row.bottom - 1,
+        escaped: items.filter((r) => r.top < menu.top - 1 || r.bottom > menu.bottom + 1).length,
+        stacked: items.every((r, i) => i === 0 || r.top >= items[i - 1].bottom - 1),
+        tall: Math.round(menu.height),
+        count: items.length,
+      }
+    })
+    if (open.expanded !== 'true') fail(`${page.name}: aria-expanded is ${open.expanded} when open`)
+    if (!open.focused) fail(`${page.name}: opening did not move focus into the menu`)
+    if (open.overflow) fail(`${page.name}: the open menu pushes the page sideways at 390`)
+    if (!open.under) fail(`${page.name}: the open menu overlaps the bar row above it`)
+    if (open.escaped) fail(`${page.name}: ${open.escaped} menu items fall outside the panel`)
+    if (!open.stacked) fail(`${page.name}: the menu's items are not stacked in a column`)
+    if (open.tall < open.count * 20) {
+      fail(`${page.name}: the open menu is ${open.tall}px tall for ${open.count} items`)
+    }
+
+    await b.keyboard.press('Escape')
+    const shut = await b.evaluate(() => ({
+      expanded: document.getElementById('menubtn').getAttribute('aria-expanded'),
+      hidden: document.getElementById('menu').hasAttribute('hidden'),
+      // Escape that closes without returning focus drops a keyboard user back
+      // at the top of the document, which is a worse place than they started.
+      focused: document.activeElement === document.getElementById('menubtn'),
+    }))
+    if (shut.expanded !== 'false') fail(`${page.name}: aria-expanded is ${shut.expanded} when shut`)
+    if (!shut.hidden) fail(`${page.name}: Escape did not close the menu`)
+    if (!shut.focused) fail(`${page.name}: Escape did not return focus to the menu button`)
+    await b.close()
+
+    // Wide: the full page nav is drawn and the button is not, so the same links
+    // are never offered twice in one bar.
+    const w = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+    await w.goto(url(page), { waitUntil: 'load' })
+    const wide = await w.evaluate(() => ({
+      nav: [...document.querySelectorAll('.bar nav.pagenav a')]
+        .filter((a) => a.offsetParent !== null).map((a) => a.textContent.trim()),
+      burger: document.getElementById('menubtn').offsetParent !== null,
+    }))
+    if (wide.burger) fail(`${page.name}: the menu button is still drawn at 1440`)
+    if (wide.nav.length !== labels.length - 2) {
+      fail(`${page.name}: the wide nav is [${wide.nav}], expected the pages from [${labels}]`)
+    }
+    await w.close()
+  }
+  console.log(`  ${PAGES.length} pages: nav [${labels.join(' ')}], open/Escape/focus, footer links`)
+}
 
 // ------------------------------------------------------------------- theme
 console.log('theme toggle')

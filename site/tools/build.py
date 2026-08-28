@@ -45,6 +45,11 @@ ROOT = SITE.parent
 REPO = "https://github.com/jatoran/swe-mux"
 BLOB = f"{REPO}/blob/master"
 
+# The project's only social account. It is a link out and nothing more: no
+# embed, no widget, no script from their host (`README.md` section 6, the
+# self-contained rule).
+X_URL = "https://x.com/swemux"
+
 # Several root documents still carry the `OWNER` placeholder this site used
 # before the account was decided (`CHANGELOG.md`, `README.md`, `SECURITY.md`,
 # `pyproject.toml`). Those are not this directory's to edit, and a page that
@@ -64,7 +69,14 @@ def repo_url(url: str) -> str:
 # on any other, so an unfilled URL cannot arrive quietly. A placeholder standing
 # in for something now known is just a dead link, so a value leaves this list the
 # moment its URL is decided.
-TODO_VALUES = ("blog URL",)
+#
+# It is empty, and the guard stays anyway - the same posture as the `/OWNER/`
+# assertion in `main`. The last entry was `blog URL`, which left when the blog
+# got a decided address (`/blog/`, in PAGES); the page itself is written by
+# another branch and is tracked in `check.mjs`'s PENDING_PAGES rather than here,
+# because "the URL is not decided" and "the file is not written yet" are
+# different states and only the first one is a placeholder.
+TODO_VALUES: tuple[str, ...] = ()
 
 # Feature requests are GitHub Discussions in the `Ideas` category, and a
 # thumbs-up reaction on one is a vote. `tools/ideas.py` reads them and writes
@@ -216,13 +228,38 @@ def section(md: str, heading: str) -> str:
 
 # ------------------------------------------------------------------------ chrome
 
+# The site's nav, in order, and the only nav there is: the bar's page list, the
+# hamburger menu's page list, and `index.html`'s hand-written copy of both are
+# all this. Real pages only - the landing page's eight in-page section anchors
+# are gone, because an anchor is a position in a document rather than a
+# destination and the two do not belong in one list.
+#
+# `blog` is here before `site/blog/` exists. The page is owned by another branch
+# that lands beside this one; registering the route now is what stops the nav
+# being edited twice. `tools/check.mjs` carries it in PENDING_PAGES, which is
+# where that debt is recorded and where it is removed once the page arrives.
 PAGES = [
     ("", "index.html", "swe-mux"),
     ("docs", "docs/index.html", "Docs"),
+    ("blog", "blog/index.html", "Blog"),
     ("changelog", "changelog/index.html", "Changelog"),
     ("roadmap", "roadmap/index.html", "Roadmap"),
     ("acknowledgements", "acknowledgements/index.html", "Acknowledgements"),
 ]
+
+BURGER = (
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3.4h13V5h-13Zm0 '
+    '3.8h13v1.6h-13Zm0 3.8h13v1.6h-13Z"/></svg>'
+)
+
+# The X mark, icon only. Inline like the GitHub mark, because nothing on this
+# site loads from a third-party host and a social button is the classic way that
+# rule gets broken.
+X_MARK = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 '
+    "8.502 11.24h-6.66l-5.214-6.817-5.966 6.817H1.68l7.73-8.835L1.254 2.25h6.826l4.713 "
+    '6.231ZM17.083 19.77h1.833L7.084 4.126H5.117Z"/></svg>'
+)
 
 GITHUB_MARK = (
     '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 '
@@ -323,12 +360,10 @@ table td:first-child { font-family: var(--mono); color: var(--fg); font-size: 12
 table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 .tablewrap { overflow-x: auto; }
 
-/* The bar's nav keeps `index.html`'s scroll-fade for narrow screens, but this
-   nav is short and its last item would sit under the fade at every width. The
-   padding gives the gradient empty space to fall on once it is scrolled out. */
-.pagenav { padding-right: 15px; }
-.pagenav a[aria-current="page"] { color: var(--fg); }
-.pagenav a[aria-current="page"]::before { content: "\\25B8 "; color: var(--green); }
+/* `.pagenav` used to be defined here, when it was what separated a sub-page's
+   bar from the landing page's. Both bars are now the same component, so its
+   rules live in `index.html`'s stylesheet with the rest of the chrome and reach
+   every page through `index_style()`. Nothing about the bar is defined twice. */
 
 /* `.rel:first-of-type` does not do this: `:first-of-type` counts elements of the
    same tag, and the first `div` in a page is the kick line. */
@@ -395,15 +430,48 @@ def index_style() -> str:
     return m.group(1)
 
 
+def index_block(name: str) -> str:
+    """A marked run of inline script out of `index.html`.
+
+    Same rule as `index_style`, applied to behaviour rather than to the
+    stylesheet: the header is the one component that must be identical on every
+    page, and a second copy of its script here is a copy that drifts. The
+    landing page is the one that has to carry the source anyway, because it is
+    hand-authored and has no build step, so it is the source for both.
+    """
+    text = (SITE / "index.html").read_text(encoding="utf-8")
+    m = re.search(rf"/\* >>> {name}:.*?\*/\n(.*?)\n/\* <<< {name} \*/", text, re.S)
+    if not m:
+        raise SystemExit(
+            f"site/index.html has no '>>> {name}' ... '<<< {name}' block to inherit from"
+        )
+    return m.group(1)
+
+
 def shell(slug: str, title: str, description: str, body: str) -> str:
     """The chrome every generated page shares: head, top bar, footer, scripts."""
     up = "../"  # every generated page lives one directory below the deploy root
     items = [(up, "home", False)] + [
         (f"{up}{s}/", label.lower(), s == slug) for s, _, label in PAGES if s
     ]
-    nav = "\n".join(
-        f'      <a href="{href}"{" aria-current=\"page\"" if current else ""}>{text}</a>'
-        for href, text, current in items
+
+    def links(indent: str) -> str:
+        return "\n".join(
+            f'{indent}<a href="{href}"'
+            f'{" aria-current=\"page\"" if current else ""}>{text}</a>'
+            for href, text, current in items
+        )
+
+    nav = links("      ")
+    # The menu carries every page the bar carries, plus the two links the bar
+    # keeps at narrow widths, so nothing is reachable only by remembering that
+    # it is there. `install` is the one fragment link in the whole chrome and is
+    # a call to action rather than a nav entry; `tools/check.mjs` asserts that it
+    # is the only one, because the section anchors this nav used to hold are
+    # exactly what must not come back.
+    menu = links("        ") + (
+        f'\n        <a class="sep" href="{up}#install">install</a>'
+        f'\n        <a href="{REPO}">github</a>'
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -431,10 +499,11 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
       <img class="dark" src="{up}img/logo.png" width="640" height="73" alt="" />
       <img class="lite" src="{up}img/logo-light.png" width="640" height="73" alt="" />
     </a>
-    <nav class="secnav pagenav">
+    <nav class="secnav pagenav" aria-label="Pages">
 {nav}
     </nav>
     <div class="util">
+      <a class="cta" href="{up}#install">install</a>
       <a href="{REPO}" aria-label="Source on GitHub" title="Source on GitHub">
         {GITHUB_MARK}
         <span class="lbl">github</span>
@@ -443,6 +512,16 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
         {MOON}
         {SUN}
       </button>
+      <button type="button" id="menubtn" class="burger" aria-label="Menu" aria-expanded="false" aria-controls="menu" title="Menu">
+        {BURGER}
+      </button>
+    </div>
+  </div>
+  <div class="menu" id="menu" hidden>
+    <div class="wrap">
+      <nav aria-label="Menu">
+{menu}
+      </nav>
     </div>
   </div>
 </div>
@@ -462,7 +541,8 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
       </div>
       <div>
         <h4>pages</h4>
-        <div><a href="{up}">home</a> &middot; <a href="{up}docs/">docs</a></div>
+        <div><a href="{up}">home</a> &middot; <a href="{up}docs/">docs</a>
+        &middot; <a href="{up}blog/">blog</a></div>
         <div><a href="{up}changelog/">changelog</a> &middot; <a href="{up}roadmap/">roadmap</a>
         &middot; <a href="{up}acknowledgements/">acknowledgements</a></div>
       </div>
@@ -474,9 +554,15 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
         <div><code>.docs/design/00_OVERVIEW.md</code></div>
       </div>
       <div>
-        <h4>license</h4>
+        <h4>legal</h4>
         <div><a href="{BLOB}/LICENSE">Apache-2.0</a></div>
         <div><a href="{BLOB}/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
+        <div><a href="{up}privacy/">Privacy</a> &middot; <a href="{up}terms/">Terms</a></div>
+        <div class="social">
+          <a href="{X_URL}" rel="me" aria-label="swe-mux on X" title="swe-mux on X">
+            {X_MARK}
+          </a>
+        </div>
       </div>
     </div>
     <p class="colophon"><span class="h">#</span> This page is generated by
@@ -490,6 +576,9 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
 
 <script>
 {THEME_TOGGLE}
+
+/* ------------------------------------------------------------------- menu */
+{index_block("menu")}
 </script>
 
 </body>
