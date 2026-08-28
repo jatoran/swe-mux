@@ -15,6 +15,78 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-28
+
+A repair release.
+`swe-mux[voice-local]` could not be installed from PyPI at all in 0.1.0, and a configuration
+file carried between two hosts left the daemon unable to launch an agent.
+
+This release also adds the first Windows installer, so swe-mux can be installed without Python.
+
+### Added
+
+- **A Windows installer** (`swe-mux-0.1.1-windows-x64-setup.exe`), attached to this release.
+  It installs the application and its PTY supervisor, creates a Start Menu entry, and offers a
+  desktop shortcut and a run-at-login task.
+  It is **not code signed**, so Windows SmartScreen warns on first run; signing is planned.
+  The portable archive is published alongside it for anyone who would rather not run an
+  installer.
+- `mux install-shortcut`, which creates Start Menu and desktop shortcuts for an install that
+  came from `uv tool`, `pipx`, or `pip`.
+  No Python packaging mechanism can create a shortcut at install time, so this is the
+  equivalent for those installs.
+- `mux doctor` now reports how swe-mux was installed, which directory its commands are in, and
+  whether that directory is on `PATH`.
+- `python -m swe_mux --where` answers the same question with nothing but an interpreter, for
+  the case where the commands are not reachable by name.
+- `muxd` prints a one-time hint at startup when its own commands are not on `PATH`, naming the
+  directory and the command that fixes it.
+- A Help surface: a modal reachable from the command palette and by voice, from which the
+  guided tour can be reopened.
+- Support for `.tar.gz` desktop bundles, which the updater already expected on macOS and Linux.
+
+### Fixed
+
+- **`pip install "swe-mux[voice-local]"` failed for everyone.**
+  The published wheel required `en-core-web-sm`, which is on no package index, so both pip and
+  uv refused the extra outright.
+  The model is now acquired at first use and verified against a pinned hash, and the extra
+  installs.
+- **A `config.toml` written on one host and loaded on another kept values the new host cannot
+  use.**
+  A file written on Windows and loaded on Linux launched `claude.exe` and `codex.exe`, so the
+  Run menu could not start an agent while typing `claude` in a shell worked.
+  In the other direction a POSIX `worktree_root` made the daemon refuse to load its own
+  configuration.
+  Ten settings are now re-derived when their stored value is shaped for a different host.
+  A deliberate override the host can run, such as `claude.cmd` on Windows, is left alone.
+- **A refused executable reported the wrong reason.**
+  Under WSL the Windows agent CLIs are reachable through interop, and swe-mux refuses them
+  because such a session writes its transcript where no Linux path points and joins no Linux
+  process group.
+  That refusal reported "no such file or directory" rather than naming the binary it found and
+  why it was rejected.
+- Provider login and harness launch failures now reach `daemon.log`, with the configured value
+  and the resolution that failed.
+- The recovery that retries a configured `codex.exe` as `codex` ran only on Windows, where an
+  `.exe` suffix is at least plausible, and not on POSIX, where it is certainly wrong.
+- `cryptography` and `py-vapid` are imported when the daemon starts and were not declared as
+  dependencies; they arrived only by way of another package's requirements.
+- The desktop application opened a console window behind its native window.
+  It is now a GUI entry point, and startup failures are reported in a dialog and written to
+  `desktop-shell.log` rather than to a console that no longer exists.
+
+### Changed
+
+- The default theme is now Tokyo Night, and the default sidebar session row shows more at a
+  glance.
+  An existing installation keeps whatever it already had; neither default is applied to a
+  configuration that has been written before.
+- The wheel no longer ships precompressed copies of the frontend bundle, which were duplicating
+  content the wheel already compresses.
+  They are regenerated once on first start, which takes under a second and makes the download
+  about a third smaller.
+
 ## [0.1.0] - 2026-08-28
 
 First public release.
@@ -184,5 +256,6 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.1
 [0.1.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.0
