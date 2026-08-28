@@ -57,6 +57,7 @@ Settings → Voice is the worked case, pinned by `test/renderer/voice-settings.s
 Settings → Harnesses is the per-harness surface: enable toggle, detected path, executable, default args, width envelope, and the native-history reconcile and scan controls.
 It reads detection off the `/api/harnesses` payload and edits `harness_enabled`.
 `HarnessSetup.tsx` is the once-only first-run panel, gated daemon-side by `harness_setup_complete`.
+It leads the first run and the guided tour waits behind it; `firstRunSurface` in `tutorial.ts` owns that ordering for both, so neither render site decides it alone.
 The enablement filter itself lives in `harnessRegistry.ts` (`setHarnessEnablement`, `harnessEnabled`, `allBackendNames`, `allHarnessesIncludingDisabled`) and is a launcher filter only, never touching display, transcript, or history surfaces.
 
 `WslBridgePanel.tsx` (decisions in `wslBridge.ts`) is the WSL agent bridge setup surface, shaped like the firewall panel beside it because it solves the same shape of problem: read status, state the blocker in a sentence, offer exactly the action that clears it.
@@ -157,6 +158,15 @@ The summary is an index, never a second editor: two controls writing one config 
 ## Guided onboarding
 
 `GuidedTutorial.tsx`, `tutorial.ts` - action gates, coach-mark geometry, product-event matching, and device-local completion.
+
+Three of `tutorial.ts`'s exports are pure decisions that `App.tsx` reads rather than restates, which is what makes them testable without mounting the shell (`test/tutorial.test.ts`).
+`mobileTutorialChrome(step)` is the single table of which collapsed panel a step's anchor sits behind on a phone; the notes step is behind the **side panel** and every other gated one behind the navigation sidebar, and confusing the two is what stranded the tour at step 10 of 14.
+`firstRunSurface(state)` returns the one first-run surface that may render - `'harness' | 'tutorial' | 'none'` - so the harness panel and the tour cannot both be live, which they were on every fresh install until 2026-08-28.
+`TutorialStepId` moved here from `GuidedTutorial.tsx` (which re-exports it) so those two can be plain functions in a JSX-free module.
+
+Every action step renders a skip beside its hint.
+That is not a convenience: a gate the user cannot satisfy - a hidden Notes tab, an uninstalled provider CLI - otherwise leaves abandoning the tour as the only way past it.
+`test/renderer/tutorial-steps.spec.ts` walks the whole tour at a phone and a desktop viewport over a page carrying **none** of its anchors, which is every step's worst case at once, and asserts it still reaches Finish.
 
 The tour's second-to-last step is a hand-off rather than a lesson: it anchors on the sidebar footer's configurator control and says what pressing it does.
 Two minutes cannot explain an install, and ending on the one surface that can answer the questions the tour did not cover is worth more than one more feature tour stop.

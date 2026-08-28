@@ -1,3 +1,48 @@
+export type TutorialStepId='welcome'|'projects'|'project-add'|'project-open'|'project-create'|'accounts'|'run'|'run-choice'|'workspace'|'new-tab'|'tabs'|'splits'|'resources'|'gates'|'features'|'feature-menu'|'configurator'|'ready'
+
+/** Which collapsed chrome a step's anchor lives behind on the mobile layout.
+ *
+ *  A step that spotlights a control has to have that control on screen, and the phone
+ *  layout keeps two panels shut by default. Getting this wrong is not cosmetic: a step
+ *  carrying an `action` is satisfied by pressing its anchor, so an anchor that is not
+ *  rendered leaves the step with nothing to press.
+ *
+ *  `resources` is the one that was wrong. Its anchor is the Notes control, which belongs
+ *  to the **side panel** - the desktop launcher rail carries it while the panel is closed
+ *  and the panel's own tab strip carries it once open - and it was opening the navigation
+ *  sidebar, which has never carried it at all. */
+export function mobileTutorialChrome(step:TutorialStepId):'sidebar'|'side-panel'|null {
+  if(step==='projects'||step==='features'||step==='feature-menu'||step==='configurator')return 'sidebar'
+  if(step==='resources')return 'side-panel'
+  return null
+}
+
+/** The one first-run surface that may render, out of the two that exist.
+ *
+ *  They used to be decided independently and both were live on a fresh install: the tour
+ *  opens synchronously from `localStorage`, the harness panel a config fetch later, and
+ *  the panel's backdrop stacks over the tour's blur - so the product's first frame was a
+ *  dialog over a doubly-dimmed app with an invisible tour card underneath it.
+ *
+ *  The harness panel **leads**: it decides what the launchers contain, and the tour walks
+ *  the user into one of those launchers two steps in. It is also a bounded modal with
+ *  three explicit exits, where a 14-step walk merely gets interrupted.
+ *
+ *  `configResolved` is why the tour does not simply render when the panel is absent:
+ *  whether the panel is needed is a daemon fact that arrives after the first paint, so
+ *  until it has settled the answer is "neither", not "the tour". Suppressing one fetch
+ *  too late is exactly when the damage was done. */
+export function firstRunSurface(state:{
+  tutorialArmed:boolean
+  configResolved:boolean
+  harnessSetupNeeded:boolean
+  settingsOpen:boolean
+}):'harness'|'tutorial'|'none' {
+  if(state.harnessSetupNeeded)return state.settingsOpen?'none':'harness'
+  if(state.tutorialArmed&&state.configResolved)return 'tutorial'
+  return 'none'
+}
+
 export const TUTORIAL_STORAGE_KEY='mux.tutorial.v1'
 export const TUTORIAL_VERSION='1'
 export const TUTORIAL_ACTION_EVENT='mux:tutorial-action'
