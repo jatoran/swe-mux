@@ -20,6 +20,16 @@ rate/volume/pitch controls.
 Only the selected provider panel is mounted; its config fields remain in the parent Settings draft,
 so hiding a panel never resets it.
 
+`Settings.tsx` holds the two first-use model panels as deliberate siblings - `KokoroModelPanel`
+(read aloud) and `WhisperModelPanel` (dictation) - over the same
+`not_downloaded`/`downloading`/`ready`/`error` vocabulary, so an operator learns one shape for
+every asset swe-mux fetches on demand.
+Neither starts a download on mount: the whole point is that the fetch is an explicit press.
+`WhisperModelPanel` draws no percentage while downloading, only elapsed seconds, because
+`faster_whisper.download_model` disables the hub's progress hook and there is nothing to read;
+it also distinguishes `backend_installed: false` (the `voice-local` extra is missing) from an
+undownloaded model, because no Download button fixes the first.
+
 Scope: app-owned capture, draft, and history; one app-level dock holding every voice surface, with no pane-attached view; follow and pin targets; registry-backed commands; typed fleet, help, and reply queries; guarded approvals; confirmed-speech barge-in; segmented playback; session-scoped Voice Comms; mobile HTTPS.
 
 ### Pure policy

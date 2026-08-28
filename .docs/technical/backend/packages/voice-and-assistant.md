@@ -83,9 +83,22 @@ The direct-onnxruntime Kokoro-82M engine: espeak-free misaki G2P (`fallback=None
 
 ## `voice_models.py`
 
-The pinned, per-file SHA-256-verified Kokoro model download under `<data_dir>/voice-models/kokoro`: explicit `not_downloaded`/`downloading`/`ready`/`error` state whose error can never load, progress callbacks, and restart-interruption detection.
+Both on-demand speech models, under one `not_downloaded`/`downloading`/`ready`/`error` vocabulary, because an operator should learn one shape for every asset swe-mux fetches.
 
-**Not:** bundling models, loading them (`kokoro_tts.py`), or any unpinned revision.
+`KokoroModelStore` (TTS) is the pinned, per-file SHA-256-verified download under `<data_dir>/voice-models/kokoro`: a state whose `error` can never load, progress callbacks, and restart-interruption detection.
+It hand-rolls the transfer, which is why it can report bytes.
+
+`WhisperModelStore` (STT) wraps `faster_whisper`'s own resolver over the Hugging Face cache.
+The cache is authoritative for `ready` - the hub writes atomically, and that resolver already understands every form `stt_whisper_model` accepts (a size alias, a bare repository id, a local directory), so a second state file here would only drift from it.
+It reports **no** byte progress: `faster_whisper.download_model` disables the hub's progress hook, so there is nothing to observe, and a proportion derived from an expected total would be an estimate presented as a reading.
+`WHISPER_APPROXIMATE_MB` gives the operator the rough cost before they press Download, labelled approximate, and an unlisted name reports no size rather than a guessed one.
+
+The rule both stores enforce: **a download happens only from an explicit act.**
+`VoiceService._require_whisper_weights` refuses transcription rather than letting `WhisperModel(name)` fetch the weights inside the decode path, and `_ensure_whisper_model` skips an absent *routing* model instead of constructing it, because construction is the download.
+
+The third first-use asset, the browser-side Silero VAD, is deliberately not here and does not download: its WASM runtime and ONNX model are emitted into the frontend bundle by Vite and served same-origin by this daemon.
+
+**Not:** bundling models, loading them (`kokoro_tts.py`), any unpinned Kokoro revision, or downloading anything a human did not ask for.
 
 ## `assistant.py`
 
