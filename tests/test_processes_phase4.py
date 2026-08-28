@@ -5,6 +5,7 @@ import json
 import os
 import time
 from collections import namedtuple
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -14,6 +15,7 @@ import pytest
 from swe_mux import app_keys as keys
 from swe_mux.event_bus import EventBus
 from swe_mux.layouts import attach_leaf, layout_terminal_ids, stack_leaf
+from swe_mux.models import SessionRecord
 from swe_mux.preview_store import PreviewStore
 from swe_mux.processes import (
     OwnedProcess,
@@ -48,15 +50,63 @@ class FakeInspector:
         }
 
 
-def fake_sessions() -> Any:
-    session = SimpleNamespace(
-        record=SimpleNamespace(
-            id="session-a", project_id="default", pid=10, state="running", root_started_at=None
-        )
+@dataclass(slots=True)
+class FakeSession:
+    """The one attribute of `Session` that the code under test reads.
+
+    `record` is a **real** `SessionRecord`, never a `SimpleNamespace`. A
+    hand-built stand-in for a type is checked by nothing here - mypy's
+    `packages = ["swe_mux"]` does not cover `tests/` - so it silently loses
+    every field the code under test grows afterwards, and the loss surfaces as
+    an `AttributeError` on whichever host happens to reach the line. That is
+    exactly what `agent_run_id` did (see `session_record`). Constructing the
+    dataclass makes the drift impossible instead of merely detected.
+    """
+
+    record: SessionRecord
+
+
+class FakeSessionManager:
+    """The two members of `SessionManager` that processes/previews reach for."""
+
+    def __init__(self, sessions: dict[str, FakeSession]) -> None:
+        self.sessions = sessions
+
+    def resolve(self, identity: str) -> FakeSession | None:
+        return self.sessions.get(identity)
+
+
+def session_record(identity: str, project_id: str, *, pid: int = -1) -> SessionRecord:
+    """A real record for a session whose root process is not on this machine.
+
+    `pid` defaults to `SessionRecord`'s own "no root process" sentinel, and that
+    is load-bearing rather than tidy. These fakes used to carry a small positive
+    pid, which makes `ProcessInspector._collect_session` walk the *host's*
+    process table. On Windows that is a guaranteed miss - Windows allocates pids
+    in multiples of four and can never issue 10 - so the walk returned early and
+    nothing downstream of it ever ran. On Linux pid 10 is a live kernel thread,
+    so the same walk ran to completion, attributed a kernel thread to this
+    session, and read record fields the walk's early return had been hiding.
+    A positive pid here means a test measures whichever machine it lands on.
+    """
+    record = SessionRecord(
+        identity,
+        identity,
+        project_id,
+        "claude",
+        f"native-{identity}",
+        ".",
+        "claude",
+        [],
     )
-    return SimpleNamespace(
-        sessions={"session-a": session},
-        resolve=lambda identity: session if identity == "session-a" else None,
+    record.pid = pid
+    record.state = "running"
+    return record
+
+
+def fake_sessions() -> Any:
+    return FakeSessionManager(
+        {"session-a": FakeSession(session_record("session-a", "default"))}
     )
 
 
@@ -88,19 +138,12 @@ class ProjectInspector:
 
 
 def project_sessions() -> Any:
-    sessions = {
-        identity: SimpleNamespace(
-            record=SimpleNamespace(
-                id=identity,
-                project_id="project-a",
-                pid=pid,
-                state="running",
-                root_started_at=None,
-            )
-        )
-        for identity, pid in (("frontend", 11), ("backend", 12))
-    }
-    return SimpleNamespace(sessions=sessions, resolve=lambda identity: sessions[identity])
+    return FakeSessionManager(
+        {
+            identity: FakeSession(session_record(identity, "project-a"))
+            for identity in ("frontend", "backend")
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -460,26 +503,19 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace())
-    records = {
-        "session-a": SimpleNamespace(
-            id="session-a",
-            project_id="project-a",
-            trusted_scope_id="scope-a",
-            agent_run_id=None,
-            run_repo_group_id=None,
-            spawn_repo_group_id="repo-a",
-        ),
-        "session-b": SimpleNamespace(
-            id="session-b",
-            project_id="project-b",
-            trusted_scope_id="scope-b",
-            agent_run_id="run-b",
-            run_repo_group_id="repo-b",
-            spawn_repo_group_id=None,
-        ),
-    }
-    sessions = SimpleNamespace(
-        sessions={identity: SimpleNamespace(record=record) for identity, record in records.items()}
+    # `trusted_scope_id` is a property on the real record, derived from whether
+    # the session has an agent run: a spawn-side scope answers for a session
+    # without one, a run-side scope for a session with one. Setting the inputs
+    # rather than the answer is the point of using the real type.
+    unattached = session_record("session-a", "project-a")
+    unattached.project_scope_id = "scope-a"
+    unattached.spawn_repo_group_id = "repo-a"
+    attached = session_record("session-b", "project-b")
+    attached.agent_run_id = "run-b"
+    attached.run_project_scope_id = "scope-b"
+    attached.run_repo_group_id = "repo-b"
+    sessions = FakeSessionManager(
+        {record.id: FakeSession(record) for record in (unattached, attached)}
     )
     inspector = ProcessInspector(cast(Any, sessions), EventBus())
     inspector._system_cpu_pct = 62.5
@@ -550,15 +586,10 @@ def _fleet_inspector(monkeypatch: pytest.MonkeyPatch) -> Any:
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace())
-    record = SimpleNamespace(
-        id="session-a",
-        project_id="project-a",
-        trusted_scope_id="scope-a",
-        agent_run_id=None,
-        run_repo_group_id=None,
-        spawn_repo_group_id="repo-a",
-    )
-    sessions = SimpleNamespace(sessions={"session-a": SimpleNamespace(record=record)})
+    record = session_record("session-a", "project-a")
+    record.project_scope_id = "scope-a"
+    record.spawn_repo_group_id = "repo-a"
+    sessions = FakeSessionManager({"session-a": FakeSession(record)})
     inspector = ProcessInspector(cast(Any, sessions), EventBus())
     live = OwnedProcess(55, 10, "session-a", "server", "server", 1.0, None, 5.0, 1024, [], [])
     ended = OwnedProcess(56, 10, "session-a", "old", "old", 2.0, 100.0, 0, 0, [], [])
@@ -1227,10 +1258,10 @@ def test_equal_strength_claims_from_two_sessions_are_quarantined(
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace(net_connections=lambda **_: []))
-    sessions = SimpleNamespace(
-        sessions={
-            "session-a": SimpleNamespace(record=SimpleNamespace(id="session-a")),
-            "session-b": SimpleNamespace(record=SimpleNamespace(id="session-b")),
+    sessions = FakeSessionManager(
+        {
+            identity: FakeSession(session_record(identity, "project-a"))
+            for identity in ("session-a", "session-b")
         }
     )
     inspector = ProcessInspector(cast(Any, sessions), EventBus())

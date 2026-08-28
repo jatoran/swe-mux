@@ -1344,6 +1344,15 @@ def read_static_preview_file(
     against the root, so neither a crafted tail nor a symlink inside the
     directory can reach outside it.
 
+    The ordering of those two is worth stating, because it differs by host. The
+    route-separator strip runs *first*, so on POSIX a tail that looks like an
+    absolute path is already root-relative by the time the absolute check sees
+    it: it is re-rooted under the served directory and hits or misses there,
+    never followed. Only a Windows drive-lettered tail survives the strip and is
+    refused outright. Both are refused; they raise different exceptions, so the
+    guarantee to assert against is that the named file never comes back, not
+    which exception said so.
+
     Returns ``(data, path relative to doc_root, size)``. ``data`` is ``None``
     when the file is larger than ``limit``, mirroring
     ``_read_regular_file_bounded``: the caller answers 413 rather than the daemon

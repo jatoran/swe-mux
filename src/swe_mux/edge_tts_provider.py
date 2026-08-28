@@ -33,6 +33,19 @@ EDGE_INSTALL_OUTPUT_LIMIT = 512 * 1024
 PYPI_SIMPLE_INDEX = "https://pypi.org/simple"
 
 
+def managed_interpreter(root: Path) -> Path:
+    """Where a virtual environment rooted at `root` puts its interpreter on this host.
+
+    The single owner of that layout. A second copy of it - in a test fixture, say -
+    reads correctly on the host it was written on and names a path that does not exist
+    on the other, which makes a working environment look absent.
+    """
+
+    if os.name == "nt":
+        return root / "Scripts" / "python.exe"
+    return root / "bin" / "python"
+
+
 def _safe_error_message(value: Any) -> str:
     message = str(value or "Edge TTS failed")[:2_000]
     message = re.sub(
@@ -193,10 +206,7 @@ class EdgeTtsProvider:
             log.warning("removed stale Edge TTS input files count=%d", removed)
 
     def managed_python(self, root: Path | None = None) -> Path:
-        environment = root or self.managed_directory
-        if os.name == "nt":
-            return environment / "Scripts" / "python.exe"
-        return environment / "bin" / "python"
+        return managed_interpreter(root or self.managed_directory)
 
     def _load_install_state(self) -> dict[str, Any]:
         try:
