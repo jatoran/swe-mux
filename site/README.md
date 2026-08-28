@@ -493,13 +493,16 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
 # 11. Open before launch
 
 - **Fill the `data-todo` placeholders.**
-  Every unfilled URL on the site carries one, and `check.mjs` fails on any value outside this list:
-  - `TODO(release): OWNER` - the GitHub organisation is undecided, so every repository URL on a generated page is built from the `REPO` constant in `build.py` and reads `github.com/OWNER/swe-mux`.
-    Filling it is one edit there plus a regenerate, and the same marker is already used in `CHANGELOG.md`.
-    **`index.html`'s footer still resolves to `github.com/jatoran/swe-mux`**; if the project is published under an organisation, that and its two license links change with the constant.
-  - `blog URL` - `index.html` only. There is no blog yet.
-  - `repository URL` - `index.html`'s GitHub mark only, still `href="#"`.
-- The `docs` link in the top bar is filled and points at `/docs/`.
+  Every unfilled URL on the site carries one, and `check.mjs` fails on any value outside this list.
+  A value leaves the list the moment its URL is decided, because a placeholder standing in for something known is just a dead link.
+  - `blog URL` - `index.html` only. There is no blog yet, and no page for one.
+
+  The `docs` link in the top bar is filled and points at `/docs/`.
+  The repository URL is filled: `github.com/jatoran/swe-mux`, decided 2026-08-27.
+- **The `OWNER` placeholder is gone from this directory but not from the repository.**
+  `CHANGELOG.md`, `README.md`, `SECURITY.md`, `pyproject.toml`, and `.docs/development/RELEASE_MANUAL_TASKS.md` still carry `github.com/OWNER/swe-mux`, and they are not this directory's to edit.
+  Because the changelog page renders `CHANGELOG.md`, `build.py` normalizes any repository URL it lifts through `repo_url()` and then asserts that no `/OWNER/` reaches a page.
+  When those files are fixed the substitution stops matching on its own, and both it and this note can go.
 - **Replace the install commands.** `get.swe-mux.dev` does not exist. The `source` flow is the only real one today, and its full version is the landing page's own Install section (`11` on the page, not in this file).
   The clone URL no longer says `REPLACE`: it resolves to `github.com/jatoran/swe-mux`, in the hero command and in the footer, alongside the license links added in Phase 10.5.
   If the project is ever published under an organisation rather than that account, both places and the footer's two license links change together.
