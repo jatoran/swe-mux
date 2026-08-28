@@ -58,5 +58,5 @@ Iteration speed, obviously.
 But also trust: I stopped hesitating before restarting things, because restarts stopped being destructive.
 When your infrastructure makes the safe action cheap, you take it constantly.
 
-swe-mux is open source (Apache 2.0): github.com/[org]/swe-mux.
+swe-mux is open source (Apache 2.0): github.com/jatoran/swe-mux.
 The full design doc for this mechanism ships in the repo.

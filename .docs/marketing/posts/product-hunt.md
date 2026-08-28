@@ -3,6 +3,8 @@
 Launch after Show HN, using whatever the HN thread proved resonates.
 Schedule for 12:01am PT; the day is a 24-hour vote window.
 
+**Never ask anyone to upvote.** Product Hunt's own [launch guidance](https://www.producthunt.com/launch) prohibits it, coordinated and paid voting is detected and penalized, and ranking weights engagement - comments, maker replies, time on page - over raw vote count. Asking people to visit, comment, try it, and give honest feedback is permitted and is the effective version anyway. Self-hunting is normal and carries no penalty, so there is no reason to find a third-party hunter.
+
 ## Listing
 
 **Name:** swe-mux
