@@ -16,12 +16,9 @@ Upgrading is the remedy for every reported issue.
 
 Report privately through GitHub, never as a public issue or pull request.
 
-1. Open the repository at `https://github.com/OWNER/swe-mux`.
+1. Open the repository at `https://github.com/jatoran/swe-mux`.
 2. Select the **Security** tab, then **Report a vulnerability** under **Advisories**.
-3. Direct link: `https://github.com/OWNER/swe-mux/security/advisories/new`.
-
-<!-- TODO(release): OWNER - the GitHub organization is undecided; replace it in the three
-     paths above when the repository is published. -->
+3. Direct link: `https://github.com/jatoran/swe-mux/security/advisories/new`.
 
 Include the swe-mux version, the operating system, whether the daemon was reachable on a
 tailnet at the time, the exact steps to reproduce, and what an attacker gains.

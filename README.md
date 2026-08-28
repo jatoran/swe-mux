@@ -11,10 +11,7 @@ It runs entirely on your machine and has no server, no account, and no telemetry
      a split pane region with a live agent, the utility drawer open) with a phone showing the same
      workspace overlapping the lower right, scrubbed of real project names and account labels. -->
 
-<!-- TODO(release): OWNER - the GitHub org/account is not decided. Replace OWNER in every
-     github.com/OWNER/swe-mux URL below, including the two badge URLs, in one pass. -->
-
-[![ci](https://github.com/OWNER/swe-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/swe-mux/actions/workflows/ci.yml)
+[![ci](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ## What it does
@@ -87,7 +84,7 @@ That installs three entry points: `mux` (the CLI), `muxd` (the daemon), and, wit
 This is the flow that works today.
 
 ```
-git clone https://github.com/OWNER/swe-mux
+git clone https://github.com/jatoran/swe-mux
 cd swe-mux
 uv sync --extra desktop
 npm --prefix frontend ci
