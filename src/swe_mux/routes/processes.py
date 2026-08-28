@@ -18,11 +18,10 @@ from ..config import Config
 from ..http_support import json_response
 from ..layouts import attach_leaf, stack_leaf
 from ..preview_capture import (
-    INSTALL_HINT as PREVIEW_CAPTURE_INSTALL_HINT,
-)
-from ..preview_capture import (
     VIEWPORT_WIDTHS,
-    capture_available,
+    CaptureCapability,
+    PreviewCaptureUnavailable,
+    capture_capability,
     capture_loopback,
 )
 from ..processes import PreviewRegistry, ProcessInspector
@@ -183,13 +182,38 @@ async def delete_preview(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+def _capture_unavailable(capability: CaptureCapability) -> web.Response:
+    """The one shape an absent capture backend reports, from either discovery path.
+
+    A 200 with `available: false`, not an error status: an optional integration
+    that is simply not installed is a state, not a fault. `state` is the machine
+    -readable discriminator and `reason`/`remedy` are what a human reads, so no
+    consumer has to parse prose to tell "no Playwright" from "no Chromium".
+    """
+    log.warning(
+        "preview capture unavailable state=%s",
+        capability.state,
+        extra={"state": capability.state, "remedy": capability.remedy},
+    )
+    return json_response(
+        {
+            "available": False,
+            "state": capability.state,
+            "reason": capability.detail,
+            "remedy": capability.remedy,
+        }
+    )
+
+
 async def capture_preview(request: web.Request) -> web.Response:
     """Headlessly screenshot a registered preview for the agent.
 
-    Returns a typed unavailable state when the optional Playwright backend is not
-    installed. The image is saved server-side and its path returned; the browser
-    inserts a reference into the target agent's composer — this route never writes
-    a PTY or submits anything.
+    Returns a typed unavailable state naming *which* half of the optional backend
+    is missing — the Playwright package or the Chromium binary under it — with the
+    exact command for that half. Nothing here installs or downloads either. The
+    image is saved server-side and its path returned; the browser inserts a
+    reference into the target agent's composer — this route never writes a PTY or
+    submits anything.
     """
     previews: PreviewRegistry = request.app[keys.PREVIEWS]
     config: Config = request.app[keys.CONFIG]
@@ -197,14 +221,9 @@ async def capture_preview(request: web.Request) -> web.Response:
     if not item:
         raise ValueError("unknown preview")
     body = await request.json() if request.can_read_body else {}
-    if not capture_available():
-        return json_response(
-            {
-                "available": False,
-                "reason": "Preview capture needs the optional Playwright backend.",
-                "install": PREVIEW_CAPTURE_INSTALL_HINT,
-            }
-        )
+    capability = capture_capability()
+    if not capability.ready:
+        return _capture_unavailable(capability)
     viewport = str(body.get("viewport") or "responsive")
     width = int(body.get("width") or VIEWPORT_WIDTHS.get(viewport, 1280))
     height = int(body.get("height") or 800)
@@ -238,6 +257,12 @@ async def capture_preview(request: web.Request) -> web.Response:
     out_path = shot_dir / f"{item.id}-{uuid4().hex[:8]}.png"
     try:
         await capture_loopback(url, out_path, width=width, height=height, clip=clip)
+    except PreviewCaptureUnavailable as exc:
+        # The pre-check said ready and the launch disagreed: a browsers root this
+        # host uses that the scan does not know about. Playwright's own verdict
+        # wins, and the operator gets the actionable state rather than a raw
+        # launch error.
+        return _capture_unavailable(exc.capability)
     except Exception as exc:  # noqa: BLE001 - a capture failure must not 500
         log.exception("preview capture failed for %s", url)
         message = str(exc).splitlines()[0][:300] if str(exc).strip() else exc.__class__.__name__

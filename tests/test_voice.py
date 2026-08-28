@@ -860,6 +860,121 @@ def test_routing_model_failure_falls_back_to_the_dictation_model(tmp_path: Path)
         service.store.close()
 
 
+def test_transcription_refuses_rather_than_downloading_the_weights_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first Talk on a fresh install must not be a silent multi-GB fetch.
+
+    `WhisperModel(name)` downloads on construction, so before this the very first
+    utterance pulled the weights from Hugging Face inside the transcription path,
+    in a worker thread, with nothing anywhere saying so. The refusal has to name
+    the model, its size, and both ways out.
+    """
+    service, _events, _emitted, _record = make_service(tmp_path)
+    monkeypatch.setattr(service.whisper_models, "cached", lambda _name: False)
+    monkeypatch.setattr(service.whisper_models, "backend_installed", lambda: True)
+    try:
+        with pytest.raises(VoiceError) as failure:
+            service._require_whisper_weights("dictation")
+        message = str(failure.value)
+        assert "'turbo' is not downloaded" in message
+        assert "about 1.6 GB" in message
+        assert "Settings" in message and "Windows Speech Recognition" in message
+
+        # Present on disk: no refusal, and still no download - `cached` is a probe.
+        monkeypatch.setattr(service.whisper_models, "cached", lambda name: name == "turbo")
+        service._require_whisper_weights("dictation")
+        # A command utterance is allowed through on the dictation model alone: the
+        # routing model is a latency optimisation, not a requirement.
+        service._require_whisper_weights("command")
+    finally:
+        service.store.close()
+
+
+def test_an_absent_routing_model_is_skipped_rather_than_downloaded(tmp_path: Path) -> None:
+    # Constructing a WhisperModel downloads it, so "try small.en, fall back on
+    # failure" would fetch 484 MB to discover it was never wanted. Only the
+    # *load-failure* ladder may attempt a model that is already here.
+    service, _events, _emitted, _record = make_service(tmp_path)
+    attempted: list[str] = []
+
+    class Model:
+        def __init__(self, name: str, *, device: str, compute_type: str) -> None:
+            attempted.append(name)
+
+    try:
+        chosen = service._ensure_whisper_model(
+            Model, "command", installed=lambda name: name == "turbo"
+        )
+        assert chosen == "turbo"
+        assert attempted == ["turbo"], "the absent routing model must never be constructed"
+    finally:
+        service.store.close()
+
+
+def test_stt_readiness_separates_no_extra_from_no_weights(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three kinds of absence that used to render as one `stt_available: false`.
+
+    "the extra is missing" and "the weights were never downloaded" need different
+    acts, and the second is the one a fresh install is actually in.
+    """
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        monkeypatch.setattr(service.whisper_models, "backend_installed", lambda: False)
+        available, diagnostic, models = service._stt_readiness()
+        assert available is False and "voice-local" in (diagnostic or "")
+        assert [entry["model"] for entry in models] == ["turbo", "small.en"]
+
+        monkeypatch.setattr(service.whisper_models, "backend_installed", lambda: True)
+        monkeypatch.setattr(service.whisper_models, "cached", lambda _name: False)
+        available, diagnostic, _models = service._stt_readiness()
+        assert available is False
+        assert "not downloaded" in (diagnostic or "")
+        assert "Nothing is downloaded until you ask for it" in (diagnostic or "")
+
+        monkeypatch.setattr(service.whisper_models, "cached", lambda _name: True)
+        available, diagnostic, _models = service._stt_readiness()
+        assert available is True and "dictation turbo" in (diagnostic or "")
+    finally:
+        service.store.close()
+
+
+def test_whisper_store_reports_the_four_states_and_downloads_only_when_asked(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from swe_mux.voice_models import WhisperModelStore, whisper_size_hint
+
+    store = WhisperModelStore()
+    monkeypatch.setattr(store, "backend_installed", lambda: True)
+    monkeypatch.setattr(WhisperModelStore, "_resolve_local", staticmethod(lambda _name: None))
+
+    status = store.status("turbo")
+    assert status["status"] == "not_downloaded"
+    assert status["size_hint"] == "about 1.6 GB"
+    # No percentage anywhere: nothing observes bytes on this path, and an estimate
+    # drawn as a reading is acted on where an absent one is not.
+    assert "downloaded_bytes" not in status
+
+    # An unlisted name (a bare repository id or a local directory, both of which
+    # the resolver accepts) reports no size rather than a guessed one.
+    assert whisper_size_hint("acme/my-finetune") is None
+
+    store._errors["turbo"] = "HTTP 503"
+    assert store.status("turbo")["status"] == "error"
+    assert store.status("turbo")["error"] == "HTTP 503"
+
+    # The probe is memoized, so weights installed by hand need an explicit forget.
+    monkeypatch.setattr(
+        WhisperModelStore, "_resolve_local", staticmethod(lambda name: f"/m/{name}")
+    )
+    assert store.status("turbo")["status"] == "error"
+    store.forget()
+    ready = store.status("turbo")
+    assert ready["status"] == "ready" and ready["path"] == "/m/turbo"
+
+
 def test_whisper_model_load_falls_back_when_cuda_runtime_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

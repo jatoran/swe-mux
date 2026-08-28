@@ -35,6 +35,7 @@ from ..session import (
 )
 from ..tts_profiles import resolve_tts_profile
 from ..voice import (
+    COMMAND_PROFILE,
     DICTATION_PROFILE,
     VoiceError,
     VoiceService,
@@ -42,6 +43,7 @@ from ..voice import (
     approval_prompt,
     group_snapshot,
 )
+from ..voice_models import VoiceModelError
 from . import terminal
 
 log = logging.getLogger(__name__)
@@ -122,6 +124,49 @@ async def edge_voice_preview(request: web.Request) -> web.Response:
 async def kokoro_model_status(request: web.Request) -> web.Response:
     voice: VoiceService = request.app[keys.VOICE]
     return json_response(voice.kokoro_models.status())
+
+
+async def whisper_model_status(request: web.Request) -> web.Response:
+    """The four-state report for the configured dictation and routing models.
+
+    A read only: it resolves what is already on disk and never reaches the
+    network, which is the whole point of separating this from the download.
+    """
+    voice: VoiceService = request.app[keys.VOICE]
+    requested = str(request.query.get("model") or "").strip()
+    names = (
+        (requested,)
+        if requested
+        else (voice.config.stt_whisper_model, voice.decode_model(COMMAND_PROFILE))
+    )
+    models = voice.whisper_models.statuses(*names)
+    return json_response({"models": models})
+
+
+async def whisper_model_download(request: web.Request) -> web.Response:
+    """Start the Whisper weights download (idempotent while one is running).
+
+    The explicit act the transcription path refuses to perform on the operator's
+    behalf. Progress reaches every client over the event stream, because the
+    download outlives the request and may have been started from another device.
+    """
+    voice: VoiceService = request.app[keys.VOICE]
+    events: EventBus = request.app[keys.EVENTS]
+    body = await request.json() if request.can_read_body else {}
+    if not isinstance(body, dict):
+        raise ValueError("whisper download body must be an object")
+    name = str(body.get("model") or voice.config.stt_whisper_model).strip()
+
+    async def progress(status: dict[str, Any]) -> None:
+        await events.emit("voice_model_progress", source="daemon", **status)
+
+    try:
+        started = voice.whisper_models.start_download(name, progress)
+    except VoiceModelError as exc:
+        return json_response({"error": str(exc)}, 400)
+    return json_response(
+        {"started": started, **voice.whisper_models.status(name)}, 202
+    )
 
 
 async def kokoro_voice_preview(request: web.Request) -> web.Response:
@@ -605,6 +650,8 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/voice/providers/edge/preview", edge_voice_preview),
     web.get("/api/voice/models/kokoro", kokoro_model_status),
     web.post("/api/voice/models/kokoro/download", kokoro_model_download),
+    web.get("/api/voice/models/whisper", whisper_model_status),
+    web.post("/api/voice/models/whisper/download", whisper_model_download),
     web.get("/api/voice/models/kokoro/preview", kokoro_voice_preview),
     web.post("/api/voice/lexicon/check", voice_lexicon_check),
     web.post("/api/voice/lexicon/build", voice_lexicon_build),
