@@ -6,8 +6,8 @@ import re
 import shutil
 import sys
 import tomllib
-from collections.abc import Collection
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Collection
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +76,56 @@ def default_shell_executable() -> str:
         if found := shutil.which(candidate):
             return found
     return "/bin/sh"
+
+
+#: A drive-letter path, which only Windows has.
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+#: The three PATHEXT shapes an agent CLI actually ships as on Windows. Kept
+#: deliberately short: every entry has to be a program image Windows starts and
+#: POSIX cannot, so `.ps1` (a script `pwsh` runs on either host) is not one.
+_WINDOWS_EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat")
+
+
+def is_foreign_host_path(value: str) -> bool:
+    """Whether this string is *shaped* for a host other than the one running.
+
+    The rule is shape, and never resolution. Both halves of that are load-bearing.
+
+    **Shape, so a CLI that is merely not installed today is left alone.**
+    `shutil.which` cannot tell the two apart: an operator who has not installed
+    Codex yet and one whose `config.toml` came off a Windows box look identical to
+    it. Rewriting on a failed lookup would silently discard a deliberate override
+    the moment its target was uninstalled, so nothing here asks the filesystem
+    anything.
+
+    **Not resolution, because resolution actively lies on the host this matters
+    most on.** Under WSL the Windows installs are on PATH through interop, so
+    `which("claude.exe")` *succeeds* and resolves to `/mnt/c/.../claude.exe` - the
+    exact outcome `harness.host_executable` exists to prevent, measured
+    2026-08-17. A value that resolves is therefore not evidence that it belongs
+    here.
+
+    So a value is foreign only when the string could not have been meant for this
+    host: on POSIX a Windows separator, a drive-letter path, or a Windows program
+    suffix; on Windows a POSIX absolute path, with `//host/share` excepted because
+    that is a UNC path Windows does accept. Everything else survives, which is
+    what keeps a deliberate override alive - `claude.cmd` on Windows, an absolute
+    `/usr/local/bin/claude` on Linux, and a bare `claude` on either, which is what
+    most overrides look like.
+
+    A POSIX directory name may legally contain a backslash, and one written that
+    way is misread here. That is accepted: the value it costs is one exotic
+    directory name, and the value it buys is every Windows path in the file, which
+    is the shape a copied config actually carries.
+    """
+    text = value.strip()
+    if not text:
+        return False
+    if IS_WINDOWS:
+        return text.startswith("/") and not text.startswith("//")
+    if "\\" in text or _WINDOWS_DRIVE_PATH.match(text):
+        return True
+    return text.casefold().endswith(_WINDOWS_EXECUTABLE_SUFFIXES)
 
 
 SCHEMA_VERSION = 35
@@ -2287,6 +2337,300 @@ def _coerce_float(value: Any, fallback: float | None) -> float | None:
         return fallback
 
 
+# ---------------------------------------------------------------------------- #
+# Foreign-host reconciliation
+#
+# A `config.toml` outlives the host that wrote it. It gets copied onto a new
+# machine, restored from a backup, or - the case this was built for - written by
+# a Windows build of swe-mux and then loaded by a Linux daemon in WSL over the
+# same home directory. Every stored value in it was correct where it was written
+# and some of them cannot be correct here.
+#
+# The failure that forced this was silent and permanent (measured on a live WSL
+# Ubuntu daemon, 2026-08-28). `harness_exe` held `{"claude": "claude.exe",
+# "codex": "codex.exe"}`, so the Run menu exec'd `claude.exe` on Linux and
+# provider login died with `No such file or directory: 'codex.exe'`, while typing
+# `claude` in a shell worked perfectly. `default_harness_executables()` already
+# derived the right names through `harness.host_executable`, but the merge below
+# was `{**defaults, **stored}` - a stored value always wins - so no default could
+# ever displace it and the install could never heal itself.
+#
+# `shell_exe` had had half of this guard since POSIX support landed, and the
+# asymmetry is the whole finding: `/bin/bash` healed and `claude.exe` did not.
+#
+# Two rules the table exists to enforce.
+#
+# **Every reconciliation is a rule in this table, never a branch in the loader.**
+# The table is what `tests/test_foreign_host_config.py` walks, and a field that
+# can hold a path or an executable and is in neither the table nor the reasoned
+# exemptions beside it fails that test. A hand-written branch would be invisible
+# to it, which is how `harness_exe` went unhandled for eleven days.
+#
+# **A repair re-derives; it never translates.** Turning
+# `C:\tools\claude.exe` into `claude` by taking its stem would look clever and
+# would be a guess about a machine nobody here can see. Re-deriving this host's
+# own default is the same thing `shell_exe` already did, and it is checkable.
+# ---------------------------------------------------------------------------- #
+
+
+def _is_foreign(value: object) -> bool:
+    return isinstance(value, str) and is_foreign_host_path(value)
+
+
+def _repair_shell_exe(cfg: Config, path: Path) -> bool:
+    del path
+    if not _is_foreign(cfg.shell_exe):
+        return False
+    cfg.shell_exe = default_shell_executable()
+    return True
+
+
+def _repair_harness_exe(cfg: Config, path: Path) -> bool:
+    del path
+    if not isinstance(cfg.harness_exe, dict):
+        return False
+    changed = False
+    repaired = dict(cfg.harness_exe)
+    for name, executable in cfg.harness_exe.items():
+        # A key the registry does not know has no default to re-derive. Leaving it
+        # is the honest answer: `_validate` refuses it a moment later and names it,
+        # which beats inventing a command for a harness this build never had.
+        if _is_foreign(executable) and name in HARNESSES:
+            repaired[name] = host_executable(HARNESSES[name])
+            changed = True
+    cfg.harness_exe = repaired
+    return changed
+
+
+def _repair_data_dir(cfg: Config, path: Path) -> bool:
+    """Fall back to where the file being loaded actually is.
+
+    `data_dir` is stored *and* re-read, so a config carried across hosts names a
+    directory on the other one. On POSIX a `C:\\Users\\...` value is not even
+    absolute, so every store, log, and clip directory would be created relative to
+    whatever the daemon's working directory happened to be. The config file's own
+    location is the fact that cannot be stale.
+
+    Read through `as_posix()` because this is the one field the loader coerces to
+    a `Path` before anything here sees it, and `str()` on a `Path` prints the
+    *host's* separators - `WindowsPath("/opt/tools")` renders as `\\opt\\tools`,
+    which no longer looks like the POSIX path it plainly is. `as_posix()` gives
+    back the spelling that was stored, which is what says which host wrote it.
+    """
+    if not _is_foreign(cfg.data_dir.as_posix()):
+        return False
+    cfg.data_dir = path.parent
+    return True
+
+
+def _repair_pinned_directories(cfg: Config, path: Path) -> bool:
+    del path
+    if not isinstance(cfg.pinned_directories, list):
+        return False
+    kept = [entry for entry in cfg.pinned_directories if not _is_foreign(entry)]
+    if len(kept) == len(cfg.pinned_directories):
+        return False
+    # Dropped rather than translated: a pin is a shortcut to a directory that
+    # exists, and there is no directory on this host that a Windows path is a
+    # shortcut to.
+    cfg.pinned_directories = kept
+    return True
+
+
+def _repair_usage_command(cfg: Config, path: Path) -> bool:
+    del path
+    command = cfg.usage_command
+    # Only argv[0] is a path. A later element is an argument, and on Windows an
+    # argument legitimately starts with `/`.
+    if not isinstance(command, list) or not command or not _is_foreign(command[0]):
+        return False
+    cfg.usage_command = default_ccusage_command()
+    return True
+
+
+def _repair_usage_commands(cfg: Config, path: Path) -> bool:
+    del path
+    if not isinstance(cfg.usage_commands, dict):
+        return False
+    changed = False
+    repaired: dict[str, list[str]] = {}
+    for source, command in cfg.usage_commands.items():
+        if isinstance(command, list) and command and _is_foreign(command[0]):
+            repaired[source] = default_ccusage_command(source)
+            changed = True
+        else:
+            repaired[source] = command
+    cfg.usage_commands = repaired
+    return changed
+
+
+def _repair_shell_profiles(cfg: Config, path: Path) -> bool:
+    """Drop the profiles that name another host's executable, and keep the rest.
+
+    A profile whose executable is shaped for another host is dead configuration:
+    there is no machine state that could make `powershell.exe` start on Linux. It
+    is dropped rather than left in place because leaving it is what turned the
+    reported install into a permanent one - a stored value that cannot work here
+    and cannot be displaced.
+
+    Whether a profile is *permitted* on this host stays
+    `profiles.profile_host_error`'s question - it owns `platforms` and already
+    refuses a Windows profile on POSIX with a reason. This one answers what that
+    refusal leaves open: whether anything is left to fall back to. An agent
+    profile with an empty `executable` inherits `harness_exe`, so it is never
+    foreign and is never dropped.
+
+    Runs after `_repair_shell_exe`, because the shell it falls back to is that
+    field. The rules tuple's order is what guarantees it.
+    """
+    kept = [profile for profile in cfg.shell_profiles if not _is_foreign(profile.executable)]
+    if len(kept) == len(cfg.shell_profiles):
+        return False
+    shell_ids = [profile.id for profile in kept if profile.backend == "shell"]
+    if not shell_ids:
+        # Nothing left to open a terminal with. `_validate` requires a shell
+        # profile and requires the default to name one, so a list of agent
+        # profiles alone would refuse to load.
+        fallback = _default_shell_profile(cfg.shell_exe)
+        if any(profile.id == fallback.id for profile in kept):
+            fallback = replace(fallback, id="default-shell")
+        kept.insert(0, fallback)
+        shell_ids = [fallback.id]
+    cfg.shell_profiles = kept
+    if cfg.default_shell_profile not in shell_ids:
+        cfg.default_shell_profile = shell_ids[0]
+    return True
+
+
+def _clearing_repair(field_name: str) -> Callable[[Config, Path], bool]:
+    """Reconcile a single stored path by emptying it, restoring the field's default.
+
+    Every field this is used for reads its empty value as "derive it" - an
+    app-managed worktree root, no assistant project parent, no startup directory,
+    the managed Edge interpreter - so clearing is how the default is re-derived
+    rather than a value being thrown away.
+    """
+
+    def repair(cfg: Config, path: Path) -> bool:
+        del path
+        if not _is_foreign(getattr(cfg, field_name)):
+            return False
+        setattr(cfg, field_name, "")
+        return True
+
+    return repair
+
+
+#: Every `Config` field that can carry a host-shaped value, and how each one is
+#: re-derived when the value stored in the file belongs to a different host.
+_HOST_SHAPED_RULES: tuple[tuple[str, Callable[[Config, Path], bool]], ...] = (
+    ("shell_exe", _repair_shell_exe),
+    ("harness_exe", _repair_harness_exe),
+    ("shell_profiles", _repair_shell_profiles),
+    ("data_dir", _repair_data_dir),
+    ("worktree_root", _clearing_repair("worktree_root")),
+    ("new_project_parent", _clearing_repair("new_project_parent")),
+    ("startup_cwd", _clearing_repair("startup_cwd")),
+    ("tts_edge_python", _clearing_repair("tts_edge_python")),
+    ("pinned_directories", _repair_pinned_directories),
+    ("usage_command", _repair_usage_command),
+    ("usage_commands", _repair_usage_commands),
+)
+
+#: Fields the discovery in `host_shaped_field_candidates` picks up by name and
+#: that deliberately have no rule, each with the reason. An entry here is a
+#: recorded decision, not a suppression: the test that reads it also fails when
+#: one names a field that no longer exists.
+HOST_SHAPED_FIELD_EXEMPTIONS: dict[str, str] = {
+    "agent_shims_on_shell_path": (
+        "a boolean switch, matched by the `_path` convention because it names one "
+        "rather than holding one. A `bool` cannot carry a host-shaped value."
+    ),
+    "config_path": (
+        "the path of the file being loaded, assigned by `load_config` itself - the "
+        "loop that copies stored values skips it, so no stored value can reach it."
+    ),
+    "voice_commands": (
+        "spoken phrases mapped to a fixed action set, not shell commands; nothing "
+        "in it is ever executed and `_validate` bounds it against "
+        "`VOICE_COMMAND_ACTIONS`."
+    ),
+    "project_init_scripts": (
+        "free-form command lines the operator typed into Settings. There is no "
+        "shape that separates a Windows-authored command from a legitimate one "
+        "without parsing a shell grammar, and a command line that fails when it is "
+        "run fails visibly at Project registration - unlike an executable swe-mux "
+        "launches on the operator's behalf, which is what the rules above cover."
+    ),
+    "shell_profiles.executable": (
+        "reconciled as part of `shell_profiles`, which replaces the whole stored "
+        "list when nothing in it can start on this host."
+    ),
+}
+
+#: The naming conventions this repository uses for a field that can hold a
+#: filesystem path, an executable, or a command line. Discovery is by convention
+#: rather than by a list of field names on purpose: a list beside the loader is a
+#: second loader, and the copy is what drifts. A newly added `*_exe` or `*_root`
+#: is picked up the moment it is declared, and fails the ratchet until it has
+#: either a rule above or an exemption beside it.
+HOST_SHAPED_FIELD_MARKERS = (
+    "_exe",
+    "_cwd",
+    "_dir",
+    "_root",
+    "_parent",
+    "_path",
+    "_python",
+    "_command",
+    "_commands",
+    "_directories",
+    "_profiles",
+    "_scripts",
+    "executable",
+)
+
+
+def host_shaped_field_candidates() -> tuple[str, ...]:
+    """Every configuration field whose value could be shaped for a host.
+
+    Walks the dataclasses rather than a transcribed list, and reaches
+    `LaunchProfile` as well as `Config` because a profile carries its own
+    executable. Nested names are dotted (`shell_profiles.executable`).
+    """
+    found: list[str] = [
+        name
+        for name in Config.__dataclass_fields__
+        if name.endswith(HOST_SHAPED_FIELD_MARKERS)
+    ]
+    found.extend(
+        f"shell_profiles.{name}"
+        for name in LaunchProfile.__dataclass_fields__
+        if name.endswith(HOST_SHAPED_FIELD_MARKERS)
+    )
+    return tuple(found)
+
+
+def _reconcile_foreign_host_values(cfg: Config, path: Path) -> bool:
+    """Re-derive every stored value that is shaped for a different host.
+
+    Returns whether anything changed, which `load_config` folds into `migrated` so
+    the healed values are written back - an install that keeps re-deriving the same
+    values on every start has not actually recovered.
+
+    Deliberately reached from `load_config` and not from `update_config`. This
+    answers a question about a *file that outlived its host*, and a value arriving
+    through the settings API is an operator typing on the machine it will run on;
+    rewriting that under them would be a control silently disagreeing with what it
+    just showed. Whether a live edit should be refused is `_validate`'s question,
+    and it is a different one.
+    """
+    migrated = False
+    for _, repair in _HOST_SHAPED_RULES:
+        migrated = repair(cfg, path) or migrated
+    return migrated
+
+
 def load_config(path: Path | None = None) -> Config:
     path = path or default_data_dir() / "config.toml"
     cfg = Config(data_dir=path.parent, config_path=path)
@@ -2323,6 +2667,10 @@ def load_config(path: Path | None = None) -> Config:
             if isinstance(legacy_usage, list) and name not in configured_usage:
                 configured_usage[name] = legacy_usage
                 migrated = True
+        # A stored value wins this merge, which is what makes an override an
+        # override - and is also why no default could ever displace a value
+        # written on another host. `_repair_harness_exe` is what closes that,
+        # after the legacy `<name>_exe` keys above have been folded in.
         cfg.harness_exe = {**default_harness_executables(), **configured_exe}
         cfg.harness_args = {**default_harness_args(), **configured_args}
         cfg.usage_commands = configured_usage
@@ -2512,15 +2860,21 @@ def load_config(path: Path | None = None) -> Config:
             # install (no config file, so this block never runs) shows the panel.
             cfg.harness_setup_complete = True
             migrated = True
+    # After every stored value has been read and before anything is derived from
+    # one: a config that outlived its host carries values this host cannot use,
+    # and the shell-profile default below is built from `shell_exe`.
+    migrated = _reconcile_foreign_host_values(cfg, path) or migrated
     if not cfg.shell_profiles:
-        if "shell_exe" not in raw:
-            if IS_WINDOWS and shutil.which("pwsh.exe"):
-                cfg.shell_exe = "pwsh.exe"
-            elif not IS_WINDOWS:
-                # A config file written on another host, or one predating POSIX
-                # support, can carry a `powershell.exe` default this host cannot
-                # start. Re-derive rather than inherit a shell that is not here.
-                cfg.shell_exe = default_shell_executable()
+        # Only the PowerShell 7 upgrade is left here. The POSIX half this block
+        # used to carry - "a config written on another host can name a shell this
+        # host cannot start, so re-derive" - is now `_repair_shell_exe`, and the
+        # move is a widening rather than a relocation: keyed off the value's shape,
+        # it also fires for a config that *does* store `shell_exe`, which is every
+        # config this daemon has ever written and was the whole hole. What stood
+        # here only ever ran when the key was absent, in which case the field
+        # already held this host's default and the branch reassigned it to itself.
+        if "shell_exe" not in raw and IS_WINDOWS and shutil.which("pwsh.exe"):
+            cfg.shell_exe = "pwsh.exe"
         cfg.shell_profiles = [_default_shell_profile(cfg.shell_exe)]
     elif (
         IS_WINDOWS

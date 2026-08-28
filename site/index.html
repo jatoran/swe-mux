@@ -395,8 +395,10 @@ footer .todo { color: var(--orange); }
         <button class="ic-copy" type="button" id="iccopy">copy</button>
       </div>
     </div>
-    <p class="ic-note" id="icnote">Puts <code>mux</code> and <code>muxd</code> on your PATH. On
-    Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the tray.</p>
+    <p class="ic-note" id="icnote">Isolated environment, and <code>mux</code>, <code>muxd</code>,
+    <code>swe-mux</code> on your PATH globally. No desktop shortcut - no Python install makes one.
+    On Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the
+    tray.</p>
 
 
     <div class="herovis">
@@ -761,22 +763,33 @@ footer .todo { color: var(--orange); }
     have, on the subscription you already pay for.</p>
     <div class="code">
       <button class="copy" type="button" data-copy="#c1">copy</button>
-      <pre id="c1"><span class="p">$</span> uv tool install swe-mux
-<span class="p">$</span> mux doctor
-<span class="p">$</span> muxd</pre>
+      <pre id="c1"><span class="p">$</span> uv tool install swe-mux   <span class="c"># isolated env; mux, muxd, swe-mux on PATH</span>
+<span class="p">$</span> mux doctor                <span class="c"># read-only health report</span>
+<span class="p">$</span> muxd                      <span class="c"># daemon on 127.0.0.1:8765</span></pre>
     </div>
-    <p class="note">Daemon on <code>127.0.0.1:8765</code>; open that in a browser. Register a Project
-    folder. Nothing spawns until you ask. <code>pipx install swe-mux</code> does the same thing
-    without <a href="https://docs.astral.sh/uv/">uv</a>, and <code>mux doctor</code> is a read-only
-    health report you can run before anything else.</p>
+    <p class="note">Open <code>127.0.0.1:8765</code> in a browser and register a Project folder.
+    Nothing spawns until you ask. <code>pipx install swe-mux</code> is the same isolated, on-PATH
+    install without <a href="https://docs.astral.sh/uv/">uv</a>.</p>
+    <p class="note"><b>No Python install of any kind creates a desktop shortcut or a Start Menu
+    entry.</b> Wheels have no post-install hook and pip runs no install-time code, so that is
+    structural rather than a step somebody forgot: start swe-mux from a terminal.</p>
     <p class="note"><b>On Windows, take the desktop extra</b> - <code>uv tool install
-    "swe-mux[desktop]"</code> - which adds the native window, the tray icon, and the
-    <code>swe-mux</code> entry point, and wants the WebView2 Runtime. The extra is declared
-    Windows-only, so on Linux and macOS it resolves to nothing and the daemon plus a browser is the
-    whole product.</p>
-    <p class="note"><b><code>pip install swe-mux</code> is a different act.</b> It installs into an
-    environment you already have and leaves <code>mux</code> reachable only inside it.
-    <code>uv tool</code> and <code>pipx</code> are what put the CLI on your PATH for good.</p>
+    "swe-mux[desktop]"</code> - which adds the native window and the tray icon, and wants the
+    WebView2 Runtime. Without it you still get a <code>swe-mux</code> command, and it fails on a
+    missing import rather than opening a window. The extra is declared Windows-only, so on Linux and
+    macOS it resolves to nothing and the daemon plus a browser is the whole product.</p>
+    <p class="note"><b><code>pip install swe-mux</code> is a different act.</b> It installs into
+    whichever environment is active and puts nothing on PATH globally, so <code>mux</code> works
+    only inside that environment. pip usually says so in a <code>WARNING: The scripts ... are
+    installed in '...' which is not on PATH</code> that scrolls past unread. If that is where you
+    are:</p>
+    <div class="code">
+      <button class="copy" type="button" data-copy="#c3">copy</button>
+      <pre id="c3"><span class="p">$</span> python -m swe_mux   <span class="c"># the daemon, no PATH setup at all: this is muxd</span>
+<span class="p">$</span> python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+                      <span class="c"># where the three executables went</span>
+<span class="p">$</span> pip show -f swe-mux <span class="c"># every file this install wrote</span></pre>
+    </div>
     <h3 class="sub-h">From source</h3>
     <div class="code">
       <button class="copy" type="button" data-copy="#c2">copy</button>
@@ -784,6 +797,7 @@ footer .todo { color: var(--orange); }
 <span class="p">$</span> cd swe-mux
 <span class="p">$</span> uv sync --extra desktop
 <span class="p">$</span> npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build
+                      <span class="c"># only the source flow needs Node</span>
 <span class="p">$</span> uv run --extra desktop swe-mux</pre>
     </div>
     <p class="note">Only the source flow needs Node: the frontend build output is gitignored, so a
@@ -792,6 +806,9 @@ footer .todo { color: var(--orange); }
     <p class="note">The wheel is pure Python, and CI builds and install-smokes it on Windows, Linux,
     and macOS on every push. What no CI job does anywhere is <i>start the daemon</i> - Windows is
     the platform that proves this thing running, and the macOS leg is not yet required to pass.</p>
+    <p class="note">Upgrading, uninstalling, what an uninstall leaves behind, and what to do when
+    the daemon will not start: <a
+    href="https://github.com/jatoran/swe-mux/blob/master/.docs/development/OPERATOR_LIFECYCLE.md">OPERATOR_LIFECYCLE.md</a>.</p>
   </div>
 </section>
 
@@ -871,17 +888,17 @@ footer .todo { color: var(--orange); }
     uv: {
       cmd: 'uv tool install swe-mux',
       os: ['windows', 'linux', 'macos'],
-      note: 'Puts <code>mux</code> and <code>muxd</code> on your PATH. On Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the tray.'
+      note: 'Isolated environment, and <code>mux</code>, <code>muxd</code>, <code>swe-mux</code> on your PATH globally. No desktop shortcut - no Python install makes one. On Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the tray.'
     },
     pipx: {
       cmd: 'pipx install swe-mux',
       os: ['windows', 'linux', 'macos'],
-      note: 'The same isolated install without <a href="https://docs.astral.sh/uv/">uv</a>. On Windows, <code>pipx install "swe-mux[desktop]"</code>.'
+      note: 'The same isolated, on-PATH install without <a href="https://docs.astral.sh/uv/">uv</a>. On Windows, <code>pipx install "swe-mux[desktop]"</code> for the window and the tray.'
     },
     pip: {
       cmd: 'pip install swe-mux',
       os: ['windows', 'linux', 'macos'],
-      note: 'Into an environment you already have. This one does <b>not</b> put <code>mux</code> on your PATH globally - only inside that environment. For a CLI you can always reach, use <code>uv tool</code> or <code>pipx</code>.'
+      note: 'Into whichever environment is active. This one does <b>not</b> put <code>mux</code> on your PATH globally - only inside that environment, on Windows in the <code>Scripts</code> folder pip names in the warning you scrolled past. <code>python -m swe_mux</code> runs the daemon either way.'
     },
     source: {
       cmd: 'git clone https://github.com/jatoran/swe-mux',
