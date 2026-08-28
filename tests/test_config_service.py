@@ -15,6 +15,7 @@ from swe_mux.config import (
     WORKTREE_IGNORE_PATTERNS,
     contrast_ratio,
     default_ccusage_command,
+    default_shell_executable,
     load_config,
     update_config,
     windows_pty_compatibility,
@@ -31,7 +32,15 @@ def test_legacy_config_migrates_with_backup_and_removes_obsolete_secret(tmp_path
     config = load_config(path)
 
     assert config.schema_version == SCHEMA_VERSION
-    assert config.shell_profiles[0].executable == "pwsh.exe"
+    if sys.platform == "win32":
+        assert config.shell_profiles[0].executable == "pwsh.exe"
+    else:
+        # `pwsh.exe` is a Windows program image, and this file is exactly the
+        # legacy shape a POSIX daemon inherits when a home directory is shared
+        # with a Windows install. It re-derives its own shell rather than
+        # carrying one it cannot start (`tests/test_foreign_host_config.py`).
+        assert config.shell_exe == default_shell_executable()
+        assert config.shell_profiles[0].executable == default_shell_executable()
     assert path.with_suffix(".toml.bak").is_file()
     assert "token" not in tomllib.loads(path.read_text(encoding="utf-8"))
     assert "token" not in config.public_dict()
