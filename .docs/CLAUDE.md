@@ -581,6 +581,25 @@
   The rule the drafts carry: every claim must be true of the shipped artifact on the day it
   posts, `[verify]` markers are re-measured before publishing, and the positioning line is
   one string used verbatim everywhere.
+- Changing what an **installed** copy looks like from the operator's side - an install, upgrade,
+  or uninstall path; what an uninstall leaves behind; where the data directory or any file under
+  it lives; what `mux doctor` answers in either mode, including its exit codes; a recovery
+  procedure for a daemon that will not start, sessions that look lost, or a missing frontend
+  bundle; or what is worth backing up: `development/OPERATOR_LIFECYCLE.md`, plus the source of
+  the fact you changed - `src/swe_mux/config.py` (`default_data_dir`, the data-dir children),
+  `src/swe_mux/doctor.py` and `src/swe_mux/doctor_local.py` (the two reports),
+  `src/swe_mux/cli.py` (the exit-code contract), `pyproject.toml` (extras, entry points,
+  `requires-python`), `README.md`, `RELEASING.md`, `SECURITY.md`.
+  Two rules that document carries. **Every command, path, flag, and exit code in it is verified
+  against the repository rather than plausible** - it is read by someone whose install is already
+  broken, so a command that does not exist costs them the one thing they came for. And **it states
+  what is not yet true rather than describing an intention**: swe-mux is not on a package index
+  yet, so the `uv tool`/`pipx` commands are documented from `pyproject.toml` metadata and marked
+  as unexercised, and the platform matrix is read out of `.github/workflows/ci.yml` rather than
+  out of any prose summary.
+  Note that the *validation* half of Phase 11's item ("Validate `uv tool install swe-mux` and
+  `pipx install swe-mux`") needs PyPI and a clean machine and stays with the operator
+  (`development/RELEASE_MANUAL_TASKS.md` § 6); only the documentation half lives here.
 - Changing backend package ownership or shared SQLite behavior:
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
 
