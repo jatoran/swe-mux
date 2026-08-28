@@ -1,0 +1,31 @@
+# A config.toml written by a Windows build of swe-mux and then loaded by a
+# POSIX daemon over the same home directory - the WSL Ubuntu case measured on
+# 2026-08-28. `shell_exe` and `harness_exe` below are that install's exact
+# stored content: the POSIX shell had healed and the Windows executable names
+# had not, which is the asymmetry the reconciliation rules exist to close.
+schema_version = 34
+host = "127.0.0.1"
+port = 8765
+theme = "dark"
+data_dir = "C:\\Users\\operator\\.mux"
+shell_exe = "powershell.exe"
+harness_exe = { "claude" = "claude.exe", "codex" = "codex.exe", "omp" = "omp", "pi" = "pi", "opencode" = "opencode" }
+harness_setup_complete = true
+default_shell_profile = "windows-powershell"
+worktree_root = "D:\\PROJECTS\\swe-mux\\.worktrees"
+new_project_parent = "D:\\PROJECTS"
+startup_cwd = "D:\\PROJECTS\\swe-mux"
+pinned_directories = ["D:\\PROJECTS\\swe-mux", "D:\\PROJECTS\\other"]
+tts_edge_python = "C:\\Users\\operator\\edge-tts\\Scripts\\python.exe"
+usage_command = ["npx.cmd", "ccusage", "daily", "--json", "--by-agent"]
+usage_commands = { "claude" = ["npx.cmd", "ccusage", "claude", "daily", "--json"] }
+ccusage_enabled = true
+
+[[shell_profiles]]
+id = "windows-powershell"
+label = "Windows PowerShell"
+executable = "powershell.exe"
+args = ["-NoLogo"]
+platforms = ["windows"]
+marker = "ps"
+backend = "shell"
