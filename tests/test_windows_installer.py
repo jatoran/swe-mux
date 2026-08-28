@@ -86,7 +86,29 @@ def _icon_that_exists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(build_installer, "ICON", icon)
 
 
-def make_bundle(root: Path, *, version: str = "0.9.0", platform: str = "windows-x64") -> Path:
+#: The only platform an installer exists for. Named as a constant rather than
+#: read from `release_platform_tag()` wherever the *installer* is the subject:
+#: `build_installer` refuses on every other host and would then be answering a
+#: different question than the one the test asked. The tests that are about the
+#: refusal itself still use the live tag.
+WINDOWS = "windows-x64"
+
+
+def as_windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Describe a Windows build host, so a compile can be asserted from any leg.
+
+    `build_installer` produces nothing off Windows by design - there is no
+    `.exe` installer for Linux or macOS to name - so the compiler-command tests
+    below would otherwise stop at that refusal on two of the three CI legs, and
+    each would then assert its `SystemExit` message instead of the signing block
+    it was written for. Sound to override here and nowhere near a path: the tag
+    is an opaque string that selects the artifact name, and everything the tests
+    touch afterwards (`tmp_path`, the recorded argument list) is this host's.
+    """
+    monkeypatch.setattr(build_installer, "release_platform_tag", lambda: WINDOWS)
+
+
+def make_bundle(root: Path, *, version: str = "0.9.0", platform: str = WINDOWS) -> Path:
     """A minimally believable built bundle: an executable and its `bundle.json`."""
     (root / "_internal").mkdir(parents=True, exist_ok=True)
     (root / "swe-mux.exe").write_bytes(b"MZ fake")
@@ -302,6 +324,7 @@ def test_signing_is_a_hook_that_is_absent_until_a_certificate_exists() -> None:
 def test_an_unset_sign_tool_adds_nothing_to_the_compiler_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    as_windows_host(monkeypatch)
     monkeypatch.delenv(build_installer.SIGNTOOL_ENV, raising=False)
     recorded: list[list[str]] = []
 
@@ -309,12 +332,10 @@ def test_an_unset_sign_tool_adds_nothing_to_the_compiler_command(
         recorded.append(list(command))
         # ISCC would have written the installer; stand in for it so the caller's
         # own "it reported success but wrote nothing" check is exercised too.
-        (tmp_path / "out" / release_installer_name("0.9.0", release_platform_tag())).write_bytes(
-            b"MZ"
-        )
+        (tmp_path / "out" / str(release_installer_name("0.9.0", WINDOWS))).write_bytes(b"MZ")
         return subprocess.CompletedProcess(command, 0)
 
-    make_bundle(tmp_path / "dist" / "swe-mux", platform=release_platform_tag())
+    make_bundle(tmp_path / "dist" / "swe-mux")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir(parents=True)
     (tmp_path / "out").mkdir()
     monkeypatch.setattr(build_installer, "find_iscc", lambda: Path("iscc"))
@@ -331,17 +352,16 @@ def test_an_unset_sign_tool_adds_nothing_to_the_compiler_command(
 def test_a_configured_sign_tool_registers_and_switches_the_block_on(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    as_windows_host(monkeypatch)
     monkeypatch.setenv(build_installer.SIGNTOOL_ENV, "signtool.exe sign $f")
     recorded: list[list[str]] = []
 
     def capture(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
         recorded.append(list(command))
-        (tmp_path / "out" / release_installer_name("0.9.0", release_platform_tag())).write_bytes(
-            b"MZ"
-        )
+        (tmp_path / "out" / str(release_installer_name("0.9.0", WINDOWS))).write_bytes(b"MZ")
         return subprocess.CompletedProcess(command, 0)
 
-    make_bundle(tmp_path / "dist" / "swe-mux", platform=release_platform_tag())
+    make_bundle(tmp_path / "dist" / "swe-mux")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir(parents=True)
     (tmp_path / "out").mkdir()
     monkeypatch.setattr(build_installer, "find_iscc", lambda: Path("iscc"))
@@ -363,7 +383,7 @@ def test_a_missing_supervisor_bundle_is_refused_before_the_compiler_runs(
 ) -> None:
     # The installer carries both bundles; packaging one produces an app that
     # silently loses its session-preserving supervisor.
-    make_bundle(tmp_path / "dist" / "swe-mux", platform=release_platform_tag())
+    make_bundle(tmp_path / "dist" / "swe-mux")
     with pytest.raises(SystemExit, match="swe-mux-supervisor"):
         build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
 
@@ -375,7 +395,7 @@ def test_a_missing_icon_is_named_rather_than_left_to_iscc(
     # `build_desktop`, so a fresh clone has none. ISCC's own failure for a missing
     # `SetupIconFile` is "The system cannot find the file specified" and a line
     # number, which names neither the file nor the command that makes it.
-    make_bundle(tmp_path / "dist" / "swe-mux", platform=release_platform_tag())
+    make_bundle(tmp_path / "dist" / "swe-mux")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir()
     monkeypatch.setattr(build_installer, "ICON", tmp_path / "absent.ico")
     with pytest.raises(SystemExit, match="build_desktop.py"):
@@ -391,10 +411,36 @@ def test_a_bundle_that_describes_nothing_cannot_be_packaged(tmp_path: Path) -> N
         build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
 
 
-def test_a_bundle_built_for_another_host_is_refused(tmp_path: Path) -> None:
+def test_a_bundle_built_for_another_host_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wrong-host refusal, which a single-host run confuses with the next one.
+
+    Both end in a `SystemExit` naming a platform tag, and a `linux-x64` bundle on
+    a Linux runner satisfies *this* check and then trips the one below - so a
+    match on the tag alone passed for the wrong reason on two of the three legs.
+    The host is pinned so only one refusal can be the answer.
+    """
+    monkeypatch.setattr(build_installer, "release_platform_tag", lambda: "macos-arm64")
+    make_bundle(tmp_path / "dist" / "swe-mux", platform=WINDOWS)
+    (tmp_path / "dist" / "swe-mux-supervisor").mkdir()
+    with pytest.raises(SystemExit, match="build the installer on the host that built it"):
+        build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
+
+
+def test_a_host_with_no_installer_of_its_own_is_told_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Linux and macOS answer, asserted from every host.
+
+    `release_installer_name` returns None off Windows, and a build that then
+    invented `swe-mux-0.9.0-linux-x64-setup.exe` would name an artifact no
+    release will ever carry.
+    """
+    monkeypatch.setattr(build_installer, "release_platform_tag", lambda: "linux-x64")
     make_bundle(tmp_path / "dist" / "swe-mux", platform="linux-x64")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir()
-    with pytest.raises(SystemExit, match="linux-x64"):
+    with pytest.raises(SystemExit, match="there is no installer for linux-x64"):
         build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
 
 
