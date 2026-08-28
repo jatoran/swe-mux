@@ -217,11 +217,18 @@ it anyway and would always trail the format.
   grant it authority in one step would make the approval meaningless, so the next run
   asks again, with a diff.
 
-This repository ships its own `.swe-mux/actions.toml` as a worked example, covering a
+This repository's own `.swe-mux/actions.toml` is a worked example, covering a
 single-command action, an action with a typed input, a step with its own `cwd`, and a
-two-step action. `tests/test_project_actions_v2.py` asserts it parses with no
-diagnostics, which is the only fixture exercising the format against real commands
-rather than a string written inside a test.
+two-step action.
+**It is no longer tracked** (2026-08-28): `.swe-mux/` is ignored end to end as per-machine
+state, so the file exists only in a checkout whose operator authored one, and a fresh clone
+of this repository declares no actions at all.
+`tests/test_project_actions_v2.py::test_this_repository_ships_actions_that_parse` reads that
+file from the repository root and is the only fixture exercising the format against real
+commands rather than a string written inside a test - which means it now depends on a file
+the repository does not supply, and fails on a clean checkout.
+Deciding what that test should become (drop it, skip when the file is absent, or move the
+worked example into a tracked fixture that is not a live Project Actions source) is open.
 
 ## The agent surface
 
@@ -296,7 +303,8 @@ On a phone the menu is bounded rather than full-bleed: one readable column wide 
 
 - `src/swe_mux/project_actions.py` (`parse_native_actions`, `read_actions_source`, `write_actions_source`, `preview_action_run`, `STARTER_ACTIONS_TOML`)
 - `src/swe_mux/assets/project-actions-schema.md` (the authoring reference)
-- `.swe-mux/actions.toml` (this repository's own worked example)
+- `.swe-mux/actions.toml` (this repository's own worked example; untracked since 2026-08-28,
+  so it is present only on a machine whose operator authored one)
 - `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/server.py` (`_start_project_action`, `_arm_action_timeout`, `diff_project_actions`)
 - `src/swe_mux/mcp.py` (`project_actions`, `run_action`)
