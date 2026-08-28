@@ -3209,7 +3209,7 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   Neither default is derived from the other (21px desktop, 17px mobile): a phone row is read at arm's length and is never hovered for the tooltip that would confirm it, but it also has far less row width to spend on the gutter the indicator sits in.
   Both values live in the single `sessionRows` blob as `dotSizeDesktop`/`dotSizeMobile` rather than in a second settings profile, so editing either is one write from either device.
   `style.css` carries its own copy of both figures as the `--session-dot` fallback for a page whose settings have not resolved, or whose daemon is unreachable, so the two must stay equal - a fresh install would otherwise draw one size before the settings load and another after, which is a visible jump on every boot.
-  `sessionRowFields.test.ts` asserts the equality rather than leaving it to the comment that used to state it.
+  `session-row-layout.spec.ts` asserts the equality rather than leaving it to the comment that used to state it, and does it by asking a browser what the declaration resolved to at each breakpoint rather than by matching the stylesheet's text.
   `sessionRowPrefs.applySessionDotSize` publishes the resolved value as `--session-dot` on the root element and re-resolves when a window crosses the device-class breakpoint, exactly as chrome scale does.
   Handing the number to `StateIndicator` as a prop instead would resize the glyph and leave the gutter, the thread, and the row height behind.
   A stored size outside the bounds is **clamped**, not discarded: a blob from a build with wider bounds should render at the nearest size this one can draw rather than silently reset and look like a lost setting.

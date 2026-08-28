@@ -20,7 +20,7 @@ Its normalizer is where the layout invariants live, so the renderer never has to
 - No field appears twice.
 
 The shipped default is transcribed from the primary install's own stored layout rather than composed here; the reasoning, and the three consequences worth checking before moving it, are in `design/features/ui.md`.
-Two of its scalars are duplicated in `style.css` as the `--session-dot` fallback, and the equality is asserted (`sessionRowFields.test.ts`) rather than left to the comment on either side.
+Two of its scalars are duplicated in `style.css` as the `--session-dot` fallback, and the equality is asserted at both breakpoints (`test/renderer/session-row-layout.spec.ts`) rather than left to the comment on either side.
 
 The normalizer is also where the stored blob is migrated.
 Version 2 moved presence-only flags into the top line's right section (the flag strip) and placed the `draft` field, because changing the shipped default reaches nobody who has ever saved a layout.
