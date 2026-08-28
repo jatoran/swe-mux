@@ -38,6 +38,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import docs_content  # noqa: E402  (the documentation prose; see the docs section)
+
 SITE = Path(__file__).resolve().parent.parent
 ROOT = SITE.parent
 
@@ -520,6 +523,126 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
               letter-spacing: 0.06em; margin-top: 4px; }
 .post .prose, .post .bullets, .post table { max-width: 74ch; }
 .post h3 { margin-top: 24px; font-size: clamp(15px, 2vw, 17px); }
+
+/* -------------------------------------------------------- the docs browser
+
+   A persistent sidebar, one URL per page, search, and prev/next. Two columns
+   above 900px and one below it, and the sidebar is ONE list in the markup
+   rather than a desktop copy and a mobile copy - a second copy is how a page
+   ends up in one nav and not the other.
+
+   `minmax(0, 1fr)` on the content track is load-bearing: a `<pre>` inside a
+   grid item has a min-content width equal to its longest line, so without it
+   an install command pushes the whole page sideways and `tools/check.mjs`
+   fails at 360. */
+.docsgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px 0; }
+@media (min-width: 900px) {
+  .docsgrid { grid-template-columns: 224px minmax(0, 1fr); gap: 0 clamp(30px, 4vw, 58px);
+              align-items: start; }
+  /* 45px clears the 44px sticky bar with the hairline under it. */
+  .dsaside { position: sticky; top: 45px; max-height: calc(100vh - 60px);
+             overflow-y: auto; overscroll-behavior: contain;
+             padding: clamp(30px, 5vw, 54px) 0 20px; }
+  .dsbody { padding-top: clamp(30px, 5vw, 54px); }
+}
+.page.docs { padding-top: 0; }
+@media (max-width: 899px) { .dsaside { padding-top: clamp(28px, 6vw, 40px); } }
+@media (max-width: 899px) { .dsbody { padding-top: 4px; } }
+
+.dsvh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+        overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Search. The control is `position: relative` because the result list hangs
+   under it, and the list is in flow on the aside rather than absolutely
+   positioned so it cannot overlap the nav it sits above at any width. */
+.dsearch { position: relative; }
+.dsearch input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+  font-family: var(--mono); color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 0; padding: 8px 30px 8px 11px;
+  appearance: none;
+}
+.dsearch input::placeholder { color: var(--fg-3); }
+.dsearch input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+/* The `/` hint, drawn as a key. `--fg-3` rather than `--fg-4`, because `--fg-4`
+   does not clear AA and is restricted to borders and inert markers. */
+.dskey { position: absolute; right: 9px; top: 8px; pointer-events: none;
+         font-family: var(--mono); font-size: 11px; color: var(--fg-3);
+         border: 1px solid var(--line-2); padding: 0 5px; line-height: 1.45; }
+.dsearch input:focus + .dskey { display: none; }
+.dsr { margin-top: 8px; border: 1px solid var(--line-2); background: var(--panel); }
+.dsr[hidden] { display: none; }
+.dsr a { display: block; border: 0; padding: 9px 11px; border-top: 1px solid var(--line); }
+.dsr a:first-child { border-top: 0; }
+.dsr a:hover, .dsr a:focus-visible { background: var(--panel-2); outline: 0; }
+.dsr a:focus-visible { box-shadow: inset 2px 0 0 var(--green); }
+.dsr .t { display: block; font-family: var(--mono); font-size: 12.5px; color: var(--fg);
+          font-weight: 600; overflow-wrap: anywhere; }
+.dsr a:hover .t, .dsr a:focus-visible .t { color: var(--cyan); }
+.dsr .d { display: block; margin-top: 3px; font-size: 12.5px; line-height: 1.5;
+          color: var(--fg-2); overflow-wrap: anywhere; }
+.dsnone { margin: 0; padding: 10px 11px; font-size: 12.5px; color: var(--fg-2); }
+
+/* The sidebar. A disclosure below 900px, always open above it. */
+.dsnavbtn { display: block; width: 100%; margin-top: 12px; text-align: left; cursor: pointer;
+            font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em;
+            text-transform: uppercase; color: var(--fg-2); background: var(--panel);
+            border: 1px solid var(--line-2); padding: 9px 12px; }
+.dsnavbtn::before { content: "\\25B8"; color: var(--green); display: inline-block;
+                    width: 15px; transition: transform 0.12s linear; }
+.dsnavbtn[aria-expanded="true"]::before { transform: rotate(90deg); }
+.dsnavbtn:hover { color: var(--fg); }
+.dsnavbtn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+@media (min-width: 900px) { .dsnavbtn { display: none; } }
+.dsnav { margin-top: 14px; display: flex; flex-direction: column; }
+.dsnav[hidden] { display: none; }
+.dsnav a { border: 0; color: var(--fg-2); font-size: 13.5px; line-height: 1.4;
+           padding: 6px 0 6px 11px; border-left: 1px solid var(--line);
+           overflow-wrap: anywhere; }
+.dsnav a:hover { color: var(--fg); border-left-color: var(--line-2); }
+.dsnav a:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.dsnav a[aria-current="page"] { color: var(--green); border-left-color: var(--green); }
+.dsgroup { margin: 18px 0 5px; font-family: var(--mono); font-size: 11px;
+           letter-spacing: 0.13em; text-transform: uppercase; color: var(--fg-3); }
+.dsnav > a:first-child + .dsgroup { margin-top: 14px; }
+
+/* Page body. The first section gets no top margin, because the heading list
+   above it already separates it from the lede. */
+.dsbody .docsec:first-of-type { margin-top: clamp(26px, 4vw, 36px); }
+.dsbody .prose, .dsbody .bullets, .dsbody .steps, .dsbody .flat, .dsbody .lede,
+.dsbody .note, .dsbody .proof { max-width: 76ch; }
+.dsbody .prose + .prose, .dsbody .prose + .note { margin-top: 12px; }
+.dsbody .code, .dsbody .tablewrap { margin-top: 14px; }
+.dsbody .head + .prose, .dsbody .head + .bullets, .dsbody .head + .flat,
+.dsbody .head + .steps { margin-top: 12px; }
+.dsbody .flat li { grid-template-columns: 180px minmax(0, 1fr); }
+@media (max-width: 760px) { .dsbody .flat li { grid-template-columns: minmax(0, 1fr); } }
+.dsbody .docsec .kbd, .dsbody kbd {
+  font-family: var(--mono); font-size: 0.86em; color: var(--fg);
+  border: 1px solid var(--line-2); background: var(--panel-2); padding: 1px 5px;
+  white-space: nowrap;
+}
+
+/* Previous and next. A grid rather than `space-between`, so a page with only a
+   next link keeps it on the right where every other page draws it. */
+.dsstep { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px;
+          margin-top: clamp(40px, 6vw, 62px); padding-top: 20px;
+          border-top: 1px solid var(--line-2); }
+.dsstep a { border: 0; display: block; padding: 12px 14px; border: 1px solid var(--line);
+            background: var(--panel); }
+.dsstep a:hover { border-color: var(--line-2); }
+.dsstep a:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.dsstep a.next { text-align: right; }
+.dsstep .l { display: block; font-family: var(--mono); font-size: 11px;
+             letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); }
+.dsstep .t { display: block; margin-top: 4px; font-size: 14px; color: var(--fg);
+             overflow-wrap: anywhere; }
+.dsstep a:hover .t { color: var(--cyan); }
+@media (max-width: 560px) {
+  .dsstep { grid-template-columns: minmax(0, 1fr); }
+  .dsstep a.next { text-align: left; }
+  .dsstep .gap { display: none; }
+}
 """
 
 THEME_INIT = """(function () {
@@ -581,11 +704,35 @@ def index_block(name: str) -> str:
     return m.group(1)
 
 
-def shell(slug: str, title: str, description: str, body: str) -> str:
-    """The chrome every generated page shares: head, top bar, footer, scripts."""
-    up = "../"  # every generated page lives one directory below the deploy root
+def page_up(path: str) -> str:
+    """The relative prefix reaching the deploy root from a generated page.
+
+    A page's registry key is its URL path (`docs`, `docs/install`), so its depth
+    is a property of the key rather than something a caller passes and can get
+    wrong. `/docs/install/` is two directories down and needs `../../`.
+    """
+    return "../" * (path.count("/") + 1)
+
+
+def shell(path: str, title: str, description: str, body: str, scripts: str = "") -> str:
+    """The chrome every generated page shares: head, top bar, footer, scripts.
+
+    `path` is the page's URL path below the deploy root, which is also its
+    `BUILDERS` key. Only its first segment reaches the nav: a documentation
+    sub-page marks `docs` as the current nav entry, because the bar names real
+    destinations and the docs browser has a navigation surface of its own.
+
+    `scripts` is page-specific inline JavaScript, appended after the two blocks
+    every page carries. The documentation pages are the only user of it.
+    """
+    up = page_up(path)
+    nav_slug = path.split("/")[0]
+    # Prefixed rather than joined with a newline in the template: a page with no
+    # extra script would otherwise gain a blank line inside `<script>`, which is
+    # a whitespace diff on eight pages that have nothing to do with this.
+    extra = f"\n{scripts}" if scripts else ""
     items = [(up, "home", False)] + [
-        (f"{up}{s}/", label.lower(), s == slug) for s, _, label in PAGES if s
+        (f"{up}{s}/", label.lower(), s == nav_slug) for s, _, label in PAGES if s
     ]
 
     def links(indent: str) -> str:
@@ -711,7 +858,7 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
 {THEME_TOGGLE}
 
 /* ------------------------------------------------------------------- menu */
-{index_block("menu")}
+{index_block("menu")}{extra}
 </script>
 
 </body>
@@ -722,7 +869,7 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
 # --------------------------------------------------------------------- changelog
 
 
-def build_changelog() -> str:
+def build_changelog(up: str) -> str:
     md = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     links = dict(re.findall(r"^\[([^\]]+)\]:\s*(\S+)\s*$", md, re.M))
@@ -888,914 +1035,678 @@ def _release_index(groups: dict[str, list[str]], counts: dict[str, int]) -> list
 
 
 # ---------------------------------------------------------------------- the docs
+#
+# `/docs/` is a documentation browser: a persistent sidebar, one URL per page,
+# in-page search, and prev/next. It replaced a single anchored page that was
+# mostly a link farm - 54 of its 61 outbound links pointed at `.docs/**.md` blobs
+# on GitHub, which is to say a reader who wanted to know how a feature worked was
+# bounced off the site into raw Markdown written for maintainers.
+#
+# Two decisions follow from that and both are asserted rather than remembered
+# (`tools/check.mjs`, the `docs browser` section):
+#
+# - **No documentation page links to a `.docs/**.md` blob.** The design documents
+#   are internal-voiced: they name phases and incident dates and state invariants
+#   that read as commitments on a public page. The answer is to write the pages,
+#   which `tools/docs_content.py` does.
+# - **A stub page is worse than the link it replaced**, because it costs a click
+#   and answers nothing. So the tree is short and each page is written to be worth
+#   arriving at; topics that could not be written well from the repository are
+#   left out rather than stubbed.
+#
+# The old `/docs/#<slug>` fragment contract is gone with the index that carried
+# it. It was documented as an interface because the in-app help modals linked
+# into it; they do not, and never did - the only swemux.dev URL the product uses
+# is `/version.json` (`update_check.py`). `site/README.md` section 10 records the
+# correction.
 
-# One entry per document, and every document under `.docs/design/features/` is
-# either here or in OMITTED with a reason. `build` fails on a document that is in
-# neither, so a new feature doc is a decision about whether it is public rather
-# than something that silently never appears.
-DOC_SECTIONS: list[tuple[str, str, list[str]]] = [
-    (
-        "overview",
-        "Overview",
-        ["architecture.md", "data-model.md", "interfaces.md"],
-    ),
-    (
-        "sessions",
-        "Sessions and terminals",
-        [
-            "features/sessions.md",
-            "features/session-recovery.md",
-            "features/terminal-input.md",
-            "features/launch-profiles.md",
-            "features/backends.md",
-            "features/status-detection.md",
-            "features/delivery-readiness.md",
-            "features/approvals.md",
-        ],
-    ),
-    (
-        "workbench",
-        "Projects and the workbench",
-        [
-            "features/projects.md",
-            "features/project-resources.md",
-            "features/project-actions.md",
-            "features/project-card.md",
-            "features/workspace-layout.md",
-            "features/ui.md",
-            "features/prompt-library.md",
-            "features/processes-and-previews.md",
-            "features/git.md",
-            "features/agent-context.md",
-            "features/agent-environment.md",
-            "features/configurator.md",
-        ],
-    ),
-    (
-        "history",
-        "History and transcripts",
-        ["features/history.md", "features/transcript-branches.md"],
-    ),
-    (
-        "control-plane",
-        "The control plane",
-        [
-            "features/tier0-facts.md",
-            "features/deterministic-consumers.md",
-            "features/code-graph.md",
-            "features/attention-ranking.md",
-            "features/fleet-intelligence.md",
-            "features/scan-timeline.md",
-            "features/operational-telemetry.md",
-            "features/automation.md",
-            "features/automation-enablement.md",
-        ],
-    ),
-    (
-        "queues",
-        "Queues, messaging, and landing",
-        [
-            "features/prompt-queue.md",
-            "features/auto-delivery.md",
-            "features/agent-messaging.md",
-            "features/land-queue.md",
-            "features/scheduled-runs.md",
-            "features/mux-mcp.md",
-        ],
-    ),
-    (
-        "voice",
-        "Voice, assistant, and alerts",
-        [
-            "features/voice.md",
-            "features/assistant.md",
-            "features/notifications.md",
-            "features/device-presence.md",
-        ],
-    ),
-    (
-        "accounts",
-        "Accounts, usage, and budgets",
-        ["features/provider-accounts.md", "features/usage.md", "features/budgets.md"],
-    ),
-    (
-        "running",
-        "Running it",
-        ["features/remote-access.md", "features/desktop-shell.md"],
-    ),
-    (
-        "reference",
-        "Technical reference",
-        [
-            "../technical/00_INDEX.md",
-            "../technical/backend/packages.md",
-            "../technical/backend/sqlite.md",
-            "../technical/frontend/packages.md",
-            "../technical/frontend/workspace-state.md",
-        ],
-    ),
-]
+DOCS_ROOT = "docs"
 
-OMITTED = {
-    "features/meta-hooks.md": "a compatibility engine for a retired hook contract, not a feature",
-    "features/observations.md": "storage compatibility for a user surface that was retired",
-    "features/ghost-windows.md": "an internal remediation sweep with no user-facing control",
-    "features/setting-links.md": "the internal mechanism behind a switched-off surface",
+# Ids the docs chrome owns. A heading that slugified onto one of these would make
+# the chrome's own element unreachable by fragment, so `build_docs_page` refuses
+# rather than emitting a page with two elements answering to one id.
+DOCS_RESERVED_IDS = {
+    "menu",
+    "menubtn",
+    "themebtn",
+    "dsq",
+    "dsr",
+    "dsstatus",
+    "dsnav",
+    "dsnavbtn",
+    "dsempty",
 }
 
+_TAGS = re.compile(r"<[^>]+>")
 
-def doc_anchor(repo_rel: str) -> str:
-    """The stable fragment a document is reachable at: `/docs/#<anchor>`.
-
-    Derived from the path rather than the title, because a title is edited and a
-    path is moved deliberately, and because two documents genuinely share a
-    filename (`backend/packages.md`, `frontend/packages.md`) - a stem-only anchor
-    silently emits the same `id` twice and the second one is unreachable.
-    `.docs/design/features/` collapses away, since it is where most of these live
-    and the shorter fragment is the one an in-app link will carry.
-    """
-    rel = repo_rel.removeprefix(".docs/").removesuffix(".md")
-    rel = rel.removeprefix("design/features/").removeprefix("design/")
-    rel = re.sub(r"(^|/)\d+_", r"\1", rel)
-    return re.sub(r"[^a-z0-9]+", "-", rel.lower()).strip("-")
-
-
-def doc_label(repo_rel: str) -> str:
-    """The path a docs entry shows, shortened by the two prefixes every row shares.
-
-    The link carries the full path; this is what a reader scans, and forty rows
-    all beginning `.docs/design/features/` spend a third of the column saying the
-    same thing and then break mid-filename because nothing is left. The two
-    prefixes dropped are stated on the page.
-    """
-    return repo_rel.removeprefix(".docs/").removeprefix("design/features/")
-
-
-def _lead_paragraph(text: str) -> str:
-    """The prose paragraph sitting directly under a document's H1, if it has one.
-
-    Walked rather than matched with a regex. The obvious `^# .+\\n+(.+?)` under
-    `re.DOTALL` does not do this: the first `.+` swallows the whole file and
-    backtracks into some heading in the middle of it, which produced summaries
-    reading "## Failure modes" before anybody looked at the output.
-    """
-    lines = text.split("\n")
-    if not lines or not lines[0].startswith("# "):
-        return ""
-    i = 1
-    while i < len(lines) and not lines[i].strip():
-        i += 1
-    if i >= len(lines) or lines[i][:1] in {"#", "-", "|", ">"}:
-        return ""
-    para: list[str] = []
-    while i < len(lines) and lines[i].strip() and lines[i][:1] not in {"#", "|"}:
-        para.append(lines[i].strip())
-        i += 1
-    return plain(" ".join(para))
-
-
-def _doc_summary(text: str, path: str, title: str) -> str:
-    """One line describing a document, taken from the document. May be empty.
-
-    Preference order, and the reason for it. A doc's own `## What it is` opening
-    sentence is written by whoever owns the doc and moves when the doc moves, so
-    it goes first; a lead paragraph sitting directly under the H1 is the same
-    thing by another convention and goes second. `00_OVERVIEW.md`'s map label is
-    third because it is a *map* label: written to sit beside a path, it is often
-    just the title again, and rendering "Architecture" under a heading that reads
-    "Architecture" is worse than rendering nothing.
-
-    Which is what a document with none of the three gets. The alternative is
-    writing a summary here, and a hand-written line beside forty generated ones
-    is the one that goes stale without anybody noticing.
-    """
-    if m := re.search(r"^## What it is\s*\n+(.+?)(?=\n\n|\n#)", text, re.M | re.S):
-        lead = plain(m.group(1)).lstrip("- ")
-        return re.split(r"(?<=[.])\s", lead)[0]
-    if lead := _lead_paragraph(text):
-        return lead
-    overview = (ROOT / ".docs/design/00_OVERVIEW.md").read_text(encoding="utf-8")
-    for label, mapped in re.findall(r"^- (.+?): `([^`]+)`$", overview, re.M):
-        if mapped == path and plain(label).lower() != plain(title).lower():
-            return plain(label) + "."
-    return ""
-
-
-# ------------------------------------------------------- quick starts, hand-written
+# The tags an authored fragment may open, and the entities it may name. Content
+# in `docs_content.py` is *trusted* inline HTML, which is what lets a command
+# reference put `<code>` in a table cell - and which means a literal `<` or `&`
+# is emitted raw and misread by the browser rather than escaped. Nothing else on
+# this site has that hazard, because everything else is either lifted through
+# `inline()` or is hand-written HTML somebody is looking at.
 #
-# Four tasks, in the order a new install hits them. These are the one part of
-# `/docs/` that is written here rather than lifted, and the reason is that no
-# document in `.docs/` is shaped like this: the design documents state invariants
-# for whoever maintains a subsystem next, and a person who has just run
-# `uv tool install` needs eight numbered lines and a way to tell whether it
-# worked.
-#
-# Every command below is one that exists. The install commands were executed
-# against the published 0.1.0 wheel (`README.md`, and `site/README.md` section 7
-# records what was run); the keybindings are `keybindings.py`'s own defaults; the
-# data-directory paths are `config.py`'s. A command invented here would be read by
-# somebody whose install is already broken, which is the worst possible audience
-# for a plausible guess.
-QUICKSTARTS: list[tuple[str, str, str, list[str], str]] = [
-    (
-        "quickstart-install",
-        "Install it, and see the workspace",
-        "Ten minutes, and it needs no checkout and no Node. The published wheel is pure "
-        "Python and already carries the built frontend.",
-        [
-            "Check you have <b>Python 3.12 or newer</b>: <code>python --version</code>.",
-            "Install it. <code>uv tool install swe-mux</code> is the recommended form and "
-            "leaves <code>mux</code>, <code>muxd</code>, and <code>swe-mux</code> on your "
-            "PATH globally. <code>pipx install swe-mux</code> does the same without uv.",
-            "<b>On Windows, take the desktop extra instead:</b> "
-            "<code>uv tool install \"swe-mux[desktop]\"</code>. That is what adds the native "
-            "window and the tray icon; without it the <code>swe-mux</code> command exists "
-            "and fails on a missing import.",
-            "Start the daemon: <code>muxd</code>. On Windows with the extra, "
-            "<code>swe-mux</code> opens the same thing in a window.",
-            "Open <code>http://127.0.0.1:8765</code>.",
-            "Create a Project and point it at a folder you already work in. Nothing else "
-            "works until there is one, and nothing is spawned until you ask for it.",
-        ],
-        "Run <code>mux doctor</code>. It is read-only, and it reports on the daemon, the "
-        "supervisor, the frontend build, the agent CLIs it can detect, the tailnet "
-        "listener, and the background loops. It is the command that tells installed from "
-        "working.",
-    ),
-    (
-        "quickstart-session",
-        "Run your first agent session",
-        "There is no special ritual for starting an agent. You open a terminal and type "
-        "the command you already type.",
-        [
-            "With a Project selected, press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>. "
-            "That opens a real terminal at the Project's root.",
-            "Type <code>claude</code>, <code>codex</code>, or whichever CLI you use, "
-            "normally. swe-mux puts its own launchers first on that terminal's PATH, so "
-            "the ordinary command <b>promotes the terminal in place</b>: same pane, same "
-            "scrollback, now carrying a transcript, a status, a queue, and a context "
-            "meter.",
-            "Give it something to do, then watch the session's status. Working, ready, "
-            "awaiting approval, and blocked mean the same thing whichever vendor's CLI "
-            "produced them.",
-            "While it is mid-turn, open the <b>Queue</b> tab in the utility drawer and "
-            "stage your next message. It is durable and head-of-line, and "
-            "<b>automatic delivery is off by default</b>: a queued message waits for you "
-            "to send it.",
-            "Use the <b>Run</b> menu for anything you did not want to type: another "
-            "agent, a shell, a worktree session, or a task imported from the repository.",
-        ],
-        "The pane's status strip stops saying <em>working</em> and the transcript tab has "
-        "something in it. If a session sits on <em>awaiting</em>, that is the agent waiting "
-        "on you rather than a stall.",
-    ),
-    (
-        "quickstart-cli",
-        "Add an agent CLI",
-        "swe-mux does not install, manage, authenticate, or proxy your agent CLIs. It "
-        "finds the ones you already have.",
-        [
-            "Install the CLI the vendor's own way, outside swe-mux, and log into it "
-            "there. Your subscription and your agreement stay with that vendor.",
-            "Check swe-mux can see it: <code>mux harnesses</code> lists every harness in "
-            "the registry with its detection state, and Settings, Harnesses shows the same "
-            "thing with the executable each one resolved to.",
-            "If it resolved to the wrong binary, or to none, set the path for that harness "
-            "in Settings, Harnesses. That is the usual fix on a machine with several "
-            "installs.",
-            "Open a terminal in a Project and run it. A harness the registry knows gets "
-            "normalized status, transcripts, history, and account switching on top.",
-            "<b>A CLI the registry has never heard of still works.</b> It runs in a real "
-            "pseudoterminal exactly as it does outside swe-mux; what it does not get is "
-            "the layer.",
-        ],
-        "<code>mux harnesses</code> shows it detected, and typing its command in a Project "
-        "terminal produces an agent session rather than a plain shell.",
-    ),
-    (
-        "quickstart-phone",
-        "Reach it from your phone",
-        "The phone client is the same application, not a companion, and it goes over your "
-        "own tailnet with no relay and no swe-mux login.",
-        [
-            "Install Tailscale on the host machine and on the phone, on the same tailnet.",
-            "Leave the daemon running. It listens on loopback and on the machine's "
-            "detected Tailscale address; <code>muxd --local-only</code> is how you stop "
-            "that.",
-            "On the phone, open the machine's <code>.ts.net</code> hostname over HTTPS. "
-            "Turn <b>Use Tailscale DNS</b> on, and leave Android's Private DNS off or "
-            "automatic: the certificate is bound to the hostname, so the raw "
-            "<code>100.x</code> address cannot serve HTTPS.",
-            "Install it to the home screen when the browser offers. It is a progressive "
-            "web app, so it gets its own window and can receive push.",
-            "<b>HTTPS is not optional if you want the microphone or the clipboard</b>, "
-            "because browsers restrict both outside a secure context. swe-mux puts "
-            "Tailscale Serve on 443 in front of the daemon for exactly this.",
-        ],
-        "The workspace renders on the phone with your Projects in it. Understand the "
-        "consequence before you leave it running: <b>Tailscale policy is the entire access "
-        "boundary</b>, and any device your tailnet admits has terminal and code-execution "
-        "authority on that host.",
-    ),
-]
-
-# ------------------------------------------ features and settings, hand-written
-#
-# What each subsystem does and where its controls are, written for somebody using
-# swe-mux rather than maintaining it. Derived from `.docs/design/features/` and
-# deliberately not lifted from it: those documents are internal-voiced, name
-# phases and incident dates, and state invariants that read as commitments on a
-# public page.
-#
-# The third element of each entry is the surface it is reached at, and every one
-# of them is a real tab. Settings tabs are `frontend/src/settingsTabs.ts`; drawer
-# tabs are `frontend/src/drawerTabs.ts`. The fourth is the design document that
-# owns it, named by its `/docs/#<slug>` anchor - `build_docs` fails on a slug the
-# index does not carry, so a document that stops being published cannot leave a
-# dead link here.
-FEATURE_GUIDE: list[tuple[str, str, str, list[tuple[str, str, str, str]]]] = [
-    (
-        "guide-sessions",
-        "Sessions, terminals, and status",
-        "Everything else is built on swe-mux owning the pseudoterminal rather than "
-        "wrapping the program inside it.",
-        [
-            (
-                "Sessions that outlive the app",
-                "A supervisor process separate from the daemon and the UI holds every "
-                "terminal, so restarting the daemon or rebuilding the desktop app leaves "
-                "the agents working. Reconnecting replays only the bytes you missed. A "
-                "session whose process did end stays readable rather than disappearing.",
-                "Settings, Terminals",
-                "sessions",
-            ),
-            (
-                "One status vocabulary",
-                "Working, ready, awaiting approval, or blocked, meaning the same thing "
-                "across vendors. It is read from provider hooks, the transcript, the "
-                "terminal, and the CLI's own state files, and every transition is kept. "
-                "<b>Awaiting is the one to watch</b>: it means the agent is waiting on you.",
-                "the session's status strip",
-                "status-detection",
-            ),
-            (
-                "Approvals",
-                "When a harness asks permission, the decision is made from its structured "
-                "request rather than from what is on screen, and there is a floor no "
-                "configuration can reach past. swe-mux never decides to deny; that stays "
-                "yours.",
-                "Settings, Prompt queue, Approvals",
-                "approvals",
-            ),
-            (
-                "Multi-device terminals",
-                "One session can be attached from several devices at once. Exactly one "
-                "connection may write, and the terminal size is arbitrated rather than "
-                "fought over, so the phone does not reflow the desktop.",
-                "Settings, Terminals",
-                "terminal-input",
-            ),
-            (
-                "Launch profiles",
-                "Named shell and agent launches: which executable, which arguments, which "
-                "working directory. A WSL distro shell is a profile like any other, and "
-                "the WSL agent bridge reports whether the distro can actually reach the "
-                "daemon rather than assuming it.",
-                "Settings, Harnesses",
-                "launch-profiles",
-            ),
-        ],
-    ),
-    (
-        "guide-workbench",
-        "Projects and the workbench",
-        "A Project binds a folder to everything else: sessions, layout, notes, files, "
-        "history, and its own settings.",
-        [
-            (
-                "Projects and Groups",
-                "Point a Project at a folder you already work in. Groups are optional "
-                "sidebar organization above them. Most per-Project switches live here "
-                "rather than globally, which is what lets the control plane be on for one "
-                "repository and off for the rest.",
-                "Settings, Projects",
-                "projects",
-            ),
-            (
-                "Panes, tabs, and splits",
-                "A mixed workspace of panes, tabs, and splits, with drag and drop. Desktop "
-                "split geometry is durable Project state; the phone renders a single-pane "
-                "projection of the same tree rather than a second layout.",
-                "the workspace itself",
-                "workspace-layout",
-            ),
-            (
-                "Notes, files, and watches",
-                "Project-owned notes in a real Markdown editor, a file browser with "
-                "editors, ignore rules, and leased non-recursive watches. Notes and files "
-                "both open into a pane rather than only into the drawer.",
-                "the Notes and Files drawer tabs",
-                "project-resources",
-            ),
-            (
-                "The Run menu and imported tasks",
-                "Starts an agent, a shell, a worktree session, or a task discovered in the "
-                "repository: VS Code tasks, root <code>package.json</code> scripts, and "
-                "<code>.swe-mux/actions.toml</code>. <b>An imported task stays inert until "
-                "its exact current bytes are approved</b>, and any edit revokes that.",
-                "the Run menu, and Settings, Projects",
-                "project-actions",
-            ),
-            (
-                "Processes and previews",
-                "Whatever your sessions started, and what each one is serving. A local dev "
-                "server is proxied through the daemon's own URL, HMR included, so a phone "
-                "never needs a raw port. Static documents in the checkout can be previewed "
-                "the same way under a sandbox policy.",
-                "the Processes drawer tab",
-                "processes-and-previews",
-            ),
-            (
-                "Prompt templates",
-                "Saved reusable messages. Selecting one <b>inserts and never submits</b>, "
-                "which is deliberate: a template is text, not an action.",
-                "the Actions drawer tab",
-                "prompt-library",
-            ),
-        ],
-    ),
-    (
-        "guide-queue",
-        "Queues, messaging, and landing",
-        "Getting work to an agent that is busy, and getting a finished branch onto the "
-        "trunk, without either of them happening behind your back.",
-        [
-            (
-                "The prompt queue",
-                "Stage ordered messages against a session that is mid-turn. It is durable, "
-                "head-of-line, and bound to the conversation rather than to the pane. "
-                "<b>Automatic delivery is off by default</b>, and when you do turn it on it "
-                "waits for a readiness gate and a stability window rather than for a "
-                "binary done signal.",
-                "the Queue drawer tab, and Settings, Prompt queue",
-                "prompt-queue",
-            ),
-            (
-                "Auto-delivery, when you want it",
-                "Per-conversation, with quiet hours, an emergency pause, an expiry on each "
-                "item, and a cap on consecutive sends. It is the setting to understand "
-                "before turning on, and the defaults are the conservative ones.",
-                "Settings, Prompt queue, Auto-delivery",
-                "auto-delivery",
-            ),
-            (
-                "Agent-to-agent messages",
-                "One session can put a message into another's queue. <b>A non-human "
-                "sender's write ends at a human</b> unless the receiving session granted it "
-                "standing permission or itself asked the question being answered.",
-                "the Fleet Queue, and Settings, Prompt queue, Agent messaging",
-                "agent-messaging",
-            ),
-            (
-                "The land queue",
-                "Landing a finished worktree branch, one at a time: reconcile with the "
-                "trunk, run the verification command whose exact bytes you approved, then "
-                "fast-forward only. Git refuses a fast-forward that would lose work, which "
-                "is what makes the last step safe for a machine. A conflict or a failed "
-                "gate goes back to the branch's own agent as a message.",
-                "the Git drawer tab, Map",
-                "land-queue",
-            ),
-            (
-                "Scheduled runs",
-                "Cron, interval, or one-off. A schedule is a deferred press of a button you "
-                "could have pressed yourself, so it goes through the ordinary spawn, "
-                "resume, and queue paths and grows no second authority. Definitions stay on "
-                "the machine rather than in the repository, so they do not arm themselves "
-                "in every clone.",
-                "the Schedule drawer tab",
-                "scheduled-runs",
-            ),
-        ],
-    ),
-    (
-        "guide-git",
-        "Git and history",
-        "What changed, who changed it, and being able to go back to the conversation that "
-        "produced it.",
-        [
-            (
-                "The worktree map",
-                "One row per worktree, with its files, its changes, and the live sessions "
-                "standing in it. Creating and removing worktrees is here, and removal is "
-                "declined rather than forced wherever Git itself would refuse.",
-                "the Git drawer tab, Map",
-                "git",
-            ),
-            (
-                "Commit provenance",
-                "Which session and which conversation produced a commit, split into "
-                "committer and contributor, with a confidence. It is drawn from "
-                "deterministic capture rather than from the agent's account of its own "
-                "work, which is what makes it worth reading after a batch landing.",
-                "the Git drawer tab, Provenance",
-                "tier0-facts",
-            ),
-            (
-                "Cross-vendor history",
-                "One search and one resume across every supported harness. Native "
-                "transcript directories are reconciled at startup and <b>never moved, "
-                "rewritten, or deleted</b>. A Claude transcript is read as the branching "
-                "graph it actually is, so a retry does not silently join two conversations.",
-                "the History browser",
-                "history",
-            ),
-        ],
-    ),
-    (
-        "guide-control-plane",
-        "The control plane",
-        "The part that decides what you look at. <b>It is off by default, per Project</b>, "
-        "and nothing in it can type, approve, or spawn.",
-        [
-            (
-                "Deterministic facts",
-                "Content hashes computed at the tool boundary rather than by reading the "
-                "file back, parsed test outcomes, git tree hashes, and write-then-read "
-                "lineage. This is the substrate everything else reads, and it is evidence "
-                "rather than the agent's own account.",
-                "Settings, Automation",
-                "tier0-facts",
-            ),
-            (
-                "Model-free detectors",
-                "Loops and stalls, claims declared but not verified, documentation debt, "
-                "and provenance gaps. No model runs, so they cost nothing per session and "
-                "cannot hallucinate a finding.",
-                "the Activity drawer tab, Findings",
-                "deterministic-consumers",
-            ),
-            (
-                "Attention ranking",
-                "Ranked items with <b>a hard daily interrupt budget</b>, four a day by "
-                "default. Incidents merge rather than repeat, demotion rules are mined and "
-                "expire, and the count of what was suppressed is always shown rather than "
-                "hidden.",
-                "the Alerts drawer tab",
-                "attention-ranking",
-            ),
-            (
-                "Automation observers",
-                "Model-backed observers that watch a run and report. They <b>can never "
-                "type, approve, spawn, execute a script, or change a Project</b>, which is "
-                "structural rather than a policy setting. Every one is gated by a "
-                "per-Project opt-in and an install-wide ceiling, and each carries a budget.",
-                "the Automation dashboard, Policy",
-                "automation",
-            ),
-            (
-                "The scan timeline",
-                "A narration of what a session did during a run, with per-run grants and "
-                "budgets, so it is readable later without re-reading the transcript. No "
-                "scan can be triggered from an agent-facing tool, because a read costs "
-                "nothing and a scan spends your budget.",
-                "the Activity drawer tab, Timeline",
-                "scan-timeline",
-            ),
-            (
-                "The code graph",
-                "A tree-sitter structural graph of the repository, behind blast-radius, "
-                "navigation, context, and test-gap reads, and behind the per-session change "
-                "map.",
-                "the Activity drawer tab, Changes",
-                "code-graph",
-            ),
-            (
-                "What agents can read back",
-                "A per-session MCP server that lets an agent pull from the control plane: "
-                "sibling status, prior resolutions, dead ends, provenance, Project notes. "
-                "Its writes are bounded to staging a message, drafting a spawn request for "
-                "a human, arming a watch, and interrupting or ending a session behind a "
-                "per-Project grant.",
-                "Settings, Automation",
-                "mux-mcp",
-            ),
-        ],
-    ),
-    (
-        "guide-voice",
-        "Voice, alerts, and the assistant",
-        "Driving it without a keyboard, and being told when something needs you.",
-        [
-            (
-                "Read aloud",
-                "A summarized or verbatim slice of the last turn, spoken by the OS voice "
-                "engine, a local model, or an explicitly acknowledged external provider. "
-                "One policy in three layers: a master switch, per-session generation, and "
-                "a per-device autoplay rule where the focused session plays and every "
-                "other one holds its clip rather than talking over you.",
-                "Settings, Voice, Read aloud",
-                "voice",
-            ),
-            (
-                "Hands-free conversation",
-                "Browser capture, on-device voice activity detection, and local "
-                "transcription, with configurable wake words and a fixed set of commands. "
-                "Spoken navigation addresses Projects and sessions by number. It needs a "
-                "secure context, which on a phone means the HTTPS step in the quick start "
-                "above.",
-                "Settings, Voice, Talk &amp; dictation",
-                "voice",
-            ),
-            (
-                "The Mux assistant",
-                "Ask for something in words. The model proposes names, deterministic code "
-                "resolves and executes them through the paths a button would have used, "
-                "and <b>the confirmation floor for a consequential action is not "
-                "configurable</b>.",
-                "Settings, Voice, Mux assistant",
-                "assistant",
-            ),
-            (
-                "Alerts and push",
-                "Web push to a phone, with per-device preferences, plus sounds. Device "
-                "presence decides which device you are actually at, once, for the whole "
-                "application, rather than each feature guessing separately.",
-                "Settings, Alerts",
-                "notifications",
-            ),
-        ],
-    ),
-    (
-        "guide-accounts",
-        "Accounts, usage, and running it",
-        "Where the money and the network boundaries are.",
-        [
-            (
-                "Provider accounts",
-                "Save, relabel, reauthenticate, switch, and remove Claude and Codex logins, "
-                "with subscription-window polling. Only authentication is copied and "
-                "switching is always an explicit act. It is for <b>one person switching "
-                "between accounts they own and pay for</b>, not pooling.",
-                "Settings, Accounts, Provider accounts",
-                "provider-accounts",
-            ),
-            (
-                "Where a model call goes",
-                "Every model setting is edited in one place and each feature shows a "
-                "read-only row naming the model it resolved to. Changing endpoint is the "
-                "operation that touches all of them at once, which is why they are together "
-                "rather than beside the features they serve.",
-                "Settings, Accounts, Models",
-                "usage",
-            ),
-            (
-                "Usage, and the three pots",
-                "Agent spend, metered automation spend, and provider quota. <b>They are "
-                "never summed</b>, because one is a subscription reconstructed from "
-                "transcripts, one is a key billed by the call, and one is not money at all. "
-                "Every figure carries the basis it was drawn on.",
-                "Settings, Usage",
-                "usage",
-            ),
-            (
-                "Budgets",
-                "A cap is tokens, dollars, or both, per feature. A dollar cap cannot bind "
-                "against a provider that reports no cost, so absent cost is recorded as "
-                "unmeasured rather than as zero and totals drawn over it read as a floor.",
-                "Settings, Usage",
-                "budgets",
-            ),
-            (
-                "Remote access",
-                "Loopback plus an optional Tailscale listener carrying the same UI and API. "
-                "There is no swe-mux login, so <b>Tailscale policy is the entire access "
-                "boundary</b>. Binding <code>0.0.0.0</code>, a LAN interface, port "
-                "forwarding, and Funnel are unsupported rather than merely discouraged.",
-                "Settings, Remote",
-                "remote-access",
-            ),
-            (
-                "The desktop shell and updates",
-                "On Windows, a native window, a tray supervisor, login startup, and a "
-                "frozen bundle that can rebuild and redeploy itself while live sessions "
-                "keep running. The daily release check is one request for a static file and "
-                "one switch turns it off; installing an update is a separate act that "
-                "verifies a hash before staging anything.",
-                "Settings, Diagnostics",
-                "desktop-shell",
-            ),
-        ],
-    ),
-]
+# So it is checked rather than remembered. The allowlist is small on purpose: a
+# fragment wanting a tag outside it is a fragment that should be a block.
+_ALLOWED_TAGS = re.compile(r"</?(?:b|em|code|kbd|a|span)(?:\s[^<>]*)?/?>")
+_BARE_AMP = re.compile(r"&(?!(?:amp|lt|gt|quot|apos|middot|nbsp|hellip|rsquo|#\d+|#x[0-9a-fA-F]+);)")
 
 
-def _agent_block() -> list[str]:
-    """The copy-paste line that hands setup to an agent, and the guide behind it.
+def check_fragment(where: str, fragment: str) -> None:
+    """Refuse an authored fragment that a browser would read as broken markup."""
+    if _BARE_AMP.search(fragment):
+        raise SystemExit(
+            f"{where}: a bare '&' reached authored content. Write '&amp;'. "
+            f"In: {fragment[:120]!r}"
+        )
+    for match in re.finditer(r"<", fragment):
+        if not _ALLOWED_TAGS.match(fragment, match.start()):
+            raise SystemExit(
+                f"{where}: '<' at offset {match.start()} does not open an allowed inline tag "
+                f"({_ALLOWED_TAGS.pattern}). Write '&lt;', or make it a block. "
+                f"In: {fragment[max(0, match.start() - 40):match.start() + 60]!r}"
+            )
 
-    Placed above the section nav rather than in a section of its own, because the
-    reader it is for has not decided to read anything yet. The guide is served
-    from the deploy root as a plain Markdown file, which is what makes it fetchable
-    by an agent without a parser.
+
+def heading_id(text: str) -> str:
+    """The fragment a `h2` block is reachable at, derived from its own words."""
+    return re.sub(r"[^a-z0-9]+", "-", plain(text).lower()).strip("-")
+
+
+def strip_markup(fragment: str) -> str:
+    """The readable text inside an authored inline-HTML fragment.
+
+    Used for the search index and for a result's snippet, so what a reader
+    searches is what a reader sees. Entities are resolved because `&amp;` is not
+    a word anybody types into a search box.
+    """
+    return " ".join(html.unescape(_TAGS.sub(" ", fragment)).split())
+
+
+def _doc_blocks_html(page: docs_content.Page, out: list[str]) -> None:
+    """Render one page's blocks. A `h2` opens a section; everything else fills it.
+
+    Sections exist so a heading can carry an `id` and a hairline rule without
+    every page having to declare its own structure, and so the in-page heading
+    list is derived from the same blocks the prose is.
+    """
+    open_section = False
+
+    def close() -> None:
+        nonlocal open_section
+        if open_section:
+            out.append("      </div>")
+            open_section = False
+
+    check_fragment(f"docs page '{page.slug}' lede", page.lede)
+    for kind, value in page.blocks:
+        if kind in {"p", "note", "proof"}:
+            check_fragment(f"docs page '{page.slug}'", str(value))
+        elif kind in {"ul", "steps"}:
+            for item in value:  # type: ignore[union-attr]
+                check_fragment(f"docs page '{page.slug}'", item)
+        elif kind == "flat":
+            for _, text in value:  # type: ignore[misc]
+                check_fragment(f"docs page '{page.slug}'", text)
+        elif kind == "table":
+            headers, rows = value  # type: ignore[misc]
+            for cell in [*headers, *(c for row in rows for c in row)]:
+                check_fragment(f"docs page '{page.slug}' table", cell)
+
+    for kind, value in page.blocks:
+        if kind == "h2":
+            close()
+            text = str(value)
+            out.append(f'      <div class="docsec" id="{heading_id(text)}">')
+            out.append(
+                '        <div class="head"><span class="n">#</span>'
+                f'<h2>{html.escape(text, quote=False)}</h2><span class="fill"></span></div>'
+            )
+            open_section = True
+            continue
+        if not open_section:
+            out.append('      <div class="docsec">')
+            open_section = True
+        if kind == "p":
+            out.append(f'        <p class="prose">{value}</p>')
+        elif kind == "note":
+            out.append(f'        <p class="note">{value}</p>')
+        elif kind == "ul":
+            out.append('        <ul class="bullets">')
+            for item in value:  # type: ignore[union-attr]
+                out.append(f"          <li><span>{item}</span></li>")
+            out.append("        </ul>")
+        elif kind == "steps":
+            out.append('        <ol class="steps">')
+            for item in value:  # type: ignore[union-attr]
+                out.append(f"          <li><span>{item}</span></li>")
+            out.append("        </ol>")
+        elif kind == "flat":
+            out.append('        <ul class="flat">')
+            for label, text in value:  # type: ignore[misc]
+                out.append(
+                    f"          <li><b>{html.escape(label, quote=False)}</b>"
+                    f"<span>{text}</span></li>"
+                )
+            out.append("        </ul>")
+        elif kind == "code":
+            body = html.escape(str(value), quote=False)
+            out.append(f'        <div class="code"><pre>{body}</pre></div>')
+        elif kind == "proof":
+            out.append(f'        <p class="proof"><b>It worked when</b> {value}</p>')
+        elif kind == "table":
+            # Cells carry inline HTML like every other block, rather than being
+            # escaped as plain text. Escaping them was the first shape and it was
+            # wrong in exactly the place a table is most useful: a command
+            # reference wants `<code>--export</code>` in a cell, and escaping
+            # published the tag itself.
+            headers, rows = value  # type: ignore[misc]
+            out.append('        <div class="tablewrap"><table>')
+            head = "".join(f"<th>{h}</th>" for h in headers)
+            out.append(f"          <thead><tr>{head}</tr></thead>")
+            out.append("          <tbody>")
+            for row in rows:
+                cells = "".join(f"<td>{c}</td>" for c in row)
+                out.append(f"            <tr>{cells}</tr>")
+            out.append("          </tbody>")
+            out.append("        </table></div>")
+        else:
+            raise SystemExit(f"docs: unknown block kind {kind!r} on page '{page.slug}'")
+    close()
+
+
+def doc_headings(page: docs_content.Page) -> list[tuple[str, str]]:
+    """`(text, id)` for every `h2` on a page, in order."""
+    return [(str(v), heading_id(str(v))) for k, v in page.blocks if k == "h2"]
+
+
+def doc_search_text(page: docs_content.Page) -> str:
+    """Everything on a page a search should be able to find, as plain text.
+
+    Derived from the same blocks that render, which is the whole reason the
+    content is declarative: a page written as markup would need its search text
+    written a second time, and the copy is what drifts.
+    """
+    parts = [page.title, strip_markup(page.lede)]
+    for kind, value in page.blocks:
+        if kind in {"h2", "code"}:
+            parts.append(strip_markup(str(value)))
+        elif kind in {"p", "note", "proof"}:
+            parts.append(strip_markup(str(value)))
+        elif kind in {"ul", "steps"}:
+            parts.extend(strip_markup(item) for item in value)  # type: ignore[union-attr]
+        elif kind == "flat":
+            # The colon matters: a label and its description run together read as
+            # one broken sentence in a search snippet ("A run note Something
+            # worth recording"), which is the only place this text is ever seen.
+            parts.extend(f"{a}: {strip_markup(b)}" for a, b in value)  # type: ignore[misc]
+        elif kind == "table":
+            headers, rows = value  # type: ignore[misc]
+            parts.extend(strip_markup(h) for h in headers)
+            parts.extend(strip_markup(c) for row in rows for c in row)
+    return " ".join(" ".join(parts).split())
+
+
+# ------------------------------------------------------------------ docs chrome
+
+
+def _docs_search(base: str) -> list[str]:
+    """The search control. Static markup; the script behind it does the rest.
+
+    `base` is the path back to `/docs/` from this page, and it is stamped on the
+    control rather than computed in the script: the index holds URLs relative to
+    `/docs/`, and the page that resolves them is the one that knows how deep it
+    is.
     """
     return [
-        '    <div class="agentbox">',
-        '      <div class="relhead"><h2>Have an agent set it up</h2>'
+        f'      <div class="dsearch" data-base="{base}">',
+        '        <label class="dsvh" for="dsq">Search the documentation</label>',
+        '        <input type="search" id="dsq" placeholder="Search the docs"'
+        ' autocomplete="off" spellcheck="false" aria-controls="dsr"'
+        ' aria-expanded="false" aria-describedby="dskey" />',
+        '        <div class="dskey" id="dskey" aria-hidden="true">/</div>',
+        '        <p class="dsvh" id="dsstatus" role="status" aria-live="polite"></p>',
+        '        <div class="dsr" id="dsr" hidden></div>',
+        "      </div>",
+    ]
+
+
+def _docs_sidebar(base: str, current: str | None) -> list[str]:
+    """The persistent section-and-page navigation, identical on every docs page.
+
+    It is one list rather than a desktop copy and a mobile copy. Below 900px a
+    disclosure button collapses it, and the button is wired by the inline script
+    directly beneath it rather than by the deferred one at the end of the body:
+    that runs before the nav is painted, so a narrow viewport does not flash a
+    full-height list. With scripting off the nav is simply open, which is long
+    rather than broken - the failure mode that matters is a nav that is *only*
+    reachable through JavaScript, and this is not that.
+    """
+    out = [
+        '      <button type="button" id="dsnavbtn" class="dsnavbtn" hidden'
+        ' aria-expanded="true" aria-controls="dsnav">All documentation</button>',
+        '      <nav class="dsnav" id="dsnav" aria-label="Documentation">',
+        # `base or "./"` because an empty `href` is a link to the current URL
+        # including its query and fragment, which is not the same thing as a
+        # link to this directory and is not what `/docs/` means here.
+        f'        <a href="{base or "./"}"'
+        f'{" aria-current=\"page\"" if current is None else ""}>Overview</a>',
+    ]
+    for section in docs_content.SECTIONS:
+        out.append(
+            f'        <div class="dsgroup">{html.escape(section.title, quote=False)}</div>'
+        )
+        for page in section.pages:
+            mark = ' aria-current="page"' if page.slug == current else ""
+            out.append(
+                f'        <a href="{base}{page.slug}/"{mark}>'
+                f"{html.escape(page.title, quote=False)}</a>"
+            )
+    out.append("      </nav>")
+    out.append("      <script>" + DOCS_NAV_INIT + "</script>")
+    return out
+
+
+def _docs_prevnext(base: str, index: int) -> list[str]:
+    """Previous and next, over the sidebar's own flat order.
+
+    Derived from that order rather than declared, so a page inserted into a
+    section cannot end up unreachable by walking the chain.
+    """
+    pages = docs_content.pages()
+    out = ['      <nav class="dsstep" aria-label="Page navigation">']
+    if index > 0:
+        prev = pages[index - 1]
+        out.append(
+            f'        <a class="prev" rel="prev" href="{base}{prev.slug}/">'
+            f'<span class="l">Previous</span>'
+            f"<span class=\"t\">{html.escape(prev.title, quote=False)}</span></a>"
+        )
+    else:
+        out.append('        <span class="gap"></span>')
+    if index < len(pages) - 1:
+        nxt = pages[index + 1]
+        out.append(
+            f'        <a class="next" rel="next" href="{base}{nxt.slug}/">'
+            f'<span class="l">Next</span>'
+            f"<span class=\"t\">{html.escape(nxt.title, quote=False)}</span></a>"
+        )
+    out.append("      </nav>")
+    return out
+
+
+def _agent_block(up: str) -> list[str]:
+    """The copy-paste line that hands setup to an agent, and the guide behind it.
+
+    The guide is served from the deploy root as a plain Markdown file, which is
+    what makes it fetchable by an agent without a parser.
+    """
+    return [
+        '      <div class="agentbox">',
+        '        <div class="relhead"><h2>Have an agent set it up</h2>'
         '<span class="fill"></span></div>',
-        '      <p class="prose">Paste this to Claude Code, Codex, or any agent that can '
+        '        <p class="prose">Paste this to Claude Code, Codex, or any agent that can '
         "fetch a URL. It reads a guide written for that job: install, first run, the "
         "concepts worth explaining, and what leaves the machine.</p>",
-        '      <div class="code"><pre>'
+        '        <div class="code"><pre>'
         f"{html.escape(AGENT_PROMPT, quote=False)}</pre></div>",
-        f'      <p class="note">The guide is <a href="../{AGENT_GUIDE_PATH}">'
+        f'        <p class="note">The guide is <a href="{up}{AGENT_GUIDE_PATH}">'
         f"<code>{html.escape(AGENT_GUIDE_URL, quote=False)}</code></a>, and it is plain "
         "Markdown rather than a page, so an agent gets the text and not a layout. "
         "Reading it costs nothing and it will tell your agent to ask before it installs "
         "anything.</p>",
-        "    </div>",
+        "      </div>",
     ]
 
 
-def _quickstart_section() -> list[str]:
-    out = ['    <div class="docsec" id="sec-quickstart">']
-    out.append(
-        '      <div class="head"><span class="n">#</span><h2>Quick starts</h2>'
-        '<span class="fill"></span></div>'
-    )
-    out.append(
-        '      <p class="prose">Four tasks, in the order a new install hits them. Every '
-        "command here is one that exists today; where a claim is about a default, the "
-        "default is the one shipping.</p>"
-    )
-    for anchor, title, intro, steps, proof in QUICKSTARTS:
-        out.append(f'      <div class="rel" id="{anchor}">')
-        out.append(
-            f'        <div class="relhead"><h2>{html.escape(title, quote=False)}</h2>'
-            '<span class="fill"></span></div>'
-        )
-        out.append(f'        <p class="prose">{intro}</p>')
-        out.append('        <ol class="steps">')
-        for step in steps:
-            out.append(f"          <li><span>{step}</span></li>")
-        out.append("        </ol>")
-        out.append(f'        <p class="proof"><b>It worked when</b> {proof}</p>')
-        out.append("      </div>")
+def _docs_frame(base: str, current: str | None, article: list[str]) -> str:
+    """Sidebar plus article, the shape every page under `/docs/` shares."""
+    out = ['<section class="page docs">\n  <div class="wrap">']
+    out.append('    <div class="docsgrid">')
+    out.append('    <div class="dsaside">')
+    out.extend(_docs_search(base))
+    out.extend(_docs_sidebar(base, current))
     out.append("    </div>")
-    return out
-
-
-def _feature_sections(anchors: set[str]) -> list[str]:
-    out: list[str] = []
-    for anchor, title, intro, entries in FEATURE_GUIDE:
-        out.append(f'    <div class="docsec" id="{anchor}">')
-        out.append(
-            f'      <div class="head"><span class="n">#</span>'
-            f"<h2>{html.escape(title, quote=False)}</h2><span class=\"fill\"></span></div>"
-        )
-        out.append(f'      <p class="prose">{intro}</p>')
-        out.append('      <ul class="flat">')
-        for name, what, where, doc in entries:
-            if doc not in anchors:
-                raise SystemExit(
-                    f"FEATURE_GUIDE entry '{name}' points at docs anchor '{doc}', which "
-                    "this page does not carry. Either the document stopped being "
-                    "published or the slug moved; see doc_anchor()."
-                )
-            out.append(
-                f"        <li><b>{html.escape(name, quote=False)}</b><span>{what} "
-                f'<span class="src">{html.escape(where, quote=False)} '
-                f'&middot; <a href="#{doc}">reference</a></span></span></li>'
-            )
-        out.append("      </ul>")
-        out.append("    </div>")
-    return out
-
-
-def build_docs() -> str:
-    base = ROOT / ".docs/design"
-    listed = [p for _, _, paths in DOC_SECTIONS for p in paths]
-    if len(listed) != len(set(listed)):
-        raise SystemExit("a document is listed in two docs sections")
-
-    on_disk = {f"features/{p.name}" for p in (base / "features").glob("*.md")}
-    unclassified = sorted(on_disk - set(listed) - set(OMITTED))
-    if unclassified:
-        raise SystemExit(
-            "these feature docs are neither published nor omitted, so the docs page "
-            "would silently not mention them: " + ", ".join(unclassified)
-        )
-    stale = sorted(set(OMITTED) - on_disk)
-    if stale:
-        raise SystemExit("OMITTED names documents that no longer exist: " + ", ".join(stale))
-
-    # Computed before anything renders, because the hand-written feature guide
-    # above the index links into it and has to fail the build rather than emit a
-    # dead fragment. `doc_anchor` is a pure function of the path, so this is the
-    # same set the loop below will produce.
-    anchors = {
-        doc_anchor((base / rel).resolve().relative_to(ROOT).as_posix())
-        for _, _, paths in DOC_SECTIONS
-        for rel in paths
-    }
-
-    out: list[str] = []
-    out.append('<section class="page">\n  <div class="wrap">')
-    out.append('    <div class="kick">install it, use it, then read why</div>')
-    out.append("    <h1>Documentation</h1>")
-    out.append(
-        '    <div class="lede"><p>Three things live on this page. <b>Quick starts</b> for '
-        "the four tasks a new install hits first. <b>Features and settings</b>, which says "
-        "what each part does and which screen its controls are on. And the "
-        "<b>reference index</b>, generated from the design documents in the repository "
-        "rather than rewritten beside them.</p>"
-        "<p>The reference documents are written for whoever maintains a subsystem next. "
-        "They state invariants and the decisions already made, which is what you want when "
-        "a behaviour surprises you and not what you want in your first ten minutes. For "
-        "that, start above and keep <code>mux doctor</code> to hand.</p></div>"
-    )
-
-    out.extend(_agent_block())
-
-    out.append('    <nav class="toc" aria-label="Documentation sections">')
-    out.append('      <a href="#sec-quickstart">quick starts</a>')
-    for anchor, title, _, _ in FEATURE_GUIDE:
-        out.append(f'      <a href="#{anchor}">{html.escape(title.lower(), quote=False)}</a>')
-    for slug, title, _ in DOC_SECTIONS:
-        out.append(
-            f'      <a href="#sec-{slug}">reference: '
-            f"{html.escape(title.lower(), quote=False)}</a>"
-        )
-    out.append("    </nav>")
-
-    out.extend(_quickstart_section())
-    out.extend(_feature_sections(anchors))
-
-    out.append('    <div class="sub-h">Reference</div>')
-    out.append(
-        '    <p class="prose">The design documents themselves, in the repository where '
-        "they are already public. Each entry is the document's own title and its own "
-        "opening line; nothing here is written for this page. Paths under each title are "
-        "relative to <code>.docs/</code>, and a bare filename means "
-        "<code>.docs/design/features/</code>. The link is the whole path.</p>"
-    )
-
-    seen: set[str] = set()
-    for slug, title, paths in DOC_SECTIONS:
-        out.append(f'    <div class="docsec" id="sec-{slug}">')
-        out.append(
-            f'      <div class="head"><span class="n">#</span>'
-            f'<h2>{html.escape(title, quote=False)}</h2><span class="fill"></span></div>'
-        )
-        out.append('      <ul class="doclist">')
-        for rel in paths:
-            src = (base / rel).resolve()
-            text = src.read_text(encoding="utf-8")
-            h1 = re.search(r"^# (.+)$", text, re.M)
-            if not h1:
-                raise SystemExit(f"{rel} has no H1 for the docs page to title it with")
-            repo_rel = src.relative_to(ROOT).as_posix()
-            anchor = doc_anchor(repo_rel)
-            # The hand-written blocks above the index carry their own ids, so the
-            # collision check has to cover them too: a duplicate `id` makes the
-            # second one unreachable, and `/docs/#<slug>` is a published contract.
-            reserved = (
-                {f"sec-{s}" for s, _, _ in DOC_SECTIONS}
-                | {"sec-quickstart"}
-                | {a for a, _, _, _, _ in QUICKSTARTS}
-                | {a for a, _, _, _ in FEATURE_GUIDE}
-            )
-            if anchor in seen or anchor in reserved:
-                raise SystemExit(f"docs anchor '{anchor}' is not unique; see doc_anchor()")
-            seen.add(anchor)
-            title_html = inline(h1.group(1))
-            summary = _doc_summary(text, rel, h1.group(1))
-            src_dir = repo_rel.rsplit("/", 1)[0]
-            out.append(f'        <li id="{anchor}">')
-            out.append(
-                f'          <div class="t"><a href="{BLOB}/{repo_rel}">'
-                f"{title_html}</a>"
-                f'<span class="src">{html.escape(doc_label(repo_rel), quote=False)}</span></div>'
-            )
-            # Always emitted, even empty: `.doclist li` is a two-column grid and a
-            # missing cell moves the next entry's title into the summary column.
-            out.append(f'          <span class="d">{inline(summary, base=src_dir)}</span>')
-            out.append("        </li>")
-        out.append("      </ul>")
-        out.append("    </div>")
-
-    left_out = "; ".join(
-        f"<code>{html.escape(p, quote=False)}</code>, {html.escape(plain(reason), quote=False)}"
-        for p, reason in OMITTED.items()
-    )
-    out.append(
-        '    <p class="note">Not everything under <code>.docs/</code> is listed here. '
-        f"Left out, each with its reason: {left_out}. "
-        "Development notes, audits, and the internal plan are unlisted too; the "
-        '<a href="../roadmap/">roadmap page</a> is the public projection of the last of '
-        "those.</p>"
-    )
+    out.append('    <article class="dsbody">')
+    out.extend(article)
+    out.append("    </article>")
+    out.append("    </div>")
     out.append("  </div>\n</section>")
     return "\n".join(out)
+
+
+def build_docs(up: str) -> str:
+    """`/docs/` itself: what is here, and a map of the tree.
+
+    A map rather than a table of contents. The sidebar is already the table of
+    contents and is on every page, so repeating it here as a bare list would
+    spend the one page a reader lands on saying nothing they cannot already see.
+    Each section gets its own summary and each page its own line.
+    """
+    base = ""
+    body: list[str] = []
+    body.append('      <div class="kick">install it, use it, then read why</div>')
+    body.append("      <h1>Documentation</h1>")
+    body.append(
+        '      <div class="lede"><p>Written for somebody <b>using</b> swe-mux. Start at '
+        "<a href=\"install/\">Install</a> and read forward, or search - every page is its "
+        "own URL and the sidebar is on all of them.</p></div>"
+    )
+    body.extend(_agent_block(up))
+
+    for section, blurb in DOCS_SECTION_BLURBS:
+        check_fragment(f"docs index blurb for '{section}'", blurb)
+        pages = next(s.pages for s in docs_content.SECTIONS if s.title == section)
+        body.append('      <div class="docsec">')
+        body.append(
+            f'        <div class="head"><span class="n">#</span>'
+            f'<h2>{html.escape(section, quote=False)}</h2><span class="fill"></span></div>'
+        )
+        body.append(f'        <p class="prose">{blurb}</p>')
+        body.append('        <ul class="flat">')
+        for page in pages:
+            body.append(
+                f'          <li><b><a href="{base}{page.slug}/">'
+                f"{html.escape(page.title, quote=False)}</a></b>"
+                f"<span>{html.escape(page.description, quote=False)}</span></li>"
+            )
+        body.append("        </ul>")
+        body.append("      </div>")
+
+    body.append(
+        '      <p class="note">Changing swe-mux rather than using it? '
+        '<a href="contributing/">Developing swe-mux</a> is the maintainer page, and it is '
+        "the only one here that sends you into the repository.</p>"
+    )
+    return _docs_frame(base, None, body)
+
+
+# One line per sidebar section, saying what the section is for. Written here
+# rather than on `Section` because it is copy for one page - the index - and the
+# sidebar deliberately shows the titles alone.
+DOCS_SECTION_BLURBS: list[tuple[str, str]] = [
+    (
+        "Getting started",
+        "Installing it, getting a first agent session running, and reaching it from a "
+        "phone. About half an hour end to end, and none of it needs a checkout.",
+    ),
+    (
+        "Concepts",
+        "The four ideas the rest of the application is built on. Worth reading once, in "
+        "order, because every later page assumes them.",
+    ),
+    (
+        "Working in it",
+        "What each surface does and where its controls are, one page per subsystem.",
+    ),
+    (
+        "Reference",
+        "Every setting, every command, every default chord, and every file swe-mux writes.",
+    ),
+    (
+        "Help",
+        "What actually goes wrong, and what to do about it.",
+    ),
+]
+
+
+def build_docs_page(page: docs_content.Page, index: int) -> str:
+    """One `/docs/<slug>/` page: lede, heading list, blocks, prev and next."""
+    base = "../"
+    headings = doc_headings(page)
+    seen = set()
+    for text, ident in headings:
+        if ident in DOCS_RESERVED_IDS:
+            raise SystemExit(
+                f"docs page '{page.slug}': heading '{text}' slugifies onto '{ident}', which "
+                "the docs chrome already owns; rename the heading"
+            )
+        if ident in seen:
+            raise SystemExit(
+                f"docs page '{page.slug}': two headings slugify onto '{ident}', so the "
+                "second is unreachable by fragment"
+            )
+        seen.add(ident)
+
+    body: list[str] = []
+    body.append(
+        f'      <div class="kick">{html.escape(_section_of(page).lower(), quote=False)}</div>'
+    )
+    body.append(f"      <h1>{html.escape(page.title, quote=False)}</h1>")
+    body.append(f'      <div class="lede"><p>{page.lede}</p></div>')
+    if len(headings) > 2:
+        body.append('      <nav class="toc" aria-label="On this page">')
+        for text, ident in headings:
+            body.append(f'        <a href="#{ident}">{html.escape(text.lower(), quote=False)}</a>')
+        body.append("      </nav>")
+    _doc_blocks_html(page, body)
+    body.extend(_docs_prevnext(base, index))
+    return _docs_frame(base, page.slug, body)
+
+
+def _section_of(page: docs_content.Page) -> str:
+    for section in docs_content.SECTIONS:
+        if page in section.pages:
+            return section.title
+    raise SystemExit(f"docs page '{page.slug}' belongs to no section")
+
+
+# ----------------------------------------------------------------- the search index
+#
+# A prebuilt index plus a small amount of vanilla JavaScript, because the site is
+# static files on GitHub Pages with no build step and no server, and a search that
+# needed either would be a search that does not work here.
+#
+# It is a **script** rather than a JSON file, and that is not a style choice. The
+# gate opens these pages over `file://`, where `fetch()` of a sibling file is a
+# cross-origin request and is refused; a classic `<script src>` is not. So the
+# same artifact that works on the deployed site also works in `tools/check.mjs`
+# and for anyone who opens the tree locally.
+#
+# It is loaded lazily, on the first interaction with the search box, so a reader
+# who never searches never pays for it.
+
+
+def build_search_index() -> str:
+    """`docs/search-index.js`: one row per page, as a global a classic script sets."""
+    rows = []
+    for page in docs_content.pages():
+        rows.append(
+            {
+                "u": f"{page.slug}/",
+                "t": page.title,
+                "s": strip_markup(page.description),
+                "h": [[text, ident] for text, ident in doc_headings(page)],
+                "b": doc_search_text(page),
+            }
+        )
+    payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "/* Generated by site/tools/build.py from site/tools/docs_content.py.\n"
+        "   Do not edit: run the build. A classic script rather than JSON so it\n"
+        "   loads over file:// as well as over https://. */\n"
+        f"window.__MUXDOCS = {payload};\n"
+    )
+
+
+# The disclosure that collapses the sidebar below 900px. Inlined directly under
+# the nav rather than deferred to the end of the body, so it runs before the nav
+# is painted and a narrow viewport does not flash a full-height list.
+DOCS_NAV_INIT = """(function () {
+  var btn = document.getElementById('dsnavbtn');
+  var nav = document.getElementById('dsnav');
+  if (!btn || !nav) return;
+  btn.hidden = false;
+  function set(open) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    nav.hidden = !open;
+  }
+  var narrow = window.matchMedia('(max-width: 899px)');
+  set(!narrow.matches);
+  btn.addEventListener('click', function () {
+    set(btn.getAttribute('aria-expanded') !== 'true');
+  });
+  narrow.addEventListener('change', function (e) { set(!e.matches); });
+})();"""
+
+# Search. Vanilla, no framework, no bundler, and no request until somebody uses
+# it. Ranking is deliberately crude and deliberately explainable: a title hit
+# beats a heading hit beats a body hit, every query word has to appear somewhere,
+# and a result carries the heading it matched so the link lands on the right part
+# of the page rather than at its top.
+DOCS_SEARCH = """(function () {
+  var box = document.querySelector('.dsearch');
+  if (!box) return;
+  var input = document.getElementById('dsq');
+  var out = document.getElementById('dsr');
+  var status = document.getElementById('dsstatus');
+  var base = box.getAttribute('data-base') || '';
+  var loading = false;
+
+  function load() {
+    if (loading || window.__MUXDOCS) return;
+    loading = true;
+    var s = document.createElement('script');
+    s.src = base + 'search-index.js';
+    s.onload = function () { run(); };
+    document.head.appendChild(s);
+  }
+
+  // A window around the first hit, snapped to word boundaries at both ends.
+  // Slicing on raw offsets opens a snippet mid-word ('...ding. Attention'),
+  // which reads as a rendering fault rather than as a truncation.
+  function snippet(body, term) {
+    var at = body.toLowerCase().indexOf(term);
+    if (at < 0) return body.slice(0, body.indexOf(' ', 120) + 1 || 120) + '\\u2026';
+    var from = Math.max(0, at - 55);
+    var to = Math.min(body.length, from + 165);
+    if (from > 0) {
+      var space = body.indexOf(' ', from);
+      from = space >= 0 && space < at ? space + 1 : from;
+    }
+    if (to < body.length) {
+      var end = body.lastIndexOf(' ', to);
+      to = end > at ? end : to;
+    }
+    return (from ? '\\u2026' : '') + body.slice(from, to).trim() +
+      (to < body.length ? '\\u2026' : '');
+  }
+
+  function rank(query) {
+    var terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    var hits = [];
+    (window.__MUXDOCS || []).forEach(function (page) {
+      var title = page.t.toLowerCase();
+      var body = page.b.toLowerCase();
+      var score = 0;
+      var heading = null;
+      for (var i = 0; i < terms.length; i++) {
+        var term = terms[i];
+        var here = 0;
+        if (title.indexOf(term) >= 0) here += 8;
+        for (var j = 0; j < page.h.length; j++) {
+          if (page.h[j][0].toLowerCase().indexOf(term) >= 0) {
+            here += 4;
+            if (!heading) heading = page.h[j];
+            break;
+          }
+        }
+        if (body.indexOf(term) >= 0) here += 1;
+        if (!here) return;
+        score += here;
+      }
+      hits.push({ page: page, score: score, heading: heading, term: terms[0] });
+    });
+    hits.sort(function (a, b) { return b.score - a.score; });
+    return hits.slice(0, 8);
+  }
+
+  function run() {
+    var query = input.value.trim();
+    if (!query) {
+      out.hidden = true;
+      out.textContent = '';
+      input.setAttribute('aria-expanded', 'false');
+      status.textContent = '';
+      return;
+    }
+    if (!window.__MUXDOCS) { load(); return; }
+    var hits = rank(query);
+    out.textContent = '';
+    if (!hits.length) {
+      var none = document.createElement('p');
+      none.className = 'dsnone';
+      none.textContent = 'No page matches "' + query + '".';
+      out.appendChild(none);
+    }
+    hits.forEach(function (hit) {
+      var a = document.createElement('a');
+      a.href = base + hit.page.u + (hit.heading ? '#' + hit.heading[1] : '');
+      var t = document.createElement('span');
+      t.className = 't';
+      t.textContent = hit.page.t + (hit.heading ? '  \\u203a  ' + hit.heading[0] : '');
+      var d = document.createElement('span');
+      d.className = 'd';
+      d.textContent = snippet(hit.page.b, hit.term);
+      a.appendChild(t);
+      a.appendChild(d);
+      out.appendChild(a);
+    });
+    out.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    status.textContent = hits.length + (hits.length === 1 ? ' result' : ' results');
+  }
+
+  input.addEventListener('focus', load);
+  input.addEventListener('input', run);
+
+  function results() { return [].slice.call(out.querySelectorAll('a')); }
+
+  input.addEventListener('keydown', function (e) {
+    var found = results();
+    if (e.key === 'ArrowDown' && found.length) { e.preventDefault(); found[0].focus(); }
+    else if (e.key === 'Enter' && found.length) { e.preventDefault(); found[0].click(); }
+    else if (e.key === 'Escape') { input.value = ''; run(); input.blur(); }
+  });
+
+  out.addEventListener('keydown', function (e) {
+    var found = results();
+    var at = found.indexOf(document.activeElement);
+    if (at < 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      found[Math.min(at + 1, found.length - 1)].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (at === 0) input.focus(); else found[at - 1].focus();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      input.focus();
+      input.value = '';
+      run();
+    }
+  });
+
+  // `/` is the shortcut every documentation site has, so it is the one people
+  // try. Never while a field is focused, because then it is a character.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== '/' || e.ctrlKey || e.altKey || e.metaKey) return;
+    var el = document.activeElement;
+    var tag = el && el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable)) return;
+    e.preventDefault();
+    input.focus();
+    input.select();
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!box.contains(e.target)) {
+      out.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+  });
+})();"""
 
 
 # ---------------------------------------------------------- acknowledgements
@@ -1803,7 +1714,7 @@ def build_docs() -> str:
 ECOSYSTEM_LABEL = {"python": "Python", "npm": "Frontend"}
 
 
-def build_acknowledgements() -> str:
+def build_acknowledgements(up: str) -> str:
     notices = (ROOT / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8")
     sidecar = json.loads((ROOT / "packaging/third_party_licenses.json").read_text(encoding="utf-8"))
     packages = sidecar["packages"]
@@ -2007,7 +1918,7 @@ def build_most_requested() -> str:
     </div>"""
 
 
-def build_roadmap() -> str:
+def build_roadmap(up: str) -> str:
     text = (SITE / "content/roadmap.html").read_text(encoding="utf-8").strip()
     # Exactly one, not at least one: the substitution below is a plain replace,
     # so a second copy - in that file's own explanatory header comment, most
@@ -2244,7 +2155,7 @@ def build_comparison_block() -> str:
     return "\n".join(out)
 
 
-def build_compare() -> str:
+def build_compare(up: str) -> str:
     return _hand_written("compare.html", COMPARISON_TABLE, build_comparison_block())
 
 
@@ -2340,7 +2251,7 @@ def build_posts_block() -> str:
     return "\n".join(out).lstrip()
 
 
-def build_blog() -> str:
+def build_blog(up: str) -> str:
     return _hand_written("blog.html", POSTS, build_posts_block())
 
 
@@ -2358,11 +2269,11 @@ def build_blog() -> str:
 # page about cookies this site does not set.
 
 
-def build_privacy() -> str:
+def build_privacy(up: str) -> str:
     return (SITE / "content/privacy.html").read_text(encoding="utf-8").strip()
 
 
-def build_terms() -> str:
+def build_terms(up: str) -> str:
     return (SITE / "content/terms.html").read_text(encoding="utf-8").strip()
 
 
@@ -2372,8 +2283,8 @@ BUILDERS = {
     "docs": (
         build_docs,
         "Docs · swe-mux",
-        "Index of swe-mux's design documentation: sessions and terminals, the workbench, "
-        "the control plane, queues and landing, voice, and the technical reference.",
+        "swe-mux documentation: install it, run a first agent session, reach it from a "
+        "phone, and a page for every surface, setting, and command.",
     ),
     "changelog": (
         build_changelog,
@@ -2419,6 +2330,52 @@ BUILDERS = {
     ),
 }
 
+# Every `/docs/<slug>/` page, registered from the content module rather than
+# listed here. A page added to `docs_content.SECTIONS` is generated, indexed for
+# search, in the sidebar, and in the prev/next chain by that one edit; there is
+# no second list to forget. The key is the URL path, which is what `shell()`
+# derives a page's depth from.
+for _page in docs_content.pages():
+    BUILDERS[f"{DOCS_ROOT}/{_page.slug}"] = (
+        (lambda p, i: lambda up: build_docs_page(p, i))(
+            _page, docs_content.pages().index(_page)
+        ),
+        f"{_page.title} · swe-mux docs",
+        _page.description,
+    )
+
+# The lazily loaded search index. Generated output like the pages, committed like
+# the pages, and covered by `--check` like the pages - a stale index beside a
+# changed page is a search that confidently returns the wrong words.
+SEARCH_INDEX_PATH = f"{DOCS_ROOT}/search-index.js"
+
+# The scripts each page carries beyond the theme toggle and the menu. Only the
+# documentation browser has any.
+PAGE_SCRIPTS = {
+    slug: "\n/* ----------------------------------------------------------------- search */\n"
+    + DOCS_SEARCH
+    for slug in BUILDERS
+    if slug == DOCS_ROOT or slug.startswith(f"{DOCS_ROOT}/")
+}
+
+
+def _write(target: Path, text: str, args: argparse.Namespace, stale: list[str], label: str) -> None:
+    """Write one generated artifact, or record it as stale under `--check`."""
+    current = target.read_text(encoding="utf-8") if target.exists() else None
+    if current == text:
+        print(f"  {label}  up to date")
+        return
+    if args.check:
+        stale.append(label)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # newline="" so the LF this builds stays LF: Python's text mode would
+    # translate it to CRLF on Windows and every regenerate would read as a
+    # whole-file diff.
+    with target.open("w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+    print(f"  {label}  written ({len(text.splitlines())} lines)")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -2426,8 +2383,17 @@ def main() -> int:
     args = ap.parse_args()
 
     stale: list[str] = []
+    _write(
+        SITE / SEARCH_INDEX_PATH,
+        build_search_index(),
+        args,
+        stale,
+        SEARCH_INDEX_PATH,
+    )
     for slug, (builder, title, description) in BUILDERS.items():
-        page = shell(slug, title, description, builder())
+        page = shell(
+            slug, title, description, builder(page_up(slug)), PAGE_SCRIPTS.get(slug, "")
+        )
         if "—" in page or "–" in page:
             raise SystemExit(f"{slug}: an em dash reached the output; see README.md section 5")
         for value in set(re.findall(r'data-todo="([^"]*)"', page)) - set(TODO_VALUES):
@@ -2440,21 +2406,7 @@ def main() -> int:
                 f"{slug}: a github.com/OWNER/ URL reached the output. The account is "
                 "decided; see repo_url() for the source documents that still say OWNER."
             )
-        target = SITE / slug / "index.html"
-        current = target.read_text(encoding="utf-8") if target.exists() else None
-        if current == page:
-            print(f"  {slug}/index.html  up to date")
-            continue
-        if args.check:
-            stale.append(f"{slug}/index.html")
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # newline="" so the LF this builds stays LF: Python's text mode would
-        # translate it to CRLF on Windows and every regenerate would read as a
-        # whole-file diff.
-        with target.open("w", encoding="utf-8", newline="") as fh:
-            fh.write(page)
-        print(f"  {slug}/index.html  written ({len(page.splitlines())} lines)")
+        _write(SITE / slug / "index.html", page, args, stale, f"{slug}/index.html")
 
     if stale:
         print("\nSTALE: " + ", ".join(stale))
