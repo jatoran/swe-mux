@@ -30,8 +30,13 @@ tree, which is exactly why a whole class of release defect passes it:
 - A `[project.urls]` entry with the `OWNER` placeholder still in it is a dead
   link on PyPI, on the artifact, and in every installed copy's metadata - and
   unlike a document, it cannot be edited after publication.
-- A README that tells a user to run a command `[project.scripts]` no longer
-  declares is a quickstart that fails on the first line.
+- A README that tells a user to run a command neither `[project.scripts]` nor
+  `[project.gui-scripts]` declares is a quickstart that fails on the first line.
+  Both tables, because they are one fact from the user's side: each puts a
+  launcher in the same scripts directory, and which of the two a command lives in
+  decides only whether that launcher opens a console. Reading just one is how
+  moving `swe-mux` to `gui-scripts` - to stop the tray popping a console window -
+  reported the README as documenting a command that does not exist.
 
 None of those is a defect *in* the artifact. Each is a disagreement *between*
 the tag, the source, and the artifact, so each needs the three read together -
@@ -655,8 +660,31 @@ def metadata_project_urls(metadata: str | None) -> dict[str, str]:
     return urls
 
 
+#: The `pyproject.toml` tables that put a launcher in the scripts directory, and
+#: the `entry_points.txt` sections they build. `gui-scripts` differs from
+#: `scripts` in exactly one way - the launcher opens no console - which is
+#: invisible to the question every check here asks, "does this command exist".
+LAUNCHER_TABLES: tuple[str, ...] = ("scripts", "gui-scripts")
+WHEEL_LAUNCHER_SECTIONS: frozenset[str] = frozenset({"console_scripts", "gui_scripts"})
+
+
+def declared_launchers(tree: SourceTree) -> dict[str, str]:
+    """Every command an install of this source would put on PATH."""
+    launchers: dict[str, str] = {}
+    for table in LAUNCHER_TABLES:
+        entries = tree.project_table().get(table)
+        if isinstance(entries, dict):
+            launchers.update({str(key): str(value) for key, value in entries.items()})
+    return launchers
+
+
 def wheel_console_scripts(entry_points: str | None) -> dict[str, str]:
-    """The `[console_scripts]` section of a wheel's `entry_points.txt`."""
+    """Every launcher section of a wheel's `entry_points.txt`.
+
+    Both `console_scripts` and `gui_scripts`: the name is kept for the evidence
+    key it feeds, but the question is which commands the wheel installs, and a
+    GUI launcher is one of them.
+    """
     scripts: dict[str, str] = {}
     if entry_points is None:
         return scripts
@@ -666,7 +694,7 @@ def wheel_console_scripts(entry_points: str | None) -> dict[str, str]:
         if stripped.startswith("[") and stripped.endswith("]"):
             section = stripped[1:-1]
             continue
-        if section != "console_scripts" or "=" not in stripped:
+        if section not in WHEEL_LAUNCHER_SECTIONS or "=" not in stripped:
             continue
         name, _, target = stripped.partition("=")
         scripts[name.strip()] = target.strip()
@@ -1038,8 +1066,7 @@ def _check_documented_commands(
     tree: SourceTree, found: list[DocumentedCommand], unreadable: list[str]
 ) -> Check:
     name = "documented-commands"
-    scripts = tree.project_table().get("scripts")
-    declared = set(scripts) if isinstance(scripts, dict) else set()
+    declared = set(declared_launchers(tree))
     if unreadable:
         return Check(
             name,
@@ -1061,8 +1088,8 @@ def _check_documented_commands(
         return Check(
             name,
             False,
-            f"{len(unresolved)} documented command(s) resolve against neither "
-            f"`[project.scripts]` ({', '.join(sorted(declared)) or 'nothing'}) nor the "
+            f"{len(unresolved)} documented command(s) resolve against neither this "
+            f"project's launchers ({', '.join(sorted(declared)) or 'nothing'}) nor the "
             f"known third-party tools: {listed}.",
             "Either the entry point was renamed or removed - in which case the document "
             "is telling a new user to run something that does not exist, and the fix is "
@@ -1084,24 +1111,24 @@ def _check_documented_commands(
 def _check_console_scripts(tree: SourceTree, facts: WheelFacts) -> Check:
     """The other half of the same join: a declared script has to be in the wheel."""
     name = "console-scripts"
-    scripts = tree.project_table().get("scripts")
-    declared = {str(k): str(v) for k, v in scripts.items()} if isinstance(scripts, dict) else {}
+    declared = declared_launchers(tree)
     if not declared:
         return Check(
             name,
             False,
-            f"{PYPROJECT} declares no `[project.scripts]`, so an install provides no "
-            "commands at all.",
-            "Declare the entry points under `[project.scripts]`; `README.md` tells a new "
-            "user to run them immediately after installing.",
+            f"{PYPROJECT} declares no `[project.scripts]` and no "
+            "`[project.gui-scripts]`, so an install provides no commands at all.",
+            "Declare the entry points under `[project.scripts]` (or "
+            "`[project.gui-scripts]` for a launcher that opens no console); "
+            "`README.md` tells a new user to run them immediately after installing.",
         )
     shipped = wheel_console_scripts(facts.entry_points)
     if not shipped:
         return Check(
             name,
             False,
-            "The wheel carries no `[console_scripts]` in its dist-info "
-            "`entry_points.txt`, so installing it puts nothing on PATH.",
+            "The wheel carries no `[console_scripts]` or `[gui_scripts]` in its "
+            "dist-info `entry_points.txt`, so installing it puts nothing on PATH.",
             "Rebuild with `uv build --wheel` from the tagged revision. A wheel with no "
             "entry points installs cleanly and leaves the user with no `mux` and no "
             "`muxd`, which is only visible after the install has already succeeded.",
@@ -1273,7 +1300,7 @@ def verify(wheel: Path, tag: str, root: Path | None = None) -> Report:
             "wheel_version": (metadata_headers(facts.metadata).get("Version") or [None])[0],
             "declared_urls": tree.project_table().get("urls") or {},
             "metadata_urls": metadata_project_urls(facts.metadata),
-            "project_scripts": tree.project_table().get("scripts") or {},
+            "project_scripts": declared_launchers(tree),
             "wheel_console_scripts": wheel_console_scripts(facts.entry_points),
             "documented_commands": sorted({item.command for item in commands}),
             "schema_stamps": [asdict(stamp) for stamp in stamps],

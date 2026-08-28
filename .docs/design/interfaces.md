@@ -2714,6 +2714,9 @@ mux history-duplicates [report|repair]
 mux accounts [list|verify|audit] [--limit N]
 mux reload-daemon [--force]
 mux doctor [--export]
+mux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
+
+muxd --where          # also: python -m swe_mux --where
 ```
 
 `mux` is the scriptable control surface; the browser and mobile clients remain the interactive
@@ -2733,11 +2736,87 @@ URL resolution is `--url`, then `MUX_URL`, then the daemon host/port from config
 default; the CLI never accepts or prints a provider secret.
 
 Exit codes: `0` success, `2` usage, `3` daemon unreachable, `4` daemon HTTP error, `5` ambiguous
-name, `6` not found, `1` a `doctor` report with a failing check.
+name, `6` not found, `1` a `doctor` report with a failing check or a local command that could not
+do what was asked.
 
 `mux doctor` prints the consolidated diagnostics report from `GET /api/diagnostics/doctor` (see
 Delivery diagnostics); `mux doctor --export` prints the full `GET /api/diagnostics/export` bundle
 as JSON.
+
+`mux install-shortcut` is the only subcommand that reaches no daemon at all, and that is the point
+of it rather than an optimisation: the person who needs it is the one whose install produced no way
+to start one.
+
+### Finding an install that produced no reachable command
+
+Three surfaces answer the same question - "where am I installed, and can I be reached" - and all
+three read one module, `src/swe_mux/install_location.py`, so they cannot disagree about the same
+filesystem.
+It reports the install method (frozen bundle, `uv tool`, `pipx`, a virtual environment, or the
+system interpreter), the directory the launchers were written to, the tool-owned shim directory
+where one of ours is actually present, and, per command, both where that launcher is and what the
+bare name resolves to on `PATH`.
+Two distinctions are load-bearing.
+A launcher that is **absent** and one that is **present but unreachable** are different faults with
+different fixes and are never collapsed; and an install that shipped **no** commands reads as
+unreachable rather than reachable, because `all()` over an empty set is vacuously true and would
+answer the only question anyone asks this exactly backwards.
+The install method decides the remedy: `uv tool update-shell`, `pipx ensurepath`, or the literal
+`setx` / `export PATH` line for this shell - never the sentence "add it to your PATH".
+
+**`muxd` prints a first-run hint** when the commands it shipped are not reachable by name, and
+prints nothing at all when they are.
+It fires there because that is the moment the confused user is present and watching: earlier is
+`pip`'s own output, which the project cannot hook, and later is a terminal nobody is looking at.
+Five lines - the directory, the fix, `python -m swe_mux`, and `--where` - once per start, and also
+logged at `WARNING` with `install_kind` / `scripts_dir` / `unreachable` and appended to the
+lifecycle ledger, because the terminal it printed to is gone by the time anyone investigates.
+A frozen desktop app never sees it: it is launched from its own executable and no scripts directory
+needs to be on `PATH`.
+
+**`python -m swe_mux --where`** is the escape hatch, and is reachable with nothing but an
+interpreter - which is the whole design constraint.
+`muxd` is `swe_mux.__main__:main`, so `python -m swe_mux` *is* the daemon; `--where` is answered on
+that entry point before the config is loaded and before logging is set up, since a config that does
+not load is one of the states someone runs it in and a refusal over `invalid config:` would be
+useless in exactly the case the flag exists for.
+It prints the version, the install method, the package and environment directories, the launcher
+directory, `PATH` status, every shipped command with its own status, the `PATH` fix, and the
+commands that work without any `PATH` at all.
+
+**`mux install-shortcut`** creates what a wheel structurally cannot: `pip` and `uv` write launchers
+and have no hook that runs afterwards, so nothing reaches the Start Menu.
+It writes `swe-mux.lnk` to the Start Menu's `Programs` and to the Desktop by default, adds a
+`shell:startup` entry under `--startup` (with `--hidden`, so a login opens the tray rather than
+throwing a window at someone who has just signed in), and removes all three under `--remove`
+regardless of the other flags - undo has to reach a login entry an earlier run added and the user
+has since forgotten.
+Every link points at the **`swe-mux`** launcher, never `mux`, and anchors its working directory in
+the data directory rather than the installation, for the same reason `desktop.ensure_daemon` does:
+a long-lived process anchored inside the installation locks that tree against an in-place update.
+The destination directories come from `SHGetKnownFolderPath`, not `%USERPROFILE%\Desktop`, because a
+Desktop that OneDrive has redirected makes the environment-variable path the wrong directory and a
+link written there is invisible to the person who asked for it.
+The `.lnk` itself is authored by `WScript.Shell` through PowerShell - no new dependency, where
+`pywin32` would add a compiled package and a license-audit entry to reach the same COM object.
+It is idempotent: each link is read before it is written and reported as
+`created`/`updated`/`unchanged`, and every operation reports the slot and the absolute path it
+touched (also appended to the lifecycle ledger, since this command runs where no daemon logging
+exists).
+It is Windows-only and says so cleanly: on POSIX the report comes back unsupported with the reason
+and the commands that do work there, writes nothing, and exits `0` - asking for something a host
+does not have is not a failure, while a shortcut that was attempted and did not land exits `1`.
+
+**The wheel ships no `.ico`.** `packaging/swe-mux.ico` is generated at build time by
+`packaging/build_desktop.py` and lives under `packaging/`, which the wheel does not contain
+(`[tool.hatch.build.targets.wheel]` carries `src/swe_mux` plus `static` and `assets`).
+What an installed copy does have is the mark itself: `desktop.create_tray_image` draws it and Pillow
+is an unconditional runtime dependency, so the same image the tray and the frozen executable use is
+rendered once into `<data_dir>/icons/swe-mux.ico` and reused.
+A frozen bundle skips that entirely and points at index 0 of its own executable, where PyInstaller
+already embedded it.
+An icon that cannot be written is not a failure: the link inherits its target's icon and the report
+says so.
 
 ### `mux doctor` without a running daemon
 
@@ -2752,12 +2831,30 @@ An HTTP error is not a fallback trigger - a daemon answered, so it is a daemon f
 install fault - and `--export` has no local form at all, since every section of that bundle is
 daemon state; it still exits `3`, naming `mux doctor` as the command that does answer.
 
-The local report runs the checks that are answerable from the machine alone: the Python floor, the
-package's own import graph, the config file, the frontend bundle in the installed package, the data
-directory's existence and writability, whether `mux.db` opens, whether the configured port is
-already held, whether this host's PTY backend imports, the frozen app's supervisor bundle, the
-prerequisite tools, harness detection, the first-use asset inventory, and the presence of each
-optional extra with the command to install it.
+The local report runs the checks that are answerable from the machine alone: where this copy is
+installed and whether its commands are on `PATH`, the Python floor, the package's own import graph,
+the config file, the frontend bundle in the installed package, the data directory's existence and
+writability, whether `mux.db` opens, whether the configured port is already held, whether this
+host's PTY backend imports, the frozen app's supervisor bundle, the prerequisite tools, harness
+detection, the first-use asset inventory, and the presence of each optional extra with the command
+to install it.
+
+`install.location` and `install.path` come **first**, ahead of the Python floor, because they are
+the first things that go wrong on a clean machine and the only ones whose symptom is *nothing at
+all*: the install succeeds, and then there is no command, no window, and no error to search for.
+Every other check presupposes the reader found a way to run something.
+`install.location` is pure description and always `ok` - it names the install method, the package
+directory, the launcher directory, and which optional extras resolved (from `_extra_probe`, the same
+probe the per-extra `extras` rows read, so the sentence and the rows cannot drift).
+`install.path` is `warn` when commands exist and are unreachable, because nothing is broken and
+calling it broken would push someone into reinstalling over a `PATH` entry; it is `fail` only when
+the install shipped no launchers at all, and it names a *different* swe-mux earlier on `PATH` as its
+own finding rather than as "not on PATH" - reachable-but-wrong-copy is how someone ends up debugging
+a version they are not running.
+The same facts are machine-readable under `capabilities.install` (`kind`, `scripts_dir`, `on_path`,
+`unreachable`, `module_fallback`), so a script does not parse an English sentence for them.
+The daemon report does **not** carry these two rows; `python -m swe_mux --where` answers the same
+question in either state.
 Prerequisites, harness detection, and the first-use assets are produced by the daemon report's own
 builders (`_prerequisite_checks`, `_harness_checks`, `optional_asset_rows` +
 `_optional_asset_checks`) over the same detection functions, so there is one implementation of

@@ -8,21 +8,25 @@ Three facts govern everything here and are stated once rather than repeated.
 **swe-mux 0.1.0 is on PyPI, published 2026-08-28.**
 `.github/workflows/release.yml` put it there over PyPI Trusted Publishing on a `v*` tag, so no API token exists anywhere to leak.
 The artifacts are `swe_mux-0.1.0-py3-none-any.whl` and `swe_mux-0.1.0.tar.gz`; `https://pypi.org/pypi/swe-mux/json` answers 200.
+The `v0.1.0` GitHub Release carries exactly those two files and no desktop artifact of any kind, which is what the Windows installer below exists to fix from the next release onwards.
 The `uv tool`, `pipx`, and `pip` commands below were **executed** against that published wheel on 2026-08-28 rather than transcribed from `pyproject.toml`: each installed into a throwaway environment, put `mux`, `muxd`, and `swe-mux` on that environment's bin directory, and answered `--help` with exit 0.
 An installed copy reports `0.1.0` and carries `swe_mux/static/index.html` with its 39 hashed JS assets, so it serves the interface without Node ever being present.
 A package install is now the primary path, and the source install is for people changing swe-mux rather than running it.
 
-**The platform matrix is: the wheel installs on all three hosts, and the daemon is proven only on Windows.**
+**The platform matrix is: the wheel installs on all three hosts, the source daemon starts under test on Windows and Linux, and the shipped product is proven only on Windows.**
 That is drawn from `.github/workflows/ci.yml` rather than from any summary, including this one.
 The `verify` job runs on `windows-latest` and carries the full gate plus the wheel build, artifact validation, install smoke, and the Playwright renderer suite.
 The `platform` job is a matrix of `ubuntu-latest` (`unproven: false`, blocking) and `macos-latest` (`unproven: true`, so `continue-on-error` is true for that leg), and since 2026-08-28 both legs also build the wheel, validate it, and run the install smoke.
 So "the wheel builds and installs and the CLI runs" is a question CI asks on all three hosts, and it was answered green on all three on 2026-08-28.
 Read the badge for today's answer rather than this sentence: those steps sit after the suite in the job, so a test failure on a leg skips them, and a skipped step is not a passing one.
 
-**What is proven nowhere is a running daemon.**
+**What is proven nowhere is a running daemon built from the published artifact.**
 `install_smoke.py` says so in its own docstring and means it: it starts no daemon and binds no port, because the daemon owns a fixed port and a single data directory and a CI job that started one would be a second writer against whatever else is running.
-No other CI job starts one either, on any host.
-Do not let "installs and the CLI runs" be read as "verified working end to end" - they are different claims, and only the first one has evidence.
+Since 2026-08-28 one CI step does start a daemon, and the distinction between the two is the whole content of this paragraph.
+The `live_daemon` tier (`tests/test_live_daemon.py`) runs on `ubuntu-latest` and `windows-latest` and starts a daemon **from the source checkout** on an OS-allocated port under the test's own temp data directory - never 8765, never `~/.mux` - so it proves that this tree's daemon reaches `status: ready` through all sixteen startup phases, writes its shims and hook artifacts, spawns a real shell through a real pseudoterminal, serves it over the terminal websocket, and exits cleanly with no orphaned children.
+It is deliberately not on the macOS leg while that leg is `continue-on-error`.
+Three claims it does **not** support: it runs no agent (its session is a shell, so no provider, credential or quota is involved), it never runs the installed wheel or the frozen desktop app, and it says nothing about a daemon on the operator's real port and data directory.
+Do not let "installs and the CLI runs" or "the source daemon starts under pytest" be read as "verified working end to end" - they are three different claims, and the third one still has no evidence on any host.
 `pyproject.toml` declares `Operating System :: Microsoft :: Windows` and `Operating System :: POSIX :: Linux` and deliberately no macOS classifier and no `OS Independent`, which is the same distinction expressed in metadata.
 
 ---
@@ -79,7 +83,36 @@ For a headless daemon plus an ordinary browser, which is the Linux and macOS sha
 Its output lands in `src/swe_mux/static/` and is gitignored, so a checkout that has never run it serves the API and no interface at all.
 This is the one respect in which a source install is harder than a package install: the published wheel carries that bundle already.
 
-### The desktop app
+### The Windows installer
+
+**This is the only install path that needs no Python**, and it is the one to hand to somebody who does not have one.
+`swe-mux-<version>-windows-x64-setup.exe`, attached to a GitHub Release by `release.yml`'s `build-desktop` job.
+
+**It is not on the `v0.1.0` release**, which predates that job and carries only the wheel and the sdist; the first release to publish it will be the next tag cut after 2026-08-28.
+Check the release page rather than this sentence.
+Once it is there, run it and take the defaults; nothing about it needs a command line.
+
+What it does, stated so an uninstall or a support question has something to check against:
+
+- Installs **per-user with no elevation prompt**, into `%LOCALAPPDATA%\Programs\swe-mux` by default. There is no per-machine mode and no `/ALLUSERS`; see the note below for why that is deliberate.
+- Writes **two sibling bundles** under that directory - `swe-mux\swe-mux.exe` and `swe-mux-supervisor\swe-mux-supervisor.exe` - which is the layout the daemon resolves the PTY supervisor through. Do not move one without the other.
+- Creates a **Start Menu** entry always, and a **Desktop shortcut** and a **run-at-sign-in** registration only if you tick those boxes. Both are unticked by default.
+- Registers in **Add/Remove Programs** as `swe-mux <version>` with a working uninstaller at `<install dir>\unins000.exe`.
+
+Silent install, for a scripted or unattended deployment:
+
+```
+swe-mux-0.1.0-windows-x64-setup.exe /VERYSILENT /NORESTART
+swe-mux-0.1.0-windows-x64-setup.exe /VERYSILENT /NORESTART /DIR="D:\apps\swe-mux" /TASKS=desktopicon,startupicon
+```
+
+Those are Inno Setup's standard switches; `/TASKS` names the optional extras and omitting it takes none of them.
+
+**It is unsigned today, and Windows will say so.** SmartScreen shows "Windows protected your PC" on first run; "More info" then "Run anyway" proceeds. A code-signing certificate has not been bought (`RELEASE_MANUAL_TASKS.md` § 1), and the build is structured so that turning signing on is one environment variable rather than a change to the installer - but until that happens, this warning is expected rather than a sign of a bad download. Check the SHA-256 against `https://swemux.dev/version.json` if you want to verify the file itself.
+
+**Why per-user rather than per-machine.** Everything swe-mux owns is per-user already: the data directory, the login registration, a daemon on loopback under your account, and provider credentials stored as current-user DPAPI blobs that no other account can read. A per-machine install would put the bundles somewhere a standard user cannot write, which is the tree an upgrade renames - so it would trade one elevation prompt now for one on every update. A second user on the same machine installs their own copy and gets their own data directory, which is the correct outcome rather than a limitation.
+
+### The desktop app, built from source
 
 The Windows distributable is a PyInstaller `onedir` build produced by `packaging/build_desktop.py`.
 Distribute the whole `dist/swe-mux/` folder, never the `.exe` alone.
@@ -92,6 +125,16 @@ uv run --extra desktop --extra voice-local --group package python packaging/buil
 
 `voice-local` is optional to install and mandatory to build from.
 `num2words` (LGPL-2.1) reaches the distributed closure through it and must ship as replaceable source under `_internal/num2words/`, so `build_desktop.verify_build_extras_installed` and `redeploy_desktop`'s preflight both refuse a build without it rather than producing a bundle that fails its own license verification.
+
+Two further artifacts are built from those bundles, and neither is produced by an ordinary developer build:
+
+```
+uv run python packaging/package_desktop_release.py     # the portable archive the in-app updater installs
+uv run python packaging/build_installer.py             # the .exe installer above (needs Inno Setup 6.3+)
+```
+
+`build_installer.py` finds `ISCC.exe` on PATH or in either default Inno Setup 6 location, and names its output from `update_install.release_installer_name` so a release cannot publish a name nothing looks for.
+It takes the version from the bundle's own `bundle.json` rather than from the process running it, so a stale `dist/` cannot be packaged under today's version number.
 
 ### Extras
 
@@ -135,9 +178,19 @@ A worktree is a different case and deliberately syncs less: `.worktree-setup` ru
 | `uv tool` | `uv tool upgrade swe-mux` |
 | `pipx` | `pipx upgrade swe-mux` |
 | Source checkout | `git pull`, then the sync command for that checkout, then `npm --prefix frontend ci && npm --prefix frontend run build` if frontend dependencies or sources changed |
-| Frozen desktop app | `uv run python packaging/redeploy_desktop.py`, or the UI menu's "Rebuild + redeploy app (keep sessions)" (`POST /api/daemon/redeploy`) |
+| Installer (`-setup.exe`) | Download the new release's installer and run it. It upgrades in place. |
+| Frozen desktop app in a checkout | `uv run python packaging/redeploy_desktop.py`, or the UI menu's "Rebuild + redeploy app (keep sessions)" (`POST /api/daemon/redeploy`) |
 
-Three upgrade properties are worth knowing before you rely on them.
+Four upgrade properties are worth knowing before you rely on them.
+
+**An installer-managed install upgrades by running the installer, and cannot use the in-app updater.**
+The in-app updater (`POST /api/update/install`, `mux update --install`) hands its verified archive to `packaging/redeploy_desktop.py`, which is not carried in the bundle - it lives in a source checkout.
+`redeploy_launch.redeploy_source_root()` looks for that script and a `pyproject.toml` beside the app, an installed copy has neither, and the preflight therefore refuses with `no_swap_tool` **before anything is downloaded**, naming the release page instead.
+That is the honest answer rather than a bug: the installer is the upgrade path for an installer install, and the same `AppId` makes running the new one an in-place replacement rather than a second entry in Add/Remove Programs.
+
+An installer upgrade also **deletes the previous bundles before writing the new ones**, which is why it is not simply a copy over the top: a PyInstaller `onedir` tree is not additive, and a dependency dropped between releases would leave an importable stale `.pyd` behind.
+It closes the running app and the PTY supervisor to do that, so **an installer upgrade ends every live terminal session**.
+The Ready page says so when it detects a previous version; finish or detach running agents first.
 
 **A daemon restart preserves sessions only when the PTY supervisor owns them.**
 `pty_supervisor_enabled` ships `False`.
@@ -168,7 +221,13 @@ Ordinary settings edits do not take a backup.
 | `uv tool` | `uv tool uninstall swe-mux` |
 | `pipx` | `pipx uninstall swe-mux` |
 | Source checkout | Delete the checkout and its `.venv` |
-| Frozen desktop app | Delete the `dist/swe-mux/` folder |
+| Installer (`-setup.exe`) | Settings → Apps → swe-mux → Uninstall, or run `<install dir>\unins000.exe` |
+| Frozen desktop app in a checkout | Delete the `dist/swe-mux/` folder |
+
+**The installer's uninstall is the one that removes more than files.**
+It removes both bundles, the install directory, the Start Menu entry, the Desktop shortcut, the Add/Remove Programs registration, and the `HKCU\...\Run` login value - the last one **only when that value still points inside the directory being removed**, so uninstalling one copy never strips the login entry of a source install or a second install.
+Verified end to end against a synthetic bundle on 2026-08-28: install, upgrade over, uninstall, with one Add/Remove Programs entry throughout and nothing left behind afterwards.
+Everything in the next four paragraphs still applies to it: the data directory survives, and so do the firewall rules and the Tailscale Serve configuration.
 
 **The data directory is not removed by any of them, and that is deliberate.**
 `~/.mux` on Windows, and its platform equivalents elsewhere, holds every project registration, the whole history database, provider account credentials, and your configuration.
@@ -183,7 +242,7 @@ Worktree checkouts created through swe-mux therefore live *inside* the directory
 
 Three registrations live outside the data directory and outside the installation, and no uninstall touches any of them.
 
-- **The Windows login entry.** `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`, value name `swe-mux`, written only if you turned on the tray's "Start with Windows". Toggle it off before uninstalling, or delete the value.
+- **The Windows login entry.** `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`, value name `swe-mux`, written by the tray's "Start with Windows" or by the installer's optional sign-in task - one value with one name, deliberately, so the tray's checkbox and the installer's tick box describe the same fact. The installer's uninstaller removes it when it names the directory being uninstalled; nothing else does, so for the other install kinds toggle it off before uninstalling, or delete the value.
 - **Windows Defender Firewall rules.** `swe-mux Mobile` and `swe-mux WSL Bridge`, created only if you enabled the direct tailnet listener or the WSL bridge. Remove with `Remove-NetFirewallRule -Name "swe-mux Mobile"`.
 - **Tailscale Serve.** A Serve configuration on 443 proxying to the daemon's loopback port, created by the mobile-voice auto-enable. It is Tailscale's state, not swe-mux's; `tailscale serve status` shows it.
 

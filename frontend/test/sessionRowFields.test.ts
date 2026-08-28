@@ -38,8 +38,14 @@ const bottomText = (item: Session, config: SessionRowConfig, ctx = context()) =>
   return [...tokens.bottom.left.tokens, ...tokens.bottom.right.tokens].map(token => token.text)
 }
 
+// `gitGlyphs` is pinned off rather than inherited: every test built on this helper
+// is about notability, degradation, or the width ladder, and the decoration would
+// otherwise put two characters into token text and into character budgets that the
+// test's own arithmetic does not account for. The setting's own behaviour, and the
+// value the default ships, are asserted directly instead.
 const withBottom = (config: SessionRowConfig, ids: RowFieldId[], mode: 'notable' | 'always' = 'always'): SessionRowConfig => ({
   ...config,
+  gitGlyphs: false,
   bottom: { ...config.bottom, left: ids.map(id => ({ id, mode })), right: [] },
 })
 
@@ -391,11 +397,16 @@ test('sessions in different checkouts are never marked as sharing one', () => {
   assert.equal(tokens.bottom.left.tokens[0].shared, false)
 })
 
-test('git glyphs are opt-in; branch names are bare by default', () => {
+test('git glyphs decorate branch names by default, and can be turned off', () => {
+  // The glyph tells a branch from a worktree from a model in one bottom line of
+  // near-identical short tokens, so it ships on; a reader who reads the line by
+  // position rather than by mark can have the width back.
   const base = defaultSessionRowConfig()
-  const item = session({ git: { branch: 'feat-x', dirty: 0, ahead: 0, behind: 0 } })
-  assert.deepEqual(bottomText(item, withBottom(base, ['branch'])), ['feat-x'])
-  assert.deepEqual(bottomText(item, withBottom({ ...base, gitGlyphs: true }, ['branch'])), ['⎇ feat-x'])
+  const item = session({ git: { branch: 'feat-x', worktree: 'wt-x', dirty: 0, ahead: 0, behind: 0 } })
+  assert.equal(base.gitGlyphs, true)
+  const decorated = { ...base, bottom: { ...base.bottom, left: [{ id: 'worktree' as const, mode: 'always' as const }, { id: 'branch' as const, mode: 'always' as const }], right: [] } }
+  assert.deepEqual(bottomText(item, decorated), ['⌂ wt-x', '⎇ feat-x'])
+  assert.deepEqual(bottomText(item, { ...decorated, gitGlyphs: false }), ['wt-x', 'feat-x'])
 })
 
 test('context draws in exactly one place', () => {
@@ -488,6 +499,9 @@ test('a value long enough to overflow is left for CSS to ellipsize, not degraded
   // edge instead, mid-glyph and without an ellipsis.
   const config: SessionRowConfig = {
     ...defaultSessionRowConfig(),
+    // Off, so the character arithmetic the comment above spells out is the
+    // arithmetic the engine does; the glyph is two more characters per git token.
+    gitGlyphs: false,
     bottom: {
       ...defaultSessionRowConfig().bottom,
       left: [{ id: 'worktree', mode: 'always' }],
@@ -894,23 +908,160 @@ test('garbage and absent blobs both yield the shipped default', () => {
   assert.equal(normalizeSessionRowConfig({ dotShape: 'triangle' }).dotShape, 'hexagon')
 })
 
-test('the shipped default is hexagon, arc, bare git, identity-only mobile', () => {
-  const base = defaultSessionRowConfig()
-  assert.equal(base.dotShape, 'hexagon')
-  assert.equal(base.context, 'arc')
-  assert.equal(base.gitGlyphs, false)
-  assert.equal(base.mobileFields, false)
-  assert.equal(base.diffStyle, 'numbers')
-  assert.ok(!base.bottom.left.some(slot => slot.id === 'state'), 'the state word is off by default')
+test('moving the shipped default repaints no device that has stored a layout', () => {
+  // The blob a build before this one wrote, verbatim: the previous default's
+  // bottom line, its bare git tokens, its identity-only phone, its 15px
+  // indicator. Every one of those differs from what ships now, which is what
+  // makes it a usable witness — a device that saved a layout must keep it, and a
+  // default change is not a migration.
+  //
+  // It works because a save writes the whole `SessionRowConfig`, so a stored blob
+  // has every key and `normalizeSessionRowConfig` never reaches its fallbacks.
+  // If a future field is ever added without that being true, this fails here
+  // rather than on somebody's sidebar.
+  const stored = {
+    version: 3,
+    top: {
+      left: [{ id: 'glyph', mode: 'always' }, { id: 'title', mode: 'always' }],
+      right: [
+        { id: 'approvals', mode: 'notable' }, { id: 'voice', mode: 'notable' },
+        { id: 'broadcast', mode: 'notable' }, { id: 'badges', mode: 'notable' },
+        { id: 'draft', mode: 'always' },
+      ],
+      separator: 'none',
+    },
+    bottom: {
+      left: [
+        { id: 'worktree', mode: 'notable' }, { id: 'branch', mode: 'notable' },
+        { id: 'diff', mode: 'notable' }, { id: 'queue', mode: 'notable' },
+        { id: 'detail', mode: 'notable' },
+      ],
+      right: [
+        { id: 'model', mode: 'notable' }, { id: 'account', mode: 'notable' },
+        { id: 'sincePrompt', mode: 'notable' }, { id: 'duration', mode: 'always' },
+        { id: 'context', mode: 'always' },
+      ],
+      separator: 'dot',
+    },
+    dotShape: 'circle',
+    dotSizeDesktop: 15,
+    dotSizeMobile: 17,
+    context: 'arc',
+    standing: 'row',
+    diffStyle: 'numbers',
+    countStyle: 'numbers',
+    gitGlyphs: false,
+    mobileFields: false,
+  }
+  assert.deepEqual(normalizeSessionRowConfig(stored), stored)
 })
 
-test('the indicator is larger on mobile than on desktop by default', () => {
-  // A phone row is read at arm's length and never hovered, so the indicator is
-  // the one element that must not step down with the smaller type around it.
+test('a version-2 blob gains only the flag it predates, never the new default', () => {
+  // The shape the primary install is actually on. Its own bottom line and
+  // scalars survive untouched; the one thing normalization adds is `voice`,
+  // which version 3 places because nobody could have declined a field that did
+  // not exist. That is the only sanctioned way a default change reaches a stored
+  // layout, and it is a field placement rather than a repaint.
+  const stored = {
+    version: 2,
+    top: {
+      left: [{ id: 'glyph', mode: 'always' }, { id: 'title', mode: 'always' }],
+      right: [
+        { id: 'broadcast', mode: 'notable' }, { id: 'badges', mode: 'notable' },
+        { id: 'draft', mode: 'always' },
+      ],
+      separator: 'none',
+    },
+    bottom: {
+      left: [{ id: 'duration', mode: 'always' }, { id: 'compactions', mode: 'notable' }],
+      right: [{ id: 'cost', mode: 'notable' }],
+      separator: 'space',
+    },
+    dotShape: 'square',
+    dotSizeDesktop: 12,
+    dotSizeMobile: 22,
+    context: 'percent',
+    standing: 'indicator',
+    diffStyle: 'bar',
+    countStyle: 'pips',
+    gitGlyphs: false,
+    mobileFields: false,
+  }
+  const config = normalizeSessionRowConfig(stored)
+  assert.equal(config.version, 3)
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['voice', 'broadcast', 'badges', 'draft'])
+  assert.deepEqual(config.bottom, stored.bottom, 'the bottom line is the device’s own, still')
+  for (const key of ['dotShape', 'dotSizeDesktop', 'dotSizeMobile', 'context', 'standing', 'diffStyle', 'countStyle', 'gitGlyphs', 'mobileFields'] as const) {
+    assert.equal(config[key], stored[key], `${key} must not adopt the new default`)
+  }
+})
+
+test('the shipped default is the layout swe-mux is operated with', () => {
+  // Pinned field by field rather than by spot-checking a flag, because this
+  // object is a transcription of a real install's stored blob and the whole
+  // point of shipping it is that a new user sees that layout and not a drift of
+  // it. Anything here that changes should change because somebody decided to
+  // move the default, which is a diff worth reading.
+  const base = defaultSessionRowConfig()
+  assert.equal(base.version, 3)
+  assert.deepEqual(base.top.left, [
+    { id: 'glyph', mode: 'always' },
+    { id: 'title', mode: 'always' },
+  ])
+  assert.deepEqual(base.top.right, [
+    { id: 'approvals', mode: 'notable' },
+    { id: 'voice', mode: 'notable' },
+    { id: 'broadcast', mode: 'notable' },
+    { id: 'badges', mode: 'notable' },
+    { id: 'draft', mode: 'always' },
+  ])
+  assert.equal(base.top.separator, 'none')
+  assert.deepEqual(base.bottom.left, [
+    { id: 'duration', mode: 'always' },
+    { id: 'worktree', mode: 'notable' },
+    { id: 'state', mode: 'notable' },
+    { id: 'queue', mode: 'notable' },
+  ])
+  assert.deepEqual(base.bottom.right, [{ id: 'model', mode: 'always' }])
+  assert.equal(base.bottom.separator, 'dot')
+  assert.equal(base.dotShape, 'hexagon')
+  assert.equal(base.context, 'arc')
+  assert.equal(base.standing, 'row')
+  assert.equal(base.diffStyle, 'numbers')
+  assert.equal(base.countStyle, 'numbers')
+  assert.equal(base.gitGlyphs, true)
+  assert.equal(base.mobileFields, true)
+  assert.equal(base.dotSizeDesktop, DEFAULT_DOT_SIZE_DESKTOP)
+  assert.equal(base.dotSizeMobile, DEFAULT_DOT_SIZE_MOBILE)
+})
+
+test('the default places the state word but keeps it silent', () => {
+  // `state` is never notable by definition — the indicator already says it — so a
+  // `notable` slot draws nothing. Placed anyway, because promoting it to `always`
+  // is one click where re-adding an unplaced field is a drag.
+  const base = defaultSessionRowConfig()
+  assert.equal(base.bottom.left.find(slot => slot.id === 'state')?.mode, 'notable')
+  const item = session({ state: 'working', state_since: NOW - 30, turn_started_at: NOW - 30 })
+  assert.ok(
+    !bottomText(item, base).includes('working'),
+    'a notable state slot must render nothing at all',
+  )
+  const shown = setFieldMode(base, 'state', 'always')
+  assert.ok(bottomText(item, shown).includes('working'), 'always is what turns it on')
+})
+
+test('the default indicator size differs per device class, and mobile is not simply larger', () => {
+  // Both are set explicitly rather than one deriving from the other: a physical
+  // size is the one property the shared layout cannot express, because the
+  // screens are held at different distances *and* a phone has far less width to
+  // spend on the gutter the indicator sits in.
   const base = defaultSessionRowConfig()
   assert.equal(base.dotSizeDesktop, DEFAULT_DOT_SIZE_DESKTOP)
   assert.equal(base.dotSizeMobile, DEFAULT_DOT_SIZE_MOBILE)
-  assert.ok(base.dotSizeMobile > base.dotSizeDesktop)
+  assert.notEqual(base.dotSizeMobile, base.dotSizeDesktop)
+  for (const size of [base.dotSizeDesktop, base.dotSizeMobile]) {
+    assert.ok(size >= DOT_SIZE_MIN && size <= DOT_SIZE_MAX, `${size} must be a size the panel can set`)
+  }
 })
 
 test('a stored indicator size is clamped rather than discarded', () => {
@@ -952,7 +1103,7 @@ test('the title cannot be removed and identity cannot cross lines', () => {
 
 test('mode changes reach the field wherever it sits', () => {
   const config = setFieldMode(defaultSessionRowConfig(), 'duration', 'notable')
-  assert.equal(config.bottom.right.find(slot => slot.id === 'duration')?.mode, 'notable')
+  assert.equal(config.bottom.left.find(slot => slot.id === 'duration')?.mode, 'notable')
 })
 
 test('every catalog field is either placed or offered by a preset', () => {

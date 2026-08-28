@@ -4,6 +4,15 @@ One shot. Tuesday-Thursday, 8-10am ET.
 Link target: the GitHub repo (HN convention for Show HN of open source; the site is in the README's first line).
 Be in the comments all day - answer everything, concede real criticism fast, never get defensive.
 
+Rules, from the [Show HN guidelines](https://news.ycombinator.com/showhn.html) and the [site guidelines](https://news.ycombinator.com/newsguidelines.html), read 2026-08-28:
+
+- Show HN is for "something you've made that other people can play with", and it must be easy to try "without barriers such as signups or emails". swe-mux qualifies and has no signup at all - worth one sentence in the text, because in this category that is unusual enough to be a point rather than a footnote.
+- **"Please don't ask friends to upvote or comment. That's not ok on HN."** Not one person. It is detectable and it is the one unrecoverable mistake available here.
+- Blog posts and other reading material are off topic for Show HN and go in as ordinary submissions. That is exactly the split this plan already uses: the engineering posts are separate submissions, never part of this one.
+- "Please don't delete and repost." A weak result stands; it does not get retried.
+- Own work is fine "part of the time", not as the account's primary use. Have ordinary participation on the account first.
+- Do not editorialize the title.
+
 ## Title
 
 Primary:
