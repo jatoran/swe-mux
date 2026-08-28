@@ -83,6 +83,14 @@ _agents-orchestrator/
 .tmp-cmux/
 .trash/
 
+# === Operator-private notes ===
+# Account setup, infrastructure configuration, and anything else that is about
+# running this project rather than about the code. The repository is public, so
+# this is the only place in the tree where "nobody else will read this" is true.
+# It is NOT for secrets: keys and passwords belong in a password manager, and a
+# gitignore rule is one `git add -f` away from not protecting them.
+.private/
+
 # === Project-local swe-mux state ===
 # Runtime state the daemon writes as ordinary operation, as opposed to the
 # repository-authored files beside it (`actions.toml`, `project-context.md`,
