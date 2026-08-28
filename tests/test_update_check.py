@@ -120,7 +120,7 @@ MANIFEST = {
     "version": "0.2.0",
     "tag": "v0.2.0",
     "published": "2026-08-27T00:00:00Z",
-    "changelog": "https://github.com/OWNER/swe-mux/releases/tag/v0.2.0",
+    "changelog": "https://github.com/jatoran/swe-mux/releases/tag/v0.2.0",
     "artifacts": [{"name": "w.whl", "url": "https://example.invalid/w.whl", "sha256": "ab"}],
 }
 
@@ -185,7 +185,7 @@ def test_the_github_fallback_reads_the_tag_and_the_release_page() -> None:
     release, reason = parse_github_release(
         {
             "tag_name": "v0.3.0",
-            "html_url": "https://github.com/OWNER/swe-mux/releases/tag/v0.3.0",
+            "html_url": "https://github.com/jatoran/swe-mux/releases/tag/v0.3.0",
             "published_at": "2026-09-01T00:00:00Z",
             "draft": False,
             "prerelease": False,

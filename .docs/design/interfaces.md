@@ -166,7 +166,7 @@ it exists for the updater, and a check that neither downloads nor verifies has
 no use for a hash.
 
 When the manifest produces no answer - for *any* reason, not only an unreachable
-one - the check falls back to `https://api.github.com/repos/OWNER/swe-mux/releases/latest`
+one - the check falls back to `https://api.github.com/repos/jatoran/swe-mux/releases/latest`
 (60 requests/hour unauthenticated is ample for a daily check). It sends only
 `Accept: application/vnd.github+json`, which is content negotiation rather than
 identification. A fallback that also fails leaves the *manifest's* reason in
