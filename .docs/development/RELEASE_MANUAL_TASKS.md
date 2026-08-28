@@ -11,9 +11,9 @@ Do the agent work first, land it, then rewrite, then push.
 
 These are cheap to make and several tasks are stalled behind them.
 
-- [ ] **The GitHub owner.** Personal account or a new organization.
-      Recommendation: a new org, because it costs nothing, makes the project look like a project rather than a side folder, and transfers to a company later without moving the URL that every blog post and awesome-list entry will already point at.
-      Agents have written `https://github.com/OWNER/swe-mux` with `TODO(release): OWNER` markers throughout; find them with `grep -rn "TODO(release): OWNER"` and replace once decided.
+- [x] **The GitHub owner.** Decided 2026-08-27: `jatoran`, at `https://github.com/jatoran/swe-mux`, created and empty.
+      A sweep replaces the `OWNER` placeholders once the last agent branch lands; find any survivors with `grep -rn "TODO(release): OWNER"` and `grep -rn "github.com/OWNER"`.
+      If the project later moves to an organization, GitHub redirects the old path, so this is not a one-way door.
 - [ ] **History: rewrite or fresh start.** Task 3 covers the rewrite. Recommendation is rewrite, for the reasons recorded there.
 - [ ] **Windows code signing.** Azure Trusted Signing (~$10/month, the cheap modern path), an OV certificate (~$100-400/year, reputation accrues with downloads), or ship unsigned and document the SmartScreen warning on the download page.
       Unsigned PyInstaller executables are the single largest source of "is this malware" reports at launch.
@@ -73,7 +73,10 @@ Only choose it if the rewrite verification above turns up something unexpected.
 
 ## 4. Create and configure the public repository
 
-- [ ] Create the repo under the chosen owner. Do not initialize it with any files.
+- [x] Repo created at `https://github.com/jatoran/swe-mux`, empty, no initial files.
+- [ ] **Do not push yet.** The leaked keypair is untracked at HEAD but is still in the history, so the first push publishes it in the object graph regardless of what the working tree looks like.
+      Task 3 (the rewrite) has to happen first, and task 3 has to happen after the last agent branch lands.
+      Nothing is lost by the wait: an empty repository is not a signal anyone reads.
 - [ ] Push the cleaned history.
 - [ ] Set the description and topics for discovery: `claude-code`, `ai-agents`, `agent-orchestration`, `coding-agents`, `codex`, `terminal-multiplexer`, `self-hosted`.
 - [ ] Enable **secret scanning** and **push protection** (Settings, Code security). Expect the synthetic `ghp_`/`sk-ant-` test fixtures to be flagged; dismiss them as test data rather than editing the tests.
