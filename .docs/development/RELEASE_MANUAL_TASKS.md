@@ -141,6 +141,31 @@ Nothing here can be delegated to an agent, because it needs a machine that is no
 - [ ] Browser pass: Chrome and Edge as primary, then Firefox, then mobile Safari and Chrome. Document what is supported rather than implying universality.
 - [ ] Confirm the Tailscale setup flow shows the phone URL with a copy button and the PWA install instruction, rather than assuming the operator derives it.
 
+## 8.5 First public CI run: two findings
+
+The repository went public on 2026-08-27 and CI ran on a machine that was not the dev host for the first time.
+It found two real things, which is what that run is for.
+
+**Fixed: the main `mypy` pass was host-dependent.**
+`[tool.mypy]` inherited its platform from the host, so `uv run mypy` asked a different question on every runner and could not be green on all of them at once.
+Five modules reach Win32 directly (`desktop.py`, `agent_launcher.py`, `ghost_windows.py`, `file_manager.py`, `timer_resolution.py`) and are absent from the per-platform `ignore_errors` override, because on Windows they typecheck normally.
+Both POSIX legs failed with the same 35 errors, reproduced locally with `uv run mypy --platform linux`.
+Fixed by pinning `platform = "win32"`, which keeps those five fully checked everywhere rather than silencing them; the `--platform linux` pass in `mypy-platform.toml` still owns the POSIX side.
+
+**Open, and deliberately not guessed at: one supervisor test fails on the GitHub Windows runner.**
+`test_pty_supervisor.py::test_supervisor_process_outlives_client_and_reaps_on_command` asserts the supervisor anchors its cwd in the data dir, which exists so a supervisor spawned from `dist/` cannot lock the app tree against a rebuild.
+On the runner its cwd was the Temp **root** (`C:\Users\runneradmin\AppData\Local\Temp`) rather than the `tmp_path` data dir - not a parent, and several levels up, so this is not a short-name or symlink artifact.
+Everything else passed: 5446 of 5448, and the run has passed every local and worktree gate many times.
+
+What is known and what is not, kept separate on purpose:
+
+- `supervisor.py` does `os.chdir(data_dir)` and logs a warning on `OSError`. That warning does **not** appear in the CI log, but the supervisor writes to its own log file rather than stdout, so its absence proves nothing.
+- The invariant the assertion protects is still satisfied: the Temp root is not `dist/`, so nothing is locked against a rebuild. The assertion is stricter than the property it guards.
+- The remaining hypothesis is that `data_dir` resolves differently on the runner from an empty config file, but the test connects successfully on `tmp_path`, which argues against it. This was not resolved.
+
+Do not weaken the assertion to make the badge green, and do not edit `supervisor.py` on a hypothesis: a supervisor change reaps every live session and needs the deliberate out-of-band update flow in the root `CLAUDE.md`.
+The next step is evidence, not a patch - surface the supervisor's own log file as a CI artifact on failure, then decide.
+
 ## 9. Known gaps deliberately not assigned to an agent
 
 Recorded so they are decisions rather than oversights.
