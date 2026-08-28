@@ -10,13 +10,14 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import webbrowser
 from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from .config import Config, load_config
 from .desktop_window_state import (
@@ -66,6 +67,20 @@ DAEMON_HEALTH_POLL_SECONDS = 0.5
 # the returning daemon by itself. Long enough to catch a daemon that dies on
 # contact, short enough that the tray stays usable if one does not.
 DAEMON_RESTART_WAIT_SECONDS = 30.0
+
+# Where a console-less launch sends the output it would otherwise have nowhere to
+# put. `swe-mux` is a `[project.gui-scripts]` entry, so its launcher is the
+# `pythonw`-style one: it opens no console, and Python therefore gives the
+# process `sys.stdout is None` and `sys.stderr is None`. Everything that would
+# have been printed - an argparse usage error, an unhandled traceback, a
+# warning - is then either discarded or, worse, raises `AttributeError` on
+# `None.write` inside the code that was reporting the original fault. This file
+# is the substitute, and `redirect_gui_streams` installs it before anything else
+# runs.
+GUI_LOG_NAME = "desktop-shell.log"
+GUI_LOG_MAX_BYTES = 1024 * 1024
+
+_gui_log: TextIO | None = None
 
 
 def local_url(config: Config) -> str:
@@ -724,8 +739,100 @@ class DesktopRuntime:
 def show_error(message: str) -> None:
     if sys.platform == "win32":
         ctypes.windll.user32.MessageBoxW(None, message, "swe-mux", 0x10)
-    else:
+    elif sys.stderr is not None:
         print(f"swe-mux: {message}", file=sys.stderr)
+
+
+def console_streams_present() -> bool:
+    """Whether this process has somewhere to print at all.
+
+    False under the GUI launcher, which is the state every function below exists
+    to compensate for.
+    """
+    return sys.stdout is not None and sys.stderr is not None
+
+
+def redirect_gui_streams(data_dir: Path | None = None) -> Path | None:
+    """Give a console-less launch a real stdout and stderr, and return the file.
+
+    None when the process already has streams, which is every source run, every
+    test, and the daemon and supervisor children the frozen app spawns with a
+    real handle. Best-effort by construction: a diagnostic that raised while
+    installing itself would be strictly worse than the silence it replaces, so
+    every failure here leaves the process exactly as it found it.
+
+    Line-buffered, because the interesting content is a traceback written
+    immediately before the process dies, and a block-buffered copy of it is a
+    copy nobody ever reads.
+    """
+    global _gui_log
+    if console_streams_present() or _gui_log is not None:
+        return None
+    try:
+        from .config import default_data_dir
+
+        directory = data_dir if data_dir is not None else default_data_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / GUI_LOG_NAME
+        _rotate_gui_log(path)
+        handle = path.open("a", encoding="utf-8", errors="replace", buffering=1)
+    except OSError:
+        return None
+    _gui_log = handle
+    sys.stdout = handle
+    sys.stderr = handle
+    handle.write(
+        f"\n===== swe-mux desktop shell started {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"pid {os.getpid()} =====\n"
+    )
+    return path
+
+
+def _rotate_gui_log(path: Path) -> None:
+    """One rotated generation, matching what `lifecycle.ledger` keeps.
+
+    The generation that matters is the launch that just failed, and a file that
+    grows forever behind a tray icon nobody looks at is its own defect.
+    """
+    try:
+        if path.is_file() and path.stat().st_size > GUI_LOG_MAX_BYTES:
+            os.replace(path, path.with_suffix(".log.1"))
+    except OSError:
+        pass
+
+
+def report_launch_failure(message: str, exception: BaseException | None = None) -> None:
+    """Make a failure that happened before the window exists survive the process.
+
+    Three sinks, because they answer different questions and none subsumes the
+    others: a message box, which is the only one the user sees at the moment it
+    happens; the lifecycle ledger, which is where every other tray and daemon
+    event already is, so the failure sits in sequence beside them; and the full
+    traceback in the GUI log, because `str(exc)` names the fault and not the line.
+
+    The data directory is resolved from the environment rather than from the
+    config, since a config that will not load is one of the failures this
+    reports.
+    """
+    try:
+        from .config import default_data_dir
+
+        data_dir = default_data_dir()
+    except Exception:  # noqa: BLE001 - the reporter must not fail
+        data_dir = None
+    if data_dir is not None:
+        ledger(data_dir, f"desktop shell failed to start: {message}")
+    if exception is not None and sys.stderr is not None:
+        with suppress(Exception):
+            traceback.print_exception(exception, file=sys.stderr)
+            sys.stderr.flush()
+    if data_dir is None:
+        show_error(message)
+        return
+    show_error(
+        f"{message}\n\nDetails: {data_dir / GUI_LOG_NAME}"
+        f"\nHistory: {data_dir / 'lifecycle.log'}"
+    )
 
 
 def desktop_parser() -> argparse.ArgumentParser:
@@ -759,7 +866,53 @@ def dispatch_internal_module(arguments: Sequence[str]) -> bool:
     return True
 
 
+def _parse_desktop_arguments(arguments: list[str]) -> argparse.Namespace:
+    """Parse the shell's own flags, making a usage error visible under a GUI launcher.
+
+    argparse writes usage to ``sys.stderr`` and raises ``SystemExit(2)``. With no
+    console that is a process which starts and vanishes leaving no trace at all,
+    and (before `redirect_gui_streams`) it was worse than that: `argparse` writes
+    to `sys.stderr` unconditionally, so a mistyped flag died on
+    ``AttributeError: 'NoneType' object has no attribute 'write'`` *inside the
+    error reporter*. The usage text now lands in the GUI log either way; this
+    turns the exit into something the person who typed the flag can see.
+    """
+    try:
+        return desktop_parser().parse_args(arguments)
+    except SystemExit as exit_request:
+        if exit_request.code not in (0, None):
+            report_launch_failure(
+                f"swe-mux does not understand: {' '.join(arguments)}\n"
+                "Usage: swe-mux [--hidden] [--config PATH]"
+            )
+        raise
+
+
+def _run_desktop_shell(arguments: list[str]) -> None:
+    args = _parse_desktop_arguments(arguments)
+    try:
+        config = load_config(args.config)
+        assert config.config_path is not None
+        # Now that the config is known, the crash-traceback sink is armed before
+        # anything native runs, rather than partway through `DesktopRuntime`.
+        enable_crash_tracebacks(config.data_dir)
+        runtime = DesktopRuntime(config, hidden=args.hidden)
+        if runtime.instance.already_running:
+            if not args.hidden:
+                runtime.instance.signal_existing()
+            runtime.instance.close()
+            return
+        runtime.run()
+    except Exception as exc:
+        report_launch_failure(str(exc) or type(exc).__name__, exc)
+        raise SystemExit(1) from exc
+
+
 def main(argv: Sequence[str] | None = None) -> None:
+    # First, and before anything can raise: the branches below are also how the
+    # frozen app starts its daemon and supervisor children, and a failure in one
+    # of those has to reach a file too.
+    redirect_gui_streams()
     arguments = list(argv if argv is not None else sys.argv[1:])
     if dispatch_internal_module(arguments):
         return
@@ -773,20 +926,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         supervisor_main(arguments[1:])
         return
-    args = desktop_parser().parse_args(arguments)
-    try:
-        config = load_config(args.config)
-        assert config.config_path is not None
-        runtime = DesktopRuntime(config, hidden=args.hidden)
-        if runtime.instance.already_running:
-            if not args.hidden:
-                runtime.instance.signal_existing()
-            runtime.instance.close()
-            return
-        runtime.run()
-    except Exception as exc:
-        show_error(str(exc))
-        raise SystemExit(1) from exc
+    _run_desktop_shell(arguments)
 
 
 if __name__ == "__main__":

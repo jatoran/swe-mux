@@ -113,11 +113,27 @@ test('every theme holds the 3:1 large-text floor through the glass, over white a
   assert.deepEqual(broken, [], `translucency dropped these below 3:1:\n${broken.join('\n')}`)
 })
 
+/**
+ * The palettes a fresh install can be on, held to the strict floor.
+ *
+ * `tokyo-night` is the shipped default (`Config.theme` in `src/swe_mux/config.py`);
+ * `default` is the `:root` block every other theme overrides; `dark` and `light`
+ * are the two baselines the picker offers first. A custom theme is the user's own
+ * choice and is already gated on background/foreground contrast by `config.py`.
+ * Moving the shipped default means moving this list too — a theme nobody chose is
+ * held to a higher bar than one somebody picked.
+ */
+const SHIPPED_DEFAULT_THEMES = ['default', 'tokyo-night', 'dark', 'light']
+
 test('the shipped default themes clear 4.5:1 through the glass on both extremes', () => {
-  // The three a fresh install can be on. A custom theme is the user's own choice and is
-  // already gated on background/foreground contrast by `config.py`.
-  const defaults = themes().filter(theme => theme.name === 'default' || theme.name === 'dark' || theme.name === 'light')
-  assert.ok(defaults.length >= 3, 'the default, dark, and light palettes must all be readable here')
+  const defaults = themes().filter(theme => SHIPPED_DEFAULT_THEMES.includes(theme.name))
+  // Named rather than counted: `default` legitimately matches several `:root`
+  // blocks, so a count would pass while a theme quietly went missing from the
+  // stylesheet — which is the one failure this list exists to catch.
+  const found = new Set(defaults.map(theme => theme.name))
+  for (const name of SHIPPED_DEFAULT_THEMES) {
+    assert.ok(found.has(name), `${name} declares no palette, so a fresh install cannot be checked`)
+  }
   for (const theme of defaults) {
     for (const buffer of [WHITE, BLACK]) {
       const composited = contrast(theme.text, labelBackground(theme, buffer))

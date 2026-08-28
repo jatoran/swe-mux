@@ -40,6 +40,14 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--where",
+        action="store_true",
+        help=(
+            "print where swe-mux is installed, whether its commands are on PATH, "
+            "and how to run it when they are not, then exit"
+        ),
+    )
+    parser.add_argument(
         "--relaunch-wait",
         action="store_true",
         help=argparse.SUPPRESS,  # successor of a self-restart: wait for the port to free
@@ -52,6 +60,20 @@ def load_daemon_config(
 ) -> tuple[Config, argparse.Namespace]:
     argument_parser = parser()
     args = argument_parser.parse_args(argv)
+    return resolve_daemon_config(argument_parser, args), args
+
+
+def resolve_daemon_config(
+    argument_parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> Config:
+    """Apply the parsed flags to the config, or fail with a usage error.
+
+    Split out of `load_daemon_config` so `main` can answer `--where` from the
+    parsed arguments alone. That ordering is the whole point of the flag: a
+    config that does not load is one of the states someone runs `--where` in, and
+    a command that first refuses over `invalid config:` would be useless in
+    exactly the case it exists for.
+    """
     try:
         config = load_config(args.config)
     except (ValueError, TypeError) as exc:
@@ -70,7 +92,7 @@ def load_daemon_config(
         config.port = args.port
     if args.local_only:
         config.tailnet_enabled = False
-    return config, args
+    return config
 
 
 async def serve(
@@ -271,8 +293,69 @@ def _warn_if_inside_job(config: Config) -> None:
     ledger(config.data_dir, f"daemon pid {os.getpid()}: {message}")
 
 
+def _print_path_hint(config: Config) -> None:
+    """Tell a first-time user where their commands are, when they are unreachable.
+
+    This is the one moment the confused user is definitely present: they got the
+    daemon started somehow - most likely with `python -m swe_mux`, because
+    nothing else worked - and they are watching this terminal. Anywhere else the
+    advice arrives too early (during `pip install`, whose output we cannot hook)
+    or too late.
+
+    Three properties it has to keep. It is **silent when nothing is wrong**, so
+    it costs a healthy install nothing and never trains anyone to skip it. It
+    prints **once per start**, which a daemon process gets for free. And it is
+    **concrete**: the directory, the exact command for this installer, and the
+    fallback that works with no PATH at all - never "add swe-mux to your PATH".
+
+    Also logged, at WARNING, because the terminal it prints to is gone by the
+    time anyone investigates and `daemon.log` is not.
+    """
+    from .install_location import detect_install_location, path_hint_lines
+
+    try:
+        location = detect_install_location()
+        lines = path_hint_lines(location)
+    except OSError as exc:
+        # A diagnostic must never be the reason a daemon does not start.
+        logging.getLogger(__name__).debug("install-location probe failed: %s", exc)
+        return
+    if not lines:
+        return
+    print("\n".join(["", *lines, ""]), flush=True)
+    logging.getLogger(__name__).warning(
+        "swe-mux commands are installed in %s but not reachable from PATH; fix with: %s",
+        location.bin_dir,
+        location.path_fix_lines()[0],
+        extra={
+            "install_kind": location.kind,
+            "scripts_dir": str(location.bin_dir),
+            "unreachable": ",".join(command.name for command in location.unreachable),
+        },
+    )
+    ledger(
+        config.data_dir,
+        f"daemon pid {os.getpid()}: swe-mux commands at {location.bin_dir} are not on PATH "
+        f"({location.kind} install)",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
-    config, args = load_daemon_config(argv)
+    argument_parser = parser()
+    args = argument_parser.parse_args(argv)
+    if args.where:
+        # Answered before the config is touched, and before logging is set up:
+        # this is the command for someone whose install answers nothing else, so
+        # every step it does not need is a step that can deny them the answer.
+        from .install_location import (
+            detect_install_location,
+            installed_version,
+            render_where,
+        )
+
+        print(render_where(detect_install_location(), version=installed_version()))
+        return
+    config = resolve_daemon_config(argument_parser, args)
     setup_daemon_logging(config.data_dir, level="DEBUG" if args.dev else config.log_level)
     if args.shutdown:
         from .supervisor_client import _discovery_pid, _pid_running, kill_server
@@ -297,6 +380,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     # tick without this: a 0.5 ms sleep measured 15.6 ms. See `timer_resolution`.
     raise_timer_resolution()
     _warn_if_inside_job(config)
+    _print_path_hint(config)
     if args.relaunch_wait:
         wait_for_port_free(config.host, config.port)
         # Then for the predecessor's *drain*, which happens after the port frees.

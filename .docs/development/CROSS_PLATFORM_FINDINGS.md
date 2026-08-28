@@ -323,6 +323,35 @@ Nothing downstream was mis-handling the extra event as a file, so this was noise
 Verified by execution on Windows and in the Linux container, where the normalization is a no-op and the suite still passes, plus a direct unit test of the projection that asserts the macOS shape on every host without needing a macOS backend to produce it.
 **Not confirmed on macOS**, for the same reason as the two above; the next `macos-latest` run is what closes it.
 
+### What the first WSL Ubuntu run actually found (2026-08-28)
+
+An operator ran the daemon on WSL Ubuntu.
+Four failures took roughly an hour of manual archaeology across several `wsl.exe` probes into config files and `~/.codex`, and **`daemon.log` was 8 KB and contained not one of them** - only `pty reader stopped` lines.
+Every real failure surfaced solely in an HTTP response body and was then gone.
+That is the finding, and it is a third instance of the shape the macOS section records: a contract nobody stated, satisfied by accident on the host that had run.
+
+**1. The `.exe` recovery was gated on the host that did not need it.**
+`provider_accounts._spawn_command` retried a configured `codex.exe` without its suffix only when `os.name == "nt"`.
+On Windows an `.exe` suffix is at least plausible and PATHEXT usually resolves it anyway; on POSIX it is *certainly* wrong.
+So the one host that could not possibly launch `codex.exe` was the one host that never attempted the repair, and a config authored on Windows produced `Could not start codex: [Errno 2] No such file or directory: 'codex.exe'` with a working `codex` on the same PATH.
+The guard was not merely on the wrong platform - it should not have been platform-conditional at all, and `launchers.resolve_command` had already been written unconditionally beside it.
+The general form: **a platform guard on a recovery is worth re-reading in the direction of "which host needs this most", because a guard written on the host that needs it least reads correctly there forever.**
+
+**2. `which_real` refused a binary and had no way to say so.**
+It returned `None` for three different situations - nothing on PATH, one of mux's own `~/.mux/bin` shims, and a Windows binary reached through WSL interop - and the caller could not tell them apart.
+The third is what happened: `which codex` answered `/mnt/c/Users/.../AppData/Roaming/npm/codex` and `npm ls -g --depth=0` was empty, so codex was not installed in Linux at all and only the Windows install was reachable.
+Refusing it is **correct** and stays: `is_windows_interop_path` exists because such a session runs, reports a `wsl.localhost` working directory, writes its transcript into the Windows home where no Linux path points, and joins no Linux process group, so cleanup cannot reach it.
+The *message* was the defect. The operator was told the file did not exist, when the truth was "found a Windows binary at `/mnt/c/...` and refused it; install the Linux build."
+One of those is actionable and the other sends you digging.
+Resolution now returns `ExecutableResolution` with one of `found` / `not_found` / `mux_shim` / `windows_interop`, the path it refused, and a sentence; `which_real` is that call with the reason dropped, so there is still exactly one resolver.
+
+**3. None of it was durable.**
+Provider login/status failures and harness launch failures now reach `daemon.log`: a refused resolution at WARNING (de-duplicated per distinct command/reason/path, because detection re-resolves every registered harness on every registry read), an unstartable provider CLI at ERROR with the configured value and the resolution, and a timeout or nonzero exit at WARNING with the exit code and a bounded stderr tail.
+Provider **stdout** is never logged even when it is the only thing a failure printed, because that is where a credential would be.
+
+Verified by execution on Windows and in the Linux container, and the platform-conditional halves are asserted on **every** host rather than skipped off WSL: the `.exe` recovery is proven both against a real file in the host's own executable form and through the lookups the resolver performs (so the Windows leg fails too if the guard is ever restored), and the interop refusal is driven by forcing `host_platform.running_under_wsl`, which is the single host input `is_windows_interop_path` has.
+The pre-existing interop tests in `test_platform_seams.py` still skip off WSL and are kept: they are the real evidence when the suite runs there.
+Not confirmed against a live WSL daemon, which stays with the operator.
 ### What a config.toml carried between hosts actually did (2026-08-28)
 
 An operator ran swe-mux on WSL Ubuntu over a home directory a Windows build had already written.
