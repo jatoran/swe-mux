@@ -86,6 +86,28 @@ ran the frontend build contains the icons, the manifest, the service worker, and
 notification sounds - and no user interface at all.
 Nothing in the build fails; the installed daemon simply serves nothing.
 
+Two scripts answer most of that list, and they answer different questions.
+`packaging/verify_release_artifact.py` reads the wheel alone - the frontend bundle, the licence
+files, the licence expression - and never looks at the tag or the source tree.
+`packaging/verify_release_unit.py` reads the three together, which is the only way to catch a
+disagreement *between* them: a tag that claims a version the tree does not, a version literal in
+a reporting route that was never bumped, a changelog entry still under `## [Unreleased]`, a
+`[project.urls]` placeholder, a command `README.md` tells a user to run that `[project.scripts]`
+no longer declares, or a store whose schema stamp cannot be the version it claims.
+
+```bash
+uv run python packaging/verify_release_artifact.py dist/swe_mux-X.Y.Z-py3-none-any.whl
+uv run python packaging/verify_release_unit.py --tag vX.Y.Z dist/swe_mux-X.Y.Z-py3-none-any.whl
+```
+
+Pass the tag you are **about to** cut.
+That is the point at which a mismatch is still fixable, and it is why the second script refuses
+to run without a tag rather than reporting a pass it did not earn.
+Both run again in `release.yml` before anything is published, so this is a rehearsal rather than
+the enforcement.
+Neither replaces the `TODO(release)` sweep in step 1: those markers are deliberately still in the
+tree, so no gate can require their absence without being red on a healthy checkout.
+
 **Precondition owed before the first publish** (`.docs/development/ROADMAP.md` Phase 11): release
 validation must fail on a missing or stale frontend bundle rather than leaving this as a manual
 check, and `av` must be out of the wheel's install closure, because `faster-whisper` otherwise
