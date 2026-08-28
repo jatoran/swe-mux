@@ -51,4 +51,4 @@ The human's job collapsed to two things: approving the gate command once, and re
 
 That's the general shape I'd argue for in any agent system: don't make the automation smart, make the failure modes impossible, and route everything that needs intelligence back to something that has it.
 
-swe-mux is open source (Apache 2.0): github.com/[org]/swe-mux.
+swe-mux is open source (Apache 2.0): github.com/jatoran/swe-mux.

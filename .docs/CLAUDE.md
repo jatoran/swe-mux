@@ -419,6 +419,12 @@
   blocks the event loop on this path defeats both, so it goes in a thread.
   Measure before moving a phase: the obvious suspect (a 2.73 GB `mux.db`) was innocent and the
   real cost was a per-store integrity probe nobody had timed.
+  A new phase needs no test edit and gets no free pass: the `live_daemon` tier
+  (`tests/test_live_daemon.py`, run in CI on Linux and Windows) derives the expected phase
+  list from `server.py` with an AST walk over the unconditional `timeline.mark(...)` calls and
+  fails when one of them never completes on a clean start. A `mark` you nest inside an `if` is
+  outside that derivation by design; an unnamed stretch of half a second or more fails it,
+  which is the rule this module exists to enforce.
 - Changing HTTP/WebSocket traffic accounting, response compression, static precompression,
   or browser polling cadence: `design/features/remote-access.md`, `design/interfaces.md`,
   `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,
@@ -600,9 +606,13 @@
   is read out of `.github/workflows/ci.yml` rather than out of any prose summary.
   The specific overstatement to watch for is the one the wheel makes easy. CI builds and
   install-smokes the artifact on all three hosts, so "the wheel installs and the CLI runs" is
-  proven everywhere - but **no CI job on any host starts a daemon** (`packaging/install_smoke.py`
-  says so and means it), so nothing may claim a platform is verified working end to end. Windows
-  remains the only platform that proves the product running.
+  proven everywhere - but **no CI job on any host starts a daemon from that artifact**
+  (`packaging/install_smoke.py` says so and means it), so nothing may claim a platform is
+  verified working end to end. Since 2026-08-28 the `live_daemon` tier does start a daemon on
+  `ubuntu-latest` and `windows-latest`, from the **source checkout**, on an ephemeral port under
+  a `tmp_path` data dir; it proves startup, a real shell session, and a clean exit, and it
+  proves nothing about the wheel, the frozen app, an agent, or the operator's own data
+  directory. Windows remains the only platform that proves the product running.
   Note that clean-machine validation - a real machine, from the published artifacts, with no
   checkout - is a different act again, needs hardware this repository does not have, and stays with
   the operator (`development/RELEASE_MANUAL_TASKS.md` § 8).

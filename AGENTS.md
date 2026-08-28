@@ -114,11 +114,19 @@ tasks are short, prefer reusing a few long-lived worktrees over creating one per
 
 Backend: `uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent
 and not live_subagent and not live_telemetry and not live_quota and not live_automations
-and not live_mcp and not live_edge_tts"`, `uv run ruff check
+and not live_mcp and not live_edge_tts and not live_daemon"`, `uv run ruff check
 src/swe_mux tests packaging`, `uv run mypy`.
 Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
 These are exactly what `.worktree-verify` runs.
+
+That `-m` expression is copied into five files and they must agree; drift between them was
+itself one of the CI bugs of 2026-08-27, so `tests/test_live_daemon_guards.py` now asserts the
+agreement in the default tier. `live_daemon` is the one live tier that needs no provider,
+credential, or quota - it starts a real daemon on an ephemeral port and drives a **shell**
+session through it - so CI runs it on `ubuntu-latest` and `windows-latest` as its own step,
+while the landing gate deselects it like every sibling. Run it by hand with
+`uv run pytest tests/test_live_daemon.py -m live_daemon` (~15s).
 
 The gate runs pytest across the host's cores (pytest-xdist, a `dev` dependency): measured
 2026-08-21 on 16 physical cores, 241.9s serial against 39.5-47.3s over seven `-n auto` runs.

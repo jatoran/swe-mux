@@ -27,6 +27,26 @@ It reports its own lifecycle to `MUX_SHIM_URL` at three moments (`started`, `chi
 **Not:** public HTTP shapes, mandatory success of best-effort provider trust preparation, composing the decision shape itself (the shim imports nothing from the package and must stay a relay), or retrying a decision POST.
 Not deciding what its reports mean either - `console_contention.py` holds those rules - and never an argument *value* in a report, since an agent command line can carry a prompt.
 
+## `shim_paths.py`
+
+The one resolver for "what would this host actually launch under that name", and - since 2026-08-28 - the one place that can say why nothing would.
+
+- `is_mux_shim` (content marker, per-host extension gate), `path_without_shim_dirs`, and the two memoizations that keep a PATH scan off the hot enablement path.
+- `resolve_executable(command) -> ExecutableResolution`: the launchable path, or one of three *distinct* refusals - `not_found`, `mux_shim`, `windows_interop` - each with the path it refused and a `describe()` sentence naming what was searched, what was found, and what to do.
+- `which_real` is that same call with the reason dropped, so there is exactly one resolver and no second implementation to disagree with it.
+- `combine_resolutions` ranks two attempts at one logical command (`found` > `windows_interop` > `mux_shim` > `not_found`, ties to the caller's spelling) and carries every name either attempt covered onto `also_tried`, so a message describes the whole search rather than half of it.
+
+The rule the three reasons exist to enforce: **a deliberate refusal and an absence must not be the same answer.**
+Collapsing them into a bare `None` is what cost an operator an hour on 2026-08-28.
+Told "No such file or directory: 'codex.exe'", they went looking for a missing install; the truth was that a working Windows codex had been found at `/mnt/c/.../npm/codex` and correctly refused.
+The refusal is right - a Windows agent CLI driven from a Linux daemon writes its transcript into the Windows home, reports a `wsl.localhost` working directory, and joins no Linux process group.
+One of those answers is actionable and the other sends you digging.
+
+A refusal is logged at WARNING, once per distinct `(command, reason, rejected path)`; a find and a plain absence are DEBUG, because `detect_installations` re-resolves every registered harness on every registry read and an undeduplicated line would be the whole of `daemon.log`.
+`clear_caches()` drops that de-duplication along with the memoizations, so a test asserting on a refusal is not silenced by a neighbour having provoked the same one.
+
+**Not:** deciding what to do about a refusal. `provider_accounts` raises, `agent_launcher` exits with the sentence, and `harness.detect_installation` simply reports the harness absent; the resolver states the fact and nothing more.
+
 ## `agent_skills.py`
 
 Read-only discovery of the CLIs' own skills: per-vendor roots (user, repo, plugin, bundled), `SKILL.md` frontmatter, Claude command files, the Codex `agents/openai.yaml` policy, plugin enable-gating, shadowing, and a 10 s cache.
@@ -66,7 +86,14 @@ The `mcp` client is imported inside the probe, so the daemon never pays for it a
 Saved auth snapshots, explicit switching, and safe quota reads.
 One-shot CLI invocations (login, status) go through `bounded_subprocess.run_bounded`; the Codex quota read is a JSON-RPC `app-server` over a held stdin and stays hand-rolled, because it is a conversation rather than a command.
 
-**Not:** concurrent provider homes.
+Executable resolution is `shim_paths.resolve_executable`, and the suffix-stripping recovery for a stale `codex.exe`/`claude.exe` is **unconditional**.
+It used to be gated on `os.name == "nt"`, which pointed exactly the wrong way: on Windows an `.exe` is at least plausible and PATHEXT usually answers anyway, while on POSIX it is certainly wrong - so the one host that could not possibly launch `codex.exe` was the one host that never tried the repair (2026-08-28).
+A `mux_shim` or `windows_interop` refusal now raises rather than exec'ing the configured value anyway; running the binary the resolver has just refused is how the shim recursed into itself, and on WSL it is how a Windows CLI would be driven from a Linux daemon.
+
+Every failure on that path is logged before it is raised - unstartable at ERROR with the resolution, timeout and nonzero exit at WARNING - because until 2026-08-28 none of them were, and a provider CLI that could not start existed only in the HTTP response body of whoever happened to ask.
+What is logged is the resolution and the failure: the exit code and a `DIAGNOSTIC_TAIL_CHARS`-bounded **stderr** tail, never stdout, because stdout is where a token or a credential blob would be even when it is the only thing a failure printed.
+
+**Not:** concurrent provider homes, or logging any provider payload.
 
 ## `usage.py`
 

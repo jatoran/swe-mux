@@ -13,7 +13,7 @@ Sessions that survive restarts (a supervisor owns the PTYs), honest per-agent st
 
 Fully local. No cloud, no accounts, no telemetry. Apache 2.0.
 
-github.com/[org]/swe-mux
+github.com/jatoran/swe-mux
 [video: hero demo]
 
 ## LinkedIn
@@ -31,5 +31,5 @@ swe-mux is that job, automated: sessions that survive restarts, trustworthy per-
 
 It's local-only by design - no cloud, no accounts, no telemetry - and Apache 2.0.
 
-Repo: github.com/[org]/swe-mux
+Repo: github.com/jatoran/swe-mux
 Write-ups on the engineering (the session-preserving runtime, the merge-safety model) are on swemux.dev.
