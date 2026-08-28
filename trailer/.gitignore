@@ -4,3 +4,7 @@
 output/
 live-captures/
 stills/
+# Full-resolution PNGs from `capture_site_shots.py`. The shipped WebP under
+# `site/img/` is the deliverable; these are the working frames it is made from
+# and they are regenerated on every run.
+site-shots/

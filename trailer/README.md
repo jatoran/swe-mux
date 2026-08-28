@@ -2,6 +2,10 @@
 
 This folder contains the complete source, live captures, original score, intermediate assets, and final renders for the swe-mux trailers.
 
+**Website screenshots are a separate job with opposite rules, and they live in [`SITE_SHOTS.md`](SITE_SHOTS.md).**
+The trailer scripts record the *live* daemon on 8765 and their footage is not cleared for publication.
+`capture_env.py` and `capture_site_shots.py` never touch 8765: they stand up a second, synthetic install with invented Projects and invented data, and everything they record is meant to be published.
+
 The 2:11 feature cut is built from the real swe-mux UI at `http://127.0.0.1:8765`.
 It records the running project list, agent sessions, user content, quotas, telemetry, settings, process data, and mobile layout.
 Treat the raw footage and final feature cut as private unless the visible data has been reviewed for publication.
