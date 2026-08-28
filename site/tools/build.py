@@ -66,6 +66,31 @@ def repo_url(url: str) -> str:
 # moment its URL is decided.
 TODO_VALUES = ("blog URL",)
 
+# Feature requests are GitHub Discussions in the `Ideas` category, and a
+# thumbs-up reaction on one is a vote. `tools/ideas.py` reads them and writes
+# `content/ideas.json`; this file is the only thing that renders it. That split
+# is the point: the scheduled workflow owns the data and never the markup, so
+# changing how the block reads is an ordinary site edit that goes through the
+# ordinary gates, and a compromised or merely wrong workflow run cannot write
+# HTML onto a published page.
+IDEAS = f"{REPO}/discussions/categories/ideas"
+
+# The floor a request clears to be drawn at all. An empty or one-vote "most
+# requested" list on a young project reads worse than no list: it publishes that
+# nobody is asking for anything. `ideas.py` filters to this number as well, so a
+# sub-threshold request never reaches the committed data and cannot churn it,
+# and this is the one definition of it.
+MIN_VOTES = 3
+
+# How many rows the block draws. The point is a ranked signal rather than an
+# inventory, and the category itself is one click away and is the full list.
+MAX_IDEAS = 8
+
+# Replaced in `content/roadmap.html`. Below the vote floor the marker's own line
+# is dropped rather than left blank, so the page is byte-identical to one that
+# never carried the block.
+MOST_REQUESTED = "<!--MOST-REQUESTED-->"
+
 
 # --------------------------------------------------------------------- markdown
 
@@ -245,6 +270,31 @@ PAGE_CSS = """
 .prose b { color: var(--fg); }
 
 .rel { margin-top: clamp(40px, 6vw, 64px); }
+
+/* The anti-roadmap is drawn as a panel rather than as a fourth run of bullets
+   that happens to be last. It is the cheapest instrument this site has for
+   answering a request that will never be built with a reason instead of with
+   silence, and the roadmap page now invites requests, which makes that job much
+   larger than it was. A panel is the whole treatment: no colour of its own, no
+   warning register, and the same hairline the rest of the page uses. */
+.boundary { border: 1px solid var(--line-2); background: var(--panel);
+            padding: 2px clamp(14px, 3vw, 26px) clamp(16px, 2.4vw, 22px); }
+.boundary .relhead { padding-top: clamp(14px, 2.4vw, 20px); }
+
+/* Vote rows. A count is a number, so it takes the mono face and a fixed column;
+   the row itself is a link rather than a description, which is what separates
+   this list from the themed ones above it. `overflow-wrap` because a title is
+   written by whoever opened the discussion and one unbroken token would push the
+   page sideways at 360px. */
+.votes li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 3px 20px;
+            padding: 11px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.votes li:first-child { border-top: 0; }
+.votes .n { font-family: var(--mono); font-size: 12.5px; color: var(--fg-3);
+            letter-spacing: 0.04em; white-space: nowrap; }
+.votes .n b { color: var(--green); font-weight: 600; }
+.votes .t { color: var(--fg-2); font-size: 14.5px; line-height: 1.58;
+            overflow-wrap: anywhere; }
+@media (max-width: 700px) { .votes li { grid-template-columns: minmax(0, 1fr); } }
 .relhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
            padding-bottom: 9px; border-bottom: 1px solid var(--line-2); }
 .relhead h2 { font-size: clamp(16px, 2.2vw, 20px); }
@@ -419,6 +469,8 @@ def shell(slug: str, title: str, description: str, body: str) -> str:
       <div>
         <h4>source</h4>
         <div><a href="{REPO}">github.com/jatoran/swe-mux</a></div>
+        <div><a href="{IDEAS}">request a feature</a> &middot;
+        <a href="{REPO}/issues">report a bug</a></div>
         <div><code>.docs/design/00_OVERVIEW.md</code></div>
       </div>
       <div>
@@ -963,8 +1015,93 @@ def _table(rows: list[list[str]], numeric: set[int] | None = None) -> list[str]:
 # ------------------------------------------------------------------------ roadmap
 
 
+def read_ideas() -> list[dict[str, object]]:
+    """The vote-ranked requests `tools/ideas.py` last wrote. May be empty.
+
+    A missing file is not an error: Discussions may not be enabled on the
+    repository yet, and a fresh clone has no reason to carry a fetched artifact.
+    A malformed one is, because the alternative is a section that quietly stops
+    being drawn, which looks exactly like nobody asking for anything.
+
+    The vote floor is applied here as well as in `ideas.py`. Reading a number out
+    of a file and rendering it is not the same as deciding it: this is the copy
+    that governs the page, so a hand-edited or stale `ideas.json` cannot put a
+    one-vote request in front of a reader.
+    """
+    path = SITE / "content/ideas.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    items = data.get("items", [])
+    if not isinstance(items, list):
+        raise SystemExit("content/ideas.json: 'items' is not a list")
+    for item in items:
+        if not isinstance(item, dict) or not {"title", "url", "votes"} <= set(item):
+            raise SystemExit(f"content/ideas.json: an item is missing a field: {item!r}")
+    ranked = sorted(
+        (i for i in items if int(i["votes"]) >= MIN_VOTES),
+        key=lambda i: (-int(i["votes"]), str(i["title"]).lower()),
+    )
+    return ranked[:MAX_IDEAS]
+
+
+def build_most_requested() -> str:
+    """The vote-ranked block, or an empty string when nothing clears the floor.
+
+    Titles are written by whoever opened the discussion, so they go through
+    `plain()` before `html.escape()`: the site's no-em-dash rule is asserted over
+    the finished page, and a request titled with one would otherwise fail a build
+    nobody in this repository triggered.
+    """
+    items = read_ideas()
+    if not items:
+        return ""
+    rows = "\n".join(
+        '        <li><span class="n"><b>{votes}</b> {noun}</span>'
+        '<span class="t"><a href="{url}">{title}</a></span></li>'.format(
+            votes=int(i["votes"]),
+            noun="vote" if int(i["votes"]) == 1 else "votes",
+            url=html.escape(str(i["url"]), quote=True),
+            title=html.escape(plain(str(i["title"])), quote=False),
+        )
+        for i in items
+    )
+    return f"""<div class="rel" id="most-requested">
+      <div class="relhead"><h2>Most requested</h2><span class="fill"></span></div>
+      <p class="prose">The open <a href="{IDEAS}">Ideas</a> discussions carrying the most
+      thumbs-up, read from the GitHub API once a day. <b>A vote is a signal, not a
+      commitment.</b> Nothing is scheduled by appearing here, and a request can sit at the
+      top of this list and still be one of the things
+      <a href="#not-planned">deliberately not on the roadmap</a>.</p>
+      <ul class="votes">
+{rows}
+      </ul>
+      <p class="note">Ranked by reaction count and nothing else: not curated, not
+      reordered, and nothing left off it. Below {MIN_VOTES} votes a request is not drawn
+      here at all, which is why this list is short rather than empty.</p>
+    </div>"""
+
+
 def build_roadmap() -> str:
-    return (SITE / "content/roadmap.html").read_text(encoding="utf-8").strip()
+    text = (SITE / "content/roadmap.html").read_text(encoding="utf-8").strip()
+    # Exactly one, not at least one: the substitution below is a plain replace,
+    # so a second copy - in that file's own explanatory header comment, most
+    # obviously - would draw the block twice, once of it inside a comment where
+    # nobody would ever see it was wrong.
+    found = text.count(MOST_REQUESTED)
+    if found != 1:
+        raise SystemExit(
+            f"content/roadmap.html carries the {MOST_REQUESTED} marker {found} times; "
+            "it needs exactly one, marking where the vote-ranked block goes"
+        )
+    block = build_most_requested()
+    if not block:
+        # The blank line after it goes too: leaving one behind would put two
+        # blank lines where every other section boundary has one, and the diff
+        # between a page with the block and a page without it would carry a
+        # whitespace change nobody wrote.
+        return re.sub(rf"^[ \t]*{re.escape(MOST_REQUESTED)}\n\n?", "", text, flags=re.M)
+    return text.replace(MOST_REQUESTED, block)
 
 
 # --------------------------------------------------------------------------- main
@@ -985,8 +1122,8 @@ BUILDERS = {
     "roadmap": (
         build_roadmap,
         "Roadmap · swe-mux",
-        "What swe-mux already does, what is being built next, and what it deliberately will "
-        "not do. No dates.",
+        "What swe-mux is building next, what it deliberately will not build, and how to ask "
+        "for something. No dates.",
     ),
     "acknowledgements": (
         build_acknowledgements,

@@ -118,6 +118,8 @@ The landing page and the argument it makes live in [`site/`](site/); the project
 ## Contributing
 
 Contributions are welcome.
+Feature requests are [Discussions in the Ideas category](https://github.com/jatoran/swe-mux/discussions/categories/ideas), where a thumbs-up is a vote and the most-voted open ideas are drawn on the [roadmap](https://swemux.dev/roadmap/); [issues](https://github.com/jatoran/swe-mux/issues) are for bugs.
+Describe the problem rather than the fix, and check [deliberately not on the roadmap](https://swemux.dev/roadmap/#not-planned) first.
 [`CONTRIBUTING.md`](CONTRIBUTING.md) covers what a change has to satisfy - the DCO sign-off, the verification gate you run before opening a pull request, and the extra rules a dependency change carries.
 [`CLAUDE.md`](CLAUDE.md) covers the working rules for this repository, and [`SECURITY.md`](SECURITY.md) is where a vulnerability report goes.
 

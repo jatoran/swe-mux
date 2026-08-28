@@ -335,6 +335,31 @@ footer .todo { color: var(--orange); }
 .prose b { color: var(--fg); }
 
 .rel { margin-top: clamp(40px, 6vw, 64px); }
+
+/* The anti-roadmap is drawn as a panel rather than as a fourth run of bullets
+   that happens to be last. It is the cheapest instrument this site has for
+   answering a request that will never be built with a reason instead of with
+   silence, and the roadmap page now invites requests, which makes that job much
+   larger than it was. A panel is the whole treatment: no colour of its own, no
+   warning register, and the same hairline the rest of the page uses. */
+.boundary { border: 1px solid var(--line-2); background: var(--panel);
+            padding: 2px clamp(14px, 3vw, 26px) clamp(16px, 2.4vw, 22px); }
+.boundary .relhead { padding-top: clamp(14px, 2.4vw, 20px); }
+
+/* Vote rows. A count is a number, so it takes the mono face and a fixed column;
+   the row itself is a link rather than a description, which is what separates
+   this list from the themed ones above it. `overflow-wrap` because a title is
+   written by whoever opened the discussion and one unbroken token would push the
+   page sideways at 360px. */
+.votes li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 3px 20px;
+            padding: 11px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.votes li:first-child { border-top: 0; }
+.votes .n { font-family: var(--mono); font-size: 12.5px; color: var(--fg-3);
+            letter-spacing: 0.04em; white-space: nowrap; }
+.votes .n b { color: var(--green); font-weight: 600; }
+.votes .t { color: var(--fg-2); font-size: 14.5px; line-height: 1.58;
+            overflow-wrap: anywhere; }
+@media (max-width: 700px) { .votes li { grid-template-columns: minmax(0, 1fr); } }
 .relhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
            padding-bottom: 9px; border-bottom: 1px solid var(--line-2); }
 .relhead h2 { font-size: clamp(16px, 2.2vw, 20px); }
@@ -763,6 +788,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div>
         <h4>source</h4>
         <div><a href="https://github.com/jatoran/swe-mux">github.com/jatoran/swe-mux</a></div>
+        <div><a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">request a feature</a> &middot;
+        <a href="https://github.com/jatoran/swe-mux/issues">report a bug</a></div>
         <div><code>.docs/design/00_OVERVIEW.md</code></div>
       </div>
       <div>

@@ -8,15 +8,30 @@
      public commitment, and a reader looking for "can it do X yet" would have to read
      an engineering plan to find out.
 
-     Three rules this page holds, and the reason for each:
+     Four rules this page holds, and the reason for each:
 
      1. **No dates, ever.** A public roadmap that names a month is a promise made by
         someone who cannot keep it, and it ages into a liability the week it slips.
      2. **No internal phase numbers.** They are ordering for the people building it.
         Published, they read as a release train and invite "when is the next one".
-     3. **Themes, and landed versus planned.** That is the honest resolution: it says
-        what you can rely on today and what direction the work is going, and it is
-        checkable against the changelog rather than against a schedule.
+     3. **Forward-looking only.** A roadmap that lists shipped work is a feature list
+        with a misleading name, and the landing page and `README.md` already carry
+        that. The `changelog` is the record of what shipped and the only page here
+        that is a commitment; everything on this one is direction.
+     4. **The boundaries are the argument.** `Deliberately not on the roadmap` is not
+        a list of gaps, and it is the cheapest instrument this page has: it turns a
+        request that will never be built into a reason rather than into silence. It
+        is linked from the lede and from the section that invites requests, because
+        inviting them is exactly what makes it load-bearing.
+
+     The vote-ranked block is generated. The MOST-REQUESTED marker comment below (written
+     without its delimiters here, because `build.py` requires exactly one of it in this
+     file and a second one in this paragraph would be it) is replaced by
+     `tools/build.py` from `content/ideas.json`, which `tools/ideas.py` writes from
+     the GitHub Discussions API. Nothing about how that block reads lives in the
+     workflow: it owns the data, this repository owns the markup, and below the vote
+     floor the marker's own line is dropped so the page is byte-identical to one that
+     never had the block. Do not hand-write rows there.
 
      Keep it to a few screens. When it grows past that, the answer is fewer themes,
      not a longer page.
@@ -27,30 +42,13 @@
     <h1>Roadmap</h1>
     <div class="lede">
       <p>This is a projection of the internal plan, not a copy of it, and it carries no
-      dates. <b>What is already here is the part you can rely on</b>; everything below
-      that is direction, and direction changes. The
-      <a href="../changelog/">changelog</a> is the record of what actually shipped, and
-      it is the only one of the two that is a commitment.</p>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Already here</h2><span class="fill"></span></div>
-      <p class="prose">Everything in this section is in the current release and described
-      in the <a href="../docs/">documentation</a>.</p>
-      <ul class="flat">
-        <li><b>Session ownership</b><span>A daemon that owns every pseudoterminal and a separate supervisor process that holds them, so live sessions survive a browser reload, a daemon restart, and a rebuild of the desktop application. Sessions the supervisor could not keep alive come back as readable, resumable rows rather than vanishing.</span></li>
-        <li><b>The workbench</b><span>Projects, a recursive pane and tab tree, a Markdown editor, a file browser, git review, dev-server previews without exposed ports, a Run menu over your own task files, clipboard history, and worktree creation as one operation.</span></li>
-        <li><b>Harness normalization</b><span>One vocabulary for input, status, transcripts, history, accounts, and lifecycle events across the agent CLIs the registry knows, and a real pseudoterminal for everything it does not. Adding a harness is a descriptor and an adapter.</span></li>
-        <li><b>Status you can audit</b><span>Working, ready, awaiting approval, blocked, derived from hooks first and the terminal last, with every transition written to a durable ledger carrying the layer readings that produced it.</span></li>
-        <li><b>A deterministic record</b><span>File writes hashed on the exact bytes written, commands with their exit class, parsed test outcomes, git operations, and commit provenance split into committer and contributor. No model, no tokens, no self-report.</span></li>
-        <li><b>Model-free detectors</b><span>Loops with a no-progress gate, work declared done that never ran a test, documentation debt, provenance edges, and a tree-sitter code graph behind blast radius, test gaps, dead code, and import cycles.</span></li>
-        <li><b>Attention routing</b><span>Findings merge into incidents and route to one of four channels by what they cost you to resolve, under a hard daily interrupt budget, with held-back items still counted and still showing why they were held.</span></li>
-        <li><b>Queues and landing</b><span>A durable prompt queue with strict head-of-line ordering, gated auto-delivery behind a stability window, bounded agent-to-agent messages that end at a human, scheduled runs, and a land queue that serializes branch landing behind a verification gate whose exact bytes you approved.</span></li>
-        <li><b>The agent return path</b><span>A per-session MCP endpoint your agents read from: sibling status, transcripts, archived search, Project notes, prior resolutions, dead ends, provenance. Writes are bounded and every one of them waits for a person by default.</span></li>
-        <li><b>Voice and the assistant</b><span>Local voice activity detection, local transcription, a configurable wake word, read aloud, and a conversational operator whose model proposes names while deterministic code resolves and executes them.</span></li>
-        <li><b>Mobile and remote</b><span>Full parity on the phone over your own tailnet, with no relay and no account, plus web push that reaches a locked screen only when a session needs a person.</span></li>
-        <li><b>Licensing and governance</b><span>Apache-2.0, contributions under a DCO sign-off rather than a CLA, generated third-party notices, and a two-half license gate that reads the resolved closure and the built bundle separately.</span></li>
-      </ul>
+      dates. <b>Everything on this page is direction, and direction changes.</b> What has
+      already shipped is deliberately not here: the <a href="../changelog/">changelog</a>
+      is the record of that, and it is the only one of the two that is a commitment.</p>
+      <p>Some of what gets asked for will never be built, and the reasons are specific
+      rather than a shortage of time. <a href="#not-planned">Deliberately not on the
+      roadmap</a> is that list, and it is worth reading before
+      <a href="#asking">asking for something</a>.</p>
     </div>
 
     <div class="rel">
@@ -85,11 +83,14 @@
       </ul>
     </div>
 
-    <div class="rel">
+    <div class="rel boundary" id="not-planned">
       <div class="relhead"><h2>Deliberately not on the roadmap</h2><span class="fill"></span></div>
       <p class="prose">These are not oversights and they are not "later". Each would need a
       new decision about authorization, confirmation, audit, and failure behaviour before
-      it could be scheduled at all, and none of those decisions has been made.</p>
+      it could be scheduled at all, and none of those decisions has been made. <b>A request
+      for one of them is closed with a link back to this section</b>, which is a boundary
+      rather than a judgement about whether the idea is a good one. No number of votes
+      moves anything out of this list; only one of those decisions would.</p>
       <ul class="bullets">
         <li><span><b>Autonomous actuation.</b> Model-authored action selection, unrestricted terminal writes, auto-approval, or arbitrary command execution. Observers structurally cannot type, approve, or spawn, and that is the property the rest of the design rests on.</span></li>
         <li><span><b>Killing processes it merely suspects.</b> swe-mux finds hung and orphaned processes and shows them to you. It does not terminate them on its own judgement.</span></li>
@@ -98,6 +99,26 @@
         <li><span><b>Remote execution hosts.</b> Treating machines over SSH as execution targets, with a remote filesystem provider and a deployed relay. A host already on your tailnet can reach the daemon directly, which is the cheaper answer to most of what this would buy.</span></li>
       </ul>
     </div>
+
+    <div class="rel" id="asking">
+      <div class="relhead"><h2>Asking for something</h2><span class="fill"></span></div>
+      <p class="prose">Feature requests are
+      <a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">GitHub
+      Discussions in the Ideas category</a>, and a thumbs-up on one is a vote. The issue
+      tracker stays for bugs. A request that is accepted becomes an issue at that point and
+      carries its discussion and its votes across with it.</p>
+      <p class="prose"><b>Describe the problem, not the fix.</b> What you were trying to do,
+      what you did instead, and what made it hard. Two proposed implementations cannot be
+      weighed against each other, and a request that arrives as one hides the thing that
+      would actually be built for; the form asks for it in that shape. Read
+      <a href="#not-planned">deliberately not on the roadmap</a> first, because a request
+      that lands inside one of those boundaries gets a reason rather than a queue place.</p>
+      <p class="prose"><b>A vote is a signal, not a commitment.</b> Votes say what to look at
+      first and nothing more. Nothing is scheduled by being voted for, and no count obliges
+      anybody to build anything.</p>
+    </div>
+
+    <!--MOST-REQUESTED-->
 
     <p class="note">The internal plan this projects from lives in the repository under
     <code>.docs/development/</code>, along with the audits and incident runbooks it cites.
