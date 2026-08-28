@@ -33,6 +33,14 @@ from .harness import AGENT_BACKENDS
 #   warn        - degraded, worth attention, not blocking
 #   fail        - broken; for a critical check this compromises safety
 #   unavailable - an optional capability is simply not configured/installed
+#   unchecked   - the check did not run, so nothing is known either way
+#
+# `unchecked` is never produced here: this builder only runs when the daemon
+# answered, and then every check has an answer. It belongs to the vocabulary
+# rather than to the local report alone because the two reports share a renderer
+# and a summary shape, and because the distinction it draws is the one a
+# consumer must not collapse - "not measured" is neither healthy nor absent
+# (`doctor_local`, which is where such rows come from).
 Status = str
 # Severity: how much a non-ok result matters.
 #   critical - compromises terminal ownership, cleanup, or delivery safety

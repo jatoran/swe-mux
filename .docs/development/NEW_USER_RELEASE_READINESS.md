@@ -54,6 +54,12 @@ P1 and P2:
 - Done: CLI-version-drift signal (best-effort `probe_cli_version`, `version_untested` against a maintainer-armed `TESTED_CLI_VERSIONS`, shown in Settings -> Harnesses).
 - Done: confirmed `ProcessPanel.tsx`'s `127.0.0.1:3000` was a seeded example; changed it to a placeholder so it no longer reads as an assumed dev-server port.
 - Done (Phase 7): the diagnostics export, prerequisites, connection-state, and firewall pieces are now consumed by the consolidated `mux doctor` report (`GET /api/diagnostics/doctor`, assembled by `doctor.build_doctor_report`), which adds per-check severity/remedy, a machine-readable capability block, and the observation-freshness check. This document owns the fresh-machine detail; the aggregation lives in `ROADMAP.md` Phase 7.
+- Done (Phase 11, W10): `mux doctor` answers when the daemon does not.
+  The consolidated report above presupposed a running daemon, which made the one diagnostic the project ships useless for the most likely fresh-install failure - a new user whose install is broken ran it and got a connection error.
+  An unreachable daemon now produces the local report (`doctor_local.build_local_doctor_report`) over the checks that stop a daemon starting: the Python floor, the package's own import graph, the config file, the frontend bundle in the installed package (the self-reported half of the release-artifact gate a wheel from a clean clone can otherwise fail silently), the data directory's existence and writability, whether `mux.db` opens, whether the configured port is already held, whether this host's PTY backend imports, the frozen app's supervisor bundle, the prerequisite tools, harness detection, and the presence of each optional extra with its install command.
+  The daemon report is untouched and byte-compatible.
+  Three things are load-bearing rather than incidental: `unchecked` is its own status so a skipped check reads as neither healthy nor absent, prerequisites and harness rows come from the daemon report's own builders rather than a second copy, and the exit codes compose the existing two (`1` on a failing check, `3` otherwise) so a degraded report never exits `0`.
+  Contract: `design/interfaces.md`, "`mux doctor` without a running daemon".
 
 Still open (deliberately not code): ship the frozen `dist/` app for external testers; code-signing and SmartScreen decision; foreign-PATH shim/detection testing across npm, bun, and native installers; CLI-on-PATH packaging verification; arming `TESTED_CLI_VERSIONS` with verified bounds.
 

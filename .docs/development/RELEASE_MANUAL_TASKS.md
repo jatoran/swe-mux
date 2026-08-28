@@ -135,7 +135,10 @@ Recorded so they are decisions rather than oversights.
   The running frozen app still carries the old inline `av` stub, including a defect W5 found and fixed: refusing every attribute meant `repr()` of the stub module raised, so any log line or traceback mentioning `av` raised from inside the stub and buried the real diagnostic.
   Run `uv run python packaging/redeploy_desktop.py` from the primary checkout once the release branch settles.
 
-- **`mux doctor` requires a running daemon.** It issues `GET /api/diagnostics/doctor`, so it cannot diagnose the single most likely new-user failure, which is the daemon not starting. Worth a daemon-less local mode before launch, but it is a feature change rather than release prep.
+- ~~**`mux doctor` requires a running daemon.**~~ **Closed 2026-08-27 (W10).** It now falls back to a local report (`src/swe_mux/doctor_local.py`) when the daemon is unreachable, covering the install-integrity faults that stop a daemon starting: the Python floor, the package's import graph, the config file, the frontend bundle in the installed package, the data directory, `mux.db`, the configured port, the host PTY backend, the frozen supervisor bundle, prerequisites, harness detection, and each optional extra.
+  A daemon that answers is byte-for-byte unaffected.
+  The status vocabulary gained `unchecked` so a check that did not run reads as neither healthy nor unavailable, and exit codes compose the existing two: `1` for a failing local check, `3` (daemon unreachable) for a clean degraded report, never `0`.
+  Contract: `design/interfaces.md`, "`mux doctor` without a running daemon".
 - **Phase 16 first-run blockers are still open** (mobile tour stranding at step 10 of 14, the unskippable provider login at step 5, and the stacked harness dialog over the tour blur). These break a brand-new user's guided first run and should land before any announcement, though not necessarily before the repository is public.
 - **`site/index.html` is 883 lines of hand-authored markup** with its own check tooling. It is in good shape; it needs the placeholder URLs and the screenshot recapture, not a rewrite.
 
