@@ -215,6 +215,33 @@ event-bus case, and both return sooner than a sleep on an idle machine.
 Sleeps guarding a *negative* assertion ("no pulse fired", "the candidate was not committed")
 are a real quiet window and stay: load only makes those safer.
 
+**A thread or a child process that outlives the test's event loop is the second thing load
+exposes, and it is worse than the sleep because the test it reddens is not the test that
+caused it.** Both halves surface from a *finalizer*, whenever the collector happens to run, so
+`filterwarnings = ["error"]` fails whatever was running at that moment. Two shapes, one rule:
+
+- `asyncio.run_coroutine_threadsafe(queue.put(x), loop)` builds the coroutine on the *calling*
+  thread, so a loop that closes first - or that accepts the callback and then stops before
+  running it - leaves it un-awaited, and Python reports `coroutine 'Queue.put' was never
+  awaited` as an unraisable warning much later. Build the coroutine on the loop instead:
+  `pty_host.submit_queue_put` is the pattern and its docstring is the argument.
+- A subprocess whose pipes have not all disconnected when its loop closes leaves
+  `BaseSubprocessTransport` unclosed, and `__del__` then calls into the dead loop and raises
+  `RuntimeError: Event loop is closed`. Waiting the child out inside the test that started it
+  (`communicate()`, `process.wait()`, `reap_process_tree`, `run_bounded`) is what closes the
+  transport; nothing else will.
+
+All three failures of the first public shared-runner CI run (2026-08-27) were one of these two
+shapes: two Windows real-console tests hit the first, and a macOS test that spawns nothing at
+all reported the second on somebody else's behalf.
+
+Attributing one to its creator needs a probe, because the traceback names only the reporter.
+Two obvious probes do not work and both were measured: forcing `gc.collect()` in teardown
+finds nothing, because the loop still holds the objects then, and scanning at session finish
+finds nothing, because they have been collected by then. What works is stamping the object at
+construction with the current nodeid and reading it back from a patched finalizer. Self-check
+any such probe against a test that leaks on purpose before believing a clean run.
+
 The pytest run above includes the real-ConPTY integration tests (`-m conpty`,
 Windows-only, `tests/test_conpty_integration.py`) and the harness-adapter coverage
 matrix (`tests/test_harness_adapter_matrix.py`, which fails when a harness is added to

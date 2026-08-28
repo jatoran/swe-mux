@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -216,13 +217,66 @@ def test_a_path_outside_the_served_directory_is_refused(tmp_path: Path, tail: st
         read_static_preview_file(served, tail, "index.html", 1024)
 
 
-def test_an_absolute_tail_is_refused(tmp_path: Path) -> None:
+def test_an_absolute_tail_never_reaches_the_file_it_names(tmp_path: Path) -> None:
+    """`str(secret)` is a different input on each host, and both must miss.
+
+    On Windows a drive-lettered tail is still absolute after the route-separator
+    strip, so `project_path` refuses it outright. On POSIX the leading `/` *is*
+    the route separator - the rule the test below states - so the same string
+    arrives as an ordinary root-relative tail, resolves inside the served
+    directory, and misses. Two exceptions, one guarantee; the guarantee is what
+    is asserted here, because asserting the exception is asserting the host.
+    """
     served = tmp_path / "site"
     served.mkdir()
     secret = tmp_path / "secret.txt"
     secret.write_text("no", encoding="utf-8")
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, FileNotFoundError)):
         read_static_preview_file(served, str(secret), "index.html", 1024)
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="a drive-lettered tail stays absolute past the strip, so it never re-roots",
+)
+def test_an_absolute_posix_tail_is_re_rooted_rather_than_followed(tmp_path: Path) -> None:
+    """The POSIX half stated positively, because a miss on its own proves little.
+
+    A tail that *names* an outside file is served from inside the served
+    directory or not at all. Planting that same relative path under the root and
+    getting that copy back is the evidence that the absolute path was re-rooted
+    rather than followed - which is why the miss above is a miss and not a leak.
+    """
+    served = tmp_path / "site"
+    served.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("outside", encoding="utf-8")
+    inside = served / str(outside).lstrip("/")
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_text("inside", encoding="utf-8")
+
+    data, resolved, _size = read_static_preview_file(served, str(outside), "index.html", 1024)
+    assert data == b"inside"
+    assert resolved == str(outside).lstrip("/")
+    assert (served / resolved).resolve() == inside.resolve()
+
+
+def test_a_symlink_inside_the_directory_cannot_reach_outside_it(tmp_path: Path) -> None:
+    """A crafted tail is refused before resolution; a symlink only after it.
+
+    The `..` and absolute checks run against the string, so nothing there sees
+    this: the tail is an ordinary relative path and only the post-resolve
+    re-check against the root catches where it landed.
+    """
+    served = tmp_path / "site"
+    served.mkdir()
+    (tmp_path / "secret.txt").write_text("no", encoding="utf-8")
+    try:
+        (served / "escape").symlink_to(tmp_path, target_is_directory=True)
+    except OSError as exc:  # Windows needs a privilege this host may not hold.
+        pytest.skip(f"symlinks unavailable here: {exc}")
+    with pytest.raises(ValueError):
+        read_static_preview_file(served, "escape/secret.txt", "index.html", 1024)
 
 
 def test_a_leading_slash_is_the_route_separator_and_not_an_escape(tmp_path: Path) -> None:
