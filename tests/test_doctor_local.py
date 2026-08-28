@@ -8,10 +8,11 @@ one would be testing the wrong thing. Every check is exercised against an inject
 
 from __future__ import annotations
 
+import os
 import socket
 import sqlite3
 import tomllib
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,6 +21,7 @@ import pytest
 from swe_mux import doctor, doctor_local, install_location
 from swe_mux.config import Config
 from swe_mux.harness import AGENT_BACKENDS
+from swe_mux.host_platform import IS_WINDOWS
 
 _AGENT = next(iter(AGENT_BACKENDS))
 
@@ -508,35 +510,65 @@ def test_the_config_loader_returns_its_failure_instead_of_raising(
 # --------------------------------------------------------------------------- #
 
 
+# A uv tool install as uv lays one out on *this* host. Shaped for the running
+# platform, never always for Windows: `install_location` joins and splits paths
+# with `pathlib` and `os.path`, which render for the host, so a Windows string
+# handed in on a Linux runner is one relative filename and both rows below then
+# describe nothing. Its module docstring has the full account.
+if IS_WINDOWS:
+    _INSTALL_HOME = Path(r"C:\Users\ada")
+    _INSTALL_ROOT = _INSTALL_HOME / "AppData" / "Roaming" / "uv" / "tools" / "swe-mux"
+    _INSTALL_SCRIPTS = _INSTALL_ROOT / "Scripts"
+    _INSTALL_PACKAGE = _INSTALL_ROOT / "Lib" / "site-packages" / "swe_mux"
+    _INSTALL_BASE_PREFIX = r"C:\Python312"
+    _INSTALL_NOISE = r"C:\Windows"
+    _INSTALL_EXE = ".exe"
+    _INSTALL_BUNDLE = _INSTALL_HOME / "swe-mux" / "dist" / "swe-mux"
+else:
+    _INSTALL_HOME = Path("/home/ada")
+    _INSTALL_ROOT = _INSTALL_HOME / ".local" / "share" / "uv" / "tools" / "swe-mux"
+    _INSTALL_SCRIPTS = _INSTALL_ROOT / "bin"
+    _INSTALL_PACKAGE = _INSTALL_ROOT / "lib" / "python3.12" / "site-packages" / "swe_mux"
+    _INSTALL_BASE_PREFIX = "/usr"
+    _INSTALL_NOISE = "/usr/bin"
+    _INSTALL_EXE = ""
+    _INSTALL_BUNDLE = _INSTALL_HOME / "swe-mux" / "dist" / "swe-mux"
+
+
+def _install_key(entry: str) -> str:
+    text = os.path.normpath(entry)
+    return text.casefold() if IS_WINDOWS else text
+
+
 def _fake_install(
     monkeypatch: pytest.MonkeyPatch, *, path: str, present: set[str] | None = None
 ) -> None:
-    """Point the two install rows at a described Windows install.
+    """Point the two install rows at a described uv tool install.
 
     A real `InstallLocation`, built by the real detector from injected inputs -
     never a hand-made stand-in. `[tool.mypy]` does not typecheck `tests/`, so a
     fake whose shape drifts from the class it fakes is checked by nothing, and
     these rows read six different attributes.
     """
-    root = PureWindowsPath(r"C:\Users\ada\AppData\Roaming\uv\tools\swe-mux")
-    scripts = root / "Scripts"
     files = present
     if files is None:
-        files = {str(scripts / f"{name}.exe") for name in ("mux", "muxd", "swe-mux")}
-    files = files | {str(root / "uv-receipt.toml")}
-    normalized = {str(PureWindowsPath(entry)).casefold() for entry in files}
+        files = {
+            str(_INSTALL_SCRIPTS / f"{name}{_INSTALL_EXE}")
+            for name in ("mux", "muxd", "swe-mux")
+        }
+    files = files | {str(_INSTALL_ROOT / "uv-receipt.toml")}
+    normalized = {_install_key(entry) for entry in files}
     location = install_location.detect_install_location(
         frozen=False,
-        executable=str(scripts / "python.exe"),
-        package_dir=Path(str(root / "Lib" / "site-packages" / "swe_mux")),
-        prefix=str(root),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(scripts)),
+        executable=str(_INSTALL_SCRIPTS / f"python{_INSTALL_EXE}"),
+        package_dir=_INSTALL_PACKAGE,
+        prefix=str(_INSTALL_ROOT),
+        base_prefix=_INSTALL_BASE_PREFIX,
+        scripts_dir=_INSTALL_SCRIPTS,
         path=path,
-        home=Path(r"C:\Users\ada"),
+        home=_INSTALL_HOME,
         environ={},
-        windows=True,
-        exists=lambda candidate: str(PureWindowsPath(str(candidate))).casefold() in normalized,
+        exists=lambda candidate: _install_key(str(candidate)) in normalized,
     )
     monkeypatch.setattr(install_location, "detect_install_location", lambda: location)
 
@@ -544,14 +576,16 @@ def _fake_install(
 def test_the_install_location_row_names_the_method_the_paths_and_the_extras(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _fake_install(monkeypatch, path=r"C:\Windows")
+    _fake_install(monkeypatch, path=_INSTALL_NOISE)
     monkeypatch.setattr(install_location, "installed_version", lambda: "1.2.3")
     check = doctor_local._install_location_check()
     assert check["status"] == "ok", "describing an install is never a fault"
     detail = check["detail"]
     assert "1.2.3" in detail
     assert "uv tool install" in detail
-    assert r"AppData\Roaming\uv\tools\swe-mux\Scripts" in detail
+    # The scripts directory as this host spells it: the row prints `bin_dir`
+    # verbatim, and the layout uv writes differs by platform.
+    assert str(_INSTALL_SCRIPTS) in detail
     assert "Optional extras resolved:" in detail
 
 
@@ -564,7 +598,7 @@ def test_the_extras_named_by_the_location_row_come_from_the_one_probe(
     command and `_install_location_check` names the resolved set in a sentence;
     both read `_extra_probe`, so a second list beside `_EXTRAS` cannot drift.
     """
-    _fake_install(monkeypatch, path=r"C:\Windows")
+    _fake_install(monkeypatch, path=_INSTALL_NOISE)
     monkeypatch.setattr(doctor_local, "_module_resolves", lambda _: True)
     assert "desktop, voice-local" in doctor_local._install_location_check()["detail"]
     monkeypatch.setattr(doctor_local, "_module_resolves", lambda _: False)
@@ -577,7 +611,7 @@ def test_commands_that_are_not_on_path_warn_and_are_never_a_failure(
     """The failure this work package exists for, and the one that must not be
     overstated: nothing is broken, so calling it broken would push someone into
     reinstalling over a PATH entry."""
-    _fake_install(monkeypatch, path=r"C:\Windows")
+    _fake_install(monkeypatch, path=_INSTALL_NOISE)
     check = doctor_local._install_path_check()
     assert check["status"] == "warn"
     assert "not on PATH" in check["detail"]
@@ -588,9 +622,7 @@ def test_commands_that_are_not_on_path_warn_and_are_never_a_failure(
 
 
 def test_commands_that_resolve_pass_without_advice(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_install(
-        monkeypatch, path=r"C:\Users\ada\AppData\Roaming\uv\tools\swe-mux\Scripts"
-    )
+    _fake_install(monkeypatch, path=str(_INSTALL_SCRIPTS))
     check = doctor_local._install_path_check()
     assert check["status"] == "ok"
     assert check["remedy"] is None
@@ -601,7 +633,7 @@ def test_an_install_that_shipped_no_launchers_is_a_real_failure(
 ) -> None:
     """Absent and unreachable are different faults with different fixes, and a
     PATH edit cannot fix a launcher that was never written."""
-    _fake_install(monkeypatch, path=r"C:\Windows", present=set())
+    _fake_install(monkeypatch, path=_INSTALL_NOISE, present=set())
     check = doctor_local._install_path_check()
     assert check["status"] == "fail"
     assert check["severity"] == "critical"
@@ -612,16 +644,15 @@ def test_an_install_that_shipped_no_launchers_is_a_real_failure(
 def test_a_frozen_app_is_not_told_its_scripts_are_missing_from_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bundle = PureWindowsPath(r"C:\Users\ada\swe-mux\dist\swe-mux")
+    launcher = _INSTALL_BUNDLE / f"swe-mux{_INSTALL_EXE}"
     location = install_location.detect_install_location(
         frozen=True,
-        executable=str(bundle / "swe-mux.exe"),
-        package_dir=Path(str(bundle)),
+        executable=str(launcher),
+        package_dir=_INSTALL_BUNDLE,
         path="",
-        home=Path(r"C:\Users\ada"),
+        home=_INSTALL_HOME,
         environ={},
-        windows=True,
-        exists=lambda candidate: candidate.name == "swe-mux.exe",
+        exists=lambda candidate: candidate.name == launcher.name,
     )
     monkeypatch.setattr(install_location, "detect_install_location", lambda: location)
     check = doctor_local._install_path_check()
@@ -634,7 +665,7 @@ def test_the_json_report_carries_the_install_facts_the_prose_states(
 ) -> None:
     """A script must not have to parse an English sentence to learn where
     swe-mux is or whether it is reachable."""
-    _fake_install(monkeypatch, path=r"C:\Windows")
+    _fake_install(monkeypatch, path=_INSTALL_NOISE)
     report = doctor_local.build_local_doctor_report(
         config=_config(tmp_path),
         config_error=None,
