@@ -170,6 +170,42 @@ async def _drain(
         return b"", False
 
 
+def release_subprocess_transport(process: asyncio.subprocess.Process) -> None:
+    """Close the transport behind `process` while its event loop is still alive.
+
+    asyncio closes a subprocess transport by itself, but only once *every* pipe has
+    disconnected and the exit has been delivered, and only on a loop still running
+    to deliver them. Every path here that gives up on a pipe breaks that: a
+    descendant that escaped the reap and still holds the write end, a reader
+    cancelled at shutdown, a drain abandoned after the grace. The transport is then
+    left open, and `BaseSubprocessTransport.__del__` calls `close()` on it whenever
+    the collector eventually gets there - by which time the loop is usually gone, so
+    that call raises `RuntimeError: Event loop is closed` out of a *finalizer*. It
+    arrives as an unraisable exception attributed to whatever happens to be running
+    at that moment, which under the suite's `filterwarnings = ["error"]` fails an
+    unrelated test; that is one of the three failures of the first public CI run
+    (2026-08-27), and the reason it is load-sensitive is that on POSIX the exit
+    notification crosses a per-child watcher thread that a loaded host may not
+    schedule before the loop closes.
+
+    On every path that ran to completion this is a no-op, because the transport is
+    already closed. On the paths that did not, it is the release this runner owes:
+    our ends of the pipes are dropped now rather than held until a collection.
+
+    `_transport` is private because `asyncio.subprocess.Process` publishes no
+    accessor for it and no public way to say "I am finished with this child", so it
+    is read defensively; a tidy-up must never become the reason a command reports
+    failure, so a close that raises is logged and swallowed.
+    """
+    transport = getattr(process, "_transport", None)
+    if transport is None:
+        return
+    try:
+        transport.close()
+    except Exception:  # noqa: BLE001 - releasing a handle must not fail a finished run
+        log.debug("bounded_command_transport_release_failed", exc_info=True)
+
+
 async def _cancel(*tasks: asyncio.Task[tuple[bytes, bool]] | None) -> None:
     live = [task for task in tasks if task is not None]
     for task in live:
@@ -222,62 +258,69 @@ async def run_bounded(
         creationflags=background_creation_flags(),
     )
     try:
-        assert process.stdout is not None
-        stdout_task = asyncio.create_task(
-            bounded_read(process.stdout, output_limit, label=label, on_chunk=on_chunk)
-        )
-        if process.stderr is not None:
-            stderr_task = asyncio.create_task(
-                bounded_read(
-                    process.stderr,
-                    output_limit if stderr_limit is None else stderr_limit,
-                    label=f"{label} stderr",
-                )
-            )
         try:
-            exit_code: int | None = await asyncio.wait_for(process.wait(), timeout_seconds)
-            timed_out = False
-        except TimeoutError:
-            await reap_process_tree(process)
-            exit_code, timed_out = None, True
+            assert process.stdout is not None
+            stdout_task = asyncio.create_task(
+                bounded_read(process.stdout, output_limit, label=label, on_chunk=on_chunk)
+            )
+            if process.stderr is not None:
+                stderr_task = asyncio.create_task(
+                    bounded_read(
+                        process.stderr,
+                        output_limit if stderr_limit is None else stderr_limit,
+                        label=f"{label} stderr",
+                    )
+                )
+            try:
+                exit_code: int | None = await asyncio.wait_for(process.wait(), timeout_seconds)
+                timed_out = False
+            except TimeoutError:
+                await reap_process_tree(process)
+                exit_code, timed_out = None, True
+                _rate_limited(
+                    "timeout",
+                    label,
+                    "bounded_command_timed_out label=%s executable=%s timeout_s=%g "
+                    "operation_id=%s",
+                    label,
+                    argv[0] if argv else "",
+                    timeout_seconds,
+                    operation_id,
+                )
+            out, out_capped = await _drain(stdout_task, label=label)
+            err, err_capped = await _drain(stderr_task, label=label)
+        except BaseException:
+            # `BaseException` rather than `Exception` for `CancelledError`, which is the
+            # whole point: every migrated caller runs inside a supervised background
+            # loop, and a loop cancelled at shutdown used to leave its child alive
+            # holding the daemon's pipes.
+            if process.returncode is None:
+                await reap_process_tree(process)
+            await _cancel(stdout_task, stderr_task)
+            raise
+        if out_capped or err_capped:
             _rate_limited(
-                "timeout",
+                "capped",
                 label,
-                "bounded_command_timed_out label=%s executable=%s timeout_s=%g operation_id=%s",
+                "bounded_command_output_capped label=%s executable=%s limit_bytes=%d "
+                "stream=%s operation_id=%s",
                 label,
                 argv[0] if argv else "",
-                timeout_seconds,
+                output_limit,
+                "stdout" if out_capped else "stderr",
                 operation_id,
             )
-        out, out_capped = await _drain(stdout_task, label=label)
-        err, err_capped = await _drain(stderr_task, label=label)
-    except BaseException:
-        # `BaseException` rather than `Exception` for `CancelledError`, which is the
-        # whole point: every migrated caller runs inside a supervised background
-        # loop, and a loop cancelled at shutdown used to leave its child alive
-        # holding the daemon's pipes.
-        if process.returncode is None:
-            await reap_process_tree(process)
-        await _cancel(stdout_task, stderr_task)
-        raise
-    if out_capped or err_capped:
-        _rate_limited(
-            "capped",
-            label,
-            "bounded_command_output_capped label=%s executable=%s limit_bytes=%d "
-            "stream=%s operation_id=%s",
-            label,
-            argv[0] if argv else "",
-            output_limit,
-            "stdout" if out_capped else "stderr",
-            operation_id,
+        return ProcessOutcome(
+            exit_code=exit_code,
+            stdout=out,
+            stderr=err,
+            stdout_truncated=out_capped,
+            stderr_truncated=err_capped,
+            duration_ms=elapsed(),
+            timed_out=timed_out,
         )
-    return ProcessOutcome(
-        exit_code=exit_code,
-        stdout=out,
-        stderr=err,
-        stdout_truncated=out_capped,
-        stderr_truncated=err_capped,
-        duration_ms=elapsed(),
-        timed_out=timed_out,
-    )
+    finally:
+        # Unconditional, and after the drains rather than beside the reap: a pipe
+        # still being read must not have its bytes cut short, and a run that gave up
+        # on one must not leave the transport for a finalizer.
+        release_subprocess_transport(process)
