@@ -1,0 +1,58 @@
+<!-- The hand-written half of the acknowledgements page.
+
+     Everything else on that page is generated: the closure table comes from
+     `packaging/third_party_licenses.json`, and the copyleft, modified-redistribution
+     and model sections are lifted out of `THIRD-PARTY-NOTICES.md`, both of which
+     `packaging/license_audit.py` writes. A hand-maintained package list beside a
+     generated one is a second inventory, and the copy is what drifts.
+
+     This file is reserved for the projects that shaped the *design* rather than
+     merely appearing in the closure, and every claim below is checkable from the
+     repository: a dependency in a lockfile, a module that exists, a script that
+     runs. Do not add an influence you cannot point at. A thank-you nobody can
+     verify reads as decoration, and there is one of those in every acknowledgements
+     page on the internet.
+
+     Emitted inside the page's `.wrap`, so it starts at `.rel` and never opens its
+     own section.
+-->
+    <div class="rel">
+      <div class="relhead"><h2>What shaped it</h2><span class="fill"></span></div>
+      <p class="prose">These are the projects the design leans on, rather than the ones
+      it merely installs. Each is named because you can find it in the repository.</p>
+      <ul class="flat">
+        <li><b>xterm.js</b><span>The terminal. Every claim on the front page about running a real TUI, with real Unicode widths and real bracketed paste, is a claim about xterm.js and its addons doing the drawing. swe-mux ships two patched copies of it, recorded below, because two defects had to be fixed before agent panes rendered correctly.</span></li>
+        <li><b>The agent CLIs</b><span>Claude Code, Codex CLI, and the others the harness registry knows. swe-mux does not install, wrap, proxy, or replace any of them: it runs the ones you already have, on the subscription you already pay for, in a pseudoterminal they cannot tell apart from your own. The whole design assumes they will keep changing without asking.</span></li>
+        <li><b>Tailscale</b><span>How the phone reaches the machine. A tailnet plus Serve on HTTPS is the entire remote-access story, which is why there is no relay, no account, and no port forwarding to explain. Nothing here would be reasonable to ship without it.</span></li>
+        <li><b>tree-sitter</b><span>The code-structure graph is a tree-sitter parse, re-run on the exact bytes of each write. It is what lets blast radius, dead code, and test gaps be deterministic answers instead of a model's opinion.</span></li>
+        <li><b>Preact and Vite</b><span>The browser client, and the reason a full rebuild of it is seconds rather than a coffee break. The whole UI, desktop and phone, is one build.</span></li>
+        <li><b>CodeMirror</b><span>Under the Markdown note editor, its language modes, and the diff surfaces. The editor is built on top of it rather than being a textarea with a preview pane bolted on.</span></li>
+        <li><b>aiohttp</b><span>The daemon, its WebSockets, and the reverse proxy that puts a dev server on your phone without exposing a port.</span></li>
+        <li><b>faster-whisper, CTranslate2, ONNX Runtime, Silero VAD, Kokoro, and misaki</b><span>Voice, entirely on your machine. Speech is detected, transcribed, and synthesized locally; no audio leaves the host on any default path.</span></li>
+        <li><b>PyInstaller, pywebview, and pystray</b><span>The frozen Windows desktop application: a WebView2 window, a tray supervisor, and a bundle that can rebuild and redeploy itself while live sessions keep running.</span></li>
+        <li><b>uv</b><span>Install, resolution, and the dependency override that keeps a GPL-linked transitive package out of the closure. The license gate reads what uv resolved, not what anything declares.</span></li>
+        <li><b>pytest, Playwright, Ruff, and mypy</b><span>The verification gate, which is a build-time dependency and ships in nothing. It runs across the host's cores, treats a new warning as a failure, and typechecks each platform's implementation on every host.</span></li>
+        <li><b>SQLite</b><span>Every durable thing swe-mux knows, in one file you can open with any tool on your machine and read without asking permission.</span></li>
+      </ul>
+      <p class="note">Conventions rather than code, and equally load-bearing:
+      <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a> and
+      <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a> shape the
+      changelog and the release policy;
+      <a href="https://developercertificate.org/">the Developer Certificate of Origin</a>
+      is how contributions arrive, deliberately instead of a CLA; and
+      <a href="https://spdx.org/licenses/">SPDX</a> identifiers are what make the license
+      gate a check rather than a reading exercise.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>Research the control plane is built on</h2>
+        <span class="fill"></span></div>
+      <p class="prose">Three results the design documents cite by name, because the
+      control plane's shape is an argument and these are the parts of it that are not
+      ours.</p>
+      <ul class="bullets">
+        <li><span><b>AgentLens (2026).</b> Of 1,136 <em>passing</em> SWE-bench runs, only a fifth had a clean trace. A passing test is not evidence that the work was done well, which is why the record here keys on what an agent did rather than on what it reported.</span></li>
+        <li><span><b>MAST (2025).</b> A failure taxonomy over 1,642 multi-agent traces. It is the reason the detectors look for specific named failure shapes instead of scoring runs.</span></li>
+        <li><span><b>Olsen and Goodrich, supervisory control.</b> Fan-out as neglect time divided by interaction time, plus one. That is the metric behind "how many agents are you actually sustainable at", and it is why the interrupt budget is a hard number rather than a preference.</span></li>
+      </ul>
+    </div>

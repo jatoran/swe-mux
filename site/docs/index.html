@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Docs · swe-mux</title>
+<meta name="description" content="Index of swe-mux&#x27;s design documentation: sessions and terminals, the workbench, the control plane, queues and landing, voice, and the technical reference." />
+<meta name="color-scheme" content="dark" />
+<script>
+/* Runs before first paint so the chosen scheme never flashes. */
+(function () {
+  var t;
+  try { t = localStorage.getItem('swemux-theme'); } catch (e) {}
+  if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  document.currentScript.previousElementSibling.setAttribute('content', t);
+})();
+</script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2.6 2.3 L13.4 6.1 L13.4 9.9 L2.6 13.7 Z' fill='%238fdb6f'/></svg>" />
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root {
+  /* Dark. Every text token is checked against --bg:
+     fg 15.2:1 · fg-2 9.1:1 · fg-3 5.4:1 · fg-4 3.5:1 (decorative and large only). */
+  --bg:      #0e1016;
+  --panel:   #151821;
+  --panel-2: #1b1f2a;
+  --line:    #242a38;
+  --line-2:  #353d51;
+  --fg:      #dfe5f0;
+  --fg-2:    #adb7cc;
+  --fg-3:    #828da6;
+  --fg-4:    #626d88;   /* borders and inert markers only, never body text */
+  --green:   #8fdb6f;
+  --cyan:    #6fd8cb;
+  --orange:  #e8b56b;
+  --red:     #f87f95;
+
+  --hatch:   rgba(255,255,255,.020);
+  --hatch-2: rgba(255,255,255,.034);
+  --sel:     rgba(143,219,111,.15);
+
+  /* Mono carries identity: headings, labels, commands, anything terminal-shaped.
+     Sans carries prose, because monospace paragraphs are what made this page tiring. */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --pad: clamp(18px, 4vw, 40px);
+  --maxw: 1160px;
+}
+
+:root[data-theme="light"] {
+  /* fg 15.8:1 · fg-2 8.6:1 · fg-3 5.5:1 · fg-4 3.2:1 */
+  --bg:      #fbfbfd;
+  --panel:   #ffffff;
+  --panel-2: #f4f5f9;
+  --line:    #e6e8f0;
+  --line-2:  #cbd0de;
+  --fg:      #161923;
+  --fg-2:    #414963;
+  --fg-3:    #626a83;
+  --fg-4:    #8a92a8;
+  --green:   #3f7a12;
+  --cyan:    #0b7a72;
+  --orange:  #8a5806;
+  --red:     #b0243c;
+  --hatch:   rgba(20,24,40,.032);
+  --hatch-2: rgba(20,24,40,.050);
+  --sel:     rgba(63,122,18,.11);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.62;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+
+/* Everything terminal-shaped keeps the monospace face. Prose does not. */
+h1, h2, h3, h4,
+.kick, .name, .secnav, .util, .grouplabel, .half h3,
+.tag, .flat b, .ic-tab, .ic-os, .ic-body, .ic-copy, .copy, .code pre, code, kbd {
+  font-family: var(--mono);
+}
+h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.3; }
+p { margin: 0 0 0.85em; }
+p:last-child { margin-bottom: 0; }
+a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid transparent; }
+a:hover { border-bottom-color: var(--cyan); }
+ul { margin: 0; padding: 0; list-style: none; }
+/* Mono renders optically larger beside sans, so inline code is stepped down. */
+code { color: var(--fg); font-size: 0.915em; }
+::selection { background: var(--sel); }
+
+.wrap { max-width: var(--maxw); margin-inline: auto; padding-inline: var(--pad); }
+
+/* --------------------------------------------------------------- statusbar */
+.bar { position: sticky; top: 0; z-index: 40; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar .wrap { display: flex; align-items: center; gap: 14px; height: 44px; font-size: 12px; }
+.bar .name { color: var(--green); font-weight: 600; flex: none; white-space: nowrap; }
+/* Wordmark. Two files rather than a CSS filter, because the mark's green must
+   darken for the light theme while the letterforms go to ink; no filter does both. */
+.brand { flex: none; display: block; border: 0; line-height: 0; }
+.brand img { height: 18px; width: auto; display: block; }
+.brand .lite, :root[data-theme="light"] .brand .dark { display: none; }
+:root[data-theme="light"] .brand .lite { display: block; }
+footer .brandmark { height: 21px; width: auto; display: block; margin-bottom: 9px; }
+footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { display: none; }
+:root[data-theme="light"] footer .brandmark.lite { display: block; }
+/* min-width:0 is load-bearing: a flex item defaults to min-width:auto, so
+   overflow-x:auto alone will not let this strip shrink and it pushes the bar wide. */
+.bar nav.secnav { margin-left: auto; min-width: 0; display: flex; gap: 15px; overflow-x: auto;
+                  scrollbar-width: none;
+                  mask-image: linear-gradient(90deg, #000 calc(100% - 14px), transparent 100%); }
+.bar nav.secnav::-webkit-scrollbar { display: none; }
+.bar nav.secnav a { color: var(--fg-3); border: 0; white-space: nowrap; }
+.bar nav.secnav a:hover { color: var(--fg); }
+
+.util { flex: none; margin-left: auto; display: flex; align-items: center; gap: 2px;
+        padding-left: 12px; border-left: 1px solid var(--line); }
+.bar nav.secnav + .util { margin-left: 0; }
+.util a, .util button {
+  font-family: inherit; font-size: 12px; line-height: 1; color: var(--fg-3); border: 1px solid transparent;
+  background: none; padding: 6px 8px; cursor: pointer; white-space: nowrap; display: flex;
+  align-items: center; gap: 6px; height: 28px;
+}
+.util a:hover, .util button:hover { color: var(--fg); border-color: var(--line-2); background: var(--panel-2); }
+.util svg { width: 14px; height: 14px; fill: currentColor; flex: none; display: block; }
+.util .ghost { display: none; }
+:root[data-theme="light"] .util .moon { display: none; }
+:root[data-theme="light"] .util .sun  { display: block; }
+.util .sun { display: none; }
+.util .moon { display: block; }
+@media (max-width: 720px) { .util .lbl { display: none; } .util a, .util button { padding: 6px; } }
+@media (max-width: 460px) { .brand img { height: 16px; } .bar .wrap { gap: 10px; } }
+
+/* ------------------------------------------------------------ install call */
+.ic { border: 1px solid var(--line-2); background: var(--panel); max-width: 780px;
+      margin-top: clamp(22px, 3.5vw, 34px); }
+.ic-head { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ic-tabs { display: flex; flex-wrap: wrap; min-width: 0; }
+.ic-tab { font-family: inherit; font-size: 11.5px; letter-spacing: .04em; background: none;
+          border: 0; border-right: 1px solid var(--line); color: var(--fg-3);
+          padding: 10px 15px; cursor: pointer; position: relative; white-space: nowrap; }
+.ic-tab:hover { color: var(--fg-2); }
+.ic-tab[aria-selected="true"] { color: var(--fg); background: var(--panel-2); }
+.ic-tab[aria-selected="true"]::before { content: ""; position: absolute; inset: 0 0 auto 0;
+                                        height: 2px; background: var(--green); }
+.ic-os { margin-left: auto; display: flex; align-items: center; gap: 13px; padding: 0 15px;
+         font-size: 10px; letter-spacing: .14em; }
+.ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
+.ic-os span.on { color: var(--cyan); }
+.ic-os span.on::before { content: "▸ "; color: var(--green); }
+.ic-os span.soon em { font-style: normal; color: var(--fg-4);
+                      text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
+.ic-body { display: flex; align-items: center; gap: 11px; padding: 14px 15px; min-width: 0; }
+.ic-body .p { color: var(--green); flex: none; user-select: none; }
+.ic-body code { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg);
+                overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+.ic-copy { font-family: inherit; font-size: 10.5px; letter-spacing: .06em; flex: none;
+           background: var(--panel-2); border: 1px solid var(--line-2); color: var(--fg-3);
+           padding: 5px 10px; cursor: pointer; }
+.ic-copy:hover { color: var(--fg); border-color: var(--fg-4); }
+.ic-note { font-size: 13px; color: var(--fg-3); max-width: 780px; margin: 11px 0 0; }
+@media (max-width: 640px) {
+  .ic-os { width: 100%; padding: 8px 15px; border-top: 1px solid var(--line); margin-left: 0; }
+  .ic-tab { flex: 1; text-align: center; padding: 10px 8px; }
+}
+
+/* -------------------------------------------------------------------- hero */
+.hero { padding: clamp(48px, 9vw, 92px) 0 clamp(26px, 4vw, 40px); }
+.hero .kick { color: var(--fg-3); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 20px; }
+.hero h1 { font-size: clamp(22px, 4.4vw, 38px); letter-spacing: -0.02em; line-height: 1.26; margin-bottom: 22px; }
+.hero h1 .dim { color: var(--fg-3); }
+.cur { display: inline-block; width: .55em; height: 1em; background: var(--green); vertical-align: -.13em; margin-left: .18em; animation: blink 1.15s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0 } }
+@media (prefers-reduced-motion: reduce) { .cur { animation: none } }
+.hero .sub { color: var(--fg-2); font-size: clamp(15px, 2vw, 19px); line-height: 1.45;
+             max-width: 72ch; margin-bottom: 24px; padding-left: 14px;
+             border-left: 1px solid var(--line-2); text-wrap: pretty; }
+.hero .sub b { color: var(--fg); font-weight: 600; }
+.hero .lede { color: var(--fg-2); max-width: 68ch; font-size: clamp(15px, 1.7vw, 16.5px);
+              line-height: 1.66; }
+.hero .lede b { color: var(--fg); }
+
+
+/* ------------------------------------------------------------- hero visual */
+.herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
+.herovis .frame {
+  border: 1px dashed var(--line-2); aspect-ratio: 16 / 9; padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 7px; background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+}
+.herovis .phone {
+  position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
+  width: clamp(84px, 15%, 186px); aspect-ratio: 9 / 19.5;
+  border: 1px dashed var(--line-2); border-radius: 11px; padding: 8px 7px;
+  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 0 0 7px var(--bg); background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch-2) 8px 9px), var(--panel);
+}
+.herovis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+                border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.herovis .frame .tag { color: var(--cyan); }
+.herovis .phone .tag { color: var(--orange); border-bottom-color: var(--line-2); font-size: 8px;
+                       padding-bottom: 4px; letter-spacing: .06em; }
+.herovis p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-3); max-width: 62ch; }
+.herovis .phone p { font-size: 8.5px; line-height: 1.4; }
+@media (max-width: 620px) {
+  .herovis { padding-right: 0; }
+  .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
+  .herovis .phone p { display: none; }
+}
+
+/* --------------------------------------------------- inline visualizations */
+.vis { border: 1px dashed var(--line-2); padding: 9px 11px; margin-top: 14px;
+       display: flex; flex-direction: column; gap: 6px; background:
+       repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2); }
+.vis.wide { aspect-ratio: 21 / 9; }
+.vis.box { aspect-ratio: 4 / 3; }
+.vis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+            color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.vis p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-3); overflow: hidden; }
+
+/* --------------------------------------------------------------- two halves */
+.halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
+          background: var(--line); border: 1px solid var(--line); margin-top: clamp(34px, 5vw, 56px); }
+.half { background: var(--panel); padding: 20px 22px; }
+.half h3 { font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 10px; }
+.half.ade h3 { color: var(--cyan); }
+.half.acp h3 { color: var(--orange); }
+.half p { color: var(--fg-2); font-size: 14.5px; line-height: 1.6; }
+.halves-note { margin-top: 16px; color: var(--fg-2); max-width: 74ch; font-size: 14.5px;
+               line-height: 1.62; }
+.halves-note b { color: var(--fg); }
+
+/* ---------------------------------------------------------------- sections */
+.sec { margin-top: clamp(52px, 8vw, 90px); }
+.head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.head .n { color: var(--green); font-size: 12px; }
+.head h2 { font-size: clamp(16px, 2.2vw, 20px); }
+.head .fill { flex: 1; border-top: 1px solid var(--line); }
+@media (max-width: 700px) { .head .fill { display: none } }
+.sec > .wrap > .intro { color: var(--fg-2); max-width: 72ch; margin-bottom: clamp(20px, 3vw, 30px);
+                        font-size: 15px; line-height: 1.66; }
+.sec > .wrap > .intro b { color: var(--fg); }
+
+/* --------------------------------------------------------- crop placeholders */
+.crops { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.46fr); gap: 10px; align-items: start; }
+.crops.solo { grid-template-columns: minmax(0, 1fr); }
+.crops.trio { grid-template-columns: repeat(auto-fit, minmax(160px, 224px)); justify-content: start; gap: 14px; }
+.crop {
+  border: 1px dashed var(--line-2); background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+  padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.crop.d { aspect-ratio: 3 / 2; }
+.crop.m { aspect-ratio: 9 / 16; }
+.crop .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+             color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.crop.d .tag { color: var(--cyan); }
+.crop.m .tag { color: var(--orange); }
+.crop p { font-size: 12px; line-height: 1.5; color: var(--fg-3); margin: 0; overflow: hidden; }
+@media (max-width: 460px) { .crops { grid-template-columns: minmax(0, 1fr); } .crop.m { max-width: 190px; } }
+
+/* ---------------------------------------------------------- real screenshots */
+figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--panel-2); min-width: 0; }
+figure.shot img { display: block; width: 100%; height: auto; }
+figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
+                         padding: 8px 10px; border-top: 1px solid var(--line); }
+.shotpair { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+            gap: clamp(16px, 3vw, 30px); align-items: start; }
+@media (max-width: 700px) { .shotpair { grid-template-columns: minmax(0, 1fr); }
+                            .shotpair figure.shot { max-width: 300px; } }
+.shotpair .claims li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
+                       padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
+                       line-height: 1.58; color: var(--fg-2); }
+.shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
+.shotpair .claims li::before { content: "▸"; color: var(--green); }
+.shotpair .claims b { color: var(--fg); }
+
+/* --------------------------------------------------------------- flat lists */
+.flat li { display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 4px 26px;
+           padding: 13px 0; border-top: 1px solid var(--line); }
+.flat li:first-child { border-top: 0; }
+.flat b { color: var(--fg); font-weight: 600; font-size: 13.5px; letter-spacing: .01em; }
+.flat b::before { content: "▸ "; color: var(--green); }
+.flat span { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+@media (max-width: 700px) { .flat li { grid-template-columns: minmax(0, 1fr); } }
+
+.grouplabel { color: var(--orange); font-size: 11.5px; letter-spacing: 0.13em; text-transform: uppercase;
+              margin: 30px 0 2px; padding-bottom: 7px; border-bottom: 1px solid var(--line-2); }
+.grouplabel:first-of-type { margin-top: 0; }
+.grouplabel span { color: var(--fg-3); text-transform: none; letter-spacing: 0; margin-left: 8px; }
+@media (max-width: 560px) { .grouplabel span { display: block; margin-left: 0; } }
+
+/* -------------------------------------------------------------------- code */
+.code { border: 1px solid var(--line-2); background: var(--panel-2); padding: 14px 16px; overflow-x: auto; position: relative; }
+.code pre { margin: 0; font-size: 12.5px; line-height: 1.8; color: var(--fg-2); }
+.code .c { color: var(--fg-3); }
+.code .p { color: var(--green); user-select: none; }
+.copy { position: absolute; top: 7px; right: 7px; font-family: inherit; font-size: 10.5px;
+        background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-3); padding: 2px 6px; cursor: pointer; }
+.copy:hover { color: var(--fg); }
+.note { font-size: 13.5px; color: var(--fg-3); margin-top: 12px; line-height: 1.55; }
+
+footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
+         padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }
+footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 22px 44px; }
+footer h4 { margin: 0 0 5px; color: var(--fg-3); font-size: 12px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
+footer .todo { color: var(--orange); }
+.colophon { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
+            font-family: var(--mono); font-size: 12.5px; color: var(--fg-3); }
+.colophon .h { color: var(--fg-4); user-select: none; margin-right: 2px; }
+
+@media (max-width: 700px) { body { font-size: 15px; }
+                            .flat span, .half p, .shotpair .claims li { font-size: 14px; } }
+/* ------------------------------------------------------- generated sub-pages */
+.page { padding: clamp(34px, 6vw, 64px) 0 0; }
+.page h1 { font-size: clamp(21px, 3.6vw, 31px); letter-spacing: -0.02em; }
+.page .kick { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+              letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 16px; }
+.page .lede { color: var(--fg-2); max-width: 74ch; margin-top: 16px;
+              font-size: clamp(15px, 1.7vw, 16.5px); line-height: 1.66; }
+.page .lede b { color: var(--fg); }
+.page > .wrap > .note { max-width: 74ch; }
+
+.bullets li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
+              padding: 6px 0; color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.bullets li::before { content: "\25B8"; color: var(--green); }
+.bullets b { color: var(--fg); }
+.prose { color: var(--fg-2); max-width: 74ch; font-size: 14.5px; line-height: 1.62; }
+.prose b { color: var(--fg); }
+
+.rel { margin-top: clamp(40px, 6vw, 64px); }
+.relhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+           padding-bottom: 9px; border-bottom: 1px solid var(--line-2); }
+.relhead h2 { font-size: clamp(16px, 2.2vw, 20px); }
+.relhead .when { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+                 letter-spacing: 0.06em; }
+.relhead .fill { flex: 1; }
+
+/* Two label levels inside a release. The Keep a Changelog type carries the brand
+   accent; the grouping under it is quieter, so a release reads as structure
+   rather than as a run of identical headings. */
+.changetype { color: var(--green); font-family: var(--mono); font-size: 11.5px;
+              letter-spacing: 0.13em; text-transform: uppercase; margin: 26px 0 2px;
+              padding-bottom: 7px; border-bottom: 1px solid var(--line-2); }
+.subgroup { color: var(--fg-3); font-family: var(--mono); font-size: 11.5px;
+            letter-spacing: 0.09em; margin: 18px 0 3px; }
+
+/* Tables carry the same hairline grid as the panels; no zebra, no shadow. */
+table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; }
+table th { text-align: left; font-family: var(--mono); font-weight: 600; font-size: 11px;
+           letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3);
+           padding: 0 14px 8px 0; border-bottom: 1px solid var(--line-2); }
+table td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--line);
+           color: var(--fg-2); vertical-align: top; }
+table td:first-child { font-family: var(--mono); color: var(--fg); font-size: 12.5px;
+                       word-break: break-word; }
+table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+
+/* The bar's nav keeps `index.html`'s scroll-fade for narrow screens, but this
+   nav is short and its last item would sit under the fade at every width. The
+   padding gives the gradient empty space to fall on once it is scrolled out. */
+.pagenav { padding-right: 15px; }
+.pagenav a[aria-current="page"] { color: var(--fg); }
+.pagenav a[aria-current="page"]::before { content: "\25B8 "; color: var(--green); }
+
+/* `.rel:first-of-type` does not do this: `:first-of-type` counts elements of the
+   same tag, and the first `div` in a page is the kick line. */
+.lede + .rel, .lede + .toc + .rel { margin-top: clamp(24px, 4vw, 38px); }
+
+.toc { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 18px;
+       padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+       font-family: var(--mono); font-size: 12px; }
+.docsec { margin-top: clamp(34px, 5vw, 52px); }
+.doclist li { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 4px 26px;
+              padding: 13px 0; border-top: 1px solid var(--line); }
+.doclist li:first-child { border-top: 0; }
+.doclist .t { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--fg);
+              letter-spacing: 0.01em; }
+.doclist .t > a { color: inherit; }
+.doclist .t > a:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
+.doclist span.d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+/* Inside `.t`, not a third grid child: as its own cell it lands on a second row
+   whose top is set by the tallest summary, which floats it away from the title
+   it names. */
+.doclist .src { display: block; margin-top: 3px; font-weight: 400; font-size: 11.5px;
+                color: var(--fg-3); overflow-wrap: anywhere; }
+@media (max-width: 700px) { .doclist li { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="swe-mux, home">
+      <img class="dark" src="../img/logo.png" width="640" height="73" alt="" />
+      <img class="lite" src="../img/logo-light.png" width="640" height="73" alt="" />
+    </a>
+    <nav class="secnav pagenav">
+      <a href="../">home</a>
+      <a href="../docs/" aria-current="page">docs</a>
+      <a href="../changelog/">changelog</a>
+      <a href="../roadmap/">roadmap</a>
+      <a href="../acknowledgements/">acknowledgements</a>
+    </nav>
+    <div class="util">
+      <a href="https://github.com/OWNER/swe-mux" data-todo="TODO(release): OWNER" aria-label="Source on GitHub" title="Source on GitHub">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="lbl">github</span>
+      </a>
+      <button type="button" id="themebtn" aria-label="Toggle colour scheme" title="Toggle colour scheme">
+        <svg class="moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7Z"/></svg>
+        <svg class="sun" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.6A3.4 3.4 0 1 0 8 11.4 3.4 3.4 0 0 0 8 4.6Zm0-4.6h0a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V.7A.7.7 0 0 1 8 0Zm0 13.3a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V14a.7.7 0 0 1 .7-.7ZM16 8a.7.7 0 0 1-.7.7H14a.7.7 0 0 1 0-1.4h1.3A.7.7 0 0 1 16 8ZM2.7 8a.7.7 0 0 1-.7.7H.7a.7.7 0 0 1 0-1.4H2a.7.7 0 0 1 .7.7Zm10.96-5.66a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0ZM4.28 11.72a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0Zm9.38 1.94a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 1 1 1-1l.94.94a.7.7 0 0 1 0 1ZM4.28 4.28a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 0 1 1-1l.94.94a.7.7 0 0 1 0 1Z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<main>
+<section class="page">
+  <div class="wrap">
+    <div class="kick">how it works, in its own words</div>
+    <h1>Documentation</h1>
+    <div class="lede"><p>swe-mux is documented in the repository, beside the code, and this index is generated from those documents rather than rewritten beside them. Each entry links to the document itself; the summary is the document's own opening line. <b>These are design documents.</b> They state what a subsystem is, the invariants it holds, and the decisions it has already made, which is what you want when a behaviour surprises you and not what you want on your first ten minutes - for that, the in-app tour and <code>mux doctor</code> come first.</p><p>Paths under each title are relative to <code>.docs/</code>, and a bare filename means <code>.docs/design/features/</code>. The link is the whole path.</p></div>
+    <nav class="toc" aria-label="Documentation sections">
+      <a href="#sec-overview">overview</a>
+      <a href="#sec-sessions">sessions and terminals</a>
+      <a href="#sec-workbench">projects and the workbench</a>
+      <a href="#sec-history">history and transcripts</a>
+      <a href="#sec-control-plane">the control plane</a>
+      <a href="#sec-queues">queues, messaging, and landing</a>
+      <a href="#sec-voice">voice, assistant, and alerts</a>
+      <a href="#sec-accounts">accounts, usage, and budgets</a>
+      <a href="#sec-running">running it</a>
+      <a href="#sec-reference">technical reference</a>
+    </nav>
+    <div class="docsec" id="sec-overview">
+      <div class="head"><span class="n">#</span><h2>Overview</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="architecture">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/architecture.md" data-todo="TODO(release): OWNER">Architecture</a><span class="src">design/architecture.md</span></div>
+          <span class="d"></span>
+        </li>
+        <li id="data-model">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/data-model.md" data-todo="TODO(release): OWNER">Data model</a><span class="src">design/data-model.md</span></div>
+          <span class="d">Durable data and ownership.</span>
+        </li>
+        <li id="interfaces">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/interfaces.md" data-todo="TODO(release): OWNER">Interfaces</a><span class="src">design/interfaces.md</span></div>
+          <span class="d">All JSON APIs are rooted at <code>/api</code>. PTY and event streams use <code>/pty/{session_id}</code> and <code>/events</code> WebSockets.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-sessions">
+      <div class="head"><span class="n">#</span><h2>Sessions and terminals</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="sessions">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/sessions.md" data-todo="TODO(release): OWNER">Sessions and terminals</a><span class="src">sessions.md</span></div>
+          <span class="d">Daemon-owned interactive ConPTY processes with immutable Project ownership, bounded replay, and reattachable browser viewports.</span>
+        </li>
+        <li id="session-recovery">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/session-recovery.md" data-todo="TODO(release): OWNER">Cold and inactive session recovery</a><span class="src">session-recovery.md</span></div>
+          <span class="d">Durable per-session state that outlives both the daemon and the PTY supervisor, so sessions whose processes died without anyone recording it come back as visible, dead, resumable rows instead of vanishing.</span>
+        </li>
+        <li id="terminal-input">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/terminal-input.md" data-todo="TODO(release): OWNER">Multi-device terminal input</a><span class="src">terminal-input.md</span></div>
+          <span class="d">One session can be attached from several devices at once, and two of the things they share cannot be shared: who may type into the PTY, and how big it is.</span>
+        </li>
+        <li id="launch-profiles">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/launch-profiles.md" data-todo="TODO(release): OWNER">Launch profiles</a><span class="src">launch-profiles.md</span></div>
+          <span class="d">A launch profile is a named executable/argv/environment definition for one backend.</span>
+        </li>
+        <li id="backends">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/backends.md" data-todo="TODO(release): OWNER">Backend detection and observation</a><span class="src">backends.md</span></div>
+          <span class="d">Adapters isolate spawn/resume syntax, transcript discovery, hook wiring, and graceful exit.</span>
+        </li>
+        <li id="status-detection">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/status-detection.md" data-todo="TODO(release): OWNER">Agent status detection and regression defense</a><span class="src">status-detection.md</span></div>
+          <span class="d">The user-visible session status (<code>starting | running | working | idle | awaiting | exited | crashed</code>, plus the <code>awaiting</code> sub-reason <code>approval | question | elicitation | rate_limit</code>) is a contract, not a heuristic: every state names the positive evidence that may set it, every transition is ledgered with that evidence and a proven/inferred classification, and the whole surface is reproduced from the golden corpus so status regressions fail CI.</span>
+        </li>
+        <li id="delivery-readiness">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/delivery-readiness.md" data-todo="TODO(release): OWNER">Evidence replay and delivery readiness</a><span class="src">delivery-readiness.md</span></div>
+          <span class="d">The versioned replay corpus provides a deterministic regression boundary around every observed harness and a provider-neutral, read-only delivery classification.</span>
+        </li>
+        <li id="approvals">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/approvals.md" data-todo="TODO(release): OWNER">Control-plane approvals</a><span class="src">approvals.md</span></div>
+          <span class="d">A per-conversation switch deciding what swe-mux answers on the agent's behalf when the harness asks for tool permission.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-workbench">
+      <div class="head"><span class="n">#</span><h2>Projects and the workbench</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="projects">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/projects.md" data-todo="TODO(release): OWNER">Projects and Groups</a><span class="src">projects.md</span></div>
+          <span class="d">Projects are the durable catalog of canonical folders swe-mux can own.</span>
+        </li>
+        <li id="project-resources">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/project-resources.md" data-todo="TODO(release): OWNER">Project resources</a><span class="src">project-resources.md</span></div>
+          <span class="d">Safe access to Project-owned notes, the global Scratchpad, a bounded Project file tree, revision-checked text editing, ignore patterns, host file-manager reveal, and leased filesystem watches.</span>
+        </li>
+        <li id="project-actions">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/project-actions.md" data-todo="TODO(release): OWNER">Project Actions</a><span class="src">project-actions.md</span></div>
+          <span class="d">The Project-level <b>Run</b> menu is the single launch surface for a new Claude, Codex, shell, custom terminal, worktree session, or an explicitly selected repository task.</span>
+        </li>
+        <li id="project-card">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/project-card.md" data-todo="TODO(release): OWNER">Project context card</a><span class="src">project-card.md</span></div>
+          <span class="d">Project context is one user-owned Markdown file at <code>&lt;project&gt;/.swe-mux/project-context.md</code>.</span>
+        </li>
+        <li id="workspace-layout">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/workspace-layout.md" data-todo="TODO(release): OWNER">Workspace panes and tabs</a><span class="src">workspace-layout.md</span></div>
+          <span class="d">One Project-owned mixed-view workspace.</span>
+        </li>
+        <li id="ui">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/ui.md" data-todo="TODO(release): OWNER">Browser shell and interaction</a><span class="src">ui.md</span></div>
+          <span class="d">The Project-first browser shell around the mixed-view workspace: persistent app identity, active-Project navigation, provider/resource status, viewport overlays, settings, focus, and responsive controls.</span>
+        </li>
+        <li id="prompt-library">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/prompt-library.md" data-todo="TODO(release): OWNER">Universal prompt library</a><span class="src">prompt-library.md</span></div>
+          <span class="d">Global and Project-scoped reusable text templates that can fill a focused terminal without submitting, executing, or becoming automation.</span>
+        </li>
+        <li id="processes-and-previews">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/processes-and-previews.md" data-todo="TODO(release): OWNER">Process ownership and previews</a><span class="src">processes-and-previews.md</span></div>
+          <span class="d">Per-session descendant attribution and bounded resource/listener snapshots.</span>
+        </li>
+        <li id="git">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/git.md" data-todo="TODO(release): OWNER">Git awareness and worktrees</a><span class="src">git.md</span></div>
+          <span class="d">Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.</span>
+        </li>
+        <li id="agent-context">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/agent-context.md" data-todo="TODO(release): OWNER">Agent Context</a><span class="src">agent-context.md</span></div>
+          <span class="d">Read-only Project/global agent instructions, memory, and manual Project-root sync.</span>
+        </li>
+        <li id="agent-environment">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/agent-environment.md" data-todo="TODO(release): OWNER">Agent Environment</a><span class="src">agent-environment.md</span></div>
+          <span class="d">Passive session CLI tools, extensions, policies, and configuration inventory.</span>
+        </li>
+        <li id="configurator">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/configurator.md" data-todo="TODO(release): OWNER">Configurator agent</a><span class="src">configurator.md</span></div>
+          <span class="d">A button that opens an ordinary agent session pointed at swe-mux itself.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-history">
+      <div class="head"><span class="n">#</span><h2>History and transcripts</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="history">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/history.md" data-todo="TODO(release): OWNER">History and events</a><span class="src">history.md</span></div>
+          <span class="d">SQLite indexes durable Claude/Codex run lifetimes and append-only daemon events.</span>
+        </li>
+        <li id="transcript-branches">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/transcript-branches.md" data-todo="TODO(release): OWNER">Transcript branches</a><span class="src">transcript-branches.md</span></div>
+          <span class="d">A Claude transcript is an append-only <b>DAG</b>, not a list of turns.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-control-plane">
+      <div class="head"><span class="n">#</span><h2>The control plane</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="tier0-facts">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/tier0-facts.md" data-todo="TODO(release): OWNER">Tier 0 deterministic facts</a><span class="src">tier0-facts.md</span></div>
+          <span class="d">Durable, no-model capture of deterministic facts about agent sessions (file writes, commands, tests, git, tools) with pointers back to the immutable event log.</span>
+        </li>
+        <li id="deterministic-consumers">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/deterministic-consumers.md" data-todo="TODO(release): OWNER">Deterministic control-plane consumers</a><span class="src">deterministic-consumers.md</span></div>
+          <span class="d">The first layer that turns captured Tier 0 facts into user-visible judgements, and it is deliberately <b>model-free</b>: every detector is a query over deterministic facts, spends no tokens, and writes nothing but annotations.</span>
+        </li>
+        <li id="code-graph">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/code-graph.md" data-todo="TODO(release): OWNER">Code-structure graph</a><span class="src">code-graph.md</span></div>
+          <span class="d">A deterministic, always-fresh graph of how the code connects: who imports whom, who calls whom, where each symbol is defined.</span>
+        </li>
+        <li id="attention-ranking">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/attention-ranking.md" data-todo="TODO(release): OWNER">Attention ranking</a><span class="src">attention-ranking.md</span></div>
+          <span class="d">The layer that decides which of many concurrent sessions actually needs the human, and when.</span>
+        </li>
+        <li id="fleet-intelligence">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/fleet-intelligence.md" data-todo="TODO(release): OWNER">Fleet attention and intelligence</a><span class="src">fleet-intelligence.md</span></div>
+          <span class="d">Explainable cross-session evidence, attention routing, lineage, and user-confirmed review built on normalized events and read-only observer results.</span>
+        </li>
+        <li id="scan-timeline">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/scan-timeline.md" data-todo="TODO(release): OWNER">Scan timeline</a><span class="src">scan-timeline.md</span></div>
+          <span class="d">The scan timeline is a read-only, run-scoped semantic index over bounded transcript deltas and deterministic Tier 0 facts.</span>
+        </li>
+        <li id="operational-telemetry">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/operational-telemetry.md" data-todo="TODO(release): OWNER">Durable operational evidence</a><span class="src">operational-telemetry.md</span></div>
+          <span class="d">Durable, bounded observations for process identity, provider quota movement, reset evidence, quota/activity correlation, explicit context compaction, and explicit tool/skill activity.</span>
+        </li>
+        <li id="automation">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/automation.md" data-todo="TODO(release): OWNER">Universal hooks and OpenRouter observers</a><span class="src">automation.md</span></div>
+          <span class="d">Asynchronous, harness-neutral rules over normalized persisted mux events.</span>
+        </li>
+        <li id="automation-enablement">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/automation-enablement.md" data-todo="TODO(release): OWNER">Automation enablement</a><span class="src">automation-enablement.md</span></div>
+          <span class="d">Per-project opt-in for control-plane automations, gated by a dependency graph and an install-wide ceiling.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-queues">
+      <div class="head"><span class="n">#</span><h2>Queues, messaging, and landing</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="prompt-queue">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/prompt-queue.md" data-todo="TODO(release): OWNER">Persistent manual prompt queue</a><span class="src">prompt-queue.md</span></div>
+          <span class="d">Durable, ordered messages staged against a target agent run, delivered through one typed operation, surviving daemon and browser restarts without duplicate delivery.</span>
+        </li>
+        <li id="auto-delivery">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/auto-delivery.md" data-todo="TODO(release): OWNER">Gated auto-delivery</a><span class="src">auto-delivery.md</span></div>
+          <span class="d">A bounded controller that presses "send next" on a session's prompt queue when - and only when - delivery readiness has been continuously <code>safe</code> for a held window.</span>
+        </li>
+        <li id="agent-messaging">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/agent-messaging.md" data-todo="TODO(release): OWNER">Agent messaging, the fleet queue, and drafted spawns</a><span class="src">agent-messaging.md</span></div>
+          <span class="d">Bounded messaging <em>between sessions that already exist</em>, plus a way for an agent to ask a human to create one.</span>
+        </li>
+        <li id="land-queue">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/land-queue.md" data-todo="TODO(release): OWNER">Land queue</a><span class="src">land-queue.md</span></div>
+          <span class="d">Serialized, deterministic landing of a finished worktree branch onto its Project's trunk.</span>
+        </li>
+        <li id="scheduled-runs">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/scheduled-runs.md" data-todo="TODO(release): OWNER">Scheduled runs</a><span class="src">scheduled-runs.md</span></div>
+          <span class="d">A schedule does one of two things in one Project on its own, on a cron expression, on an interval, or once at a time.</span>
+        </li>
+        <li id="mux-mcp">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/mux-mcp.md" data-todo="TODO(release): OWNER">mux MCP: the agent return path (reads + bounded writes and session control)</a><span class="src">mux-mcp.md</span></div>
+          <span class="d">A streamable-HTTP MCP endpoint (<code>POST /mcp</code>) hosted in the daemon that gives every spawned agent session visibility into the fleet - sibling sessions, their live status, bounded transcript reads, indexed search over conversation history, exact Agent Context sources, Project notes, cross-session memory reads, and request outcomes, plus the bounded write tools added in Phase 5 and the session-control tools added in Phase 7.6.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-voice">
+      <div class="head"><span class="n">#</span><h2>Voice, assistant, and alerts</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="voice">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/voice.md" data-todo="TODO(release): OWNER">Read aloud and hands-free conversation</a><span class="src">voice.md</span></div>
+          <span class="d">Optional per-session reply synthesis (TTS, "read aloud") plus a workspace-level, browser-captured Conversation mode (STT, "hands-free"), isolated from history, Project, and transcript correctness.</span>
+        </li>
+        <li id="assistant">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/assistant.md" data-todo="TODO(release): OWNER">The Mux assistant</a><span class="src">assistant.md</span></div>
+          <span class="d">A conversational operator for the whole workspace: the control plane given a chat surface and, behind the voice grammar's fallback tier, a voice.</span>
+        </li>
+        <li id="notifications">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/notifications.md" data-todo="TODO(release): OWNER">Session and reset alerts</a><span class="src">notifications.md</span></div>
+          <span class="d">Alerts are normalized root-session events delivered through an optional sound channel in a live tab and an optional Web Push channel that can reach a locked phone.</span>
+        </li>
+        <li id="device-presence">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/device-presence.md" data-todo="TODO(release): OWNER">Device presence</a><span class="src">device-presence.md</span></div>
+          <span class="d">Which device class the human is actually using right now, tracked per client connection and aggregated to <code>desktop</code> / <code>mobile</code>.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-accounts">
+      <div class="head"><span class="n">#</span><h2>Accounts, usage, and budgets</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="provider-accounts">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/provider-accounts.md" data-todo="TODO(release): OWNER">Provider accounts</a><span class="src">provider-accounts.md</span></div>
+          <span class="d">App-owned credential snapshots for harnesses that explicitly declare provider-account management, reconciled against one live system login per provider.</span>
+        </li>
+        <li id="usage">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/usage.md" data-todo="TODO(release): OWNER">Usage analytics</a><span class="src">usage.md</span></div>
+          <span class="d">Optional cached historical token and cost summaries collected by the locally installed <code>ccusage</code> CLI.</span>
+        </li>
+        <li id="budgets">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/budgets.md" data-todo="TODO(release): OWNER">Spending budgets</a><span class="src">budgets.md</span></div>
+          <span class="d">Every model-cost ceiling in the install has one shape, one editor, and one enforcement path.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-running">
+      <div class="head"><span class="n">#</span><h2>Running it</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="remote-access">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/remote-access.md" data-todo="TODO(release): OWNER">Remote access</a><span class="src">remote-access.md</span></div>
+          <span class="d">The same browser/API surface over localhost or a policy-controlled direct Tailscale listener, with optional Tailscale Serve for browser-recognized HTTPS.</span>
+        </li>
+        <li id="desktop-shell">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/desktop-shell.md" data-todo="TODO(release): OWNER">Windows desktop shell</a><span class="src">desktop-shell.md</span></div>
+          <span class="d">An optional Windows WebView2 window and system-tray supervisor around the same Preact/aiohttp surface used by ordinary desktop and mobile browsers.</span>
+        </li>
+      </ul>
+    </div>
+    <div class="docsec" id="sec-reference">
+      <div class="head"><span class="n">#</span><h2>Technical reference</h2><span class="fill"></span></div>
+      <ul class="doclist">
+        <li id="technical-index">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/00_INDEX.md" data-todo="TODO(release): OWNER">Technical documentation</a><span class="src">technical/00_INDEX.md</span></div>
+          <span class="d">Implementation-facing rules supplement the product/design contracts in <code>../design/</code>. Read the design feature first, then the relevant technical page before changing code.</span>
+        </li>
+        <li id="technical-backend-packages">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/backend/packages.md" data-todo="TODO(release): OWNER">Backend package responsibilities</a><span class="src">technical/backend/packages.md</span></div>
+          <span class="d">Where daemon code lives and how to modify it. The map is split by domain so a change touches one file; this page is the index, the dependency rules, and the composition boundary.</span>
+        </li>
+        <li id="technical-backend-sqlite">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/backend/sqlite.md" data-todo="TODO(release): OWNER">Shared SQLite concurrency</a><span class="src">technical/backend/sqlite.md</span></div>
+          <span class="d">Shared SQLite operation rules.</span>
+        </li>
+        <li id="technical-frontend-packages">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/frontend/packages.md" data-todo="TODO(release): OWNER">Frontend package responsibilities</a><span class="src">technical/frontend/packages.md</span></div>
+          <span class="d">Where browser code lives and how to modify it. The map is split by domain so a change touches one file; this page is the index and the shared rules.</span>
+        </li>
+        <li id="technical-frontend-workspace-state">
+          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/frontend/workspace-state.md" data-todo="TODO(release): OWNER">Workspace state and persistence</a><span class="src">technical/frontend/workspace-state.md</span></div>
+          <span class="d"></span>
+        </li>
+      </ul>
+    </div>
+    <p class="note">Not everything under <code>.docs/</code> is listed here. Left out, each with its reason: <code>features/meta-hooks.md</code>, a compatibility engine for a retired hook contract, not a feature; <code>features/observations.md</code>, storage compatibility for a user surface that was retired; <code>features/ghost-windows.md</code>, an internal remediation sweep with no user-facing control; <code>features/setting-links.md</code>, the internal mechanism behind a switched-off surface. Development notes, audits, and the internal plan are unlisted too; the <a href="../roadmap/">roadmap page</a> is the public projection of the last of those.</p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <img class="brandmark dark" src="../img/logo.png" width="640" height="73" alt="swe-mux" />
+        <img class="brandmark lite" src="../img/logo-light.png" width="640" height="73" alt="swe-mux" />
+        <div>Agentic development environment and agent control plane.</div>
+        <div>Windows-first. Local-only. No account.</div>
+      </div>
+      <div>
+        <h4>pages</h4>
+        <div><a href="../">home</a> &middot; <a href="../docs/">docs</a></div>
+        <div><a href="../changelog/">changelog</a> &middot; <a href="../roadmap/">roadmap</a>
+        &middot; <a href="../acknowledgements/">acknowledgements</a></div>
+      </div>
+      <div>
+        <h4>source</h4>
+        <div><a href="https://github.com/OWNER/swe-mux" data-todo="TODO(release): OWNER">github.com/OWNER/swe-mux</a></div>
+        <div><code>.docs/design/00_OVERVIEW.md</code></div>
+      </div>
+      <div>
+        <h4>license</h4>
+        <div><a href="https://github.com/OWNER/swe-mux/blob/master/LICENSE" data-todo="TODO(release): OWNER">Apache-2.0</a></div>
+        <div><a href="https://github.com/OWNER/swe-mux/blob/master/THIRD-PARTY-NOTICES.md" data-todo="TODO(release): OWNER">Third-party notices</a></div>
+      </div>
+    </div>
+    <p class="colophon"><span class="h">#</span> This page is generated by
+    <code>site/tools/build.py</code>. Edit its source, not the HTML.</p>
+    <p class="colophon"><span class="h">#</span> swe-mux is not affiliated with, endorsed
+    by, or sponsored by Anthropic, OpenAI, or any other vendor whose CLI it launches.
+    Product names and trademarks belong to their respective owners. You run those tools
+    under your own account and your own agreement with each vendor.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var btn = document.getElementById('themebtn');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    document.querySelector('meta[name=color-scheme]').setAttribute('content', t);
+  }
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    apply(next);
+    try { localStorage.setItem('swemux-theme', next); } catch (e) {}
+  });
+})();
+</script>
+
+</body>
+</html>

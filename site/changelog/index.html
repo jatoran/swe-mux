@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Changelog · swe-mux</title>
+<meta name="description" content="Every released change to swe-mux, in Keep a Changelog format, generated from the repository&#x27;s own CHANGELOG.md." />
+<meta name="color-scheme" content="dark" />
+<script>
+/* Runs before first paint so the chosen scheme never flashes. */
+(function () {
+  var t;
+  try { t = localStorage.getItem('swemux-theme'); } catch (e) {}
+  if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  document.currentScript.previousElementSibling.setAttribute('content', t);
+})();
+</script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2.6 2.3 L13.4 6.1 L13.4 9.9 L2.6 13.7 Z' fill='%238fdb6f'/></svg>" />
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root {
+  /* Dark. Every text token is checked against --bg:
+     fg 15.2:1 · fg-2 9.1:1 · fg-3 5.4:1 · fg-4 3.5:1 (decorative and large only). */
+  --bg:      #0e1016;
+  --panel:   #151821;
+  --panel-2: #1b1f2a;
+  --line:    #242a38;
+  --line-2:  #353d51;
+  --fg:      #dfe5f0;
+  --fg-2:    #adb7cc;
+  --fg-3:    #828da6;
+  --fg-4:    #626d88;   /* borders and inert markers only, never body text */
+  --green:   #8fdb6f;
+  --cyan:    #6fd8cb;
+  --orange:  #e8b56b;
+  --red:     #f87f95;
+
+  --hatch:   rgba(255,255,255,.020);
+  --hatch-2: rgba(255,255,255,.034);
+  --sel:     rgba(143,219,111,.15);
+
+  /* Mono carries identity: headings, labels, commands, anything terminal-shaped.
+     Sans carries prose, because monospace paragraphs are what made this page tiring. */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --pad: clamp(18px, 4vw, 40px);
+  --maxw: 1160px;
+}
+
+:root[data-theme="light"] {
+  /* fg 15.8:1 · fg-2 8.6:1 · fg-3 5.5:1 · fg-4 3.2:1 */
+  --bg:      #fbfbfd;
+  --panel:   #ffffff;
+  --panel-2: #f4f5f9;
+  --line:    #e6e8f0;
+  --line-2:  #cbd0de;
+  --fg:      #161923;
+  --fg-2:    #414963;
+  --fg-3:    #626a83;
+  --fg-4:    #8a92a8;
+  --green:   #3f7a12;
+  --cyan:    #0b7a72;
+  --orange:  #8a5806;
+  --red:     #b0243c;
+  --hatch:   rgba(20,24,40,.032);
+  --hatch-2: rgba(20,24,40,.050);
+  --sel:     rgba(63,122,18,.11);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.62;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+
+/* Everything terminal-shaped keeps the monospace face. Prose does not. */
+h1, h2, h3, h4,
+.kick, .name, .secnav, .util, .grouplabel, .half h3,
+.tag, .flat b, .ic-tab, .ic-os, .ic-body, .ic-copy, .copy, .code pre, code, kbd {
+  font-family: var(--mono);
+}
+h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.3; }
+p { margin: 0 0 0.85em; }
+p:last-child { margin-bottom: 0; }
+a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid transparent; }
+a:hover { border-bottom-color: var(--cyan); }
+ul { margin: 0; padding: 0; list-style: none; }
+/* Mono renders optically larger beside sans, so inline code is stepped down. */
+code { color: var(--fg); font-size: 0.915em; }
+::selection { background: var(--sel); }
+
+.wrap { max-width: var(--maxw); margin-inline: auto; padding-inline: var(--pad); }
+
+/* --------------------------------------------------------------- statusbar */
+.bar { position: sticky; top: 0; z-index: 40; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar .wrap { display: flex; align-items: center; gap: 14px; height: 44px; font-size: 12px; }
+.bar .name { color: var(--green); font-weight: 600; flex: none; white-space: nowrap; }
+/* Wordmark. Two files rather than a CSS filter, because the mark's green must
+   darken for the light theme while the letterforms go to ink; no filter does both. */
+.brand { flex: none; display: block; border: 0; line-height: 0; }
+.brand img { height: 18px; width: auto; display: block; }
+.brand .lite, :root[data-theme="light"] .brand .dark { display: none; }
+:root[data-theme="light"] .brand .lite { display: block; }
+footer .brandmark { height: 21px; width: auto; display: block; margin-bottom: 9px; }
+footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { display: none; }
+:root[data-theme="light"] footer .brandmark.lite { display: block; }
+/* min-width:0 is load-bearing: a flex item defaults to min-width:auto, so
+   overflow-x:auto alone will not let this strip shrink and it pushes the bar wide. */
+.bar nav.secnav { margin-left: auto; min-width: 0; display: flex; gap: 15px; overflow-x: auto;
+                  scrollbar-width: none;
+                  mask-image: linear-gradient(90deg, #000 calc(100% - 14px), transparent 100%); }
+.bar nav.secnav::-webkit-scrollbar { display: none; }
+.bar nav.secnav a { color: var(--fg-3); border: 0; white-space: nowrap; }
+.bar nav.secnav a:hover { color: var(--fg); }
+
+.util { flex: none; margin-left: auto; display: flex; align-items: center; gap: 2px;
+        padding-left: 12px; border-left: 1px solid var(--line); }
+.bar nav.secnav + .util { margin-left: 0; }
+.util a, .util button {
+  font-family: inherit; font-size: 12px; line-height: 1; color: var(--fg-3); border: 1px solid transparent;
+  background: none; padding: 6px 8px; cursor: pointer; white-space: nowrap; display: flex;
+  align-items: center; gap: 6px; height: 28px;
+}
+.util a:hover, .util button:hover { color: var(--fg); border-color: var(--line-2); background: var(--panel-2); }
+.util svg { width: 14px; height: 14px; fill: currentColor; flex: none; display: block; }
+.util .ghost { display: none; }
+:root[data-theme="light"] .util .moon { display: none; }
+:root[data-theme="light"] .util .sun  { display: block; }
+.util .sun { display: none; }
+.util .moon { display: block; }
+@media (max-width: 720px) { .util .lbl { display: none; } .util a, .util button { padding: 6px; } }
+@media (max-width: 460px) { .brand img { height: 16px; } .bar .wrap { gap: 10px; } }
+
+/* ------------------------------------------------------------ install call */
+.ic { border: 1px solid var(--line-2); background: var(--panel); max-width: 780px;
+      margin-top: clamp(22px, 3.5vw, 34px); }
+.ic-head { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ic-tabs { display: flex; flex-wrap: wrap; min-width: 0; }
+.ic-tab { font-family: inherit; font-size: 11.5px; letter-spacing: .04em; background: none;
+          border: 0; border-right: 1px solid var(--line); color: var(--fg-3);
+          padding: 10px 15px; cursor: pointer; position: relative; white-space: nowrap; }
+.ic-tab:hover { color: var(--fg-2); }
+.ic-tab[aria-selected="true"] { color: var(--fg); background: var(--panel-2); }
+.ic-tab[aria-selected="true"]::before { content: ""; position: absolute; inset: 0 0 auto 0;
+                                        height: 2px; background: var(--green); }
+.ic-os { margin-left: auto; display: flex; align-items: center; gap: 13px; padding: 0 15px;
+         font-size: 10px; letter-spacing: .14em; }
+.ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
+.ic-os span.on { color: var(--cyan); }
+.ic-os span.on::before { content: "▸ "; color: var(--green); }
+.ic-os span.soon em { font-style: normal; color: var(--fg-4);
+                      text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
+.ic-body { display: flex; align-items: center; gap: 11px; padding: 14px 15px; min-width: 0; }
+.ic-body .p { color: var(--green); flex: none; user-select: none; }
+.ic-body code { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg);
+                overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+.ic-copy { font-family: inherit; font-size: 10.5px; letter-spacing: .06em; flex: none;
+           background: var(--panel-2); border: 1px solid var(--line-2); color: var(--fg-3);
+           padding: 5px 10px; cursor: pointer; }
+.ic-copy:hover { color: var(--fg); border-color: var(--fg-4); }
+.ic-note { font-size: 13px; color: var(--fg-3); max-width: 780px; margin: 11px 0 0; }
+@media (max-width: 640px) {
+  .ic-os { width: 100%; padding: 8px 15px; border-top: 1px solid var(--line); margin-left: 0; }
+  .ic-tab { flex: 1; text-align: center; padding: 10px 8px; }
+}
+
+/* -------------------------------------------------------------------- hero */
+.hero { padding: clamp(48px, 9vw, 92px) 0 clamp(26px, 4vw, 40px); }
+.hero .kick { color: var(--fg-3); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 20px; }
+.hero h1 { font-size: clamp(22px, 4.4vw, 38px); letter-spacing: -0.02em; line-height: 1.26; margin-bottom: 22px; }
+.hero h1 .dim { color: var(--fg-3); }
+.cur { display: inline-block; width: .55em; height: 1em; background: var(--green); vertical-align: -.13em; margin-left: .18em; animation: blink 1.15s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0 } }
+@media (prefers-reduced-motion: reduce) { .cur { animation: none } }
+.hero .sub { color: var(--fg-2); font-size: clamp(15px, 2vw, 19px); line-height: 1.45;
+             max-width: 72ch; margin-bottom: 24px; padding-left: 14px;
+             border-left: 1px solid var(--line-2); text-wrap: pretty; }
+.hero .sub b { color: var(--fg); font-weight: 600; }
+.hero .lede { color: var(--fg-2); max-width: 68ch; font-size: clamp(15px, 1.7vw, 16.5px);
+              line-height: 1.66; }
+.hero .lede b { color: var(--fg); }
+
+
+/* ------------------------------------------------------------- hero visual */
+.herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
+.herovis .frame {
+  border: 1px dashed var(--line-2); aspect-ratio: 16 / 9; padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 7px; background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+}
+.herovis .phone {
+  position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
+  width: clamp(84px, 15%, 186px); aspect-ratio: 9 / 19.5;
+  border: 1px dashed var(--line-2); border-radius: 11px; padding: 8px 7px;
+  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 0 0 7px var(--bg); background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch-2) 8px 9px), var(--panel);
+}
+.herovis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+                border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.herovis .frame .tag { color: var(--cyan); }
+.herovis .phone .tag { color: var(--orange); border-bottom-color: var(--line-2); font-size: 8px;
+                       padding-bottom: 4px; letter-spacing: .06em; }
+.herovis p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-3); max-width: 62ch; }
+.herovis .phone p { font-size: 8.5px; line-height: 1.4; }
+@media (max-width: 620px) {
+  .herovis { padding-right: 0; }
+  .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
+  .herovis .phone p { display: none; }
+}
+
+/* --------------------------------------------------- inline visualizations */
+.vis { border: 1px dashed var(--line-2); padding: 9px 11px; margin-top: 14px;
+       display: flex; flex-direction: column; gap: 6px; background:
+       repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2); }
+.vis.wide { aspect-ratio: 21 / 9; }
+.vis.box { aspect-ratio: 4 / 3; }
+.vis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+            color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.vis p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-3); overflow: hidden; }
+
+/* --------------------------------------------------------------- two halves */
+.halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
+          background: var(--line); border: 1px solid var(--line); margin-top: clamp(34px, 5vw, 56px); }
+.half { background: var(--panel); padding: 20px 22px; }
+.half h3 { font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 10px; }
+.half.ade h3 { color: var(--cyan); }
+.half.acp h3 { color: var(--orange); }
+.half p { color: var(--fg-2); font-size: 14.5px; line-height: 1.6; }
+.halves-note { margin-top: 16px; color: var(--fg-2); max-width: 74ch; font-size: 14.5px;
+               line-height: 1.62; }
+.halves-note b { color: var(--fg); }
+
+/* ---------------------------------------------------------------- sections */
+.sec { margin-top: clamp(52px, 8vw, 90px); }
+.head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.head .n { color: var(--green); font-size: 12px; }
+.head h2 { font-size: clamp(16px, 2.2vw, 20px); }
+.head .fill { flex: 1; border-top: 1px solid var(--line); }
+@media (max-width: 700px) { .head .fill { display: none } }
+.sec > .wrap > .intro { color: var(--fg-2); max-width: 72ch; margin-bottom: clamp(20px, 3vw, 30px);
+                        font-size: 15px; line-height: 1.66; }
+.sec > .wrap > .intro b { color: var(--fg); }
+
+/* --------------------------------------------------------- crop placeholders */
+.crops { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.46fr); gap: 10px; align-items: start; }
+.crops.solo { grid-template-columns: minmax(0, 1fr); }
+.crops.trio { grid-template-columns: repeat(auto-fit, minmax(160px, 224px)); justify-content: start; gap: 14px; }
+.crop {
+  border: 1px dashed var(--line-2); background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+  padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.crop.d { aspect-ratio: 3 / 2; }
+.crop.m { aspect-ratio: 9 / 16; }
+.crop .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+             color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.crop.d .tag { color: var(--cyan); }
+.crop.m .tag { color: var(--orange); }
+.crop p { font-size: 12px; line-height: 1.5; color: var(--fg-3); margin: 0; overflow: hidden; }
+@media (max-width: 460px) { .crops { grid-template-columns: minmax(0, 1fr); } .crop.m { max-width: 190px; } }
+
+/* ---------------------------------------------------------- real screenshots */
+figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--panel-2); min-width: 0; }
+figure.shot img { display: block; width: 100%; height: auto; }
+figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
+                         padding: 8px 10px; border-top: 1px solid var(--line); }
+.shotpair { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+            gap: clamp(16px, 3vw, 30px); align-items: start; }
+@media (max-width: 700px) { .shotpair { grid-template-columns: minmax(0, 1fr); }
+                            .shotpair figure.shot { max-width: 300px; } }
+.shotpair .claims li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
+                       padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
+                       line-height: 1.58; color: var(--fg-2); }
+.shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
+.shotpair .claims li::before { content: "▸"; color: var(--green); }
+.shotpair .claims b { color: var(--fg); }
+
+/* --------------------------------------------------------------- flat lists */
+.flat li { display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 4px 26px;
+           padding: 13px 0; border-top: 1px solid var(--line); }
+.flat li:first-child { border-top: 0; }
+.flat b { color: var(--fg); font-weight: 600; font-size: 13.5px; letter-spacing: .01em; }
+.flat b::before { content: "▸ "; color: var(--green); }
+.flat span { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+@media (max-width: 700px) { .flat li { grid-template-columns: minmax(0, 1fr); } }
+
+.grouplabel { color: var(--orange); font-size: 11.5px; letter-spacing: 0.13em; text-transform: uppercase;
+              margin: 30px 0 2px; padding-bottom: 7px; border-bottom: 1px solid var(--line-2); }
+.grouplabel:first-of-type { margin-top: 0; }
+.grouplabel span { color: var(--fg-3); text-transform: none; letter-spacing: 0; margin-left: 8px; }
+@media (max-width: 560px) { .grouplabel span { display: block; margin-left: 0; } }
+
+/* -------------------------------------------------------------------- code */
+.code { border: 1px solid var(--line-2); background: var(--panel-2); padding: 14px 16px; overflow-x: auto; position: relative; }
+.code pre { margin: 0; font-size: 12.5px; line-height: 1.8; color: var(--fg-2); }
+.code .c { color: var(--fg-3); }
+.code .p { color: var(--green); user-select: none; }
+.copy { position: absolute; top: 7px; right: 7px; font-family: inherit; font-size: 10.5px;
+        background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-3); padding: 2px 6px; cursor: pointer; }
+.copy:hover { color: var(--fg); }
+.note { font-size: 13.5px; color: var(--fg-3); margin-top: 12px; line-height: 1.55; }
+
+footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
+         padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }
+footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 22px 44px; }
+footer h4 { margin: 0 0 5px; color: var(--fg-3); font-size: 12px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
+footer .todo { color: var(--orange); }
+.colophon { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
+            font-family: var(--mono); font-size: 12.5px; color: var(--fg-3); }
+.colophon .h { color: var(--fg-4); user-select: none; margin-right: 2px; }
+
+@media (max-width: 700px) { body { font-size: 15px; }
+                            .flat span, .half p, .shotpair .claims li { font-size: 14px; } }
+/* ------------------------------------------------------- generated sub-pages */
+.page { padding: clamp(34px, 6vw, 64px) 0 0; }
+.page h1 { font-size: clamp(21px, 3.6vw, 31px); letter-spacing: -0.02em; }
+.page .kick { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+              letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 16px; }
+.page .lede { color: var(--fg-2); max-width: 74ch; margin-top: 16px;
+              font-size: clamp(15px, 1.7vw, 16.5px); line-height: 1.66; }
+.page .lede b { color: var(--fg); }
+.page > .wrap > .note { max-width: 74ch; }
+
+.bullets li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
+              padding: 6px 0; color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.bullets li::before { content: "\25B8"; color: var(--green); }
+.bullets b { color: var(--fg); }
+.prose { color: var(--fg-2); max-width: 74ch; font-size: 14.5px; line-height: 1.62; }
+.prose b { color: var(--fg); }
+
+.rel { margin-top: clamp(40px, 6vw, 64px); }
+.relhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+           padding-bottom: 9px; border-bottom: 1px solid var(--line-2); }
+.relhead h2 { font-size: clamp(16px, 2.2vw, 20px); }
+.relhead .when { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+                 letter-spacing: 0.06em; }
+.relhead .fill { flex: 1; }
+
+/* Two label levels inside a release. The Keep a Changelog type carries the brand
+   accent; the grouping under it is quieter, so a release reads as structure
+   rather than as a run of identical headings. */
+.changetype { color: var(--green); font-family: var(--mono); font-size: 11.5px;
+              letter-spacing: 0.13em; text-transform: uppercase; margin: 26px 0 2px;
+              padding-bottom: 7px; border-bottom: 1px solid var(--line-2); }
+.subgroup { color: var(--fg-3); font-family: var(--mono); font-size: 11.5px;
+            letter-spacing: 0.09em; margin: 18px 0 3px; }
+
+/* Tables carry the same hairline grid as the panels; no zebra, no shadow. */
+table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; }
+table th { text-align: left; font-family: var(--mono); font-weight: 600; font-size: 11px;
+           letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3);
+           padding: 0 14px 8px 0; border-bottom: 1px solid var(--line-2); }
+table td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--line);
+           color: var(--fg-2); vertical-align: top; }
+table td:first-child { font-family: var(--mono); color: var(--fg); font-size: 12.5px;
+                       word-break: break-word; }
+table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+
+/* The bar's nav keeps `index.html`'s scroll-fade for narrow screens, but this
+   nav is short and its last item would sit under the fade at every width. The
+   padding gives the gradient empty space to fall on once it is scrolled out. */
+.pagenav { padding-right: 15px; }
+.pagenav a[aria-current="page"] { color: var(--fg); }
+.pagenav a[aria-current="page"]::before { content: "\25B8 "; color: var(--green); }
+
+/* `.rel:first-of-type` does not do this: `:first-of-type` counts elements of the
+   same tag, and the first `div` in a page is the kick line. */
+.lede + .rel, .lede + .toc + .rel { margin-top: clamp(24px, 4vw, 38px); }
+
+.toc { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 18px;
+       padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+       font-family: var(--mono); font-size: 12px; }
+.docsec { margin-top: clamp(34px, 5vw, 52px); }
+.doclist li { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 4px 26px;
+              padding: 13px 0; border-top: 1px solid var(--line); }
+.doclist li:first-child { border-top: 0; }
+.doclist .t { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--fg);
+              letter-spacing: 0.01em; }
+.doclist .t > a { color: inherit; }
+.doclist .t > a:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
+.doclist span.d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+/* Inside `.t`, not a third grid child: as its own cell it lands on a second row
+   whose top is set by the tallest summary, which floats it away from the title
+   it names. */
+.doclist .src { display: block; margin-top: 3px; font-weight: 400; font-size: 11.5px;
+                color: var(--fg-3); overflow-wrap: anywhere; }
+@media (max-width: 700px) { .doclist li { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="swe-mux, home">
+      <img class="dark" src="../img/logo.png" width="640" height="73" alt="" />
+      <img class="lite" src="../img/logo-light.png" width="640" height="73" alt="" />
+    </a>
+    <nav class="secnav pagenav">
+      <a href="../">home</a>
+      <a href="../docs/">docs</a>
+      <a href="../changelog/" aria-current="page">changelog</a>
+      <a href="../roadmap/">roadmap</a>
+      <a href="../acknowledgements/">acknowledgements</a>
+    </nav>
+    <div class="util">
+      <a href="https://github.com/OWNER/swe-mux" data-todo="TODO(release): OWNER" aria-label="Source on GitHub" title="Source on GitHub">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="lbl">github</span>
+      </a>
+      <button type="button" id="themebtn" aria-label="Toggle colour scheme" title="Toggle colour scheme">
+        <svg class="moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7Z"/></svg>
+        <svg class="sun" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.6A3.4 3.4 0 1 0 8 11.4 3.4 3.4 0 0 0 8 4.6Zm0-4.6h0a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V.7A.7.7 0 0 1 8 0Zm0 13.3a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V14a.7.7 0 0 1 .7-.7ZM16 8a.7.7 0 0 1-.7.7H14a.7.7 0 0 1 0-1.4h1.3A.7.7 0 0 1 16 8ZM2.7 8a.7.7 0 0 1-.7.7H.7a.7.7 0 0 1 0-1.4H2a.7.7 0 0 1 .7.7Zm10.96-5.66a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0ZM4.28 11.72a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0Zm9.38 1.94a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 1 1 1-1l.94.94a.7.7 0 0 1 0 1ZM4.28 4.28a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 0 1 1-1l.94.94a.7.7 0 0 1 0 1Z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<main>
+<section class="page">
+  <div class="wrap">
+    <div class="kick">what changed, and when</div>
+    <h1>Changelog</h1>
+    <div class="lede">
+      <p>All notable changes to swe-mux are recorded here.</p>
+      <p>The format follows <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>, and the project follows <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>. While the major version is <code>0</code>, a minor bump may carry a breaking change; the entry says so explicitly when it does.</p>
+      <p>Entries describe what changed for someone running swe-mux, not how it was built. Internal refactors, test changes, and documentation edits are omitted unless they change observable behaviour, a supported platform, or a distributed artifact.</p>
+      <p>The release procedure that maintains this file is <a href="https://github.com/OWNER/swe-mux/blob/master/RELEASING.md" data-todo="TODO(release): OWNER"><code>RELEASING.md</code></a>.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/OWNER/swe-mux/compare/v0.1.0...HEAD" data-todo="TODO(release): OWNER">Unreleased</a></h2>
+        <span class="fill"></span>
+      </div>
+      <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/OWNER/swe-mux/releases/tag/v0.1.0" data-todo="TODO(release): OWNER">0.1.0</a></h2>
+        <span class="when">unreleased</span>
+        <span class="fill"></span>
+      </div>
+      <p class="prose">First public release.</p>
+      <p class="prose">swe-mux is a local daemon that owns long-lived pseudoterminals for coding-agent CLIs and shells, and presents them in a browser. Everything runs on the operator's own machine; the trust boundary is stated in <a href="https://github.com/OWNER/swe-mux/blob/master/SECURITY.md" data-todo="TODO(release): OWNER"><code>SECURITY.md</code></a>.</p>
+      <p class="prose">Windows is the proving platform and the only one with a frozen desktop application. Linux runs the daemon and the test suite from source. macOS is implemented and typechecked but has never been executed.</p>
+      <div class="changetype">Added</div>
+      <div class="subgroup">Session ownership and terminals</div>
+      <ul class="bullets">
+        <li><span><code>muxd</code>, an aiohttp daemon that owns every pseudoterminal, so closing or reloading the browser never stops a session.</span></li>
+        <li><span>A separate PTY supervisor process that holds the terminals, so live sessions survive a daemon restart, a backend reload, and a rebuild of the desktop application.</span></li>
+        <li><span>ConPTY on Windows and the stdlib <code>pty</code> module on POSIX behind one platform seam, with Win32 Job Object process ownership and its POSIX process-group equivalent.</span></li>
+        <li><span>Crash recovery for sessions the supervisor could not keep alive: a durable session registry, terminal checkpoints, and cold sessions that stay readable after their process ends.</span></li>
+        <li><span>Multi-device attach for one session, with exactly one connection permitted to write to the PTY and one arbitrated terminal size shared across devices.</span></li>
+        <li><span>Terminal-aware bracketed paste, copy/paste, find, clipboard capture, and a bounded clipboard-history ring that refuses secret-shaped copies.</span></li>
+      </ul>
+      <div class="subgroup">Projects and workspace</div>
+      <ul class="bullets">
+        <li><span>Explicit Projects that bind sessions, layouts, notes, history, and file browsing to a canonical folder, plus optional Groups for sidebar organization.</span></li>
+        <li><span>A mixed-view workspace of panes, tabs, splits, and drag/drop, with desktop split geometry as durable Project state and a single-pane projection for mobile.</span></li>
+        <li><span>Project-owned notes, a file browser with editors, ignore rules, and leased non-recursive watches.</span></li>
+        <li><span>A reusable prompt library whose templates are inert text: selecting one inserts, and never submits.</span></li>
+        <li><span>Trusted task discovery and a per-Project Run menu over VS Code tasks, root package scripts, and <code>.swe-mux/actions.toml</code>; every task file stays inert until its exact current contents are reviewed and approved, and any edit revokes that approval.</span></li>
+        <li><span>Process and preview registration for Project-local listeners, with HTTP, WebSocket, and HMR traffic bridged through the daemon's own URL, and static document previews served from the checkout under a sandbox CSP.</span></li>
+      </ul>
+      <div class="subgroup">Agent sessions</div>
+      <ul class="bullets">
+        <li><span>A harness registry with capability descriptors and adapter families, covering Claude Code, Codex CLI, and plain shells.</span></li>
+        <li><span>Automatic promotion of a nested agent started inside an ordinary terminal, through mux-local <code>claude.cmd</code> and <code>codex.cmd</code> shims that preserve the normal CLI invocation.</span></li>
+        <li><span>Session status detection with a durable transition ledger, a state watchdog, awaiting sub-reasons, and a golden detection corpus.</span></li>
+        <li><span>A fail-closed delivery-readiness contract (<code>safe</code> / <code>blocked(reason)</code> / <code>unknown</code>) that never authorizes automatic terminal input on <code>unknown</code>, and never reads child-agent completion as root-agent readiness.</span></li>
+        <li><span>Control-plane approvals driven by the harness's structured permission request rather than the terminal screen, with a floor that no configuration can reach past.</span></li>
+        <li><span>Managed provider accounts: save, relabel, reauthenticate, switch, and remove Claude and Codex logins, with subscription-window polling. Only authentication is copied, and switching is always an explicit act.</span></li>
+        <li><span>A read-only History browser that reconciles native Claude and Codex transcript directories at startup without moving or deleting the originals, and reads a Claude transcript as the branching DAG it is.</span></li>
+        <li><span>Launch profiles for shells and agents, and a WSL agent bridge with an explicit reachability probe.</span></li>
+      </ul>
+      <div class="subgroup">Fleet control plane</div>
+      <ul class="bullets">
+        <li><span>Tier 0 deterministic fact capture with source pointers and fingerprints, scoped by a run boundary that survives an in-CLI conversation replacement.</span></li>
+        <li><span>Model-free detectors for loops and stalls, declared-versus-verified claims, documentation debt, and provenance.</span></li>
+        <li><span>A tree-sitter code-structure graph backing blast-radius, navigation, context, and test-gap reads.</span></li>
+        <li><span>An opt-in scan timeline with per-run grants, budgets, source rehydration, and dead-end extraction.</span></li>
+        <li><span>Attention ranking with an interrupt budget, four in-app delivery channels, breakpoint detection, and an absence digest.</span></li>
+        <li><span>Automation observers that can capture and report but cannot type, approve, spawn, execute scripts, or mutate a Project, governed by a per-Project enablement dependency graph and an install-wide ceiling.</span></li>
+        <li><span>An automation dashboard with policy, usage, and activity tabs as the single editor that may turn an automation off in either scope.</span></li>
+        <li><span>A prompt queue with head-of-line ordering, stranding, and seed staging for new sessions; gated auto-delivery with a stability window, quiet hours, an emergency pause, and a consecutive-send cap.</span></li>
+        <li><span>Agent-to-agent messages and a fleet queue, where a non-human sender's write ends at a human unless the receiver granted it or itself solicited it.</span></li>
+        <li><span>Scheduled runs (cron, interval, one-off) that go through the ordinary spawn, resume, and queue paths and grow no second authority.</span></li>
+        <li><span>A land queue that serializes branch landing: reconcile, then a verification gate whose exact bytes a human approved, then a fast-forward-only merge, returning conflicts and failures to the branch's own agent.</span></li>
+      </ul>
+      <div class="subgroup">Agent-facing MCP surface</div>
+      <ul class="bullets">
+        <li><span>A per-session MCP server exposing reads over the fleet: sibling sessions and their status, paged transcripts, archived conversation search, Project notes, Agent Context sources, scan timeline and search, provenance, verified status, prior resolutions, and dead ends.</span></li>
+        <li><span>Bounded writes only: staging a message into another session's prompt queue, drafting a spawn request for human approval, arming a session-settle watch, and interrupting or ending a session behind a per-Project grant.</span></li>
+      </ul>
+      <div class="subgroup">Git</div>
+      <ul class="bullets">
+        <li><span>Git status, comparison, diff review, first-time repository initialization, a commit graph, and a provenance ledger that separates who authored a change from who landed it.</span></li>
+        <li><span>Worktree creation and removal, including a background purge that never appears in <code>git worktree list</code> and never raises a checkout's dirty count.</span></li>
+      </ul>
+      <div class="subgroup">Voice and assistant</div>
+      <ul class="bullets">
+        <li><span>Read aloud, from a summarized or verbatim slice of the last turn, through the OS voice engine, a local Kokoro model, or an explicitly acknowledged external Edge TTS provider that is never bundled.</span></li>
+        <li><span>Hands-free conversation: browser capture through an AudioWorklet, Silero VAD, a frame-counted endpoint gate, and faster-whisper transcription with configurable wake words and commands.</span></li>
+        <li><span>The Mux assistant, where the model proposes names, deterministic code resolves and executes through existing paths, and the confirmation floor for a consequential action is not configurable.</span></li>
+      </ul>
+      <div class="subgroup">Remote access and desktop</div>
+      <ul class="bullets">
+        <li><span>A loopback listener plus an optional direct Tailscale listener carrying the same UI and API, with automatic Tailscale Serve on HTTPS 443 so a phone browser gets the secure context its microphone requires.</span></li>
+        <li><span>Web push notifications with per-device preferences, and device presence that decides which device the operator is at once for the whole application.</span></li>
+        <li><span>A Windows desktop shell: a WebView2 window, a system tray supervisor, login startup, and a frozen <code>onedir</code> bundle that can rebuild and redeploy itself while preserving live sessions.</span></li>
+        <li><span>A progressive web app manifest and service worker for phone installation.</span></li>
+      </ul>
+      <div class="subgroup">Operations</div>
+      <ul class="bullets">
+        <li><span><code>mux</code>, an HTTP CLI with stable human and JSON output, and <code>mux doctor</code> for local configuration, integration, ownership, tailnet, provider, telemetry, automation, and queue problems.</span></li>
+        <li><span>A copyable diagnostics bundle (sanitized config, remote state, firewall status, network counters, status-health aggregate, log tails) that contains no terminal bytes and no message content.</span></li>
+        <li><span>Durable operational telemetry for process ownership, quota samples and reset detection, compaction, and tool evidence, all recorded as observations with confidence rather than as authoritative facts.</span></li>
+        <li><span>Usage analytics that never sum agent spend, metered automation spend, and provider quota into one figure, and spending budgets denominated in tokens or dollars with an honest floor when cost is unmeasurable.</span></li>
+        <li><span>Traffic accounting, response compression, static precompression, and conditional Git reads.</span></li>
+      </ul>
+      <div class="subgroup">Licensing and governance</div>
+      <ul class="bullets">
+        <li><span>Apache-2.0 with <code>NOTICE</code> and <code>TRADEMARK.md</code>, declared in package metadata as a PEP 639 license expression and carried into the wheel.</span></li>
+        <li><span>Contributions under a DCO sign-off rather than a CLA.</span></li>
+        <li><span>A generated <code>THIRD-PARTY-NOTICES.md</code> and a two-half license gate: a metadata check over the resolved dependency closure that runs in the test suite, and a payload check over the built desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <img class="brandmark dark" src="../img/logo.png" width="640" height="73" alt="swe-mux" />
+        <img class="brandmark lite" src="../img/logo-light.png" width="640" height="73" alt="swe-mux" />
+        <div>Agentic development environment and agent control plane.</div>
+        <div>Windows-first. Local-only. No account.</div>
+      </div>
+      <div>
+        <h4>pages</h4>
+        <div><a href="../">home</a> &middot; <a href="../docs/">docs</a></div>
+        <div><a href="../changelog/">changelog</a> &middot; <a href="../roadmap/">roadmap</a>
+        &middot; <a href="../acknowledgements/">acknowledgements</a></div>
+      </div>
+      <div>
+        <h4>source</h4>
+        <div><a href="https://github.com/OWNER/swe-mux" data-todo="TODO(release): OWNER">github.com/OWNER/swe-mux</a></div>
+        <div><code>.docs/design/00_OVERVIEW.md</code></div>
+      </div>
+      <div>
+        <h4>license</h4>
+        <div><a href="https://github.com/OWNER/swe-mux/blob/master/LICENSE" data-todo="TODO(release): OWNER">Apache-2.0</a></div>
+        <div><a href="https://github.com/OWNER/swe-mux/blob/master/THIRD-PARTY-NOTICES.md" data-todo="TODO(release): OWNER">Third-party notices</a></div>
+      </div>
+    </div>
+    <p class="colophon"><span class="h">#</span> This page is generated by
+    <code>site/tools/build.py</code>. Edit its source, not the HTML.</p>
+    <p class="colophon"><span class="h">#</span> swe-mux is not affiliated with, endorsed
+    by, or sponsored by Anthropic, OpenAI, or any other vendor whose CLI it launches.
+    Product names and trademarks belong to their respective owners. You run those tools
+    under your own account and your own agreement with each vendor.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var btn = document.getElementById('themebtn');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    document.querySelector('meta[name=color-scheme]').setAttribute('content', t);
+  }
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    apply(next);
+    try { localStorage.setItem('swemux-theme', next); } catch (e) {}
+  });
+})();
+</script>
+
+</body>
+</html>
