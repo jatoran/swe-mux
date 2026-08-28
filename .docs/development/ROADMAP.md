@@ -3586,10 +3586,39 @@ No update server: static manifest plus GitHub Releases covers the whole loop.
 - [ ] Two channels, both exercised before launch: PyPI for developers
   (`uv tool upgrade swe-mux` / `pipx upgrade`), and the frozen desktop app as GitHub Releases
   artifacts (free hosting, download counts via API).
-- [ ] In-app update check: poll the site's `version.json` (fallback: the GitHub Releases API,
+- [x] In-app update check: poll the site's `version.json` (fallback: the GitHub Releases API,
   whose 60/hr unauthenticated limit is ample for a daily check), semver-compare against the
   running version, and show a non-blocking banner with the changelog.
   Nothing downloads or installs without an explicit user act.
+  (Done 2026-08-27. `src/swe_mux/update_check.py` + `routes/update.py` +
+  `frontend/src/UpdateBanner.tsx`; contract in `design/interfaces.md`.
+  **Four things are load-bearing and each was a constraint rather than a preference.**
+  *The no-telemetry claim stays literally true.* This is now the only request swe-mux makes
+  on its own behalf, so it is documented as the single exception in `README.md`,
+  `SECURITY.md`, `remote-access.md`, and `desktop-shell.md`, and it carries nothing that
+  identifies the install: no query string, no custom header, no body, and a `DummyCookieJar`
+  so a `Set-Cookie` from the site cannot become an install id on the next day's request.
+  `update_check_enabled` is on by default and visible in Settings → Diagnostics; off means
+  no request under any caller, which is proven by counting fetches rather than asserted.
+  *A restart loop cannot become a request loop.* The interval is enforced against a
+  wall-clock timestamp in `<data_dir>/update-check.json`, so five restarts make one request;
+  a timestamp from the future is treated as due, because one extra request is the
+  recoverable side of a clock that moved and the other reading stops checking until wall
+  time catches up.
+  *The comparison is a pure function with its own tests*, because it is the part that is
+  confidently wrong when it is wrong: a string compare puts `0.10.0` below `0.9.0` and calls
+  `0.1.0` newer than itself once a `v` prefix creeps in. It is PEP 440 - prereleases below
+  their release, dev below what it is a dev of, `1.0` and `1.0.0` one version, local
+  segments ignored - and an unparseable version on either side answers "cannot tell" rather
+  than "older".
+  *`schema` is honoured before any field is read.* An unrecognized value degrades to
+  "cannot tell" instead of misparsing, because an install years old will still be reading
+  this file and cannot be asked to change first; the same rule is why the fallback runs on
+  *any* non-ok manifest outcome rather than only on an unreachable one, and why a failed
+  fallback leaves the manifest's own reason in place.
+  Deliberately not done: the frozen-app updater below, and any prerelease-channel policy -
+  the manifest carries no severity or channel, so the banner states a version and nothing
+  else.)
 - [ ] The frozen-app updater reuses the redeploy machinery's staged swap
   (`packaging/redeploy_desktop.py`): download the release artifact, verify its SHA-256 against
   the manifest, stage, healthcheck, swap, roll back on failure - sessions preserved through

@@ -200,6 +200,17 @@ Windows-only, frozen-build-gated Defender Firewall inspect and repair for the ta
 
 **Not:** non-Windows and source-build behavior (`firewall_supported` gates it off), any rule not owned by swe-mux's own program path, or the phone's own firewall.
 
+### `update_check.py`
+
+The release update check, in three layers.
+The pure PEP 440 comparison (`parse_version`, `compare_versions`, `is_newer`), which returns "cannot tell" rather than an order when a version does not parse.
+The schema-gated `parse_manifest` and `parse_github_release` reductions, which refuse an unrecognized `schema` before reading a field.
+And `UpdateChecker`, which owns the daily interval persisted in `<data_dir>/update-check.json`, the bounded cookie-free fetch, the GitHub Releases fallback, per-version dismissal, and the snapshot the route serves.
+It is the **only** module that reaches the network on swe-mux's own behalf.
+`update_check_enabled` gates it, and off means no request is made at all - which `tests/test_update_check.py` proves by counting fetches.
+
+**Not:** downloading, hash-verifying, staging, or installing anything (that is the future frozen-app updater over the redeploy machinery); raising on any path; blocking startup - the loop is supervised as `update-check` and takes its first look 60s in.
+
 ## Operator surfaces
 
 ### `prerequisites.py`
