@@ -165,7 +165,15 @@ def build_installer(dist: Path, out: Path) -> Path:
         str(find_iscc()),
         f"/DAppVersion={metadata.version}",
         f"/DFileVersion={file_version(metadata.version)}",
-        f"/DAppSource={dist}",
+        # Absolute, which the script documents as this define's contract and
+        # which a relative path silently breaks. ISCC resolves a relative
+        # `Source:` against the **.iss file's own directory**, not against its
+        # working directory and not against `SourceRoot` - so `--dist dist`
+        # reached the compiler as `packaging/installer/dist/swe-mux/*`, and the
+        # only symptom was "No files found matching" naming a path nobody
+        # passed. `cwd=ROOT` below does not help, and looking like it should is
+        # what made this cost a release (v0.1.1, 2026-08-28).
+        f"/DAppSource={dist.resolve()}",
         f"/DSourceRoot={ROOT}",
         f"/DIconFile={ICON}",
         f"/F{name.removesuffix('.exe')}",

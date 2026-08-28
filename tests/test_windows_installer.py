@@ -375,6 +375,61 @@ def test_a_configured_sign_tool_registers_and_switches_the_block_on(
     assert f"/DSignTool={build_installer.SIGNTOOL_NAME}" in command
 
 
+def test_every_path_define_reaches_the_compiler_absolute(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The three `/D` path defines are absolute, because ISCC anchors on the script.
+
+    A relative `Source:` in the `.iss` is resolved against **the `.iss` file's own
+    directory**, not against the compiler's working directory and not against
+    `SourceRoot`. So passing `--dist dist` sent `/DAppSource=dist`, the `[Files]`
+    section looked for `packaging/installer/dist/swe-mux/*`, and ISCC failed with
+    "No files found matching" naming a path no caller had ever written. `cwd=ROOT`
+    on the subprocess looks like it should prevent that and does not.
+
+    That cost the v0.1.1 desktop artifact on 2026-08-28: every earlier step passed,
+    the bundles built, and the release shipped to PyPI without a GitHub Release or a
+    refreshed `version.json`. The `.iss` header already documented `AppSource` as an
+    absolute path, so this asserts the caller keeps the contract the script states.
+
+    This is deliberately a check on the *command*, not a compile: the suite cannot
+    run ISCC, which is the gap that let the bug through, and a text assertion that
+    names the exact failure is worth more than none. A real compile smoke on a stub
+    tree, skipped where ISCC is absent, is the stronger version and is owed.
+    """
+    as_windows_host(monkeypatch)
+    recorded: list[list[str]] = []
+
+    def capture(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        recorded.append(list(command))
+        (tmp_path / "out" / str(release_installer_name("0.9.0", WINDOWS))).write_bytes(b"MZ")
+        return subprocess.CompletedProcess(command, 0)
+
+    make_bundle(tmp_path / "dist" / "swe-mux")
+    (tmp_path / "dist" / "swe-mux-supervisor").mkdir(parents=True)
+    (tmp_path / "out").mkdir()
+    monkeypatch.setattr(build_installer, "find_iscc", lambda: Path("iscc"))
+    monkeypatch.setattr(build_installer.subprocess, "run", capture)
+
+    # A *relative* dist path, which is what the release workflow passes and what
+    # made this fail. Resolving it is the product's job, not the caller's.
+    monkeypatch.chdir(tmp_path)
+    build_installer.build_installer(Path("dist"), tmp_path / "out")
+
+    defines = {
+        flag.split("=", 1)[0][2:]: flag.split("=", 1)[1]
+        for flag in recorded[0]
+        if flag.startswith("/D") and "=" in flag
+    }
+    for name in ("AppSource", "SourceRoot", "IconFile"):
+        assert name in defines, f"/D{name} was not passed to the compiler"
+        assert Path(defines[name]).is_absolute(), (
+            f"/D{name}={defines[name]} is relative; ISCC resolves a relative path "
+            "against the .iss file's directory, so the compiler will look for it "
+            "under packaging/installer/"
+        )
+
+
 # --- refusals that cost nothing -----------------------------------------------
 
 
