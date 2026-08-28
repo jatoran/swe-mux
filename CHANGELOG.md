@@ -15,10 +15,7 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
-## [0.1.0] - unreleased
-
-<!-- TODO(release): replace `unreleased` above with the tag date (YYYY-MM-DD) when v0.1.0 is
-     cut, per RELEASING.md. -->
+## [0.1.0] - 2026-08-28
 
 First public release.
 

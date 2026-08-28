@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Compared · swe-mux</title>
+<meta name="description" content="swe-mux against Herdr, tmux, Orca, Conductor, Superset, and Warp. Every cell is sourced and dated, and the rows where swe-mux loses are marked." />
+<meta name="color-scheme" content="dark" />
+<script>
+/* Runs before first paint so the chosen scheme never flashes. */
+(function () {
+  var t;
+  try { t = localStorage.getItem('swemux-theme'); } catch (e) {}
+  if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  document.currentScript.previousElementSibling.setAttribute('content', t);
+})();
+</script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2.6 2.3 L13.4 6.1 L13.4 9.9 L2.6 13.7 Z' fill='%238fdb6f'/></svg>" />
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root {
+  /* Dark. Every text token is checked against --bg:
+     fg 15.2:1 · fg-2 9.1:1 · fg-3 5.4:1 · fg-4 3.5:1 (decorative and large only). */
+  --bg:      #0e1016;
+  --panel:   #151821;
+  --panel-2: #1b1f2a;
+  --line:    #242a38;
+  --line-2:  #353d51;
+  --fg:      #dfe5f0;
+  --fg-2:    #adb7cc;
+  --fg-3:    #828da6;
+  --fg-4:    #626d88;   /* borders and inert markers only, never body text */
+  --green:   #8fdb6f;
+  --cyan:    #6fd8cb;
+  --orange:  #e8b56b;
+  --red:     #f87f95;
+
+  --hatch:   rgba(255,255,255,.020);
+  --hatch-2: rgba(255,255,255,.034);
+  --sel:     rgba(143,219,111,.15);
+
+  /* Mono carries identity: headings, labels, commands, anything terminal-shaped.
+     Sans carries prose, because monospace paragraphs are what made this page tiring. */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --pad: clamp(18px, 4vw, 40px);
+  --maxw: 1160px;
+}
+
+:root[data-theme="light"] {
+  /* fg 15.8:1 · fg-2 8.6:1 · fg-3 5.5:1 · fg-4 3.2:1 */
+  --bg:      #fbfbfd;
+  --panel:   #ffffff;
+  --panel-2: #f4f5f9;
+  --line:    #e6e8f0;
+  --line-2:  #cbd0de;
+  --fg:      #161923;
+  --fg-2:    #414963;
+  --fg-3:    #626a83;
+  --fg-4:    #8a92a8;
+  --green:   #3f7a12;
+  --cyan:    #0b7a72;
+  --orange:  #8a5806;
+  --red:     #b0243c;
+  --hatch:   rgba(20,24,40,.032);
+  --hatch-2: rgba(20,24,40,.050);
+  --sel:     rgba(63,122,18,.11);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.62;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+
+/* Everything terminal-shaped keeps the monospace face. Prose does not. */
+h1, h2, h3, h4,
+.kick, .name, .secnav, .util, .grouplabel, .half h3,
+.tag, .flat b, .ic-tab, .ic-os, .ic-body, .ic-copy, .copy, .code pre, code, kbd {
+  font-family: var(--mono);
+}
+h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.3; }
+p { margin: 0 0 0.85em; }
+p:last-child { margin-bottom: 0; }
+a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid transparent; }
+a:hover { border-bottom-color: var(--cyan); }
+ul { margin: 0; padding: 0; list-style: none; }
+/* Mono renders optically larger beside sans, so inline code is stepped down. */
+code { color: var(--fg); font-size: 0.915em; }
+::selection { background: var(--sel); }
+
+.wrap { max-width: var(--maxw); margin-inline: auto; padding-inline: var(--pad); }
+
+/* --------------------------------------------------------------- statusbar */
+.bar { position: sticky; top: 0; z-index: 40; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar .wrap { display: flex; align-items: center; gap: 14px; height: 44px; font-size: 12px; }
+.bar .name { color: var(--green); font-weight: 600; flex: none; white-space: nowrap; }
+/* Wordmark. Two files rather than a CSS filter, because the mark's green must
+   darken for the light theme while the letterforms go to ink; no filter does both. */
+.brand { flex: none; display: block; border: 0; line-height: 0; }
+.brand img { height: 18px; width: auto; display: block; }
+.brand .lite, :root[data-theme="light"] .brand .dark { display: none; }
+:root[data-theme="light"] .brand .lite { display: block; }
+footer .brandmark { height: 21px; width: auto; display: block; margin-bottom: 9px; }
+footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { display: none; }
+:root[data-theme="light"] footer .brandmark.lite { display: block; }
+/* min-width:0 is load-bearing: a flex item defaults to min-width:auto, so
+   overflow-x:auto alone will not let this strip shrink and it pushes the bar wide. */
+.bar nav.secnav { margin-left: auto; min-width: 0; display: flex; gap: 15px; overflow-x: auto;
+                  scrollbar-width: none;
+                  mask-image: linear-gradient(90deg, #000 calc(100% - 14px), transparent 100%); }
+.bar nav.secnav::-webkit-scrollbar { display: none; }
+.bar nav.secnav a { color: var(--fg-3); border: 0; white-space: nowrap; }
+.bar nav.secnav a:hover { color: var(--fg); }
+
+.util { flex: none; margin-left: auto; display: flex; align-items: center; gap: 2px;
+        padding-left: 12px; border-left: 1px solid var(--line); }
+.bar nav.secnav + .util { margin-left: 0; }
+.util a, .util button {
+  font-family: inherit; font-size: 12px; line-height: 1; color: var(--fg-3); border: 1px solid transparent;
+  background: none; padding: 6px 8px; cursor: pointer; white-space: nowrap; display: flex;
+  align-items: center; gap: 6px; height: 28px;
+}
+.util a:hover, .util button:hover { color: var(--fg); border-color: var(--line-2); background: var(--panel-2); }
+.util svg { width: 14px; height: 14px; fill: currentColor; flex: none; display: block; }
+.util .ghost { display: none; }
+:root[data-theme="light"] .util .moon { display: none; }
+:root[data-theme="light"] .util .sun  { display: block; }
+.util .sun { display: none; }
+.util .moon { display: block; }
+@media (max-width: 720px) { .util .lbl { display: none; } .util a, .util button { padding: 6px; } }
+@media (max-width: 460px) { .brand img { height: 16px; } .bar .wrap { gap: 10px; } }
+
+/* ------------------------------------------------------------ install call */
+.ic { border: 1px solid var(--line-2); background: var(--panel); max-width: 780px;
+      margin-top: clamp(22px, 3.5vw, 34px); }
+.ic-head { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ic-tabs { display: flex; flex-wrap: wrap; min-width: 0; }
+.ic-tab { font-family: inherit; font-size: 11.5px; letter-spacing: .04em; background: none;
+          border: 0; border-right: 1px solid var(--line); color: var(--fg-3);
+          padding: 10px 15px; cursor: pointer; position: relative; white-space: nowrap; }
+.ic-tab:hover { color: var(--fg-2); }
+.ic-tab[aria-selected="true"] { color: var(--fg); background: var(--panel-2); }
+.ic-tab[aria-selected="true"]::before { content: ""; position: absolute; inset: 0 0 auto 0;
+                                        height: 2px; background: var(--green); }
+.ic-os { margin-left: auto; display: flex; align-items: center; gap: 13px; padding: 0 15px;
+         font-size: 10px; letter-spacing: .14em; }
+.ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
+.ic-os span.on { color: var(--cyan); }
+.ic-os span.on::before { content: "▸ "; color: var(--green); }
+.ic-os span.qual em { font-style: normal; color: var(--fg-4);
+                      text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
+.ic-body { display: flex; align-items: center; gap: 11px; padding: 14px 15px; min-width: 0; }
+.ic-body .p { color: var(--green); flex: none; user-select: none; }
+.ic-body code { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg);
+                overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+.ic-copy { font-family: inherit; font-size: 10.5px; letter-spacing: .06em; flex: none;
+           background: var(--panel-2); border: 1px solid var(--line-2); color: var(--fg-3);
+           padding: 5px 10px; cursor: pointer; }
+.ic-copy:hover { color: var(--fg); border-color: var(--fg-4); }
+.ic-note { font-size: 13px; color: var(--fg-3); max-width: 780px; margin: 11px 0 0; }
+@media (max-width: 640px) {
+  .ic-os { width: 100%; padding: 8px 15px; border-top: 1px solid var(--line); margin-left: 0; }
+  .ic-tab { flex: 1; text-align: center; padding: 10px 8px; }
+}
+
+/* -------------------------------------------------------------------- hero */
+.hero { padding: clamp(48px, 9vw, 92px) 0 clamp(26px, 4vw, 40px); }
+.hero .kick { color: var(--fg-3); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 20px; }
+.hero h1 { font-size: clamp(22px, 4.4vw, 38px); letter-spacing: -0.02em; line-height: 1.26; margin-bottom: 22px; }
+.hero h1 .dim { color: var(--fg-3); }
+.cur { display: inline-block; width: .55em; height: 1em; background: var(--green); vertical-align: -.13em; margin-left: .18em; animation: blink 1.15s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0 } }
+@media (prefers-reduced-motion: reduce) { .cur { animation: none } }
+.hero .sub { color: var(--fg-2); font-size: clamp(15px, 2vw, 19px); line-height: 1.45;
+             max-width: 72ch; margin-bottom: 24px; padding-left: 14px;
+             border-left: 1px solid var(--line-2); text-wrap: pretty; }
+.hero .sub b { color: var(--fg); font-weight: 600; }
+.hero .lede { color: var(--fg-2); max-width: 68ch; font-size: clamp(15px, 1.7vw, 16.5px);
+              line-height: 1.66; }
+.hero .lede b { color: var(--fg); }
+
+
+/* ------------------------------------------------------------- hero visual */
+.herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
+.herovis .frame {
+  border: 1px dashed var(--line-2); aspect-ratio: 16 / 9; padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 7px; background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+}
+.herovis .phone {
+  position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
+  width: clamp(84px, 15%, 186px); aspect-ratio: 9 / 19.5;
+  border: 1px dashed var(--line-2); border-radius: 11px; padding: 8px 7px;
+  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 0 0 7px var(--bg); background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch-2) 8px 9px), var(--panel);
+}
+.herovis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+                border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.herovis .frame .tag { color: var(--cyan); }
+.herovis .phone .tag { color: var(--orange); border-bottom-color: var(--line-2); font-size: 8px;
+                       padding-bottom: 4px; letter-spacing: .06em; }
+.herovis p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-3); max-width: 62ch; }
+.herovis .phone p { font-size: 8.5px; line-height: 1.4; }
+@media (max-width: 620px) {
+  .herovis { padding-right: 0; }
+  .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
+  .herovis .phone p { display: none; }
+}
+
+/* --------------------------------------------------- inline visualizations */
+.vis { border: 1px dashed var(--line-2); padding: 9px 11px; margin-top: 14px;
+       display: flex; flex-direction: column; gap: 6px; background:
+       repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2); }
+.vis.wide { aspect-ratio: 21 / 9; }
+.vis.box { aspect-ratio: 4 / 3; }
+.vis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+            color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.vis p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-3); overflow: hidden; }
+
+/* --------------------------------------------------------------- two halves */
+.halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
+          background: var(--line); border: 1px solid var(--line); margin-top: clamp(34px, 5vw, 56px); }
+.half { background: var(--panel); padding: 20px 22px; }
+.half h3 { font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 10px; }
+.half.ade h3 { color: var(--cyan); }
+.half.acp h3 { color: var(--orange); }
+.half p { color: var(--fg-2); font-size: 14.5px; line-height: 1.6; }
+.halves-note { margin-top: 16px; color: var(--fg-2); max-width: 74ch; font-size: 14.5px;
+               line-height: 1.62; }
+.halves-note b { color: var(--fg); }
+
+/* ---------------------------------------------------------------- sections */
+.sec { margin-top: clamp(52px, 8vw, 90px); }
+.head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.head .n { color: var(--green); font-size: 12px; }
+.head h2 { font-size: clamp(16px, 2.2vw, 20px); }
+.head .fill { flex: 1; border-top: 1px solid var(--line); }
+@media (max-width: 700px) { .head .fill { display: none } }
+.sec > .wrap > .intro { color: var(--fg-2); max-width: 72ch; margin-bottom: clamp(20px, 3vw, 30px);
+                        font-size: 15px; line-height: 1.66; }
+.sec > .wrap > .intro b { color: var(--fg); }
+
+/* --------------------------------------------------------- crop placeholders */
+.crops { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.46fr); gap: 10px; align-items: start; }
+.crops.solo { grid-template-columns: minmax(0, 1fr); }
+.crops.trio { grid-template-columns: repeat(auto-fit, minmax(160px, 224px)); justify-content: start; gap: 14px; }
+.crop {
+  border: 1px dashed var(--line-2); background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+  padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.crop.d { aspect-ratio: 3 / 2; }
+.crop.m { aspect-ratio: 9 / 16; }
+.crop .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+             color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.crop.d .tag { color: var(--cyan); }
+.crop.m .tag { color: var(--orange); }
+.crop p { font-size: 12px; line-height: 1.5; color: var(--fg-3); margin: 0; overflow: hidden; }
+@media (max-width: 460px) { .crops { grid-template-columns: minmax(0, 1fr); } .crop.m { max-width: 190px; } }
+
+/* ---------------------------------------------------------- real screenshots */
+figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--panel-2); min-width: 0; }
+figure.shot img { display: block; width: 100%; height: auto; }
+figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
+                         padding: 8px 10px; border-top: 1px solid var(--line); }
+.shotpair { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+            gap: clamp(16px, 3vw, 30px); align-items: start; }
+@media (max-width: 700px) { .shotpair { grid-template-columns: minmax(0, 1fr); }
+                            .shotpair figure.shot { max-width: 300px; } }
+.shotpair .claims li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
+                       padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
+                       line-height: 1.58; color: var(--fg-2); }
+.shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
+.shotpair .claims li::before { content: "▸"; color: var(--green); }
+.shotpair .claims b { color: var(--fg); }
+
+/* --------------------------------------------------------------- flat lists */
+.flat li { display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 4px 26px;
+           padding: 13px 0; border-top: 1px solid var(--line); }
+.flat li:first-child { border-top: 0; }
+.flat b { color: var(--fg); font-weight: 600; font-size: 13.5px; letter-spacing: .01em; }
+.flat b::before { content: "▸ "; color: var(--green); }
+.flat span { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+@media (max-width: 700px) { .flat li { grid-template-columns: minmax(0, 1fr); } }
+
+.grouplabel { color: var(--orange); font-size: 11.5px; letter-spacing: 0.13em; text-transform: uppercase;
+              margin: 30px 0 2px; padding-bottom: 7px; border-bottom: 1px solid var(--line-2); }
+.grouplabel:first-of-type { margin-top: 0; }
+.grouplabel span { color: var(--fg-3); text-transform: none; letter-spacing: 0; margin-left: 8px; }
+@media (max-width: 560px) { .grouplabel span { display: block; margin-left: 0; } }
+
+/* -------------------------------------------------------------------- code */
+.code { border: 1px solid var(--line-2); background: var(--panel-2); padding: 14px 16px; overflow-x: auto; position: relative; }
+.code pre { margin: 0; font-size: 12.5px; line-height: 1.8; color: var(--fg-2); }
+.code .c { color: var(--fg-3); }
+.code .p { color: var(--green); user-select: none; }
+.copy { position: absolute; top: 7px; right: 7px; font-family: inherit; font-size: 10.5px;
+        background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-3); padding: 2px 6px; cursor: pointer; }
+.copy:hover { color: var(--fg); }
+.note { font-size: 13.5px; color: var(--fg-3); margin-top: 12px; line-height: 1.55; }
+/* A subheading inside a section, for the one section that has two flows in it.
+   Reuses `--fg-3`, which `tools/contrast.py` already audits, rather than
+   introducing a colour the table would not know about. */
+.sub-h { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3);
+         margin: clamp(24px, 3.5vw, 34px) 0 12px; }
+
+footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
+         padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }
+footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 22px 44px; }
+footer h4 { margin: 0 0 5px; color: var(--fg-3); font-size: 12px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
+footer .todo { color: var(--orange); }
+.colophon { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
+            font-family: var(--mono); font-size: 12.5px; color: var(--fg-3); }
+.colophon .h { color: var(--fg-4); user-select: none; margin-right: 2px; }
+
+@media (max-width: 700px) { body { font-size: 15px; }
+                            .flat span, .half p, .shotpair .claims li { font-size: 14px; } }
+/* ------------------------------------------------------- generated sub-pages */
+.page { padding: clamp(34px, 6vw, 64px) 0 0; }
+.page h1 { font-size: clamp(21px, 3.6vw, 31px); letter-spacing: -0.02em; }
+.page .kick { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+              letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 16px; }
+.page .lede { color: var(--fg-2); max-width: 74ch; margin-top: 16px;
+              font-size: clamp(15px, 1.7vw, 16.5px); line-height: 1.66; }
+.page .lede b { color: var(--fg); }
+.page > .wrap > .note { max-width: 74ch; }
+
+.bullets li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
+              padding: 6px 0; color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.bullets li::before { content: "\25B8"; color: var(--green); }
+.bullets b { color: var(--fg); }
+.prose { color: var(--fg-2); max-width: 74ch; font-size: 14.5px; line-height: 1.62; }
+.prose b { color: var(--fg); }
+
+.rel { margin-top: clamp(40px, 6vw, 64px); }
+
+/* The anti-roadmap is drawn as a panel rather than as a fourth run of bullets
+   that happens to be last. It is the cheapest instrument this site has for
+   answering a request that will never be built with a reason instead of with
+   silence, and the roadmap page now invites requests, which makes that job much
+   larger than it was. A panel is the whole treatment: no colour of its own, no
+   warning register, and the same hairline the rest of the page uses. */
+.boundary { border: 1px solid var(--line-2); background: var(--panel);
+            padding: 2px clamp(14px, 3vw, 26px) clamp(16px, 2.4vw, 22px); }
+.boundary .relhead { padding-top: clamp(14px, 2.4vw, 20px); }
+
+/* Vote rows. A count is a number, so it takes the mono face and a fixed column;
+   the row itself is a link rather than a description, which is what separates
+   this list from the themed ones above it. `overflow-wrap` because a title is
+   written by whoever opened the discussion and one unbroken token would push the
+   page sideways at 360px. */
+.votes li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 3px 20px;
+            padding: 11px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.votes li:first-child { border-top: 0; }
+.votes .n { font-family: var(--mono); font-size: 12.5px; color: var(--fg-3);
+            letter-spacing: 0.04em; white-space: nowrap; }
+.votes .n b { color: var(--green); font-weight: 600; }
+.votes .t { color: var(--fg-2); font-size: 14.5px; line-height: 1.58;
+            overflow-wrap: anywhere; }
+@media (max-width: 700px) { .votes li { grid-template-columns: minmax(0, 1fr); } }
+.relhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+           padding-bottom: 9px; border-bottom: 1px solid var(--line-2); }
+.relhead h2 { font-size: clamp(16px, 2.2vw, 20px); }
+.relhead .when { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+                 letter-spacing: 0.06em; }
+.relhead .fill { flex: 1; }
+
+/* Two label levels inside a release. The Keep a Changelog type carries the brand
+   accent; the grouping under it is quieter, so a release reads as structure
+   rather than as a run of identical headings. */
+.changetype { color: var(--green); font-family: var(--mono); font-size: 11.5px;
+              letter-spacing: 0.13em; text-transform: uppercase; margin: 26px 0 2px;
+              padding-bottom: 7px; border-bottom: 1px solid var(--line-2); }
+.subgroup { color: var(--fg-3); font-family: var(--mono); font-size: 11.5px;
+            letter-spacing: 0.09em; margin: 18px 0 3px; }
+
+/* Tables carry the same hairline grid as the panels; no zebra, no shadow. */
+table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; }
+table th { text-align: left; font-family: var(--mono); font-weight: 600; font-size: 11px;
+           letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3);
+           padding: 0 14px 8px 0; border-bottom: 1px solid var(--line-2); }
+table td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--line);
+           color: var(--fg-2); vertical-align: top; }
+table td:first-child { font-family: var(--mono); color: var(--fg); font-size: 12.5px;
+                       word-break: break-word; }
+table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+
+/* The bar's nav keeps `index.html`'s scroll-fade for narrow screens, but this
+   nav is short and its last item would sit under the fade at every width. The
+   padding gives the gradient empty space to fall on once it is scrolled out. */
+.pagenav { padding-right: 15px; }
+.pagenav a[aria-current="page"] { color: var(--fg); }
+.pagenav a[aria-current="page"]::before { content: "\25B8 "; color: var(--green); }
+
+/* `.rel:first-of-type` does not do this: `:first-of-type` counts elements of the
+   same tag, and the first `div` in a page is the kick line. */
+.lede + .rel, .lede + .toc + .rel { margin-top: clamp(24px, 4vw, 38px); }
+
+.toc { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 18px;
+       padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+       font-family: var(--mono); font-size: 12px; }
+.docsec { margin-top: clamp(34px, 5vw, 52px); }
+.doclist li { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 4px 26px;
+              padding: 13px 0; border-top: 1px solid var(--line); }
+.doclist li:first-child { border-top: 0; }
+.doclist .t { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--fg);
+              letter-spacing: 0.01em; }
+.doclist .t > a { color: inherit; }
+.doclist .t > a:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
+.doclist span.d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+/* Inside `.t`, not a third grid child: as its own cell it lands on a second row
+   whose top is set by the tallest summary, which floats it away from the title
+   it names. */
+.doclist .src { display: block; margin-top: 3px; font-weight: 400; font-size: 11.5px;
+                color: var(--fg-3); overflow-wrap: anywhere; }
+@media (max-width: 700px) { .doclist li { grid-template-columns: minmax(0, 1fr); } }
+/* The same "where this lives" line under a feature-guide row, where the label
+   column is the feature's name rather than its path. */
+.flat .src { display: block; margin-top: 4px; font-size: 11.5px; color: var(--fg-3); }
+.flat .src a { color: var(--fg-3); }
+/* `.flat b` is the *label* column: monospace, and carrying the green marker. A
+   `<b>` inside the description column inherited both, so an emphasised clause in
+   the middle of a sentence rendered as monospace with a stray bullet in front of
+   it. The landing page never hit this because its descriptions carry no bold;
+   the feature guide's do, and emphasis inside prose is the reason it is prose. */
+.flat span b { font-family: var(--sans); font-size: inherit; letter-spacing: normal; }
+.flat span b::before { content: none; }
+
+/* ------------------------------------------------------------- the changelog
+
+   A release entry is compact by default and complete on demand. The full 0.1.0
+   entry is sixty bullets, which nobody scans; the group labels are what a person
+   actually wants off a changelog ("did anything change in Git?"), so those are
+   drawn flat and the bullets live behind one disclosure per release.
+
+   `<details>` rather than a script, because these pages carry no JavaScript of
+   their own beyond the theme toggle, and a disclosure that needs one would be a
+   feature that is missing with JS off rather than merely unstyled. */
+.relgroups { margin-top: 13px; color: var(--fg-2); font-size: 14px; line-height: 1.66; }
+.relgroups .k { color: var(--fg); font-family: var(--mono); font-size: 11.5px;
+                letter-spacing: 0.11em; text-transform: uppercase; }
+.relgroups .sep { color: var(--fg-3); padding: 0 2px; }
+.relhead .relnotes { font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; }
+.relmore { margin-top: 16px; border-top: 1px solid var(--line); }
+.relmore > summary { list-style: none; cursor: pointer; padding: 11px 0 0;
+                     font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.11em;
+                     text-transform: uppercase; color: var(--fg-3); }
+.relmore > summary::-webkit-details-marker { display: none; }
+.relmore > summary::before { content: "\25B8"; color: var(--green); display: inline-block;
+                             width: 15px; transition: transform 0.12s linear; }
+.relmore[open] > summary::before { transform: rotate(90deg); }
+.relmore > summary:hover { color: var(--fg); }
+.relmore .changetype:first-of-type { margin-top: 18px; }
+
+/* ------------------------------------------------------------ the comparison
+
+   Two renderings of the same data, and the split is deliberate. The matrix is
+   markers only, because seven columns of prose at 360px is seven columns of one
+   word per line; the sentences and their sources live below it, one block per
+   row, in a grid that collapses to a single column like every other list here.
+
+   `min-width` on the matrix is load-bearing and not a guess. `table` here is
+   `width: 100%`, which means a narrow viewport does not overflow the wrapper: it
+   *squeezes*, and at 390px the label column reached one character per line and
+   the thirteen rows became six thousand pixels tall. A minimum width makes it
+   overflow instead, which `.tablewrap`'s `overflow-x: auto` then scrolls. The
+   value is the row's own content: 190px of label plus seven marker columns. */
+.cmp { min-width: 640px; }
+.cmp th:first-child, .cmp td:first-child { min-width: 190px; }
+.cmp td:first-child { font-family: inherit; font-size: 13.5px; color: var(--fg-2); }
+.cmp td:first-child a { color: var(--fg); }
+.cmp th.tool, .cmp td.c { text-align: center; }
+.cmp th.tool.self, .cmp td.c.self { background: var(--panel); }
+.cmp td.c { font-family: var(--mono); font-size: 12.5px; white-space: nowrap;
+            padding-left: 4px; padding-right: 4px; }
+.v-yes { color: var(--green); }
+.v-partial { color: var(--orange); }
+.v-no, .v-unclear { color: var(--fg-3); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 14px;
+          font-family: var(--mono); font-size: 12px; color: var(--fg-3); }
+.legend b { font-weight: 400; }
+.loseflag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.09em;
+            text-transform: uppercase; color: var(--orange); }
+.cmprow li { display: grid; grid-template-columns: 30px 132px minmax(0, 1fr); gap: 4px 16px;
+             padding: 12px 0; border-top: 1px solid var(--line); }
+.cmprow li:first-child { border-top: 0; }
+.cmprow .m { font-family: var(--mono); font-size: 12.5px; }
+.cmprow .who { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.cmprow li.self .who { color: var(--green); }
+.cmprow .d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.cmprow .cite { display: block; margin-top: 4px; font-size: 11.5px; color: var(--fg-3); }
+.cmprow .cite a { color: var(--fg-3); }
+@media (max-width: 700px) {
+  .cmprow li { grid-template-columns: 30px minmax(0, 1fr); }
+  .cmprow .d { grid-column: 2 / -1; }
+}
+
+/* -------------------------------------------------- the agent-onboarding block
+
+   Prominent by position rather than by colour: it sits directly under the lede,
+   above the section nav, and takes the panel treatment the roadmap's boundary
+   panel already uses. It is the first thing on the page because the reader most
+   likely to act on it is the one who has not decided to read anything yet. */
+.agentbox { border: 1px solid var(--line-2); background: var(--panel);
+            padding: clamp(15px, 2.6vw, 22px); margin-top: clamp(20px, 3vw, 28px); }
+.agentbox h2 { font-size: clamp(15px, 2vw, 17px); }
+.agentbox .prose { margin-top: 8px; }
+.agentbox .code { margin-top: 13px; }
+.agentbox .code pre { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+
+/* -------------------------------------------------------------- quick starts */
+.steps { counter-reset: step; margin-top: 12px; }
+.steps li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px;
+            padding: 7px 0; color: var(--fg-2); font-size: 14.5px; line-height: 1.58;
+            counter-increment: step; }
+.steps li::before { content: counter(step) "."; font-family: var(--mono);
+                    font-size: 12.5px; color: var(--green); }
+.steps b { color: var(--fg); }
+.proof { margin-top: 12px; color: var(--fg-2); font-size: 14px; line-height: 1.58; }
+.proof b { color: var(--fg); font-family: var(--mono); font-size: 11.5px;
+           letter-spacing: 0.11em; text-transform: uppercase; }
+
+/* ------------------------------------------------------------------ the blog
+
+   Posts render inline on the index, each under its own `id`, which is the same
+   fragment contract `/docs/#<slug>` carries. A post per page would mean pages
+   `tools/check.mjs` never discovers, since it walks one directory level. */
+.post { margin-top: clamp(34px, 5vw, 48px); }
+.post .meta { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+              letter-spacing: 0.06em; margin-top: 4px; }
+.post .prose, .post .bullets, .post table { max-width: 74ch; }
+.post h3 { margin-top: 24px; font-size: clamp(15px, 2vw, 17px); }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="swe-mux, home">
+      <img class="dark" src="../img/logo.png" width="640" height="73" alt="" />
+      <img class="lite" src="../img/logo-light.png" width="640" height="73" alt="" />
+    </a>
+    <nav class="secnav pagenav">
+      <a href="../">home</a>
+      <a href="../docs/">docs</a>
+      <a href="../changelog/">changelog</a>
+      <a href="../roadmap/">roadmap</a>
+      <a href="../acknowledgements/">acknowledgements</a>
+    </nav>
+    <div class="util">
+      <a href="https://github.com/jatoran/swe-mux" aria-label="Source on GitHub" title="Source on GitHub">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="lbl">github</span>
+      </a>
+      <button type="button" id="themebtn" aria-label="Toggle colour scheme" title="Toggle colour scheme">
+        <svg class="moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7Z"/></svg>
+        <svg class="sun" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.6A3.4 3.4 0 1 0 8 11.4 3.4 3.4 0 0 0 8 4.6Zm0-4.6h0a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V.7A.7.7 0 0 1 8 0Zm0 13.3a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V14a.7.7 0 0 1 .7-.7ZM16 8a.7.7 0 0 1-.7.7H14a.7.7 0 0 1 0-1.4h1.3A.7.7 0 0 1 16 8ZM2.7 8a.7.7 0 0 1-.7.7H.7a.7.7 0 0 1 0-1.4H2a.7.7 0 0 1 .7.7Zm10.96-5.66a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0ZM4.28 11.72a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0Zm9.38 1.94a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 1 1 1-1l.94.94a.7.7 0 0 1 0 1ZM4.28 4.28a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 0 1 1-1l.94.94a.7.7 0 0 1 0 1Z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<main>
+<!-- The comparison page, hand-authored around a generated table.
+
+     This is the highest-risk page on the site, and the rules below exist because an
+     overclaiming comparison gets taken apart in public and costs more than it earns.
+
+     1. **Every cell is sourced, and the sources are printed.** The data lives in
+        `content/compare.json`, one cell per tool per row, each naming source ids that
+        must resolve. `build.py` fails on a missing cell, an undefined source, or a
+        source nothing cites. There is nowhere to put an unsupported claim.
+     2. **`unclear` is a legitimate answer and is used freely.** Several of these
+        projects change weekly. "Not described in the sources checked" is honest and
+        checkable; a guess is neither, and one wrong cell discredits the other ninety.
+     3. **swe-mux loses rows, on purpose.** A table where the author's own product has
+        a full column of ticks is read as marketing and dismissed whole. Four rows are
+        marked as losses and they are marked in the data, not in the prose, so removing
+        one is a deliberate edit rather than a quiet omission. If a future edit leaves
+        no losses, the page has stopped being worth publishing.
+     4. **Capabilities, never disparagement.** Each cell says what a tool does. None of
+        them says what a tool is bad at, and none of them reads a missing feature as a
+        failing: tmux is not trying to detect agent status, and saying so is describing
+        scope rather than scoring a point.
+     5. **It carries the date it was checked**, on the page and next to the table,
+        because it will go stale and a reader has to be able to tell how stale.
+
+     The COMPARISON-TABLE marker comment below (written without its delimiters in this
+     paragraph, because `build.py` requires exactly one of it in this file) is replaced
+     with the generated matrix and the per-row detail. Do not hand-write rows there.
+-->
+<section class="page">
+  <div class="wrap">
+    <div class="kick">where it differs, including where it loses</div>
+    <h1>Compared</h1>
+    <div class="lede">
+      <p>swe-mux sits in a crowded category and does not win most of it. This page says
+      what each of the neighbouring tools does, from that tool's own documentation, and
+      marks the rows where swe-mux is behind as plainly as the rows where it is ahead.</p>
+      <p><b>Every cell names its source and the page carries the date those sources were
+      read.</b> Where the sources did not settle a question the answer is
+      <code>unclear</code> rather than a guess. Several of these projects are young and
+      move quickly, so check the date before trusting a row, and
+      <a href="https://github.com/jatoran/swe-mux/issues">open an issue</a> if a cell
+      about your project is wrong. It will be fixed rather than argued about.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>What each of these is</h2><span class="fill"></span></div>
+      <p class="prose">They are not the same kind of thing, which is the first thing a
+      comparison table hides. Read this before the matrix.</p>
+      <ul class="flat">
+        <li><b>swe-mux</b><span>A local daemon that owns pseudoterminals, with a browser
+        UI and a phone client in front of it, plus an evidence layer over what the agents
+        did. Windows-first, Apache-2.0.</span></li>
+        <li><b>Herdr</b><span>A single Rust binary that multiplexes terminals inside your
+        existing terminal and reads agent state into a sidebar. Apache-2.0.</span></li>
+        <li><b>tmux</b><span>The terminal multiplexer everything in this category is
+        measured against. It is here as the baseline, not as a competitor: it predates
+        coding agents by twenty years and is not trying to understand them.</span></li>
+        <li><b>Orca</b><span>A desktop agent development environment with an editor, a
+        built-in browser, mobile apps, and a worktree per task. MIT.</span></li>
+        <li><b>Conductor</b><span>A Mac app that runs parallel Claude Code, Codex, and
+        Cursor agents in isolated git worktrees, with a hosted cloud tier.</span></li>
+        <li><b>Superset</b><span>A local-first desktop workspace for orchestrating any
+        CLI agent, one git worktree per task, aiming at very large agent counts.
+        Source-available under the Elastic License.</span></li>
+        <li><b>Warp</b><span>A terminal, an agent CLI, and cloud agent infrastructure.
+        The client is open source; the platform around it is a paid service.</span></li>
+      </ul>
+    </div>
+
+    <div class="rel" id="matrix">
+      <div class="relhead"><h2>At a glance</h2><span class="when">sources read 2026-08-28</span><span class="fill"></span></div>
+      <p class="prose">Markers only. Every one of them is a sentence with a source under it, in the section of the same name below, and a row label links straight there.</p>
+      <div class="legend">
+        <span><b class="v-yes">[x]</b> yes</span>
+        <span><b class="v-partial">[~]</b> partly</span>
+        <span><b class="v-no">[ ]</b> no</span>
+        <span><b class="v-unclear">[?]</b> unclear</span>
+      </div>
+      <div class="tablewrap">
+      <table class="cmp">
+        <thead><tr><th></th><th class="tool self">swe-mux</th><th class="tool">Herdr</th><th class="tool">tmux</th><th class="tool">Orca</th><th class="tool">Conductor</th><th class="tool">Superset</th><th class="tool">Warp</th></tr></thead>
+        <tbody>
+        <tr><td><a href="#row-license">License</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Conductor: no">[ ]</td><td class="c v-partial" title="Superset: partly">[~]</td><td class="c v-partial" title="Warp: partly">[~]</td></tr>
+        <tr><td><a href="#row-local">Runs entirely on hardware you control</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-partial" title="Conductor: partly">[~]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-partial" title="Warp: partly">[~]</td></tr>
+        <tr><td><a href="#row-windows">Windows as a first-class host</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Conductor: no">[ ]</td><td class="c v-no" title="Superset: no">[ ]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
+        <tr><td><a href="#row-macos">macOS as a first-class host</a></td><td class="c v-partial self" title="swe-mux: partly">[~]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
+        <tr><td><a href="#row-persistence">Agent processes outlive the client</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-unclear" title="Orca: unclear">[?]</td><td class="c v-unclear" title="Conductor: unclear">[?]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
+        <tr><td><a href="#row-worktrees">Per-agent git worktree isolation</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
+        <tr><td><a href="#row-harnesses">Breadth of recognized agent CLIs</a></td><td class="c v-partial self" title="swe-mux: partly">[~]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-partial" title="Conductor: partly">[~]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-partial" title="Warp: partly">[~]</td></tr>
+        <tr><td><a href="#row-phone">Phone client</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-no" title="Herdr: no">[ ]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Conductor: no">[ ]</td><td class="c v-unclear" title="Superset: unclear">[?]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
+        <tr><td><a href="#row-voice">Voice control of the tool itself</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-partial" title="Orca: partly">[~]</td><td class="c v-unclear" title="Conductor: unclear">[?]</td><td class="c v-unclear" title="Superset: unclear">[?]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
+        <tr><td><a href="#row-evidence">Evidence about a run that is not the agent's own transcript</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-partial" title="Herdr: partly">[~]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-unclear" title="Orca: unclear">[?]</td><td class="c v-unclear" title="Conductor: unclear">[?]</td><td class="c v-unclear" title="Superset: unclear">[?]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
+        <tr><td><a href="#row-attention">Deciding which agent to look at next</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-partial" title="Herdr: partly">[~]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-partial" title="Orca: partly">[~]</td><td class="c v-partial" title="Conductor: partly">[~]</td><td class="c v-partial" title="Superset: partly">[~]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
+        <tr><td><a href="#row-cloud">Hosted runners the vendor operates</a></td><td class="c v-no self" title="swe-mux: no">[ ]</td><td class="c v-no" title="Herdr: no">[ ]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-no" title="Orca: no">[ ]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-no" title="Superset: no">[ ]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
+        <tr><td><a href="#row-team">Teams, roles, and shared state</a></td><td class="c v-no self" title="swe-mux: no">[ ]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-partial" title="tmux: partly">[~]</td><td class="c v-unclear" title="Orca: unclear">[?]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-partial" title="Superset: partly">[~]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="note">Read a marker as shorthand for the sentence below it, never as a score. Nothing on this page is weighted, nothing is added up, and <code>[ ]</code> often means a tool is not trying to do the thing rather than trying and failing.</p>
+    </div>
+    <div class="rel" id="row-license">
+      <div class="relhead"><h2>License</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Apache-2.0.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux">swe-mux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Apache-2.0.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">ISC.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">MIT.<span class="cite">source: <a href="https://github.com/stablyai/orca">Orca repository</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Conductor</span><span class="d">Proprietary. Free tier, then paid plans.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Superset</span><span class="d">Elastic License 2.0. Source-available, and its own site says not OSI-approved open source.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Warp</span><span class="d">The client is AGPL-3.0 with two MIT UI crates. The service around it is paid.<span class="cite">source: <a href="https://github.com/warpdotdev/Warp">Warp repository</a>, <a href="https://www.warp.dev/pricing">Warp pricing</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-local">
+      <div class="relhead"><h2>Runs entirely on hardware you control</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">No server, no account, no relay. The project operates nothing.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">A local binary. Remote means your own SSH or your own rented box.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">A local process, and nothing else.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">A desktop app on your own subscriptions, with SSH to your own VPS.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Conductor</span><span class="d">Local workspaces on the free plan; Conductor Cloud is a paid tier.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">Local-first, and it states it never proxies model API calls.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Warp</span><span class="d">The terminal is local; Warp Drive, cloud agents, and conversation storage are account-backed.<span class="cite">source: <a href="https://www.warp.dev/pricing">Warp pricing</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-windows">
+      <div class="relhead"><h2>Windows as a first-class host</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">The proving platform, and the only one with a packaged desktop application.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Stable-channel Windows binaries; ARM64 runs the x86_64 build under emulation.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">OpenBSD, FreeBSD, NetBSD, Linux, macOS, Solaris. Windows only inside WSL or Cygwin.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Windows builds published.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Conductor</span><span class="d">macOS only. Its own copy says 'on your Mac'.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Superset</span><span class="d">macOS primary, an experimental Linux AppImage, Windows not yet available.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">Windows 10 and 11, x64 and ARM64.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-macos">
+      <div class="relhead"><h2>macOS as a first-class host</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-partial" title="partly">[~]</span><span class="who">swe-mux</span><span class="d">The wheel installs and the CLI runs, proven in CI. No CI job on any host has ever started a daemon, so the daemon on macOS is unproven, and there is no desktop application for it.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Stable-channel macOS binaries.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">A listed platform.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">ARM64 and Intel.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">The only platform it ships on.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">The primary platform.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">macOS 10.14 and newer.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-persistence">
+      <div class="relhead"><h2>Agent processes outlive the client</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">A supervisor process separate from the daemon and the UI holds every terminal, so a daemon restart and a rebuild of the application itself leave the agents working. A reboot still ends the processes; the sessions stay readable afterwards.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Detach and reattach from any terminal or over SSH; its site states sessions survive restarts.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">The server keeps sessions after every client detaches. Not across a reboot.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Orca</span><span class="d">Scrollback recovery after restart is documented; whether the process itself survives is not stated in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Conductor</span><span class="d">Not stated in the sources checked.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">'Persistent terminals: sessions survive app restarts.'<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not stated for the local terminal in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-worktrees">
+      <div class="relhead"><h2>Per-agent git worktree isolation</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Worktree creation and removal, plus a serialized land queue: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a>, <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope. tmux knows nothing about git.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">'Every task runs in its own isolated git worktree.'<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">Each workspace is created as its own git worktree and branch.<span class="cite">source: <a href="https://www.conductor.build/docs/guides/git-worktrees/run-claude-code-with-git-worktrees">Conductor worktree guide</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">'Each agent gets an isolated Git worktree and its own branch.'<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-harnesses">
+      <div class="relhead"><h2>Breadth of recognized agent CLIs</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-partial" title="partly">[~]</span><span class="who">swe-mux</span><span class="d">Any CLI or shell runs unchanged, including one swe-mux has never heard of. The registry that adds status, transcripts, history, and account switching on top recognizes fewer of them than Orca or Herdr list.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">'21 agents detected out of the box.'<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">None. It multiplexes terminals and does not read what is inside them.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Names more than twenty CLI agents by hand, and states any CLI agent works.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Conductor</span><span class="d">Claude Code, Codex, Cursor, and OpenCode.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">Names six and states any CLI-based coding agent works.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Warp</span><span class="d">Ships its own Agent CLI; other agents run inside it as ordinary terminal programs.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-phone">
+      <div class="relhead"><h2>Phone client</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">An installable web app reached over your own tailnet, with no relay and no swe-mux login.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Herdr</span><span class="d">No first-party client. Reachable from a phone by SSH into the host and attaching.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a>, <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">None. SSH in and attach.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">iOS and Android companion apps.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Conductor</span><span class="d">Announced as coming soon, not shipping on the date below.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Superset</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-voice">
+      <div class="relhead"><h2>Voice control of the tool itself</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Hands-free conversation: on-device wake words, dictation, spoken navigation and commands, and read-aloud.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a>, <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Orca</span><span class="d">Voice dictation with on-device models. Dictating into an agent, rather than driving the application.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Conductor</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Superset</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-evidence">
+      <div class="relhead"><h2>Evidence about a run that is not the agent's own transcript</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Deterministic facts captured at the tool boundary - content hashes, parsed test outcomes, git tree hashes - and commit-level provenance separating who authored a change from who landed it. Off by default, per Project.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Herdr</span><span class="d">Semantic agent state forwarded by the agent integrations over its socket API. Status rather than an evidence record.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Orca</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Conductor</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Superset</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-attention">
+      <div class="relhead"><h2>Deciding which agent to look at next</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Ranked attention items with a hard daily interrupt budget, four a day by default, incident merging, and suppressed counts always shown rather than hidden.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Herdr</span><span class="d">A sidebar marking each agent working, blocked or idle. A view, not a budget.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Orca</span><span class="d">A fleet view with native notifications.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Conductor</span><span class="d">A dashboard of what the agents are doing.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Superset</span><span class="d">A workspace list. Its own roadmap names human review, not agent count, as the bottleneck.<span class="cite">source: <a href="https://superset.sh/blog/roadmap-to-100-agents">Superset, 100 parallel agents</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-cloud">
+      <div class="relhead"><h2>Hosted runners the vendor operates</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-no" title="no">[ ]</span><span class="who">swe-mux</span><span class="d">None, and none planned. Your machine, or a machine you own.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux">swe-mux repository</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Herdr</span><span class="d">A local binary. 'A box you rent' is still your box.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Orca</span><span class="d">SSH to your own VPS rather than a hosted runner.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">Conductor Cloud, with cloud workspace hours, from the paid tier upward.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Superset</span><span class="d">Local-first, with no hosted execution in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">Warp Factories: cloud infrastructure for running fleets of coding agents.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-team">
+      <div class="relhead"><h2>Teams, roles, and shared state</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-no" title="no">[ ]</span><span class="who">swe-mux</span><span class="d">A single-operator tool. No multi-tenancy, no role model, no audit subsystem, and none planned.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/SECURITY.md">swe-mux SECURITY.md</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">tmux</span><span class="d">Several people can attach to one session on a host they all have accounts on. Not a product feature so much as a consequence.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Orca</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">A Teams plan with live collaboration and admin controls, and SSO on Enterprise.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Superset</span><span class="d">Paid seats above the free tier.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">Business and Enterprise plans with collaboration features.<span class="cite">source: <a href="https://www.warp.dev/pricing">Warp pricing</a></span></span></li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>How to read this</h2><span class="fill"></span></div>
+      <p class="prose">Three things the matrix cannot say, and they matter more than most
+      of the rows.</p>
+      <ul class="flat">
+        <li><b>A phone client is not a phone client</b><span>Orca ships iOS and Android
+        apps and calls them companions; swe-mux's claim is parity, meaning nothing
+        functional exists on the desktop and not on the phone. Those are different
+        products in the same cell, and the row cannot tell you which one you want.</span></li>
+        <li><b>Breadth is not depth</b><span>Orca and Herdr recognize more agent CLIs
+        than swe-mux does, and if the CLI you use is on their list and not in swe-mux's
+        registry, that is the row that decides it. Every CLI still runs in swe-mux as an
+        ordinary terminal program; what it does not get is the layer on top.</span></li>
+        <li><b>Not built is not the same as not yet built</b><span>swe-mux has no hosted
+        runners and no team features, and both are
+        <a href="../roadmap/#not-planned">deliberately not on the roadmap</a> rather than
+        pending. If you want either, two of the tools above have them today.</span></li>
+      </ul>
+      <p class="note">Nothing on this page is a benchmark. No tool here was run
+      side by side against another, and none of the rows measure speed, reliability, or
+      how any of this feels after a week. They are capability claims read out of public
+      documentation, which is the most that can be checked from outside.</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <img class="brandmark dark" src="../img/logo.png" width="640" height="73" alt="swe-mux" />
+        <img class="brandmark lite" src="../img/logo-light.png" width="640" height="73" alt="swe-mux" />
+        <div>Agentic development environment and agent control plane.</div>
+        <div>Windows-first. Local-only. No account.</div>
+      </div>
+      <div>
+        <h4>pages</h4>
+        <div><a href="../">home</a> &middot; <a href="../docs/">docs</a></div>
+        <div><a href="../changelog/">changelog</a> &middot; <a href="../roadmap/">roadmap</a>
+        &middot; <a href="../acknowledgements/">acknowledgements</a></div>
+      </div>
+      <div>
+        <h4>source</h4>
+        <div><a href="https://github.com/jatoran/swe-mux">github.com/jatoran/swe-mux</a></div>
+        <div><a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">request a feature</a> &middot;
+        <a href="https://github.com/jatoran/swe-mux/issues">report a bug</a></div>
+        <div><code>.docs/design/00_OVERVIEW.md</code></div>
+      </div>
+      <div>
+        <h4>license</h4>
+        <div><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></div>
+        <div><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
+      </div>
+    </div>
+    <p class="colophon"><span class="h">#</span> This page is generated by
+    <code>site/tools/build.py</code>. Edit its source, not the HTML.</p>
+    <p class="colophon"><span class="h">#</span> swe-mux is not affiliated with, endorsed
+    by, or sponsored by Anthropic, OpenAI, or any other vendor whose CLI it launches.
+    Product names and trademarks belong to their respective owners. You run those tools
+    under your own account and your own agreement with each vendor.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var btn = document.getElementById('themebtn');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    document.querySelector('meta[name=color-scheme]').setAttribute('content', t);
+  }
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    apply(next);
+    try { localStorage.setItem('swemux-theme', next); } catch (e) {}
+  });
+})();
+</script>
+
+</body>
+</html>

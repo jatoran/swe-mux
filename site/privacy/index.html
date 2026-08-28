@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Roadmap · swe-mux</title>
-<meta name="description" content="What swe-mux is building next, what it deliberately will not build, and how to ask for something. No dates." />
+<title>Privacy · swe-mux</title>
+<meta name="description" content="swe-mux runs on your own machine and talks to no service this project operates. Exactly which requests it makes, and what this website sees." />
 <meta name="color-scheme" content="dark" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
@@ -552,7 +552,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <a href="../">home</a>
       <a href="../docs/">docs</a>
       <a href="../changelog/">changelog</a>
-      <a href="../roadmap/" aria-current="page">roadmap</a>
+      <a href="../roadmap/">roadmap</a>
       <a href="../acknowledgements/">acknowledgements</a>
     </nav>
     <div class="util">
@@ -569,129 +569,175 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 </div>
 
 <main>
-<!-- The public roadmap, hand-authored.
+<!-- The privacy page, hand-authored.
 
-     This is a curated projection of `.docs/development/ROADMAP.md`, not a copy, and
-     the difference is the whole point. That file is an internal working document of
-     several thousand lines: phase numbers, dependency interlocks, per-item acceptance
-     criteria, and the measurements behind decisions nobody outside the project needs
-     to re-litigate. Rendering it would leak internal sequencing as though it were a
-     public commitment, and a reader looking for "can it do X yet" would have to read
-     an engineering plan to find out.
+     swe-mux is an Apache-2.0 tool that runs on the reader's own machine and talks to no
+     service this project operates. A generated corporate privacy template would be
+     inaccurate in both directions: it would imply an operator collecting data, and it
+     would bury the one request that actually leaves the machine under a page of
+     boilerplate about cookies nobody sets.
 
-     Four rules this page holds, and the reason for each:
+     So this page is short and every claim on it is checkable in a named file. Rules:
 
-     1. **No dates, ever.** A public roadmap that names a month is a promise made by
-        someone who cannot keep it, and it ages into a liability the week it slips.
-     2. **No internal phase numbers.** They are ordering for the people building it.
-        Published, they read as a release train and invite "when is the next one".
-     3. **Forward-looking only.** A roadmap that lists shipped work is a feature list
-        with a misleading name, and the landing page and `README.md` already carry
-        that. The `changelog` is the record of what shipped and the only page here
-        that is a commitment; everything on this one is direction.
-     4. **The boundaries are the argument.** `Deliberately not on the roadmap` is not
-        a list of gaps, and it is the cheapest instrument this page has: it turns a
-        request that will never be built into a reason rather than into silence. It
-        is linked from the lede and from the section that invites requests, because
-        inviting them is exactly what makes it load-bearing.
-
-     The vote-ranked block is generated. The MOST-REQUESTED marker comment below (written
-     without its delimiters here, because `build.py` requires exactly one of it in this
-     file and a second one in this paragraph would be it) is replaced by
-     `tools/build.py` from `content/ideas.json`, which `tools/ideas.py` writes from
-     the GitHub Discussions API. Nothing about how that block reads lives in the
-     workflow: it owns the data, this repository owns the markup, and below the vote
-     floor the marker's own line is dropped so the page is byte-identical to one that
-     never had the block. Do not hand-write rows there.
-
-     Keep it to a few screens. When it grows past that, the answer is fewer themes,
-     not a longer page.
+     1. **Name the source of each fact.** `update_check.py` is what makes the one
+        request; `SECURITY.md` is where the trust boundary is stated; `config.py` owns
+        the data directory. A reader who does not believe a sentence here can read the
+        code it points at.
+     2. **State the exceptions before the reassurance.** The optional features that
+        reach a third party are listed in full, above the summary, because a reader
+        looking for a reason to distrust the page will find that list either way and
+        should find it where it was volunteered.
+     3. **Never claim the project cannot see something it merely does not look at.**
+        GitHub serves swemux.dev and sees the requests to it; saying otherwise would be
+        false. What is true is that the project has no analytics and no access log.
+     4. **No legal register.** No "we may", no "from time to time", no defined terms.
+        This describes behaviour. What it is not is stated at the bottom.
 -->
 <section class="page">
   <div class="wrap">
-    <div class="kick">direction, not dates</div>
-    <h1>Roadmap</h1>
+    <div class="kick">what leaves your machine, and what does not</div>
+    <h1>Privacy</h1>
     <div class="lede">
-      <p>This is a projection of the internal plan, not a copy of it, and it carries no
-      dates. <b>Everything on this page is direction, and direction changes.</b> What has
-      already shipped is deliberately not here: the <a href="../changelog/">changelog</a>
-      is the record of that, and it is the only one of the two that is a commitment.</p>
-      <p>Some of what gets asked for will never be built, and the reasons are specific
-      rather than a shortage of time. <a href="#not-planned">Deliberately not on the
-      roadmap</a> is that list, and it is worth reading before
-      <a href="#asking">asking for something</a>.</p>
+      <p>swe-mux is a program that runs on your own computer. <b>There is no swe-mux
+      account, no swe-mux server, and no service this project operates that your install
+      talks to.</b> Everything it records is written to a directory on your own disk and
+      stays there.</p>
+      <p>That makes most of a privacy policy inapplicable, so this page says the two
+      things that are actually true: exactly which requests the software makes, and what
+      this website sees. Last revised 2026-08-28.</p>
     </div>
 
     <div class="rel">
-      <div class="relhead"><h2>Being built now</h2><span class="fill"></span></div>
-      <p class="prose">One theme at a time, and this is the current one.</p>
-      <ul class="flat">
-        <li><b>Getting it installable</b><span>Published wheel and desktop artifacts, an update check against a static manifest with a staged swap that preserves live sessions, clean-machine install and upgrade testing, and this site.</span></li>
-        <li><b>The first ten minutes</b><span>A first run that works on a phone as well as a desktop, an in-app help surface that links here rather than restating things, and inline controls for the gates that quietly stop a new install from doing anything.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Next</h2><span class="fill"></span></div>
-      <p class="prose">Direction, in rough order of how settled it is. None of it is dated,
-      and anything here can be reordered by what the first users actually hit.</p>
-      <ul class="flat">
-        <li><b>More harnesses</b><span>The registry was built so that a new agent CLI costs a descriptor and an adapter instead of a branch through every feature. The candidate study exists; spending that abstraction is the work.</span></li>
-        <li><b>macOS</b><span>Implemented behind the same platform seams as Linux and typechecked on every gate run, but it has never been executed. It becomes a supported platform when somebody runs the suite on real hardware, not before.</span></li>
-        <li><b>Deeper code analysis</b><span>Joining the structural graph to the behavioral record at the symbol level: cross-session conflict prediction, entity-level change facts, and stale-caller detection. swe-mux is the only observer that sees every parallel session's edits as they happen, which is what makes the first of those possible at all.</span></li>
-        <li><b>A portable verification contract</b><span>The setup and verify scripts a worktree needs are already repository-neutral, and the land queue is worth nothing without them. Making that pair reachable and adoptable from inside any repository is the gap.</span></li>
-        <li><b>A shared browser surface</b><span>Recorded, and gated on an authorization decision that has not been made. Today's previews are safe precisely because they cannot navigate anywhere and no agent can drive them; letting either of those change is a product decision about trust, not a feature.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Recorded, not scheduled</h2><span class="fill"></span></div>
-      <p class="prose">Written down so the reasoning survives, with no commitment to build
-      them.</p>
+      <div class="relhead"><h2>The one request the software makes on its own</h2>
+      <span class="fill"></span></div>
+      <p class="prose">Once a day the daemon fetches
+      <code>https://swemux.dev/version.json</code> to find out whether a newer release
+      exists. If that does not answer, it falls back to the public GitHub Releases API
+      for this repository. It downloads nothing either way, and it shows a dismissible
+      banner if a newer version is out.</p>
       <ul class="bullets">
-        <li><span><b>Subagent visibility.</b> Nested rows for a session's subagents and a read-only pane per subagent. There is no way to attach a terminal to a specific subagent from outside its session, so a reader over the on-disk sidecar files is the only path.</span></li>
-        <li><span><b>Following a forked conversation.</b> When a CLI replaces its own conversation underneath a pane, that pane should be followed rather than abandoned, and a pane swe-mux has demonstrably lost track of should say so instead of freezing on its last reading.</span></li>
+        <li><span>The request carries <b>no query string, no custom header, no cookie,
+        and no identifier</b> of the machine or the install. It is a plain <code>GET</code>
+        of a static file that is byte-identical for every copy of swe-mux, so it conveys
+        nothing beyond the fact that some address asked for a public file.</span></li>
+        <li><span><b>It is off with one switch.</b> Settings, Diagnostics, Software
+        updates, or <code>update_check_enabled</code> in your config file. Off means no
+        request is made at all, rather than a request that is ignored.</span></li>
+        <li><span><b>Installing an update is a separate act you take.</b> Nothing
+        downloads automatically. <code>mux update --install &lt;version&gt;</code>
+        fetches that release from GitHub and verifies its SHA-256 against the published
+        manifest before anything is staged.</span></li>
+        <li><span>The mechanism and every one of these constraints are in
+        <code>src/swe_mux/update_check.py</code>, and the test suite proves the disabled
+        case by counting requests rather than by reading the promise.</span></li>
+      </ul>
+      <p class="note">There is no analytics, no crash reporting, no usage ping, no
+      licence check, and no first-run registration. That is the complete list of
+      unprompted outbound traffic: one file, once a day, or nothing.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>What reaches a third party only if you turn it on</h2>
+      <span class="fill"></span></div>
+      <p class="prose">Each of these is off until you configure it, and each one talks to
+      a service you already have a relationship with rather than to this project.</p>
+      <ul class="flat">
+        <li><b>Your agent CLIs</b><span>Claude Code, Codex, opencode and the rest contact
+        their own vendors under your own subscription, exactly as they do outside
+        swe-mux. swe-mux proxies nothing, resells nothing, and is not in the path of
+        those requests.</span></li>
+        <li><b>Summaries and the assistant</b><span>Read-aloud summaries, the Mux
+        assistant, the scan timeline, automation observers, and attention narration call
+        an OpenRouter-compatible endpoint <b>with your key</b>. The text being summarized
+        or asked about goes to that endpoint. Each of these is separately switchable and
+        separately budgeted.</span></li>
+        <li><b>Web push</b><span>Notifications to a phone go through your browser
+        vendor's push service, and only after you subscribe that device. The payload is
+        what the notification says.</span></li>
+        <li><b>Saved provider accounts</b><span>Subscription-window polling calls that
+        vendor's own usage endpoint with the credential you saved. Credentials stay on
+        your machine and go nowhere but the provider they belong to.</span></li>
+        <li><b>On-device speech</b><span>The local speech models download once from
+        Hugging Face, pinned by revision and verified per file by SHA-256. After that,
+        dictation and speech run entirely on your machine.</span></li>
+        <li><b>Experimental Edge TTS</b><span>Reaches a Microsoft endpoint and is the one
+        integration that requires an explicit acknowledgement before any text leaves the
+        machine, because it uses a consumer endpoint with no third-party service
+        contract. Its client is installed from PyPI into an isolated environment and is
+        never bundled.</span></li>
+        <li><b>Tailscale</b><span>Reaching your machine from a phone uses your own
+        tailnet. Tailscale operates that coordination service under your agreement with
+        them; swe-mux adds no relay and no broker of its own.</span></li>
       </ul>
     </div>
 
-    <div class="rel boundary" id="not-planned">
-      <div class="relhead"><h2>Deliberately not on the roadmap</h2><span class="fill"></span></div>
-      <p class="prose">These are not oversights and they are not "later". Each would need a
-      new decision about authorization, confirmation, audit, and failure behaviour before
-      it could be scheduled at all, and none of those decisions has been made. <b>A request
-      for one of them is closed with a link back to this section</b>, which is a boundary
-      rather than a judgement about whether the idea is a good one. No number of votes
-      moves anything out of this list; only one of those decisions would.</p>
+    <div class="rel">
+      <div class="relhead"><h2>What the software stores, and where</h2>
+      <span class="fill"></span></div>
+      <p class="prose">All of it is on your own disk, in one directory, and none of it is
+      transmitted anywhere.</p>
       <ul class="bullets">
-        <li><span><b>Autonomous actuation.</b> Model-authored action selection, unrestricted terminal writes, auto-approval, or arbitrary command execution. Observers structurally cannot type, approve, or spawn, and that is the property the rest of the design rests on.</span></li>
-        <li><span><b>Killing processes it merely suspects.</b> swe-mux finds hung and orphaned processes and shows them to you. It does not terminate them on its own judgement.</span></li>
-        <li><span><b>A cloud service.</b> No account, no relay, no server, no telemetry. The phone reaches your machine over your own tailnet, and there is no third party in the path because there is no third party.</span></li>
-        <li><span><b>A chat-bot control adapter.</b> Web push covers outbound alerting and the mobile browser covers inbound control, so a bot would buy "reply without opening the UI" at the cost of a second confirmation surface to keep safe.</span></li>
-        <li><span><b>Remote execution hosts.</b> Treating machines over SSH as execution targets, with a remote filesystem provider and a deployed relay. A host already on your tailnet can reach the daemon directly, which is the cheaper answer to most of what this would buy.</span></li>
+        <li><span>The data directory is <code>~/.mux</code> on Windows,
+        <code>$XDG_DATA_HOME/swe-mux</code> (else <code>~/.local/share/swe-mux</code>) on
+        Linux, and <code>~/Library/Application Support/swe-mux</code> on macOS. An
+        existing <code>~/.mux</code> wins on every host and <code>MUX_DATA_DIR</code>
+        overrides all of it.</span></li>
+        <li><span>It holds your configuration, the session registry and terminal
+        checkpoints, SQLite databases for history and telemetry, the daemon log,
+        generated speech clips, and the clipboard-history ring. Terminal output is in
+        there, which means anything an agent printed is in there.</span></li>
+        <li><span><b>Agent transcripts are read in place and never moved, rewritten, or
+        deleted.</b> They stay wherever the vendor's own CLI put them.</span></li>
+        <li><span>Deleting that directory deletes everything swe-mux has recorded. There
+        is no second copy and nothing to request from anyone.</span></li>
+      </ul>
+      <p class="note">Two things worth knowing rather than discovering. The diagnostics
+      bundle (<code>mux doctor --export</code>) is built for sharing and deliberately
+      contains no terminal bytes and no message content, but it does contain a sanitized
+      configuration, so read it before attaching it to anything. And anyone your tailnet
+      admits to the daemon's listener has terminal and code-execution authority on the
+      host: <a href="https://github.com/jatoran/swe-mux/blob/master/SECURITY.md">Tailscale
+      policy is the entire access boundary</a>, because there is no swe-mux login to
+      add one.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>This website</h2><span class="fill"></span></div>
+      <p class="prose">swemux.dev is static files served by GitHub Pages from the
+      <code>site/</code> directory of the public repository.</p>
+      <ul class="bullets">
+        <li><span><b>No analytics, no tracking pixels, no cookies set by this site, and
+        no third-party requests of any kind.</b> No external fonts, no CDN, no embedded
+        video. Every page is one HTML file with its CSS and its handful of lines of
+        JavaScript inline. You can read the whole thing with view-source.</span></li>
+        <li><span>One value is stored in your browser: <code>localStorage</code> under
+        the key <code>swemux-theme</code>, holding <code>dark</code> or
+        <code>light</code>. It is what stops the colour scheme flashing on load, it is
+        never read by anything else, and it never leaves your browser.</span></li>
+        <li><span><b>GitHub serves these pages and therefore sees the requests</b>, the
+        way any web host does. That is covered by GitHub's own privacy statement. This
+        project has no access log for the site and collects nothing from it.</span></li>
+        <li><span>Links from here to GitHub, PyPI, or another project's site are ordinary
+        links. Following one is a request to that host, under that host's terms.</span></li>
       </ul>
     </div>
 
-    <div class="rel" id="asking">
-      <div class="relhead"><h2>Asking for something</h2><span class="fill"></span></div>
-      <p class="prose">Feature requests are
-      <a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">GitHub
-      Discussions in the Ideas category</a>, and a thumbs-up on one is a vote. The issue
-      tracker stays for bugs. A request that is accepted becomes an issue at that point and
-      carries its discussion and its votes across with it.</p>
-      <p class="prose"><b>Describe the problem, not the fix.</b> What you were trying to do,
-      what you did instead, and what made it hard. Two proposed implementations cannot be
-      weighed against each other, and a request that arrives as one hides the thing that
-      would actually be built for; the form asks for it in that shape. Read
-      <a href="#not-planned">deliberately not on the roadmap</a> first, because a request
-      that lands inside one of those boundaries gets a reason rather than a queue place.</p>
-      <p class="prose"><b>A vote is a signal, not a commitment.</b> Votes say what to look at
-      first and nothing more. Nothing is scheduled by being voted for, and no count obliges
-      anybody to build anything.</p>
+    <div class="rel">
+      <div class="relhead"><h2>Rights, and who to ask</h2><span class="fill"></span></div>
+      <p class="prose">There is no account to delete, no export to request, and no
+      profile held anywhere, because the project holds nothing about you. Data protection
+      rights are exercised against whoever holds data, and for swe-mux that is you, on
+      your own machine.</p>
+      <p class="prose">If you believe a sentence on this page is wrong,
+      <a href="https://github.com/jatoran/swe-mux/issues">open an issue</a>. A privacy
+      claim that turns out to be false is a bug in this page and will be corrected rather
+      than defended. Security reports go through
+      <a href="https://github.com/jatoran/swe-mux/blob/master/SECURITY.md">the security
+      policy</a> instead, privately.</p>
+      <p class="note">This page describes how the software behaves. It is not legal
+      advice and it is not a contract; what you are permitted to do with swe-mux is the
+      <a href="../terms/">licence</a>.</p>
     </div>
-
-    <p class="note">The internal plan this projects from lives in the repository under
-    <code>.docs/development/</code>, along with the audits and incident runbooks it cites.
-    It is written for the people building swe-mux and reads like it.</p>
   </div>
 </section>
 </main>

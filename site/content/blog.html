@@ -1,0 +1,59 @@
+<!-- The blog index, hand-authored around a generated post list.
+
+     There are no posts yet, and this page is deliberately shipped anyway: a `blog` link
+     in the top bar that 404s is worse than an empty blog, and an empty blog that says so
+     is better than one that looks abandoned. The empty state is written, not defaulted.
+
+     How a post gets published:
+
+       1. Write `content/blog/<slug>.md`. `content/blog/_template.md` is the format and
+          is itself never published, because `build.py` skips any filename beginning
+          with an underscore.
+       2. Run `python site/tools/build.py`, then the two site gates.
+       3. Commit `content/blog/<slug>.md` and the regenerated `blog/index.html` together.
+
+     Posts render **inline on this page**, newest first, each under a stable `#<slug>`
+     fragment that is its permalink. That is the same contract `/docs/#<slug>` already
+     carries, and it is the right shape while the volume is this low: a post per page
+     would mean generating pages `tools/check.mjs` does not discover, since it only walks
+     directories one level below the deploy root. When there are enough posts that this
+     page is unpleasant to scroll, split it - and move the fragments to real pages at the
+     same time, keeping the old ones working.
+
+     The POSTS marker comment below (written without its delimiters in this paragraph,
+     because `build.py` requires exactly one of it in this file) is replaced by the
+     rendered posts, or by the empty state when there are none.
+-->
+<section class="page">
+  <div class="wrap">
+    <div class="kick">notes from building it</div>
+    <h1>Blog</h1>
+    <div class="lede">
+      <p>Engineering write-ups about swe-mux: what broke, what the measurement said, and
+      what got decided because of it. Not release announcements. The
+      <a href="../changelog/">changelog</a> is the record of what shipped and the
+      <a href="../roadmap/">roadmap</a> is what is coming.</p>
+      <p>There is no feed, no newsletter, and no comment system. Posts are plain HTML on
+      this page, each with its own permalink.</p>
+    </div>
+
+    <!--POSTS-->
+
+    <div class="rel">
+      <div class="relhead"><h2>Elsewhere</h2><span class="fill"></span></div>
+      <p class="prose">Until there is something here, these are the pages that carry the
+      same material in a different shape.</p>
+      <ul class="flat">
+        <li><b>The design documents</b><span>Fifty-odd documents written for whoever
+        maintains a subsystem next, stating the invariants it holds and the decisions it
+        has already made. Indexed at <a href="../docs/">docs</a>, and they are where the
+        reasoning actually lives.</span></li>
+        <li><b>The changelog</b><span>Every released change, in
+        <a href="../changelog/">one place</a>, written for someone running swe-mux rather
+        than someone building it.</span></li>
+        <li><b>Commit messages</b><span>The repository is public and its history is the
+        long-form version of most of what a post here would say.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>

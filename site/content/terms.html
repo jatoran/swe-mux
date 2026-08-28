@@ -1,0 +1,132 @@
+<!-- The terms page, hand-authored.
+
+     swe-mux is Apache-2.0 software that runs on the reader's own machine. There is no
+     service, no account, and no contract between this project and anyone who downloads
+     it - so the licence is the terms, and this page's job is to say what the licence
+     already says rather than to invent a second agreement beside it.
+
+     Three rules, and the third is the one that keeps this page honest:
+
+     1. **Point at LICENSE for anything the licence covers.** Warranty, liability,
+        patent grant, and redistribution are all in there, already legally drafted, and
+        a paraphrase that drifts from it is worse than a link.
+     2. **Add only the facts the licence does not carry**: that there is no service and
+        therefore no service terms, that the vendors' CLIs run under the reader's own
+        agreements, and what the trademark reservation means in practice.
+     3. **Say where a lawyer is needed rather than guessing.** This page states no
+        governing law, no jurisdiction, no dispute procedure and no consumer-law
+        carve-out, because inventing any of those would be worse than their absence.
+        The licence's own terms are what apply.
+-->
+<section class="page">
+  <div class="wrap">
+    <div class="kick">the licence is the terms</div>
+    <h1>Terms</h1>
+    <div class="lede">
+      <p>swe-mux is free software you run on your own computer. <b>There is no service to
+      sign up for, so there is no service agreement.</b> What governs your use of it is
+      the <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache License
+      2.0</a>, which is a real licence written by lawyers and is not restated here.</p>
+      <p>This page covers the four things people ask that the licence does not answer on
+      its own. Last revised 2026-08-28.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>The software</h2><span class="fill"></span></div>
+      <ul class="bullets">
+        <li><span><b>Licence: Apache-2.0.</b> You may use, modify, and redistribute
+        swe-mux, including commercially, provided you keep the notices the licence
+        requires. See <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">
+        <code>LICENSE</code></a> and
+        <a href="https://github.com/jatoran/swe-mux/blob/master/NOTICE"><code>NOTICE</code></a>.</span></li>
+        <li><span><b>No warranty, and limited liability.</b> The licence's sections 7 and
+        8 provide the software "as is", without warranties or conditions of any kind, and
+        limit the contributors' liability for damages arising from its use. That is the
+        operative text, not this sentence, and it is worth reading before you run an
+        autonomous agent against a repository you care about.</span></li>
+        <li><span><b>What that means in practice.</b> swe-mux launches coding agents with
+        the full privileges of the account running the daemon, and executing code on that
+        machine is its purpose rather than a defect. Back up your work, review what your
+        agents are configured to do without asking, and keep the approval floor in
+        place.</span></li>
+        <li><span><b>Third-party components</b> redistributed with swe-mux keep their own
+        licences, listed in
+        <a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">
+        <code>THIRD-PARTY-NOTICES.md</code></a> and on the
+        <a href="../acknowledgements/">acknowledgements page</a>. No GPL or AGPL code
+        ships.</span></li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>The agent CLIs are not ours</h2><span class="fill"></span></div>
+      <p class="prose">swe-mux launches and observes coding-agent CLIs published by other
+      vendors, including Anthropic's Claude Code and OpenAI's Codex CLI. It is <b>not
+      affiliated with, endorsed by, sponsored by, or certified by</b> any of them, and it
+      uses their names only to identify which tool a feature works with.</p>
+      <ul class="bullets">
+        <li><span>You run those CLIs under <b>your own account and your own agreement
+        with each vendor</b>. The same is true of the optional OpenRouter and Hugging
+        Face integrations, and of Tailscale if you use it to reach your machine.</span></li>
+        <li><span>swe-mux proxies nothing and resells nothing. It does not sit between
+        your agent and its vendor, and it holds no relationship with any of them on your
+        behalf.</span></li>
+        <li><span>Account switching is a convenience for <b>one person switching between
+        accounts they personally own and pay for</b>. It is not account pooling and not a
+        way around a usage limit: accounts are never shared between people, sessions are
+        never load-balanced across accounts, and switching is always an explicit
+        act.</span></li>
+        <li><span>Quota, billing, and account-sharing questions belong to that vendor.
+        Nothing here changes what your agreement with them permits.</span></li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>The name and the mark</h2><span class="fill"></span></div>
+      <p class="prose">Apache-2.0 grants copyright and patent rights and deliberately
+      does <b>not</b> grant trademark rights. The practical shape of that reservation is
+      written out in
+      <a href="https://github.com/jatoran/swe-mux/blob/master/TRADEMARK.md">
+      <code>TRADEMARK.md</code></a>: you may say your fork is derived from swe-mux and
+      you may not present a modified build as though it were this project.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>This website</h2><span class="fill"></span></div>
+      <ul class="bullets">
+        <li><span>swemux.dev lives in <code>site/</code> in the public repository, so it
+        is under the same Apache-2.0 licence as the rest of it.</span></li>
+        <li><span>Every claim on it is meant to be checkable against the repository, and
+        several pages say which file to check. If one is wrong,
+        <a href="https://github.com/jatoran/swe-mux/issues">open an issue</a>; it will be
+        corrected.</span></li>
+        <li><span>The <a href="../compare/">comparison page</a> describes other people's
+        products from their own published documentation and carries the date those
+        sources were read. It is not a benchmark and it is not an endorsement in either
+        direction.</span></li>
+        <li><span>The <a href="../roadmap/">roadmap</a> is direction, not commitment, and
+        says so. A vote on a feature request is a signal, not an obligation.</span></li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>Support</h2><span class="fill"></span></div>
+      <p class="prose">There is none to buy and none promised. Bugs go to
+      <a href="https://github.com/jatoran/swe-mux/issues">issues</a>, feature requests to
+      the Ideas discussions, and vulnerabilities privately through
+      <a href="https://github.com/jatoran/swe-mux/blob/master/SECURITY.md">the security
+      policy</a>. The response times in that policy are the targets of a maintainer-scale
+      project, stated so a reporter knows what to expect, and they are not a contractual
+      commitment.</p>
+      <p class="prose">Only the most recent release is supported. There is no long-term
+      support branch and no backport process; upgrading is the remedy for every reported
+      issue.</p>
+      <p class="note">This page is a plain-language summary of documents that are
+      themselves the agreement. It is not legal advice, and where it and
+      <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE"><code>LICENSE</code></a>
+      differ, the licence governs. It states no choice of law and no dispute procedure,
+      because the licence's own terms are what apply and inventing a second set beside
+      them would create a conflict rather than resolve one.</p>
+    </div>
+  </div>
+</section>

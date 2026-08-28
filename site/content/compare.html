@@ -1,0 +1,96 @@
+<!-- The comparison page, hand-authored around a generated table.
+
+     This is the highest-risk page on the site, and the rules below exist because an
+     overclaiming comparison gets taken apart in public and costs more than it earns.
+
+     1. **Every cell is sourced, and the sources are printed.** The data lives in
+        `content/compare.json`, one cell per tool per row, each naming source ids that
+        must resolve. `build.py` fails on a missing cell, an undefined source, or a
+        source nothing cites. There is nowhere to put an unsupported claim.
+     2. **`unclear` is a legitimate answer and is used freely.** Several of these
+        projects change weekly. "Not described in the sources checked" is honest and
+        checkable; a guess is neither, and one wrong cell discredits the other ninety.
+     3. **swe-mux loses rows, on purpose.** A table where the author's own product has
+        a full column of ticks is read as marketing and dismissed whole. Four rows are
+        marked as losses and they are marked in the data, not in the prose, so removing
+        one is a deliberate edit rather than a quiet omission. If a future edit leaves
+        no losses, the page has stopped being worth publishing.
+     4. **Capabilities, never disparagement.** Each cell says what a tool does. None of
+        them says what a tool is bad at, and none of them reads a missing feature as a
+        failing: tmux is not trying to detect agent status, and saying so is describing
+        scope rather than scoring a point.
+     5. **It carries the date it was checked**, on the page and next to the table,
+        because it will go stale and a reader has to be able to tell how stale.
+
+     The COMPARISON-TABLE marker comment below (written without its delimiters in this
+     paragraph, because `build.py` requires exactly one of it in this file) is replaced
+     with the generated matrix and the per-row detail. Do not hand-write rows there.
+-->
+<section class="page">
+  <div class="wrap">
+    <div class="kick">where it differs, including where it loses</div>
+    <h1>Compared</h1>
+    <div class="lede">
+      <p>swe-mux sits in a crowded category and does not win most of it. This page says
+      what each of the neighbouring tools does, from that tool's own documentation, and
+      marks the rows where swe-mux is behind as plainly as the rows where it is ahead.</p>
+      <p><b>Every cell names its source and the page carries the date those sources were
+      read.</b> Where the sources did not settle a question the answer is
+      <code>unclear</code> rather than a guess. Several of these projects are young and
+      move quickly, so check the date before trusting a row, and
+      <a href="https://github.com/jatoran/swe-mux/issues">open an issue</a> if a cell
+      about your project is wrong. It will be fixed rather than argued about.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>What each of these is</h2><span class="fill"></span></div>
+      <p class="prose">They are not the same kind of thing, which is the first thing a
+      comparison table hides. Read this before the matrix.</p>
+      <ul class="flat">
+        <li><b>swe-mux</b><span>A local daemon that owns pseudoterminals, with a browser
+        UI and a phone client in front of it, plus an evidence layer over what the agents
+        did. Windows-first, Apache-2.0.</span></li>
+        <li><b>Herdr</b><span>A single Rust binary that multiplexes terminals inside your
+        existing terminal and reads agent state into a sidebar. Apache-2.0.</span></li>
+        <li><b>tmux</b><span>The terminal multiplexer everything in this category is
+        measured against. It is here as the baseline, not as a competitor: it predates
+        coding agents by twenty years and is not trying to understand them.</span></li>
+        <li><b>Orca</b><span>A desktop agent development environment with an editor, a
+        built-in browser, mobile apps, and a worktree per task. MIT.</span></li>
+        <li><b>Conductor</b><span>A Mac app that runs parallel Claude Code, Codex, and
+        Cursor agents in isolated git worktrees, with a hosted cloud tier.</span></li>
+        <li><b>Superset</b><span>A local-first desktop workspace for orchestrating any
+        CLI agent, one git worktree per task, aiming at very large agent counts.
+        Source-available under the Elastic License.</span></li>
+        <li><b>Warp</b><span>A terminal, an agent CLI, and cloud agent infrastructure.
+        The client is open source; the platform around it is a paid service.</span></li>
+      </ul>
+    </div>
+
+    <!--COMPARISON-TABLE-->
+
+    <div class="rel">
+      <div class="relhead"><h2>How to read this</h2><span class="fill"></span></div>
+      <p class="prose">Three things the matrix cannot say, and they matter more than most
+      of the rows.</p>
+      <ul class="flat">
+        <li><b>A phone client is not a phone client</b><span>Orca ships iOS and Android
+        apps and calls them companions; swe-mux's claim is parity, meaning nothing
+        functional exists on the desktop and not on the phone. Those are different
+        products in the same cell, and the row cannot tell you which one you want.</span></li>
+        <li><b>Breadth is not depth</b><span>Orca and Herdr recognize more agent CLIs
+        than swe-mux does, and if the CLI you use is on their list and not in swe-mux's
+        registry, that is the row that decides it. Every CLI still runs in swe-mux as an
+        ordinary terminal program; what it does not get is the layer on top.</span></li>
+        <li><b>Not built is not the same as not yet built</b><span>swe-mux has no hosted
+        runners and no team features, and both are
+        <a href="../roadmap/#not-planned">deliberately not on the roadmap</a> rather than
+        pending. If you want either, two of the tools above have them today.</span></li>
+      </ul>
+      <p class="note">Nothing on this page is a benchmark. No tool here was run
+      side by side against another, and none of the rows measure speed, reliability, or
+      how any of this feels after a week. They are capability claims read out of public
+      documentation, which is the most that can be checked from outside.</p>
+    </div>
+  </div>
+</section>

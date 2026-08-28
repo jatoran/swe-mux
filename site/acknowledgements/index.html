@@ -422,6 +422,122 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 .doclist .src { display: block; margin-top: 3px; font-weight: 400; font-size: 11.5px;
                 color: var(--fg-3); overflow-wrap: anywhere; }
 @media (max-width: 700px) { .doclist li { grid-template-columns: minmax(0, 1fr); } }
+/* The same "where this lives" line under a feature-guide row, where the label
+   column is the feature's name rather than its path. */
+.flat .src { display: block; margin-top: 4px; font-size: 11.5px; color: var(--fg-3); }
+.flat .src a { color: var(--fg-3); }
+/* `.flat b` is the *label* column: monospace, and carrying the green marker. A
+   `<b>` inside the description column inherited both, so an emphasised clause in
+   the middle of a sentence rendered as monospace with a stray bullet in front of
+   it. The landing page never hit this because its descriptions carry no bold;
+   the feature guide's do, and emphasis inside prose is the reason it is prose. */
+.flat span b { font-family: var(--sans); font-size: inherit; letter-spacing: normal; }
+.flat span b::before { content: none; }
+
+/* ------------------------------------------------------------- the changelog
+
+   A release entry is compact by default and complete on demand. The full 0.1.0
+   entry is sixty bullets, which nobody scans; the group labels are what a person
+   actually wants off a changelog ("did anything change in Git?"), so those are
+   drawn flat and the bullets live behind one disclosure per release.
+
+   `<details>` rather than a script, because these pages carry no JavaScript of
+   their own beyond the theme toggle, and a disclosure that needs one would be a
+   feature that is missing with JS off rather than merely unstyled. */
+.relgroups { margin-top: 13px; color: var(--fg-2); font-size: 14px; line-height: 1.66; }
+.relgroups .k { color: var(--fg); font-family: var(--mono); font-size: 11.5px;
+                letter-spacing: 0.11em; text-transform: uppercase; }
+.relgroups .sep { color: var(--fg-3); padding: 0 2px; }
+.relhead .relnotes { font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; }
+.relmore { margin-top: 16px; border-top: 1px solid var(--line); }
+.relmore > summary { list-style: none; cursor: pointer; padding: 11px 0 0;
+                     font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.11em;
+                     text-transform: uppercase; color: var(--fg-3); }
+.relmore > summary::-webkit-details-marker { display: none; }
+.relmore > summary::before { content: "\25B8"; color: var(--green); display: inline-block;
+                             width: 15px; transition: transform 0.12s linear; }
+.relmore[open] > summary::before { transform: rotate(90deg); }
+.relmore > summary:hover { color: var(--fg); }
+.relmore .changetype:first-of-type { margin-top: 18px; }
+
+/* ------------------------------------------------------------ the comparison
+
+   Two renderings of the same data, and the split is deliberate. The matrix is
+   markers only, because seven columns of prose at 360px is seven columns of one
+   word per line; the sentences and their sources live below it, one block per
+   row, in a grid that collapses to a single column like every other list here.
+
+   `min-width` on the matrix is load-bearing and not a guess. `table` here is
+   `width: 100%`, which means a narrow viewport does not overflow the wrapper: it
+   *squeezes*, and at 390px the label column reached one character per line and
+   the thirteen rows became six thousand pixels tall. A minimum width makes it
+   overflow instead, which `.tablewrap`'s `overflow-x: auto` then scrolls. The
+   value is the row's own content: 190px of label plus seven marker columns. */
+.cmp { min-width: 640px; }
+.cmp th:first-child, .cmp td:first-child { min-width: 190px; }
+.cmp td:first-child { font-family: inherit; font-size: 13.5px; color: var(--fg-2); }
+.cmp td:first-child a { color: var(--fg); }
+.cmp th.tool, .cmp td.c { text-align: center; }
+.cmp th.tool.self, .cmp td.c.self { background: var(--panel); }
+.cmp td.c { font-family: var(--mono); font-size: 12.5px; white-space: nowrap;
+            padding-left: 4px; padding-right: 4px; }
+.v-yes { color: var(--green); }
+.v-partial { color: var(--orange); }
+.v-no, .v-unclear { color: var(--fg-3); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 14px;
+          font-family: var(--mono); font-size: 12px; color: var(--fg-3); }
+.legend b { font-weight: 400; }
+.loseflag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.09em;
+            text-transform: uppercase; color: var(--orange); }
+.cmprow li { display: grid; grid-template-columns: 30px 132px minmax(0, 1fr); gap: 4px 16px;
+             padding: 12px 0; border-top: 1px solid var(--line); }
+.cmprow li:first-child { border-top: 0; }
+.cmprow .m { font-family: var(--mono); font-size: 12.5px; }
+.cmprow .who { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.cmprow li.self .who { color: var(--green); }
+.cmprow .d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.cmprow .cite { display: block; margin-top: 4px; font-size: 11.5px; color: var(--fg-3); }
+.cmprow .cite a { color: var(--fg-3); }
+@media (max-width: 700px) {
+  .cmprow li { grid-template-columns: 30px minmax(0, 1fr); }
+  .cmprow .d { grid-column: 2 / -1; }
+}
+
+/* -------------------------------------------------- the agent-onboarding block
+
+   Prominent by position rather than by colour: it sits directly under the lede,
+   above the section nav, and takes the panel treatment the roadmap's boundary
+   panel already uses. It is the first thing on the page because the reader most
+   likely to act on it is the one who has not decided to read anything yet. */
+.agentbox { border: 1px solid var(--line-2); background: var(--panel);
+            padding: clamp(15px, 2.6vw, 22px); margin-top: clamp(20px, 3vw, 28px); }
+.agentbox h2 { font-size: clamp(15px, 2vw, 17px); }
+.agentbox .prose { margin-top: 8px; }
+.agentbox .code { margin-top: 13px; }
+.agentbox .code pre { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+
+/* -------------------------------------------------------------- quick starts */
+.steps { counter-reset: step; margin-top: 12px; }
+.steps li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px;
+            padding: 7px 0; color: var(--fg-2); font-size: 14.5px; line-height: 1.58;
+            counter-increment: step; }
+.steps li::before { content: counter(step) "."; font-family: var(--mono);
+                    font-size: 12.5px; color: var(--green); }
+.steps b { color: var(--fg); }
+.proof { margin-top: 12px; color: var(--fg-2); font-size: 14px; line-height: 1.58; }
+.proof b { color: var(--fg); font-family: var(--mono); font-size: 11.5px;
+           letter-spacing: 0.11em; text-transform: uppercase; }
+
+/* ------------------------------------------------------------------ the blog
+
+   Posts render inline on the index, each under its own `id`, which is the same
+   fragment contract `/docs/#<slug>` carries. A post per page would mean pages
+   `tools/check.mjs` never discovers, since it walks one directory level. */
+.post { margin-top: clamp(34px, 5vw, 48px); }
+.post .meta { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+              letter-spacing: 0.06em; margin-top: 4px; }
+.post .prose, .post .bullets, .post table { max-width: 74ch; }
+.post h3 { margin-top: 24px; font-size: clamp(15px, 2vw, 17px); }
 </style>
 </head>
 <body>
