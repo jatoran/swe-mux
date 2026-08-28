@@ -123,7 +123,7 @@ async def edge_voice_preview(request: web.Request) -> web.Response:
 
 async def kokoro_model_status(request: web.Request) -> web.Response:
     voice: VoiceService = request.app[keys.VOICE]
-    return json_response(voice.kokoro_models.status())
+    return json_response(voice.kokoro_model_status())
 
 
 async def whisper_model_status(request: web.Request) -> web.Response:
@@ -255,6 +255,14 @@ async def kokoro_model_download(request: web.Request) -> web.Response:
 
     Progress reaches every client over the event stream, because the download
     outlives any single request and may have been started from another device.
+
+    Two downloads, one press. The spaCy G2P model is a prerequisite of the same
+    engine - Kokoro's weights cannot phonemize a word without it - so asking the
+    operator to find a second button for a 12 MB companion of a 106 MB download
+    would be an interface describing an implementation. They stay separate stores
+    and separate progress streams because they can fail independently, and a
+    single state would have to lie about one of them; `model` on the event says
+    which is speaking, and the Kokoro panel ignores the one that is not its own.
     """
     voice: VoiceService = request.app[keys.VOICE]
     events: EventBus = request.app[keys.EVENTS]
@@ -262,8 +270,18 @@ async def kokoro_model_download(request: web.Request) -> web.Response:
     async def progress(status: dict[str, Any]) -> None:
         await events.emit("voice_model_progress", source="daemon", model="kokoro", **status)
 
+    async def g2p_progress(status: dict[str, Any]) -> None:
+        # `model` is not optional here. The Kokoro panel accepts an event whose
+        # `model` is absent as well as one that says `kokoro`, so an unlabelled
+        # G2P event would overwrite the Kokoro download's own progress with a
+        # 12 MB total mid-transfer.
+        await events.emit("voice_model_progress", source="daemon", model="g2p", **status)
+
     started = voice.kokoro_models.start_download(progress)
-    return json_response({"started": started, **voice.kokoro_models.status()}, 202)
+    g2p_started = voice.g2p_model.start_download(g2p_progress)
+    return json_response(
+        {"started": started or g2p_started, **voice.kokoro_model_status()}, 202
+    )
 
 
 async def voice_transcribe(request: web.Request) -> web.Response:

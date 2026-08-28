@@ -1649,11 +1649,22 @@ POST   /voice/deferral-diagnostic        one resolved unfinished-utterance defer
 GET    /voice/clips[?session=&run=&anchor=&kind=summary|verbatim&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
-GET    /voice/models/kokoro               pinned-download state
-POST   /voice/models/kokoro/download      202; progress rides voice_model_progress events
+GET    /voice/models/kokoro               pinned-download state, with `g2p` nested inside it
+POST   /voice/models/kokoro/download      202; starts BOTH stores; progress rides voice_model_progress
 GET    /voice/models/whisper[?model=]     {models[]}; per-model first-use state, probe only
 POST   /voice/models/whisper/download     {model?} → 202; the explicit act, never implicit
 ```
+
+`/voice/models/kokoro` carries a nested `g2p` object - `{status, source, distribution, version,
+total_bytes, downloaded_bytes, error}` - for the spaCy model the Kokoro G2P loads before it can
+pronounce anything. Nested rather than merged, because a caller has to be able to tell which half
+of one capability is missing; `source` is `installed` (the environment resolves the distribution)
+or `downloaded` (this daemon fetched it into the data directory), which are the same working state
+reached two ways and only the second is anything an operator can act on. The download POST starts
+whichever store needs it and reports `started` if either did; its `voice_model_progress` events
+carry `model: "kokoro"` or `model: "g2p"`, and a consumer must branch on that - the Kokoro panel
+also accepts an event with `model` absent, so an unlabelled G2P event would overwrite a 106 MB
+download's progress with a 12 MB one.
 
 `/voice/models/whisper` reports the configured dictation and routing models under the same
 `not_downloaded | downloading | ready | error` vocabulary Kokoro uses, plus `backend_installed`

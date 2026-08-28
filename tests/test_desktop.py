@@ -13,7 +13,14 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
-from swe_mux.build_support import publish_frontend
+from swe_mux.build_support import (
+    PRECOMPRESS_LEVEL,
+    PRECOMPRESS_MIN_BYTES,
+    PRECOMPRESS_SUFFIXES,
+    precompress_static,
+    publish_frontend,
+    sidecar_is_current,
+)
 from swe_mux.config import Config
 from swe_mux.desktop import (
     DesktopRuntime,
@@ -230,6 +237,152 @@ def test_the_desktop_frontend_build_repeats_every_postbuild_step() -> None:
             f"frontend/package.json runs scripts/{script} in postbuild, which the "
             f"desktop build bypasses. Run it explicitly in build_frontend."
         )
+
+
+def test_the_python_and_node_precompressors_agree_on_the_rule() -> None:
+    """Two producers, one rule, asserted rather than remembered.
+
+    `frontend/scripts/compress-static.mjs` writes the sidecars at build time so a
+    fresh `npm run build` never leaves a stale one beside a new asset, and
+    `build_support.precompress_static` writes them at daemon start because the
+    wheel and the sdist deliberately carry none. Neither can be removed: the first
+    protects a running daemon, the second is the only one an installed copy ever
+    runs.
+
+    What that costs is a second copy of "which files earn a sidecar", and a copy
+    is what drifts. A suffix added to one and not the other would show up as a
+    file served uncompressed from a wheel install and compressed from a checkout,
+    which nothing else in the suite would notice. So the constants are compared,
+    the way the marker expression in three files is.
+    """
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    script = (root / "frontend" / "scripts" / "compress-static.mjs").read_text(
+        encoding="utf-8"
+    )
+
+    minimum = re.search(r"const MIN_BYTES\s*=\s*(\d+)", script)
+    assert minimum is not None, "compress-static.mjs no longer declares MIN_BYTES"
+    assert int(minimum.group(1)) == PRECOMPRESS_MIN_BYTES
+
+    suffixes = re.search(r"const COMPRESSIBLE\s*=\s*new Set\(\[([^\]]*)\]\)", script)
+    assert suffixes is not None, "compress-static.mjs no longer declares COMPRESSIBLE"
+    assert set(re.findall(r"'([^']+)'", suffixes.group(1))) == set(PRECOMPRESS_SUFFIXES)
+
+    # Level 9 by name on the Node side; the number is what the Python side has.
+    assert "Z_BEST_COMPRESSION" in script
+    assert PRECOMPRESS_LEVEL == 9
+
+
+def test_a_distribution_carries_no_precompressed_sidecar() -> None:
+    """The 35% of the wheel that was re-shipping what the zip already compressed.
+
+    Asserted against `pyproject.toml` rather than against a built wheel, because a
+    wheel is not available in every environment the gate runs in and because the
+    thing that can regress is the pattern. It is a *negated artifact* pattern for
+    a reason worth keeping visible: hatchling's `BuilderConfig.include_path` tests
+    `path_is_artifact` first and short-circuits on it, so an `exclude` entry beside
+    these patterns is read, matched, and then ignored - the sidecars ship anyway
+    and the build says nothing.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    for target in ("wheel", "sdist"):
+        artifacts = manifest["tool"]["hatch"]["build"]["targets"][target]["artifacts"]
+        assert "!src/swe_mux/static/**/*.gz" in artifacts, (
+            f"the {target} target would carry the precompressed sidecars again"
+        )
+        assert artifacts.index("src/swe_mux/static/**") < artifacts.index(
+            "!src/swe_mux/static/**/*.gz"
+        ), "gitignore semantics: the last matching pattern wins, so the negation goes after"
+
+
+def test_precompression_is_decided_by_content_and_never_by_a_timestamp(
+    tmp_path: Path,
+) -> None:
+    """A stale `.gz` is a blank screen, so "current" has to be a content question.
+
+    An mtime comparison is what this deliberately is not: this host raises its
+    timer resolution to 1 ms while a bare CI runner sits at Windows' 15.625 ms
+    default, and two tests have already been lost betting on the gap. The gzip
+    container answers it exactly - every member records the CRC-32 and the length
+    of what it was made from - so the check is eight bytes off the sidecar against
+    one CRC pass over the source.
+    """
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    asset = static / "assets" / "index-abc.js"
+    asset.write_text("x" * 4096, encoding="utf-8")
+    small = static / "tiny.js"
+    small.write_text("no", encoding="utf-8")
+    image = static / "icon.png"
+    image.write_bytes(b"\x89PNG" + b"\x00" * 4096)
+
+    first = precompress_static(static)
+    assert first.written == 1
+    assert first.kept == 0
+    sidecar = static / "assets" / "index-abc.js.gz"
+    assert sidecar.is_file()
+    # Below the floor and not a compressible kind: neither earns one, so a wheel
+    # install does not spend time on files a browser gains nothing from.
+    assert not (static / "tiny.js.gz").exists()
+    assert not (static / "icon.png.gz").exists()
+
+    # Idempotent: a second pass rewrites nothing at all.
+    encoded = sidecar.read_bytes()
+    second = precompress_static(static)
+    assert (second.written, second.kept, second.orphans_removed, second.failed) == (0, 1, 0, 0)
+    assert second.changed is False
+    assert sidecar.read_bytes() == encoded
+
+    # Same length, different content - the case a size check would pass and an
+    # mtime check would pass on a coarse clock.
+    asset.write_text("y" * 4096, encoding="utf-8")
+    assert not sidecar_is_current(asset, sidecar)
+    third = precompress_static(static)
+    assert third.written == 1
+    assert sidecar.read_bytes() != encoded
+
+    # A sidecar whose source is gone serves nothing and is swept.
+    orphan = static / "assets" / "index-old.js.gz"
+    orphan.write_bytes(sidecar.read_bytes())
+    fourth = precompress_static(static)
+    assert fourth.orphans_removed == 1
+    assert not orphan.exists()
+
+
+def test_precompression_survives_a_static_tree_it_cannot_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read-only install is a slower UI, never a daemon that will not start.
+
+    The failure is counted and logged rather than raised, because this runs as a
+    startup phase: refusing to serve at all over an optimisation would be a much
+    worse answer than serving uncompressed bytes.
+    """
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "app.js").write_text("z" * 4096, encoding="utf-8")
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr("swe_mux.build_support._write_sidecar", refuse)
+    result = precompress_static(static)
+    assert result.failed == 1
+    assert result.written == 0
+    assert not (static / "app.js.gz").exists()
+
+
+def test_a_missing_static_tree_is_not_an_error(tmp_path: Path) -> None:
+    """A source checkout that has never run `npm run build` has no tree at all."""
+    result = precompress_static(tmp_path / "never-built")
+    assert result.written == 0
+    assert result.failed == 0
+    assert not result.changed
 
 
 def test_frozen_desktop_dispatches_allowlisted_internal_modules(

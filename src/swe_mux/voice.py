@@ -54,7 +54,12 @@ from .subprocess_flags import background_creation_flags
 from .transcript_view import SpokenExchange, final_exchange_record, message_exchange
 from .tts_profiles import TtsProfile, resolve_tts_profile
 from .voice_audio import join_wav_files
-from .voice_models import ENGLISH_VOICES, KokoroModelStore, WhisperModelStore
+from .voice_models import (
+    ENGLISH_VOICES,
+    KokoroModelStore,
+    SpacyModelStore,
+    WhisperModelStore,
+)
 
 
 def _last_exchange(
@@ -1397,6 +1402,7 @@ class VoiceService:
         provider: OpenRouterClient,
         kokoro_models: KokoroModelStore | None = None,
         whisper_models: WhisperModelStore | None = None,
+        g2p_model: SpacyModelStore | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -1405,6 +1411,16 @@ class VoiceService:
         self.automation_store = automation_store
         self.provider = provider
         self.kokoro_models = kokoro_models or KokoroModelStore(config.data_dir)
+        # The G2P model the Kokoro engine needs before it can phonemize anything.
+        # A prerequisite of the same capability rather than a separate feature, so
+        # it is acquired by the same press and reported on the same line - but it
+        # is its own store, because "the weights are here" and "the model spaCy
+        # loads is here" are different facts and a single state would have to lie
+        # about one of them. `activate()` here rather than at first use so the
+        # `sys.path` entry it may add is made once, on the loop, rather than from
+        # whichever synthesis worker thread gets there first.
+        self.g2p_model = g2p_model or SpacyModelStore(config.data_dir)
+        self.g2p_model.activate()
         # The STT half of the same first-use contract: weights are a reported
         # state and an explicit download, never something the first Talk fetches.
         self.whisper_models = whisper_models or WhisperModelStore()
@@ -2864,6 +2880,15 @@ class VoiceService:
                 "the Kokoro voice model is not downloaded; download it in "
                 "Settings → Voice, or switch the engine to the OS voice"
             )
+        # Checked here as well as inside `KokoroEngine._ensure_g2p`, and the
+        # duplication is deliberate: this one runs before anything loads, so the
+        # operator is told what is missing instead of watching an ONNX session
+        # come up and then fail on the first word.
+        if not self.g2p_model.ready():
+            raise VoiceError(
+                "the spaCy English model the Kokoro G2P needs is not present; "
+                "download it in Settings → Voice, or switch the engine to the OS voice"
+            )
         if self._kokoro_engine is None:
             install = self.kokoro_models.install
             try:
@@ -3488,8 +3513,22 @@ class VoiceService:
             models,
         )
 
+    def kokoro_model_status(self) -> dict[str, Any]:
+        """The Kokoro weights' state, with the G2P model it cannot speak without.
+
+        One payload rather than two endpoints because they are two halves of one
+        capability and one press acquires both - but nested rather than merged,
+        because a caller has to be able to tell which half is missing. `status`
+        below and `GET /api/voice/models/kokoro` both read this, so the settings
+        panel and the doctor cannot disagree about what "ready" means here.
+        """
+        return {**self.kokoro_models.status(), "g2p": self.g2p_model.status()}
+
     async def status(self) -> dict[str, Any]:
-        kokoro_model = self.kokoro_models.status()
+        kokoro_model = self.kokoro_model_status()
+        kokoro_ready = (
+            kokoro_model["status"] == "ready" and kokoro_model["g2p"]["status"] == "ready"
+        )
         sapi_available = os.name == "nt" and bool(shutil.which("powershell.exe"))
         providers = {
             "sapi": {
@@ -3508,12 +3547,21 @@ class VoiceService:
             },
             "kokoro": {
                 "id": "kokoro",
-                "available": kokoro_model["status"] == "ready",
+                "available": kokoro_ready,
+                # Two absences, two sentences. They are acquired by the same press
+                # and a reader who is told the generic thing cannot tell whether
+                # the 106 MB download they already ran is the one that failed.
                 "diagnostic": None
-                if kokoro_model["status"] == "ready"
+                if kokoro_ready
                 else (
                     "the Kokoro voice model is not downloaded; download it in "
                     "Settings → Voice, or switch the engine to the OS voice"
+                )
+                if kokoro_model["status"] != "ready"
+                else (
+                    "the spaCy English model the Kokoro G2P needs is not present; "
+                    "download it in Settings → Voice, or switch the engine to the "
+                    "OS voice"
                 ),
                 "capabilities": {
                     "offline": True,

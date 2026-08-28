@@ -489,3 +489,42 @@ def test_real_g2p_phoneme_links_and_punctuated_lexicon_hits() -> None:
     built = engine.build_respelling("chronotron", "")
     assert built["ok"] is True
     assert str(built["value"]).startswith("[chronotron](/")
+
+
+def test_an_absent_g2p_model_is_refused_and_never_pip_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """misaki would run `pip install` from inside the synthesis path. It must not.
+
+    `misaki.en.G2P.__init__` reads
+
+        if not spacy.util.is_package(name): spacy.cli.download(name)
+
+    and `spacy.cli.download` shells out to pip. In a source checkout that writes
+    into the venv unasked; in the frozen app there is no pip to shell to at all;
+    and on either, it happens on a worker thread while somebody is waiting for a
+    sentence to be spoken. The model became a first-use asset when it stopped
+    being a publishable dependency, so its absence is now a legitimate state and
+    has to answer with a remedy rather than with an unrequested install.
+
+    `en.G2P` is asserted never to be reached, which is the only form of this test
+    that would fail if the check were removed: on this machine the model *is*
+    installed, so a test that only inspected the error message would pass with
+    the guard deleted.
+    """
+    pytest.importorskip("misaki")
+    from misaki import en
+
+    def never(*_args: Any, **_kwargs: Any) -> Any:  # pragma: no cover - the point
+        raise AssertionError("en.G2P was constructed with no model resolvable")
+
+    monkeypatch.setattr(kokoro_tts, "g2p_model_installed", lambda: False)
+    monkeypatch.setattr(en, "G2P", never)
+    engine = make_engine(Path("."))
+    with pytest.raises(KokoroError) as raised:
+        engine._ensure_g2p()
+    message = str(raised.value)
+    assert "spaCy English model" in message
+    # Both audiences: a press for an installed copy, a command for a checkout.
+    assert "Settings" in message
+    assert "uv sync --group g2p-model" in message

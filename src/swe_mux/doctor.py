@@ -664,7 +664,7 @@ def _wsl_bridge_checks(bridges: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def optional_asset_rows(
-    *, capture: dict[str, Any], voice: dict[str, Any]
+    *, capture: dict[str, Any], voice: dict[str, Any], voice_local_install: str
 ) -> list[dict[str, Any]]:
     """Normalize the first-use assets into one row shape, keeping their own states.
 
@@ -677,6 +677,13 @@ def optional_asset_rows(
     Voice rows say when a model is unused *as well as* absent: with `tts_enabled`
     and `stt_enabled` both shipping false, an untouched install has downloaded
     nothing, and reporting that as a missing capability would invent a problem.
+
+    `voice_local_install` is passed in rather than computed here, and that is what
+    keeps this function pure while still being right. The command that installs an
+    extra depends on how swe-mux was installed - `uv sync --extra voice-local` is
+    a source-checkout command that a PyPI user cannot run at all - so the answer
+    comes from `install_location.extra_install_command`, which reads the
+    filesystem. Both callers already know their own installation.
     """
     rows: list[dict[str, Any]] = [
         {
@@ -707,6 +714,37 @@ def optional_asset_rows(
                 else "Settings -> Voice -> Download Kokoro voices",
             }
         )
+    g2p = dict(kokoro.get("g2p") or {})
+    if g2p:
+        # Its own row rather than a clause on the Kokoro one, because its two
+        # ready states have different causes and only one of them is about this
+        # data directory: `installed` means the environment resolves the
+        # distribution (a source checkout, the desktop bundle), `downloaded`
+        # means this daemon fetched it. A reader chasing a broken voice needs to
+        # know which, and a merged row could not say.
+        used = bool(voice.get("tts_enabled")) and voice.get("tts_engine") == "kokoro"
+        source = str(g2p.get("source") or "")
+        rows.append(
+            {
+                "id": "voice_g2p",
+                "label": "spaCy English model (Kokoro pronunciation)",
+                "state": g2p.get("status"),
+                "detail": (
+                    f"the spaCy English model is present ({source})"
+                    if g2p.get("status") == "ready"
+                    else _asset_detail(
+                        str(g2p.get("status") or ""),
+                        "the spaCy English model the Kokoro G2P needs",
+                        used=used,
+                        unused_note="read aloud is off or set to another engine",
+                        error=g2p.get("error"),
+                    )
+                ),
+                "remedy": None
+                if g2p.get("status") == "ready"
+                else "Settings -> Voice -> Download Kokoro voices (it comes with them)",
+            }
+        )
     stt_used = bool(voice.get("stt_enabled")) and voice.get("stt_engine") != "sapi"
     for model in voice.get("whisper") or []:
         name = str(model.get("model") or "")
@@ -732,7 +770,7 @@ def optional_asset_rows(
                 ),
                 "remedy": None
                 if model.get("status") == "ready" and model.get("backend_installed")
-                else "uv sync --extra voice-local"
+                else voice_local_install
                 if not model.get("backend_installed")
                 else "Settings -> Voice -> Download speech model",
             }

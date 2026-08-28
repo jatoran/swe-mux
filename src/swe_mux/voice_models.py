@@ -1,9 +1,9 @@
 """On-demand acquisition of the local speech models, and the state machine over it.
 
-Two stores live here and both answer the same four-state question — ``not_downloaded
-→ downloading → ready``, plus ``error`` — because a first-use download that a
-fresh install cannot see coming is the failure this module exists to remove.
-Neither store ever downloads without an explicit act.
+Three stores live here and all three answer the same four-state question -
+``not_downloaded`` to ``downloading`` to ``ready``, plus ``error`` - because a
+first-use download that a fresh install cannot see coming is the failure this
+module exists to remove. No store ever downloads without an explicit act.
 
 - :class:`KokoroModelStore` (TTS) is **pinned**: an immutable repository revision
   and a per-file SHA-256, checked while streaming, whose error state can never be
@@ -16,8 +16,13 @@ Neither store ever downloads without an explicit act.
   nothing to observe: a percentage derived from an expected total would be an
   estimate presented as a reading, and a wrong number is acted on where an absent
   one is not.
+- :class:`SpacyModelStore` (the Kokoro G2P's spaCy model) is pinned the same way
+  as Kokoro's, and is the newest of the three because it used to be a *declared
+  dependency* rather than an asset. That declaration was unresolvable for every
+  downstream install (`.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 4), so
+  the model moved here, where the two speech models it serves already lived.
 
-The third first-use asset, the browser-side Silero VAD, is **not** here and does
+The fourth first-use asset, the browser-side Silero VAD, is **not** here and does
 not download: its ~11 MB WASM runtime and ~2.3 MB ONNX model are emitted into the
 frontend bundle by Vite and served same-origin by this daemon, so a fresh install
 already has them (`design/features/voice.md`).
@@ -27,9 +32,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
+import importlib.metadata
+import io
 import json
 import logging
+import shutil
+import sys
 import time
+import zipfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,6 +117,20 @@ _VOICE_SHAS: dict[str, str] = {
 KOKORO_FILES.update(
     {f"voices/{name}.bin": (522240, sha) for name, sha in _VOICE_SHAS.items()}
 )
+
+# The spaCy English model misaki's G2P resolves through `spacy.load`, pinned to
+# the same release `[tool.uv.sources]` and `uv.lock` name so a source checkout, a
+# desktop bundle, and a downloading install all end up with byte-identical bytes.
+# The hash is `uv.lock`'s own, which is what makes the pin real.
+G2P_DISTRIBUTION = "en_core_web_sm"
+G2P_VERSION = "3.8.0"
+G2P_WHEEL_URL = (
+    "https://github.com/explosion/spacy-models/releases/download/"
+    f"{G2P_DISTRIBUTION}-{G2P_VERSION}/{G2P_DISTRIBUTION}-{G2P_VERSION}-py3-none-any.whl"
+)
+G2P_WHEEL_SHA256 = "1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85"
+#: Measured from the release asset's `Content-Length` on 2026-08-28.
+G2P_WHEEL_BYTES = 12806118
 
 STATES = ("not_downloaded", "downloading", "ready", "error")
 
@@ -571,3 +596,275 @@ class WhisperModelStore:
         from faster_whisper.utils import download_model
 
         download_model(name)
+
+
+def g2p_model_installed() -> bool:
+    """Whether `spacy.load("en_core_web_sm")` would resolve in this interpreter.
+
+    Deliberately the same question spaCy asks itself. `spacy.util.load_model`
+    tries `is_package(name)` first, which is `importlib.metadata.distribution`,
+    and only then a filesystem path - so distribution metadata, not importability,
+    is what decides, and a bare `find_spec` would answer a different question.
+    """
+    try:
+        importlib.metadata.distribution(G2P_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    except (OSError, ValueError):  # pragma: no cover - unreadable metadata on disk
+        return False
+    return True
+
+
+class SpacyModelStore:
+    """The Kokoro G2P's spaCy model, as a first-use asset rather than a dependency.
+
+    Why it is here at all
+    ---------------------
+    `en-core-web-sm` is published as a GitHub release asset and exists on no
+    index. It used to be declared in the `voice-local` extra and resolved through
+    `[tool.uv.sources]`, which works perfectly for this checkout and not at all
+    for anybody else: an override is a property of *this* project's resolution and
+    is not carried in the wheel's `Requires-Dist`, so the published metadata
+    carried a bare unresolvable name and `pip install "swe-mux[voice-local]"`
+    failed outright for every downstream user of 0.1.0
+    (`.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 4). A PEP 508 direct URL
+    is not an escape either, because PyPI rejects distributions whose
+    `Requires-Dist` contains one.
+
+    So the declaration moved to the unpublished `g2p-model` dependency group -
+    which keeps the development checkout, both CI legs, and the desktop build
+    resolving it exactly as before - and an installed copy that does not have it
+    acquires it here, the way it already acquires the Kokoro weights.
+
+    Why the activation is a `sys.path` entry
+    ----------------------------------------
+    misaki calls `spacy.load("en_core_web_sm")` by bare name, and spaCy resolves a
+    bare name through `importlib.metadata.distribution`. So the downloaded copy
+    has to look like an installed distribution rather than like a directory: the
+    wheel is unpacked whole, `.dist-info` included, into one directory that is put
+    on `sys.path`. `importlib.metadata` searches `sys.path` at call time, so the
+    model becomes resolvable in this process without writing anything into
+    `site-packages` - which a daemon has no business doing to the environment it
+    was installed into.
+
+    The refusal this must never lose
+    --------------------------------
+    misaki's `G2P.__init__` reads
+
+        if not spacy.util.is_package(name): spacy.cli.download(name)
+
+    which shells out to `pip install` **from inside the synthesis path**. In a
+    frozen app there is no pip to shell to, and in a source checkout it would
+    write into the venv unasked. `kokoro_tts._ensure_g2p` therefore refuses with a
+    typed error before constructing `en.G2P` at all, and that check is the reason
+    this store can be an explicit, visible download instead of a silent one.
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self.root = data_dir / "voice-models" / "spacy"
+        #: The unpacked wheel. Named for what it is - a directory that behaves
+        #: like a `site-packages` - because that is exactly what goes on `sys.path`.
+        self.site = self.root / "site"
+        self._state_path = self.root / "state.json"
+        self._task: asyncio.Task[None] | None = None
+
+    # ---- state -------------------------------------------------------------
+
+    def _read_state(self) -> dict[str, Any]:
+        try:
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"status": "not_downloaded"}
+        if not isinstance(raw, dict) or raw.get("status") not in STATES:
+            return {"status": "not_downloaded"}
+        return raw
+
+    def _write_state(self, state: dict[str, Any]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(state, indent=2, sort_keys=True)
+        temporary = self._state_path.with_suffix(".json.tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        temporary.replace(self._state_path)
+
+    def unpacked(self) -> bool:
+        """Whether a verified unpacked copy is sitting under `self.site`."""
+        state = self._read_state()
+        if state.get("status") != "ready" or state.get("version") != G2P_VERSION:
+            return False
+        return (self.site / G2P_DISTRIBUTION / "__init__.py").is_file()
+
+    def activate(self) -> bool:
+        """Make the model resolvable in this interpreter; returns whether it is.
+
+        Idempotent and cheap enough to call on every start. An environment that
+        already has the distribution - a source checkout, the frozen bundle -
+        short-circuits and `sys.path` is never touched, so the ordinary case pays
+        nothing and cannot be perturbed by this at all.
+        """
+        if g2p_model_installed():
+            return True
+        if not self.unpacked():
+            return False
+        entry = str(self.site)
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+        # `importlib.metadata` caches its view of a `sys.path` entry, so a new one
+        # added after the first lookup is invisible without this.
+        importlib.invalidate_caches()
+        return g2p_model_installed()
+
+    def ready(self) -> bool:
+        return self.activate()
+
+    def _source(self) -> str:
+        """Which kind of present this is, read rather than remembered.
+
+        Derived from whether this store's own directory is on `sys.path`, not
+        from a flag set when `activate` last took the download branch. A flag is
+        a memory of one moment and gets the answer wrong the moment the orderings
+        differ - the first version of this reported `installed` for a model it had
+        just downloaded itself, and a test caught it. The path entry is the fact.
+        """
+        return "downloaded" if str(self.site) in sys.path else "installed"
+
+    def status(self) -> dict[str, Any]:
+        state = self._read_state()
+        downloading = self._task is not None and not self._task.done()
+        if self.activate():
+            # `installed` and `downloaded` are different facts about the same
+            # working state, and the difference is what a remedy is written
+            # against: one is a property of the environment, the other of the
+            # data directory this daemon owns.
+            return {
+                "status": "ready",
+                "source": self._source(),
+                "distribution": G2P_DISTRIBUTION,
+                "version": G2P_VERSION,
+                "total_bytes": G2P_WHEEL_BYTES,
+                "downloaded_bytes": G2P_WHEEL_BYTES,
+                "error": None,
+            }
+        status = "downloading" if downloading else state.get("status", "not_downloaded")
+        if status in {"downloading", "ready"} and not downloading:
+            # Either a restart killed the task, or the state file says `ready`
+            # while `activate` just said otherwise - a deleted or half-unpacked
+            # directory. Both mean what is on disk cannot be loaded.
+            status = "error"
+            state.setdefault("error", "the download was interrupted or the unpacked model is gone")
+        return {
+            "status": status,
+            "source": None,
+            "distribution": G2P_DISTRIBUTION,
+            "version": G2P_VERSION,
+            "total_bytes": G2P_WHEEL_BYTES,
+            "downloaded_bytes": 0,
+            "error": None if status == "downloading" else state.get("error"),
+        }
+
+    # ---- download ----------------------------------------------------------
+
+    def start_download(self, progress: ProgressCallback | None = None) -> bool:
+        """Begin the pinned download; returns False when one is already running."""
+        if self._task is not None and not self._task.done():
+            return False
+        if self.activate():
+            return False
+        self._write_state({"status": "downloading", "version": G2P_VERSION})
+        self._task = asyncio.create_task(self._download(progress), name="g2p-model-download")
+        return True
+
+    async def wait(self) -> None:
+        if self._task is not None:
+            await asyncio.gather(self._task, return_exceptions=True)
+
+    async def _download(self, progress: ProgressCallback | None) -> None:
+        started = time.monotonic()
+        timeout = aiohttp.ClientTimeout(total=DOWNLOAD_TIMEOUT_SECONDS, connect=20)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                payload = await self._fetch_wheel(session)
+            await asyncio.to_thread(self._unpack, payload)
+            self._write_state(
+                {
+                    "status": "ready",
+                    "version": G2P_VERSION,
+                    "sha256": G2P_WHEEL_SHA256,
+                    "verified_at": time.time(),
+                }
+            )
+            self.activate()
+            log.info(
+                "g2p model download complete bytes=%d seconds=%.1f",
+                G2P_WHEEL_BYTES,
+                time.monotonic() - started,
+            )
+        except asyncio.CancelledError:
+            self._write_state(
+                {
+                    "status": "error",
+                    "version": G2P_VERSION,
+                    "error": "the download was cancelled",
+                }
+            )
+            raise
+        except (VoiceModelError, aiohttp.ClientError, OSError, TimeoutError) as exc:
+            message = str(exc)[:400] or exc.__class__.__name__
+            self._write_state({"status": "error", "version": G2P_VERSION, "error": message})
+            log.warning("g2p model download failed: %s", message)
+        finally:
+            if progress is not None:
+                await progress(self.status())
+
+    async def _fetch_wheel(self, session: aiohttp.ClientSession) -> bytes:
+        """The pinned wheel, in memory, verified before anything touches disk.
+
+        In memory because it is 12 MB and because a partial file that never
+        reaches the filesystem cannot be mistaken for a complete one - the same
+        property `KokoroModelStore` buys with a `.partial` name for payloads far
+        too large to hold.
+        """
+        async with session.get(G2P_WHEEL_URL, allow_redirects=True) as response:
+            if response.status != 200:
+                raise VoiceModelError(
+                    f"the model host returned HTTP {response.status} for "
+                    f"{G2P_DISTRIBUTION} {G2P_VERSION}"
+                )
+            payload = await response.read()
+        digest = hashlib.sha256(payload).hexdigest()
+        if digest != G2P_WHEEL_SHA256:
+            raise VoiceModelError(
+                f"{G2P_DISTRIBUTION} {G2P_VERSION} failed verification "
+                f"(got {len(payload)} bytes, sha256 {digest[:16]}...); the pinned "
+                "release may have been tampered with or the download was corrupted"
+            )
+        return payload
+
+    def _unpack(self, payload: bytes) -> None:
+        """Replace `self.site` with the wheel's contents, atomically enough.
+
+        Unpacked beside the live directory and then swapped, so a failure part way
+        through leaves the previous state rather than a half-model that `activate`
+        would happily put on `sys.path`.
+        """
+        staging = self.root / "site.staging"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for member in archive.namelist():
+                # The payload is hash-pinned, so this cannot currently be hostile.
+                # It is checked anyway because the alternative is a rule that holds
+                # only while the constant above is right, and an absolute or
+                # parent-relative member is never legitimate in a wheel.
+                target = (staging / member).resolve()
+                if not target.is_relative_to(staging.resolve()):
+                    raise VoiceModelError(
+                        f"{G2P_DISTRIBUTION} {G2P_VERSION} contains an out-of-tree "
+                        f"path ({member!r}); refusing to unpack it"
+                    )
+            archive.extractall(staging)
+        if not (staging / G2P_DISTRIBUTION / "__init__.py").is_file():
+            raise VoiceModelError(
+                f"the {G2P_DISTRIBUTION} wheel did not contain the package it names"
+            )
+        shutil.rmtree(self.site, ignore_errors=True)
+        staging.replace(self.site)

@@ -255,10 +255,23 @@ Recorded so they are decisions rather than oversights.
 - **PyAV is out of this project's closure, but not out of a downstream `pip install`.**
   W5 landed the fix and proved by measurement that transcription works with no `av` installed at all, so swe-mux imports the real package on no code path.
   The limit is structural rather than an oversight: a uv override governs this repository's resolution, its lockfile, its builds, and the license gate, but it is not carried in the published wheel's `Requires-Dist`.
-  A downstream `pip install swe-mux[voice-local]` therefore still resolves `faster-whisper`'s own declared `av>=11`.
+  A downstream `pip install swe-mux[voice-local]` therefore resolves `faster-whisper`'s own declared `av>=11`.
   There is no PEP 508 mechanism to exclude a transitive dependency from published metadata; closing the last inch needs `faster-whisper` to make `av` optional upstream, or an override on the installing side.
   What remains for that user is disk size and diligence, not function.
   Decide before publishing whether to document this in `SECURITY.md`/`RELEASING.md` or to raise it upstream with `faster-whisper`.
+
+  **Corrected 2026-08-28, and the correction is the interesting part.**
+  This paragraph used to say that the command "**still** resolves" `av>=11`, which was written from the metadata rather than from a run and was false for the whole life of 0.1.0.
+  Measurement refuted it ([`DEPENDENCY_AUDIT_2026-08-28.md`](DEPENDENCY_AUDIT_2026-08-28.md) § 4): `pip install "swe-mux[voice-local]"` resolved **nothing at all**.
+  The published wheel declared `Requires-Dist: en-core-web-sm`, a name that exists on no index, so pip and uv both refused the extra outright before they ever reached `faster-whisper`.
+  **No downstream user has ever pulled the GPL-linked `av` payload through this extra**, because no downstream user has ever installed this extra.
+
+  The ordering matters and is the reason this is one entry rather than two.
+  The `en-core-web-sm` defect is what made the `av` limitation unreachable, so **fixing the first is what activates the second**.
+  WP-DEPFIX fixed the first: the model is no longer a published requirement (it lives in the unpublished `g2p-model` dependency group and is acquired at first use by `voice_models.SpacyModelStore`), so `pip install "swe-mux[voice-local]"` now resolves.
+  From that release onward the paragraph above is true for the first time: `av>=11` is a real transitive requirement of a real, installable extra, and the diligence question it describes is live rather than theoretical.
+  Nothing about swe-mux's own code changed - it still imports the real PyAV on no path, and `swe_mux.av_stub` still makes any *use* of it raise at the call site.
+  Raising it upstream with `faster-whisper` is now worth doing rather than worth deciding about.
 - **A desktop redeploy is owed before release, though not before landing.**
   The running frozen app still carries the old inline `av` stub, including a defect W5 found and fixed: refusing every attribute meant `repr()` of the stub module raised, so any log line or traceback mentioning `av` raised from inside the stub and buried the real diagnostic.
   Run `uv run python packaging/redeploy_desktop.py` from the primary checkout once the release branch settles.

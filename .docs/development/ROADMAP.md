@@ -3446,7 +3446,9 @@ precondition for publishing, not a nice-to-have.
 That item closed 2026-08-27 - `av` is out of the resolved closure and dictation is measured
 working with no PyAV installed - with one residue recorded there rather than hidden: a uv override
 does not travel in the wheel's `Requires-Dist`, so a downstream `pip install swe-mux[voice-local]`
-still resolves faster-whisper's own `av>=11` until upstream makes it optional.
+resolves faster-whisper's own `av>=11` until upstream makes it optional.
+That residue was **unreachable in practice until 2026-08-28** and the record said otherwise; see
+the corrected scope note on the item itself below.
 Every dependency this phase adds passes `packaging/license_audit.py`, and any addition requires
 regenerating `THIRD-PARTY-NOTICES.md` in the same commit.
 The packaging and external-trial readiness gaps, and the CI matrices, are inventoried in
@@ -3498,7 +3500,7 @@ the onboarding and launch subsections and is not restated here.
   **Scope, stated precisely, because the item's title overreaches.** A uv override is a property
   of *this* project's resolution, not of published metadata. It governs `uv.lock`, `uv sync`,
   every artifact built from them, and the gate - but it is not carried in the wheel's
-  `Requires-Dist`, so a downstream `pip install swe-mux[voice-local]` still resolves
+  `Requires-Dist`, so a downstream `pip install swe-mux[voice-local]` resolves
   faster-whisper's own declared `av>=11`. There is no PEP 508 mechanism to exclude a transitive
   dependency from published metadata; closing that last inch needs faster-whisper to make `av`
   optional upstream, or the installing side to pass its own override/constraint. What did change
@@ -3506,6 +3508,18 @@ the onboarding and launch subsections and is not restated here.
   size-and-diligence question rather than a functional dependency.
   **Not validated by a desktop rebuild.** The frozen path is unchanged in behaviour and the spec
   is untouched; the rebuild is owed before the next release, not before landing.)
+  **Corrected 2026-08-28 (WP-DEPFIX), and the correction is worth reading.** The scope note above
+  said the command "still resolves" `av>=11`. That was derived from metadata rather than from a
+  run, and it was false for the whole life of 0.1.0: `pip install "swe-mux[voice-local]"` resolved
+  *nothing*, because the published wheel declared `Requires-Dist: en-core-web-sm`, a name that is
+  on no index, and both installers refused the extra outright before reaching faster-whisper
+  ([`DEPENDENCY_AUDIT_2026-08-28.md`](DEPENDENCY_AUDIT_2026-08-28.md) § 4). **No downstream user
+  has ever pulled the GPL-linked `av` payload through this extra.** The ordering is the point:
+  fixing the unresolvable extra is what *activates* the `av` residue. WP-DEPFIX fixed it - the
+  spaCy model moved out of published metadata into the unpublished `g2p-model` dependency group
+  and is acquired at first use by `voice_models.SpacyModelStore` - so from the next release the
+  paragraph above is true for the first time, and raising `av` upstream with faster-whisper moves
+  from "decide whether to" to "worth doing".
 - [x] Guarantee every wheel contains a frontend bundle from the same revision; fail release
   validation on stale or missing assets.
   (Done 2026-08-27, W4. `packaging/verify_release_artifact.py` is the gate, structurally a twin

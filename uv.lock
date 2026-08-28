@@ -2687,9 +2687,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "cryptography" },
     { name = "mcp" },
     { name = "pillow" },
     { name = "psutil" },
+    { name = "py-vapid" },
     { name = "pywebpush" },
     { name = "pywinpty", marker = "sys_platform == 'win32'" },
     { name = "tree-sitter" },
@@ -2710,39 +2712,48 @@ voice-edge = [
     { name = "edge-tts" },
 ]
 voice-local = [
-    { name = "en-core-web-sm" },
+    { name = "ctranslate2" },
     { name = "faster-whisper" },
     { name = "misaki" },
     { name = "num2words" },
+    { name = "numpy" },
     { name = "onnxruntime" },
     { name = "spacy" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "en-core-web-sm" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-xdist" },
     { name = "ruff" },
 ]
+g2p-model = [
+    { name = "en-core-web-sm" },
+]
 package = [
+    { name = "en-core-web-sm" },
     { name = "pyinstaller" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.11" },
+    { name = "cryptography", specifier = ">=44.0" },
+    { name = "ctranslate2", marker = "extra == 'voice-local'", specifier = ">=4.4" },
     { name = "edge-tts", marker = "extra == 'voice-edge'", specifier = "==7.2.8" },
-    { name = "en-core-web-sm", marker = "extra == 'voice-local'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "faster-whisper", marker = "extra == 'voice-local'", specifier = ">=1.2" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "misaki", marker = "extra == 'voice-local'", specifier = ">=0.9.4" },
     { name = "num2words", marker = "extra == 'voice-local'", specifier = ">=0.5.14" },
+    { name = "numpy", marker = "extra == 'voice-local'", specifier = ">=1.26" },
     { name = "onnxruntime", marker = "extra == 'voice-local'", specifier = ">=1.27.0" },
     { name = "pillow", specifier = ">=11.0" },
     { name = "playwright", marker = "extra == 'preview-capture'", specifier = ">=1.49" },
     { name = "psutil", specifier = ">=6.1" },
+    { name = "py-vapid", specifier = ">=1.9" },
     { name = "pystray", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=0.19.5" },
     { name = "pywebpush", specifier = ">=2.0" },
     { name = "pywebview", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=5.4" },
@@ -2757,13 +2768,18 @@ provides-extras = ["desktop", "voice-local", "preview-capture", "voice-edge"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "mypy", specifier = ">=1.15" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.25" },
     { name = "pytest-xdist", specifier = ">=3.6" },
     { name = "ruff", specifier = ">=0.11" },
 ]
-package = [{ name = "pyinstaller", specifier = ">=6.15" }]
+g2p-model = [{ name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }]
+package = [
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
+    { name = "pyinstaller", specifier = ">=6.15" },
+]
 
 [[package]]
 name = "tabulate"

@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .voice_models import g2p_model_installed
+
 log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 24_000
@@ -350,6 +352,21 @@ class KokoroEngine:
                     "the misaki G2P package is not installed; local speech synthesis "
                     "needs the voice-local extra (`uv sync --extra voice-local`)"
                 ) from exc
+            # This refusal is load-bearing and is not defensive tidiness. misaki's
+            # `G2P.__init__` reads `if not spacy.util.is_package(name):
+            # spacy.cli.download(name)`, which shells out to `pip install` from
+            # inside the synthesis path - into the venv of a source checkout, and
+            # into nothing at all in a frozen app, where there is no pip to reach.
+            # The model is a first-use asset now rather than a declared dependency
+            # (`voice_models.SpacyModelStore` says why), so its absence is a
+            # legitimate state and has to answer with a remedy the reader can act
+            # on rather than with an unasked-for install.
+            if not g2p_model_installed():
+                raise KokoroError(
+                    "the spaCy English model the G2P needs is not present; download "
+                    "it in Settings → Voice (it comes with the Kokoro model), or "
+                    "install it into this environment with `uv sync --group g2p-model`"
+                )
             # fallback=None is the espeak-free constraint: unknown words come
             # back as the unknown token and are repaired here instead of being
             # handed to a GPL phonemizer.

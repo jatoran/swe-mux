@@ -281,3 +281,50 @@ async def test_notification_sound_route_serves_the_packaged_audio(tmp_path: Path
         assert response.content_type == "audio/mpeg"
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_started_daemon_serves_gzip_for_a_tree_that_shipped_none(
+    tmp_path: Path,
+) -> None:
+    """The whole of S1 in one assertion, from the browser's side.
+
+    The wheel carries no `.gz` sidecars any more - they were 4.43 MiB of a
+    12.70 MiB download, re-compressing what the archive had already compressed.
+    That is only safe because aiohttp does no on-the-fly compression for
+    `add_static`: it serves a `.gz` sitting beside the file to any client that
+    sent `Accept-Encoding: gzip`, and serves the plain bytes otherwise. So the
+    property to prove is not that a file appears on disk, it is that a fresh
+    install still hands a phone compressed bytes.
+    """
+    import gzip as gzip_module
+
+    frontend = tmp_path / "frontend"
+    (frontend / "assets").mkdir(parents=True)
+    (frontend / "index.html").write_text("app shell", encoding="utf-8")
+    # Big enough to earn a sidecar, and compressible, like every real chunk.
+    source = ("console.log('swe-mux');\n" * 400).encode("utf-8")
+    (frontend / "assets" / "index-abc.js").write_bytes(source)
+    assert not list(frontend.rglob("*.gz"))
+
+    config = Config(data_dir=tmp_path / "data", reconcile_external_history=False)
+    client = TestClient(TestServer(create_app(config, frontend_dir=frontend)))
+    await client.start_server()
+    await wait_runtime_ready(client.app)
+    try:
+        compressed = await client.get(
+            "/assets/index-abc.js", headers={"Accept-Encoding": "gzip"}, auto_decompress=False
+        )
+        assert compressed.status == 200
+        assert compressed.headers["Content-Encoding"] == "gzip"
+        body = await compressed.read()
+        assert len(body) < len(source)
+        assert gzip_module.decompress(body) == source
+
+        # A client that did not ask still gets the real file, unchanged.
+        plain = await client.get("/assets/index-abc.js", headers={"Accept-Encoding": "identity"})
+        assert plain.status == 200
+        assert "Content-Encoding" not in plain.headers
+        assert await plain.read() == source
+    finally:
+        await client.close()

@@ -378,6 +378,49 @@ def test_the_build_requires_every_distributed_extra() -> None:
     assert set(build_desktop.REQUIRED_BUILD_EXTRAS) == set(
         license_audit.DISTRIBUTED_EXTRAS
     )
+    assert set(build_desktop.REQUIRED_BUILD_GROUPS) == set(
+        license_audit.DISTRIBUTED_GROUPS
+    )
+
+
+def test_an_unpublished_group_that_ships_is_still_walked() -> None:
+    """`en-core-web-sm` is in a dependency group and in the bundle at the same time.
+
+    Groups are normally the opposite of distributed - `pyinstaller` is a build
+    tool and `python_closure` excludes groups because including it would make the
+    gate cry wolf on the one copyleft package that cannot matter. `g2p-model` is
+    there for a packaging reason rather than a build-tool one: the spaCy model
+    exists on no index and therefore cannot be a published requirement at all,
+    while `packaging/swe_mux.spec` collects it into `_internal/en_core_web_sm/`.
+
+    So it is unpublished *and* shipped, and a walk that could not see it would
+    report a closure the bundle does not match - the same failure
+    `DISTRIBUTED_EXTRAS` exists to prevent for `voice-local`'s LGPL `num2words`.
+    """
+    closure = license_audit.python_closure()
+    assert "en-core-web-sm" in closure
+
+
+def test_dropping_a_distributed_group_removes_a_shipped_package_from_the_walk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The negative control, so the assertion above is known to be load-bearing."""
+    monkeypatch.setattr(license_audit, "DISTRIBUTED_GROUPS", ())
+    assert "en-core-web-sm" not in license_audit.python_closure()
+
+
+def test_a_distributed_group_that_no_longer_exists_is_refused_rather_than_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A renamed group must fail loudly, not quietly walk a smaller closure.
+
+    `.get(group, [])` would have turned a rename into a silently narrower audit,
+    which is precisely the shape of failure this whole module is written against.
+    """
+    monkeypatch.setattr(license_audit, "DISTRIBUTED_GROUPS", ("no-such-group",))
+    with pytest.raises(SystemExit) as raised:
+        license_audit.python_closure()
+    assert "no-such-group" in str(raised.value)
 
 
 def test_a_fully_synced_environment_reports_nothing_missing(
@@ -457,11 +500,16 @@ def test_building_without_the_extra_is_refused_before_pyinstaller_runs(
 
 
 def test_the_spec_collects_the_voice_closure_the_extra_provides() -> None:
-    """Every voice-local package the frozen app resolves by name, not by import.
+    """Every voice package the frozen app resolves by name, not by import.
 
     spaCy loads its language modules from a registry, `en_core_web_sm` is a data
     package, misaki ships its lexicon as data, and num2words is the LGPL one.
     PyInstaller's source graph follows none of those.
+
+    `en_core_web_sm` reaches the build through the `g2p-model` dependency group
+    rather than through the extra (it is unpublishable, so it cannot be a
+    `Requires-Dist` at all), and that is exactly why it has to stay in this list:
+    the bundle is the one install shape that does not download it at first use.
     """
     spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
     for name in ("spacy", "en_core_web_sm", "misaki", "num2words"):

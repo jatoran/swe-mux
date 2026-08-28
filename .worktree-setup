@@ -18,6 +18,12 @@ export npm_config_cache="${npm_config_cache:-$HOME/.npm}"
 # time for a user who is happy with the browser's speech stack; a worktree that
 # runs the verification gate is not that user. `--extra desktop` is deliberately
 # NOT here: a worktree never builds or runs the app (CLAUDE.md § Worktrees).
+#
+# The spaCy model those G2P tests also need is not in that extra and must not be
+# (`pyproject.toml`, `voice-local`): it lives in the `g2p-model` dependency
+# group, which `dev` includes, and `dev` is uv's default group - so this command
+# still installs it and no flag is needed here. That is why it is in `dev` rather
+# than only in `package`.
 note "installing python deps (uv sync --extra voice-local)"
 uv sync --extra voice-local
 

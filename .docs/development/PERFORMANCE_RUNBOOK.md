@@ -255,11 +255,20 @@ INFO under `SLOW_STARTUP_SECONDS` (20s), WARNING above it. Then read where the t
 per-phase lines that precede it:
 
 ```
+startup_phase name=static-precompress elapsed=0.03s total=0.0s
 startup_phase name=database-integrity elapsed=11.52s total=11.5s
 startup_phase name=stores elapsed=0.31s total=11.8s
 startup_phase name=supervisor-connect elapsed=0.04s total=11.9s
 startup_phase name=session-reattach elapsed=2.41s total=14.3s
 ```
+
+`static-precompress` is first and is normally the cheapest thing on the path: it is the phase that
+makes the gzip sidecars the static tree is served from, and a tree that already has current ones
+costs a stat-and-CRC pass (measured 0.03s over 40 files, 16.2 MiB). It is expensive **exactly
+once** - 2.02s on the first start after an install or an upgrade, because a wheel deliberately
+carries no sidecars (they were 35% of the download; `design/features/remote-access.md`). If you see
+seconds here on a start that is not the first after an update, the tree is being rewritten every
+time, which means the CRC comparison is failing rather than that compression is slow.
 
 A phase at or above 10s is a WARNING; a phase still *running* after 15s is reported by the
 timeline's watchdog (`startup_phase_running name=... elapsed=...`) and again every 15s after that.

@@ -168,6 +168,33 @@ class InstallLocation:
         entry = self.command(name)
         return entry.path if entry is not None else None
 
+    @property
+    def pip_command(self) -> str:
+        """``<interpreter> -m pip``, shell-ready.
+
+        Derived from `module_fallback` rather than re-quoted, so there is one
+        rule for putting this interpreter's path in front of a user.
+        """
+        return f"{self.module_fallback.removesuffix(' -m swe_mux')} -m pip"
+
+    @property
+    def source_checkout(self) -> bool:
+        """Whether this is the repository itself rather than an installed copy.
+
+        `_detect_kind` cannot answer this: a `uv sync`ed checkout and a
+        `pip install swe-mux` into a virtualenv are both `INSTALL_VENV`, and they
+        take opposite advice - `uv sync --extra X` is the right command for the
+        first and is not a command the second can run at all.
+
+        Decided by layout, which is the only thing that actually differs: the
+        package sits at `<root>/src/swe_mux` beside a `pyproject.toml`, and an
+        installed copy sits in `site-packages` where neither is true.
+        """
+        return (
+            self.package_dir.parent.name == "src"
+            and (self.package_dir.parent.parent / "pyproject.toml").is_file()
+        )
+
     def path_fix_lines(self) -> list[str]:
         """The concrete way to put `bin_dir` on ``PATH`` on this host.
 
@@ -395,6 +422,36 @@ def installed_version() -> str | None:
         return None
 
 
+def extra_install_command(extra: str, location: InstallLocation | None = None) -> str:
+    """The command that adds `extra` to *this* copy of swe-mux.
+
+    Every diagnostic that reports an absent extra used to answer `uv sync --extra
+    <name>`, which is a source-checkout command: it needs a `pyproject.toml` and a
+    `uv.lock` beside it, so the one audience most likely to read it - somebody who
+    installed from PyPI and is looking at a capability that is simply not there -
+    could not run it at all. A remedy that cannot be run is worse than none,
+    because it ends the search.
+
+    So the command is derived from how this copy got here. The frozen app is the
+    one case with no command, because its extras are fixed when the bundle is
+    built; `doctor_local` says that in its own words rather than being handed an
+    empty string here.
+    """
+    where = location if location is not None else detect_install_location()
+    if where.source_checkout:
+        return f"uv sync --extra {extra}"
+    if where.kind == INSTALL_UV_TOOL:
+        # `--force` because the tool is already installed; uv reinstalls it with
+        # the extra rather than refusing, and no other invocation adds one.
+        return f'uv tool install --force "swe-mux[{extra}]"'
+    if where.kind == INSTALL_PIPX:
+        return f'pipx install --force "swe-mux[{extra}]"'
+    # A venv or the system interpreter. Named explicitly rather than as a bare
+    # `pip install`, because the whole failure this module exists for is a user
+    # whose `swe-mux` and whose `pip` are not the same environment.
+    return f'{where.pip_command} install "swe-mux[{extra}]"'
+
+
 def path_hint_lines(location: InstallLocation) -> list[str]:
     """The terse block a starting daemon prints, or [] when nothing is wrong.
 
@@ -492,6 +549,7 @@ __all__ = [
     "CommandLocation",
     "InstallLocation",
     "detect_install_location",
+    "extra_install_command",
     "installed_version",
     "path_hint_lines",
     "render_where",

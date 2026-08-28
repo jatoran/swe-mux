@@ -127,6 +127,8 @@ continues to own every terminal.
 
 - Runtime extra: `uv sync --extra desktop`.
 - Build dependencies: `uv sync --extra desktop --extra voice-local --group package`.
+  `--group package` is what brings the `g2p-model` group with it, and the build refuses without it
+  (`build_desktop.REQUIRED_BUILD_GROUPS`).
 - `voice-local` is optional at install time and mandatory at build time.
   It carries the on-device speech closure, and with it the LGPL `num2words`, whose
   relink condition is met only by the spec collecting it as readable source under
@@ -155,6 +157,13 @@ continues to own every terminal.
   new source. The daemon prefers a `.gz` for any client sending `Accept-Encoding: gzip` - every
   browser - and `index.html.gz` names content-hashed assets, so a stale one serves an index whose
   every asset 404s: a blank screen on a bundle that reports itself healthy.
+  Since 2026-08-28 there is a **second** producer, and the bundle is the one place both run:
+  `build_support.precompress_static` regenerates missing or stale sidecars as a daemon startup
+  phase, because the wheel and the sdist deliberately carry none (they were 35% of the download).
+  It is not a replacement for the build-time step - a `npm run build` in a source checkout does
+  not restart the daemon, so the stale sidecar above would live until something did - and the two
+  cannot disagree about which files earn one
+  (`test_desktop.py::test_the_python_and_node_precompressors_agree_on_the_rule`).
   This defect also defeats the asset-hash check in the repository's `CLAUDE.md`, because `curl`
   without `--compressed` is served the correct plain `index.html`. To check the file a browser
   actually receives, request it compressed:
@@ -189,8 +198,22 @@ continues to own every terminal.
   RuntimeError from inside the stub.
   The override governs this project's resolution - `uv.lock`, `uv sync`, the bundle, the
   gate - and is *not* carried in the wheel's `Requires-Dist`, so a downstream
-  `pip install swe-mux[voice-local]` still resolves faster-whisper's own `av>=11`; swe-mux
+  `pip install swe-mux[voice-local]` resolves faster-whisper's own `av>=11`; swe-mux
   imports the real package on no path either way.
+  That sentence was **unreachable until 2026-08-28**: the extra itself did not resolve, because
+  it declared `en-core-web-sm` and that name is on no index
+  (`../../development/DEPENDENCY_AUDIT_2026-08-28.md` § 4). Fixing the extra is what made the
+  `av` residue real, which is the ordering to keep in mind when reading anything written about
+  it before that date.
+- **The spaCy G2P model is a dependency *group*, not an extra, and the bundle still collects it.**
+  `en-core-web-sm` cannot be a published requirement at all - `[tool.uv.sources]` resolves it
+  from a GitHub release and a `uv` source does not travel in a wheel - so it is declared in
+  `g2p-model`, which PEP 735 never publishes. Two things have to name that group or the bundle
+  and the audit stop describing each other: `license_audit.DISTRIBUTED_GROUPS` (it *is*
+  redistributed, under `_internal/en_core_web_sm/`) and `build_desktop.REQUIRED_BUILD_GROUPS`
+  (a build environment without it produces a bundle whose `collect_all` collected nothing, and
+  `collect_all` on an absent package is silent). A wheel install has no bundled copy and
+  downloads it at first use instead (`voice_models.SpacyModelStore`).
 - **The optional Edge TTS client is external-only.**
   `voice-edge` is a source-install convenience extra and is not a member of
   `license_audit.DISTRIBUTED_EXTRAS`.

@@ -56,6 +56,17 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 dependencies = [
   "aiohttp>=3.11",
+  # Module-scope imports in `push.py`, which the daemon imports at startup, so
+  # the failure mode of leaving them undeclared is a daemon that will not start
+  # rather than a degraded feature. Both arrive transitively today through
+  # `pywebpush` -> `py-vapid` -> `cryptography`, which is an assumption about a
+  # third party's dependency graph rather than a claim this project has checked;
+  # a `pywebpush` release that stopped requiring either one would turn an
+  # invisible edge into an ImportError at daemon start. Declaring them costs no
+  # size at all - they are already installed in every environment - and converts
+  # that assumption into something an installer verifies.
+  # (`.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 6.)
+  "cryptography>=44.0",
   # The official MCP client, used only by the Agent Environment tool-catalog
   # fetch to dial a Claude-configured server (`mcp_tools.claude_probe`). swe-mux
   # implements the MCP *server* side itself (`mcp.py`); the client is taken as a
@@ -73,6 +84,9 @@ dependencies = [
   # a degraded capability rather than an import error.
   "pillow>=11.0",
   "psutil>=6.1",
+  # The other half of the pair above, and the same reasoning: `push.py` imports
+  # `py_vapid` at module scope for the VAPID claim signing.
+  "py-vapid>=1.9",
   "pywebpush>=2.0",
   # Genuinely Windows-only: there is no ConPTY anywhere else. The POSIX target
   # uses the stdlib `pty` module, which needs no third-party dependency.
@@ -146,12 +160,35 @@ desktop = [
 # `license_audit.DISTRIBUTED_EXTRAS` includes this extra, `build_desktop` refuses
 # to build without it, and `redeploy_desktop`'s preflight says so before spending
 # minutes on a build that would fail its own license verification.
+#
+# The spaCy English model misaki's G2P resolves through `spacy.load` is
+# deliberately NOT here, and that is the one thing about this extra that is easy
+# to get wrong twice. `en-core-web-sm` is published as a GitHub release asset and
+# exists on no index, so `[tool.uv.sources]` below is what resolves it - and an
+# override is a property of *this* project's resolution, not of published
+# metadata. Declaring it here put a bare `Requires-Dist: en-core-web-sm` in the
+# wheel, which made `pip install swe-mux[voice-local]` and `uv pip install
+# swe-mux[voice-local]` fail outright for every downstream user from 0.1.0's
+# release until 2026-08-28 (measured:
+# `.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 4). A PEP 508 direct URL is
+# not a way out either - PyPI rejects distributions whose `Requires-Dist` carries
+# one. It now lives in the unpublished `g2p-model` dependency group below, and an
+# installed copy that does not have it acquires it the way it already acquires the
+# Kokoro weights: `voice_models.SpacyModelStore`, on an explicit press, verified
+# against a pinned hash.
 voice-local = [
-  # The spaCy English model misaki's G2P resolves through `spacy.load`, taken as
-  # a URL dependency (see `[tool.uv.sources]`) because it is not on PyPI.
-  "en-core-web-sm",
+  # `voice._transcribe_whisper` reads `ctranslate2.get_cuda_device_count()` to
+  # decide the compute device, and `kokoro_tts`/`voice` build their audio buffers
+  # with numpy. Both arrive transitively today (through `faster-whisper` and
+  # `onnxruntime` respectively) and both are lazy imports inside features that
+  # already answer with a typed diagnostic, so this is the quieter half of the
+  # same rule `cryptography` and `py-vapid` carry in `dependencies`: a direct
+  # import is a declared dependency, because the alternative is an assumption
+  # about somebody else's dependency graph.
+  "ctranslate2>=4.4",
   "faster-whisper>=1.2",
   "misaki>=0.9.4",
+  "numpy>=1.26",
   # Direct rather than transitive on purpose. `misaki.en` imports it at module
   # scope for the Kokoro G2P, so there is no misaki English path without it, and
   # it is LGPL-2.1: an explicit declaration is what documents the runtime
@@ -176,7 +213,24 @@ voice-edge = [
   "edge-tts==7.2.8",
 ]
 [dependency-groups]
+# PEP 735 groups are never published: a wheel's `METADATA` carries
+# `Provides-Extra` for the four extras above and no group content at all. That
+# property is what makes this the right home for `en-core-web-sm` - see the note
+# on `voice-local`. The model is still resolved for every environment that needs
+# it, because `dev` and `package` each include this group: `uv sync` (dev is uv's
+# default group) covers the development checkout, `.worktree-setup`, and both CI
+# legs, so the real-G2P tests in `test_kokoro_tts.py` keep running rather than
+# turning into silent `importorskip` skips; `uv sync --group package` covers the
+# desktop build, whose `collect_all("en_core_web_sm")` in `packaging/swe_mux.spec`
+# needs it installed. `license_audit.DISTRIBUTED_GROUPS` names this group for the
+# same reason `DISTRIBUTED_EXTRAS` names `voice-local`: it is not published, but
+# it *is* redistributed inside the desktop bundle, and a closure walk that could
+# not see it would report a bundle it does not describe.
+g2p-model = [
+  "en-core-web-sm",
+]
 dev = [
+  { include-group = "g2p-model" },
   "mypy>=1.15",
   "pytest>=8.3",
   "pytest-asyncio>=0.25",
@@ -187,6 +241,7 @@ dev = [
   "ruff>=0.11",
 ]
 package = [
+  { include-group = "g2p-model" },
   "pyinstaller>=6.15",
 ]
 
@@ -196,7 +251,38 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/swe_mux"]
-artifacts = ["src/swe_mux/static/**", "src/swe_mux/assets/**"]
+artifacts = [
+  "src/swe_mux/static/**",
+  "!src/swe_mux/static/**/*.gz",
+  "src/swe_mux/assets/**",
+]
+# The precompressed sidecars are the one part of the static tree a distribution
+# must NOT carry, and the measurement is unambiguous: 40 `.gz` members, 4.43 MiB
+# of a 12.70 MiB wheel, every one of them with its plain sibling in the same
+# archive - 35% of the download spent re-shipping content the zip container has
+# already compressed once (`.docs/development/DEPENDENCY_AUDIT_2026-08-28.md`
+# § 1).
+#
+# They are not dropped, they are *moved*: `build_support.precompress_static`
+# regenerates the whole set in 0.93 s on first daemon start, and the daemon runs
+# it as a named startup phase, so what a browser is served is unchanged. Dropping
+# them without that would be a large regression rather than a wash - aiohttp does
+# no on-the-fly compression for `add_static`, so a phone over Tailscale would
+# fetch the 10.7 MiB ONNX runtime uncompressed.
+#
+# The exclusion is a **negated artifact pattern**, not an `exclude` entry, and
+# that is not a style choice: `BuilderConfig.include_path` tests
+# `path_is_artifact` first and short-circuits on it, so an `exclude` beside these
+# patterns is read, matched, and then ignored - the sidecars ship anyway, and the
+# build says nothing. `artifacts` is a `pathspec.GitIgnoreSpec`, so gitignore
+# negation applies and the last matching line wins.
+#
+# The exclusion is what makes this a packaging decision rather than a build-order
+# one: `frontend/scripts/compress-static.mjs` still writes the sidecars, because a
+# `npm run build` that left the *previous* build's `index.html.gz` beside fresh
+# content-hashed assets is a blank screen on a running daemon. They exist in every
+# checkout and in the desktop bundle, and are simply not put in a distribution.
+
 
 # The same artifacts on the sdist, and this is load-bearing rather than tidy.
 #
@@ -213,8 +299,16 @@ artifacts = ["src/swe_mux/static/**", "src/swe_mux/assets/**"]
 # run, which is what it exists for; this is the root fix behind that gate.
 # It also closes the gap `release.yml` recorded: an sdist that carries the
 # bundle is one a distro packager can rebuild a working wheel from.
+#
+# The `.gz` negation is repeated here for a reason the paragraph above already
+# names: `uv build` builds the sdist first and the wheel *from that sdist*, so a
+# sidecar that survived into the sdist would come straight back out in the wheel.
 [tool.hatch.build.targets.sdist]
-artifacts = ["src/swe_mux/static/**", "src/swe_mux/assets/**"]
+artifacts = [
+  "src/swe_mux/static/**",
+  "!src/swe_mux/static/**/*.gz",
+  "src/swe_mux/assets/**",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

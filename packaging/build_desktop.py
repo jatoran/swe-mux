@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -111,6 +112,16 @@ def build_frontend() -> None:
     # prefers a `.gz` for any client that accepts gzip, every browser was served an
     # index naming asset hashes that no longer existed: a blank screen on a bundle
     # that reported itself healthy.
+    #
+    # Since 2026-08-28 there is a second producer - `build_support.
+    # precompress_static`, run by the daemon as a startup phase - because the wheel
+    # and the sdist no longer *carry* the sidecars (they were 35% of the download).
+    # This one is still the right thing to run here: it makes the built tree
+    # correct at build time rather than at first start, and it is the step that
+    # keeps a *stale* sidecar from ever existing beside a fresh asset. The two
+    # cannot drift on which files earn a sidecar, because
+    # `test_desktop.py::test_the_python_and_node_precompressors_agree_on_the_rule`
+    # reads both definitions and compares them.
     subprocess.run([node, "scripts/compress-static.mjs"], cwd=frontend, check=True)
 
 
@@ -183,11 +194,23 @@ def describe_bundle(bundle_root: Path) -> Path:
 # `redeploy_desktop`'s preflight runs the same check before it stops anything.
 REQUIRED_BUILD_EXTRAS = ("desktop", "voice-local")
 
+# Dependency *groups* the bundle is built from, for the same reason and with the
+# same failure mode. `g2p-model` holds `en-core-web-sm`, which is a group member
+# rather than a `voice-local` member only because it cannot be published in
+# `Requires-Dist` at all (see the note on `voice-local` in `pyproject.toml`) - so
+# without naming it here, moving it out of the extra would have quietly removed it
+# from this check, and a bundle whose `collect_all("en_core_web_sm")` collected
+# nothing would ship with a Kokoro engine that cannot pronounce a word. That
+# failure appears only in the frozen app and only on the first spoken sentence,
+# which is exactly the class this whole function exists to turn into a refusal.
+REQUIRED_BUILD_GROUPS = ("g2p-model",)
+
 
 def missing_extra_distributions(
     extras: Sequence[str] = REQUIRED_BUILD_EXTRAS,
+    groups: Sequence[str] = REQUIRED_BUILD_GROUPS,
 ) -> list[str]:
-    """Distributions declared by `extras` that are not installed for this build.
+    """Distributions declared by `extras` or `groups` that are not installed here.
 
     Membership is read from `pyproject.toml` rather than listed here so adding a
     package to an extra cannot leave the check behind. Presence is decided by
@@ -204,19 +227,31 @@ def missing_extra_distributions(
 
     from packaging.requirements import Requirement
 
-    declared = tomllib.loads(
-        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )["project"]["optional-dependencies"]
+    manifest = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared: list[tuple[str, list[Any]]] = [
+        (f"--extra {extra}", manifest["project"]["optional-dependencies"].get(extra, []))
+        for extra in extras
+    ]
+    declared += [
+        (f"--group {group}", manifest.get("dependency-groups", {}).get(group, []))
+        for group in groups
+    ]
     missing: list[str] = []
-    for extra in extras:
-        for entry in declared.get(extra, []):
+    for flag, entries in declared:
+        for entry in entries:
+            # PEP 735 allows `{include-group = "..."}` beside plain strings. Both
+            # groups named here are flat, and a non-string entry is skipped rather
+            # than followed: this check is about what is installed, and an included
+            # group is named in its own right or it is not required.
+            if not isinstance(entry, str):
+                continue
             requirement = Requirement(entry)
             if requirement.marker is not None and not requirement.marker.evaluate():
                 continue
             try:
                 version(requirement.name)
             except PackageNotFoundError:
-                missing.append(f"{requirement.name} (--extra {extra})")
+                missing.append(f"{requirement.name} ({flag})")
     return missing
 
 
@@ -224,12 +259,15 @@ def verify_build_extras_installed() -> None:
     """Refuse to build from an environment that cannot produce a compliant bundle."""
     missing = missing_extra_distributions()
     if missing:
-        extras = " ".join(f"--extra {extra}" for extra in REQUIRED_BUILD_EXTRAS)
+        flags = " ".join(
+            [f"--extra {extra}" for extra in REQUIRED_BUILD_EXTRAS]
+            + [f"--group {group}" for group in REQUIRED_BUILD_GROUPS]
+        )
         raise SystemExit(
-            "The desktop bundle is built from every distributed extra, and these "
-            "are not installed:\n  "
+            "The desktop bundle is built from every distributed extra and group, "
+            "and these are not installed:\n  "
             + "\n  ".join(missing)
-            + f"\nRun `uv sync {extras}` and build again. This is a license "
+            + f"\nRun `uv sync {flags}` and build again. This is a license "
             "requirement as well as a functional one: num2words is LGPL and must "
             "ship as replaceable source under _internal/num2words/, which the "
             "spec's collect_all cannot do for a package that is absent."

@@ -178,10 +178,24 @@ type Config = {
   assistant_trust_reversible:'auto'|'cancel_window'|'confirm'
   assistant_stream_replies:boolean
 }
+/**
+ * The spaCy English model the Kokoro G2P loads before it can pronounce anything.
+ * Its own state rather than a boolean on the weights, because `installed` (the
+ * environment resolves the distribution - a source checkout, the desktop app)
+ * and `downloaded` (this daemon fetched it into the data directory) are the same
+ * working state reached two different ways, and only one of them is anything the
+ * operator can act on.
+ */
+type G2pModelInfo = {
+  status:'not_downloaded'|'downloading'|'ready'|'error'
+  source?:'installed'|'downloaded'|null
+  distribution:string;version:string
+  total_bytes:number;downloaded_bytes:number;error?:string|null
+}
 type KokoroModelInfo = {
   status:'not_downloaded'|'downloading'|'ready'|'error'
   total_bytes:number;downloaded_bytes:number;current_file?:string|null
-  error?:string|null;voices:string[]
+  error?:string|null;voices:string[];g2p?:G2pModelInfo
 }
 type VoiceStatusInfo = {
   enabled:boolean;engine:string;engine_available:boolean;diagnostic?:string|null;voice:string
@@ -2450,8 +2464,17 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   },[initial])
   useEffect(()=>{
     const handler=(raw:Event)=>{
-      const detail=(raw as CustomEvent).detail as Partial<KokoroModelInfo>&{model?:string}
-      if(detail&&(detail.model===undefined||detail.model==='kokoro')&&detail.status)setModel(current=>({...(current||{total_bytes:0,downloaded_bytes:0,voices:[]}),...detail} as KokoroModelInfo))
+      const detail=(raw as CustomEvent).detail as Partial<KokoroModelInfo>&Partial<G2pModelInfo>&{model?:string}
+      if(!detail?.status)return
+      // The G2P model rides the same event stream and is merged into its own
+      // sub-object. Checked before the Kokoro branch because that branch accepts
+      // an absent `model` as its own, so an unlabelled event reaching it would
+      // replace a 106 MB download's progress with a 12 MB one.
+      if(detail.model==='g2p'){
+        setModel(current=>current?{...current,g2p:{...(current.g2p as G2pModelInfo|undefined),...detail} as G2pModelInfo}:current)
+        return
+      }
+      if(detail.model===undefined||detail.model==='kokoro')setModel(current=>({...(current||{total_bytes:0,downloaded_bytes:0,voices:[]}),...detail} as KokoroModelInfo))
     }
     window.addEventListener('mux:voice-model',handler)
     return()=>window.removeEventListener('mux:voice-model',handler)
@@ -2471,6 +2494,16 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   const total=model?.total_bytes||0
   const done=model?.downloaded_bytes||0
   const pct=total?Math.min(100,Math.round(done/total*100)):0
+  // Two halves of one capability, drawn as two lines. One press acquires both,
+  // but they can fail independently, and a single "Kokoro model::error" that
+  // could mean either would send the reader after the wrong 106 MB.
+  const g2p=model?.g2p
+  const g2pStatus=g2p?.status||'not_downloaded'
+  const g2pWaiting=Boolean(g2p)&&g2pStatus!=='ready'&&g2pStatus!=='downloading'
+  const waiting=status!=='ready'&&status!=='downloading'
+  const label=status==='error'||g2pStatus==='error'?'Retry download'
+    :waiting?'Download Kokoro voices (~106 MB)'
+    :'Download the pronunciation model (~12 MB)'
   return <div class="kokoro-model-panel">
     <p aria-live="polite">
       <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>
@@ -2479,7 +2512,15 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
       {status==='ready'&&` · ${Math.round(total/1048576)} MB, hash-verified`}
       {status==='error'&&model?.error&&` · ${model.error}`}
     </p>
-    {status!=='ready'&&status!=='downloading'&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':'Download Kokoro voices (~106 MB)'}</button>}
+    {g2p&&<p aria-live="polite">
+      <span class={`state-dot ${g2pStatus==='ready'?'idle':g2pStatus==='downloading'?'running':'stopped'}`}/>
+      Pronunciation model::{g2pStatus}
+      {g2pStatus==='ready'&&` · ${g2p.distribution} ${g2p.version}, ${g2p.source==='installed'?'installed in this environment':'downloaded and hash-verified'}`}
+      {g2pStatus==='downloading'&&` · ${Math.round((g2p.total_bytes||0)/1048576)} MB`}
+      {g2pStatus==='not_downloaded'&&' · Kokoro cannot pronounce anything without it'}
+      {g2pStatus==='error'&&g2p.error&&` · ${g2p.error}`}
+    </p>}
+    {(waiting||g2pWaiting)&&<button disabled={starting} onClick={()=>void download()}>{label}</button>}
   </div>
 }
 
