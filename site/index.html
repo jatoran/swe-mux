@@ -156,7 +156,7 @@ footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { displ
 .ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
 .ic-os span.on { color: var(--cyan); }
 .ic-os span.on::before { content: "▸ "; color: var(--green); }
-.ic-os span.soon em { font-style: normal; color: var(--fg-4);
+.ic-os span.qual em { font-style: normal; color: var(--fg-4);
                       text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
 .ic-body { display: flex; align-items: center; gap: 11px; padding: 14px 15px; min-width: 0; }
 .ic-body .p { color: var(--green); flex: none; user-select: none; }
@@ -307,6 +307,11 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
         background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-3); padding: 2px 6px; cursor: pointer; }
 .copy:hover { color: var(--fg); }
 .note { font-size: 13.5px; color: var(--fg-3); margin-top: 12px; line-height: 1.55; }
+/* A subheading inside a section, for the one section that has two flows in it.
+   Reuses `--fg-3`, which `tools/contrast.py` already audits, rather than
+   introducing a colour the table would not know about. */
+.sub-h { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3);
+         margin: clamp(24px, 3.5vw, 34px) 0 12px; }
 
 footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
          padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }
@@ -373,25 +378,25 @@ footer .todo { color: var(--orange); }
     <div class="ic">
       <div class="ic-head">
         <div class="ic-tabs" role="tablist" aria-label="Install method">
-          <button class="ic-tab" role="tab" type="button" data-m="powershell" aria-selected="true">powershell</button>
-          <button class="ic-tab" role="tab" type="button" data-m="curl" aria-selected="false">curl</button>
-          <button class="ic-tab" role="tab" type="button" data-m="uv" aria-selected="false">uv</button>
+          <button class="ic-tab" role="tab" type="button" data-m="uv" aria-selected="true">uv</button>
+          <button class="ic-tab" role="tab" type="button" data-m="pipx" aria-selected="false">pipx</button>
+          <button class="ic-tab" role="tab" type="button" data-m="pip" aria-selected="false">pip</button>
           <button class="ic-tab" role="tab" type="button" data-m="source" aria-selected="false">source</button>
         </div>
         <div class="ic-os" aria-hidden="true">
           <span data-os="windows" class="on">WINDOWS</span>
-          <span data-os="linux">LINUX</span>
-          <span data-os="macos" class="soon">MACOS <em>soon</em></span>
+          <span data-os="linux" class="on">LINUX</span>
+          <span data-os="macos" class="on qual">MACOS <em>unproven</em></span>
         </div>
       </div>
       <div class="ic-body">
         <span class="p">$</span>
-        <code id="iccmd">irm https://get.swe-mux.dev/install.ps1 | iex</code>
+        <code id="iccmd">uv tool install swe-mux</code>
         <button class="ic-copy" type="button" id="iccopy">copy</button>
       </div>
     </div>
-    <p class="ic-note" id="icnote">Windows 10 or 11. Installs the desktop app, the daemon, and the
-    <code>mux</code> CLI.</p>
+    <p class="ic-note" id="icnote">Puts <code>mux</code> and <code>muxd</code> on your PATH. On
+    Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the tray.</p>
 
 
     <div class="herovis">
@@ -751,18 +756,42 @@ footer .todo { color: var(--orange); }
 <section class="sec" id="install">
   <div class="wrap">
     <div class="head"><span class="n">11</span><h2>Install</h2><span class="fill"></span></div>
-    <p class="intro">Windows 10 or 11 (or Linux), <a href="https://docs.astral.sh/uv/">uv</a>, Node,
-    WebView2 for desktop mode, and at least one agent CLI already installed and logged in. swe-mux
-    does not install, manage, or proxy the agent CLIs. It runs the ones you already have, on the
-    subscription you already pay for.</p>
+    <p class="intro">Python 3.12 or newer, and at least one agent CLI already installed and logged
+    in. swe-mux does not install, manage, or proxy the agent CLIs. It runs the ones you already
+    have, on the subscription you already pay for.</p>
     <div class="code">
       <button class="copy" type="button" data-copy="#c1">copy</button>
-      <pre id="c1"><span class="p">$</span> uv sync --extra desktop
+      <pre id="c1"><span class="p">$</span> uv tool install swe-mux
+<span class="p">$</span> mux doctor
+<span class="p">$</span> muxd</pre>
+    </div>
+    <p class="note">Daemon on <code>127.0.0.1:8765</code>; open that in a browser. Register a Project
+    folder. Nothing spawns until you ask. <code>pipx install swe-mux</code> does the same thing
+    without <a href="https://docs.astral.sh/uv/">uv</a>, and <code>mux doctor</code> is a read-only
+    health report you can run before anything else.</p>
+    <p class="note"><b>On Windows, take the desktop extra</b> - <code>uv tool install
+    "swe-mux[desktop]"</code> - which adds the native window, the tray icon, and the
+    <code>swe-mux</code> entry point, and wants the WebView2 Runtime. The extra is declared
+    Windows-only, so on Linux and macOS it resolves to nothing and the daemon plus a browser is the
+    whole product.</p>
+    <p class="note"><b><code>pip install swe-mux</code> is a different act.</b> It installs into an
+    environment you already have and leaves <code>mux</code> reachable only inside it.
+    <code>uv tool</code> and <code>pipx</code> are what put the CLI on your PATH for good.</p>
+    <h3 class="sub-h">From source</h3>
+    <div class="code">
+      <button class="copy" type="button" data-copy="#c2">copy</button>
+      <pre id="c2"><span class="p">$</span> git clone https://github.com/jatoran/swe-mux
+<span class="p">$</span> cd swe-mux
+<span class="p">$</span> uv sync --extra desktop
 <span class="p">$</span> npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build
 <span class="p">$</span> uv run --extra desktop swe-mux</pre>
     </div>
-    <p class="note">Desktop window plus a tray icon, daemon on <code>127.0.0.1:8765</code>. Register
-    a Project folder. Nothing spawns until you ask.</p>
+    <p class="note">Only the source flow needs Node: the frontend build output is gitignored, so a
+    fresh clone serves the API and no interface until that build runs once. A published wheel
+    carries the built frontend already.</p>
+    <p class="note">The wheel is pure Python, and CI builds and install-smokes it on Windows, Linux,
+    and macOS on every push. What no CI job does anywhere is <i>start the daemon</i> - Windows is
+    the platform that proves this thing running, and the macOS leg is not yet required to pass.</p>
   </div>
 </section>
 
@@ -828,26 +857,36 @@ footer .todo { color: var(--orange); }
 
 /* ---------------------------------------------------------------- install */
 (function () {
+  /* Every command here is one you can paste today: swe-mux is on PyPI as a pure
+     Python `py3-none-any` wheel carrying the built frontend, so the same command
+     works on all three hosts. Two rules this map is under, both learned the hard
+     way. Nothing may point at a host the project does not publish - this block
+     shipped `get.swe-mux.dev` one-liners for a domain that never existed, and
+     `tools/check.mjs` now fails on any install host outside the allowlist. And
+     the `desktop` extra is Windows-only *by declaration* (`pystray` and
+     `pywebview` both carry `sys_platform == 'win32'`), so it is named in the
+     notes rather than in the commands, because on Linux and macOS it resolves to
+     nothing at all. */
   var M = {
-    powershell: {
-      cmd: 'irm https://get.swe-mux.dev/install.ps1 | iex',
-      os: ['windows'],
-      note: 'Windows 10 or 11. Installs the desktop app, the daemon, and the <code>mux</code> CLI.'
-    },
-    curl: {
-      cmd: 'curl -fsSL https://get.swe-mux.dev/install.sh | sh',
-      os: ['linux'],
-      note: 'Installs the daemon and the <code>mux</code> CLI. Open the browser UI on <code>127.0.0.1:8765</code>.'
-    },
     uv: {
       cmd: 'uv tool install swe-mux',
-      os: ['windows', 'linux'],
-      note: 'If you already run <a href="https://docs.astral.sh/uv/">uv</a>. Add <code>--extra desktop</code> on Windows for the tray app.'
+      os: ['windows', 'linux', 'macos'],
+      note: 'Puts <code>mux</code> and <code>muxd</code> on your PATH. On Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the tray.'
+    },
+    pipx: {
+      cmd: 'pipx install swe-mux',
+      os: ['windows', 'linux', 'macos'],
+      note: 'The same isolated install without <a href="https://docs.astral.sh/uv/">uv</a>. On Windows, <code>pipx install "swe-mux[desktop]"</code>.'
+    },
+    pip: {
+      cmd: 'pip install swe-mux',
+      os: ['windows', 'linux', 'macos'],
+      note: 'Into an environment you already have. This one does <b>not</b> put <code>mux</code> on your PATH globally - only inside that environment. For a CLI you can always reach, use <code>uv tool</code> or <code>pipx</code>.'
     },
     source: {
       cmd: 'git clone https://github.com/jatoran/swe-mux',
-      os: ['windows', 'linux'],
-      note: 'Then <code>uv sync --extra desktop</code> and <code>npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build</code>. Full steps below.'
+      os: ['windows', 'linux', 'macos'],
+      note: 'Then <code>uv sync --extra desktop</code> and <code>npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build</code>. Needs Node; the published wheel does not. Full steps below.'
     }
   };
   var cmdEl = document.getElementById('iccmd');

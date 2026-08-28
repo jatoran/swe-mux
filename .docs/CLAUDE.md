@@ -592,14 +592,20 @@
   `requires-python`), `README.md`, `RELEASING.md`, `SECURITY.md`.
   Two rules that document carries. **Every command, path, flag, and exit code in it is verified
   against the repository rather than plausible** - it is read by someone whose install is already
-  broken, so a command that does not exist costs them the one thing they came for. And **it states
-  what is not yet true rather than describing an intention**: swe-mux is not on a package index
-  yet, so the `uv tool`/`pipx` commands are documented from `pyproject.toml` metadata and marked
-  as unexercised, and the platform matrix is read out of `.github/workflows/ci.yml` rather than
-  out of any prose summary.
-  Note that the *validation* half of Phase 11's item ("Validate `uv tool install swe-mux` and
-  `pipx install swe-mux`") needs PyPI and a clean machine and stays with the operator
-  (`development/RELEASE_MANUAL_TASKS.md` § 6); only the documentation half lives here.
+  broken, so a command that does not exist costs them the one thing they came for. Since 2026-08-28
+  that bar is higher for install commands specifically: `swe-mux` 0.1.0 is on PyPI, so a `uv tool`,
+  `pipx`, or `pip` command is *runnable* and is therefore expected to have been **run** into a
+  throwaway environment before it is written down, not derived from `pyproject.toml` metadata.
+  And **it states what is not yet true rather than describing an intention**: the platform matrix
+  is read out of `.github/workflows/ci.yml` rather than out of any prose summary.
+  The specific overstatement to watch for is the one the wheel makes easy. CI builds and
+  install-smokes the artifact on all three hosts, so "the wheel installs and the CLI runs" is
+  proven everywhere - but **no CI job on any host starts a daemon** (`packaging/install_smoke.py`
+  says so and means it), so nothing may claim a platform is verified working end to end. Windows
+  remains the only platform that proves the product running.
+  Note that clean-machine validation - a real machine, from the published artifacts, with no
+  checkout - is a different act again, needs hardware this repository does not have, and stays with
+  the operator (`development/RELEASE_MANUAL_TASKS.md` § 8).
 - Changing backend package ownership or shared SQLite behavior:
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
 

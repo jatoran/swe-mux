@@ -332,12 +332,32 @@ A full-bleed install box reads as a code block rather than a control, and the he
 The per-method note sits **outside and below** the box, so the bordered panel contains only the interactive parts: tabs, platforms, command, copy.
 
 Method tabs on the left of the header row, platform indicators right-aligned on the same row.
-**Selecting a method lights the platforms it targets**, which makes the row informative rather than decorative.
 The command, its `$` prompt, and the note all swap with the tab.
 
-**MACOS is deliberately never lit and carries a `soon` marker.**
-Roadmap Phase 10 has every Linux box checked and macOS open, so lighting it would claim something the build does not support, and leaving it dark with no explanation reads as a bug.
-When macOS is verified: remove the `soon` span, add `macos` to the `curl`, `uv`, and `source` entries in the install map, and update the assertion in `tools/check.mjs` that currently fails if macOS is lit.
+**The four methods are `uv`, `pipx`, `pip`, `source`, in that order, and the order is the argument.**
+`uv tool install swe-mux` is first because it is the one that leaves you with a `mux` you can run, which is what a reader of this box wants.
+`pip` is third rather than absent because people will reach for it anyway, and its note is the only one that says what it does *not* do: a `pip install` into an environment you already have leaves `mux` reachable only inside that environment.
+That distinction cost the operator real time on publish day, so it is stated on the page rather than left to be inferred.
+There is no `powershell` or `curl` tab; see below.
+
+**Every command in the box is one you can paste today.**
+Verified on 2026-08-28 against the published 0.1.0 wheel, by executing each one into a throwaway environment: `pip install swe-mux` in a clean venv, `uv tool install swe-mux` and `uv tool install "swe-mux[desktop]"` with `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` redirected, and `pipx install swe-mux` with `PIPX_HOME`/`PIPX_BIN_DIR` redirected.
+Each left `mux`, `muxd`, and `swe-mux` on the target's bin directory and each `--help` exited 0.
+
+**All three platforms are lit on every method, and that is a statement rather than a shrug.**
+The wheel is `py3-none-any` - pure Python, no compiled extensions - so the same command genuinely works on all three hosts, and CI builds and install-smokes the artifact on `windows-latest`, `ubuntu-latest` and `macos-latest`.
+The per-method set is therefore a weak assertion on its own, which is why `tools/check.mjs` now carries two stronger ones in its place.
+
+**MACOS is lit and carries an `unproven` qualifier.**
+Both halves are load-bearing and `check.mjs` asserts both.
+Unlighting it would understate a platform the wheel installs on cleanly; dropping the qualifier would overstate one whose CI leg is still `continue-on-error`.
+The word to remember is that **no CI job on any host starts a daemon** - "installs and the CLI runs" is what is proven everywhere, and it is not the same claim as "works end to end".
+When the macOS leg becomes required in `ci.yml`: drop the `qual` class and its `<em>`, and the `check.mjs` assertion that currently requires a qualifier.
+
+**Nothing in the box may fetch from a host the project does not publish.**
+This is the rule the callout broke: it shipped `irm https://get.swe-mux.dev/install.ps1 | iex` and a `curl` sibling for a domain that was never registered - note the hyphen, which the real `swemux.dev` does not have.
+Both tabs are gone, replaced by commands that resolve against PyPI.
+`check.mjs` now parses every URL out of every method's command and fails on any host outside a small allowlist, so a resurrected one-liner cannot reach the live site the way that one did.
 
 ## Wordmark and favicon
 
@@ -433,7 +453,8 @@ The dashed `.crop` and `.vis` placeholders elsewhere on the page are unchanged: 
 Each of these was wrong on this page at some point.
 
 - **Four interrupts a day, two an hour.** `attention_daily_interrupt_budget` defaults to 4.
-- **Windows-first, Linux supported, macOS unverified.** Roadmap Phase 10 has every Linux box checked and the macOS box open. The page claimed "Windows only, WSL is not a supported host" long after the WSL bridge shipped.
+- **Windows-first, Linux supported, macOS installs but is not required to pass.** Roadmap Phase 10 has every Linux box checked and the macOS box open. The page claimed "Windows only, WSL is not a supported host" long after the WSL bridge shipped.
+- **The install claim stops at the CLI.** The wheel installs and `mux`/`muxd` run on all three hosts, and CI proves that on all three. No CI job on any host starts a daemon, so nothing on this page may say a platform is verified working end to end.
 - **Every supported harness has conversation discovery and resume**, including the store-backed one. Confirmed in `harness.py` and `adapters/`.
 - **swe-mux finds hung processes, it does not kill them.** Suspected orphans are never terminated automatically. Do not write copy promising automatic cleanup.
 - **The queue waits on a readiness gate and a stability window**, not on a binary "done" signal.
@@ -557,7 +578,8 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
   `build.py` keeps normalizing any repository URL it lifts through `repo_url()` and still asserts that no `/OWNER/` reaches a page.
   The substitution now matches nothing, which is the point: it is a standing guard against a placeholder reappearing through a source this directory does not control, such as `CHANGELOG.md`, which the changelog page renders.
   Keep the assertion even though it currently fires on nothing.
-- **Replace the install commands.** `get.swe-mux.dev` does not exist. The `source` flow is the only real one today, and its full version is the landing page's own Install section (`11` on the page, not in this file).
+- **The install commands are real** (done 2026-08-28, when `swe-mux` 0.1.0 reached PyPI).
+  The two `get.swe-mux.dev` one-liners are gone; section 7 records what replaced them, what was executed to verify it, and the `check.mjs` assertion that keeps a dead host from coming back.
   The clone URL no longer says `REPLACE`: it resolves to `github.com/jatoran/swe-mux`, in the hero command and in the footer, alongside the license links added in Phase 10.5.
   If the project is ever published under an organisation rather than that account, both places and the footer's two license links change together.
 - **Re-shoot every screenshot.** All nine files in `img/` are generated placeholders and none of them is a capture; section 8 has the table of what each replacement must contain.

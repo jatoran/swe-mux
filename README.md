@@ -31,11 +31,26 @@ Installing an update is a separate act you take: `mux update --install <version>
 
 ## Install
 
-<!-- TODO(release): pypi - not published to a package index yet, and there is no publish workflow in
-     .github/workflows, so the source install below is the only one that works. Once published:
-     `uv tool install swe-mux`, or `uv tool install "swe-mux[desktop]"`.
-     TODO(release): desktop download - there is no signed release artifact yet. Link it here and say
+<!-- TODO(release): desktop download - there is no signed release artifact yet. Link it here and say
      which Windows builds and architectures it is signed for. -->
+
+swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so this needs no Node and no checkout:
+
+```
+uv tool install swe-mux
+uv tool install "swe-mux[desktop]"
+```
+
+The second form is the Windows one: the `desktop` extra adds the native window and the tray icon and wants the WebView2 Runtime.
+It is Windows-only by declaration: `pystray` and `pywebview` both carry a `win32`-only platform marker in `pyproject.toml`, so on Linux and macOS the extra resolves to nothing and the daemon plus a browser is the whole product.
+`pipx install swe-mux` and `pipx install "swe-mux[desktop]"` do the same thing without uv.
+
+Both put the CLI on your PATH globally, which is the point of them.
+`pip install swe-mux` is a different act: it installs into an environment you already have, and leaves `mux` reachable only inside that environment.
+
+Then run `muxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop window on Windows.
+
+To run from a checkout instead, which is what you want if you are changing it:
 
 ```
 git clone https://github.com/jatoran/swe-mux
@@ -46,11 +61,10 @@ npm --prefix frontend run build
 uv run --extra desktop swe-mux
 ```
 
-The frontend build output is gitignored, so a fresh clone serves no UI until that build runs once.
-For a headless daemon and an ordinary browser, which is the Linux shape, run `uv run muxd` and open <http://127.0.0.1:8765>.
+Only the source flow needs Node: the frontend build output is gitignored, so a fresh clone serves no UI until that build runs once.
 
-Three entry points are installed: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the Windows desktop window and tray, which needs the `desktop` extra and the WebView2 Runtime).
-`uv run mux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
+Three entry points are installed either way - `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray) - and `mux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
+Upgrades are `uv tool upgrade swe-mux` or `pipx upgrade swe-mux`; the full install, upgrade, uninstall and recovery reference is [`.docs/development/OPERATOR_LIFECYCLE.md`](.docs/development/OPERATOR_LIFECYCLE.md).
 
 Build the Windows distributable with `uv sync --extra desktop --extra voice-local --group package`, then `uv run --extra desktop --extra voice-local --group package python packaging/build_desktop.py`.
 It is deliberately an `onedir` build: distribute the whole `dist/swe-mux/` folder, not only the `.exe`.
@@ -58,8 +72,8 @@ Packaging rules: [`.docs/design/features/desktop-shell.md`](.docs/design/feature
 
 ### Requirements
 
-- Python 3.12 or newer, and [uv](https://docs.astral.sh/uv/).
-- Node 22.6 or newer, to build the frontend from source.
+- Python 3.12 or newer, and either [uv](https://docs.astral.sh/uv/) or pipx to install with.
+- Node 22.6 or newer, only to build the frontend from source. The published wheel carries it already and needs no Node.
 - At least one agent CLI, already installed and logged in. swe-mux does not install, manage, or proxy them.
 - Optionally Tailscale, to reach the daemon from a phone.
 
@@ -78,9 +92,12 @@ The **Run** menu starts an agent, a shell, a worktree session, or an imported ta
 
 ## Platform support
 
+The wheel is `py3-none-any`, and CI builds it, validates it, and install-smokes it on `windows-latest`, `ubuntu-latest` and `macos-latest` on every push, so installing and running the CLI is checked on all three.
+No CI job on any host starts a daemon, so that is exactly where the proof stops. Beyond it:
+
 - **Windows 10 or 11 is the proving platform.** The full gate runs there in CI (the `verify` job), including the real ConPTY integration tests and the Playwright renderer suite, and it is the only platform the desktop app ships on. PowerShell 7 is the primary shell contract; 5.1, CMD, and a WSL distro shell are separately supported profiles.
-- **Linux runs from source**, headless plus a browser, on a required CI leg that syncs with no extras. There is no Linux desktop app, by design.
-- **macOS is implemented and typechecked, and newly exercised.** Its CI leg runs the whole suite on `macos-latest`, but that leg is still `continue-on-error` and has not passed yet, so treat macOS as unproven.
+- **Linux runs headless plus a browser**, on a required CI leg that syncs with no extras. There is no Linux desktop app, by design.
+- **macOS is implemented, typechecked, and exercised.** Its CI leg runs the whole suite on `macos-latest`, but that leg is still `continue-on-error` and so is not required to pass; treat macOS as unproven.
 
 What each claim rests on: [`.docs/development/CROSS_PLATFORM_FINDINGS.md`](.docs/development/CROSS_PLATFORM_FINDINGS.md).
 
@@ -109,10 +126,7 @@ Scope and terms: [`.docs/design/features/provider-accounts.md`](.docs/design/fea
 
 ## Documentation
 
-<!-- TODO(release): site URL - the landing page in site/ is not deployed yet (swemux.dev currently
-     404s) and its own docs and blog links are placeholders. Link the published site and docs here
-     once both exist. -->
-
+The published docs are at <https://swemux.dev/docs/>.
 The maintained design contract starts at [`.docs/design/00_OVERVIEW.md`](.docs/design/00_OVERVIEW.md), and [`.docs/CLAUDE.md`](.docs/CLAUDE.md) routes each subsystem to the document that owns it.
 The landing page and the argument it makes live in [`site/`](site/); the project homepage is <https://swemux.dev>.
 
