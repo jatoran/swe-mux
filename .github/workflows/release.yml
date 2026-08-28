@@ -60,10 +60,15 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # Kept in step with `ci.yml`, which had to move to 22 because `npm test`
+      # needs `--experimental-strip-types`. The release build does not run that
+      # script, so 20 would still work here - but a release that builds the
+      # shipped bundle on a different Node from the one CI proved it on is the
+      # kind of difference nobody looks for when an artifact misbehaves.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
