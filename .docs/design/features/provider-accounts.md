@@ -94,6 +94,23 @@ the last good reading and changes no state.
 
 - Sign in + save runs the provider's ordinary host login command, then captures the
   resulting system auth file. Save current login captures without launching login.
+- **Every failure on that path is durable, and none of it is the payload.** A provider CLI
+  that could not be started, timed out, or exited nonzero used to exist only in the HTTP
+  response body of whoever happened to ask; `daemon.log` held nothing about any of it, which
+  is why four failures on WSL Ubuntu took about an hour of manual archaeology on 2026-08-28.
+  Unstartable is an ERROR carrying the configured value, what resolution found, and why it
+  was rejected (`shim_paths.resolve_executable`); a timeout and a nonzero exit are WARNINGs
+  carrying the fixed argv, the exit code, and a bounded **stderr** tail. A login start and a
+  successful capture are INFO. Provider **stdout** is never logged - it is where a token or a
+  credential blob would be, even when a failure printed nothing else - and the bound is the
+  same `DIAGNOSTIC_TAIL_CHARS` the operator-facing error already used, so the log can never
+  quietly carry more of a third-party CLI's output than the error does.
+- Executable resolution refuses rather than falls through. A configured value that resolves
+  only to swe-mux's own agent shim, or to a Windows binary reached through WSL interop, fails
+  the operation with the resolver's own sentence instead of being exec'd anyway - running the
+  binary that was just refused is how the shim recursed into itself, and on WSL it is how a
+  Windows CLI would be driven from a Linux daemon. A stale `.exe` suffix is stripped and
+  retried first, on every host (`backends.md` § Executable resolution).
 - Selection atomically replaces only the normal system auth file. Provider config,
   skills, sessions, projects, and histories remain shared. It is never refused and never asks
   for confirmation, including while live sessions of that provider are running: those processes

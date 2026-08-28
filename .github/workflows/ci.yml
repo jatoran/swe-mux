@@ -100,10 +100,30 @@ jobs:
       # reaches Microsoft's hosted Edge TTS endpoint, which no CI runner should
       # be calling and which would have gone red on all three runners the first
       # time this workflow ran in public.
+      #
+      # That drift is now asserted rather than remembered:
+      # `tests/test_live_daemon_guards.py` reads this file, `.worktree-verify`
+      # and `CLAUDE.md` and fails when any of the three stops deselecting a live
+      # mark. `live_daemon` is deselected here like every sibling and then run by
+      # its own step below, which is the only live tier a public runner can run.
       - name: pytest (incl. ConPTY integration + harness adapter matrix)
         run: >-
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
-          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts"
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
+
+      # The one live tier that needs no provider, no credential and no quota, so
+      # it is the only one a public runner can run. It starts a real daemon - in
+      # process for the startup phases and the session round trip, and as a real
+      # `muxd` subprocess for the lifecycle half - on an OS-allocated port under
+      # the test's own temp data directory. It never touches 8765 or `~/.mux`,
+      # which is what makes it safe on a shared runner.
+      #
+      # A separate step rather than a widening of the `-m` expression above:
+      # this one binds ports and spawns shells, and "did the daemon start on this
+      # host" deserves to be its own red or green rather than one line inside
+      # 5400 other results.
+      - name: pytest (live_daemon)
+        run: uv run pytest tests/test_live_daemon.py -q --durations=10 -m live_daemon
 
       # The supervisor is a separate process that logs to its own file rather
       # than to stdout, so when a supervisor test goes red on a runner the CI
@@ -277,7 +297,22 @@ jobs:
       - name: pytest
         run: >-
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
-          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts"
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
+
+      # Ubuntu only, and held off macOS deliberately rather than by oversight.
+      # The macOS leg is still `continue-on-error` (see the header), and a new
+      # tier added under that flag is a tier whose first regression is invisible:
+      # it goes red beside an already-red leg and nobody can tell the two apart.
+      # This joins macOS on the run after that flag comes off.
+      #
+      # It is the first thing in this workflow that starts a daemon at all. It is
+      # safe on a shared runner for the same reason it is safe in a worktree: an
+      # OS-allocated port and a `tmp_path` data directory, never 8765 and never
+      # `~/.mux`. `install_smoke.py` still starts nothing - the *artifact* is
+      # deliberately still unproven as a running daemon on any host.
+      - name: pytest (live_daemon)
+        if: matrix.os == 'ubuntu-latest'
+        run: uv run pytest tests/test_live_daemon.py -q --durations=10 -m live_daemon
 
       # Everything below builds and installs the artifact, and until 2026-08-28 it
       # ran on Windows only. That made "Linux is supported" a claim about the source

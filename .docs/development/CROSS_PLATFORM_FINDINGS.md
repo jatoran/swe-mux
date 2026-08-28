@@ -199,6 +199,7 @@ These are Windows trial-readiness issues even if native Linux/macOS work never s
 - Adapt Claude/Codex/OMP homes, transcript layouts, settings, skills, hooks, and account files per platform.
 - Put DPAPI, Keychain, libsecret, and a permission-checked file fallback behind one typed secret-store contract.
 - Define migration and backup behavior when a user moves data between hosts; encrypted Windows secrets cannot be copied as usable credentials.
+  The `config.toml` half of this is implemented - see "What a config.toml carried between hosts actually did" below - and it is only the half: the durable stores, transcripts, and secrets beside it still carry whatever the other host wrote.
 
 ### Desktop, browser, and remote access
 
@@ -321,6 +322,77 @@ Nothing downstream was mis-handling the extra event as a file, so this was noise
 
 Verified by execution on Windows and in the Linux container, where the normalization is a no-op and the suite still passes, plus a direct unit test of the projection that asserts the macOS shape on every host without needing a macOS backend to produce it.
 **Not confirmed on macOS**, for the same reason as the two above; the next `macos-latest` run is what closes it.
+
+### What the first WSL Ubuntu run actually found (2026-08-28)
+
+An operator ran the daemon on WSL Ubuntu.
+Four failures took roughly an hour of manual archaeology across several `wsl.exe` probes into config files and `~/.codex`, and **`daemon.log` was 8 KB and contained not one of them** - only `pty reader stopped` lines.
+Every real failure surfaced solely in an HTTP response body and was then gone.
+That is the finding, and it is a third instance of the shape the macOS section records: a contract nobody stated, satisfied by accident on the host that had run.
+
+**1. The `.exe` recovery was gated on the host that did not need it.**
+`provider_accounts._spawn_command` retried a configured `codex.exe` without its suffix only when `os.name == "nt"`.
+On Windows an `.exe` suffix is at least plausible and PATHEXT usually resolves it anyway; on POSIX it is *certainly* wrong.
+So the one host that could not possibly launch `codex.exe` was the one host that never attempted the repair, and a config authored on Windows produced `Could not start codex: [Errno 2] No such file or directory: 'codex.exe'` with a working `codex` on the same PATH.
+The guard was not merely on the wrong platform - it should not have been platform-conditional at all, and `launchers.resolve_command` had already been written unconditionally beside it.
+The general form: **a platform guard on a recovery is worth re-reading in the direction of "which host needs this most", because a guard written on the host that needs it least reads correctly there forever.**
+
+**2. `which_real` refused a binary and had no way to say so.**
+It returned `None` for three different situations - nothing on PATH, one of mux's own `~/.mux/bin` shims, and a Windows binary reached through WSL interop - and the caller could not tell them apart.
+The third is what happened: `which codex` answered `/mnt/c/Users/.../AppData/Roaming/npm/codex` and `npm ls -g --depth=0` was empty, so codex was not installed in Linux at all and only the Windows install was reachable.
+Refusing it is **correct** and stays: `is_windows_interop_path` exists because such a session runs, reports a `wsl.localhost` working directory, writes its transcript into the Windows home where no Linux path points, and joins no Linux process group, so cleanup cannot reach it.
+The *message* was the defect. The operator was told the file did not exist, when the truth was "found a Windows binary at `/mnt/c/...` and refused it; install the Linux build."
+One of those is actionable and the other sends you digging.
+Resolution now returns `ExecutableResolution` with one of `found` / `not_found` / `mux_shim` / `windows_interop`, the path it refused, and a sentence; `which_real` is that call with the reason dropped, so there is still exactly one resolver.
+
+**3. None of it was durable.**
+Provider login/status failures and harness launch failures now reach `daemon.log`: a refused resolution at WARNING (de-duplicated per distinct command/reason/path, because detection re-resolves every registered harness on every registry read), an unstartable provider CLI at ERROR with the configured value and the resolution, and a timeout or nonzero exit at WARNING with the exit code and a bounded stderr tail.
+Provider **stdout** is never logged even when it is the only thing a failure printed, because that is where a credential would be.
+
+Verified by execution on Windows and in the Linux container, and the platform-conditional halves are asserted on **every** host rather than skipped off WSL: the `.exe` recovery is proven both against a real file in the host's own executable form and through the lookups the resolver performs (so the Windows leg fails too if the guard is ever restored), and the interop refusal is driven by forcing `host_platform.running_under_wsl`, which is the single host input `is_windows_interop_path` has.
+The pre-existing interop tests in `test_platform_seams.py` still skip off WSL and are kept: they are the real evidence when the suite runs there.
+Not confirmed against a live WSL daemon, which stays with the operator.
+### What a config.toml carried between hosts actually did (2026-08-28)
+
+An operator ran swe-mux on WSL Ubuntu over a home directory a Windows build had already written.
+The Run menu could not launch Claude, while typing `claude` into a shell in the same pane worked; provider login died with `Could not start codex: [Errno 2] No such file or directory: 'codex.exe'`.
+`/home/atora/.mux/config.toml` held this:
+
+```toml
+shell_exe = "/bin/bash"
+harness_exe = { "claude" = "claude.exe", "codex" = "codex.exe", "omp" = "omp", "pi" = "pi", "opencode" = "opencode" }
+```
+
+Both halves were correct where they were written, and **the asymmetry between them is the finding**.
+`harness.host_executable` had stripped `.exe` on POSIX since 2026-08-17 and `config.default_harness_executables` used it, so the derived answer was right all along.
+It could never be reached: the loader merged `{**default_harness_executables(), **configured_exe}`, a stored value always wins that merge, and the stored value predated the fix - the box's `config.toml.bak` was dated 2026-08-16, one day before.
+So the install was not merely wrong, it was permanently wrong, with no operator action short of hand-editing TOML that could heal it.
+`shell_exe` healed because it had had half of this guard since POSIX support landed, and `harness_exe` never got the equivalent.
+
+Three things generalize past this field.
+
+**A stored value is evidence about a host, not about a machine.**
+Every reconciliation rule now keys off the *shape* of the string and never off whether it resolves, and both halves of that are load-bearing.
+`shutil.which` cannot separate "written on another host" from "not installed yet", so a repair keyed off resolution would silently discard a deliberate override the moment its target was uninstalled.
+Worse, under WSL resolution actively lies: the Windows installs are on PATH through interop, so `which("claude.exe")` *succeeds* and resolves to `/mnt/c/.../claude.exe`, which is the exact silent-wrong-binary outcome `host_executable` exists to prevent.
+A value that resolves is therefore not evidence that it belongs here.
+The rule that survives both: a value is foreign only when the string could not have been meant for this host - on POSIX a Windows separator, drive letter, or program suffix; on Windows a POSIX absolute path, UNC excepted.
+`claude.cmd` on Windows and `/usr/local/bin/claude` on Linux are deliberate overrides and are left exactly as written.
+
+**The two directions fail differently, and the Windows direction fails harder.**
+A Windows executable on POSIX is a silent `ENOENT` at spawn time.
+A POSIX absolute path on Windows is not an absolute path at all as far as `pathlib` is concerned, so `worktree_root` and `new_project_parent` fail `_validate` and the daemon refuses to load its own configuration rather than starting degraded.
+Both directions are now reconciled before validation runs, which is what turns a daemon that will not start into one that starts with an app-managed worktree root.
+
+**The ratchet is the deliverable, not the fix.**
+`harness_exe` was not the first field of this kind and will not be the last, so `tests/test_foreign_host_config.py` walks `Config.__dataclass_fields__` rather than a list of names.
+A field whose name matches the repository's own conventions for a path, an executable, or a command line and which has neither a rule in `config._HOST_SHAPED_RULES` nor a reasoned entry in `config.HOST_SHAPED_FIELD_EXEMPTIONS` fails that test the moment it is declared.
+The exemptions are the interesting half: `voice_commands` holds spoken phrases and never an executable, and `project_init_scripts` holds free-form command lines the operator typed, where no shape separates a Windows-authored command from a legitimate one and the failure is visible at Project registration anyway.
+Both are recorded decisions with reasons rather than suppressions, and a further test fails when one names a field that no longer exists.
+The corpus behind it is `tests/fixtures/foreign_host_configs/`, kept as files rather than strings so more than one work package can consume it, with the Windows-authored fixture carrying the exact content measured above.
+
+A correct configuration is deliberately not the only thing standing between the daemon and an unstartable command.
+`provider_accounts._spawn_command`'s `.exe`-recovery fallback is gated on `os.name == "nt"` and so never fires on POSIX, which is the same user-visible symptom from a different cause and is fixed independently.
 
 ### Native-platform CI
 

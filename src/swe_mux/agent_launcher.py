@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import re
 import shutil
@@ -19,7 +20,7 @@ from .adapters.opencode import materialize_mux_config, opencode_plugin_path, ret
 from .adapters.pi import pi_hook_path
 from .codex_tui import with_scrollback_safe_tui
 from .harness import Backend, agent_harnesses, descriptor, is_agent_harness, require_backend
-from .shim_paths import is_mux_shim, path_without_shim_dirs
+from .shim_paths import ExecutableResolution, combine_resolutions, resolve_executable
 from .spawn_contract import AGENT_FORCE_COLOR_ENV
 
 #: Reports are point telemetry on a launch path a human is waiting on, so the
@@ -518,29 +519,36 @@ def child_environment(environ: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def _resolve_agent_executable(executable: str) -> str:
+def _resolve_agent_executable(executable: str) -> ExecutableResolution:
     """Resolve the configured CLI, never landing back on a mux agent shim.
 
     ``MUX_*_EXE`` can point at ``~/.mux/bin``'s own shim when the daemon that
     wired it had the shim directory on its PATH (a daemon relaunched from
     inside a session inherits exactly that). Launching it would recurse:
     shim -> swe-mux.exe -> shim, spawning a console window per cycle.
+
+    Returns the reason-carrying resolution rather than a bare string, so `_launch`
+    can tell "nothing of that name exists" from "found it and refused it" - which
+    are the two answers that read identically from the outside and mean opposite
+    things.
+
+    The basename retry is **not** gated on Windows any more. It used to be, for
+    the `.exe` case, which is exactly backwards: on Windows PATHEXT usually
+    resolves a stale `codex.exe` by itself, while on POSIX an `.exe` suffix is
+    certainly wrong and the retry is the only thing that can repair it. A config
+    authored on Windows and carried to a POSIX host was therefore the one case the
+    recovery declined to attempt.
     """
-    resolved = shutil.which(executable)
-    if resolved and not is_mux_shim(resolved):
-        return resolved
-    if resolved:
-        real = shutil.which(Path(executable).stem, path=path_without_shim_dirs())
-        if real and not is_mux_shim(real):
-            return real
-        return resolved
-    if os.name == "nt" and executable.lower().endswith(".exe"):
-        # npm-installed CLIs commonly expose only codex.cmd/claude.cmd even
-        # when the mux's compatibility default still names an .exe.
-        real = shutil.which(Path(executable).stem, path=path_without_shim_dirs())
-        if real:
-            return real
-    return executable
+    resolution = resolve_executable(executable)
+    if resolution.usable:
+        return resolution
+    stem = Path(executable).stem
+    retry_worthwhile = (
+        resolution.reason == "mux_shim" or Path(executable).suffix.casefold() == ".exe"
+    )
+    if stem and stem != executable and retry_worthwhile:
+        return combine_resolutions(resolution, resolve_executable(stem))
+    return resolution
 
 
 def _run_child(argv: list[str], stdio: dict[str, Any], stdio_mode: str) -> int:
@@ -569,15 +577,41 @@ def _run_child(argv: list[str], stdio: dict[str, Any], stdio_mode: str) -> int:
 
 
 def _launch(executable: str, args: list[str]) -> int:
-    """Run native executables directly and Windows batch shims through COMSPEC."""
-    executable = _resolve_agent_executable(executable)
-    if is_mux_shim(executable):
+    """Run native executables directly and Windows batch shims through COMSPEC.
+
+    A deliberate refusal ends the process with a sentence naming what was found
+    and why it is unusable. Until 2026-08-28 the interop refusal had no sentence
+    at all: the resolver simply answered "nothing", so a WSL operator whose only
+    codex was the Windows one was told the file did not exist.
+    """
+    resolution = _resolve_agent_executable(executable)
+    if resolution.reason == "mux_shim":
         raise SystemExit(
-            f"swe-mux: no real {Path(executable).stem} CLI found on PATH; "
-            f"refusing to relaunch the mux shim {executable}"
+            f"swe-mux: {resolution.describe()}; "
+            f"refusing to relaunch the mux shim {resolution.rejected}"
         )
-    executable_path = Path(executable)
+    if resolution.reason == "windows_interop":
+        raise SystemExit(f"swe-mux: {resolution.describe()}")
+    # `not_found` still attempts the configured value: it may name something this
+    # process's PATH cannot judge, and the spawn's own OSError - annotated below
+    # with the resolution - is a better answer than refusing on a guess.
+    executable = resolution.path or executable
     stdio, stdio_mode = _child_stdio()
+    try:
+        return _run_child(_child_argv(executable, args), stdio, stdio_mode)
+    except OSError as exc:
+        # The bare `[Errno 2] No such file or directory: 'codex.exe'` is the
+        # message that sent an operator digging through config files for an hour.
+        # The resolution says what the search actually covered and, when something
+        # *was* found, what it was.
+        raise SystemExit(
+            f"swe-mux: could not start {executable}: {exc}; {resolution.describe()}"
+        ) from exc
+
+
+def _child_argv(executable: str, args: list[str]) -> list[str]:
+    """The argv to hand `_run_child`: native directly, Windows batch via COMSPEC."""
+    executable_path = Path(executable)
     if os.name == "nt" and executable_path.name.casefold() in {"codex.cmd", "codex.bat"}:
         # npm's batch shim cannot preserve Codex's JSON-valued `-c notify=...`
         # argument through cmd.exe. Launch its underlying JS entrypoint directly.
@@ -588,15 +622,11 @@ def _launch(executable: str, args: list[str]) -> int:
             bundled_node = executable_path.parent / "node.exe"
             node = str(bundled_node) if bundled_node.is_file() else shutil.which("node")
             if node:
-                return _run_child([node, str(codex_js), *args], stdio, stdio_mode)
-    if os.name == "nt" and Path(executable).suffix.casefold() in {".cmd", ".bat"}:
+                return [node, str(codex_js), *args]
+    if os.name == "nt" and executable_path.suffix.casefold() in {".cmd", ".bat"}:
         command_line = subprocess.list2cmdline([executable, *args])
-        return _run_child(
-            [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command_line],
-            stdio,
-            stdio_mode,
-        )
-    return _run_child([executable, *args], stdio, stdio_mode)
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command_line]
+    return [executable, *args]
 
 
 def _build_launch(backend: Backend, args: list[str]) -> tuple[str, list[str], str]:
@@ -633,6 +663,13 @@ def _build_launch(backend: Backend, args: list[str]) -> tuple[str, list[str], st
 
 
 def main() -> None:
+    # This process has no logging configuration and is about to hand its console
+    # to an interactive CLI, so `logging.lastResort` would print a bare,
+    # half-formatted WARNING from `shim_paths` straight into the pane - beside the
+    # `SystemExit` sentence that says the same thing properly. A handler here is
+    # what stops `lastResort` engaging; the shim's own diagnostics still go to
+    # `MUX_SHIM_URL`, and the daemon logs the refusal in `daemon.log`.
+    logging.getLogger("swe_mux").addHandler(logging.NullHandler())
     if len(sys.argv) < 2 or not is_agent_harness(sys.argv[1]):
         names = "|".join(descriptor_name for descriptor_name in sorted(agent_harnesses()))
         raise SystemExit(f"usage: python -m swe_mux.agent_launcher {names} [args...]")

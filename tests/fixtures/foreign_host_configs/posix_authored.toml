@@ -1,0 +1,32 @@
+# The mirror of `windows_authored.toml`: written by a Linux build and loaded on
+# Windows. The direction matters because the two failures are not the same. A
+# Windows executable on POSIX is a silent ENOENT at spawn time, while a POSIX
+# absolute path on Windows is not absolute at all as far as `pathlib` is
+# concerned, so `worktree_root` and `new_project_parent` fail `_validate` and
+# the daemon refuses to load its own config rather than starting degraded.
+schema_version = 34
+host = "127.0.0.1"
+port = 8765
+theme = "dark"
+data_dir = "/home/atora/.mux"
+shell_exe = "/bin/bash"
+harness_exe = { "claude" = "/home/atora/.local/bin/claude", "codex" = "codex", "omp" = "omp", "pi" = "pi", "opencode" = "opencode" }
+harness_setup_complete = true
+default_shell_profile = "bash"
+worktree_root = "/home/atora/worktrees"
+new_project_parent = "/home/atora/projects"
+startup_cwd = "/home/atora/projects/swe-mux"
+pinned_directories = ["/home/atora/projects/swe-mux", "/home/atora/projects/other"]
+tts_edge_python = "/home/atora/.venvs/edge-tts/bin/python"
+usage_command = ["/usr/local/bin/ccusage", "daily", "--json", "--by-agent"]
+usage_commands = { "claude" = ["/usr/local/bin/ccusage", "claude", "daily", "--json"] }
+ccusage_enabled = true
+
+[[shell_profiles]]
+id = "bash"
+label = "bash"
+executable = "/bin/bash"
+args = []
+platforms = ["linux"]
+marker = "sh"
+backend = "shell"
