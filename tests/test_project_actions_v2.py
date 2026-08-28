@@ -870,15 +870,36 @@ def test_saving_un_approves_the_file_it_just_wrote(tmp_path: Path) -> None:
 
 
 def test_this_repository_ships_actions_that_parse() -> None:
-    """The shipped `.swe-mux/actions.toml` is a worked example, so it must load.
+    """This checkout's `.swe-mux/actions.toml` is a worked example, so it must load.
 
-    It is also the only Project Actions fixture that exercises the real format
-    against real commands rather than against a string written inside a test.
+    It is the only Project Actions fixture that exercises the real format against
+    real commands rather than against a string written inside a test, which is why
+    it survives `.swe-mux/` becoming untracked (2026-08-28) rather than being
+    deleted with its subject.
+
+    Three outcomes, and keeping them distinct is the point:
+
+    - **Absent** - skipped. `.swe-mux/` is ignored end to end as per-machine state,
+      so a fresh clone and CI have no such file and there is nothing to validate.
+    - **Present and well-formed** - passes, having checked the whole guard below.
+    - **Present and malformed** - fails, which is the case that actually costs
+      someone something: a broken actions.toml breaks the Run menu on the machine
+      that has it.
+
+    The skip must never widen to cover the third case. A file that exists and does
+    not parse is a real failure, and an `except` around the read or a truthiness
+    check on the parse result would hide it.
     """
     root = Path(__file__).resolve().parents[1]
-    actions, diagnostics = parse_native_actions(
-        (root / ".swe-mux" / "actions.toml").read_text(encoding="utf-8"), root
-    )
+    source = root / ".swe-mux" / "actions.toml"
+    if not source.is_file():
+        pytest.skip(
+            "No .swe-mux/actions.toml in this checkout. The directory is per-machine "
+            "operator state and deliberately untracked, so a clone carries no actions "
+            "file for this test to validate. Nothing is wrong; there is no subject."
+        )
+
+    actions, diagnostics = parse_native_actions(source.read_text(encoding="utf-8"), root)
 
     by_id = {item.id: item for item in actions}
     assert {"native:verify", "native:test", "native:frontend", "native:checks"} <= set(by_id)

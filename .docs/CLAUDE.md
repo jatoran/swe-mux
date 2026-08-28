@@ -78,10 +78,20 @@
   doc that names those paths as describing the *format* a checkout may carry, never as a
   claim that this repository supplies one: a fresh clone declares no actions, imports no VS
   Code tasks, and starts with no project context.
-  One consequence is unresolved and belongs to whoever touches this next:
+  The rule that untracking forced, and the one to keep: **a test whose subject is a
+  git-ignored path must distinguish "absent" from "broken".**
   `tests/test_project_actions_v2.py::test_this_repository_ships_actions_that_parse` reads the
-  repository's own `.swe-mux/actions.toml` off disk, so it passes on a machine that has one
-  and fails on a clean checkout.
+  repository's own `.swe-mux/actions.toml` off disk, so it skips with a reason where there is
+  no such file (a clone, CI) and still fails where one exists and does not parse - which is
+  the only case that costs anyone anything. Collapsing those two into one green result is the
+  regression to watch for, and it is what an `except` around the read would silently do.
+  The suite was audited for others of this class by recording every git-ignored path any of
+  the 5454 tests actually reads (2026-08-28). The only other one is
+  `doctor_local._frontend_check` probing `src/swe_mux/static/index.html`, which is already
+  written this way on purpose: the bundle is gitignored build output, so the check reports
+  "source checkout, not built" rather than failing, and
+  `test_doctor_local.py::test_every_category_the_daemon_report_emits_is_covered_or_declared_unchecked`
+  asserts only that a category comes back either way.
 - Changing panes, tabs, splits, drag/drop, or the mobile workspace projection:
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
