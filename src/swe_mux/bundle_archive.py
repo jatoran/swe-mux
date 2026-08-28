@@ -18,14 +18,41 @@ onedir tree and the `bundle.json` that describes it. Anything else - an absolute
 path, a drive letter, a `..` segment, a second top-level entry - is not that, and
 is refused rather than normalized. A hash proves an archive is the file the
 manifest named; it proves nothing about what extracting it would write.
+
+**Two container formats, because `update_install._ARCHIVE_SUFFIX` names two.**
+Windows gets `.zip` (Explorer and `Expand-Archive` open one with nothing
+installed); macOS and Linux get `.tar.gz`. That suffix map predates any POSIX
+desktop wrapper, and until 2026-08-28 this module could open only zips - so the
+map was a promise about a format nothing could read, which would have surfaced
+as a refusal to install the very first POSIX release. The gap is closed by
+teaching the reader rather than by pointing POSIX at `.zip`, because a zip cannot
+carry the property a POSIX bundle needs: `ZipFile.extractall` does not restore
+the Unix mode bits it stores, so an extracted `swe-mux` binary would arrive
+without its executable bit and the "installed" app would not start. `.tar.gz` is
+the honest answer there, and it is the one the map already gave.
+
+Extraction of a tarball goes through `tarfile`'s `filter="data"`, which is the
+3.12+ supported way to refuse absolute paths, `..` escapes, links pointing out of
+the tree, and device/fifo members. `validate_members` still runs first and
+independently, because it is the rule *both* processes share and because it says
+what a swe-mux bundle is rather than what a tarball may not do.
+
+Both readers bound the *uncompressed* size as well. `update_install` bounds the
+download, which bounds a zip and says nothing about a gzip stream: a few hundred
+compressed kilobytes can name terabytes of members, and the point of a ceiling is
+not to write the bytes in the first place.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import tarfile
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Protocol
 
 from .bundle_metadata import BUNDLE_METADATA_NAME, BundleMetadata, parse_bundle_metadata
 
@@ -36,6 +63,20 @@ ARCHIVE_ROOT = "swe-mux"
 
 #: Read granularity for hashing. Large enough that hashing is not syscall-bound.
 CHUNK_BYTES = 1024 * 1024
+
+#: The container formats a release archive may be in, longest suffix first so a
+#: `.tar.gz` is never mistaken for something ending in `.gz`. Kept here rather
+#: than in `update_install` because this module is what can actually open one -
+#: a name the reader cannot honour is the defect this pairing exists to prevent.
+ZIP_SUFFIX = ".zip"
+TAR_GZ_SUFFIX = ".tar.gz"
+ARCHIVE_SUFFIXES = (TAR_GZ_SUFFIX, ZIP_SUFFIX)
+
+#: The ceiling on what extracting an archive may write. A desktop bundle is a few
+#: hundred megabytes; this is the size past which the file is not the artifact we
+#: asked for. It bounds the members' declared sizes, so a decompression bomb is
+#: refused before anything is written rather than after the disk fills.
+MAX_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
 
 #: Closed reason vocabulary, shared with `update_install`'s refusals so one word
 #: means one thing wherever it is printed.
@@ -88,6 +129,101 @@ def validate_members(names: list[str]) -> None:
             )
 
 
+def archive_suffix(archive: Path) -> str:
+    """Which container format `archive` claims to be, by name.
+
+    By name and never by sniffing content: the name is what the manifest
+    published and what the digest was taken over, so a file whose bytes disagree
+    with its name is a substitution to refuse rather than a format to detect.
+    """
+    lowered = Path(archive).name.lower()
+    for suffix in ARCHIVE_SUFFIXES:
+        if lowered.endswith(suffix):
+            return suffix
+    raise ArchiveError(
+        ARCHIVE_INVALID,
+        f"{Path(archive).name!r} is not a swe-mux release archive; one is named "
+        f"{' or '.join(ARCHIVE_SUFFIXES)}.",
+    )
+
+
+def _check_total_size(sizes: list[int]) -> None:
+    """Refuse an archive whose members declare more bytes than the ceiling."""
+    total = sum(size for size in sizes if size > 0)
+    if total > MAX_UNCOMPRESSED_BYTES:
+        raise ArchiveError(
+            ARCHIVE_INVALID,
+            f"The archive's entries declare {total} bytes, above the "
+            f"{MAX_UNCOMPRESSED_BYTES} byte ceiling, so it is not the artifact the "
+            "manifest describes. Nothing was extracted.",
+        )
+
+
+class _Reader(Protocol):
+    """The two things both formats have to answer before anything is extracted."""
+
+    def names(self) -> list[str]: ...
+
+    def read(self, member: str) -> bytes: ...
+
+
+class _ZipReader:
+    def __init__(self, handle: zipfile.ZipFile) -> None:
+        self._handle = handle
+
+    def names(self) -> list[str]:
+        _check_total_size([info.file_size for info in self._handle.infolist()])
+        return self._handle.namelist()
+
+    def read(self, member: str) -> bytes:
+        return self._handle.read(member)
+
+
+class _TarReader:
+    def __init__(self, handle: tarfile.TarFile) -> None:
+        self._handle = handle
+        self._members = handle.getmembers()
+
+    def names(self) -> list[str]:
+        _check_total_size([member.size for member in self._members])
+        return [member.name for member in self._members]
+
+    def read(self, member: str) -> bytes:
+        stream = self._handle.extractfile(member)
+        if stream is None:
+            # A directory, a symlink, or a special member under a name we asked
+            # for as a file. Not something to follow.
+            raise ArchiveError(
+                ARCHIVE_INVALID,
+                f"The archive's {member!r} is not a regular file, so it cannot be read.",
+            )
+        with stream:
+            return stream.read()
+
+
+@contextmanager
+def _open_archive(archive: Path) -> Iterator[_Reader]:
+    """Open a release archive in whichever of the two formats it is named for."""
+    if archive_suffix(archive) == TAR_GZ_SUFFIX:
+        with tarfile.open(archive, "r:gz") as tar:
+            yield _TarReader(tar)
+    else:
+        with zipfile.ZipFile(archive) as bundle:
+            yield _ZipReader(bundle)
+
+
+#: Everything either container library raises for a file that is not the archive
+#: it was named as. Caught as one set so both formats produce one refusal.
+_UNREADABLE = (
+    zipfile.BadZipFile,
+    tarfile.TarError,
+    EOFError,
+    OSError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
+
 def read_archive_metadata(archive: Path) -> BundleMetadata:
     """The incoming bundle's `bundle.json`, read without extracting anything.
 
@@ -97,8 +233,8 @@ def read_archive_metadata(archive: Path) -> BundleMetadata:
     binary to find out what it needs.
     """
     try:
-        with zipfile.ZipFile(archive) as bundle:
-            names = bundle.namelist()
+        with _open_archive(archive) as bundle:
+            names = bundle.names()
             validate_members(names)
             member = f"{ARCHIVE_ROOT}/{BUNDLE_METADATA_NAME}"
             if member not in names:
@@ -110,7 +246,7 @@ def read_archive_metadata(archive: Path) -> BundleMetadata:
             payload = json.loads(bundle.read(member).decode("utf-8"))
     except ArchiveError:
         raise
-    except (zipfile.BadZipFile, OSError, ValueError, UnicodeDecodeError) as exc:
+    except _UNREADABLE as exc:
         raise ArchiveError(
             ARCHIVE_INVALID,
             f"The archive could not be read ({type(exc).__name__}).",
@@ -131,15 +267,37 @@ def extract_bundle(archive: Path, staging_root: Path) -> Path:
     The destination is emptied first. A staging tree left by a previous run is
     not a starting point: merging a new bundle over an old one produces a tree
     that is neither, and the failure would only appear at runtime.
+
+    A tarball is extracted under `filter="data"`, which is the interpreter's own
+    refusal of absolute paths, `..` escapes, links leaving the tree, and special
+    files. `validate_members` has already run; the filter is the second half that
+    covers what a name alone cannot say, and it is deliberately not disabled to
+    preserve some member a bundle has never needed.
     """
     import shutil
 
     staging_root = Path(staging_root)
     shutil.rmtree(staging_root, ignore_errors=True)
     staging_root.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive) as bundle:
-        validate_members(bundle.namelist())
-        bundle.extractall(staging_root)
+    try:
+        if archive_suffix(archive) == TAR_GZ_SUFFIX:
+            with tarfile.open(archive, "r:gz") as tar:
+                members = tar.getmembers()
+                _check_total_size([member.size for member in members])
+                validate_members([member.name for member in members])
+                tar.extractall(staging_root, filter="data")
+        else:
+            with zipfile.ZipFile(archive) as bundle:
+                _check_total_size([info.file_size for info in bundle.infolist()])
+                validate_members(bundle.namelist())
+                bundle.extractall(staging_root)
+    except ArchiveError:
+        raise
+    except _UNREADABLE as exc:
+        raise ArchiveError(
+            ARCHIVE_INVALID,
+            f"The archive could not be extracted ({type(exc).__name__}).",
+        ) from exc
     root = staging_root / ARCHIVE_ROOT
     if not root.is_dir():
         raise ArchiveError(
