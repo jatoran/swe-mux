@@ -14,7 +14,7 @@ Nothing here writes to the machine's own shell folders. Every test injects
 
 from __future__ import annotations
 
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 
 import pytest
 
@@ -23,7 +23,20 @@ from swe_mux.config import Config
 from swe_mux.host_platform import IS_WINDOWS
 from swe_mux.install_location import detect_install_location
 
-_TARGET = PureWindowsPath(r"C:\Users\ada\.local\bin\swe-mux.exe")
+#: The launcher a shortcut points at, spelled for the host running the suite.
+#:
+#: `plan_shortcuts` is pure and runs on every leg, but a `Path` renders
+#: separators for the platform that is *running* - so the Windows literal this
+#: used to be became one relative filename on Linux, and
+#: `test_every_shortcut_points_at_the_desktop_shell_not_the_cli` asserted
+#: `.name` against the whole string. The launcher keeps its `.exe`, because a
+#: `.lnk` only ever points at a Windows executable; what varies is the shape of
+#: the directory holding it.
+_TARGET = (
+    Path(r"C:\Users\ada\.local\bin\swe-mux.exe")
+    if IS_WINDOWS
+    else Path("/home/ada/.local/bin/swe-mux.exe")
+)
 
 
 def _folders(root: Path) -> shortcuts.ShortcutFolders:
@@ -38,7 +51,7 @@ def _plan(root: Path, *slots: str) -> tuple[shortcuts.ShortcutSpec, ...]:
     return shortcuts.plan_shortcuts(
         slots=slots or (shortcuts.SLOT_START_MENU, shortcuts.SLOT_DESKTOP),
         folders=_folders(root),
-        target=Path(str(_TARGET)),
+        target=_TARGET,
         working_directory=root / "data",
         icon=f"{root / 'data' / 'icons' / 'swe-mux.ico'},0",
     )
@@ -78,7 +91,7 @@ def test_an_unknown_slot_is_refused_rather_than_silently_dropped(tmp_path: Path)
         shortcuts.plan_shortcuts(
             slots=("quick-launch",),
             folders=_folders(tmp_path),
-            target=Path(str(_TARGET)),
+            target=_TARGET,
             working_directory=tmp_path,
             icon="",
         )
@@ -142,7 +155,7 @@ def test_a_quote_in_a_path_cannot_escape_its_string(tmp_path: Path) -> None:
     specs = shortcuts.plan_shortcuts(
         slots=(shortcuts.SLOT_DESKTOP,),
         folders=shortcuts.ShortcutFolders(start_menu=odd, desktop=odd, startup=odd),
-        target=Path(str(_TARGET)),
+        target=_TARGET,
         working_directory=odd,
         icon="",
     )
