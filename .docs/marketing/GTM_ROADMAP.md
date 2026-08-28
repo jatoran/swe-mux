@@ -78,7 +78,7 @@ Conceding them in the post costs nothing and buys the thread.
 - **It is a lot of software.** The surface is large and the tutorial covers a small slice of it. "Not magic, it is a lot of software" is already in the launch draft; keep it.
 - **No signed desktop installer yet**, so an unsigned frozen executable means SmartScreen friction for anyone who is not installing from PyPI.
 - **One maintainer.** Say the support expectation out loud rather than implying an SLA.
-- **`pip install swe-mux[voice-local]` still resolves faster-whisper's own `av>=11`**, because a uv override does not travel in the wheel's `Requires-Dist`. swe-mux imports a stub and never the real package, so it is a size-and-diligence residue rather than a functional dependency, and it is documented. Do not let a diligence scan surface it first.
+- **`pip install swe-mux[voice-local]` does not install at all.** Measured 2026-08-28 ([`../development/DEPENDENCY_AUDIT_2026-08-28.md`](../development/DEPENDENCY_AUDIT_2026-08-28.md) § 4): the published wheel declares `en-core-web-sm`, which is on no index, so both pip and uv refuse the extra outright. Concede this as a packaging bug rather than as the `av` caveat it was previously written up as - the `av>=11` residue is real in principle but currently unreachable, because nothing resolves at all. Fixing the extra is what activates it, so both are owed before this bullet can be softened. Do not let a diligence scan surface either one first.
 
 ## Launch sequencing
 
