@@ -168,6 +168,24 @@ build-backend = "hatchling.build"
 packages = ["src/swe_mux"]
 artifacts = ["src/swe_mux/static/**", "src/swe_mux/assets/**"]
 
+# The same artifacts on the sdist, and this is load-bearing rather than tidy.
+#
+# `src/swe_mux/static/**` is gitignored build output, so hatchling excludes it
+# from an sdist unless it is named here. A bare `uv build` does NOT build the
+# wheel from the working tree: it builds the sdist first and then builds the
+# wheel *from that sdist*, which it says out loud ("Building wheel from source
+# distribution"). So without this the release pipeline produced a 258-entry
+# wheel with no UI at all, while a local `uv build --wheel` - which does build
+# straight from the tree - produced a correct 346-entry one. The failure is
+# silent at install time and only appears in a browser.
+#
+# `packaging/verify_release_artifact.py` caught it on the first real release
+# run, which is what it exists for; this is the root fix behind that gate.
+# It also closes the gap `release.yml` recorded: an sdist that carries the
+# bundle is one a distro packager can rebuild a working wheel from.
+[tool.hatch.build.targets.sdist]
+artifacts = ["src/swe_mux/static/**", "src/swe_mux/assets/**"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
