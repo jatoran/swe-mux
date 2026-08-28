@@ -129,7 +129,7 @@ not a description of its shipped binaries.
 Run the full gate before opening a pull request:
 
 ```bash
-uv run pytest tests -q -n auto --dist loadgroup -m "not live_agent and not live_subagent and not live_telemetry and not live_quota"
+uv run pytest tests -q -n auto --dist loadgroup -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
 uv run ruff check src/swe_mux tests packaging
 uv run mypy
 cd frontend && npx tsc --noEmit && npm test
@@ -138,6 +138,14 @@ cd frontend && npx tsc --noEmit && npm test
 `.worktree-verify` runs exactly this. Read all of its output rather than piping
 it through `tail` or `grep`; a trimmed gate has shipped a failing test green
 here before.
+
+The `not live_*` marks deselect tiers that need an authenticated provider CLI, consume quota,
+or reach a third-party service, so none of them belongs in a gate. One of them,
+`live_daemon`, needs none of that - it starts a real daemon on an OS-allocated port under a
+temp data directory and drives a **shell** session through it. It is out of the gate because
+it binds ports and spawns processes, not because you cannot run it; CI runs it on Linux and
+Windows, and you can run it directly with
+`uv run pytest tests/test_live_daemon.py -m live_daemon`.
 
 ## Documentation
 
