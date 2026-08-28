@@ -129,14 +129,18 @@ That is not a substitute for § 8 below, which needs a machine that is not the d
 
 ## 7. Screenshots and demo assets
 
-`site/img/desktop-workspace.webp` currently leaks real data: your full project list (`cmr-capture-manager`, `continuity`, `workout-plan`, `augur-engine`, `valadezvalor.com`, and others), the name `ADAM`, and account spend percentages.
-The mobile shots that were checked are clean, but every image needs review before publishing.
+The leak this section was written about is closed.
+`site/img/desktop-workspace.webp` did carry a full personal project list, the name `ADAM`, and account spend percentages; those files were replaced outright with generated placeholders, and eight of the nine placeholders have now been replaced again with real captures taken in a synthetic environment.
 
-- [ ] Stand up the capture environment. This needs no VM: a second daemon with its own `data_dir` and port (the isolated-daemon pattern already used on 8799) plus a handful of synthetic projects with invented names.
-- [ ] Audit all eleven files in `site/img/` and recapture any that show real project names, personal names, spend figures, or unrelated paths.
-- [ ] Record the launch assets from that environment: one 60 to 90 second hero video, plus feature GIFs for the orchestrator fan-out, the land queue landing branches serially, phone and voice control, the status board, and a session-preserving redeploy.
+- [x] **Stand up the capture environment.** `trailer/capture_env.py` builds it: five invented Projects with their own git repositories, invented commit authors, seven sessions, a seeded note, five attention items, and a fixture provider account with invented quota. It runs a second daemon on 8799 under `D:/swemux-capture`, and it prints the operator daemon's health before and after so a collision cannot pass unnoticed. Method and traps: `trailer/SITE_SHOTS.md`.
+- [x] **Audit all eleven files in `site/img/`.** Both logos are wordmarks and carry nothing. The nine screenshot slots were placeholders drawn by `site/tools/placeholders.py` at the time of the audit, so none of them was leaking - the leak had already been closed by pulling the originals, which remain in that file's git history and are dealt with by task 3.
+- [x] **Recapture.** Eight of the nine are now real shots of the synthetic install, at the dimensions the page declares. `capture_site_shots.scan_for_leaks` reads each rendered page and refuses to write the file if it contains the host's home directory, account name, or configured git identity; the list is derived at run time rather than written down.
+- [ ] **`desktop-insight.webp` is still a placeholder**, and it is the only one. Activity's Timeline segment is gated on the session having a harness transcript and every session in the capture environment is a shell; its sibling Findings segment renders the detector opt-in screen for the same reason. Both need a real agent CLI, which needs a provider credential - the thing the environment exists to exclude. `trailer/SITE_SHOTS.md` records the way through (real `CLAUDE_CONFIG_DIR`, synthetic `USERPROFILE`, one bounded agent run) and why it is an operator's call: it spends the subscription and writes into the real agent config.
+- [ ] Record the launch assets from that environment: one 60 to 90 second hero video, plus feature GIFs for the orchestrator fan-out, the land queue landing branches serially, phone and voice control, the status board, and a session-preserving redeploy. The environment now makes these possible without a VM; `trailer/capture_live_ui.py`'s scene functions port onto it by changing its `URL` and its session names.
 - [ ] Drop them into the `TODO(release)` markers the agents left in `README.md` and `.docs/marketing/`.
-- [ ] Keep the capture scripts and scene notes beside the assets so they can be re-recorded after UI changes rather than reconstructed from memory.
+- [x] **Keep the capture scripts and scene notes beside the assets.** `trailer/capture_env.py`, `trailer/capture_site_shots.py`, and `trailer/SITE_SHOTS.md`.
+
+Two things `site/README.md` § 8 now states that are no longer true, and are the site's own to correct rather than this document's: "EVERY SCREENSHOT IN `img/` IS A PLACEHOLDER", and the instruction not to restore the `Real screenshot.` caption under `mobile-session.webp`.
 
 ## 8. Clean-machine validation
 
