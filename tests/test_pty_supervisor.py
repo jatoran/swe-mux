@@ -349,8 +349,18 @@ class _StreamDrain:
 _ANSI = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|[]P^_].*?(?:\x07|\x1b\\)|[@-Z\\-_])")
 
 
+# `cmd /c cd` answers with one absolute path on its own line; taking it as soon
+# as it is complete ends the probe in well under a second instead of waiting out
+# the pseudoconsole's end-of-output sentinel.
+_CWD_LINE = re.compile(r"^([A-Za-z]:[^\r\n]*)[\r\n]", re.MULTILINE)
+
+
 def _raw_process_cwd(pid: int) -> str:
-    """psutil's view of a process's cwd, unresolved, never raising."""
+    """psutil's view of a process's cwd, unresolved, never raising.
+
+    Diagnostic only; see ``_cwd_inherited_from_supervisor`` for why this is not
+    the oracle.
+    """
     import psutil
 
     try:
@@ -359,12 +369,23 @@ def _raw_process_cwd(pid: int) -> str:
         return f"<unavailable: {type(exc).__name__}: {exc}>"
 
 
-async def _cwd_as_the_supervisor_sees_it(data_dir: Path) -> str:
-    """Ask the supervisor itself, independently of psutil's PEB read.
+async def _cwd_inherited_from_supervisor(data_dir: Path) -> str:
+    """The working directory a child of the supervisor actually inherits.
 
-    A session spawned with ``cwd=None`` inherits the supervisor's own working
-    directory, so ``cmd /c cd`` prints it. This is the cross-check that tells a
-    genuinely mis-anchored supervisor apart from a misreported one.
+    This is the oracle for the anchor assertion, and it is a *stronger* check
+    than reading the supervisor's cwd from outside rather than a weaker one.
+    The property the anchor exists to guarantee is about inheritance: a cwd
+    inside ``dist/`` locks that directory on Windows for as long as the
+    supervisor and everything descended from it lives. A session spawned with
+    ``cwd=None`` is passed through as a NULL ``lpCurrentDirectory``, so it
+    inherits exactly that directory and ``cmd /c cd`` prints it. Nothing is
+    interposed between the property and the measurement.
+
+    ``psutil.Process(pid).cwd()`` is one external observer's view of the same
+    fact, and on the GitHub ``windows-latest`` runner it is wrong: it returns
+    ``%TEMP%`` verbatim, in 8.3 form, unchanging across the whole timeline, for
+    a supervisor whose own children demonstrably inherit the data dir and which
+    logged no ``could not anchor`` warning. See RELEASE_MANUAL_TASKS.md § 8.5.
     """
     try:
         client = await _connect_with_retries(data_dir, deadline_seconds=10.0)
@@ -382,7 +403,7 @@ async def _cwd_as_the_supervisor_sees_it(data_dir: Path) -> str:
         probe.prepare()
         await asyncio.to_thread(probe.spawn)
         buffer = b""
-        deadline = time.monotonic() + 15.0
+        deadline = time.monotonic() + READ_TIMEOUT
         while time.monotonic() < deadline:
             try:
                 chunk = await asyncio.wait_for(
@@ -390,16 +411,27 @@ async def _cwd_as_the_supervisor_sees_it(data_dir: Path) -> str:
                 )
             except TimeoutError:
                 break
+            buffer += chunk
+            answer = _CWD_LINE.search(_ANSI.sub("", buffer.decode("utf-8", "replace")))
+            if answer:
+                return answer.group(1).strip()
             if chunk == b"":
                 break
-            buffer += chunk
         text = _ANSI.sub("", buffer.decode("utf-8", "replace")).strip()
         return text or "<no output>"
-    except Exception as exc:  # noqa: BLE001 - diagnostic only
+    except Exception as exc:  # noqa: BLE001 - reported through the failure report
         return f"<probe failed: {type(exc).__name__}: {exc}>"
     finally:
         with contextlib.suppress(Exception):
             await client.close()
+
+
+def _is_same_directory(observed: str, expected: Path) -> bool:
+    """Compare a probed path against a real one; a probe's error string is not one."""
+    try:
+        return Path(observed).resolve() == expected.resolve()
+    except (OSError, ValueError):
+        return False
 
 
 def _read_tail(path: Path, limit: int = 8000) -> str:
@@ -410,10 +442,11 @@ def _read_tail(path: Path, limit: int = 8000) -> str:
     return text[-limit:] if text else "<empty>"
 
 
-async def _cwd_anchor_report(
+def _cwd_anchor_report(
     *,
     config_file: Path,
     data_dir: Path,
+    inherited: str,
     marks: list[tuple[str, str]],
     drain: _StreamDrain,
 ) -> str:
@@ -422,22 +455,21 @@ async def _cwd_anchor_report(
     Deliberately built here rather than uploaded as a CI artifact: the answer
     then travels with the failure instead of with the run.
     """
-    probe = await _cwd_as_the_supervisor_sees_it(data_dir)
     try:
         listing = sorted(p.name for p in data_dir.iterdir())
     except OSError as exc:
         listing = [f"<unreadable: {exc}>"]
     lines = [
         "supervisor did not anchor its cwd in the data dir.",
-        f"  raw cwd (psutil, unresolved): {marks[-1][1]!r}",
-        f"  cwd per the supervisor itself: {probe!r}",
+        f"  cwd a child inherits (oracle): {inherited!r}",
+        f"  raw cwd (psutil, diagnostic): {marks[-1][1]!r}",
         f"  expected data dir (raw):      {str(data_dir)!r}",
         f"  expected data dir (resolved): {str(data_dir.resolve())!r}",
         f"  resolve_data_dir(config):     {str(resolve_data_dir(config_file))!r}",
         f"  config file bytes:            {config_file.read_bytes()!r}",
         f"  TEMP={os.environ.get('TEMP')!r} TMP={os.environ.get('TMP')!r}",
         f"  data dir contents:            {listing}",
-        "  cwd timeline (psutil, unresolved):",
+        "  cwd timeline (psutil, unresolved, diagnostic only):",
         *(f"    {label}: {value!r}" for label, value in marks),
         "  supervisor console output:",
         *(f"    {line}" for line in (drain.text().splitlines() or ["<empty>"])),
@@ -492,12 +524,20 @@ async def test_supervisor_process_outlives_client_and_reaps_on_command(
         # The supervisor must anchor its cwd in the data dir: a cwd inherited
         # from the spawner (e.g. inside dist/) locks that directory on Windows
         # and blocks session-preserving app rebuilds.
+        #
+        # The oracle is what a child of the supervisor actually inherits, which
+        # is the property that sentence is about. psutil's reading of the same
+        # process is kept as a diagnostic because it is one observer's view and
+        # the GitHub windows-latest runner proved it can be wrong; asserting on
+        # it once failed a supervisor that was behaving correctly.
         marks.append(("client-aborted", _raw_process_cwd(process.pid)))
-        if Path(marks[-1][1]).resolve() != tmp_path.resolve():
+        inherited = await _cwd_inherited_from_supervisor(tmp_path)
+        if not _is_same_directory(inherited, tmp_path):
             raise AssertionError(
-                await _cwd_anchor_report(
+                _cwd_anchor_report(
                     config_file=config_file,
                     data_dir=tmp_path,
+                    inherited=inherited,
                     marks=marks,
                     drain=drain,
                 )

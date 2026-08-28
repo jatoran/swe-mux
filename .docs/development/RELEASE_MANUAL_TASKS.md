@@ -162,55 +162,62 @@ The provider itself is unchanged in behavior.
 Reproduced and confirmed green on Linux with `tools/linux_container_verify.sh`.
 The same run also added coverage the suite did not have: a failure *after* `_activate_managed` has already swapped `current`, which is the half of the design whose directory renames actually differ between hosts and which the repair test never reaches.
 
-**Open, and deliberately not guessed at: one supervisor test fails on the GitHub Windows runner.**
+**Resolved: `psutil.Process.cwd()` is unreliable on the GitHub Windows runner, and the supervisor was right all along.**
 `test_pty_supervisor.py::test_supervisor_process_outlives_client_and_reaps_on_command` asserts the supervisor anchors its cwd in the data dir, which exists so a supervisor spawned from `dist/` cannot lock the app tree against a rebuild.
-On the runner its cwd was the Temp **root** (`C:\Users\runneradmin\AppData\Local\Temp`) rather than the `tmp_path` data dir - not a parent, and several levels up, so this is not a short-name or symlink artifact.
-Everything else passed: 5446 of 5448, and the run has passed every local and worktree gate many times.
+On the runner the assertion read the Temp **root** (`C:\Users\runneradmin\AppData\Local\Temp`) rather than the `tmp_path` data dir - not a parent, and several levels up, so it was not a short-name or symlink artifact.
+Everything else passed: 5446 of 5448, and the run had passed every local and worktree gate many times.
 
-What is known and what is not, kept separate on purpose:
+It took two rounds, and the first one deliberately shipped no fix.
+That was the right call: the instrument answered the question on its first run and the answer was that the product needed no change.
 
-- `supervisor.py` does `os.chdir(data_dir)` and logs a warning on `OSError`. That warning does **not** appear in the CI log, but the supervisor writes to its own log file rather than stdout, so its absence proves nothing.
-- The invariant the assertion protects is still satisfied: the Temp root is not `dist/`, so nothing is locked against a rebuild. The assertion is stricter than the property it guards.
-- ~~The remaining hypothesis is that `data_dir` resolves differently on the runner from an empty config file, but the test connects successfully on `tmp_path`, which argues against it. This was not resolved.~~ **Refuted 2026-08-27 (W16).** See below.
+**Round 1 (W16, 2026-08-27): kill the wrong hypotheses, then instrument.**
 
-### W16, 2026-08-27: the `data_dir` hypothesis is dead, and the instrument is in
-
-**Proved from the code, not guessed.**
+The standing hypothesis was that `data_dir` resolved somewhere else on the runner from an empty config file.
+It is refutable from the source and from the failing run, with no new evidence needed.
 `main()` computes `data_dir` exactly once and hands that same object to all three consumers: `_setup_logging`, `os.chdir`, and `_run` -> `SupervisorServer(config_path, data_dir)` -> `_write_discovery` -> `discovery_path(self.data_dir)`.
-Discovery and chdir therefore cannot disagree; there is no second value to diverge.
-`resolve_data_dir` on an empty config file falls through `tomllib.loads("") == {}` to `config_path.parent`, which for `--config <tmp_path>/config.toml` is `tmp_path`.
+Discovery and chdir cannot disagree, because there is no second value to diverge.
+`resolve_data_dir` on an empty config falls through `tomllib.loads("") == {}` to `config_path.parent`, which for `--config <tmp_path>/config.toml` is `tmp_path`.
+The client reads the discovery file at a path derived from that same value, on a `tmp_path` that is fresh per test, and the failing run got past `_connect_with_retries(tmp_path)` - so on that runner the supervisor's `data_dir` **was** `tmp_path`.
 
-**Proved from the CI run already in hand.**
-The client reads the discovery file at `data_dir / "supervisor.json"` derived from the *same* value, on a `tmp_path` that is fresh per test, so no stale supervisor could have written it.
-The failing run got past `_connect_with_retries(tmp_path)` to reach line 353, so on that runner the supervisor's `data_dir` **was** `tmp_path`.
-The chdir target was therefore `tmp_path`, and "`data_dir` resolved elsewhere" is not the explanation.
+A failed `os.chdir` could not produce the observed value either: the test launches the supervisor with `cwd=str(tmp_path)`, so a failed anchor leaves the cwd at `tmp_path`, not at the Temp root.
+`os.chdir` appears exactly twice in `src/swe_mux` and the other is the POSIX fork child, so no swe-mux Python code was a candidate.
+That left two: something native moved the cwd, or psutil reported a value the supervisor did not hold.
+Neither is decidable by reading this repository, so round 1 shipped instrumentation and no patch.
 
-**What that leaves, and why none of it can be settled from the source.**
-A plain `OSError` from `os.chdir` cannot produce the observed value either: the test launches the supervisor with `cwd=str(tmp_path)`, so a failed anchor leaves the cwd at `tmp_path`, not at the Temp root.
-Something therefore moved the cwd to the Temp root, or `psutil` reported a value the supervisor does not hold.
-`os.chdir` appears exactly twice in `src/swe_mux`, and the other one is in the POSIX fork child (`pty_backend_posix.py`), so no swe-mux Python code is a candidate.
-The remaining candidates are native: the `_winpty` extension around `PTY()` creation or `spawn`, or `psutil`'s PEB read of a 64-bit target.
-Neither is decidable by reading this repository, which is why nothing was patched.
+**Round 2 (2026-08-28): the instrument answered on its first run.**
 
-**The instrument, and exactly what the next red run will say.**
-`tests/test_pty_supervisor.py` now samples the supervisor's raw, *unresolved* cwd at three points and, on a mismatch, raises a report instead of a bare comparison.
-The report is built in-process rather than uploaded, so the answer travels with the failure rather than with the run.
-It resolves the question in one pass:
+```
+raw cwd (psutil, unresolved):  'C:\Users\RUNNER~1\AppData\Local\Temp'
+cwd per the supervisor itself: 'C:\...\pytest-0\popen-gw0\test_supervisor_process_outliv0'
+resolve_data_dir(config):      'C:\...\pytest-0\popen-gw0\test_supervisor_process_outliv0'
+TEMP='C:\Users\RUNNER~1\AppData\Local\Temp'
+cwd timeline: connected / spawned / client-aborted all 'C:\Users\RUNNER~1\AppData\Local\Temp'
+supervisor.log: no "could not anchor" warning
+```
 
-- The **timeline** (`connected` -> `spawned` -> `client-aborted`) says *when*. `connected` is taken before any pseudoconsole exists, so a bad value there means the anchor never held, and a value that is right at `connected` and wrong at `spawned` convicts the ConPTY spawn.
-- **`cwd per the supervisor itself`** says *whether psutil is telling the truth*. It spawns a session with `cwd=None`, which the supervisor passes through as a NULL `lpCurrentDirectory`, so `cmd /c cd` prints the supervisor's own working directory. Agreement with psutil means the supervisor really is mis-anchored; disagreement means the assertion has been reading a bad instrument and the invariant was never violated.
-- The **raw, unresolved** strings say *provenance*. The runner's `%TEMP%` is the 8.3 form `C:\Users\RUNNER~1\AppData\Local\Temp`, and `.resolve()` erases that distinction, so the short form points at something that read the environment variable while the long form points at something that did not.
-- The **supervisor console output and `supervisor.log`** are both included, which closes the evidence gap named above: if `os.chdir` did raise, its warning and traceback are now in the failure text.
+Four things converge, and they all say the supervisor is correct.
+The probe session - spawned with `cwd=None`, which the supervisor passes through as a NULL `lpCurrentDirectory` - reports the data dir exactly, so a real child of the supervisor really does inherit the anchored directory.
+`resolve_data_dir` agrees.
+No `could not anchor` warning was logged, so `os.chdir` did not raise.
+And psutil returns a value byte-identical to `$TEMP`, in **8.3 form**, unchanging across all three timeline marks - it is echoing the environment variable rather than reading this process's current directory.
+The short form is what settles it: `os.chdir` was given the long-form `tmp_path`, so a reading that comes back in 8.3 did not come from that call.
 
-Two supporting changes.
-The test now drains the supervisor's stdout on a thread from the moment it launches; it previously left a `PIPE` unread for the whole test, which is a 64 KB deadlock waiting for a chatty run as well as the reason the console log was unavailable.
-`.github/workflows/ci.yml` gained an `if: failure()` pair of steps that copy every `supervisor*.log` and `crash.log` out of the runner's `pytest-of-*` trees and upload them as a `supervisor-logs` artifact, which covers the failure modes that produce no assertion message at all (a connect timeout, a hung spawn).
-The copy runs after the suite, so the path lengths the test actually used are untouched.
+**The fix is in the oracle, not in the product.**
+`supervisor.py` is untouched and needed no change.
+The assertion now measures **what a child of the supervisor inherits**, which is the property the invariant is actually about: a cwd inside `dist/` locks that directory on Windows for as long as the supervisor and everything descended from it lives.
+`_cwd_inherited_from_supervisor` measures that directly with nothing interposed, so this is a *stronger* check than reading the cwd from outside, not a weaker one.
+psutil is kept, demoted to a diagnostic line and the three-point timeline, because it is one external observer's view and this runner proved it can be wrong.
 
-**Still open, and still not to be guessed at.**
-Do not weaken the assertion to make the badge green, and do not edit `supervisor.py` on a hypothesis: a supervisor change reaps every live session and needs the deliberate out-of-band update flow in the root `CLAUDE.md`.
-If the probe and psutil disagree on the next red run, the fix is in the test's instrument and no supervisor change is warranted.
-If they agree, the timeline names the culprit and a supervisor-side fix can be written against evidence.
+The full failure report stays exactly as it was, because it is what made this solvable: the oracle and the psutil reading side by side, the timeline, the raw *unresolved* strings (`.resolve()` erases the 8.3 form that identified the culprit), `resolve_data_dir`, the config bytes, `TEMP`/`TMP`, the data-dir listing, and both the supervisor's console output and its `supervisor.log`.
+
+Two supporting changes from round 1 stay.
+The test drains the supervisor's stdout on a thread from the moment it launches; it previously left a `PIPE` unread for the whole test, which is a 64 KB deadlock waiting for a chatty run as well as the reason its console log was unavailable.
+`.github/workflows/ci.yml` has an `if: failure()` pair that copies every `supervisor*.log` and `crash.log` out of the runner's `pytest-of-*` trees and uploads them as a `supervisor-logs` artifact, covering the failure modes that produce no assertion message at all (a connect timeout, a hung spawn); the copy runs after the suite so the path lengths the test used are untouched.
+
+**What to carry forward.**
+Do not assert on `psutil.Process(pid).cwd()` on Windows CI.
+It is fine as a diagnostic and is not an oracle: on `windows-latest` it returned `%TEMP%` verbatim for a process whose real working directory was elsewhere, with no error and no variation to hint at it.
+Where a test needs a process's working directory as a *fact*, measure the property that matters - what a child inherits - rather than an observer's report of it.
 
 ## 8.6 First Linux CI run: a test fake that only drifts on one host
 
