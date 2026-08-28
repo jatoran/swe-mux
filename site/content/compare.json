@@ -1,0 +1,227 @@
+{
+  "_comment": [
+    "The comparison table's data. `site/tools/build.py` renders it and nothing else",
+    "writes it, which is the same split `content/ideas.json` has: data here, markup there.",
+    "",
+    "Rules this file is held to, and `build_compare()` enforces every one of them:",
+    "  - every row carries a cell for every tool, so a blank is impossible rather than",
+    "    merely discouraged;",
+    "  - every cell names at least one source id, and every source id is defined below;",
+    "  - every defined source is cited by at least one cell, so a link cannot rot into",
+    "    decoration;",
+    "  - `v` is one of yes | partial | no | unclear, and `unclear` is the correct answer",
+    "    whenever the sources checked did not settle it. Guessing on a public comparison",
+    "    is how one gets taken apart.",
+    "",
+    "`checked` is the date every URL below was read. It is printed on the page, because",
+    "several of these projects move weekly and a comparison with no date is a claim about",
+    "an unspecified past."
+  ],
+  "checked": "2026-08-28",
+
+  "tools": [
+    { "key": "swemux", "name": "swe-mux", "self": true },
+    { "key": "herdr", "name": "Herdr" },
+    { "key": "tmux", "name": "tmux" },
+    { "key": "orca", "name": "Orca" },
+    { "key": "conductor", "name": "Conductor" },
+    { "key": "superset", "name": "Superset" },
+    { "key": "warp", "name": "Warp" }
+  ],
+
+  "sources": {
+    "swemux-readme": { "label": "swe-mux README", "url": "https://github.com/jatoran/swe-mux/blob/master/README.md" },
+    "swemux-security": { "label": "swe-mux SECURITY.md", "url": "https://github.com/jatoran/swe-mux/blob/master/SECURITY.md" },
+    "swemux-repo": { "label": "swe-mux repository", "url": "https://github.com/jatoran/swe-mux" },
+    "herdr-site": { "label": "herdr.dev", "url": "https://herdr.dev/" },
+    "herdr-install": { "label": "Herdr install docs", "url": "https://herdr.dev/docs/install" },
+    "herdr-guide": { "label": "Herdr agent guide", "url": "https://herdr.dev/agent-guide.md" },
+    "tmux-repo": { "label": "tmux repository", "url": "https://github.com/tmux/tmux" },
+    "orca-site": { "label": "onorca.dev", "url": "https://www.onorca.dev/" },
+    "orca-repo": { "label": "Orca repository", "url": "https://github.com/stablyai/orca" },
+    "conductor-site": { "label": "conductor.build", "url": "https://conductor.build/" },
+    "conductor-pricing": { "label": "Conductor pricing", "url": "https://conductor.build/pricing" },
+    "conductor-worktrees": { "label": "Conductor worktree guide", "url": "https://www.conductor.build/docs/guides/git-worktrees/run-claude-code-with-git-worktrees" },
+    "superset-site": { "label": "superset.sh", "url": "https://superset.sh/" },
+    "superset-roadmap": { "label": "Superset, 100 parallel agents", "url": "https://superset.sh/blog/roadmap-to-100-agents" },
+    "warp-site": { "label": "warp.dev", "url": "https://www.warp.dev/" },
+    "warp-pricing": { "label": "Warp pricing", "url": "https://www.warp.dev/pricing" },
+    "warp-repo": { "label": "Warp repository", "url": "https://github.com/warpdotdev/Warp" }
+  },
+
+  "rows": [
+    {
+      "id": "license",
+      "label": "License",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Apache-2.0.", "src": ["swemux-repo"] },
+        "herdr": { "v": "yes", "t": "Apache-2.0.", "src": ["herdr-site"] },
+        "tmux": { "v": "yes", "t": "ISC.", "src": ["tmux-repo"] },
+        "orca": { "v": "yes", "t": "MIT.", "src": ["orca-repo"] },
+        "conductor": { "v": "no", "t": "Proprietary. Free tier, then paid plans.", "src": ["conductor-pricing"] },
+        "superset": { "v": "partial", "t": "Elastic License 2.0. Source-available, and its own site says not OSI-approved open source.", "src": ["superset-site"] },
+        "warp": { "v": "partial", "t": "The client is AGPL-3.0 with two MIT UI crates. The service around it is paid.", "src": ["warp-repo", "warp-pricing"] }
+      }
+    },
+    {
+      "id": "local",
+      "label": "Runs entirely on hardware you control",
+      "cells": {
+        "swemux": { "v": "yes", "t": "No server, no account, no relay. The project operates nothing.", "src": ["swemux-readme"] },
+        "herdr": { "v": "yes", "t": "A local binary. Remote means your own SSH or your own rented box.", "src": ["herdr-site"] },
+        "tmux": { "v": "yes", "t": "A local process, and nothing else.", "src": ["tmux-repo"] },
+        "orca": { "v": "yes", "t": "A desktop app on your own subscriptions, with SSH to your own VPS.", "src": ["orca-site"] },
+        "conductor": { "v": "partial", "t": "Local workspaces on the free plan; Conductor Cloud is a paid tier.", "src": ["conductor-pricing"] },
+        "superset": { "v": "yes", "t": "Local-first, and it states it never proxies model API calls.", "src": ["superset-site"] },
+        "warp": { "v": "partial", "t": "The terminal is local; Warp Drive, cloud agents, and conversation storage are account-backed.", "src": ["warp-pricing"] }
+      }
+    },
+    {
+      "id": "windows",
+      "label": "Windows as a first-class host",
+      "cells": {
+        "swemux": { "v": "yes", "t": "The proving platform, and the only one with a packaged desktop application.", "src": ["swemux-readme"] },
+        "herdr": { "v": "yes", "t": "Stable-channel Windows binaries; ARM64 runs the x86_64 build under emulation.", "src": ["herdr-install"] },
+        "tmux": { "v": "no", "t": "OpenBSD, FreeBSD, NetBSD, Linux, macOS, Solaris. Windows only inside WSL or Cygwin.", "src": ["tmux-repo"] },
+        "orca": { "v": "yes", "t": "Windows builds published.", "src": ["orca-site"] },
+        "conductor": { "v": "no", "t": "macOS only. Its own copy says 'on your Mac'.", "src": ["conductor-site"] },
+        "superset": { "v": "no", "t": "macOS primary, an experimental Linux AppImage, Windows not yet available.", "src": ["superset-site"] },
+        "warp": { "v": "yes", "t": "Windows 10 and 11, x64 and ARM64.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "macos",
+      "label": "macOS as a first-class host",
+      "loses": true,
+      "cells": {
+        "swemux": { "v": "partial", "t": "The wheel installs and the CLI runs, proven in CI. No CI job on any host has ever started a daemon, so the daemon on macOS is unproven, and there is no desktop application for it.", "src": ["swemux-readme"] },
+        "herdr": { "v": "yes", "t": "Stable-channel macOS binaries.", "src": ["herdr-install"] },
+        "tmux": { "v": "yes", "t": "A listed platform.", "src": ["tmux-repo"] },
+        "orca": { "v": "yes", "t": "ARM64 and Intel.", "src": ["orca-site"] },
+        "conductor": { "v": "yes", "t": "The only platform it ships on.", "src": ["conductor-site"] },
+        "superset": { "v": "yes", "t": "The primary platform.", "src": ["superset-site"] },
+        "warp": { "v": "yes", "t": "macOS 10.14 and newer.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "persistence",
+      "label": "Agent processes outlive the client",
+      "cells": {
+        "swemux": { "v": "yes", "t": "A supervisor process separate from the daemon and the UI holds every terminal, so a daemon restart and a rebuild of the application itself leave the agents working. A reboot still ends the processes; the sessions stay readable afterwards.", "src": ["swemux-readme"] },
+        "herdr": { "v": "yes", "t": "Detach and reattach from any terminal or over SSH; its site states sessions survive restarts.", "src": ["herdr-site"] },
+        "tmux": { "v": "yes", "t": "The server keeps sessions after every client detaches. Not across a reboot.", "src": ["tmux-repo"] },
+        "orca": { "v": "unclear", "t": "Scrollback recovery after restart is documented; whether the process itself survives is not stated in the sources checked.", "src": ["orca-site"] },
+        "conductor": { "v": "unclear", "t": "Not stated in the sources checked.", "src": ["conductor-site"] },
+        "superset": { "v": "yes", "t": "'Persistent terminals: sessions survive app restarts.'", "src": ["superset-site"] },
+        "warp": { "v": "unclear", "t": "Not stated for the local terminal in the sources checked.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "worktrees",
+      "label": "Per-agent git worktree isolation",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Worktree creation and removal, plus a serialized land queue: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only.", "src": ["swemux-readme"] },
+        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-site", "herdr-guide"] },
+        "tmux": { "v": "no", "t": "Out of scope. tmux knows nothing about git.", "src": ["tmux-repo"] },
+        "orca": { "v": "yes", "t": "'Every task runs in its own isolated git worktree.'", "src": ["orca-site"] },
+        "conductor": { "v": "yes", "t": "Each workspace is created as its own git worktree and branch.", "src": ["conductor-worktrees"] },
+        "superset": { "v": "yes", "t": "'Each agent gets an isolated Git worktree and its own branch.'", "src": ["superset-site"] },
+        "warp": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "harnesses",
+      "label": "Breadth of recognized agent CLIs",
+      "loses": true,
+      "cells": {
+        "swemux": { "v": "partial", "t": "Any CLI or shell runs unchanged, including one swe-mux has never heard of. The registry that adds status, transcripts, history, and account switching on top recognizes fewer of them than Orca or Herdr list.", "src": ["swemux-readme"] },
+        "herdr": { "v": "yes", "t": "'21 agents detected out of the box.'", "src": ["herdr-site"] },
+        "tmux": { "v": "no", "t": "None. It multiplexes terminals and does not read what is inside them.", "src": ["tmux-repo"] },
+        "orca": { "v": "yes", "t": "Names more than twenty CLI agents by hand, and states any CLI agent works.", "src": ["orca-site"] },
+        "conductor": { "v": "partial", "t": "Claude Code, Codex, Cursor, and OpenCode.", "src": ["conductor-site"] },
+        "superset": { "v": "yes", "t": "Names six and states any CLI-based coding agent works.", "src": ["superset-site"] },
+        "warp": { "v": "partial", "t": "Ships its own Agent CLI; other agents run inside it as ordinary terminal programs.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "phone",
+      "label": "Phone client",
+      "cells": {
+        "swemux": { "v": "yes", "t": "An installable web app reached over your own tailnet, with no relay and no swe-mux login.", "src": ["swemux-readme"] },
+        "herdr": { "v": "no", "t": "No first-party client. Reachable from a phone by SSH into the host and attaching.", "src": ["herdr-install", "herdr-guide"] },
+        "tmux": { "v": "no", "t": "None. SSH in and attach.", "src": ["tmux-repo"] },
+        "orca": { "v": "yes", "t": "iOS and Android companion apps.", "src": ["orca-site"] },
+        "conductor": { "v": "no", "t": "Announced as coming soon, not shipping on the date below.", "src": ["conductor-pricing"] },
+        "superset": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["superset-site"] },
+        "warp": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "voice",
+      "label": "Voice control of the tool itself",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Hands-free conversation: on-device wake words, dictation, spoken navigation and commands, and read-aloud.", "src": ["swemux-readme"] },
+        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-site", "herdr-guide"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
+        "orca": { "v": "partial", "t": "Voice dictation with on-device models. Dictating into an agent, rather than driving the application.", "src": ["orca-site"] },
+        "conductor": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["conductor-site"] },
+        "superset": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["superset-site"] },
+        "warp": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence about a run that is not the agent's own transcript",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Deterministic facts captured at the tool boundary - content hashes, parsed test outcomes, git tree hashes - and commit-level provenance separating who authored a change from who landed it. Off by default, per Project.", "src": ["swemux-readme"] },
+        "herdr": { "v": "partial", "t": "Semantic agent state forwarded by the agent integrations over its socket API. Status rather than an evidence record.", "src": ["herdr-site"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
+        "orca": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["orca-site"] },
+        "conductor": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["conductor-site"] },
+        "superset": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["superset-site"] },
+        "warp": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "attention",
+      "label": "Deciding which agent to look at next",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Ranked attention items with a hard daily interrupt budget, four a day by default, incident merging, and suppressed counts always shown rather than hidden.", "src": ["swemux-readme"] },
+        "herdr": { "v": "partial", "t": "A sidebar marking each agent working, blocked or idle. A view, not a budget.", "src": ["herdr-site"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
+        "orca": { "v": "partial", "t": "A fleet view with native notifications.", "src": ["orca-site"] },
+        "conductor": { "v": "partial", "t": "A dashboard of what the agents are doing.", "src": ["conductor-site"] },
+        "superset": { "v": "partial", "t": "A workspace list. Its own roadmap names human review, not agent count, as the bottleneck.", "src": ["superset-roadmap"] },
+        "warp": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "cloud",
+      "label": "Hosted runners the vendor operates",
+      "loses": true,
+      "cells": {
+        "swemux": { "v": "no", "t": "None, and none planned. Your machine, or a machine you own.", "src": ["swemux-repo"] },
+        "herdr": { "v": "no", "t": "A local binary. 'A box you rent' is still your box.", "src": ["herdr-site"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
+        "orca": { "v": "no", "t": "SSH to your own VPS rather than a hosted runner.", "src": ["orca-site"] },
+        "conductor": { "v": "yes", "t": "Conductor Cloud, with cloud workspace hours, from the paid tier upward.", "src": ["conductor-pricing"] },
+        "superset": { "v": "no", "t": "Local-first, with no hosted execution in the sources checked.", "src": ["superset-site"] },
+        "warp": { "v": "yes", "t": "Warp Factories: cloud infrastructure for running fleets of coding agents.", "src": ["warp-site"] }
+      }
+    },
+    {
+      "id": "team",
+      "label": "Teams, roles, and shared state",
+      "loses": true,
+      "cells": {
+        "swemux": { "v": "no", "t": "A single-operator tool. No multi-tenancy, no role model, no audit subsystem, and none planned.", "src": ["swemux-security"] },
+        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-site"] },
+        "tmux": { "v": "partial", "t": "Several people can attach to one session on a host they all have accounts on. Not a product feature so much as a consequence.", "src": ["tmux-repo"] },
+        "orca": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["orca-site"] },
+        "conductor": { "v": "yes", "t": "A Teams plan with live collaboration and admin controls, and SSO on Enterprise.", "src": ["conductor-pricing"] },
+        "superset": { "v": "partial", "t": "Paid seats above the free tier.", "src": ["superset-site"] },
+        "warp": { "v": "yes", "t": "Business and Enterprise plans with collaboration features.", "src": ["warp-pricing"] }
+      }
+    }
+  ]
+}

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Roadmap · swe-mux</title>
-<meta name="description" content="What swe-mux is building next, what it deliberately will not build, and how to ask for something. No dates." />
+<title>Terms · swe-mux</title>
+<meta name="description" content="swe-mux is Apache-2.0 software you run yourself, so the licence is the terms. What that covers, and the four things it does not answer on its own." />
 <meta name="color-scheme" content="dark" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
@@ -552,7 +552,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <a href="../">home</a>
       <a href="../docs/">docs</a>
       <a href="../changelog/">changelog</a>
-      <a href="../roadmap/" aria-current="page">roadmap</a>
+      <a href="../roadmap/">roadmap</a>
       <a href="../acknowledgements/">acknowledgements</a>
     </nav>
     <div class="util">
@@ -569,129 +569,136 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 </div>
 
 <main>
-<!-- The public roadmap, hand-authored.
+<!-- The terms page, hand-authored.
 
-     This is a curated projection of `.docs/development/ROADMAP.md`, not a copy, and
-     the difference is the whole point. That file is an internal working document of
-     several thousand lines: phase numbers, dependency interlocks, per-item acceptance
-     criteria, and the measurements behind decisions nobody outside the project needs
-     to re-litigate. Rendering it would leak internal sequencing as though it were a
-     public commitment, and a reader looking for "can it do X yet" would have to read
-     an engineering plan to find out.
+     swe-mux is Apache-2.0 software that runs on the reader's own machine. There is no
+     service, no account, and no contract between this project and anyone who downloads
+     it - so the licence is the terms, and this page's job is to say what the licence
+     already says rather than to invent a second agreement beside it.
 
-     Four rules this page holds, and the reason for each:
+     Three rules, and the third is the one that keeps this page honest:
 
-     1. **No dates, ever.** A public roadmap that names a month is a promise made by
-        someone who cannot keep it, and it ages into a liability the week it slips.
-     2. **No internal phase numbers.** They are ordering for the people building it.
-        Published, they read as a release train and invite "when is the next one".
-     3. **Forward-looking only.** A roadmap that lists shipped work is a feature list
-        with a misleading name, and the landing page and `README.md` already carry
-        that. The `changelog` is the record of what shipped and the only page here
-        that is a commitment; everything on this one is direction.
-     4. **The boundaries are the argument.** `Deliberately not on the roadmap` is not
-        a list of gaps, and it is the cheapest instrument this page has: it turns a
-        request that will never be built into a reason rather than into silence. It
-        is linked from the lede and from the section that invites requests, because
-        inviting them is exactly what makes it load-bearing.
-
-     The vote-ranked block is generated. The MOST-REQUESTED marker comment below (written
-     without its delimiters here, because `build.py` requires exactly one of it in this
-     file and a second one in this paragraph would be it) is replaced by
-     `tools/build.py` from `content/ideas.json`, which `tools/ideas.py` writes from
-     the GitHub Discussions API. Nothing about how that block reads lives in the
-     workflow: it owns the data, this repository owns the markup, and below the vote
-     floor the marker's own line is dropped so the page is byte-identical to one that
-     never had the block. Do not hand-write rows there.
-
-     Keep it to a few screens. When it grows past that, the answer is fewer themes,
-     not a longer page.
+     1. **Point at LICENSE for anything the licence covers.** Warranty, liability,
+        patent grant, and redistribution are all in there, already legally drafted, and
+        a paraphrase that drifts from it is worse than a link.
+     2. **Add only the facts the licence does not carry**: that there is no service and
+        therefore no service terms, that the vendors' CLIs run under the reader's own
+        agreements, and what the trademark reservation means in practice.
+     3. **Say where a lawyer is needed rather than guessing.** This page states no
+        governing law, no jurisdiction, no dispute procedure and no consumer-law
+        carve-out, because inventing any of those would be worse than their absence.
+        The licence's own terms are what apply.
 -->
 <section class="page">
   <div class="wrap">
-    <div class="kick">direction, not dates</div>
-    <h1>Roadmap</h1>
+    <div class="kick">the licence is the terms</div>
+    <h1>Terms</h1>
     <div class="lede">
-      <p>This is a projection of the internal plan, not a copy of it, and it carries no
-      dates. <b>Everything on this page is direction, and direction changes.</b> What has
-      already shipped is deliberately not here: the <a href="../changelog/">changelog</a>
-      is the record of that, and it is the only one of the two that is a commitment.</p>
-      <p>Some of what gets asked for will never be built, and the reasons are specific
-      rather than a shortage of time. <a href="#not-planned">Deliberately not on the
-      roadmap</a> is that list, and it is worth reading before
-      <a href="#asking">asking for something</a>.</p>
+      <p>swe-mux is free software you run on your own computer. <b>There is no service to
+      sign up for, so there is no service agreement.</b> What governs your use of it is
+      the <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache License
+      2.0</a>, which is a real licence written by lawyers and is not restated here.</p>
+      <p>This page covers the four things people ask that the licence does not answer on
+      its own. Last revised 2026-08-28.</p>
     </div>
 
     <div class="rel">
-      <div class="relhead"><h2>Being built now</h2><span class="fill"></span></div>
-      <p class="prose">One theme at a time, and this is the current one.</p>
-      <ul class="flat">
-        <li><b>Getting it installable</b><span>Published wheel and desktop artifacts, an update check against a static manifest with a staged swap that preserves live sessions, clean-machine install and upgrade testing, and this site.</span></li>
-        <li><b>The first ten minutes</b><span>A first run that works on a phone as well as a desktop, an in-app help surface that links here rather than restating things, and inline controls for the gates that quietly stop a new install from doing anything.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Next</h2><span class="fill"></span></div>
-      <p class="prose">Direction, in rough order of how settled it is. None of it is dated,
-      and anything here can be reordered by what the first users actually hit.</p>
-      <ul class="flat">
-        <li><b>More harnesses</b><span>The registry was built so that a new agent CLI costs a descriptor and an adapter instead of a branch through every feature. The candidate study exists; spending that abstraction is the work.</span></li>
-        <li><b>macOS</b><span>Implemented behind the same platform seams as Linux and typechecked on every gate run, but it has never been executed. It becomes a supported platform when somebody runs the suite on real hardware, not before.</span></li>
-        <li><b>Deeper code analysis</b><span>Joining the structural graph to the behavioral record at the symbol level: cross-session conflict prediction, entity-level change facts, and stale-caller detection. swe-mux is the only observer that sees every parallel session's edits as they happen, which is what makes the first of those possible at all.</span></li>
-        <li><b>A portable verification contract</b><span>The setup and verify scripts a worktree needs are already repository-neutral, and the land queue is worth nothing without them. Making that pair reachable and adoptable from inside any repository is the gap.</span></li>
-        <li><b>A shared browser surface</b><span>Recorded, and gated on an authorization decision that has not been made. Today's previews are safe precisely because they cannot navigate anywhere and no agent can drive them; letting either of those change is a product decision about trust, not a feature.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Recorded, not scheduled</h2><span class="fill"></span></div>
-      <p class="prose">Written down so the reasoning survives, with no commitment to build
-      them.</p>
+      <div class="relhead"><h2>The software</h2><span class="fill"></span></div>
       <ul class="bullets">
-        <li><span><b>Subagent visibility.</b> Nested rows for a session's subagents and a read-only pane per subagent. There is no way to attach a terminal to a specific subagent from outside its session, so a reader over the on-disk sidecar files is the only path.</span></li>
-        <li><span><b>Following a forked conversation.</b> When a CLI replaces its own conversation underneath a pane, that pane should be followed rather than abandoned, and a pane swe-mux has demonstrably lost track of should say so instead of freezing on its last reading.</span></li>
+        <li><span><b>Licence: Apache-2.0.</b> You may use, modify, and redistribute
+        swe-mux, including commercially, provided you keep the notices the licence
+        requires. See <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">
+        <code>LICENSE</code></a> and
+        <a href="https://github.com/jatoran/swe-mux/blob/master/NOTICE"><code>NOTICE</code></a>.</span></li>
+        <li><span><b>No warranty, and limited liability.</b> The licence's sections 7 and
+        8 provide the software "as is", without warranties or conditions of any kind, and
+        limit the contributors' liability for damages arising from its use. That is the
+        operative text, not this sentence, and it is worth reading before you run an
+        autonomous agent against a repository you care about.</span></li>
+        <li><span><b>What that means in practice.</b> swe-mux launches coding agents with
+        the full privileges of the account running the daemon, and executing code on that
+        machine is its purpose rather than a defect. Back up your work, review what your
+        agents are configured to do without asking, and keep the approval floor in
+        place.</span></li>
+        <li><span><b>Third-party components</b> redistributed with swe-mux keep their own
+        licences, listed in
+        <a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">
+        <code>THIRD-PARTY-NOTICES.md</code></a> and on the
+        <a href="../acknowledgements/">acknowledgements page</a>. No GPL or AGPL code
+        ships.</span></li>
       </ul>
     </div>
 
-    <div class="rel boundary" id="not-planned">
-      <div class="relhead"><h2>Deliberately not on the roadmap</h2><span class="fill"></span></div>
-      <p class="prose">These are not oversights and they are not "later". Each would need a
-      new decision about authorization, confirmation, audit, and failure behaviour before
-      it could be scheduled at all, and none of those decisions has been made. <b>A request
-      for one of them is closed with a link back to this section</b>, which is a boundary
-      rather than a judgement about whether the idea is a good one. No number of votes
-      moves anything out of this list; only one of those decisions would.</p>
+    <div class="rel">
+      <div class="relhead"><h2>The agent CLIs are not ours</h2><span class="fill"></span></div>
+      <p class="prose">swe-mux launches and observes coding-agent CLIs published by other
+      vendors, including Anthropic's Claude Code and OpenAI's Codex CLI. It is <b>not
+      affiliated with, endorsed by, sponsored by, or certified by</b> any of them, and it
+      uses their names only to identify which tool a feature works with.</p>
       <ul class="bullets">
-        <li><span><b>Autonomous actuation.</b> Model-authored action selection, unrestricted terminal writes, auto-approval, or arbitrary command execution. Observers structurally cannot type, approve, or spawn, and that is the property the rest of the design rests on.</span></li>
-        <li><span><b>Killing processes it merely suspects.</b> swe-mux finds hung and orphaned processes and shows them to you. It does not terminate them on its own judgement.</span></li>
-        <li><span><b>A cloud service.</b> No account, no relay, no server, no telemetry. The phone reaches your machine over your own tailnet, and there is no third party in the path because there is no third party.</span></li>
-        <li><span><b>A chat-bot control adapter.</b> Web push covers outbound alerting and the mobile browser covers inbound control, so a bot would buy "reply without opening the UI" at the cost of a second confirmation surface to keep safe.</span></li>
-        <li><span><b>Remote execution hosts.</b> Treating machines over SSH as execution targets, with a remote filesystem provider and a deployed relay. A host already on your tailnet can reach the daemon directly, which is the cheaper answer to most of what this would buy.</span></li>
+        <li><span>You run those CLIs under <b>your own account and your own agreement
+        with each vendor</b>. The same is true of the optional OpenRouter and Hugging
+        Face integrations, and of Tailscale if you use it to reach your machine.</span></li>
+        <li><span>swe-mux proxies nothing and resells nothing. It does not sit between
+        your agent and its vendor, and it holds no relationship with any of them on your
+        behalf.</span></li>
+        <li><span>Account switching is a convenience for <b>one person switching between
+        accounts they personally own and pay for</b>. It is not account pooling and not a
+        way around a usage limit: accounts are never shared between people, sessions are
+        never load-balanced across accounts, and switching is always an explicit
+        act.</span></li>
+        <li><span>Quota, billing, and account-sharing questions belong to that vendor.
+        Nothing here changes what your agreement with them permits.</span></li>
       </ul>
     </div>
 
-    <div class="rel" id="asking">
-      <div class="relhead"><h2>Asking for something</h2><span class="fill"></span></div>
-      <p class="prose">Feature requests are
-      <a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">GitHub
-      Discussions in the Ideas category</a>, and a thumbs-up on one is a vote. The issue
-      tracker stays for bugs. A request that is accepted becomes an issue at that point and
-      carries its discussion and its votes across with it.</p>
-      <p class="prose"><b>Describe the problem, not the fix.</b> What you were trying to do,
-      what you did instead, and what made it hard. Two proposed implementations cannot be
-      weighed against each other, and a request that arrives as one hides the thing that
-      would actually be built for; the form asks for it in that shape. Read
-      <a href="#not-planned">deliberately not on the roadmap</a> first, because a request
-      that lands inside one of those boundaries gets a reason rather than a queue place.</p>
-      <p class="prose"><b>A vote is a signal, not a commitment.</b> Votes say what to look at
-      first and nothing more. Nothing is scheduled by being voted for, and no count obliges
-      anybody to build anything.</p>
+    <div class="rel">
+      <div class="relhead"><h2>The name and the mark</h2><span class="fill"></span></div>
+      <p class="prose">Apache-2.0 grants copyright and patent rights and deliberately
+      does <b>not</b> grant trademark rights. The practical shape of that reservation is
+      written out in
+      <a href="https://github.com/jatoran/swe-mux/blob/master/TRADEMARK.md">
+      <code>TRADEMARK.md</code></a>: you may say your fork is derived from swe-mux and
+      you may not present a modified build as though it were this project.</p>
     </div>
 
-    <p class="note">The internal plan this projects from lives in the repository under
-    <code>.docs/development/</code>, along with the audits and incident runbooks it cites.
-    It is written for the people building swe-mux and reads like it.</p>
+    <div class="rel">
+      <div class="relhead"><h2>This website</h2><span class="fill"></span></div>
+      <ul class="bullets">
+        <li><span>swemux.dev lives in <code>site/</code> in the public repository, so it
+        is under the same Apache-2.0 licence as the rest of it.</span></li>
+        <li><span>Every claim on it is meant to be checkable against the repository, and
+        several pages say which file to check. If one is wrong,
+        <a href="https://github.com/jatoran/swe-mux/issues">open an issue</a>; it will be
+        corrected.</span></li>
+        <li><span>The <a href="../compare/">comparison page</a> describes other people's
+        products from their own published documentation and carries the date those
+        sources were read. It is not a benchmark and it is not an endorsement in either
+        direction.</span></li>
+        <li><span>The <a href="../roadmap/">roadmap</a> is direction, not commitment, and
+        says so. A vote on a feature request is a signal, not an obligation.</span></li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>Support</h2><span class="fill"></span></div>
+      <p class="prose">There is none to buy and none promised. Bugs go to
+      <a href="https://github.com/jatoran/swe-mux/issues">issues</a>, feature requests to
+      the Ideas discussions, and vulnerabilities privately through
+      <a href="https://github.com/jatoran/swe-mux/blob/master/SECURITY.md">the security
+      policy</a>. The response times in that policy are the targets of a maintainer-scale
+      project, stated so a reporter knows what to expect, and they are not a contractual
+      commitment.</p>
+      <p class="prose">Only the most recent release is supported. There is no long-term
+      support branch and no backport process; upgrading is the remedy for every reported
+      issue.</p>
+      <p class="note">This page is a plain-language summary of documents that are
+      themselves the agreement. It is not legal advice, and where it and
+      <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE"><code>LICENSE</code></a>
+      differ, the licence governs. It states no choice of law and no dispute procedure,
+      because the licence's own terms are what apply and inventing a second set beside
+      them would create a conflict rather than resolve one.</p>
+    </div>
   </div>
 </section>
 </main>

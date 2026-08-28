@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Roadmap · swe-mux</title>
-<meta name="description" content="What swe-mux is building next, what it deliberately will not build, and how to ask for something. No dates." />
+<title>Blog · swe-mux</title>
+<meta name="description" content="Engineering write-ups about swe-mux: what broke, what the measurement said, and what got decided because of it." />
 <meta name="color-scheme" content="dark" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
@@ -552,7 +552,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <a href="../">home</a>
       <a href="../docs/">docs</a>
       <a href="../changelog/">changelog</a>
-      <a href="../roadmap/" aria-current="page">roadmap</a>
+      <a href="../roadmap/">roadmap</a>
       <a href="../acknowledgements/">acknowledgements</a>
     </nav>
     <div class="util">
@@ -569,129 +569,70 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 </div>
 
 <main>
-<!-- The public roadmap, hand-authored.
+<!-- The blog index, hand-authored around a generated post list.
 
-     This is a curated projection of `.docs/development/ROADMAP.md`, not a copy, and
-     the difference is the whole point. That file is an internal working document of
-     several thousand lines: phase numbers, dependency interlocks, per-item acceptance
-     criteria, and the measurements behind decisions nobody outside the project needs
-     to re-litigate. Rendering it would leak internal sequencing as though it were a
-     public commitment, and a reader looking for "can it do X yet" would have to read
-     an engineering plan to find out.
+     There are no posts yet, and this page is deliberately shipped anyway: a `blog` link
+     in the top bar that 404s is worse than an empty blog, and an empty blog that says so
+     is better than one that looks abandoned. The empty state is written, not defaulted.
 
-     Four rules this page holds, and the reason for each:
+     How a post gets published:
 
-     1. **No dates, ever.** A public roadmap that names a month is a promise made by
-        someone who cannot keep it, and it ages into a liability the week it slips.
-     2. **No internal phase numbers.** They are ordering for the people building it.
-        Published, they read as a release train and invite "when is the next one".
-     3. **Forward-looking only.** A roadmap that lists shipped work is a feature list
-        with a misleading name, and the landing page and `README.md` already carry
-        that. The `changelog` is the record of what shipped and the only page here
-        that is a commitment; everything on this one is direction.
-     4. **The boundaries are the argument.** `Deliberately not on the roadmap` is not
-        a list of gaps, and it is the cheapest instrument this page has: it turns a
-        request that will never be built into a reason rather than into silence. It
-        is linked from the lede and from the section that invites requests, because
-        inviting them is exactly what makes it load-bearing.
+       1. Write `content/blog/<slug>.md`. `content/blog/_template.md` is the format and
+          is itself never published, because `build.py` skips any filename beginning
+          with an underscore.
+       2. Run `python site/tools/build.py`, then the two site gates.
+       3. Commit `content/blog/<slug>.md` and the regenerated `blog/index.html` together.
 
-     The vote-ranked block is generated. The MOST-REQUESTED marker comment below (written
-     without its delimiters here, because `build.py` requires exactly one of it in this
-     file and a second one in this paragraph would be it) is replaced by
-     `tools/build.py` from `content/ideas.json`, which `tools/ideas.py` writes from
-     the GitHub Discussions API. Nothing about how that block reads lives in the
-     workflow: it owns the data, this repository owns the markup, and below the vote
-     floor the marker's own line is dropped so the page is byte-identical to one that
-     never had the block. Do not hand-write rows there.
+     Posts render **inline on this page**, newest first, each under a stable `#<slug>`
+     fragment that is its permalink. That is the same contract `/docs/#<slug>` already
+     carries, and it is the right shape while the volume is this low: a post per page
+     would mean generating pages `tools/check.mjs` does not discover, since it only walks
+     directories one level below the deploy root. When there are enough posts that this
+     page is unpleasant to scroll, split it - and move the fragments to real pages at the
+     same time, keeping the old ones working.
 
-     Keep it to a few screens. When it grows past that, the answer is fewer themes,
-     not a longer page.
+     The POSTS marker comment below (written without its delimiters in this paragraph,
+     because `build.py` requires exactly one of it in this file) is replaced by the
+     rendered posts, or by the empty state when there are none.
 -->
 <section class="page">
   <div class="wrap">
-    <div class="kick">direction, not dates</div>
-    <h1>Roadmap</h1>
+    <div class="kick">notes from building it</div>
+    <h1>Blog</h1>
     <div class="lede">
-      <p>This is a projection of the internal plan, not a copy of it, and it carries no
-      dates. <b>Everything on this page is direction, and direction changes.</b> What has
-      already shipped is deliberately not here: the <a href="../changelog/">changelog</a>
-      is the record of that, and it is the only one of the two that is a commitment.</p>
-      <p>Some of what gets asked for will never be built, and the reasons are specific
-      rather than a shortage of time. <a href="#not-planned">Deliberately not on the
-      roadmap</a> is that list, and it is worth reading before
-      <a href="#asking">asking for something</a>.</p>
+      <p>Engineering write-ups about swe-mux: what broke, what the measurement said, and
+      what got decided because of it. Not release announcements. The
+      <a href="../changelog/">changelog</a> is the record of what shipped and the
+      <a href="../roadmap/">roadmap</a> is what is coming.</p>
+      <p>There is no feed, no newsletter, and no comment system. Posts are plain HTML on
+      this page, each with its own permalink.</p>
     </div>
 
     <div class="rel">
-      <div class="relhead"><h2>Being built now</h2><span class="fill"></span></div>
-      <p class="prose">One theme at a time, and this is the current one.</p>
+      <div class="relhead"><h2>Nothing published yet</h2><span class="fill"></span></div>
+      <p class="prose">This page exists before its first post on purpose: a
+      <code>blog</code> link that 404s is worse than an empty blog, and an empty blog
+      that says so is better than one that looks abandoned. When there is something
+      worth a post it will appear here, with its own permalink, and nothing else about
+      the page will change.</p>
+    </div>
+
+    <div class="rel">
+      <div class="relhead"><h2>Elsewhere</h2><span class="fill"></span></div>
+      <p class="prose">Until there is something here, these are the pages that carry the
+      same material in a different shape.</p>
       <ul class="flat">
-        <li><b>Getting it installable</b><span>Published wheel and desktop artifacts, an update check against a static manifest with a staged swap that preserves live sessions, clean-machine install and upgrade testing, and this site.</span></li>
-        <li><b>The first ten minutes</b><span>A first run that works on a phone as well as a desktop, an in-app help surface that links here rather than restating things, and inline controls for the gates that quietly stop a new install from doing anything.</span></li>
+        <li><b>The design documents</b><span>Fifty-odd documents written for whoever
+        maintains a subsystem next, stating the invariants it holds and the decisions it
+        has already made. Indexed at <a href="../docs/">docs</a>, and they are where the
+        reasoning actually lives.</span></li>
+        <li><b>The changelog</b><span>Every released change, in
+        <a href="../changelog/">one place</a>, written for someone running swe-mux rather
+        than someone building it.</span></li>
+        <li><b>Commit messages</b><span>The repository is public and its history is the
+        long-form version of most of what a post here would say.</span></li>
       </ul>
     </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Next</h2><span class="fill"></span></div>
-      <p class="prose">Direction, in rough order of how settled it is. None of it is dated,
-      and anything here can be reordered by what the first users actually hit.</p>
-      <ul class="flat">
-        <li><b>More harnesses</b><span>The registry was built so that a new agent CLI costs a descriptor and an adapter instead of a branch through every feature. The candidate study exists; spending that abstraction is the work.</span></li>
-        <li><b>macOS</b><span>Implemented behind the same platform seams as Linux and typechecked on every gate run, but it has never been executed. It becomes a supported platform when somebody runs the suite on real hardware, not before.</span></li>
-        <li><b>Deeper code analysis</b><span>Joining the structural graph to the behavioral record at the symbol level: cross-session conflict prediction, entity-level change facts, and stale-caller detection. swe-mux is the only observer that sees every parallel session's edits as they happen, which is what makes the first of those possible at all.</span></li>
-        <li><b>A portable verification contract</b><span>The setup and verify scripts a worktree needs are already repository-neutral, and the land queue is worth nothing without them. Making that pair reachable and adoptable from inside any repository is the gap.</span></li>
-        <li><b>A shared browser surface</b><span>Recorded, and gated on an authorization decision that has not been made. Today's previews are safe precisely because they cannot navigate anywhere and no agent can drive them; letting either of those change is a product decision about trust, not a feature.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Recorded, not scheduled</h2><span class="fill"></span></div>
-      <p class="prose">Written down so the reasoning survives, with no commitment to build
-      them.</p>
-      <ul class="bullets">
-        <li><span><b>Subagent visibility.</b> Nested rows for a session's subagents and a read-only pane per subagent. There is no way to attach a terminal to a specific subagent from outside its session, so a reader over the on-disk sidecar files is the only path.</span></li>
-        <li><span><b>Following a forked conversation.</b> When a CLI replaces its own conversation underneath a pane, that pane should be followed rather than abandoned, and a pane swe-mux has demonstrably lost track of should say so instead of freezing on its last reading.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel boundary" id="not-planned">
-      <div class="relhead"><h2>Deliberately not on the roadmap</h2><span class="fill"></span></div>
-      <p class="prose">These are not oversights and they are not "later". Each would need a
-      new decision about authorization, confirmation, audit, and failure behaviour before
-      it could be scheduled at all, and none of those decisions has been made. <b>A request
-      for one of them is closed with a link back to this section</b>, which is a boundary
-      rather than a judgement about whether the idea is a good one. No number of votes
-      moves anything out of this list; only one of those decisions would.</p>
-      <ul class="bullets">
-        <li><span><b>Autonomous actuation.</b> Model-authored action selection, unrestricted terminal writes, auto-approval, or arbitrary command execution. Observers structurally cannot type, approve, or spawn, and that is the property the rest of the design rests on.</span></li>
-        <li><span><b>Killing processes it merely suspects.</b> swe-mux finds hung and orphaned processes and shows them to you. It does not terminate them on its own judgement.</span></li>
-        <li><span><b>A cloud service.</b> No account, no relay, no server, no telemetry. The phone reaches your machine over your own tailnet, and there is no third party in the path because there is no third party.</span></li>
-        <li><span><b>A chat-bot control adapter.</b> Web push covers outbound alerting and the mobile browser covers inbound control, so a bot would buy "reply without opening the UI" at the cost of a second confirmation surface to keep safe.</span></li>
-        <li><span><b>Remote execution hosts.</b> Treating machines over SSH as execution targets, with a remote filesystem provider and a deployed relay. A host already on your tailnet can reach the daemon directly, which is the cheaper answer to most of what this would buy.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel" id="asking">
-      <div class="relhead"><h2>Asking for something</h2><span class="fill"></span></div>
-      <p class="prose">Feature requests are
-      <a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">GitHub
-      Discussions in the Ideas category</a>, and a thumbs-up on one is a vote. The issue
-      tracker stays for bugs. A request that is accepted becomes an issue at that point and
-      carries its discussion and its votes across with it.</p>
-      <p class="prose"><b>Describe the problem, not the fix.</b> What you were trying to do,
-      what you did instead, and what made it hard. Two proposed implementations cannot be
-      weighed against each other, and a request that arrives as one hides the thing that
-      would actually be built for; the form asks for it in that shape. Read
-      <a href="#not-planned">deliberately not on the roadmap</a> first, because a request
-      that lands inside one of those boundaries gets a reason rather than a queue place.</p>
-      <p class="prose"><b>A vote is a signal, not a commitment.</b> Votes say what to look at
-      first and nothing more. Nothing is scheduled by being voted for, and no count obliges
-      anybody to build anything.</p>
-    </div>
-
-    <p class="note">The internal plan this projects from lives in the repository under
-    <code>.docs/development/</code>, along with the audits and incident runbooks it cites.
-    It is written for the people building swe-mux and reads like it.</p>
   </div>
 </section>
 </main>

@@ -422,6 +422,122 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 .doclist .src { display: block; margin-top: 3px; font-weight: 400; font-size: 11.5px;
                 color: var(--fg-3); overflow-wrap: anywhere; }
 @media (max-width: 700px) { .doclist li { grid-template-columns: minmax(0, 1fr); } }
+/* The same "where this lives" line under a feature-guide row, where the label
+   column is the feature's name rather than its path. */
+.flat .src { display: block; margin-top: 4px; font-size: 11.5px; color: var(--fg-3); }
+.flat .src a { color: var(--fg-3); }
+/* `.flat b` is the *label* column: monospace, and carrying the green marker. A
+   `<b>` inside the description column inherited both, so an emphasised clause in
+   the middle of a sentence rendered as monospace with a stray bullet in front of
+   it. The landing page never hit this because its descriptions carry no bold;
+   the feature guide's do, and emphasis inside prose is the reason it is prose. */
+.flat span b { font-family: var(--sans); font-size: inherit; letter-spacing: normal; }
+.flat span b::before { content: none; }
+
+/* ------------------------------------------------------------- the changelog
+
+   A release entry is compact by default and complete on demand. The full 0.1.0
+   entry is sixty bullets, which nobody scans; the group labels are what a person
+   actually wants off a changelog ("did anything change in Git?"), so those are
+   drawn flat and the bullets live behind one disclosure per release.
+
+   `<details>` rather than a script, because these pages carry no JavaScript of
+   their own beyond the theme toggle, and a disclosure that needs one would be a
+   feature that is missing with JS off rather than merely unstyled. */
+.relgroups { margin-top: 13px; color: var(--fg-2); font-size: 14px; line-height: 1.66; }
+.relgroups .k { color: var(--fg); font-family: var(--mono); font-size: 11.5px;
+                letter-spacing: 0.11em; text-transform: uppercase; }
+.relgroups .sep { color: var(--fg-3); padding: 0 2px; }
+.relhead .relnotes { font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; }
+.relmore { margin-top: 16px; border-top: 1px solid var(--line); }
+.relmore > summary { list-style: none; cursor: pointer; padding: 11px 0 0;
+                     font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.11em;
+                     text-transform: uppercase; color: var(--fg-3); }
+.relmore > summary::-webkit-details-marker { display: none; }
+.relmore > summary::before { content: "\25B8"; color: var(--green); display: inline-block;
+                             width: 15px; transition: transform 0.12s linear; }
+.relmore[open] > summary::before { transform: rotate(90deg); }
+.relmore > summary:hover { color: var(--fg); }
+.relmore .changetype:first-of-type { margin-top: 18px; }
+
+/* ------------------------------------------------------------ the comparison
+
+   Two renderings of the same data, and the split is deliberate. The matrix is
+   markers only, because seven columns of prose at 360px is seven columns of one
+   word per line; the sentences and their sources live below it, one block per
+   row, in a grid that collapses to a single column like every other list here.
+
+   `min-width` on the matrix is load-bearing and not a guess. `table` here is
+   `width: 100%`, which means a narrow viewport does not overflow the wrapper: it
+   *squeezes*, and at 390px the label column reached one character per line and
+   the thirteen rows became six thousand pixels tall. A minimum width makes it
+   overflow instead, which `.tablewrap`'s `overflow-x: auto` then scrolls. The
+   value is the row's own content: 190px of label plus seven marker columns. */
+.cmp { min-width: 640px; }
+.cmp th:first-child, .cmp td:first-child { min-width: 190px; }
+.cmp td:first-child { font-family: inherit; font-size: 13.5px; color: var(--fg-2); }
+.cmp td:first-child a { color: var(--fg); }
+.cmp th.tool, .cmp td.c { text-align: center; }
+.cmp th.tool.self, .cmp td.c.self { background: var(--panel); }
+.cmp td.c { font-family: var(--mono); font-size: 12.5px; white-space: nowrap;
+            padding-left: 4px; padding-right: 4px; }
+.v-yes { color: var(--green); }
+.v-partial { color: var(--orange); }
+.v-no, .v-unclear { color: var(--fg-3); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 14px;
+          font-family: var(--mono); font-size: 12px; color: var(--fg-3); }
+.legend b { font-weight: 400; }
+.loseflag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.09em;
+            text-transform: uppercase; color: var(--orange); }
+.cmprow li { display: grid; grid-template-columns: 30px 132px minmax(0, 1fr); gap: 4px 16px;
+             padding: 12px 0; border-top: 1px solid var(--line); }
+.cmprow li:first-child { border-top: 0; }
+.cmprow .m { font-family: var(--mono); font-size: 12.5px; }
+.cmprow .who { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.cmprow li.self .who { color: var(--green); }
+.cmprow .d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.cmprow .cite { display: block; margin-top: 4px; font-size: 11.5px; color: var(--fg-3); }
+.cmprow .cite a { color: var(--fg-3); }
+@media (max-width: 700px) {
+  .cmprow li { grid-template-columns: 30px minmax(0, 1fr); }
+  .cmprow .d { grid-column: 2 / -1; }
+}
+
+/* -------------------------------------------------- the agent-onboarding block
+
+   Prominent by position rather than by colour: it sits directly under the lede,
+   above the section nav, and takes the panel treatment the roadmap's boundary
+   panel already uses. It is the first thing on the page because the reader most
+   likely to act on it is the one who has not decided to read anything yet. */
+.agentbox { border: 1px solid var(--line-2); background: var(--panel);
+            padding: clamp(15px, 2.6vw, 22px); margin-top: clamp(20px, 3vw, 28px); }
+.agentbox h2 { font-size: clamp(15px, 2vw, 17px); }
+.agentbox .prose { margin-top: 8px; }
+.agentbox .code { margin-top: 13px; }
+.agentbox .code pre { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+
+/* -------------------------------------------------------------- quick starts */
+.steps { counter-reset: step; margin-top: 12px; }
+.steps li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px;
+            padding: 7px 0; color: var(--fg-2); font-size: 14.5px; line-height: 1.58;
+            counter-increment: step; }
+.steps li::before { content: counter(step) "."; font-family: var(--mono);
+                    font-size: 12.5px; color: var(--green); }
+.steps b { color: var(--fg); }
+.proof { margin-top: 12px; color: var(--fg-2); font-size: 14px; line-height: 1.58; }
+.proof b { color: var(--fg); font-family: var(--mono); font-size: 11.5px;
+           letter-spacing: 0.11em; text-transform: uppercase; }
+
+/* ------------------------------------------------------------------ the blog
+
+   Posts render inline on the index, each under its own `id`, which is the same
+   fragment contract `/docs/#<slug>` carries. A post per page would mean pages
+   `tools/check.mjs` never discovers, since it walks one directory level. */
+.post { margin-top: clamp(34px, 5vw, 48px); }
+.post .meta { color: var(--fg-3); font-family: var(--mono); font-size: 12px;
+              letter-spacing: 0.06em; margin-top: 4px; }
+.post .prose, .post .bullets, .post table { max-width: 74ch; }
+.post h3 { margin-top: 24px; font-size: clamp(15px, 2vw, 17px); }
 </style>
 </head>
 <body>
@@ -455,21 +571,168 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 <main>
 <section class="page">
   <div class="wrap">
-    <div class="kick">how it works, in its own words</div>
+    <div class="kick">install it, use it, then read why</div>
     <h1>Documentation</h1>
-    <div class="lede"><p>swe-mux is documented in the repository, beside the code, and this index is generated from those documents rather than rewritten beside them. Each entry links to the document itself; the summary is the document's own opening line. <b>These are design documents.</b> They state what a subsystem is, the invariants it holds, and the decisions it has already made, which is what you want when a behaviour surprises you and not what you want on your first ten minutes - for that, the in-app tour and <code>mux doctor</code> come first.</p><p>Paths under each title are relative to <code>.docs/</code>, and a bare filename means <code>.docs/design/features/</code>. The link is the whole path.</p></div>
+    <div class="lede"><p>Three things live on this page. <b>Quick starts</b> for the four tasks a new install hits first. <b>Features and settings</b>, which says what each part does and which screen its controls are on. And the <b>reference index</b>, generated from the design documents in the repository rather than rewritten beside them.</p><p>The reference documents are written for whoever maintains a subsystem next. They state invariants and the decisions already made, which is what you want when a behaviour surprises you and not what you want in your first ten minutes. For that, start above and keep <code>mux doctor</code> to hand.</p></div>
+    <div class="agentbox">
+      <div class="relhead"><h2>Have an agent set it up</h2><span class="fill"></span></div>
+      <p class="prose">Paste this to Claude Code, Codex, or any agent that can fetch a URL. It reads a guide written for that job: install, first run, the concepts worth explaining, and what leaves the machine.</p>
+      <div class="code"><pre>Help me understand and set up swe-mux. Read https://swemux.dev/agent-guide.md first, then walk me through it step by step.</pre></div>
+      <p class="note">The guide is <a href="../agent-guide.md"><code>https://swemux.dev/agent-guide.md</code></a>, and it is plain Markdown rather than a page, so an agent gets the text and not a layout. Reading it costs nothing and it will tell your agent to ask before it installs anything.</p>
+    </div>
     <nav class="toc" aria-label="Documentation sections">
-      <a href="#sec-overview">overview</a>
-      <a href="#sec-sessions">sessions and terminals</a>
-      <a href="#sec-workbench">projects and the workbench</a>
-      <a href="#sec-history">history and transcripts</a>
-      <a href="#sec-control-plane">the control plane</a>
-      <a href="#sec-queues">queues, messaging, and landing</a>
-      <a href="#sec-voice">voice, assistant, and alerts</a>
-      <a href="#sec-accounts">accounts, usage, and budgets</a>
-      <a href="#sec-running">running it</a>
-      <a href="#sec-reference">technical reference</a>
+      <a href="#sec-quickstart">quick starts</a>
+      <a href="#guide-sessions">sessions, terminals, and status</a>
+      <a href="#guide-workbench">projects and the workbench</a>
+      <a href="#guide-queue">queues, messaging, and landing</a>
+      <a href="#guide-git">git and history</a>
+      <a href="#guide-control-plane">the control plane</a>
+      <a href="#guide-voice">voice, alerts, and the assistant</a>
+      <a href="#guide-accounts">accounts, usage, and running it</a>
+      <a href="#sec-overview">reference: overview</a>
+      <a href="#sec-sessions">reference: sessions and terminals</a>
+      <a href="#sec-workbench">reference: projects and the workbench</a>
+      <a href="#sec-history">reference: history and transcripts</a>
+      <a href="#sec-control-plane">reference: the control plane</a>
+      <a href="#sec-queues">reference: queues, messaging, and landing</a>
+      <a href="#sec-voice">reference: voice, assistant, and alerts</a>
+      <a href="#sec-accounts">reference: accounts, usage, and budgets</a>
+      <a href="#sec-running">reference: running it</a>
+      <a href="#sec-reference">reference: technical reference</a>
     </nav>
+    <div class="docsec" id="sec-quickstart">
+      <div class="head"><span class="n">#</span><h2>Quick starts</h2><span class="fill"></span></div>
+      <p class="prose">Four tasks, in the order a new install hits them. Every command here is one that exists today; where a claim is about a default, the default is the one shipping.</p>
+      <div class="rel" id="quickstart-install">
+        <div class="relhead"><h2>Install it, and see the workspace</h2><span class="fill"></span></div>
+        <p class="prose">Ten minutes, and it needs no checkout and no Node. The published wheel is pure Python and already carries the built frontend.</p>
+        <ol class="steps">
+          <li><span>Check you have <b>Python 3.12 or newer</b>: <code>python --version</code>.</span></li>
+          <li><span>Install it. <code>uv tool install swe-mux</code> is the recommended form and leaves <code>mux</code>, <code>muxd</code>, and <code>swe-mux</code> on your PATH globally. <code>pipx install swe-mux</code> does the same without uv.</span></li>
+          <li><span><b>On Windows, take the desktop extra instead:</b> <code>uv tool install "swe-mux[desktop]"</code>. That is what adds the native window and the tray icon; without it the <code>swe-mux</code> command exists and fails on a missing import.</span></li>
+          <li><span>Start the daemon: <code>muxd</code>. On Windows with the extra, <code>swe-mux</code> opens the same thing in a window.</span></li>
+          <li><span>Open <code>http://127.0.0.1:8765</code>.</span></li>
+          <li><span>Create a Project and point it at a folder you already work in. Nothing else works until there is one, and nothing is spawned until you ask for it.</span></li>
+        </ol>
+        <p class="proof"><b>It worked when</b> Run <code>mux doctor</code>. It is read-only, and it reports on the daemon, the supervisor, the frontend build, the agent CLIs it can detect, the tailnet listener, and the background loops. It is the command that tells installed from working.</p>
+      </div>
+      <div class="rel" id="quickstart-session">
+        <div class="relhead"><h2>Run your first agent session</h2><span class="fill"></span></div>
+        <p class="prose">There is no special ritual for starting an agent. You open a terminal and type the command you already type.</p>
+        <ol class="steps">
+          <li><span>With a Project selected, press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>. That opens a real terminal at the Project's root.</span></li>
+          <li><span>Type <code>claude</code>, <code>codex</code>, or whichever CLI you use, normally. swe-mux puts its own launchers first on that terminal's PATH, so the ordinary command <b>promotes the terminal in place</b>: same pane, same scrollback, now carrying a transcript, a status, a queue, and a context meter.</span></li>
+          <li><span>Give it something to do, then watch the session's status. Working, ready, awaiting approval, and blocked mean the same thing whichever vendor's CLI produced them.</span></li>
+          <li><span>While it is mid-turn, open the <b>Queue</b> tab in the utility drawer and stage your next message. It is durable and head-of-line, and <b>automatic delivery is off by default</b>: a queued message waits for you to send it.</span></li>
+          <li><span>Use the <b>Run</b> menu for anything you did not want to type: another agent, a shell, a worktree session, or a task imported from the repository.</span></li>
+        </ol>
+        <p class="proof"><b>It worked when</b> The pane's status strip stops saying <em>working</em> and the transcript tab has something in it. If a session sits on <em>awaiting</em>, that is the agent waiting on you rather than a stall.</p>
+      </div>
+      <div class="rel" id="quickstart-cli">
+        <div class="relhead"><h2>Add an agent CLI</h2><span class="fill"></span></div>
+        <p class="prose">swe-mux does not install, manage, authenticate, or proxy your agent CLIs. It finds the ones you already have.</p>
+        <ol class="steps">
+          <li><span>Install the CLI the vendor's own way, outside swe-mux, and log into it there. Your subscription and your agreement stay with that vendor.</span></li>
+          <li><span>Check swe-mux can see it: <code>mux harnesses</code> lists every harness in the registry with its detection state, and Settings, Harnesses shows the same thing with the executable each one resolved to.</span></li>
+          <li><span>If it resolved to the wrong binary, or to none, set the path for that harness in Settings, Harnesses. That is the usual fix on a machine with several installs.</span></li>
+          <li><span>Open a terminal in a Project and run it. A harness the registry knows gets normalized status, transcripts, history, and account switching on top.</span></li>
+          <li><span><b>A CLI the registry has never heard of still works.</b> It runs in a real pseudoterminal exactly as it does outside swe-mux; what it does not get is the layer.</span></li>
+        </ol>
+        <p class="proof"><b>It worked when</b> <code>mux harnesses</code> shows it detected, and typing its command in a Project terminal produces an agent session rather than a plain shell.</p>
+      </div>
+      <div class="rel" id="quickstart-phone">
+        <div class="relhead"><h2>Reach it from your phone</h2><span class="fill"></span></div>
+        <p class="prose">The phone client is the same application, not a companion, and it goes over your own tailnet with no relay and no swe-mux login.</p>
+        <ol class="steps">
+          <li><span>Install Tailscale on the host machine and on the phone, on the same tailnet.</span></li>
+          <li><span>Leave the daemon running. It listens on loopback and on the machine's detected Tailscale address; <code>muxd --local-only</code> is how you stop that.</span></li>
+          <li><span>On the phone, open the machine's <code>.ts.net</code> hostname over HTTPS. Turn <b>Use Tailscale DNS</b> on, and leave Android's Private DNS off or automatic: the certificate is bound to the hostname, so the raw <code>100.x</code> address cannot serve HTTPS.</span></li>
+          <li><span>Install it to the home screen when the browser offers. It is a progressive web app, so it gets its own window and can receive push.</span></li>
+          <li><span><b>HTTPS is not optional if you want the microphone or the clipboard</b>, because browsers restrict both outside a secure context. swe-mux puts Tailscale Serve on 443 in front of the daemon for exactly this.</span></li>
+        </ol>
+        <p class="proof"><b>It worked when</b> The workspace renders on the phone with your Projects in it. Understand the consequence before you leave it running: <b>Tailscale policy is the entire access boundary</b>, and any device your tailnet admits has terminal and code-execution authority on that host.</p>
+      </div>
+    </div>
+    <div class="docsec" id="guide-sessions">
+      <div class="head"><span class="n">#</span><h2>Sessions, terminals, and status</h2><span class="fill"></span></div>
+      <p class="prose">Everything else is built on swe-mux owning the pseudoterminal rather than wrapping the program inside it.</p>
+      <ul class="flat">
+        <li><b>Sessions that outlive the app</b><span>A supervisor process separate from the daemon and the UI holds every terminal, so restarting the daemon or rebuilding the desktop app leaves the agents working. Reconnecting replays only the bytes you missed. A session whose process did end stays readable rather than disappearing. <span class="src">Settings, Terminals &middot; <a href="#sessions">reference</a></span></span></li>
+        <li><b>One status vocabulary</b><span>Working, ready, awaiting approval, or blocked, meaning the same thing across vendors. It is read from provider hooks, the transcript, the terminal, and the CLI's own state files, and every transition is kept. <b>Awaiting is the one to watch</b>: it means the agent is waiting on you. <span class="src">the session's status strip &middot; <a href="#status-detection">reference</a></span></span></li>
+        <li><b>Approvals</b><span>When a harness asks permission, the decision is made from its structured request rather than from what is on screen, and there is a floor no configuration can reach past. swe-mux never decides to deny; that stays yours. <span class="src">Settings, Prompt queue, Approvals &middot; <a href="#approvals">reference</a></span></span></li>
+        <li><b>Multi-device terminals</b><span>One session can be attached from several devices at once. Exactly one connection may write, and the terminal size is arbitrated rather than fought over, so the phone does not reflow the desktop. <span class="src">Settings, Terminals &middot; <a href="#terminal-input">reference</a></span></span></li>
+        <li><b>Launch profiles</b><span>Named shell and agent launches: which executable, which arguments, which working directory. A WSL distro shell is a profile like any other, and the WSL agent bridge reports whether the distro can actually reach the daemon rather than assuming it. <span class="src">Settings, Harnesses &middot; <a href="#launch-profiles">reference</a></span></span></li>
+      </ul>
+    </div>
+    <div class="docsec" id="guide-workbench">
+      <div class="head"><span class="n">#</span><h2>Projects and the workbench</h2><span class="fill"></span></div>
+      <p class="prose">A Project binds a folder to everything else: sessions, layout, notes, files, history, and its own settings.</p>
+      <ul class="flat">
+        <li><b>Projects and Groups</b><span>Point a Project at a folder you already work in. Groups are optional sidebar organization above them. Most per-Project switches live here rather than globally, which is what lets the control plane be on for one repository and off for the rest. <span class="src">Settings, Projects &middot; <a href="#projects">reference</a></span></span></li>
+        <li><b>Panes, tabs, and splits</b><span>A mixed workspace of panes, tabs, and splits, with drag and drop. Desktop split geometry is durable Project state; the phone renders a single-pane projection of the same tree rather than a second layout. <span class="src">the workspace itself &middot; <a href="#workspace-layout">reference</a></span></span></li>
+        <li><b>Notes, files, and watches</b><span>Project-owned notes in a real Markdown editor, a file browser with editors, ignore rules, and leased non-recursive watches. Notes and files both open into a pane rather than only into the drawer. <span class="src">the Notes and Files drawer tabs &middot; <a href="#project-resources">reference</a></span></span></li>
+        <li><b>The Run menu and imported tasks</b><span>Starts an agent, a shell, a worktree session, or a task discovered in the repository: VS Code tasks, root <code>package.json</code> scripts, and <code>.swe-mux/actions.toml</code>. <b>An imported task stays inert until its exact current bytes are approved</b>, and any edit revokes that. <span class="src">the Run menu, and Settings, Projects &middot; <a href="#project-actions">reference</a></span></span></li>
+        <li><b>Processes and previews</b><span>Whatever your sessions started, and what each one is serving. A local dev server is proxied through the daemon's own URL, HMR included, so a phone never needs a raw port. Static documents in the checkout can be previewed the same way under a sandbox policy. <span class="src">the Processes drawer tab &middot; <a href="#processes-and-previews">reference</a></span></span></li>
+        <li><b>Prompt templates</b><span>Saved reusable messages. Selecting one <b>inserts and never submits</b>, which is deliberate: a template is text, not an action. <span class="src">the Actions drawer tab &middot; <a href="#prompt-library">reference</a></span></span></li>
+      </ul>
+    </div>
+    <div class="docsec" id="guide-queue">
+      <div class="head"><span class="n">#</span><h2>Queues, messaging, and landing</h2><span class="fill"></span></div>
+      <p class="prose">Getting work to an agent that is busy, and getting a finished branch onto the trunk, without either of them happening behind your back.</p>
+      <ul class="flat">
+        <li><b>The prompt queue</b><span>Stage ordered messages against a session that is mid-turn. It is durable, head-of-line, and bound to the conversation rather than to the pane. <b>Automatic delivery is off by default</b>, and when you do turn it on it waits for a readiness gate and a stability window rather than for a binary done signal. <span class="src">the Queue drawer tab, and Settings, Prompt queue &middot; <a href="#prompt-queue">reference</a></span></span></li>
+        <li><b>Auto-delivery, when you want it</b><span>Per-conversation, with quiet hours, an emergency pause, an expiry on each item, and a cap on consecutive sends. It is the setting to understand before turning on, and the defaults are the conservative ones. <span class="src">Settings, Prompt queue, Auto-delivery &middot; <a href="#auto-delivery">reference</a></span></span></li>
+        <li><b>Agent-to-agent messages</b><span>One session can put a message into another's queue. <b>A non-human sender's write ends at a human</b> unless the receiving session granted it standing permission or itself asked the question being answered. <span class="src">the Fleet Queue, and Settings, Prompt queue, Agent messaging &middot; <a href="#agent-messaging">reference</a></span></span></li>
+        <li><b>The land queue</b><span>Landing a finished worktree branch, one at a time: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only. Git refuses a fast-forward that would lose work, which is what makes the last step safe for a machine. A conflict or a failed gate goes back to the branch's own agent as a message. <span class="src">the Git drawer tab, Map &middot; <a href="#land-queue">reference</a></span></span></li>
+        <li><b>Scheduled runs</b><span>Cron, interval, or one-off. A schedule is a deferred press of a button you could have pressed yourself, so it goes through the ordinary spawn, resume, and queue paths and grows no second authority. Definitions stay on the machine rather than in the repository, so they do not arm themselves in every clone. <span class="src">the Schedule drawer tab &middot; <a href="#scheduled-runs">reference</a></span></span></li>
+      </ul>
+    </div>
+    <div class="docsec" id="guide-git">
+      <div class="head"><span class="n">#</span><h2>Git and history</h2><span class="fill"></span></div>
+      <p class="prose">What changed, who changed it, and being able to go back to the conversation that produced it.</p>
+      <ul class="flat">
+        <li><b>The worktree map</b><span>One row per worktree, with its files, its changes, and the live sessions standing in it. Creating and removing worktrees is here, and removal is declined rather than forced wherever Git itself would refuse. <span class="src">the Git drawer tab, Map &middot; <a href="#git">reference</a></span></span></li>
+        <li><b>Commit provenance</b><span>Which session and which conversation produced a commit, split into committer and contributor, with a confidence. It is drawn from deterministic capture rather than from the agent's account of its own work, which is what makes it worth reading after a batch landing. <span class="src">the Git drawer tab, Provenance &middot; <a href="#tier0-facts">reference</a></span></span></li>
+        <li><b>Cross-vendor history</b><span>One search and one resume across every supported harness. Native transcript directories are reconciled at startup and <b>never moved, rewritten, or deleted</b>. A Claude transcript is read as the branching graph it actually is, so a retry does not silently join two conversations. <span class="src">the History browser &middot; <a href="#history">reference</a></span></span></li>
+      </ul>
+    </div>
+    <div class="docsec" id="guide-control-plane">
+      <div class="head"><span class="n">#</span><h2>The control plane</h2><span class="fill"></span></div>
+      <p class="prose">The part that decides what you look at. <b>It is off by default, per Project</b>, and nothing in it can type, approve, or spawn.</p>
+      <ul class="flat">
+        <li><b>Deterministic facts</b><span>Content hashes computed at the tool boundary rather than by reading the file back, parsed test outcomes, git tree hashes, and write-then-read lineage. This is the substrate everything else reads, and it is evidence rather than the agent's own account. <span class="src">Settings, Automation &middot; <a href="#tier0-facts">reference</a></span></span></li>
+        <li><b>Model-free detectors</b><span>Loops and stalls, claims declared but not verified, documentation debt, and provenance gaps. No model runs, so they cost nothing per session and cannot hallucinate a finding. <span class="src">the Activity drawer tab, Findings &middot; <a href="#deterministic-consumers">reference</a></span></span></li>
+        <li><b>Attention ranking</b><span>Ranked items with <b>a hard daily interrupt budget</b>, four a day by default. Incidents merge rather than repeat, demotion rules are mined and expire, and the count of what was suppressed is always shown rather than hidden. <span class="src">the Alerts drawer tab &middot; <a href="#attention-ranking">reference</a></span></span></li>
+        <li><b>Automation observers</b><span>Model-backed observers that watch a run and report. They <b>can never type, approve, spawn, execute a script, or change a Project</b>, which is structural rather than a policy setting. Every one is gated by a per-Project opt-in and an install-wide ceiling, and each carries a budget. <span class="src">the Automation dashboard, Policy &middot; <a href="#automation">reference</a></span></span></li>
+        <li><b>The scan timeline</b><span>A narration of what a session did during a run, with per-run grants and budgets, so it is readable later without re-reading the transcript. No scan can be triggered from an agent-facing tool, because a read costs nothing and a scan spends your budget. <span class="src">the Activity drawer tab, Timeline &middot; <a href="#scan-timeline">reference</a></span></span></li>
+        <li><b>The code graph</b><span>A tree-sitter structural graph of the repository, behind blast-radius, navigation, context, and test-gap reads, and behind the per-session change map. <span class="src">the Activity drawer tab, Changes &middot; <a href="#code-graph">reference</a></span></span></li>
+        <li><b>What agents can read back</b><span>A per-session MCP server that lets an agent pull from the control plane: sibling status, prior resolutions, dead ends, provenance, Project notes. Its writes are bounded to staging a message, drafting a spawn request for a human, arming a watch, and interrupting or ending a session behind a per-Project grant. <span class="src">Settings, Automation &middot; <a href="#mux-mcp">reference</a></span></span></li>
+      </ul>
+    </div>
+    <div class="docsec" id="guide-voice">
+      <div class="head"><span class="n">#</span><h2>Voice, alerts, and the assistant</h2><span class="fill"></span></div>
+      <p class="prose">Driving it without a keyboard, and being told when something needs you.</p>
+      <ul class="flat">
+        <li><b>Read aloud</b><span>A summarized or verbatim slice of the last turn, spoken by the OS voice engine, a local model, or an explicitly acknowledged external provider. One policy in three layers: a master switch, per-session generation, and a per-device autoplay rule where the focused session plays and every other one holds its clip rather than talking over you. <span class="src">Settings, Voice, Read aloud &middot; <a href="#voice">reference</a></span></span></li>
+        <li><b>Hands-free conversation</b><span>Browser capture, on-device voice activity detection, and local transcription, with configurable wake words and a fixed set of commands. Spoken navigation addresses Projects and sessions by number. It needs a secure context, which on a phone means the HTTPS step in the quick start above. <span class="src">Settings, Voice, Talk &amp;amp; dictation &middot; <a href="#voice">reference</a></span></span></li>
+        <li><b>The Mux assistant</b><span>Ask for something in words. The model proposes names, deterministic code resolves and executes them through the paths a button would have used, and <b>the confirmation floor for a consequential action is not configurable</b>. <span class="src">Settings, Voice, Mux assistant &middot; <a href="#assistant">reference</a></span></span></li>
+        <li><b>Alerts and push</b><span>Web push to a phone, with per-device preferences, plus sounds. Device presence decides which device you are actually at, once, for the whole application, rather than each feature guessing separately. <span class="src">Settings, Alerts &middot; <a href="#notifications">reference</a></span></span></li>
+      </ul>
+    </div>
+    <div class="docsec" id="guide-accounts">
+      <div class="head"><span class="n">#</span><h2>Accounts, usage, and running it</h2><span class="fill"></span></div>
+      <p class="prose">Where the money and the network boundaries are.</p>
+      <ul class="flat">
+        <li><b>Provider accounts</b><span>Save, relabel, reauthenticate, switch, and remove Claude and Codex logins, with subscription-window polling. Only authentication is copied and switching is always an explicit act. It is for <b>one person switching between accounts they own and pay for</b>, not pooling. <span class="src">Settings, Accounts, Provider accounts &middot; <a href="#provider-accounts">reference</a></span></span></li>
+        <li><b>Where a model call goes</b><span>Every model setting is edited in one place and each feature shows a read-only row naming the model it resolved to. Changing endpoint is the operation that touches all of them at once, which is why they are together rather than beside the features they serve. <span class="src">Settings, Accounts, Models &middot; <a href="#usage">reference</a></span></span></li>
+        <li><b>Usage, and the three pots</b><span>Agent spend, metered automation spend, and provider quota. <b>They are never summed</b>, because one is a subscription reconstructed from transcripts, one is a key billed by the call, and one is not money at all. Every figure carries the basis it was drawn on. <span class="src">Settings, Usage &middot; <a href="#usage">reference</a></span></span></li>
+        <li><b>Budgets</b><span>A cap is tokens, dollars, or both, per feature. A dollar cap cannot bind against a provider that reports no cost, so absent cost is recorded as unmeasured rather than as zero and totals drawn over it read as a floor. <span class="src">Settings, Usage &middot; <a href="#budgets">reference</a></span></span></li>
+        <li><b>Remote access</b><span>Loopback plus an optional Tailscale listener carrying the same UI and API. There is no swe-mux login, so <b>Tailscale policy is the entire access boundary</b>. Binding <code>0.0.0.0</code>, a LAN interface, port forwarding, and Funnel are unsupported rather than merely discouraged. <span class="src">Settings, Remote &middot; <a href="#remote-access">reference</a></span></span></li>
+        <li><b>The desktop shell and updates</b><span>On Windows, a native window, a tray supervisor, login startup, and a frozen bundle that can rebuild and redeploy itself while live sessions keep running. The daily release check is one request for a static file and one switch turns it off; installing an update is a separate act that verifies a hash before staging anything. <span class="src">Settings, Diagnostics &middot; <a href="#desktop-shell">reference</a></span></span></li>
+      </ul>
+    </div>
+    <div class="sub-h">Reference</div>
+    <p class="prose">The design documents themselves, in the repository where they are already public. Each entry is the document's own title and its own opening line; nothing here is written for this page. Paths under each title are relative to <code>.docs/</code>, and a bare filename means <code>.docs/design/features/</code>. The link is the whole path.</p>
     <div class="docsec" id="sec-overview">
       <div class="head"><span class="n">#</span><h2>Overview</h2><span class="fill"></span></div>
       <ul class="doclist">
