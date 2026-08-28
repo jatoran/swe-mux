@@ -178,6 +178,5 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-<!-- TODO(release): OWNER - the GitHub organization is undecided; replace it in both links. -->
-[Unreleased]: https://github.com/OWNER/swe-mux/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/OWNER/swe-mux/releases/tag/v0.1.0
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.0

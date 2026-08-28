@@ -499,10 +499,10 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
 
   The `docs` link in the top bar is filled and points at `/docs/`.
   The repository URL is filled: `github.com/jatoran/swe-mux`, decided 2026-08-27.
-- **The `OWNER` placeholder is gone from this directory but not from the repository.**
-  `CHANGELOG.md`, `README.md`, `SECURITY.md`, `pyproject.toml`, and `.docs/development/RELEASE_MANUAL_TASKS.md` still carry `github.com/OWNER/swe-mux`, and they are not this directory's to edit.
-  Because the changelog page renders `CHANGELOG.md`, `build.py` normalizes any repository URL it lifts through `repo_url()` and then asserts that no `/OWNER/` reaches a page.
-  When those files are fixed the substitution stops matching on its own, and both it and this note can go.
+- **The `OWNER` placeholder is gone from the whole repository** (swept 2026-08-27, after the owner was decided).
+  `build.py` keeps normalizing any repository URL it lifts through `repo_url()` and still asserts that no `/OWNER/` reaches a page.
+  The substitution now matches nothing, which is the point: it is a standing guard against a placeholder reappearing through a source this directory does not control, such as `CHANGELOG.md`, which the changelog page renders.
+  Keep the assertion even though it currently fires on nothing.
 - **Replace the install commands.** `get.swe-mux.dev` does not exist. The `source` flow is the only real one today, and its full version is the landing page's own Install section (`11` on the page, not in this file).
   The clone URL no longer says `REPLACE`: it resolves to `github.com/jatoran/swe-mux`, in the hero command and in the footer, alongside the license links added in Phase 10.5.
   If the project is ever published under an organisation rather than that account, both places and the footer's two license links change together.
