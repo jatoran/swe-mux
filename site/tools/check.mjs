@@ -45,8 +45,10 @@ const url = (p) => pathToFileURL(p.file).href
 
 // Every placeholder value the site is allowed to carry. Mirrors TODO_VALUES in
 // `tools/build.py` and the list in `README.md` section 11; an unfilled URL that
-// is not one of these is a placeholder nobody wrote down.
-const TODO_VALUES = new Set(['TODO(release): OWNER', 'blog URL', 'repository URL'])
+// is not one of these is a placeholder nobody wrote down. A value leaves this
+// list the moment its URL is decided, because a placeholder standing in for
+// something known is just a dead link.
+const TODO_VALUES = new Set(['blog URL'])
 
 const built = readFileSync(join(here, 'build.py'), 'utf8')
 for (const page of PAGES) {

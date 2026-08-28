@@ -410,7 +410,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <a href="../acknowledgements/">acknowledgements</a>
     </nav>
     <div class="util">
-      <a href="https://github.com/OWNER/swe-mux" data-todo="TODO(release): OWNER" aria-label="Source on GitHub" title="Source on GitHub">
+      <a href="https://github.com/jatoran/swe-mux" aria-label="Source on GitHub" title="Source on GitHub">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         <span class="lbl">github</span>
       </a>
@@ -444,15 +444,15 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Overview</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="architecture">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/architecture.md" data-todo="TODO(release): OWNER">Architecture</a><span class="src">design/architecture.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/architecture.md">Architecture</a><span class="src">design/architecture.md</span></div>
           <span class="d"></span>
         </li>
         <li id="data-model">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/data-model.md" data-todo="TODO(release): OWNER">Data model</a><span class="src">design/data-model.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/data-model.md">Data model</a><span class="src">design/data-model.md</span></div>
           <span class="d">Durable data and ownership.</span>
         </li>
         <li id="interfaces">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/interfaces.md" data-todo="TODO(release): OWNER">Interfaces</a><span class="src">design/interfaces.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/interfaces.md">Interfaces</a><span class="src">design/interfaces.md</span></div>
           <span class="d">All JSON APIs are rooted at <code>/api</code>. PTY and event streams use <code>/pty/{session_id}</code> and <code>/events</code> WebSockets.</span>
         </li>
       </ul>
@@ -461,35 +461,35 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Sessions and terminals</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="sessions">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/sessions.md" data-todo="TODO(release): OWNER">Sessions and terminals</a><span class="src">sessions.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/sessions.md">Sessions and terminals</a><span class="src">sessions.md</span></div>
           <span class="d">Daemon-owned interactive ConPTY processes with immutable Project ownership, bounded replay, and reattachable browser viewports.</span>
         </li>
         <li id="session-recovery">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/session-recovery.md" data-todo="TODO(release): OWNER">Cold and inactive session recovery</a><span class="src">session-recovery.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/session-recovery.md">Cold and inactive session recovery</a><span class="src">session-recovery.md</span></div>
           <span class="d">Durable per-session state that outlives both the daemon and the PTY supervisor, so sessions whose processes died without anyone recording it come back as visible, dead, resumable rows instead of vanishing.</span>
         </li>
         <li id="terminal-input">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/terminal-input.md" data-todo="TODO(release): OWNER">Multi-device terminal input</a><span class="src">terminal-input.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/terminal-input.md">Multi-device terminal input</a><span class="src">terminal-input.md</span></div>
           <span class="d">One session can be attached from several devices at once, and two of the things they share cannot be shared: who may type into the PTY, and how big it is.</span>
         </li>
         <li id="launch-profiles">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/launch-profiles.md" data-todo="TODO(release): OWNER">Launch profiles</a><span class="src">launch-profiles.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/launch-profiles.md">Launch profiles</a><span class="src">launch-profiles.md</span></div>
           <span class="d">A launch profile is a named executable/argv/environment definition for one backend.</span>
         </li>
         <li id="backends">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/backends.md" data-todo="TODO(release): OWNER">Backend detection and observation</a><span class="src">backends.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/backends.md">Backend detection and observation</a><span class="src">backends.md</span></div>
           <span class="d">Adapters isolate spawn/resume syntax, transcript discovery, hook wiring, and graceful exit.</span>
         </li>
         <li id="status-detection">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/status-detection.md" data-todo="TODO(release): OWNER">Agent status detection and regression defense</a><span class="src">status-detection.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/status-detection.md">Agent status detection and regression defense</a><span class="src">status-detection.md</span></div>
           <span class="d">The user-visible session status (<code>starting | running | working | idle | awaiting | exited | crashed</code>, plus the <code>awaiting</code> sub-reason <code>approval | question | elicitation | rate_limit</code>) is a contract, not a heuristic: every state names the positive evidence that may set it, every transition is ledgered with that evidence and a proven/inferred classification, and the whole surface is reproduced from the golden corpus so status regressions fail CI.</span>
         </li>
         <li id="delivery-readiness">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/delivery-readiness.md" data-todo="TODO(release): OWNER">Evidence replay and delivery readiness</a><span class="src">delivery-readiness.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/delivery-readiness.md">Evidence replay and delivery readiness</a><span class="src">delivery-readiness.md</span></div>
           <span class="d">The versioned replay corpus provides a deterministic regression boundary around every observed harness and a provider-neutral, read-only delivery classification.</span>
         </li>
         <li id="approvals">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/approvals.md" data-todo="TODO(release): OWNER">Control-plane approvals</a><span class="src">approvals.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/approvals.md">Control-plane approvals</a><span class="src">approvals.md</span></div>
           <span class="d">A per-conversation switch deciding what swe-mux answers on the agent's behalf when the harness asks for tool permission.</span>
         </li>
       </ul>
@@ -498,51 +498,51 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Projects and the workbench</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="projects">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/projects.md" data-todo="TODO(release): OWNER">Projects and Groups</a><span class="src">projects.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/projects.md">Projects and Groups</a><span class="src">projects.md</span></div>
           <span class="d">Projects are the durable catalog of canonical folders swe-mux can own.</span>
         </li>
         <li id="project-resources">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/project-resources.md" data-todo="TODO(release): OWNER">Project resources</a><span class="src">project-resources.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/project-resources.md">Project resources</a><span class="src">project-resources.md</span></div>
           <span class="d">Safe access to Project-owned notes, the global Scratchpad, a bounded Project file tree, revision-checked text editing, ignore patterns, host file-manager reveal, and leased filesystem watches.</span>
         </li>
         <li id="project-actions">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/project-actions.md" data-todo="TODO(release): OWNER">Project Actions</a><span class="src">project-actions.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/project-actions.md">Project Actions</a><span class="src">project-actions.md</span></div>
           <span class="d">The Project-level <b>Run</b> menu is the single launch surface for a new Claude, Codex, shell, custom terminal, worktree session, or an explicitly selected repository task.</span>
         </li>
         <li id="project-card">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/project-card.md" data-todo="TODO(release): OWNER">Project context card</a><span class="src">project-card.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/project-card.md">Project context card</a><span class="src">project-card.md</span></div>
           <span class="d">Project context is one user-owned Markdown file at <code>&lt;project&gt;/.swe-mux/project-context.md</code>.</span>
         </li>
         <li id="workspace-layout">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/workspace-layout.md" data-todo="TODO(release): OWNER">Workspace panes and tabs</a><span class="src">workspace-layout.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/workspace-layout.md">Workspace panes and tabs</a><span class="src">workspace-layout.md</span></div>
           <span class="d">One Project-owned mixed-view workspace.</span>
         </li>
         <li id="ui">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/ui.md" data-todo="TODO(release): OWNER">Browser shell and interaction</a><span class="src">ui.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/ui.md">Browser shell and interaction</a><span class="src">ui.md</span></div>
           <span class="d">The Project-first browser shell around the mixed-view workspace: persistent app identity, active-Project navigation, provider/resource status, viewport overlays, settings, focus, and responsive controls.</span>
         </li>
         <li id="prompt-library">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/prompt-library.md" data-todo="TODO(release): OWNER">Universal prompt library</a><span class="src">prompt-library.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/prompt-library.md">Universal prompt library</a><span class="src">prompt-library.md</span></div>
           <span class="d">Global and Project-scoped reusable text templates that can fill a focused terminal without submitting, executing, or becoming automation.</span>
         </li>
         <li id="processes-and-previews">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/processes-and-previews.md" data-todo="TODO(release): OWNER">Process ownership and previews</a><span class="src">processes-and-previews.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/processes-and-previews.md">Process ownership and previews</a><span class="src">processes-and-previews.md</span></div>
           <span class="d">Per-session descendant attribution and bounded resource/listener snapshots.</span>
         </li>
         <li id="git">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/git.md" data-todo="TODO(release): OWNER">Git awareness and worktrees</a><span class="src">git.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/git.md">Git awareness and worktrees</a><span class="src">git.md</span></div>
           <span class="d">Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.</span>
         </li>
         <li id="agent-context">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/agent-context.md" data-todo="TODO(release): OWNER">Agent Context</a><span class="src">agent-context.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/agent-context.md">Agent Context</a><span class="src">agent-context.md</span></div>
           <span class="d">Read-only Project/global agent instructions, memory, and manual Project-root sync.</span>
         </li>
         <li id="agent-environment">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/agent-environment.md" data-todo="TODO(release): OWNER">Agent Environment</a><span class="src">agent-environment.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/agent-environment.md">Agent Environment</a><span class="src">agent-environment.md</span></div>
           <span class="d">Passive session CLI tools, extensions, policies, and configuration inventory.</span>
         </li>
         <li id="configurator">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/configurator.md" data-todo="TODO(release): OWNER">Configurator agent</a><span class="src">configurator.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/configurator.md">Configurator agent</a><span class="src">configurator.md</span></div>
           <span class="d">A button that opens an ordinary agent session pointed at swe-mux itself.</span>
         </li>
       </ul>
@@ -551,11 +551,11 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>History and transcripts</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="history">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/history.md" data-todo="TODO(release): OWNER">History and events</a><span class="src">history.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/history.md">History and events</a><span class="src">history.md</span></div>
           <span class="d">SQLite indexes durable Claude/Codex run lifetimes and append-only daemon events.</span>
         </li>
         <li id="transcript-branches">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/transcript-branches.md" data-todo="TODO(release): OWNER">Transcript branches</a><span class="src">transcript-branches.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/transcript-branches.md">Transcript branches</a><span class="src">transcript-branches.md</span></div>
           <span class="d">A Claude transcript is an append-only <b>DAG</b>, not a list of turns.</span>
         </li>
       </ul>
@@ -564,39 +564,39 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>The control plane</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="tier0-facts">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/tier0-facts.md" data-todo="TODO(release): OWNER">Tier 0 deterministic facts</a><span class="src">tier0-facts.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/tier0-facts.md">Tier 0 deterministic facts</a><span class="src">tier0-facts.md</span></div>
           <span class="d">Durable, no-model capture of deterministic facts about agent sessions (file writes, commands, tests, git, tools) with pointers back to the immutable event log.</span>
         </li>
         <li id="deterministic-consumers">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/deterministic-consumers.md" data-todo="TODO(release): OWNER">Deterministic control-plane consumers</a><span class="src">deterministic-consumers.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/deterministic-consumers.md">Deterministic control-plane consumers</a><span class="src">deterministic-consumers.md</span></div>
           <span class="d">The first layer that turns captured Tier 0 facts into user-visible judgements, and it is deliberately <b>model-free</b>: every detector is a query over deterministic facts, spends no tokens, and writes nothing but annotations.</span>
         </li>
         <li id="code-graph">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/code-graph.md" data-todo="TODO(release): OWNER">Code-structure graph</a><span class="src">code-graph.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/code-graph.md">Code-structure graph</a><span class="src">code-graph.md</span></div>
           <span class="d">A deterministic, always-fresh graph of how the code connects: who imports whom, who calls whom, where each symbol is defined.</span>
         </li>
         <li id="attention-ranking">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/attention-ranking.md" data-todo="TODO(release): OWNER">Attention ranking</a><span class="src">attention-ranking.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/attention-ranking.md">Attention ranking</a><span class="src">attention-ranking.md</span></div>
           <span class="d">The layer that decides which of many concurrent sessions actually needs the human, and when.</span>
         </li>
         <li id="fleet-intelligence">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/fleet-intelligence.md" data-todo="TODO(release): OWNER">Fleet attention and intelligence</a><span class="src">fleet-intelligence.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/fleet-intelligence.md">Fleet attention and intelligence</a><span class="src">fleet-intelligence.md</span></div>
           <span class="d">Explainable cross-session evidence, attention routing, lineage, and user-confirmed review built on normalized events and read-only observer results.</span>
         </li>
         <li id="scan-timeline">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/scan-timeline.md" data-todo="TODO(release): OWNER">Scan timeline</a><span class="src">scan-timeline.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/scan-timeline.md">Scan timeline</a><span class="src">scan-timeline.md</span></div>
           <span class="d">The scan timeline is a read-only, run-scoped semantic index over bounded transcript deltas and deterministic Tier 0 facts.</span>
         </li>
         <li id="operational-telemetry">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/operational-telemetry.md" data-todo="TODO(release): OWNER">Durable operational evidence</a><span class="src">operational-telemetry.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/operational-telemetry.md">Durable operational evidence</a><span class="src">operational-telemetry.md</span></div>
           <span class="d">Durable, bounded observations for process identity, provider quota movement, reset evidence, quota/activity correlation, explicit context compaction, and explicit tool/skill activity.</span>
         </li>
         <li id="automation">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/automation.md" data-todo="TODO(release): OWNER">Universal hooks and OpenRouter observers</a><span class="src">automation.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/automation.md">Universal hooks and OpenRouter observers</a><span class="src">automation.md</span></div>
           <span class="d">Asynchronous, harness-neutral rules over normalized persisted mux events.</span>
         </li>
         <li id="automation-enablement">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/automation-enablement.md" data-todo="TODO(release): OWNER">Automation enablement</a><span class="src">automation-enablement.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/automation-enablement.md">Automation enablement</a><span class="src">automation-enablement.md</span></div>
           <span class="d">Per-project opt-in for control-plane automations, gated by a dependency graph and an install-wide ceiling.</span>
         </li>
       </ul>
@@ -605,27 +605,27 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Queues, messaging, and landing</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="prompt-queue">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/prompt-queue.md" data-todo="TODO(release): OWNER">Persistent manual prompt queue</a><span class="src">prompt-queue.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/prompt-queue.md">Persistent manual prompt queue</a><span class="src">prompt-queue.md</span></div>
           <span class="d">Durable, ordered messages staged against a target agent run, delivered through one typed operation, surviving daemon and browser restarts without duplicate delivery.</span>
         </li>
         <li id="auto-delivery">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/auto-delivery.md" data-todo="TODO(release): OWNER">Gated auto-delivery</a><span class="src">auto-delivery.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/auto-delivery.md">Gated auto-delivery</a><span class="src">auto-delivery.md</span></div>
           <span class="d">A bounded controller that presses "send next" on a session's prompt queue when - and only when - delivery readiness has been continuously <code>safe</code> for a held window.</span>
         </li>
         <li id="agent-messaging">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/agent-messaging.md" data-todo="TODO(release): OWNER">Agent messaging, the fleet queue, and drafted spawns</a><span class="src">agent-messaging.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/agent-messaging.md">Agent messaging, the fleet queue, and drafted spawns</a><span class="src">agent-messaging.md</span></div>
           <span class="d">Bounded messaging <em>between sessions that already exist</em>, plus a way for an agent to ask a human to create one.</span>
         </li>
         <li id="land-queue">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/land-queue.md" data-todo="TODO(release): OWNER">Land queue</a><span class="src">land-queue.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/land-queue.md">Land queue</a><span class="src">land-queue.md</span></div>
           <span class="d">Serialized, deterministic landing of a finished worktree branch onto its Project's trunk.</span>
         </li>
         <li id="scheduled-runs">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/scheduled-runs.md" data-todo="TODO(release): OWNER">Scheduled runs</a><span class="src">scheduled-runs.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/scheduled-runs.md">Scheduled runs</a><span class="src">scheduled-runs.md</span></div>
           <span class="d">A schedule does one of two things in one Project on its own, on a cron expression, on an interval, or once at a time.</span>
         </li>
         <li id="mux-mcp">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/mux-mcp.md" data-todo="TODO(release): OWNER">mux MCP: the agent return path (reads + bounded writes and session control)</a><span class="src">mux-mcp.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/mux-mcp.md">mux MCP: the agent return path (reads + bounded writes and session control)</a><span class="src">mux-mcp.md</span></div>
           <span class="d">A streamable-HTTP MCP endpoint (<code>POST /mcp</code>) hosted in the daemon that gives every spawned agent session visibility into the fleet - sibling sessions, their live status, bounded transcript reads, indexed search over conversation history, exact Agent Context sources, Project notes, cross-session memory reads, and request outcomes, plus the bounded write tools added in Phase 5 and the session-control tools added in Phase 7.6.</span>
         </li>
       </ul>
@@ -634,19 +634,19 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Voice, assistant, and alerts</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="voice">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/voice.md" data-todo="TODO(release): OWNER">Read aloud and hands-free conversation</a><span class="src">voice.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/voice.md">Read aloud and hands-free conversation</a><span class="src">voice.md</span></div>
           <span class="d">Optional per-session reply synthesis (TTS, "read aloud") plus a workspace-level, browser-captured Conversation mode (STT, "hands-free"), isolated from history, Project, and transcript correctness.</span>
         </li>
         <li id="assistant">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/assistant.md" data-todo="TODO(release): OWNER">The Mux assistant</a><span class="src">assistant.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/assistant.md">The Mux assistant</a><span class="src">assistant.md</span></div>
           <span class="d">A conversational operator for the whole workspace: the control plane given a chat surface and, behind the voice grammar's fallback tier, a voice.</span>
         </li>
         <li id="notifications">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/notifications.md" data-todo="TODO(release): OWNER">Session and reset alerts</a><span class="src">notifications.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/notifications.md">Session and reset alerts</a><span class="src">notifications.md</span></div>
           <span class="d">Alerts are normalized root-session events delivered through an optional sound channel in a live tab and an optional Web Push channel that can reach a locked phone.</span>
         </li>
         <li id="device-presence">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/device-presence.md" data-todo="TODO(release): OWNER">Device presence</a><span class="src">device-presence.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/device-presence.md">Device presence</a><span class="src">device-presence.md</span></div>
           <span class="d">Which device class the human is actually using right now, tracked per client connection and aggregated to <code>desktop</code> / <code>mobile</code>.</span>
         </li>
       </ul>
@@ -655,15 +655,15 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Accounts, usage, and budgets</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="provider-accounts">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/provider-accounts.md" data-todo="TODO(release): OWNER">Provider accounts</a><span class="src">provider-accounts.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/provider-accounts.md">Provider accounts</a><span class="src">provider-accounts.md</span></div>
           <span class="d">App-owned credential snapshots for harnesses that explicitly declare provider-account management, reconciled against one live system login per provider.</span>
         </li>
         <li id="usage">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/usage.md" data-todo="TODO(release): OWNER">Usage analytics</a><span class="src">usage.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/usage.md">Usage analytics</a><span class="src">usage.md</span></div>
           <span class="d">Optional cached historical token and cost summaries collected by the locally installed <code>ccusage</code> CLI.</span>
         </li>
         <li id="budgets">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/budgets.md" data-todo="TODO(release): OWNER">Spending budgets</a><span class="src">budgets.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/budgets.md">Spending budgets</a><span class="src">budgets.md</span></div>
           <span class="d">Every model-cost ceiling in the install has one shape, one editor, and one enforcement path.</span>
         </li>
       </ul>
@@ -672,11 +672,11 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Running it</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="remote-access">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/remote-access.md" data-todo="TODO(release): OWNER">Remote access</a><span class="src">remote-access.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/remote-access.md">Remote access</a><span class="src">remote-access.md</span></div>
           <span class="d">The same browser/API surface over localhost or a policy-controlled direct Tailscale listener, with optional Tailscale Serve for browser-recognized HTTPS.</span>
         </li>
         <li id="desktop-shell">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/design/features/desktop-shell.md" data-todo="TODO(release): OWNER">Windows desktop shell</a><span class="src">desktop-shell.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/design/features/desktop-shell.md">Windows desktop shell</a><span class="src">desktop-shell.md</span></div>
           <span class="d">An optional Windows WebView2 window and system-tray supervisor around the same Preact/aiohttp surface used by ordinary desktop and mobile browsers.</span>
         </li>
       </ul>
@@ -685,23 +685,23 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="head"><span class="n">#</span><h2>Technical reference</h2><span class="fill"></span></div>
       <ul class="doclist">
         <li id="technical-index">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/00_INDEX.md" data-todo="TODO(release): OWNER">Technical documentation</a><span class="src">technical/00_INDEX.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/00_INDEX.md">Technical documentation</a><span class="src">technical/00_INDEX.md</span></div>
           <span class="d">Implementation-facing rules supplement the product/design contracts in <code>../design/</code>. Read the design feature first, then the relevant technical page before changing code.</span>
         </li>
         <li id="technical-backend-packages">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/backend/packages.md" data-todo="TODO(release): OWNER">Backend package responsibilities</a><span class="src">technical/backend/packages.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/backend/packages.md">Backend package responsibilities</a><span class="src">technical/backend/packages.md</span></div>
           <span class="d">Where daemon code lives and how to modify it. The map is split by domain so a change touches one file; this page is the index, the dependency rules, and the composition boundary.</span>
         </li>
         <li id="technical-backend-sqlite">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/backend/sqlite.md" data-todo="TODO(release): OWNER">Shared SQLite concurrency</a><span class="src">technical/backend/sqlite.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/backend/sqlite.md">Shared SQLite concurrency</a><span class="src">technical/backend/sqlite.md</span></div>
           <span class="d">Shared SQLite operation rules.</span>
         </li>
         <li id="technical-frontend-packages">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/frontend/packages.md" data-todo="TODO(release): OWNER">Frontend package responsibilities</a><span class="src">technical/frontend/packages.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/frontend/packages.md">Frontend package responsibilities</a><span class="src">technical/frontend/packages.md</span></div>
           <span class="d">Where browser code lives and how to modify it. The map is split by domain so a change touches one file; this page is the index and the shared rules.</span>
         </li>
         <li id="technical-frontend-workspace-state">
-          <div class="t"><a href="https://github.com/OWNER/swe-mux/blob/master/.docs/technical/frontend/workspace-state.md" data-todo="TODO(release): OWNER">Workspace state and persistence</a><span class="src">technical/frontend/workspace-state.md</span></div>
+          <div class="t"><a href="https://github.com/jatoran/swe-mux/blob/master/.docs/technical/frontend/workspace-state.md">Workspace state and persistence</a><span class="src">technical/frontend/workspace-state.md</span></div>
           <span class="d"></span>
         </li>
       </ul>
@@ -728,13 +728,13 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div>
         <h4>source</h4>
-        <div><a href="https://github.com/OWNER/swe-mux" data-todo="TODO(release): OWNER">github.com/OWNER/swe-mux</a></div>
+        <div><a href="https://github.com/jatoran/swe-mux">github.com/jatoran/swe-mux</a></div>
         <div><code>.docs/design/00_OVERVIEW.md</code></div>
       </div>
       <div>
         <h4>license</h4>
-        <div><a href="https://github.com/OWNER/swe-mux/blob/master/LICENSE" data-todo="TODO(release): OWNER">Apache-2.0</a></div>
-        <div><a href="https://github.com/OWNER/swe-mux/blob/master/THIRD-PARTY-NOTICES.md" data-todo="TODO(release): OWNER">Third-party notices</a></div>
+        <div><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></div>
+        <div><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
       </div>
     </div>
     <p class="colophon"><span class="h">#</span> This page is generated by
