@@ -1,12 +1,30 @@
 """Where swe-mux is installed, and whether its commands can be reached.
 
-**Every Windows answer here is asserted from every host.** `install_location`
-takes its whole world as arguments - the platform flag, `PATH`, the scripts
-directory, the environment, and the existence probe - precisely so the Windows
-layouts, which are the ones that matter and the ones the development host cannot
-be trusted to represent, are described exactly on the Ubuntu and macOS legs too.
-A platform branch whose other side is never asserted is the bug class this whole
-work package is cleaning up after, so nothing below is skipped by host.
+**Every fixture here is shaped for the host that is running**, and that is the
+correction this file exists in its current form to record. It used to hand the
+detector Windows path strings from every leg on the theory that
+``detect_install_location(windows=True, ...)`` describes a Windows install
+exactly from anywhere. It does not, and cannot: `Path` renders separators for the
+platform that is *running*, `os.pathsep` is ``;`` on Windows and ``:`` everywhere
+else, and `os.path.normpath` only collapses backslashes on Windows. So on a Linux
+runner ``Path(r"C:\\Users\\ada\\.local\\bin")`` is one *relative* filename that
+happens to contain backslashes, ``"C:\\Windows;C:\\Users\\ada\\.local\\bin"``
+splits into three nonsense entries, and every derived answer is wrong - the
+assertion then measures the fixture rather than the code. Thirteen tests failed
+that way on both POSIX legs while the Windows gate stayed green.
+
+The rule that replaces it: **each host describes the install its own users get**,
+so the Ubuntu and macOS legs now assert the POSIX layout they were never
+covering, and the Windows leg still asserts every Windows answer. Where a
+behaviour genuinely differs by platform - `_same_path`'s case rule, the
+``setx`` / ``export`` line, whether ``install-shortcut`` is offered - the
+assertion names the host's own answer rather than pretending one host can speak
+for another.
+
+``windows=`` is still passed explicitly in a few places below, and only ever for
+an assertion that is **separator-independent** (how a path with a space is
+quoted, which PATH-fix line is emitted). Anything that joins, splits, or compares
+a path must be given host-shaped input.
 
 The two facts under test that a fresh install turns on:
 
@@ -20,9 +38,11 @@ The two facts under test that a fresh install turns on:
 
 from __future__ import annotations
 
-from pathlib import Path, PureWindowsPath
+import os
+from pathlib import Path
 
 from swe_mux import install_location
+from swe_mux.host_platform import IS_WINDOWS
 from swe_mux.install_location import (
     INSTALL_FROZEN,
     INSTALL_PIPX,
@@ -34,25 +54,74 @@ from swe_mux.install_location import (
     render_where,
 )
 
-# A uv tool install exactly as uv lays one out on Windows: the environment under
-# the tool directory (with its receipt), the entry points inside that
-# environment's Scripts, and the shims uv exposes in `~/.local/bin`.
-_UV_ROOT = PureWindowsPath(r"C:\Users\ada\AppData\Roaming\uv\tools\swe-mux")
-_UV_SCRIPTS = _UV_ROOT / "Scripts"
-_UV_HOME = PureWindowsPath(r"C:\Users\ada")
-_UV_SHIMS = _UV_HOME / ".local" / "bin"
+#: The launcher suffix the installer writes on this host, and the separator this
+#: host's `PATH` uses. Both are read from the running platform for the same
+#: reason every path below is: the detector reads them from `os.path`/`os.pathsep`
+#: and cannot be told otherwise.
+_EXE = ".exe" if IS_WINDOWS else ""
+_PATHSEP = os.pathsep
+
+# A uv tool install exactly as uv lays one out on *this* host: the environment
+# under the tool directory (with its receipt), the entry points inside that
+# environment's scripts directory, and the shims uv exposes in `~/.local/bin`.
+if IS_WINDOWS:
+    _HOME = Path(r"C:\Users\ada")
+    _UV_ROOT = _HOME / "AppData" / "Roaming" / "uv" / "tools" / "swe-mux"
+    _UV_SCRIPTS = _UV_ROOT / "Scripts"
+    _SITE_PACKAGES = _UV_ROOT / "Lib" / "site-packages" / "swe_mux"
+    _INTERPRETER = _UV_SCRIPTS / "python.exe"
+    _BASE_PREFIX = r"C:\Python312"
+    #: A `PATH` entry that holds none of our launchers.
+    _NOISE = r"C:\Windows"
+    #: A second, complete swe-mux install - the one that shadows ours.
+    _OTHER_SCRIPTS = Path(r"C:\Python312\Scripts")
+    #: Somewhere `UV_TOOL_BIN_DIR` could point that is not the default.
+    _ELSEWHERE = Path(r"D:\bin")
+    _BUNDLE = _HOME / "swe-mux" / "dist" / "swe-mux"
+    _SPACED_PREFIX = Path(r"C:\Program Files\Python312")
+else:
+    _HOME = Path("/home/ada")
+    _UV_ROOT = _HOME / ".local" / "share" / "uv" / "tools" / "swe-mux"
+    _UV_SCRIPTS = _UV_ROOT / "bin"
+    _SITE_PACKAGES = _UV_ROOT / "lib" / "python3.12" / "site-packages" / "swe_mux"
+    _INTERPRETER = _UV_SCRIPTS / "python"
+    _BASE_PREFIX = "/usr"
+    _NOISE = "/usr/bin"
+    _OTHER_SCRIPTS = Path("/usr/local/bin")
+    _ELSEWHERE = Path("/opt/bin")
+    _BUNDLE = _HOME / "swe-mux" / "dist" / "swe-mux"
+    _SPACED_PREFIX = Path("/opt/swe mux")
+
+#: Both tools default here, on every platform they support.
+_UV_SHIMS = _HOME / ".local" / "bin"
+
+_LAUNCHERS = tuple(f"{name}{_EXE}" for name in ("mux", "muxd", "swe-mux"))
 
 
-def _windows_layout(present: set[str]) -> object:
-    """An existence probe over an explicit set of Windows paths.
+def _key(entry: str, *, case_insensitive: bool) -> str:
+    """The comparison key a filesystem on this host would use for `entry`."""
+    text = os.path.normpath(entry)
+    return text.casefold() if case_insensitive else text
 
-    Compared casefolded with backslashes normalized, so a test states the paths
-    the way Windows writes them and the probe answers the way Windows would.
+
+def _layout(present: set[str], *, case_insensitive: bool | None = None) -> object:
+    """An existence probe over an explicit set of paths on this host.
+
+    Normalized before comparing, so a fixture may state a path however it reads
+    best and the probe still answers the way the platform would. `Path` joining
+    renders this host's separator, which is exactly why the paths handed in have
+    to be this host's too.
+
+    `case_insensitive` defaults to what the host actually does. The one test that
+    overrides it needs the probe to answer *yes* to a shouted spelling on POSIX,
+    so that the assertion is about `_same_path`'s case rule rather than about a
+    file the probe could not find.
     """
-    normalized = {str(PureWindowsPath(entry)).casefold() for entry in present}
+    folded = IS_WINDOWS if case_insensitive is None else case_insensitive
+    normalized = {_key(entry, case_insensitive=folded) for entry in present}
 
     def exists(candidate: Path) -> bool:
-        return str(PureWindowsPath(str(candidate))).casefold() in normalized
+        return _key(str(candidate), case_insensitive=folded) in normalized
 
     return exists
 
@@ -64,9 +133,12 @@ _POSIX_BIN = f"{_POSIX_ROOT}/bin"
 def _posix_install(*, path: str, case_insensitive_probe: bool = False) -> object:
     """A POSIX prefix install, described the same way from any host.
 
-    `Path` renders separators for the *running* platform, so a POSIX layout is
-    kept as text and only converted where a `Path` is required. The probe
-    compares text for the same reason.
+    The one deliberate cross-platform description left in this file, and it works
+    only because every path in it is kept as text and the probe compares text: a
+    POSIX layout carries no `;`, so `os.pathsep` cannot mangle it, and the probe
+    normalizes the backslashes `Path` would introduce on a Windows host. It earns
+    that care by covering the POSIX rendering rules (`export PATH=`, no
+    `install-shortcut`) on the Windows leg, which is the leg that ships them.
     """
 
     def exists(candidate: Path) -> bool:
@@ -90,24 +162,28 @@ def _posix_install(*, path: str, case_insensitive_probe: bool = False) -> object
     )
 
 
-def _uv_tool_install(*, path: str, shims_populated: bool = True) -> object:
+def _uv_tool_install(
+    *,
+    path: str,
+    shims_populated: bool = True,
+    case_insensitive_probe: bool | None = None,
+) -> object:
     present = {str(_UV_ROOT / "uv-receipt.toml")}
-    for name in ("mux.exe", "muxd.exe", "swe-mux.exe"):
+    for name in _LAUNCHERS:
         present.add(str(_UV_SCRIPTS / name))
         if shims_populated:
             present.add(str(_UV_SHIMS / name))
     return detect_install_location(
         frozen=False,
-        executable=str(_UV_SCRIPTS / "python.exe"),
-        package_dir=Path(str(_UV_ROOT / "Lib" / "site-packages" / "swe_mux")),
+        executable=str(_INTERPRETER),
+        package_dir=_SITE_PACKAGES,
         prefix=str(_UV_ROOT),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(_UV_SCRIPTS)),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=_UV_SCRIPTS,
         path=path,
-        home=Path(str(_UV_HOME)),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout(present),  # type: ignore[arg-type]
+        exists=_layout(present, case_insensitive=case_insensitive_probe),  # type: ignore[arg-type]
     )
 
 
@@ -117,7 +193,7 @@ def _uv_tool_install(*, path: str, shims_populated: bool = True) -> object:
 
 
 def test_a_uv_tool_environment_is_named_by_its_receipt() -> None:
-    location = _uv_tool_install(path=r"C:\Windows")
+    location = _uv_tool_install(path=_NOISE)
     assert location.kind == INSTALL_UV_TOOL
     assert location.label == "uv tool install"
     # The command uv itself ships, not a hand-written PATH edit: telling a uv
@@ -126,99 +202,131 @@ def test_a_uv_tool_environment_is_named_by_its_receipt() -> None:
 
 
 def test_a_pipx_environment_is_named_by_its_metadata() -> None:
-    root = PureWindowsPath(r"C:\Users\ada\pipx\venvs\swe-mux")
+    root = _HOME / "pipx" / "venvs" / "swe-mux"
+    scripts = root / ("Scripts" if IS_WINDOWS else "bin")
     location = detect_install_location(
         frozen=False,
-        executable=str(root / "Scripts" / "python.exe"),
-        package_dir=Path(str(root / "Lib" / "site-packages" / "swe_mux")),
+        executable=str(scripts / f"python{_EXE}"),
+        package_dir=root / "swe_mux",
         prefix=str(root),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(root / "Scripts")),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=scripts,
         path="",
-        home=Path(r"C:\Users\ada"),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout({str(root / "pipx_metadata.json")}),  # type: ignore[arg-type]
+        exists=_layout({str(root / "pipx_metadata.json")}),  # type: ignore[arg-type]
     )
     assert location.kind == INSTALL_PIPX
     assert location.path_fix_lines() == ["pipx ensurepath"]
 
 
 def test_a_plain_venv_is_a_venv_and_gets_a_literal_path_line() -> None:
-    root = PureWindowsPath(r"C:\work\.venv")
+    root = _HOME / "work" / ".venv"
+    scripts = root / ("Scripts" if IS_WINDOWS else "bin")
     location = detect_install_location(
         frozen=False,
-        executable=str(root / "Scripts" / "python.exe"),
-        package_dir=Path(str(root / "Lib" / "site-packages" / "swe_mux")),
+        executable=str(scripts / f"python{_EXE}"),
+        package_dir=root / "swe_mux",
         prefix=str(root),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(root / "Scripts")),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=scripts,
         path="",
-        home=Path(r"C:\Users\ada"),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout(set()),  # type: ignore[arg-type]
+        exists=_layout(set()),  # type: ignore[arg-type]
     )
     assert location.kind == INSTALL_VENV
     # No tool owns this install, so the advice has to be the literal command for
     # the shell the user is in - "add it to your PATH" is the answer that sends
-    # someone to a search engine.
-    assert location.path_fix_lines()[0] == f'setx PATH "%PATH%;{root / "Scripts"}"'
+    # someone to a search engine. Which literal it is, is the host's own answer.
+    expected = (
+        f'setx PATH "%PATH%;{scripts}"'
+        if IS_WINDOWS
+        else f'export PATH="$PATH:{scripts}"'
+    )
+    assert location.path_fix_lines()[0] == expected
+
+
+def test_both_path_fix_renderings_are_asserted_from_every_host() -> None:
+    """`setx` and `export` are both shipped, so both are checked everywhere.
+
+    Safe to describe a foreign platform here only because the assertion is about
+    the *shape of the line*, and `bin_dir` is interpolated verbatim: nothing
+    joins, splits, or compares a path, so the running platform's separator rules
+    never enter into it. That is the whole licence for a `windows=` override in
+    this file.
+    """
+    for windows, prefix in ((True, "setx PATH "), (False, 'export PATH="$PATH:')):
+        described = detect_install_location(
+            frozen=False,
+            executable="python",
+            package_dir=Path("swe_mux"),
+            prefix="env",
+            base_prefix="base",
+            scripts_dir=Path("scripts"),
+            path="",
+            home=Path("home"),
+            environ={},
+            windows=windows,
+            exists=_layout(set()),  # type: ignore[arg-type]
+        )
+        assert described.path_fix_lines()[0].startswith(prefix)
+        assert len(described.path_fix_lines()) == 2, "the line, then what it means"
 
 
 def test_an_interpreter_that_is_its_own_base_is_a_system_install() -> None:
-    root = PureWindowsPath(r"C:\Python312")
+    root = Path(r"C:\Python312") if IS_WINDOWS else Path("/usr")
+    scripts = root / ("Scripts" if IS_WINDOWS else "bin")
     location = detect_install_location(
         frozen=False,
-        executable=str(root / "python.exe"),
-        package_dir=Path(str(root / "Lib" / "site-packages" / "swe_mux")),
+        executable=str(scripts / f"python{_EXE}"),
+        package_dir=root / "swe_mux",
         prefix=str(root),
         base_prefix=str(root),
-        scripts_dir=Path(str(root / "Scripts")),
+        scripts_dir=scripts,
         path="",
-        home=Path(r"C:\Users\ada"),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout(set()),  # type: ignore[arg-type]
+        exists=_layout(set()),  # type: ignore[arg-type]
     )
     assert location.kind == INSTALL_SYSTEM
 
 
 def test_a_frozen_bundle_reports_its_own_directory_as_the_launcher_home() -> None:
     """A PyInstaller bundle has no scripts directory; the exe beside it is it."""
-    bundle = PureWindowsPath(r"C:\Users\ada\swe-mux\dist\swe-mux")
+    launcher = _BUNDLE / f"swe-mux{_EXE}"
     location = detect_install_location(
         frozen=True,
-        executable=str(bundle / "swe-mux.exe"),
-        package_dir=Path(str(bundle / "_internal" / "swe_mux")),
+        executable=str(launcher),
+        package_dir=_BUNDLE / "_internal" / "swe_mux",
         path="",
-        home=Path(r"C:\Users\ada"),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout({str(bundle / "swe-mux.exe")}),  # type: ignore[arg-type]
+        exists=_layout({str(launcher)}),  # type: ignore[arg-type]
     )
     assert location.kind == INSTALL_FROZEN
-    assert location.bin_dir == Path(str(bundle))
-    assert location.executable("swe-mux") == Path(str(bundle / "swe-mux.exe"))
+    assert location.bin_dir == _BUNDLE
+    assert location.executable("swe-mux") == launcher
 
 
 def test_a_uv_tool_shim_directory_can_be_relocated_by_its_variable() -> None:
-    elsewhere = PureWindowsPath(r"D:\bin")
-    present = {str(_UV_ROOT / "uv-receipt.toml"), str(elsewhere / "mux.exe")}
+    present = {
+        str(_UV_ROOT / "uv-receipt.toml"),
+        str(_ELSEWHERE / f"mux{_EXE}"),
+    }
     location = detect_install_location(
         frozen=False,
-        executable=str(_UV_SCRIPTS / "python.exe"),
-        package_dir=Path(str(_UV_ROOT)),
+        executable=str(_INTERPRETER),
+        package_dir=_UV_ROOT,
         prefix=str(_UV_ROOT),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(_UV_SCRIPTS)),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=_UV_SCRIPTS,
         path="",
-        home=Path(str(_UV_HOME)),
-        environ={"UV_TOOL_BIN_DIR": str(elsewhere)},
-        windows=True,
-        exists=_windows_layout(present),  # type: ignore[arg-type]
+        home=_HOME,
+        environ={"UV_TOOL_BIN_DIR": str(_ELSEWHERE)},
+        exists=_layout(present),  # type: ignore[arg-type]
     )
-    assert location.shim_dir == Path(str(elsewhere))
+    assert location.shim_dir == _ELSEWHERE
 
 
 def test_a_shim_directory_with_none_of_our_commands_is_not_reported() -> None:
@@ -229,7 +337,7 @@ def test_a_shim_directory_with_none_of_our_commands_is_not_reported() -> None:
     """
     location = _uv_tool_install(path="", shims_populated=False)
     assert location.shim_dir is None
-    assert location.bin_dir == Path(str(_UV_SCRIPTS))
+    assert location.bin_dir == _UV_SCRIPTS
 
 
 # --------------------------------------------------------------------------- #
@@ -238,74 +346,84 @@ def test_a_shim_directory_with_none_of_our_commands_is_not_reported() -> None:
 
 
 def test_commands_in_a_directory_that_is_not_on_path_are_unreachable() -> None:
-    location = _uv_tool_install(path=r"C:\Windows;C:\Windows\System32")
+    location = _uv_tool_install(path=_PATHSEP.join([_NOISE, str(_OTHER_SCRIPTS)]))
     assert location.on_path is False
     assert [command.name for command in location.unreachable] == ["mux", "muxd", "swe-mux"]
     assert all(command.status == "not on PATH" for command in location.unreachable)
 
 
 def test_commands_in_a_directory_that_is_on_path_are_reachable() -> None:
-    location = _uv_tool_install(path=rf"C:\Windows;{_UV_SHIMS}")
+    location = _uv_tool_install(path=_PATHSEP.join([_NOISE, str(_UV_SHIMS)]))
     assert location.on_path is True
     assert location.unreachable == ()
 
 
 def test_path_matching_ignores_case_on_windows_and_not_elsewhere() -> None:
-    """`C:\\USERS\\ADA\\.LOCAL\\BIN` is the same directory; on POSIX it is not."""
-    shouted = str(_UV_SHIMS).upper()
-    assert _uv_tool_install(path=shouted).on_path is True
+    """Shouted, a directory is itself on Windows and a different one on POSIX.
 
+    Asserted against the host's own rule rather than against a described foreign
+    one: `_same_path` normalizes through `os.path`, so what it does with a
+    Windows path on a Linux runner is not a fact about Windows.
+    """
+    shouted = str(_UV_SHIMS).upper()
+    location = _uv_tool_install(path=shouted, case_insensitive_probe=True)
+    mux = location.command("mux")
+    assert mux is not None
     # The probe answers yes to both spellings, so the case rule in `_same_path`
     # is what the assertion is about rather than a missing file.
-    posix = _posix_install(path="/OPT/SWE-MUX/BIN", case_insensitive_probe=True)
-    mux = posix.command("mux")
-    assert mux is not None
     assert mux.resolved is not None, "the probe must find the shouted spelling"
+    assert location.on_path is IS_WINDOWS
+
+    # And the POSIX rule from a Windows host too, so the Windows leg still
+    # covers the branch it ships to everybody else.
+    posix = _posix_install(path="/OPT/SWE-MUX/BIN", case_insensitive_probe=True)
+    posix_mux = posix.command("mux")
+    assert posix_mux is not None
+    assert posix_mux.resolved is not None, "the probe must find the shouted spelling"
     assert posix.on_path is False
 
 
 def test_a_different_install_earlier_on_path_is_named_as_a_shadow() -> None:
     """Reachable, wrong copy. The state that has someone debugging a version
     they are not running, and it must not render as plain "not on PATH"."""
-    other = PureWindowsPath(r"C:\Python312\Scripts")
     present = {str(_UV_ROOT / "uv-receipt.toml")}
-    for name in ("mux.exe", "muxd.exe", "swe-mux.exe"):
+    for name in _LAUNCHERS:
         present.add(str(_UV_SCRIPTS / name))
-        present.add(str(other / name))
+        present.add(str(_OTHER_SCRIPTS / name))
     location = detect_install_location(
         frozen=False,
-        executable=str(_UV_SCRIPTS / "python.exe"),
-        package_dir=Path(str(_UV_ROOT)),
+        executable=str(_INTERPRETER),
+        package_dir=_UV_ROOT,
         prefix=str(_UV_ROOT),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(_UV_SCRIPTS)),
-        path=str(other),
-        home=Path(str(_UV_HOME)),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=_UV_SCRIPTS,
+        path=str(_OTHER_SCRIPTS),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout(present),  # type: ignore[arg-type]
+        exists=_layout(present),  # type: ignore[arg-type]
     )
     assert location.on_path is False
     mux = location.command("mux")
     assert mux is not None
-    assert mux.resolved == Path(str(other / "mux.exe"))
-    assert mux.status == f"shadowed by {other / 'mux.exe'}"
+    assert mux.resolved == _OTHER_SCRIPTS / f"mux{_EXE}"
+    assert mux.status == f"shadowed by {_OTHER_SCRIPTS / f'mux{_EXE}'}"
 
 
 def test_an_install_that_shipped_no_commands_is_not_reported_as_reachable() -> None:
     """The vacuous truth guard: `all([])` is True and would be the wrong answer."""
+    root = _HOME / "work" / ".venv"
+    scripts = root / ("Scripts" if IS_WINDOWS else "bin")
     location = detect_install_location(
         frozen=False,
-        executable=r"C:\work\.venv\Scripts\python.exe",
-        package_dir=Path(r"C:\work\.venv\Lib\site-packages\swe_mux"),
-        prefix=r"C:\work\.venv",
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(r"C:\work\.venv\Scripts"),
-        path=r"C:\work\.venv\Scripts",
-        home=Path(r"C:\Users\ada"),
+        executable=str(scripts / f"python{_EXE}"),
+        package_dir=root / "swe_mux",
+        prefix=str(root),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=scripts,
+        path=str(scripts),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout(set()),  # type: ignore[arg-type]
+        exists=_layout(set()),  # type: ignore[arg-type]
     )
     assert location.installed == ()
     assert location.on_path is False
@@ -313,19 +431,18 @@ def test_an_install_that_shipped_no_commands_is_not_reported_as_reachable() -> N
 
 
 def test_a_missing_launcher_is_never_reported_as_merely_unreachable() -> None:
-    present = {str(_UV_ROOT / "uv-receipt.toml"), str(_UV_SCRIPTS / "mux.exe")}
+    present = {str(_UV_ROOT / "uv-receipt.toml"), str(_UV_SCRIPTS / f"mux{_EXE}")}
     location = detect_install_location(
         frozen=False,
-        executable=str(_UV_SCRIPTS / "python.exe"),
-        package_dir=Path(str(_UV_ROOT)),
+        executable=str(_INTERPRETER),
+        package_dir=_UV_ROOT,
         prefix=str(_UV_ROOT),
-        base_prefix=r"C:\Python312",
-        scripts_dir=Path(str(_UV_SCRIPTS)),
+        base_prefix=_BASE_PREFIX,
+        scripts_dir=_UV_SCRIPTS,
         path="",
-        home=Path(str(_UV_HOME)),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout(present),  # type: ignore[arg-type]
+        exists=_layout(present),  # type: ignore[arg-type]
     )
     desktop = location.command("swe-mux")
     assert desktop is not None
@@ -346,23 +463,22 @@ def test_the_daemon_hint_is_silent_when_everything_resolves() -> None:
 
 
 def test_the_daemon_hint_is_silent_for_a_frozen_app() -> None:
-    bundle = PureWindowsPath(r"C:\Users\ada\swe-mux\dist\swe-mux")
+    launcher = _BUNDLE / f"swe-mux{_EXE}"
     frozen = detect_install_location(
         frozen=True,
-        executable=str(bundle / "swe-mux.exe"),
-        package_dir=Path(str(bundle)),
+        executable=str(launcher),
+        package_dir=_BUNDLE,
         path="",
-        home=Path(r"C:\Users\ada"),
+        home=_HOME,
         environ={},
-        windows=True,
-        exists=_windows_layout({str(bundle / "swe-mux.exe")}),  # type: ignore[arg-type]
+        exists=_layout({str(launcher)}),  # type: ignore[arg-type]
     )
     assert path_hint_lines(frozen) == []
 
 
 def test_the_daemon_hint_carries_the_directory_the_fix_and_the_fallback() -> None:
     """Three concrete things, and nothing that needs a document to act on."""
-    lines = path_hint_lines(_uv_tool_install(path=r"C:\Windows"))
+    lines = path_hint_lines(_uv_tool_install(path=_NOISE))
     text = "\n".join(lines)
     assert str(_UV_SHIMS) in text
     assert "uv tool update-shell" in text
@@ -373,13 +489,15 @@ def test_the_daemon_hint_carries_the_directory_the_fix_and_the_fallback() -> Non
 
 
 def test_where_answers_the_four_questions_it_exists_for() -> None:
-    text = render_where(_uv_tool_install(path=r"C:\Windows"), version="9.9.9")
+    text = render_where(_uv_tool_install(path=_NOISE), version="9.9.9")
     assert "swe-mux 9.9.9" in text
     assert "uv tool install" in text  # how it got here
     assert str(_UV_SHIMS) in text  # where the commands are
     assert "on PATH        no" in text  # whether they are reachable
     assert "-m swe_mux" in text  # how to run the daemon anyway
-    assert "install-shortcut" in text  # how to get a Start Menu entry
+    # How to get a Start Menu entry - on the only platform that has one. The
+    # POSIX side of this branch is `test_where_does_not_offer_shortcuts_off_windows`.
+    assert ("install-shortcut" in text) is IS_WINDOWS
 
 
 def test_where_does_not_offer_shortcuts_off_windows() -> None:
@@ -405,21 +523,31 @@ def test_where_names_the_missing_version_rather_than_printing_none() -> None:
 
 
 def test_a_path_with_a_space_is_quoted_for_the_shell_it_is_pasted_into() -> None:
-    windows = detect_install_location(
-        frozen=False,
-        executable=r"C:\Program Files\Python312\python.exe",
-        package_dir=Path(r"C:\Program Files\Python312\Lib\site-packages\swe_mux"),
-        prefix=r"C:\Program Files\Python312",
-        base_prefix=r"C:\Program Files\Python312",
-        scripts_dir=Path(r"C:\Program Files\Python312\Scripts"),
-        path="",
-        home=Path(r"C:\Users\ada"),
-        environ={},
-        windows=True,
-        exists=_windows_layout(set()),  # type: ignore[arg-type]
-    )
-    assert windows.module_fallback.startswith('"C:\\Program Files\\')
-    assert windows.module_fallback.endswith('" -m swe_mux')
+    """Both quoting rules, from every host.
+
+    `_quote` looks at whitespace and at the platform flag and never at a
+    separator, so describing the other platform here is sound in the way the
+    file's docstring allows - and both shells ship, so both are asserted.
+    """
+    scripts = _SPACED_PREFIX / ("Scripts" if IS_WINDOWS else "bin")
+    interpreter = scripts / f"python{_EXE}"
+    assert " " in str(interpreter), "the fixture has to carry a space to quote"
+    for windows, quote in ((True, '"'), (False, "'")):
+        described = detect_install_location(
+            frozen=False,
+            executable=str(interpreter),
+            package_dir=_SPACED_PREFIX / "swe_mux",
+            prefix=str(_SPACED_PREFIX),
+            base_prefix=str(_SPACED_PREFIX),
+            scripts_dir=scripts,
+            path="",
+            home=_HOME,
+            environ={},
+            windows=windows,
+            exists=_layout(set()),  # type: ignore[arg-type]
+        )
+        assert described.module_fallback == f"{quote}{interpreter}{quote} -m swe_mux"
+        assert described.pip_command == f"{quote}{interpreter}{quote} -m pip"
 
 
 # --------------------------------------------------------------------------- #
@@ -446,6 +574,9 @@ def test_the_live_probe_describes_this_very_interpreter() -> None:
     # The suite runs from a checkout's own virtual environment.
     assert location.kind == INSTALL_VENV
     assert location.executable("muxd") is not None
+    # And it reads this host, which is what makes every fixture above have to
+    # be shaped for this host too.
+    assert location.windows is IS_WINDOWS
 
 
 def test_every_declared_command_is_one_pyproject_actually_ships() -> None:

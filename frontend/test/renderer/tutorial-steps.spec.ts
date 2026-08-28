@@ -95,6 +95,32 @@ test('the skip control fits inside the card on a phone, beside the hint', async 
   expect(button.x).toBeGreaterThanOrEqual(hint.x + hint.width - 0.5)
 })
 
+for (const viewport of VIEWPORTS) {
+  test(`the menu step describes the menu that exists on ${viewport.name}`, async ({ page }) => {
+    // `tourChrome.test.ts` proves the names are real by reading `App.tsx`; this proves the
+    // card actually renders them, at both layouts, in the browser. The negative half is the
+    // regression that started Phase 16's stale-guidance item: this step described a
+    // `Utilities` group for months after it was unfolded into the rows below.
+    await page.setViewportSize({ width: viewport.width, height: viewport.height })
+    await page.goto('/tutorial-harness.html?project=1')
+    await expect(page.locator('.tutorial-card')).toBeVisible()
+
+    const eyebrow = () => page.textContent('.tutorial-card > header span')
+    for (let guard = 0; guard < 20; guard++) {
+      if (await eyebrow() === 'MAIN FEATURES') break
+      await stepForward(page)
+    }
+    expect(await eyebrow()).toBe('MAIN FEATURES')
+
+    const copy = (await page.textContent('.tutorial-copy'))!
+    expect(copy).not.toContain('Utilities')
+    for (const row of ['Session history', 'Fleet queue', 'Usage & spend', 'Automation Dashboard', 'Help']) {
+      expect(copy).toContain(row)
+    }
+    expect(copy).toContain('Maintenance')
+  })
+}
+
 test('the provider-login step is optional, and says so in the harness panel’s words', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
   await page.goto('/tutorial-harness.html?project=1')

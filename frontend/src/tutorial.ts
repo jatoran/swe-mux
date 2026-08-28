@@ -43,6 +43,43 @@ export function firstRunSurface(state:{
   return 'none'
 }
 
+/**
+ * Every piece of chrome the tour names by name, declared so it can be checked.
+ *
+ * The tour is prose about a moving app, and prose is exactly what nothing verifies. It
+ * spent months telling every new user that the app menu had a `Utilities` group holding
+ * the viewers; that group was unfolded into eight plain rows and the tour went on naming
+ * it, because a string in a JSX body is invisible to every test in the suite. The audit
+ * that opened Phase 16 found this by reading, which is not a mechanism.
+ *
+ * So the claims are data and `test/tourChrome.test.ts` closes the loop in both directions:
+ * every name here must exist in the live chrome that owns it (`settingsTabs.ts` for a
+ * Settings path, `App.tsx`'s rendered menu rows for a menu row), **and** every name here
+ * must actually appear in the tour's copy, **and** every `Settings →` the copy contains
+ * must be declared here. A renamed tab or a retired menu row fails the gate rather than
+ * misdirecting a first-time user forever.
+ *
+ * Anchors are deliberately *not* listed: the same test derives them from the step list's
+ * own `[data-tutorial="…"]` selectors and checks each against the components, so a
+ * spotlight on a mark nobody renders fails without anything being declared twice.
+ */
+export const TUTORIAL_CHROME_CLAIMS: {
+  /** Full `Settings → <tab label>` paths, exactly as the copy spells them. */
+  settingsPaths: string[]
+  /** Labels of rows in the app menu, exactly as `App.tsx` renders them. */
+  menuRows: string[]
+  /** Labels of collapsible groups in the app menu. */
+  menuGroups: string[]
+} = {
+  settingsPaths: ['Settings → General', 'Settings → Accounts'],
+  menuRows: [
+    'Session history', 'Notes', 'Fleet queue', 'Prompt library', 'Clipboard history',
+    'Resources', 'Usage & spend', 'Notifications',
+    'Projects', 'Configure Actions', 'Automation Dashboard', 'Settings', 'Help',
+  ],
+  menuGroups: ['Maintenance'],
+}
+
 export const TUTORIAL_STORAGE_KEY='mux.tutorial.v1'
 export const TUTORIAL_VERSION='1'
 export const TUTORIAL_ACTION_EVENT='mux:tutorial-action'

@@ -358,8 +358,11 @@ It is drawn as a bordered control, it points at the install callout (`#install`,
 The bar keeps exactly two links at those widths, `install` and `github`, and the menu holds everything including those two, so nothing is reachable only by remembering that it is there.
 Above 860px the button is not rendered at all: a menu beside a complete nav offers the same links twice in one bar.
 
-The panel is a plain block inside the sticky bar, below the bar row, full width.
-It is not absolutely positioned and not an overlay, which is what keeps it out of the horizontal-overflow assertions and off the top of the hero.
+The panel is an opaque dropdown pinned below the bar row and to its **right** edge, which is where the button that opens it sits: the control and the motion agree.
+An earlier shape was a full-width in-flow block, which read as opening from the left while the button sat top right, and which reflowed the page under it every time it opened.
+The panel is absolutely positioned inside the sticky bar (`right: 0`, `width: min(300px, 100%)`), so opening it moves nothing underneath, and it is revealed with a clip sweep from the right rather than a transform, because a clip changes no geometry - it cannot push `scrollWidth` past the viewport mid-animation the way a translate can, and `check.mjs` measures overflow with the menu open.
+The animation is wrapped in `prefers-reduced-motion: no-preference`, and the panel carries a `max-height` with its own scrollbar because a pinned panel taller than a short landscape viewport would strand its last items - the in-flow block it replaces scrolled with the document.
+`check.mjs` asserts the anchoring and the stillness on every page: the open panel's right edge sits on the viewport's, and `main` does not move when the menu opens.
 
 **Its behaviour is written once**, between the `>>> menu` and `<<< menu` markers in `index.html`'s inline script, and `build.py`'s `index_block()` lifts it into every generated page - the same rule the stylesheet is already under, applied to behaviour.
 
@@ -384,7 +387,12 @@ The H1 says the same thing forty pixels below it, and at 1280 it pushed the sect
 
 ## Footer
 
-Five columns on the landing page, four on the generated pages, in the ordinary order for a footer of this kind: brand, pages, source, **legal**, and on the landing page the citations.
+A brand row, then link columns, in the ordinary order for a footer of this kind: pages, source, **legal**, and on the landing page a fourth column for the citations.
+
+The brand sits **above** the columns rather than beside them as a first column: the mark reads as a sign-off at every width, and the columns below are free to pack by count (four on the landing page, three on the generated pages) without a wide brand cell distorting the grid.
+The columns are one link per line - the dot-separated runs this replaces collapsed at phone widths into one long undifferentiated list - and the grid is `repeat(auto-fit, minmax(140px, 1fr))`, which lands at two columns at 360px rather than one.
+The pages column carries every generated page including `compare`, which the footer is deliberately the only part of the chrome to link: the comparison is reachable without being promoted into the six-entry top nav.
+The old footer also carried `.docs/design/00_OVERVIEW.md` as inert code text; it is gone, because an unlinked internal path means nothing to a visitor and cannot become a link - the docs pages ban `.docs/` hrefs.
 
 The legal column is license, then legal pages, then social, and that order is the convention rather than a preference:
 
@@ -805,10 +813,9 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
   The last entry was `blog URL`, and it left when the blog got a decided address, `/blog/`.
   The `docs` link in the top bar is filled and points at `/docs/`.
   The repository URL is filled: `github.com/jatoran/swe-mux`, decided 2026-08-27.
-- **Three pages the chrome links to are not written yet**, and are listed in `PENDING_PAGES` in `check.mjs`: `/blog/`, `/privacy/`, `/terms/`.
-  They are not placeholders and are deliberately tracked by a different mechanism: a `data-todo` is a URL nobody has decided, while these are decided URLs whose file arrives with the branch that writes the page.
-  The list is checked in both directions - an entry whose file now exists is checked like any other link, and an entry no page links to fails, because a permanent exemption is how a broken link becomes permanent too.
-  Delete an entry when its page lands.
+- **`PENDING_PAGES` in `check.mjs` is empty, and the guard stays**, the same posture as `TODO_VALUES`.
+  Its last three entries (`/blog/`, `/privacy/`, `/terms/`) left when those pages landed.
+  The mechanism remains for the next page the chrome links before its file exists: a `data-todo` is a URL nobody has decided, while a pending page is a decided URL whose file arrives with the branch that writes it, and the list is checked in both directions so a permanent exemption cannot become a permanent broken link.
 - **The `OWNER` placeholder is gone from the whole repository** (swept 2026-08-27, after the owner was decided).
   `build.py` keeps normalizing any repository URL it lifts through `repo_url()` and still asserts that no `/OWNER/` reaches a page.
   The substitution now matches nothing, which is the point: it is a standing guard against a placeholder reappearing through a source this directory does not control, such as `CHANGELOG.md`, which the changelog page renders.
@@ -822,9 +829,9 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
   Delete `tools/placeholders.py` and its row in section 8 once the last slot holds a real shot.
 - **Draw the two diagrams.** See section 8.
 - **Enable Discussions and create the Ideas category.** Section 12 has the exact steps; until they are done the vote block never appears and the roadmap page links to a 404.
-- **Wire the new pages into the chrome.**
-  `/compare/`, `/blog/`, `/privacy/`, and `/terms/` are generated, gated, and reachable by URL, but nothing links to them yet.
-  They need entries in `PAGES` in `build.py` (which is what puts them in the sub-page nav and marks the current one), a link each in `index.html`'s top bar or footer, and a footer column on the generated pages.
+- **Decide whether `/compare/` joins the top nav.**
+  `/blog/`, `/privacy/`, and `/terms/` are wired into the chrome (nav and footer respectively), and `/compare/` is linked from the footer's pages column on every page - `check.mjs` asserts the link.
+  What remains is a judgement call, not a wiring gap: promoting the comparison into the six-entry top nav (`PAGES` in `build.py` plus `index.html`'s two hand-written copies) gives the highest-risk page on the site top billing, and the footer link was chosen deliberately as the quieter placement.
 - **Add the changelog gate to `release.yml`.**
   `python site/tools/check_changelog.py --tag "${{ github.ref_name }}"` after the checkout, before anything is published.
   It runs in about a second, needs no dependencies, and is the difference between finding a missing entry before the artifacts go out and finding it on the public page afterwards.

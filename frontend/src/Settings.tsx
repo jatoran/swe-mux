@@ -1645,7 +1645,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p class="profile-hint">Follow detection tracks the available agent automatically. Choose explicitly when several are installed.</p>
           </section>
 
-          <section class="settings-harnesses"><h3>Harnesses</h3>
+          {/* Marked as an *area* rather than per row: the deep link's promise is "the
+              switches are these", and there is one per registered harness. The reveal
+              focuses the first checkbox inside, which is the right landing. */}
+          <section class="settings-harnesses" data-setting="harness_enabled"><h3>Harnesses</h3>
           <p>Controls which harnesses appear in launchers and how they start. Disabled harnesses keep existing sessions and searchable history.</p>
           {allHarnessesIncludingDisabled().map(harness=><div class="settings-harness" key={harness.name}>
             <div class="settings-harness-head">

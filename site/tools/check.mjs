@@ -81,11 +81,9 @@ const TODO_VALUES = new Set([])
 // now exists is checked like any other link, and an entry that no page links to
 // is a line nobody removed - that one fails, because a permanent exemption is
 // how a broken link becomes permanent too.
-const PENDING_PAGES = new Set([
-  'blog/index.html', // wp-site-pages
-  'privacy/index.html', // wp-site-pages
-  'terms/index.html', // wp-site-pages
-])
+// Empty, and kept: the last three entries (`blog/`, `privacy/`, `terms/`) left
+// when their pages landed, the same posture as TODO_VALUES above.
+const PENDING_PAGES = new Set([])
 const pendingSeen = new Set()
 
 // Each top-level page directory has to be one `build.py` declares, so a
@@ -462,6 +460,7 @@ console.log('bar and menu')
         hidden: document.getElementById('menu')?.hasAttribute('hidden'),
         privacy: !!document.querySelector('footer a[href$="privacy/"]'),
         terms: !!document.querySelector('footer a[href$="terms/"]'),
+        compare: !!document.querySelector('footer a[href$="compare/"]'),
         x: document.querySelector('footer .social a[href*="x.com"]')?.getAttribute('href'),
       }
     })
@@ -472,6 +471,7 @@ console.log('bar and menu')
     if (shape.controls !== 'menu') fail(`${page.name}: menu button controls "${shape.controls}"`)
     if (shape.hidden !== true) fail(`${page.name}: the menu is not closed on load`)
     if (!shape.privacy || !shape.terms) fail(`${page.name}: the footer is missing privacy/terms`)
+    if (!shape.compare) fail(`${page.name}: the footer is missing the compare link`)
     if (shape.x !== 'https://x.com/swemux') fail(`${page.name}: footer X link is "${shape.x}"`)
     if (labels === null) labels = shape.menu
     else if (shape.menu.join('|') !== labels.join('|')) {
@@ -481,6 +481,8 @@ console.log('bar and menu')
     // Open by pointer, dismiss by keyboard, which is the pair that has to work:
     // a menu that opens and cannot be closed without a mouse is a trap on a
     // page whose whole nav is behind it.
+    const mainTopBefore = await b.evaluate(
+      () => document.querySelector('main').getBoundingClientRect().top)
     await b.click('#menubtn')
     // "It draws something" is not enough, and this is the shape that proved it:
     // `.wrap` is used by the menu panel and by the 44px bar row above it, and one
@@ -501,6 +503,11 @@ console.log('bar and menu')
         stacked: items.every((r, i) => i === 0 || r.top >= items[i - 1].bottom - 1),
         tall: Math.round(menu.height),
         count: items.length,
+        // The panel is anchored to the edge its button sits at. A panel that
+        // came back full-width or left-anchored would read as a mistake: the
+        // control is top right, so the panel hangs from the right.
+        rightGap: Math.round(document.documentElement.clientWidth - menu.right),
+        mainTop: document.querySelector('main').getBoundingClientRect().top,
       }
     })
     if (open.expanded !== 'true') fail(`${page.name}: aria-expanded is ${open.expanded} when open`)
@@ -511,6 +518,15 @@ console.log('bar and menu')
     if (!open.stacked) fail(`${page.name}: the menu's items are not stacked in a column`)
     if (open.tall < open.count * 20) {
       fail(`${page.name}: the open menu is ${open.tall}px tall for ${open.count} items`)
+    }
+    if (Math.abs(open.rightGap) > 1) {
+      fail(`${page.name}: the open menu sits ${open.rightGap}px off the right edge its button is at`)
+    }
+    // The panel overlays the page rather than reflowing it: opening must not
+    // move the content underneath.
+    if (open.mainTop !== mainTopBefore) {
+      fail(`${page.name}: opening the menu shifted the page (main moved ` +
+        `${mainTopBefore} -> ${open.mainTop})`)
     }
 
     await b.keyboard.press('Escape')

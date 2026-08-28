@@ -318,6 +318,14 @@ export const CogIcon = () => <svg {...stroke}>
   <path d="M12 1.8v2.6M12 19.6v2.6M22.2 12h-2.6M4.4 12H1.8M19.2 4.8l-1.9 1.9M6.7 17.3l-1.9 1.9M19.2 19.2l-1.9-1.9M6.7 6.7 4.8 4.8" />
 </svg>
 
+/** A question mark in a ring: the help surface. The one row in the app menu that
+ *  explains rather than opens, so it wears the universal mark rather than a noun. */
+export const HelpIcon = () => <svg {...stroke}>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M9.3 9.2a2.8 2.8 0 1 1 3.4 3.1c-.6.2-.9.7-.9 1.3v.6" />
+  <line x1="12" y1="17.2" x2="12" y2="17.3" />
+</svg>
+
 /** A plus. Add one more of the thing this surface lists. */
 export const PlusIcon = () => <svg {...stroke}>
   <line x1="12" y1="5" x2="12" y2="19" />

@@ -72,6 +72,9 @@
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+/* The bar is sticky, so a fragment target scrolled flush to the viewport top
+   sits underneath it. 44px of bar plus breathing room. */
+[id] { scroll-margin-top: 58px; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font-family: var(--sans); font-size: 15.5px; line-height: 1.62;
@@ -164,11 +167,25 @@ a[aria-current="page"]::before { content: "\25B8\00A0"; color: var(--green); }
    bar keeps `install` and `github`, and the menu holds everything including
    those two, so nothing is reachable only by remembering it is there. */
 .util .burger { display: none; }
+/* The panel is an opaque dropdown pinned below the bar row and to its right
+   edge, which is where the button that opens it sits: the control and the
+   motion agree. Absolutely positioned, so opening it never reflows the page
+   underneath, and revealed with a clip sweep from the right rather than a
+   transform, because a clip changes no geometry - it cannot push `scrollWidth`
+   past the viewport mid-animation the way a translate can, and
+   `tools/check.mjs` measures overflow with the menu open. `top` clears the
+   bar's 1px bottom border so that hairline stays visible above the panel. */
 .menu, .menu[hidden] { display: none; }
-.menu .wrap { padding-top: 2px; padding-bottom: 13px; }
+.menu { position: absolute; top: calc(100% + 1px); right: 0; width: min(300px, 100%);
+        background: var(--panel); border: 1px solid var(--line-2); border-top: 0;
+        /* The in-flow panel this replaces scrolled with the document; a pinned
+           panel taller than a short landscape viewport would strand its last
+           items, so it scrolls itself instead. */
+        max-height: calc(100vh - 60px); overflow-y: auto; }
+.menu .wrap { padding: 4px 18px 14px; }
 .menu nav { display: flex; flex-direction: column; }
 .menu a { display: block; font-size: 13px; color: var(--fg-2); border: 0;
-          border-top: 1px solid var(--line); padding: 10px 0; }
+          border-top: 1px solid var(--line); padding: 11px 0; }
 .menu a:first-child { border-top: 0; }
 .menu a:hover { color: var(--fg); }
 .menu a[aria-current="page"] { color: var(--fg); }
@@ -188,10 +205,31 @@ a[aria-current="page"]::before { content: "\25B8\00A0"; color: var(--green); }
 .util a:focus-visible, .util button:focus-visible, .menu a:focus-visible {
   outline: 2px solid var(--green); outline-offset: 1px;
 }
+/* Every focusable thing on the page gets the same ring, not just the chrome's:
+   the user-agent default is a thin dark outline that disappears against
+   `--panel` in the dark theme. The chrome rules above stay for their tighter
+   offset, and `.dsr`'s inset marker wins on specificity as before. */
+a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+/* Skip link: hidden until focused, first in the tab order on every page. */
+.skip { position: absolute; left: 8px; top: -100px; z-index: 60; background: var(--panel);
+        color: var(--fg); border: 1px solid var(--green); padding: 8px 12px;
+        font-family: var(--mono); font-size: 12px; }
+.skip:focus { top: 8px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .menu:not([hidden]) { animation: menu-in 0.16s ease; }
+  @keyframes menu-in {
+    from { clip-path: inset(0 0 0 100%); }
+    to   { clip-path: inset(0 0 0 0); }
+  }
+}
 
 @media (max-width: 860px) {
   .util .lbl { display: none; }
-  .util a, .util button { padding: 6px; }
+  /* 32px squares rather than 28px: at these widths the buttons are touch
+     targets, and the burger is the primary control on the page. */
+  .util a, .util button { padding: 6px; height: 32px; min-width: 32px; justify-content: center; }
   .util a.cta { padding: 6px 8px; }
   .bar nav.secnav.pagenav { display: none; }
   /* The adjacent-sibling rule above still matches a nav that is not drawn, so
@@ -343,6 +381,7 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
             gap: clamp(16px, 3vw, 30px); align-items: start; }
 @media (max-width: 700px) { .shotpair { grid-template-columns: minmax(0, 1fr); }
                             .shotpair figure.shot { max-width: 300px; } }
+.shotpair .claims { max-width: 72ch; }
 .shotpair .claims li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
                        padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
                        line-height: 1.58; color: var(--fg-2); }
@@ -356,7 +395,9 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
 .flat li:first-child { border-top: 0; }
 .flat b { color: var(--fg); font-weight: 600; font-size: 13.5px; letter-spacing: .01em; }
 .flat b::before { content: "▸ "; color: var(--green); }
-.flat span { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+/* Capped: at full page width the description column runs past 110 characters a
+   line, which is well beyond comfortable reading. Same measure the intros use. */
+.flat span { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; max-width: 72ch; }
 @media (max-width: 700px) { .flat li { grid-template-columns: minmax(0, 1fr); } }
 
 .grouplabel { color: var(--orange); font-size: 11.5px; letter-spacing: 0.13em; text-transform: uppercase;
@@ -381,10 +422,22 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
          margin: clamp(24px, 3.5vw, 34px) 0 12px; }
 
 footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
-         padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }
-footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 22px 44px; }
-footer h4 { margin: 0 0 5px; color: var(--fg-3); font-size: 12px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
-footer .todo { color: var(--orange); }
+         padding: clamp(26px, 4vw, 38px) 0 54px; font-size: 13px; color: var(--fg-3); }
+/* Brand row above the link columns rather than a first column beside them: the
+   mark reads as a sign-off at every width, and the columns below are free to
+   pack by count (four on the landing page, three on the generated pages)
+   without a wide brand cell distorting the grid. The columns are one link per
+   line, so the collapse at narrow widths is a two-column grid of short rows
+   rather than one long run of dot-separated links. */
+footer .fbrand { margin-bottom: clamp(20px, 3.5vw, 30px); }
+footer .fbrand p { margin: 0; line-height: 1.7; }
+footer .fcols { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+                gap: 26px 32px; }
+footer .fcol { min-width: 0; }
+footer .fcol li { padding: 3px 0; }
+/* The repository URL is the one entry longer than a narrow column. */
+footer .fcol a { overflow-wrap: anywhere; }
+footer h4 { margin: 0 0 7px; color: var(--fg-3); font-size: 12px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
 /* Icon only, at the weight of the text beside it rather than as a badge. Inline
    SVG like the bar's GitHub mark, because nothing on this site loads from a
    third-party host and a social button is the classic way that rule breaks. */
@@ -490,7 +543,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
               letter-spacing: 0.01em; }
 .doclist .t > a { color: inherit; }
 .doclist .t > a:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
-.doclist span.d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.doclist span.d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; max-width: 72ch; }
 /* Inside `.t`, not a third grid child: as its own cell it lands on a second row
    whose top is set by the tallest summary, which floats it away from the title
    it names. */
@@ -653,6 +706,9 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   appearance: none;
 }
 .dsearch input::placeholder { color: var(--fg-3); }
+/* 16px on narrow screens, because iOS Safari zooms the whole page into any
+   focused input whose font is smaller than that. */
+@media (max-width: 899px) { .dsearch input { font-size: 16px; } }
 .dsearch input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 /* The `/` hint, drawn as a key. `--fg-3` rather than `--fg-4`, because `--fg-4`
    does not clear AA and is restricted to borders and inert markers. */
@@ -737,6 +793,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 </head>
 <body>
 
+<a class="skip" href="#main">skip to content</a>
+
 <div class="bar">
   <div class="wrap">
     <a class="brand" href="../../" aria-label="swe-mux, home">
@@ -782,7 +840,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   </div>
 </div>
 
-<main>
+<main id="main">
 <section class="page docs">
   <div class="wrap">
     <div class="docsgrid">
@@ -933,32 +991,41 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 
 <footer>
   <div class="wrap">
-    <div class="cols">
-      <div>
-        <img class="brandmark dark" src="../../img/logo.png" width="640" height="73" alt="swe-mux" />
-        <img class="brandmark lite" src="../../img/logo-light.png" width="640" height="73" alt="swe-mux" />
-        <div>Agentic development environment and agent control plane.</div>
-        <div>Windows-first. Local-only. No account.</div>
-      </div>
-      <div>
+    <div class="fbrand">
+      <img class="brandmark dark" src="../../img/logo.png" width="640" height="73" alt="swe-mux" />
+      <img class="brandmark lite" src="../../img/logo-light.png" width="640" height="73" alt="swe-mux" />
+      <p>Agentic development environment and agent control plane.<br />
+      Windows-first. Local-only. No account.</p>
+    </div>
+    <div class="fcols">
+      <div class="fcol">
         <h4>pages</h4>
-        <div><a href="../../">home</a> &middot; <a href="../../docs/">docs</a>
-        &middot; <a href="../../blog/">blog</a></div>
-        <div><a href="../../changelog/">changelog</a> &middot; <a href="../../roadmap/">roadmap</a>
-        &middot; <a href="../../acknowledgements/">acknowledgements</a></div>
+        <ul>
+          <li><a href="../../">home</a></li>
+          <li><a href="../../docs/">docs</a></li>
+          <li><a href="../../blog/">blog</a></li>
+          <li><a href="../../changelog/">changelog</a></li>
+          <li><a href="../../roadmap/">roadmap</a></li>
+          <li><a href="../../acknowledgements/">acknowledgements</a></li>
+          <li><a href="../../compare/">compare</a></li>
+        </ul>
       </div>
-      <div>
+      <div class="fcol">
         <h4>source</h4>
-        <div><a href="https://github.com/jatoran/swe-mux">github.com/jatoran/swe-mux</a></div>
-        <div><a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">request a feature</a> &middot;
-        <a href="https://github.com/jatoran/swe-mux/issues">report a bug</a></div>
-        <div><code>.docs/design/00_OVERVIEW.md</code></div>
+        <ul>
+          <li><a href="https://github.com/jatoran/swe-mux">github.com/jatoran/swe-mux</a></li>
+          <li><a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">request a feature</a></li>
+          <li><a href="https://github.com/jatoran/swe-mux/issues">report a bug</a></li>
+        </ul>
       </div>
-      <div>
+      <div class="fcol">
         <h4>legal</h4>
-        <div><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></div>
-        <div><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
-        <div><a href="../../privacy/">Privacy</a> &middot; <a href="../../terms/">Terms</a></div>
+        <ul>
+          <li><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></li>
+          <li><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></li>
+          <li><a href="../../privacy/">Privacy</a></li>
+          <li><a href="../../terms/">Terms</a></li>
+        </ul>
         <div class="social">
           <a href="https://x.com/swemux" rel="me" aria-label="swe-mux on X" title="swe-mux on X">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817-5.966 6.817H1.68l7.73-8.835L1.254 2.25h6.826l4.713 6.231ZM17.083 19.77h1.833L7.084 4.126H5.117Z"/></svg>
