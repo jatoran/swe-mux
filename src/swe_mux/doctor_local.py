@@ -46,7 +46,13 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .doctor import DOCTOR_REPORT_VERSION, _check, _harness_checks, _prerequisite_checks
+from .doctor import (
+    DOCTOR_REPORT_VERSION,
+    _check,
+    _harness_checks,
+    _optional_asset_checks,
+    _prerequisite_checks,
+)
 from .host_platform import IS_WINDOWS, platform_key
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -58,13 +64,25 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 MINIMUM_PYTHON = (3, 12)
 
 # Optional extras, their import probes, and how to install them. Probed with
-# `find_spec` rather than a real import: `onnxruntime` and `playwright` cost
-# seconds to import and the question is only whether they resolve.
+# `find_spec` rather than a real import: `onnxruntime` costs seconds to import and
+# the question is only whether it resolves.
 #
-# `voice-edge` is deliberately absent. It is source-install convenience only - the
-# runtime reaches Edge TTS through an externally managed bridge interpreter - so
-# whether `edge_tts` resolves *in this environment* says nothing about whether the
-# feature works, and a row asserting otherwise would be a confident wrong answer.
+# These rows are about the **Python extras themselves**, which is a different fact
+# from the first-use *assets* `doctor.optional_asset_rows` reports (W9): an extra
+# installed with nothing downloaded and a cached model with no extra are different
+# states with different commands, so both are wanted.
+#
+# `preview-capture` is deliberately absent for that reason: `capture_capability()`
+# already separates "the extra is not installed" from "the extra is installed and
+# has no Chromium", carries the right remedy for each including the frozen build,
+# and is reported through the shared asset rows below - a second row asking only
+# half that question would be the duplicate check, not a complement.
+#
+# `voice-edge` is absent for a different reason. It is source-install convenience
+# only - the runtime reaches Edge TTS through an externally managed bridge
+# interpreter - so whether `edge_tts` resolves *in this environment* says nothing
+# about whether the feature works, and a row asserting otherwise would be a
+# confident wrong answer.
 _EXTRAS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     (
         "desktop",
@@ -77,12 +95,6 @@ _EXTRAS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
         "On-device speech (Kokoro TTS + Whisper dictation)",
         ("faster_whisper", "onnxruntime", "misaki"),
         "uv sync --extra voice-local",
-    ),
-    (
-        "preview-capture",
-        "Preview screenshot capture",
-        ("playwright",),
-        "",  # filled from preview_capture.INSTALL_HINT, which owns the two-step form
     ),
 )
 
@@ -632,12 +644,9 @@ def _extras_checks() -> list[dict[str, Any]]:
     and each row carries the exact install command so the next step is not a
     documentation hunt.
     """
-    from .preview_capture import INSTALL_HINT as PREVIEW_INSTALL_HINT
-
     frozen = bool(getattr(sys, "frozen", False))
     checks: list[dict[str, Any]] = []
-    for name, label, modules, command in _EXTRAS:
-        install = command or PREVIEW_INSTALL_HINT
+    for name, label, modules, install in _EXTRAS:
         if name == "desktop" and not IS_WINDOWS:
             # The extra's own markers are `sys_platform == 'win32'`, so it resolves
             # to nothing elsewhere; "not installed" would read as a fixable gap.
@@ -686,6 +695,72 @@ def _extras_checks() -> list[dict[str, Any]]:
             )
         )
     return checks
+
+
+def _optional_asset_rows_local(config: Config | None) -> list[dict[str, Any]]:
+    """The first-use assets (W9), probed without a daemon.
+
+    `routes/diagnostics._optional_asset_report` reads these off the live
+    `VoiceService`, but nothing about the underlying question needs one:
+    `capture_capability()` is an import plus a browsers-root read, and both model
+    stores are constructed from a data directory and answer from the filesystem.
+    So the local report builds the same rows through `doctor.optional_asset_rows`
+    rather than describing these capabilities a second way - the whole point of
+    that function being pure is that a second caller costs nothing.
+
+    A fresh install is exactly where this matters: every one of these is absent on
+    a clean machine, each absence has a different command behind it, and the user
+    reading this report is the one who has not run any of them yet.
+
+    The Whisper model names are the same set the route asks for. It passes
+    `decode_model(COMMAND_PROFILE)`, which is `stt_routing_model` when set and
+    `stt_whisper_model` otherwise; `statuses` de-duplicates and drops blanks, so
+    naming both settings yields exactly that set without importing `voice.py` for
+    a one-line rule.
+    """
+    from .doctor import optional_asset_rows
+    from .preview_capture import capture_capability
+
+    voice: dict[str, Any] = {}
+    if config is not None:
+        from .voice_models import KokoroModelStore, WhisperModelStore
+
+        voice = {
+            "tts_enabled": config.tts_enabled,
+            "tts_engine": config.tts_engine,
+            "stt_enabled": config.stt_enabled,
+            "stt_engine": config.stt_engine,
+            "kokoro": KokoroModelStore(config.data_dir).status(),
+            "whisper": WhisperModelStore().statuses(
+                config.stt_whisper_model, config.stt_routing_model
+            ),
+        }
+    return optional_asset_rows(capture=capture_capability().as_dict(), voice=voice)
+
+
+def _optional_asset_local_checks(config: Config | None) -> list[dict[str, Any]]:
+    """The asset rows as checks, or one honest `unchecked` row when probing fails.
+
+    A probe here reads a Hugging Face cache and may import `faster_whisper`, and
+    this report runs specifically on installs that are broken - so a raise must
+    become a stated non-answer rather than take the whole report down with it,
+    and it must not be reported as "absent", which is a measurement nobody made.
+    """
+    try:
+        return _optional_asset_checks(_optional_asset_rows_local(config))
+    except Exception as exc:  # noqa: BLE001 - a broken install is the expected caller
+        return [
+            _check(
+                id="optional-assets.unchecked",
+                category="optional-assets",
+                title="First-use downloads",
+                status="unchecked",
+                severity="info",
+                detail="Probing the first-use assets (Chromium, the speech models) "
+                f"raised {type(exc).__name__}: {exc}, so nothing is known about "
+                "them. The package-import check above names the underlying fault.",
+            )
+        ]
 
 
 def _module_resolves(module: str) -> bool:
@@ -785,6 +860,7 @@ def collect_local_checks(
     installations = detect_installations_with_versions(harness_exe)
     checks += _harness_checks(public_harness_registry(installations))
     checks += _extras_checks()
+    checks += _optional_asset_local_checks(config)
     checks += _unchecked_rows()
     return checks
 

@@ -56,10 +56,11 @@ P1 and P2:
 - Done (Phase 7): the diagnostics export, prerequisites, connection-state, and firewall pieces are now consumed by the consolidated `mux doctor` report (`GET /api/diagnostics/doctor`, assembled by `doctor.build_doctor_report`), which adds per-check severity/remedy, a machine-readable capability block, and the observation-freshness check. This document owns the fresh-machine detail; the aggregation lives in `ROADMAP.md` Phase 7.
 - Done (Phase 11, W10): `mux doctor` answers when the daemon does not.
   The consolidated report above presupposed a running daemon, which made the one diagnostic the project ships useless for the most likely fresh-install failure - a new user whose install is broken ran it and got a connection error.
-  An unreachable daemon now produces the local report (`doctor_local.build_local_doctor_report`) over the checks that stop a daemon starting: the Python floor, the package's own import graph, the config file, the frontend bundle in the installed package (the self-reported half of the release-artifact gate a wheel from a clean clone can otherwise fail silently), the data directory's existence and writability, whether `mux.db` opens, whether the configured port is already held, whether this host's PTY backend imports, the frozen app's supervisor bundle, the prerequisite tools, harness detection, and the presence of each optional extra with its install command.
+  An unreachable daemon now produces the local report (`doctor_local.build_local_doctor_report`) over the checks that stop a daemon starting: the Python floor, the package's own import graph, the config file, the frontend bundle in the installed package (the self-reported half of the release-artifact gate a wheel from a clean clone can otherwise fail silently), the data directory's existence and writability, whether `mux.db` opens, whether the configured port is already held, whether this host's PTY backend imports, the frozen app's supervisor bundle, the prerequisite tools, harness detection, the W9 first-use asset inventory below, and the presence of each optional extra with its install command.
   The daemon report is untouched and byte-compatible.
-  Three things are load-bearing rather than incidental: `unchecked` is its own status so a skipped check reads as neither healthy nor absent, prerequisites and harness rows come from the daemon report's own builders rather than a second copy, and the exit codes compose the existing two (`1` on a failing check, `3` otherwise) so a degraded report never exits `0`.
+  Three things are load-bearing rather than incidental: `unchecked` is its own status so a skipped check reads as neither healthy nor absent, prerequisite/harness/asset rows come from the daemon report's own builders rather than a second copy, and the exit codes compose the existing two (`1` on a failing check, `3` otherwise) so a degraded report never exits `0`.
   Contract: `design/interfaces.md`, "`mux doctor` without a running daemon".
+- Done (Phase 11 W9): the **first-use asset inventory** below is now reported rather than discovered by failing. See "First-use assets" for what a clean machine is told and what each state's command is.
 
 Still open (deliberately not code): ship the frozen `dist/` app for external testers; code-signing and SmartScreen decision; foreign-PATH shim/detection testing across npm, bun, and native installers; CLI-on-PATH packaging verification; arming `TESTED_CLI_VERSIONS` with verified bounds.
 
@@ -118,11 +119,41 @@ So the "bespoke to one workflow" surface is config defaults and first-use downlo
 
 | Item | Priority | Intent | Key files |
 |---|---|---|---|
-| STT default and download gate | P1 | `stt_enabled` is true by default, so the first Talk downloads the Whisper `turbo` model, the Silero VAD WASM runtime, and its ONNX assets with no warning; default STT off, or gate the first capture behind a clear "this downloads a speech model" confirmation | `src/swe_mux/config.py` (`stt_enabled`, `stt_whisper_model`), `src/swe_mux/voice.py` |
-| Neutral TTS voice default | P1 | `tts_edge_voice` defaults to the Australian `en-AU-NatashaNeural` for every user; use `en-US` or a locale-derived voice (TTS is off by default, so impact is low) | `src/swe_mux/config.py` (`tts_edge_voice`) |
-| Stated STT language and model | P2 | `en-US` and `turbo` are English-first and large; surface them as an explicit first-use choice rather than a silent assumption | `src/swe_mux/config.py`, `frontend/src/Settings.tsx` (Voice) |
+| STT default and download gate | P1 | Done. `stt_enabled` defaults false *and* the download is now an explicit act with reported states rather than a first-capture side effect - see "First-use assets" | `src/swe_mux/config.py` (`stt_enabled`, `stt_whisper_model`), `src/swe_mux/voice_models.py`, `src/swe_mux/voice.py` |
+| Neutral TTS voice default | P1 | Done, and re-verified 2026-08-27: `tts_edge_voice` is `en-US-JennyNeural`. The Australian default this row was written against is long gone | `src/swe_mux/config.py` (`tts_edge_voice`) |
+| Stated STT language and model | P2 | Done, and re-verified 2026-08-27: both are editable inputs in Settings -> Voice under copy that calls them a first-use choice. They remain English-first by default, which is stated rather than hidden | `src/swe_mux/config.py`, `frontend/src/Settings.tsx` (Voice) |
 | Scan-timeline model default | P2 | `deepseek/deepseek-v4-flash` is an opinionated default that needs a key; document it as a changeable default | `src/swe_mux/config.py` (`scan_timeline_model`) |
 | Model catalog upkeep | P2 | `claude_models.py` hardcodes model ids and context windows; a model newer than the catalog shows no context percentage; confirm the unknown-model path degrades cleanly and track new releases | `src/swe_mux/claude_models.py` |
+
+## First-use assets
+
+This document owns the inventory of things a clean machine does **not** have and swe-mux does not bundle.
+Phase 11 W9 closed it, and the shape of the fix is worth stating once because every future optional asset should follow it.
+
+The rule: **an absent capability must say which kind of absent it is, and nothing is fetched without an explicit act.**
+That is the same discipline `design/features/agent-environment.md` states for an empty MCP catalog, applied to installation state.
+One "unavailable" is what made a fresh install fail oddly - an operator who had already installed the Playwright extra was told to install it again, and the first press of Talk pulled 1.6 GB with no one asking.
+
+| Asset | States a clean machine can be in | Command for each | Reported by |
+|---|---|---|---|
+| Preview capture (Playwright package) | `extra_missing` | `uv sync --extra preview-capture && uv run playwright install chromium`, or "no command helps" on the packaged app | `POST /previews/{id}/capture`, `optional_asset:preview_capture` in `mux doctor` |
+| Preview capture (Chromium binary) | `browser_missing` | `uv run playwright install chromium` - and *only* that half | same |
+| Whisper dictation weights | `not_downloaded` / `downloading` / `error`, plus `backend_installed: false` for a missing `voice-local` extra | Settings -> Voice -> Download (or `uv sync --extra voice-local` for the extra) | `GET /api/voice`, `GET /api/voice/models/whisper`, `optional_asset:voice_whisper:<model>` |
+| Kokoro read-aloud weights | `not_downloaded` / `downloading` / `error` | Settings -> Voice -> Download Kokoro voices | `GET /api/voice`, `optional_asset:voice_kokoro` |
+| Silero VAD runtime + model | **none** - it ships in the frontend bundle | n/a | n/a |
+
+Four things that were already true before W9 and needed confirming rather than fixing:
+
+- `tts_enabled` and `stt_enabled` both default `False`, so an untouched install downloads nothing at all. `tests/test_first_use_assets.py` pins that so it cannot be flipped quietly.
+- `tts_edge_voice` already defaults to the neutral `en-US-JennyNeural`, not the Australian voice this document's earlier draft recorded.
+- `stt_language` and `stt_whisper_model` are already drawn in Settings -> Voice as explicit first-use choices with copy saying so. They are English-first (`en-US`, `turbo` for dictation, `small.en` for routing) and stated rather than hidden; W9 did not change them, because changing a default is not the same as reporting one.
+- The Silero VAD assets do **not** download. Vite emits the ~11 MB WASM runtime and ~2.3 MB ONNX model into the frontend bundle and this daemon serves them same-origin; the "lazy" load on first Talk is a lazy import. Both this document and the Settings copy previously said otherwise, and both are corrected.
+
+What W9 actually added: the three-state preview-capture report with a per-half remedy and a launch-time reclassification when the filesystem probe was wrong; `WhisperModelStore` (`not_downloaded → downloading → ready → error`, the same mechanism the Kokoro weights already used) with its own routes and Settings panel; a transcription refusal in place of the implicit fetch, including the skip that stops an absent *routing* model being downloaded to discover it was never needed; and an `optional_assets` block plus `optional_asset:*` checks in `mux doctor`, at severity `optional` so a clean install never exit-codes non-zero for owning none of them.
+
+Still open and deliberately not code: preview capture does not work in the frozen desktop app at all, because `preview-capture` is outside `DISTRIBUTED_EXTRAS` (`packaging/license_audit.py`).
+Bundling a ~150 MB Chromium for an optional feature and auto-running `playwright install` on first press were both rejected - the second is the exact silent-fetch failure this section exists to remove.
+The packaged app now says so instead of failing quietly.
 
 ## Onboarding prerequisites
 

@@ -93,6 +93,37 @@ its port.
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.
 
+### The upgrade itself is tested, once, across every store
+
+`tests/test_migration_compatibility.py` opens a whole `mux.db` written by an older build of
+this repository and asserts the file is carried forward rather than replaced.
+The fixture is not hand-written: `tests/support/legacy_database.py` extracts a real revision
+with `git archive`, runs *that* revision's store constructors on a clean interpreter, and
+commits the `.dump`, so the schema, the index set, and the recorded `schema_versions` rows are
+that build's own output.
+One test guards the guard - a fixture regenerated from HEAD would pass everything while
+proving nothing, so at least one store in it must record a version behind today's.
+
+Four properties are asserted against a *fresh* install of the same store set, which is what
+makes the check self-maintaining: whatever a schema declares tomorrow is what an upgrade is
+then required to produce, with no inventory to keep in step.
+
+- Every table and column a fresh install has must reach an upgraded one.
+  This is the failure `CREATE TABLE IF NOT EXISTS` hides: a column added to a schema string
+  with no `PRAGMA table_info` entry beside it reaches new installs only.
+- Every index a fresh install has must reach an upgraded one, which is the `VoiceStore`
+  ordering hazard stated as a test rather than as a warning.
+- Rows written by the old build survive.
+  The single exemption is `voice_clips`, whose pre-schema-3 rows `VoiceStore._migrate`
+  discards deliberately, and the exemption is itself asserted: an exemption that outlives the
+  behaviour it excuses is how a second, silent data loss gets in unremarked.
+- The upgraded file takes a write naming every migrated column (`AutomationStore.add_spend`
+  names six of them), because openable is not usable and the difference surfaces on the
+  user's first automation run rather than at startup.
+
+The per-store migration tests are unaffected and remain the right place to assert what a
+backfilled value *becomes*; this one asserts the composition none of them can see.
+
 ## Write patterns
 
 Correct single-statement write:

@@ -663,6 +663,133 @@ def _wsl_bridge_checks(bridges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return checks
 
 
+def optional_asset_rows(
+    *, capture: dict[str, Any], voice: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Normalize the first-use assets into one row shape, keeping their own states.
+
+    Pure, like the rest of this module: the caller has already probed. The point
+    of the shared shape is that a consumer can render "which kind of absent" for
+    every optional asset without knowing what a Playwright browsers root or a
+    Hugging Face cache is, while `state` stays each subsystem's own vocabulary
+    rather than being flattened into a boolean.
+
+    Voice rows say when a model is unused *as well as* absent: with `tts_enabled`
+    and `stt_enabled` both shipping false, an untouched install has downloaded
+    nothing, and reporting that as a missing capability would invent a problem.
+    """
+    rows: list[dict[str, Any]] = [
+        {
+            "id": "preview_capture",
+            "label": "Preview capture (Playwright + Chromium)",
+            "state": capture.get("state"),
+            "detail": capture.get("detail"),
+            "remedy": capture.get("remedy"),
+        }
+    ]
+    kokoro = dict(voice.get("kokoro") or {})
+    if kokoro:
+        used = bool(voice.get("tts_enabled")) and voice.get("tts_engine") == "kokoro"
+        rows.append(
+            {
+                "id": "voice_kokoro",
+                "label": "Kokoro speech model (read aloud)",
+                "state": kokoro.get("status"),
+                "detail": _asset_detail(
+                    str(kokoro.get("status") or ""),
+                    "the Kokoro voice model",
+                    used=used,
+                    unused_note="read aloud is off or set to another engine",
+                    error=kokoro.get("error"),
+                ),
+                "remedy": None
+                if kokoro.get("status") == "ready"
+                else "Settings -> Voice -> Download Kokoro voices",
+            }
+        )
+    stt_used = bool(voice.get("stt_enabled")) and voice.get("stt_engine") != "sapi"
+    for model in voice.get("whisper") or []:
+        name = str(model.get("model") or "")
+        size = f" ({model['size_hint']})" if model.get("size_hint") else ""
+        rows.append(
+            {
+                "id": f"voice_whisper:{name}",
+                "label": f"Whisper speech model '{name}' (dictation)",
+                "state": "extra_missing"
+                if not model.get("backend_installed")
+                else model.get("status"),
+                "detail": (
+                    "faster-whisper is not installed, so no local dictation model "
+                    "can be used"
+                    if not model.get("backend_installed")
+                    else _asset_detail(
+                        str(model.get("status") or ""),
+                        f"the '{name}' speech model{size}",
+                        used=stt_used,
+                        unused_note="hands-free conversation is off or set to the OS engine",
+                        error=model.get("error"),
+                    )
+                ),
+                "remedy": None
+                if model.get("status") == "ready" and model.get("backend_installed")
+                else "uv sync --extra voice-local"
+                if not model.get("backend_installed")
+                else "Settings -> Voice -> Download speech model",
+            }
+        )
+    return rows
+
+
+def _asset_detail(
+    state: str, subject: str, *, used: bool, unused_note: str, error: Any = None
+) -> str:
+    if state == "ready":
+        return f"{subject} is downloaded"
+    if state == "downloading":
+        return f"{subject} is downloading now"
+    if state == "error":
+        return f"{subject} failed to download: {error}"
+    suffix = "" if used else f" ({unused_note}, so nothing has fetched it)"
+    return f"{subject} has never been downloaded{suffix}"
+
+
+def _optional_asset_checks(assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """First-use assets that are installed or downloaded on demand, never bundled.
+
+    Every one of these is absent on a clean machine and each has a *different*
+    kind of absence with a different command behind it: an optional Python extra
+    that was never installed, a browser binary the extra does not carry, a model
+    file that has never been downloaded. Collapsing them into one "unavailable"
+    is what made a fresh install fail oddly instead of saying what to do, so the
+    state is reported verbatim (`state`) beside the human sentence, and every
+    non-ready row carries its own remedy rather than a shared install hint.
+
+    None of these rows is a fault: severity is `optional` throughout, including
+    `error`, because a failed download of a feature that is off by default breaks
+    nothing that was working. `downloading` is `warn` rather than `ok` only so it
+    is visibly not finished.
+    """
+    checks: list[dict[str, Any]] = []
+    for asset in assets:
+        state = str(asset.get("state") or "unknown")
+        status = (
+            "ok" if state == "ready" else "warn" if state in {"downloading", "error"}
+            else "unavailable"
+        )
+        checks.append(
+            _check(
+                id=f"optional_asset:{asset.get('id')}",
+                category="optional-assets",
+                title=str(asset.get("label") or asset.get("id") or "optional asset"),
+                status=status,
+                severity="optional",
+                detail=str(asset.get("detail") or state),
+                remedy=str(asset.get("remedy")) if asset.get("remedy") else None,
+            )
+        )
+    return checks
+
+
 def build_doctor_report(
     *,
     health: dict[str, Any],
@@ -677,6 +804,7 @@ def build_doctor_report(
     daemon: dict[str, Any],
     now: float,
     wsl_bridges: list[dict[str, Any]] | None = None,
+    optional_assets: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the consolidated doctor report from already-fetched diagnostics.
 
@@ -695,6 +823,7 @@ def build_doctor_report(
     checks += _background_checks(background)
     checks += _freshness_checks(freshness)
     checks += _wsl_bridge_checks(wsl_bridges or [])
+    checks += _optional_asset_checks(optional_assets or [])
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "unavailable": 0}
     for check in checks:
@@ -705,7 +834,9 @@ def build_doctor_report(
         "generated_at": now,
         "ok": summary["fail"] == 0,
         "summary": summary,
-        "capabilities": _capabilities(health, platform, daemon, remote, firewall, harnesses),
+        "capabilities": _capabilities(
+            health, platform, daemon, remote, firewall, harnesses, optional_assets or []
+        ),
         "checks": checks,
         "observation_freshness": freshness,
     }
@@ -718,9 +849,23 @@ def _capabilities(
     remote: dict[str, Any],
     firewall: dict[str, Any],
     harnesses: dict[str, Any],
+    optional_assets: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Machine-readable capability/version block, free of secrets and bytes."""
     return {
+        # Each optional asset keeps its own `state` string here rather than a
+        # boolean: "not installed", "installed but no browser", and "never
+        # downloaded" are different facts, and a consumer that only sees false
+        # cannot tell an operator which command to run.
+        "optional_assets": [
+            {
+                "id": asset.get("id"),
+                "label": asset.get("label"),
+                "state": asset.get("state"),
+                "remedy": asset.get("remedy"),
+            }
+            for asset in optional_assets
+        ],
         "swe_mux_version": health.get("version"),
         "ui_build_id": health.get("ui_build_id"),
         "supervisor_state": health.get("supervisor_state"),

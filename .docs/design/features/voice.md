@@ -526,7 +526,7 @@ install-wide, so the tab edits them directly for the focused session.
 
 - **Detection is Silero VAD v5 over `onnxruntime-web`** (`sileroVad.ts`), with the energy
   detector kept as a fallback.
-  The build emits the runtime (~11 MB) and model (~2.3 MB) as separate assets that the browser fetches lazily on the first Talk start; the runtime is pinned to one thread
+  The build emits the runtime (~11 MB) and model (~2.3 MB) as separate assets that the browser fetches lazily on the first Talk start — **from this daemon, same-origin, not from the internet**: Vite emits them into the bundle, so they are present on a fresh install and cost no first-use download; the runtime is pinned to one thread
   because multi-threaded WASM needs `SharedArrayBuffer`, which needs COOP/COEP headers swe-mux
   does not send on the Tailscale Serve path. A load failure is not fatal: capture keeps running
   on the energy detector, because a microphone that refuses to open is worse than one that
@@ -741,15 +741,39 @@ install-wide, so the tab edits them directly for the focused session.
   rather than by a cleanup sweep that can lose a race.
 - Default engine is local **faster-whisper**, auto-preferring CUDA/float16 and
   falling back to CPU/int8 both at model load and at transcription time (CTranslate2 can see a
-  GPU whose CUDA/cuDNN runtime DLLs are missing). Models download once from Hugging
-  Face on first use, then run from the local cache; download, load, GPU-runtime, and
-  CPU-fallback failures surface through the STT diagnostic without submitting the utterance.
-- **`stt_enabled` defaults off** so a fresh install never downloads the several-hundred-MB Whisper
-  model and the browser voice-activity runtime on the first Talk without warning. Enabling
-  microphone input in Settings -> Voice is the explicit opt-in, and the Voice tab states that the
-  first capture downloads a speech model. Existing configs keep their stored value. `tts_edge_voice`
-  defaults to the neutral `en-US-JennyNeural` rather than a locale-specific voice; TTS is off by
-  default, so this only takes effect once a user turns read-aloud on.
+  GPU whose CUDA/cuDNN runtime DLLs are missing).
+  Load, GPU-runtime, and CPU-fallback failures surface through the STT diagnostic without
+  submitting the utterance.
+- **The weights are a reported state and an explicit download, never something a transcription
+  does.** `WhisperModel(name)` fetches from Hugging Face *on construction*, so the first press of
+  Talk on a fresh install used to be a silent multi-gigabyte download inside the decode path, in
+  a worker thread, with nothing anywhere saying so — it presented as one very slow transcription.
+  `WhisperModelStore` (`voice_models.py`) reports the same
+  `not_downloaded → downloading → ready → error` states the Kokoro weights already use,
+  `GET /api/voice/models/whisper` reads them, and `POST /api/voice/models/whisper/download` is
+  the only path that fetches. `VoiceService._require_whisper_weights` refuses transcription
+  until then, naming the model, its approximate size, and both ways out; `_ensure_whisper_model`
+  skips an absent *routing* model instead of constructing it, because construction is the
+  download and the routing model is only a latency optimisation.
+  Settings -> Voice draws the state and the Download button beside the STT status line, as the
+  sibling of the Kokoro panel.
+- **`stt_enabled` defaults off**, so an untouched install has downloaded nothing at all, and the
+  explicit states above are what a user who turns it on meets rather than a surprise fetch.
+  Enabling microphone input in Settings -> Voice is the opt-in; existing configs keep their
+  stored value.
+  `tts_enabled` is off by the same rule, so the Kokoro weights are equally unfetched.
+  `tts_edge_voice` defaults to the neutral `en-US-JennyNeural` rather than a locale-specific
+  voice, and `stt_language`/`stt_whisper_model` are drawn as explicit first-use choices in the
+  Voice tab rather than as fixed assumptions — they are English-first defaults, and the setting
+  says so instead of hiding it.
+- **The browser voice-activity runtime is not a download.** Vite emits Silero's WASM runtime and
+  ONNX model into the frontend bundle, so they are served same-origin by this daemon and a fresh
+  install already has them; the "lazy" in the capture path is a lazy *import*, not a network
+  fetch. Copy that told users otherwise was wrong, and the distinction matters on a metered or
+  air-gapped machine.
+- All of this is also a row in `mux doctor` (`optional_asset:voice_whisper:<model>`,
+  `optional_asset:voice_kokoro`), at severity `optional`, and a row whose feature is switched off
+  says "nothing has fetched it" rather than reporting a missing capability.
 - **Two decoders by job, chosen by the `X-Mux-Decode-Profile` request header.** A spoken command
   is a reflex and a dictated paragraph is read afterwards, so they get opposite trade-offs:
   - `command` (the routing pass, used by speculative decodes and the wake-word tester) decodes on
@@ -1099,6 +1123,12 @@ and never touches the daemon or an LLM.
 
 - `GET  /api/voice` — active provider/STT availability, every provider's local cached status
   and capabilities, content/mode defaults, spend, cache stats, and Kokoro model state.
+  `stt_available` is false while the configured dictation weights are absent, and
+  `stt_diagnostic` says which of the three absences it is (host requirement, `voice-local`
+  extra, or an undownloaded model) rather than one flag for all three; `stt_models[]` carries
+  the per-model state.
+- `GET  /api/voice/models/whisper` / `POST /api/voice/models/whisper/download` — the STT half
+  of the first-use asset contract. The GET is a local probe; the POST is the only download path.
 - `GET /api/voice/providers/edge` — cached external-integration and catalog status; no process
   or network probe.
 - `POST /api/voice/providers/edge/install` — user-gesture-gated staged managed install or repair;
@@ -1182,7 +1212,9 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
   profile check that decides whether its segments can be joined at all.
 - `src/swe_mux/kokoro_tts.py` — the direct-onnxruntime Kokoro engine, the espeak-free G2P
   constraint, and the out-of-vocabulary repair ladder.
-- `src/swe_mux/voice_models.py` — the pinned, hash-verified Kokoro model download state machine.
+- `src/swe_mux/voice_models.py` — both on-demand speech models under one state machine: the
+  pinned, hash-verified Kokoro download, and `WhisperModelStore` over the Hugging Face cache
+  (`tests/test_voice.py`, `tests/test_first_use_assets.py`).
 - `src/swe_mux/tts_profiles.py` — immutable provider snapshots and provider-option synthesis keys.
 - `src/swe_mux/edge_tts_provider.py` — external interpreter resolution, structured bridge calls,
   classified errors/backoff, and the last-good voice catalog.

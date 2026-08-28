@@ -1587,11 +1587,21 @@ async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directo
         match_info={"preview_id": "pv1"}, app=app, can_read_body=True, json=body
     )
 
-    # Backend missing: a typed unavailable state with an install hint, never a 500.
-    monkeypatch.setattr(processes_routes, "capture_available", lambda: False)
+    from swe_mux.preview_capture import CaptureCapability
+
+    # Backend missing: a typed unavailable state with the command for THAT half,
+    # never a 500 and never the other half's command.
+    monkeypatch.setattr(
+        processes_routes,
+        "capture_capability",
+        lambda: CaptureCapability(
+            state="extra_missing", detail="no playwright", remedy="uv sync --extra preview-capture"
+        ),
+    )
     payload = json.loads((await capture_preview(request)).body)  # type: ignore[arg-type]
     assert payload["available"] is False
-    assert payload["install"]
+    assert payload["state"] == "extra_missing"
+    assert payload["remedy"] == "uv sync --extra preview-capture"
 
     # Backend present: the shot lands in the owning Project, not the data dir.
     captured: dict[str, Path] = {}
@@ -1601,7 +1611,11 @@ async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directo
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"png")
 
-    monkeypatch.setattr(processes_routes, "capture_available", lambda: True)
+    monkeypatch.setattr(
+        processes_routes,
+        "capture_capability",
+        lambda: CaptureCapability(state="ready", detail="ready", browser_path="chrome.exe"),
+    )
     monkeypatch.setattr(processes_routes, "capture_loopback", fake_capture)
     payload = json.loads((await capture_preview(request)).body)  # type: ignore[arg-type]
     assert payload["available"] is True
