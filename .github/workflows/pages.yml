@@ -1,0 +1,87 @@
+# Deploys swemux.dev from `site/`.
+#
+# The Actions source rather than a `gh-pages` branch, which is the decision
+# Roadmap Phase 11 records: the site is one static `index.html` with no build
+# step, so a branch holding build output would hold a byte-identical copy of the
+# source and give every site edit a second commit to keep in sync. Deploying the
+# directory directly means a documentation fix is one ordinary commit on master.
+#
+# Path-filtered to `site/**` because this repository's ordinary traffic is
+# backend and frontend work, and a site deployment on every one of those commits
+# is a queue of no-op deployments in front of the one that matters. The workflow
+# file itself is in the filter so a change to *how* the site deploys is
+# exercised by making it, not by remembering to dispatch afterwards.
+#
+# `master` only, not `[master, main]` as `ci.yml` allows: CI answering the same
+# question on two branch names is harmless, but two branches deploying to one
+# live site is a race with a publicly visible loser.
+#
+# The custom domain (`swemux.dev`, with enforced HTTPS) is a repository setting,
+# not a file here - under the Actions source GitHub keeps it in Pages
+# configuration rather than in a committed `CNAME`. If a `site/CNAME` is ever
+# added it becomes the authority and both have to agree.
+name: pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# `pages: write` and `id-token: write` are what `deploy-pages` exchanges for its
+# short-lived deployment credential; `contents: read` is for the checkout and for
+# reading the latest release's assets. No stored secret is involved on any of
+# those paths.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Shared with `release.yml`'s `update-manifest` job, which deploys this same
+# site. Pages serves whichever deployment finished last, so the two must not
+# overlap. `cancel-in-progress: false` because both deployments carry real
+# content - dropping the running one to start a newer one is how the manifest or
+# a site edit goes missing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      # `site/version.json` is the app's update-check endpoint and is generated
+      # by `release.yml`, never committed - so a checkout of master does not
+      # contain it, and deploying `site/` as-is would delete the endpoint every
+      # time somebody fixed a typo on the landing page. Restoring it from the
+      # latest Release, where `release.yml` also attaches it, keeps one writer
+      # and one source of truth while making every deployment carry it.
+      #
+      # A missing manifest is not an error: before the first release there is
+      # nothing to restore, and the site is still worth publishing.
+      - name: Restore the update manifest from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download --pattern version.json --dir site --clobber; then
+            echo "Restored site/version.json from the latest release."
+          else
+            echo "No published release carries version.json yet; deploying without it."
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
