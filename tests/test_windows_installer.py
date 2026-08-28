@@ -64,6 +64,28 @@ def script_text() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def _icon_that_exists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point `build_installer.ICON` at a file, because the real one is build output.
+
+    `packaging/swe-mux.ico` is gitignored (`.gitignore`) and rendered by
+    `build_desktop.build_app_bundle`, so it exists in a checkout that has built the
+    app and in no other - the development host has one, a fresh worktree and every
+    CI runner do not. Four tests below reach `_prepare` for reasons that have
+    nothing to do with the icon, and without this they stop at its guard and assert
+    against *that* message instead of the platform refusal or the signtool block
+    they were written for. They passed on the host that built the bundle and would
+    have failed on the first runner: the icon is scaffolding here, not the subject.
+
+    The guard itself is still covered, by
+    `test_a_missing_icon_is_named_rather_than_left_to_iscc`, which points `ICON` at
+    an absent path from inside the test body and so overrides this.
+    """
+    icon = tmp_path / "swe-mux.ico"
+    icon.write_bytes(b"\x00\x00\x01\x00 fake icon")
+    monkeypatch.setattr(build_installer, "ICON", icon)
+
+
 def make_bundle(root: Path, *, version: str = "0.9.0", platform: str = "windows-x64") -> Path:
     """A minimally believable built bundle: an executable and its `bundle.json`."""
     (root / "_internal").mkdir(parents=True, exist_ok=True)
