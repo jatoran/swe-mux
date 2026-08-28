@@ -638,7 +638,12 @@ async def test_an_archive_without_bundle_metadata_cannot_be_installed(
     # Not a corner case: it is what an archive built before this contract existed
     # looks like, and it is exactly the archive whose supervisor requirement
     # nobody can determine.
-    plain = tmp_path / f"swe-mux-{NEXT}-{release_platform_tag()}.zip"
+    # `release_archive_name`, not a hand-built name: the suffix is per host
+    # (`.zip` on Windows, `.tar.gz` on macOS and Linux), so hardcoding `.zip`
+    # named an artifact no POSIX host would ever look for. The installer then
+    # stopped at `no_artifact` before it could reach the metadata check this
+    # test is about, and both POSIX legs went red on a passing Windows one.
+    plain = tmp_path / release_archive_name(NEXT)
     with zipfile.ZipFile(plain, "w") as bundle:
         bundle.writestr("swe-mux/swe-mux.exe", "MZ")
     fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(plain)])})
