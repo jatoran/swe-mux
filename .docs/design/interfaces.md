@@ -113,9 +113,9 @@ POST /api/update/dismiss   {version: str}
 ```
 
 Whether a newer swe-mux release exists. **Detection and presentation only**:
-nothing here downloads an artifact, verifies a hash, or installs anything, and
-the frozen-app staged-swap updater is a separate item (`ROADMAP.md` Phase 11,
-"Update propagation").
+nothing on these three routes downloads an artifact, verifies a hash, or installs
+anything. Installing is a separate, explicit act on a separate route
+(`/api/update/install`, below).
 
 The daemon fetches `https://swemux.dev/version.json` - the manifest
 `.github/workflows/release.yml` writes and documents as a published interface -
@@ -161,9 +161,12 @@ non-event**: nothing here raises on a UI path.
 `schema` is honoured rather than assumed. An unrecognized value degrades to
 "cannot tell" **before any field is read** - a future manifest may repurpose
 `version`, and a build installed today will still be reading this file in three
-years and cannot be asked to change first. `artifacts` is read past on purpose:
-it exists for the updater, and a check that neither downloads nor verifies has
-no use for a hash.
+years and cannot be asked to change first. `artifacts` is parsed but is neither
+persisted in `<data_dir>/update-check.json` nor returned by `GET /api/update`: a
+hash is worth something only at the moment bytes are measured against it, and the
+release workflow re-uploads with `--clobber`, so a hash cached yesterday is a
+claim about a file that may since have been replaced. The updater re-fetches the
+manifest at install time and reads the artifacts from *that* response.
 
 When the manifest produces no answer - for *any* reason, not only an unreachable
 one - the check falls back to `https://api.github.com/repos/jatoran/swe-mux/releases/latest`
@@ -201,6 +204,78 @@ cover a terminal or arrive on top of a turn; `role="status"` with
 `aria-live="polite"` is the same promise for a screen reader. It is **not** the
 `.ui-update-banner` strip beside it, which says this browser tab is behind the
 daemon it is already talking to and reloads itself.
+
+## Release install (the frozen-app updater)
+
+```text
+GET  /api/update/install
+POST /api/update/install   {version: str}   (X-Mux-User-Gesture: update-install)
+```
+
+Downloads a named release, verifies its SHA-256 against the published manifest,
+and hands the archive to the redeploy machinery's staged swap
+(`packaging/redeploy_desktop.py --from-archive`, `design/features/desktop-shell.md`).
+The swap itself is unchanged: sessions survive because the PTY supervisor owns
+them, a failure leaves the running app untouched, and a bundle that never turns
+healthy is rolled back to `dist/swe-mux.prev`.
+
+`GET` reads state and nothing else - it is polled while a download runs, so it
+makes no request, touches no archive, and inspects no bundle. It returns
+`{install_kind, swappable, bundle_root, upgrade_command, platform, artifact_name,
+current_version, running, phase, reason, message, version, artifact, archive,
+bytes_downloaded, bytes_total, started_at, finished_at, install_id, events[]}`.
+`phase` is `idle | downloading | verifying | inspecting | handed_off | refused |
+failed`, and the state is durable in `<data_dir>/update-install.json` because
+**the daemon does not survive its own swap** - a record that lived only in memory
+would be gone exactly when someone wanted to know what happened.
+A phase left mid-flight by a restart reads back as `failed`, never as still
+running: nothing is transferring, because the process that was is gone.
+
+`POST` needs two things, and they answer different questions. The
+**gesture header** is the same promise the manual check makes - nothing a
+background poll or a stray reload can trigger reaches the network on the daemon's
+behalf, and this one also replaces the application. The **named version** is
+consent about a specific release: the manifest moves, and "install whatever is
+latest" is not what a person pressing a button labelled with a version number
+agreed to, so a manifest that has moved on is `409 version_mismatch`.
+It returns `202` with the snapshot once the attempt starts, and every refusal
+that needs no network is answered as `409` to *this* request rather than left for
+a poll to discover.
+
+`reason` is a closed set, and each word is a different thing an operator can do:
+`source_install` (a `uv tool install`/wheel has no bundle to swap; the reply
+carries the `uv tool upgrade swe-mux` to run instead), `update_check_disabled`,
+`in_progress`, `no_swap_tool`, `unreachable`, `malformed`, `unsupported_schema`,
+`no_artifact` (this release publishes no bundle named for this platform - also
+the answer when the GitHub fallback found the release, since it carries no
+hashes), `version_mismatch`, `not_newer`, `truncated` (the server declared more
+bytes than it sent - a network event worth retrying), `hash_mismatch` (a complete
+body that is not the released file - never retried into success), `oversized`,
+`download_failed`, `archive_invalid` (an absolute path, a `..` segment, or a
+root other than `swe-mux/`), `bundle_metadata_missing`, `no_supervisor`,
+`supervisor_unknown`, and `supervisor_update_required`.
+
+The last one is the point of the feature rather than an edge case: updating the
+PTY supervisor reaps every live session, so a release whose daemon speaks a
+different supervisor protocol is **refused with the manual flow named** instead of
+being installed behind the operator's back. The comparison is `!=` rather than
+`>` (the supervisor's `hello` refuses any mismatch, so a downgrade strands the
+fleet exactly as a bump does) and it is the protocol rather than a source hash
+(`build_desktop.supervisor_source_hash()` mixes in the build machine's own
+package versions, so hashes never match across a release). An archive whose
+`bundle.json` is missing or unreadable is refused too: "cannot tell whether this
+reaps your sessions" is not a case to guess at.
+
+Nothing is staged before the digest matches. The download streams to a `.part`
+file while it is hashed, and only a matching digest promotes it to a name the
+swap can see, so a partial or substituted download is not a file the swap can
+find. A verified archive is kept (two at a time, under `<data_dir>/updates/`) and
+reused rather than re-fetched, which is the only resume worth having; a file under
+an artifact's name whose digest is wrong is deleted rather than trusted.
+
+`mux update` reports both halves from the CLI, and `mux update --install
+<version>` performs one - it sends the same gesture header, because typing the
+command is exactly the deliberate act that header stands for.
 
 ## Daemon self-restart
 

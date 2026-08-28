@@ -11,8 +11,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from swe_mux import __version__  # noqa: E402
 from swe_mux.build_support import publish_frontend  # noqa: E402
+from swe_mux.bundle_metadata import bundle_metadata, write_bundle_metadata  # noqa: E402
 from swe_mux.desktop import create_tray_image  # noqa: E402
+from swe_mux.supervisor import PROTOCOL_VERSION as SUPERVISOR_PROTOCOL_VERSION  # noqa: E402
+from swe_mux.update_install import release_platform_tag  # noqa: E402
 
 # The dedicated supervisor bundle's complete source closure. Rebuilding it is
 # gated on this hash: a supervisor rebuild requires reaping live sessions
@@ -139,7 +143,31 @@ def build_app_bundle(distpath: Path | None = None) -> None:
         check=True,
     )
     verify_bundle_licenses(output_root / "swe-mux")
+    describe_bundle(output_root / "swe-mux")
     print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
+
+
+def describe_bundle(bundle_root: Path) -> Path:
+    """Write `bundle.json` into a freshly built bundle.
+
+    Every bundle carries it, not only the ones that become releases: the frozen
+    updater refuses an archive it cannot interrogate, so a bundle built without
+    this is a bundle nobody can update to. Writing it here rather than in the
+    release packaging step is what makes that true of a locally-staged redeploy
+    as well - which is the tree the next redeploy's `dist/swe-mux` becomes.
+
+    `supervisor_protocol` is read from the running source's `supervisor.py`, so
+    it describes the daemon that is actually being packaged. That is the whole
+    value of the file (`swe_mux/bundle_metadata.py`).
+    """
+    return write_bundle_metadata(
+        bundle_root,
+        bundle_metadata(
+            version=__version__,
+            supervisor_protocol=SUPERVISOR_PROTOCOL_VERSION,
+            platform=release_platform_tag(),
+        ),
+    )
 
 
 # Extras the bundle is built from. Optional at *install* time - a source run

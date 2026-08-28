@@ -5,11 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import secrets
 import shutil
 import subprocess
-import sys
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -25,8 +23,6 @@ from ..bundle_locks import (
     bundle_lock_holders,
     describe_holders,
     frozen_bundle_root,
-    live_redeploy_lock_pid,
-    write_redeploy_lock,
 )
 from ..config import Config
 from ..event_bus import EventBus
@@ -39,11 +35,15 @@ from ..lifecycle import planned_handoff
 from ..logsetup import current_log_level, set_log_level
 from ..prerequisites import detect_prerequisites
 from ..processes import PreviewRegistry
+from ..redeploy_launch import (
+    RedeployInFlight,
+    claim_redeploy_lock,
+    redeploy_lock_pid,
+    redeploy_source_root,
+    spawn_redeploy,
+)
 from ..session import (
     SessionManager,
-)
-from ..spawn_contract import (
-    scrub_claude_session_markers,
 )
 from ..startup_phases import StartupTimeline
 from ..subprocess_flags import background_creation_flags, popen_outside_job
@@ -65,9 +65,6 @@ from ..wsl_bridge import install_bridge as install_wsl_bridge
 from ..wsl_bridge import setup_status as wsl_setup_status
 
 log = logging.getLogger(__name__)
-
-#: The installed `swe_mux` package directory (`src/swe_mux` in a checkout).
-PACKAGE_DIR = Path(__file__).resolve().parents[1]
 
 
 # How long the daemon lingers after broadcasting `daemon_redeploy_stopping` so the
@@ -350,31 +347,6 @@ async def daemon_restart(request: web.Request) -> web.Response:
     return response
 
 
-def redeploy_source_root() -> Path | None:
-    """The source checkout this daemon can rebuild itself from, if any.
-
-    Frozen builds live at ``<root>/dist/swe-mux/swe-mux.exe`` inside the
-    checkout; source runs resolve from this file. A frozen app deployed away
-    from its checkout has neither, and redeploy is refused.
-    """
-    candidates: list[Path] = []
-    if getattr(sys, "frozen", False):
-        with suppress(OSError, IndexError):
-            candidates.append(Path(sys.executable).resolve().parents[2])
-    with suppress(OSError, IndexError):
-        # Anchored on the package directory rather than counted from this file:
-        # this handler used to live in `server.py`, one level up, and counting
-        # from `__file__` would have silently repointed "the checkout" at `src/`
-        # when it moved.
-        candidates.append(PACKAGE_DIR.parents[1])
-    for root in candidates:
-        if (root / "packaging" / "redeploy_desktop.py").is_file() and (
-            root / "pyproject.toml"
-        ).is_file():
-            return root
-    return None
-
-
 def _redeploy_lock_pid(config: Config) -> int | None:
     """PID of a live in-flight redeploy, or None (missing/stale lock).
 
@@ -389,7 +361,7 @@ def _redeploy_lock_pid(config: Config) -> int | None:
     (`bundle_locks.REDEPLOY_LOCK_NAME`). Both readers share that rule so they
     cannot disagree about whether a redeploy is happening.
     """
-    return live_redeploy_lock_pid(config.data_dir / REDEPLOY_LOCK_NAME)
+    return redeploy_lock_pid(config)
 
 
 #: Said in the same breath as the interruption list, every time. The reflex when
@@ -662,66 +634,22 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
                 },
                 409,
             )
-    lock_path = config.data_dir / REDEPLOY_LOCK_NAME
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    # `_redeploy_lock_pid` already reported no live redeploy, so any file still
-    # here is stale (a crash between claiming the lock and writing the pid).
-    # Leaving it would make O_EXCL refuse every future redeploy.
-    with suppress(OSError):
-        lock_path.unlink(missing_ok=True)
+    # Claimed atomically *before* the spawn. Writing it afterwards let a
+    # double-submit (desktop plus phone, or a double tap) start two staged
+    # redeploys that then race the same dist/.staging tree and the swap.
+    # Shared with the frozen-app updater's handoff (`redeploy_launch.py`), which
+    # runs the same script with `--from-archive`.
     try:
-        # Claimed atomically *before* the spawn. Writing it afterwards let a
-        # double-submit (desktop plus phone, or a double tap) start two staged
-        # redeploys that then race the same dist/.staging tree and the swap.
-        lock_handle = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
+        lock_path = claim_redeploy_lock(config)
+    except RedeployInFlight as exc:
         return json_response(
-            {"error": "redeploy_in_progress", "message": "a redeploy is already starting"},
+            {"error": "redeploy_in_progress", "message": str(exc)},
             409,
         )
-    os.close(lock_handle)
     log_path = config.data_dir / "redeploy.log"
-    command = [
-        uv,
-        "run",
-        "--project",
-        str(root),
-        "python",
-        str(root / "packaging" / "redeploy_desktop.py"),
-        "--restore-visibility",
-        # The lock above is already claimed and already names this child, and the
-        # start is broadcast below; without this the script would refuse itself.
-        "--lock-held",
-    ]
-    # Without this the script targets ~/.mux, so a daemon on an alternate config
-    # reads the wrong supervisor discovery file and aborts — or worse,
-    # detach-stops a *different* instance while swapping the shared bundle.
-    if (config_path := getattr(config, "config_path", None)) is not None:
-        command += ["--config", str(config_path)]
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with log_path.open("wb", buffering=0) as log_file:
-            # Detached from this daemon's process group, lifetime, and any Job it
-            # inherited: the script stops this very daemon mid-run, so it must not
-            # die with it. cwd is the source root (never inside dist/, which would
-            # lock the rebuild) and the env is scrubbed of parent-Claude session
-            # markers.
-            process = popen_outside_job(  # noqa: ASYNC220 - non-blocking Popen
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                cwd=str(root),
-                env=scrub_claude_session_markers(os.environ),
-                creationflags=background_creation_flags()
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-            )
-    except OSError:
-        # The placeholder lock must not outlive a spawn that never happened.
-        with suppress(OSError):
-            lock_path.unlink(missing_ok=True)
-        raise
-    write_redeploy_lock(lock_path, process.pid)
+    process = spawn_redeploy(  # noqa: ASYNC220 - non-blocking Popen
+        config, root=root, uv=uv, lock_path=lock_path, log_path=log_path
+    )
     # Told to every client now, minutes before the daemon can actually go away,
     # which is what lets them show progress instead of discovering the redeploy
     # as failed requests. The script does not announce a run spawned from here.

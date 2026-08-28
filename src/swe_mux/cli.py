@@ -100,9 +100,19 @@ def resolve_base_url(explicit: str | None) -> str:
 
 
 def request(
-    method: str, path: str, body: dict[str, object] | None = None, *, base: str
+    method: str,
+    path: str,
+    body: dict[str, object] | None = None,
+    *,
+    base: str,
+    headers: dict[str, str] | None = None,
 ) -> Any:
-    headers = {"Content-Type": "application/json"}
+    # `headers` exists for the explicit-gesture routes (the update check and the
+    # updater), which refuse a request that does not carry one. Typing a command
+    # is exactly the deliberate act that header stands for, so the CLI is
+    # entitled to send it - and it is spelled at the call site rather than
+    # defaulted here, so nothing acquires the gesture by accident.
+    headers = {"Content-Type": "application/json", **(headers or {})}
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
@@ -315,6 +325,41 @@ def _render_doctor(result: Any) -> str:
     return "\n".join([*lines, "", f"{header} - {verdict}"])
 
 
+def _render_update(result: Any) -> str:
+    """The two halves an operator needs: what exists, and what this install can do.
+
+    They are separate questions, and the answer to the first does not imply the
+    second: a source install is told about a release it must upgrade to with a
+    different command entirely, and reporting "an update is available" without
+    that would send someone hunting for a button that is correctly not there.
+    """
+    check = result.get("check", {}) if isinstance(result, dict) else {}
+    install = result.get("install", {}) if isinstance(result, dict) else {}
+    latest = check.get("latest") or {}
+    lines = [
+        f"running   {check.get('current_version', '?')}",
+        f"latest    {latest.get('version', '-')} ({check.get('status', '?')})",
+        f"install   {install.get('install_kind', '?')}"
+        + ("" if install.get("swappable") else " (no bundle swap)"),
+    ]
+    if not install.get("swappable") and install.get("upgrade_command"):
+        lines.append(f"upgrade   {install['upgrade_command']}")
+    elif check.get("update_available") and latest.get("version"):
+        lines.append(f"upgrade   mux update --install {latest['version']}")
+    if install.get("phase") and install.get("phase") != "idle":
+        lines.append(f"last      {install.get('phase')} {install.get('reason', '')}".rstrip())
+        if install.get("message"):
+            lines.append(f"          {install['message']}")
+    return "\n".join(lines)
+
+
+def _render_update_install(result: Any) -> str:
+    payload = result if isinstance(result, dict) else {}
+    head = f"{payload.get('phase', '?')} {payload.get('version', '')}".strip()
+    message = payload.get("message") or payload.get("error") or ""
+    return f"{head}\n{message}".strip()
+
+
 def local_doctor_report(*, base: str, detail: str) -> dict[str, Any]:
     """The degraded report, built when no daemon answered at ``base``.
 
@@ -419,6 +464,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="report lists what would change; repair merges each conversation's rows",
     )
 
+    update = sub.add_parser(
+        "update",
+        parents=[common],
+        help="report the release check and this install's update path",
+    )
+    update.add_argument(
+        "--install",
+        metavar="VERSION",
+        help=(
+            "download exactly this version, verify its SHA-256 against the published "
+            "manifest, and hand it to the staged swap (frozen desktop app only)"
+        ),
+    )
+
     resume = sub.add_parser("resume", parents=[common], help="resume a history entry")
     resume.add_argument("id", help="history entry id")
     resume.add_argument("--project", required=True)
@@ -466,6 +525,25 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
     if args.command == "kill":
         sid = resolve_session(args.session, base=base)
         return request("DELETE", f"/api/sessions/{sid}", base=base), None
+    if args.command == "update":
+        if args.install:
+            return (
+                request(
+                    "POST",
+                    "/api/update/install",
+                    {"version": args.install},
+                    base=base,
+                    headers={"X-Mux-User-Gesture": "update-install"},
+                ),
+                _render_update_install,
+            )
+        return (
+            {
+                "check": request("GET", "/api/update", base=base),
+                "install": request("GET", "/api/update/install", base=base),
+            },
+            _render_update,
+        )
     if args.command == "reload-daemon":
         return request("POST", "/api/daemon/restart", {"force": args.force}, base=base), None
     if args.command == "history":

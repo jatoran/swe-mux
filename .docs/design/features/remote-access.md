@@ -113,6 +113,11 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   It is gated by `update_check_enabled` (Settings → Diagnostics → **Software updates**,
   on by default), and off means no request is made at all - not a reduced one, not a
   deferred one. Nothing downloads or installs.
+  Installing an update **does** download, and it stays on the operator's side of that line:
+  it happens only on an explicit act naming a version (`POST /api/update/install`,
+  `mux update --install`, `design/interfaces.md`), it fetches the artifact the manifest
+  names from GitHub Releases, and it verifies the SHA-256 before anything is staged. The
+  same switch gates it, so "off means nothing leaves the machine" holds for both halves.
   Every other outbound path in the app belongs to a feature the operator turned on and
   points at a service they configured: the OpenRouter-compatible endpoint for
   summarization and the assistant, the browser vendor's web-push service, and experimental

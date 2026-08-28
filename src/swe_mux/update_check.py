@@ -44,8 +44,15 @@ and served at `https://swemux.dev/version.json`:
 `schema` is the version of that contract, and an unrecognized value is answered
 with "cannot tell" rather than with a best guess - a build installed today will
 still be reading this file in three years, and it cannot be asked to change
-first. `artifacts` is read past deliberately: it exists for the updater, and a
-check that neither downloads nor verifies has no use for a hash.
+first.
+
+`artifacts` is parsed here and used by `update_install.py`, but it is
+deliberately **not persisted** in `<data_dir>/update-check.json` and not served
+by `GET /api/update`. A hash is only worth anything at the moment it is checked
+against bytes: the release workflow uploads with `--clobber`, so a day-old cached
+hash is a claim about a file that may since have been replaced. The updater
+therefore re-fetches the manifest at install time and reads the artifacts from
+*that* response, and this module keeps only the four things a banner needs.
 """
 
 from __future__ import annotations
@@ -272,8 +279,31 @@ def is_newer(candidate: str, current: str) -> bool | None:
 
 
 @dataclass(frozen=True, slots=True)
+class Artifact:
+    """One downloadable file named by the manifest.
+
+    `sha256` may be empty, and that is a real state rather than an oversight: it
+    is what an artifact list assembled from anywhere other than the manifest
+    looks like. An empty hash is never treated as "skip the check" - it is what
+    makes an artifact un-installable (`update_install.py`).
+    """
+
+    name: str
+    url: str
+    sha256: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"name": self.name, "url": self.url, "sha256": self.sha256}
+
+
+@dataclass(frozen=True, slots=True)
 class Release:
-    """What a check found, reduced to the four things a banner needs."""
+    """What a check found, reduced to the four things a banner needs.
+
+    `artifacts` rides along for the updater and is excluded from `as_dict` on
+    purpose: that projection is what gets persisted and served, and a stored hash
+    is a claim about bytes nobody is holding.
+    """
 
     version: str
     tag: str
@@ -281,6 +311,7 @@ class Release:
     changelog: str
     #: `manifest` or `github`, so the surface can say which source answered.
     source: str
+    artifacts: tuple[Artifact, ...] = ()
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -332,9 +363,41 @@ def parse_manifest(payload: object) -> tuple[Release | None, str]:
             published=published.strip() if isinstance(published, str) else "",
             changelog=changelog.strip() if isinstance(changelog, str) else "",
             source="manifest",
+            artifacts=parse_artifacts(payload.get("artifacts")),
         ),
         OK,
     )
+
+
+def parse_artifacts(payload: object) -> tuple[Artifact, ...]:
+    """The manifest's `artifacts` list, keeping only fully-described entries.
+
+    Called only from inside the schema gate above, so it never has to decide
+    whether it is reading a document it understands.
+
+    An entry missing any of its three fields is dropped rather than kept with a
+    blank hash. The distinction matters at the other end: "this release names no
+    installable artifact for your platform" is a fact an operator can act on,
+    while a half-described entry that reaches the downloader would have to be
+    refused there anyway, one layer further from where the manifest was read.
+    """
+    if not isinstance(payload, list):
+        return ()
+    artifacts: list[Artifact] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        url = entry.get("url")
+        digest = entry.get("sha256")
+        if not (isinstance(name, str) and isinstance(url, str) and isinstance(digest, str)):
+            continue
+        if not (name.strip() and url.strip() and digest.strip()):
+            continue
+        artifacts.append(
+            Artifact(name=name.strip(), url=url.strip(), sha256=digest.strip().lower())
+        )
+    return tuple(artifacts)
 
 
 def parse_github_release(payload: object) -> tuple[Release | None, str]:
@@ -344,6 +407,13 @@ def parse_github_release(payload: object) -> tuple[Release | None, str]:
     are checked rather than trusted: a payload that carries `draft: true` is not
     the endpoint we think we called, and answering "unknown" is better than
     announcing a release that is not published.
+
+    It yields **no artifacts**, and that is the point rather than a gap. GitHub's
+    release payload lists assets with download URLs and no digests, so a release
+    found this way can be announced but can never be installed: the updater's
+    first rule is that nothing is staged without a hash from the manifest, and
+    inventing an artifact list here would put an unverifiable download one
+    refusal away from the swap.
     """
     if not isinstance(payload, dict):
         return None, MALFORMED
