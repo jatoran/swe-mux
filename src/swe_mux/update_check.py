@@ -37,7 +37,7 @@ and served at `https://swemux.dev/version.json`:
 ```json
 {"schema": 1, "version": "0.1.0", "tag": "v0.1.0",
  "published": "2026-08-27T00:00:00Z",
- "changelog": "https://github.com/OWNER/swe-mux/releases/tag/v0.1.0",
+ "changelog": "https://github.com/jatoran/swe-mux/releases/tag/v0.1.0",
  "artifacts": [{"name": "...", "url": "...", "sha256": "..."}]}
 ```
 
@@ -80,12 +80,13 @@ MANIFEST_URL = "https://swemux.dev/version.json"
 #: check that runs once a day, and `releases/latest` is a stable contract that
 #: predates this project by a decade.
 #:
-#: TODO(release): OWNER - the GitHub organization is undecided. Replace it here
-#: when the repository is published, the same replacement `README.md`,
-#: `SECURITY.md`, and `pyproject.toml` are waiting on. Until then the fallback
-#: resolves to a 404, which is exactly the "unknown" this module is built to
-#: degrade to, so nothing misbehaves in the meantime.
-GITHUB_REPOSITORY = "OWNER/swe-mux"
+#: The repository is the one the release workflow publishes to, so this constant
+#: and `release.yml`'s `github.repository` must name the same thing: the manifest
+#: this file exists to stand in for is written from that repository's own
+#: artifacts, and a fallback pointed elsewhere would answer with a different
+#: project's version rather than failing. While the repository is empty this
+#: resolves to a 404, which is exactly the "unknown" the module degrades to.
+GITHUB_REPOSITORY = "jatoran/swe-mux"
 GITHUB_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 
 #: The manifest schema this build understands. Anything else is "cannot tell".
