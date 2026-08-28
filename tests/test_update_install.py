@@ -20,8 +20,10 @@ metadata contract tested rather than restated.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import sys
+import tarfile
 import zipfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -32,7 +34,13 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
-from swe_mux.bundle_archive import ArchiveError, read_archive_metadata, validate_members
+from swe_mux.bundle_archive import (
+    ARCHIVE_ROOT,
+    TAR_GZ_SUFFIX,
+    ArchiveError,
+    read_archive_metadata,
+    validate_members,
+)
 from swe_mux.bundle_metadata import (
     BUNDLE_METADATA_MALFORMED,
     BUNDLE_METADATA_MISSING,
@@ -178,6 +186,28 @@ def make_archive(
     """A real release archive, produced by the real packaging writer."""
     bundle = make_bundle(tmp_path / "build" / "swe-mux", version=version, protocol=protocol)
     return package_desktop_release.build_archive(bundle, tmp_path / "out")
+
+
+def write_plain_archive(path: Path, members: dict[str, bytes]) -> Path:
+    """A structurally valid release archive in *this host's* container format.
+
+    For the cases the real writer cannot produce - an archive deliberately
+    missing its `bundle.json`, say. `bundle_archive` chooses its reader from the
+    file's suffix and never by sniffing content, so the container has to match
+    the name `release_archive_name` gives it or the archive is refused as
+    unreadable before the property under test is reached.
+    """
+    if path.name.endswith(TAR_GZ_SUFFIX):
+        with tarfile.open(path, "w:gz") as tar:
+            for name, payload in members.items():
+                info = tarfile.TarInfo(name)
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+    else:
+        with zipfile.ZipFile(path, "w") as bundle:
+            for name, payload in members.items():
+                bundle.writestr(name, payload)
+    return path
 
 
 def manifest(
@@ -638,14 +668,17 @@ async def test_an_archive_without_bundle_metadata_cannot_be_installed(
     # Not a corner case: it is what an archive built before this contract existed
     # looks like, and it is exactly the archive whose supervisor requirement
     # nobody can determine.
-    # `release_archive_name`, not a hand-built name: the suffix is per host
-    # (`.zip` on Windows, `.tar.gz` on macOS and Linux), so hardcoding `.zip`
-    # named an artifact no POSIX host would ever look for. The installer then
-    # stopped at `no_artifact` before it could reach the metadata check this
-    # test is about, and both POSIX legs went red on a passing Windows one.
-    plain = tmp_path / release_archive_name(NEXT)
-    with zipfile.ZipFile(plain, "w") as bundle:
-        bundle.writestr("swe-mux/swe-mux.exe", "MZ")
+    # The *container* has to be this host's too, not just the name. The name was
+    # fixed first - `release_archive_name`, because the suffix is per host
+    # (`.zip` on Windows, `.tar.gz` on macOS and Linux) and a hardcoded `.zip`
+    # named an artifact no POSIX host would ever look for - but the bytes stayed
+    # a zip, and `bundle_archive` dispatches on the suffix by design: a zip
+    # inside a `.tar.gz` is `archive_invalid` before any metadata question is
+    # reached. That is the correct refusal for the file the fixture built, and it
+    # is a different one from the refusal under test.
+    plain = write_plain_archive(
+        tmp_path / release_archive_name(NEXT), {f"{ARCHIVE_ROOT}/swe-mux.exe": b"MZ"}
+    )
     fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(plain)])})
     handoff = Handoff()
     installer = build(

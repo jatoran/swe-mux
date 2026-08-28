@@ -21,6 +21,7 @@ import {
   availableDrawerSegments, drawerSectionTarget, drawerSegment, hasDrawerSegments,
   hasSharedSegmentBody, resolveDrawerSegment, type DrawerSegmentContext,
 } from './drawerSegments'
+import { helpTopicForDrawer } from './helpTopics'
 import { DrawerSegmentControl } from './DrawerSegmentControl'
 import { revealSetting } from './settingReveal'
 import { drawerTabVisible, visibleDrawerTabs } from './drawerVisibility'
@@ -66,6 +67,10 @@ type Props = {
   onTab: (tab: DrawerTabId, collapseIfSelected?: boolean) => void
   /** Select a segment of a tab. Persisted per Project beside the tab selection itself. */
   onSegment: (tab: DrawerTabId, segment: string) => void
+  /** Open help on one topic. The pane heading offers it for whichever surface it is
+   *  drawing, which is what makes the answer reachable from where the question is asked
+   *  rather than only from the app menu. */
+  onHelp: (topic: string) => void
   /** One-shot request to scroll a *section* into view and flash it, from a palette entry,
    *  a voice phrase, or an Action button that names one. Sections are co-visible regions
    *  rather than modes, so arriving at one is a scroll, not a selection. */
@@ -666,6 +671,18 @@ export function UtilityDrawer(props: Props) {
               />
             : <h2 class="drawer-panel-title" title={active.title}>{heading}</h2>}
           <span class="drawer-scope-context">{scopeContext(selected)}</span>
+          {/* Drawn from the topic registry rather than per tab, so a surface with no
+              topic gets no control instead of an empty modal, and a topic added later
+              needs no edit here. */}
+          {(() => {
+            const topic = helpTopicForDrawer(selected, segment)
+            return topic ? <button
+              class="drawer-help"
+              aria-label={`Help: ${topic.title}`}
+              title={`Help: ${topic.title}`}
+              onClick={() => props.onHelp(topic.id)}
+            >?</button> : null
+          })()}
           {stack.id === collapseHostId && <button
             class="drawer-collapse"
             aria-label="Collapse side panel"

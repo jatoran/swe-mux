@@ -382,6 +382,11 @@ Its rules, and what each one is defending:
   six tabs measured neither a token nor a dollar. A subject nobody finds by guessing which
   meter it was filed under is exactly the thing a menu row buys. The row-count discipline
   above is about rows that duplicate a route, not about refusing a destination.
+- **`Help` is the last row, below Settings.** It is the only row that explains rather than
+  opens, and it is drawn here because this menu is where every other app-wide surface is
+  looked for. It is not the primary route by design: the person who needs help is the person
+  who has not found this menu, which is why `help.open` is a command with spoken aliases
+  first and a row second (see "Help" below).
 - **No row in this menu ends in an ellipsis.** Every row here opens something — that is what
   the menu is — so a mark that means "this opens something" appeared on nearly all of them
   and therefore distinguished none.
@@ -1202,6 +1207,40 @@ Its rules, and what each one is defending:
   SQLite behind the queue pane, outside the draft/Save cycle.
 - General exposes **Reset & run tutorial**. Starting it shares the ordinary Settings
   Save/Discard guard, so replay never silently loses a dirty draft.
+  It is no longer the only door to the tour, and was never a discoverable one: `help.open`,
+  `tutorial.start`, and the app menu's **Help** row all reach it (see "Help" below).
+
+## Help
+
+The app-wide answer to "what is this", and the recovery path for the tour.
+
+- **It is a registered command before it is a control.** `help.open` opens the index,
+  `tutorial.start` runs the tour, and `help.topic.<id>` opens one topic - each with spoken
+  aliases, because a surface reached only by clicking has no palette entry and no voice
+  phrase. That is the same rule `drawerSegments.ts` enforces for a folded-in segment, and it
+  is why Help is not simply a menu row.
+  The bare word "help" is deliberately **not** one of those aliases: `voiceQueries.ts` has
+  owned it for the voice command catalog since Phase 10.6, and two surfaces answering one
+  phrase is worse than either of them.
+- **No help prose is written by hand.** Each topic's body is generated from the feature doc
+  that defines the surface (`frontend/scripts/build-help-content.mts` →
+  `frontend/src/helpContent.generated.ts`), and the modal says so on the page - "From
+  `<doc>`, the document that defines this surface" - because that claim is the whole point.
+  The one authored string per topic is a `blurb`: a plain sentence for a reader who has not
+  read a design document and should not have to.
+  The content is generated **into the tree** rather than imported at build time, for the same
+  reason the shipped configurator guides live under `src/swe_mux/assets/`: `.docs/` is carried
+  in neither the wheel nor the PyInstaller bundle. Freshness is a test
+  (`frontend/test/helpTopics.test.ts` regenerates and compares), exactly as
+  `harnessRegistrySeed.ts` is guarded.
+- **A topic's in-context control is drawn from the registry, never per tab.** The drawer's
+  pane heading offers `?` for whichever surface it is drawing, resolved by
+  `helpTopicForDrawer(tab, segment)`; a tab with no registered topic gets no control rather
+  than an empty modal. The scan timeline is Activity's **Timeline** segment, so that is where
+  its help opens from.
+- Each topic links to `https://swemux.dev/docs/<id>/` for the full page. The trailing slash is
+  load-bearing under the Pages Actions source, and the retired `/docs/#<slug>` fragment form
+  must not come back (`site/README.md`).
 
 ## Guided first-run tutorial
 
@@ -1274,6 +1313,21 @@ Its rules, and what each one is defending:
   work on every step; progress, reduced-motion styling, and the mobile bottom sheet remain.
 - Completion is browser-local only. No daemon config, Project file, account metadata, or layout
   field records tutorial state.
+- **The tour may only name chrome that exists, and that is enforced rather than reviewed.**
+  It is prose about a moving app, and prose is what nothing verifies: the walk told every new
+  user for months that the app menu had a `Utilities` group holding the viewers, long after
+  that group was unfolded into eight plain rows, because a string inside a JSX body is
+  invisible to every test in the suite. `frontend/test/tourChrome.test.ts` closes it in three
+  ways. Every `[data-tutorial="…"]` in the step list is **derived** from the tour and checked
+  against the components, so a spotlight on a mark nobody renders fails with nothing to
+  maintain. Every Settings path and menu-row name the copy uses is **declared**
+  (`TUTORIAL_CHROME_CLAIMS` in `tutorial.ts`) and checked in both directions - the name must
+  exist in the live chrome, and the copy must really say it - so the declaration cannot rot
+  into a list of names the tour stopped using. And every `Settings →` in the copy must be
+  declared, which is what stops a fourth one arriving unchecked.
+  The declaration is not decoration: there is no way to derive "this sentence names a menu
+  row" from prose, and a renderer harness cannot answer it either, because the two components
+  are never mounted together.
 
 ## Focus and responsive behavior
 
@@ -3383,6 +3437,9 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/Settings.tsx`
 - `frontend/src/GuidedTutorial.tsx`
 - `frontend/src/tutorial.ts`
+- `frontend/src/HelpModal.tsx`
+- `frontend/src/helpTopics.ts`
+- `frontend/src/helpContent.generated.ts` (generated by `frontend/scripts/build-help-content.mts`)
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/src/ResourceUsage.tsx`
 - `frontend/src/TerminalPane.tsx`

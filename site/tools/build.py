@@ -400,7 +400,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
               letter-spacing: 0.01em; }
 .doclist .t > a { color: inherit; }
 .doclist .t > a:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
-.doclist span.d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
+.doclist span.d { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; max-width: 72ch; }
 /* Inside `.t`, not a third grid child: as its own cell it lands on a second row
    whose top is set by the tallest summary, which floats it away from the title
    it names. */
@@ -563,6 +563,9 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   appearance: none;
 }
 .dsearch input::placeholder { color: var(--fg-3); }
+/* 16px on narrow screens, because iOS Safari zooms the whole page into any
+   focused input whose font is smaller than that. */
+@media (max-width: 899px) { .dsearch input { font-size: 16px; } }
 .dsearch input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 /* The `/` hint, drawn as a key. `--fg-3` rather than `--fg-4`, because `--fg-4`
    does not clear AA and is restricted to borders and inert markers. */
@@ -773,6 +776,8 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
 </head>
 <body>
 
+<a class="skip" href="#main">skip to content</a>
+
 <div class="bar">
   <div class="wrap">
     <a class="brand" href="{up}" aria-label="swe-mux, home">
@@ -806,38 +811,47 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
   </div>
 </div>
 
-<main>
+<main id="main">
 {body}
 </main>
 
 <footer>
   <div class="wrap">
-    <div class="cols">
-      <div>
-        <img class="brandmark dark" src="{up}img/logo.png" width="640" height="73" alt="swe-mux" />
-        <img class="brandmark lite" src="{up}img/logo-light.png" width="640" height="73" alt="swe-mux" />
-        <div>Agentic development environment and agent control plane.</div>
-        <div>Windows-first. Local-only. No account.</div>
-      </div>
-      <div>
+    <div class="fbrand">
+      <img class="brandmark dark" src="{up}img/logo.png" width="640" height="73" alt="swe-mux" />
+      <img class="brandmark lite" src="{up}img/logo-light.png" width="640" height="73" alt="swe-mux" />
+      <p>Agentic development environment and agent control plane.<br />
+      Windows-first. Local-only. No account.</p>
+    </div>
+    <div class="fcols">
+      <div class="fcol">
         <h4>pages</h4>
-        <div><a href="{up}">home</a> &middot; <a href="{up}docs/">docs</a>
-        &middot; <a href="{up}blog/">blog</a></div>
-        <div><a href="{up}changelog/">changelog</a> &middot; <a href="{up}roadmap/">roadmap</a>
-        &middot; <a href="{up}acknowledgements/">acknowledgements</a></div>
+        <ul>
+          <li><a href="{up}">home</a></li>
+          <li><a href="{up}docs/">docs</a></li>
+          <li><a href="{up}blog/">blog</a></li>
+          <li><a href="{up}changelog/">changelog</a></li>
+          <li><a href="{up}roadmap/">roadmap</a></li>
+          <li><a href="{up}acknowledgements/">acknowledgements</a></li>
+          <li><a href="{up}compare/">compare</a></li>
+        </ul>
       </div>
-      <div>
+      <div class="fcol">
         <h4>source</h4>
-        <div><a href="{REPO}">github.com/jatoran/swe-mux</a></div>
-        <div><a href="{IDEAS}">request a feature</a> &middot;
-        <a href="{REPO}/issues">report a bug</a></div>
-        <div><code>.docs/design/00_OVERVIEW.md</code></div>
+        <ul>
+          <li><a href="{REPO}">github.com/jatoran/swe-mux</a></li>
+          <li><a href="{IDEAS}">request a feature</a></li>
+          <li><a href="{REPO}/issues">report a bug</a></li>
+        </ul>
       </div>
-      <div>
+      <div class="fcol">
         <h4>legal</h4>
-        <div><a href="{BLOB}/LICENSE">Apache-2.0</a></div>
-        <div><a href="{BLOB}/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
-        <div><a href="{up}privacy/">Privacy</a> &middot; <a href="{up}terms/">Terms</a></div>
+        <ul>
+          <li><a href="{BLOB}/LICENSE">Apache-2.0</a></li>
+          <li><a href="{BLOB}/THIRD-PARTY-NOTICES.md">Third-party notices</a></li>
+          <li><a href="{up}privacy/">Privacy</a></li>
+          <li><a href="{up}terms/">Terms</a></li>
+        </ul>
         <div class="social">
           <a href="{X_URL}" rel="me" aria-label="swe-mux on X" title="swe-mux on X">
             {X_MARK}
