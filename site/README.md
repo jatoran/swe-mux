@@ -11,12 +11,13 @@ site/
   roadmap/index.html  | and regenerate. Section 10 says which source is which.
   acknowledgements/index.html
   content/            the hand-authored sources for the two curated pages
-  img/                logo variants and screenshots
+  img/                logo variants, and the screenshot placeholders (section 8)
   tools/build.py      generates the four pages above from their sources
   tools/check.mjs     layout + behaviour gate over every page (borrows Playwright
                       from ../frontend)
   tools/contrast.py   recomputes the WCAG table from the stylesheet
   tools/logo.py       regenerates both wordmark variants from the source render
+  tools/placeholders.py  regenerates every screenshot placeholder in img/
   tools/wordmark-source.png   the render logo.py keys; lives in tools/ so the
                               deploy root holds only deployable files
 ```
@@ -35,6 +36,7 @@ grep -rn data-todo site/       # unfilled placeholder URLs
 ```
 
 All three exit non-zero on failure and take no arguments.
+`tools/logo.py` and `tools/placeholders.py` are generators rather than gates, so they are not in that list; run them when their inputs move, not every ship.
 `build.py --check` is the exception: it fails instead of writing when a generated page is stale, which is how you find out that a source moved without touching the tree.
 
 `check.mjs` covers the things that have actually broken here before, and it covers them on **every** page.
@@ -371,17 +373,55 @@ Verified by compositing both variants over dark, light, and a hostile mid-grey: 
 Diagrams carry their own placeholder class (`.vis`) separate from screenshot crops (`.crop`), because they are illustrations to be drawn rather than shots to be taken.
 Two are specified so far: the workbench split tree, and the control plane's escalating-cost stack with a human gate on every arrow leaving it.
 
-## Current status
+## Current status: EVERY SCREENSHOT IN `img/` IS A PLACEHOLDER
 
-`img/mobile-session.webp` is wired into the page and is the only screenshot that passes.
-It is naturally cropped, on-claim, and shows only swe-mux's own repository.
+**There is no real screenshot anywhere in this directory, and none may be committed until it has been taken in an environment with no personal or third-party data in it.**
+All nine files below are generated panels, not captures.
+They must each be replaced with a real, scrubbed shot before launch.
 
-The other eight captures are **not usable as-is** and are not referenced by the page.
-The five `desktop-*` files are full-window shots, which this document forbids.
-All of them need scrubbing: they show unrelated project names in the sidebar and competitor checkout directories (`.tmp-herdr/`, `.tmp-omp/`) in the file tree.
-`desktop-alerts.webp` additionally shows the attention inbox with zero records.
+| File | Label it draws | What the real capture must contain |
+|---|---|---|
+| `img/desktop-workspace.webp` | Desktop workspace | The hero composite: sidebar, a split pane region with a working agent, the utility drawer open. The one shot allowed to include chrome. |
+| `img/desktop-alerts.webp` | Attention inbox | The ranked inbox cropped to the panel, with the interrupt budget line and at least one suppressed item and its reason. Not an empty inbox. |
+| `img/desktop-git.webp` | Git map | The Git drawer's map cropped to the rows: branches with ahead/behind counts and the commit provenance column. |
+| `img/desktop-insight.webp` | Behaviour timeline | The Insight tab's timeline cropped to the records, budget visible, actual records present. |
+| `img/desktop-notes.webp` | Note editor | The note editor body only, cropped out of the drawer: rendered headings, nested lists, a checkbox row. |
+| `img/mobile-session.webp` | Mobile session | A live agent mid-turn on a phone: tab rail, status line, context meter, touch key rail. **This is the only one the page currently references** (section 01). |
+| `img/mobile-nav.webp` | Mobile navigation | The navigation overlay: two projects expanded with session rows, status dots, elapsed times, model names. |
+| `img/mobile-notes.webp` | Mobile notes | The Markdown editor on a phone with rendered structure. |
+| `img/mobile-alerts.webp` | Mobile alerts | The attention inbox on a phone with ranked items present and the budget line visible. |
 
-The page keeps dashed placeholders wherever a real image is not yet usable, and each placeholder states exactly what its replacement must contain.
+That table is a copy of `SLOTS` in `tools/placeholders.py`, which is where it is maintained; the script is the thing that has to agree with the files.
+
+### Why they are placeholders rather than scrubbed captures
+
+The captures that occupied these nine filenames were screenshots of a live machine.
+Between them they showed the operator's full project sidebar (ten unrelated private project names), the operator's own name against two provider accounts with their spend percentages, absolute local paths, competitor checkout directories (`.tmp-herdr/`, `.tmp-omp/`) in the file tree, and several screens of real transcript prose.
+`site/` is the GitHub Pages deploy root, so every file in it is served whether or not a page references it; eight of the nine were not referenced and would have been published anyway.
+
+Blurring or cropping was rejected.
+A redaction leaves the original bytes in that file's git history, and an image on a public domain is scraped and cached faster than it can be withdrawn.
+The files were replaced outright.
+
+### What the placeholders are
+
+`tools/placeholders.py` draws them, and it is committed for two reasons: so they can be regenerated when the palette moves, and, more importantly, so it is obvious from the tree that these are placeholders rather than content.
+
+They match the dimensions of the captures they replaced exactly (`2100x1275` desktop, `1206x2622` mobile), so the page's layout and `tools/check.mjs`'s overflow assertions are unchanged.
+
+They are **one raster each, with a transparent ground**, rather than a dark/light pair the way the wordmark is.
+A real screenshot is one file, so a pair would bake a naming convention into the markup that dies the day the first real capture lands.
+`figure.shot` supplies `background: var(--panel-2)`, so the placeholder takes the page's own panel colour in whichever theme is showing, and swapping in a real capture is a file replacement with no markup change.
+
+Every mark is a stylesheet token rescaled to one computed luminance, because no single colour clears AA against both `--panel-2` values - the two grounds are 15.11:1 apart, so a colour dark enough for one is invisible on the other.
+The script solves for the luminance whose contrast against the two is equal, which lands at 3.88:1 dark and 3.89:1 light: above the 3.0 large-text floor in both themes rather than comfortable in one and unreadable in the other.
+It refuses to write if a mark drops below that floor, so a palette edit cannot quietly make them illegible.
+
+### The page's own copy
+
+The one referenced placeholder is captioned `Placeholder.` on the page, followed by what the real shot will contain.
+Do not restore the `Real screenshot.` caption until the file under it is one.
+The dashed `.crop` and `.vis` placeholders elsewhere on the page are unchanged: they are CSS, they carry no image, and each already states what its replacement must contain.
 
 ---
 
@@ -506,5 +546,7 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
 - **Replace the install commands.** `get.swe-mux.dev` does not exist. The `source` flow is the only real one today, and its full version is the landing page's own Install section (`11` on the page, not in this file).
   The clone URL no longer says `REPLACE`: it resolves to `github.com/jatoran/swe-mux`, in the hero command and in the footer, alongside the license links added in Phase 10.5.
   If the project is ever published under an organisation rather than that account, both places and the footer's two license links change together.
-- **Re-shoot and scrub the screenshots.** See section 8.
+- **Re-shoot every screenshot.** All nine files in `img/` are generated placeholders and none of them is a capture; section 8 has the table of what each replacement must contain.
+  Shoot them on an install with no personal or third-party data on screen: no unrelated project names, no account or operator name, no spend or quota percentages, no absolute local paths, no competitor checkouts in the file tree, no real transcript prose.
+  Delete `tools/placeholders.py` and its row in section 8 once the last slot holds a real shot.
 - **Draw the two diagrams.** See section 8.
