@@ -54,7 +54,7 @@ from .subprocess_flags import background_creation_flags
 from .transcript_view import SpokenExchange, final_exchange_record, message_exchange
 from .tts_profiles import TtsProfile, resolve_tts_profile
 from .voice_audio import join_wav_files
-from .voice_models import ENGLISH_VOICES, KokoroModelStore
+from .voice_models import ENGLISH_VOICES, KokoroModelStore, WhisperModelStore
 
 
 def _last_exchange(
@@ -1396,6 +1396,7 @@ class VoiceService:
         automation_store: AutomationStore,
         provider: OpenRouterClient,
         kokoro_models: KokoroModelStore | None = None,
+        whisper_models: WhisperModelStore | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -1404,6 +1405,9 @@ class VoiceService:
         self.automation_store = automation_store
         self.provider = provider
         self.kokoro_models = kokoro_models or KokoroModelStore(config.data_dir)
+        # The STT half of the same first-use contract: weights are a reported
+        # state and an explicit download, never something the first Talk fetches.
+        self.whisper_models = whisper_models or WhisperModelStore()
         self.edge_tts = EdgeTtsProvider(config)
         self._kokoro_engine: KokoroEngine | None = None
         # Voice-audition samples, per voice for the daemon's lifetime: the whole
@@ -3232,7 +3236,10 @@ class VoiceService:
                 "voice-local extra (`uv sync --extra voice-local`), or select "
                 "Windows Speech Recognition in Settings"
             ) from exc
-        name = self._ensure_whisper_model(WhisperModel, profile)
+        self._require_whisper_weights(profile)
+        name = self._ensure_whisper_model(
+            WhisperModel, profile, installed=self._whisper_weights_present
+        )
         # int16 PCM straight from the validated WAV header. `astype` copies, so the
         # read-only buffer view never reaches the decoder.
         samples = numpy.frombuffer(frames, dtype=numpy.int16).astype(numpy.float32) / 32768.0
@@ -3254,21 +3261,71 @@ class VoiceService:
                     f"local Whisper transcription failed: {str(fallback_error)[:300]}"
                 ) from fallback_error
 
-    def _ensure_whisper_model(self, model_class: Any, profile: str) -> str:
+    def _whisper_weights_present(self, name: str) -> bool:
+        """Already loaded in this process, or already on disk. Never a download."""
+        return name in self._whisper_models or self.whisper_models.cached(name)
+
+    def _require_whisper_weights(self, profile: str) -> None:
+        """Refuse rather than let the decoder download the weights behind the operator.
+
+        `WhisperModel(name)` fetches from Hugging Face on construction, so without
+        this the first Talk on a fresh install is a silent multi-gigabyte download
+        inside a transcription. The routing model is exempt from the refusal on
+        its own - `_ensure_whisper_model` already treats it as a latency
+        optimisation and falls back - so this only fires when *neither* the
+        profile's model nor the dictation model it would fall back to is here.
+        """
+        name = self.decode_model(profile)
+        fallback = self.config.stt_whisper_model
+        if self._whisper_weights_present(name) or self._whisper_weights_present(fallback):
+            return
+        status = self.whisper_models.status(fallback)
+        size = f" ({status['size_hint']})" if status["size_hint"] else ""
+        raise VoiceError(
+            f"the local Whisper model '{fallback}' is not downloaded{size}; "
+            "download it in Settings → Voice, or switch the daemon transcription "
+            "engine to Windows Speech Recognition. Nothing is downloaded until "
+            "you ask for it."
+        )
+
+    def _ensure_whisper_model(
+        self,
+        model_class: Any,
+        profile: str,
+        *,
+        installed: Callable[[str], bool] | None = None,
+    ) -> str:
         """Load the model this profile wants, falling back to the dictation model.
 
         A missing or unloadable routing model must not take the command path down
         with it: it is a latency optimisation, and the dictation model answers the
         same question correctly, only slower.
+
+        `installed` is the "are these weights already here" predicate. Constructing
+        a `WhisperModel` *downloads* its weights, so an absent routing model has to
+        be skipped rather than attempted - the fetch is a separate explicit act.
+        It is injected rather than read off the store so that a caller testing the
+        load-failure ladder can exercise it without weights on the machine; the
+        production caller (`_transcribe_whisper`) always passes it.
         """
         name = self.decode_model(profile)
         if name in self._whisper_models:
             return name
+        fallback = self.config.stt_whisper_model
+        if installed is not None and name != fallback and not installed(name):
+            log.info(
+                "voice stt routing model %s is not downloaded; using %s",
+                name,
+                fallback,
+                extra={"routing_model": name, "fallback": fallback},
+            )
+            name = fallback
+            if name in self._whisper_models:
+                return name
         try:
             self._load_whisper_model(model_class, name)
             return name
         except Exception as exc:
-            fallback = self.config.stt_whisper_model
             if name == fallback:
                 raise VoiceError(f"local Whisper model could not load: {str(exc)[:300]}") from exc
             log.warning("voice stt routing model %s could not load; using %s", name, fallback)
@@ -3379,6 +3436,58 @@ class VoiceService:
             with suppress(OSError):
                 item.unlink(missing_ok=True)
 
+    def _stt_readiness(self) -> tuple[bool, str | None, list[dict[str, Any]]]:
+        """Whether dictation can run *right now*, why not, and each model's state.
+
+        Three kinds of absence that used to render identically as one available
+        flag, and each needs a different act: the engine's host requirement is
+        missing, the `voice-local` extra is missing, or the extra is installed and
+        the weights have never been downloaded. The last one is the one a fresh
+        install is actually in, and reporting it as "available" is what made the
+        first Talk a silent multi-gigabyte download.
+        """
+        if self.config.stt_engine == "sapi":
+            if os.name != "nt" or not shutil.which("powershell.exe"):
+                return False, "Windows Speech Recognition requires Windows PowerShell", []
+            return True, None, []
+        dictation = self.config.stt_whisper_model
+        routing = self.decode_model(COMMAND_PROFILE)
+        models = self.whisper_models.statuses(dictation, routing)
+        if not self.whisper_models.backend_installed():
+            return (
+                False,
+                "faster-whisper is missing; install the voice-local extra "
+                "(`uv sync --extra voice-local`)",
+                models,
+            )
+        dictation_state = self.whisper_models.status(dictation)
+        if dictation_state["status"] != "ready":
+            size = f" ({dictation_state['size_hint']})" if dictation_state["size_hint"] else ""
+            downloading = dictation_state["status"] == "downloading"
+            detail = (
+                f"downloading the '{dictation}' speech model{size} — this runs once"
+                if downloading
+                else f"the '{dictation}' speech model is not downloaded{size}; "
+                "download it below. Nothing is downloaded until you ask for it"
+            )
+            if dictation_state["status"] == "error":
+                detail = (
+                    f"the '{dictation}' speech model download failed: "
+                    f"{dictation_state['error']}"
+                )
+            return False, detail, models
+        runtime = (
+            ", ".join(
+                f"{name} on {device}" for name, device in sorted(self._whisper_devices.items())
+            )
+            or "not loaded yet"
+        )
+        return (
+            True,
+            f"dictation {dictation}, routing {routing}; loaded: {runtime}",
+            models,
+        )
+
     async def status(self) -> dict[str, Any]:
         kokoro_model = self.kokoro_models.status()
         sapi_available = os.name == "nt" and bool(shutil.which("powershell.exe"))
@@ -3432,35 +3541,7 @@ class VoiceService:
         ) or active.get("diagnostic")
         stats = await self.store.cache_stats()
         spend = await self.automation_store.spend(rule_id=VOICE_RULE_ID)
-        stt_available = True
-        stt_diagnostic: str | None = None
-        if self.config.stt_engine == "sapi":
-            if os.name != "nt" or not shutil.which("powershell.exe"):
-                stt_available = False
-                stt_diagnostic = "Windows Speech Recognition requires Windows PowerShell"
-        else:
-            av_stub.install()  # `faster_whisper` imports `av` at module scope.
-            try:
-                import faster_whisper  # noqa: F401
-            except ImportError:
-                stt_available = False
-                stt_diagnostic = (
-                    "faster-whisper is missing; install the voice-local extra "
-                    "(`uv sync --extra voice-local`)"
-                )
-            else:
-                runtime = (
-                    ", ".join(
-                        f"{name} on {device}" for name, device in sorted(
-                            self._whisper_devices.items()
-                        )
-                    )
-                    or "not loaded yet"
-                )
-                stt_diagnostic = (
-                    f"dictation {self.config.stt_whisper_model}, routing "
-                    f"{self.decode_model(COMMAND_PROFILE)}; loaded: {runtime}"
-                )
+        stt_available, stt_diagnostic, stt_models = self._stt_readiness()
         return {
             "enabled": self.config.tts_enabled,
             "engine": self.config.tts_engine,
@@ -3486,6 +3567,7 @@ class VoiceService:
             "stt_engine": self.config.stt_engine,
             "stt_available": stt_available,
             "stt_diagnostic": stt_diagnostic,
+            "stt_models": stt_models,
             "stt_language": self.config.stt_language,
             "stt_whisper_model": self.config.stt_whisper_model,
             "stt_routing_model": self.decode_model(COMMAND_PROFILE),

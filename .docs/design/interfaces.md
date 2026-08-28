@@ -1576,7 +1576,21 @@ GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
 GET    /voice/models/kokoro               pinned-download state
 POST   /voice/models/kokoro/download      202; progress rides voice_model_progress events
+GET    /voice/models/whisper[?model=]     {models[]}; per-model first-use state, probe only
+POST   /voice/models/whisper/download     {model?} → 202; the explicit act, never implicit
 ```
+
+`/voice/models/whisper` reports the configured dictation and routing models under the same
+`not_downloaded | downloading | ready | error` vocabulary Kokoro uses, plus `backend_installed`
+— the *other* kind of absence (`voice-local` itself missing), which no download fixes — and an
+`approximate_mb`/`size_hint` so the cost is known before the press.
+It carries no percentage and no downloaded-byte count while downloading, only
+`elapsed_seconds`: `faster_whisper.download_model` disables the hub's progress hook, so nothing
+observes bytes, and a proportion drawn from an expected total would be an estimate presented as
+a reading.
+The GET is a local probe that never reaches the network; the POST is the only path that
+downloads, and `GET /voice` reports `stt_available: false` with the naming diagnostic until it
+has run, because transcription refuses rather than fetching the weights behind the operator.
 
 The Mux assistant (`design/features/assistant.md`) adds its own surface:
 
@@ -1888,11 +1902,16 @@ Both forms are excluded from the counters so observing a window does not change 
 
 `diagnostics/doctor` is the consolidated read-only report behind `mux doctor` (no `--export`).
 It is aggregation, not new capability: the handler gathers the payloads the diagnostics above already produce (health, remote status, firewall, prerequisites, status-health, background loops, the harness registry) plus the one class of fault nothing else exposes, the **observation-freshness** check, and the assembly is a pure function in `doctor.py`.
-The response carries `version`, `generated_at`, `ok` (false when any check failed), a `summary` count of `ok`/`warn`/`fail`/`unavailable`, a machine-readable `capabilities` block (versions, platform, per-harness detection, remote and firewall availability), a flat `checks[]` list, and `observation_freshness[]`.
+The response carries `version`, `generated_at`, `ok` (false when any check failed), a `summary` count of `ok`/`warn`/`fail`/`unavailable`, a machine-readable `capabilities` block (versions, platform, per-harness detection, remote and firewall availability, and `optional_assets[]`), a flat `checks[]` list, and `observation_freshness[]`.
+`optional_assets[]` is the first-use inventory a clean machine has none of: preview capture and each on-demand speech model, as `{id, label, state, remedy}` with `optional_asset:<id>` checks beside it.
+Each keeps its **own** `state` string rather than a boolean, because "the extra was never installed", "the extra is here but the browser binary is not", and "the model has never been downloaded" are different facts with different commands, and a consumer that only sees `false` cannot tell an operator which to run (`development/NEW_USER_RELEASE_READINESS.md` owns the inventory).
+Severity is `optional` throughout, including `error`: none of these is a fault, and a clean install must not exit-code `mux doctor` non-zero for having downloaded nothing.
+A voice row whose feature is switched off says so ("nothing has fetched it") rather than reporting an absence as a missing capability.
 Each check is `{id, category, title, status, severity, detail, remedy}`; `status` is `ok`/`warn`/`fail`/`unavailable` and `severity` separates a `critical` fault (a lost supervisor, a dead background loop, a stale observation that blocks delivery, a needs-repair firewall rule) from an `optional` unavailable feature (a harness not installed, Tailscale logged out) and pure `info`.
 Every failed check carries a concrete `remedy`.
 Each `observation_freshness[]` row is one agent session whose observation the daemon can no longer trust - `{id, name, backend, reason, since, seconds_stale, diagnostic, delivery_blocking}` - drawn from the same `observation_stale_since`/`observation_stale_reason` fields the per-session state-log exposes (`features/status-detection.md`).
 Like `export`, the report is built from already-sanitized sources and content-free rows, so it never includes a secret, terminal bytes, prompt or message content, or a credential.
+This endpoint is what `mux doctor` reads when a daemon answers, and it is unchanged by the CLI's daemon-less fallback: `unchecked` never appears here and the payload carries no `mode` field (see "`mux doctor` without a running daemon" under CLI).
 
 ## Configurator agent
 
@@ -2098,9 +2117,18 @@ opened document in an opaque origin. It is not gated on a live session.
 `POST /previews/{id}/capture` headlessly screenshots the live loopback server and saves a PNG
 under the owning Project's `.swe-mux/preview-shots/` (data-dir fallback), returning
 `{available, path, url, width, height, region}`. Optional `clip {x,y,width,height}` (page
-pixels, from the top of the page) captures a region. Missing the optional Playwright backend
-returns `{available: false, reason, install}`; a render error returns `{available: true,
-error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
+pixels, from the top of the page) captures a region.
+An absent optional backend returns `{available: false, state, reason, remedy}` at 200 —
+a state, not a fault.
+`state` is `extra_missing` (no Playwright package) or `browser_missing` (Playwright present,
+no Chromium binary), because the two halves fail separately and need different commands;
+`remedy` is the command for that half alone, or `null` where none on this machine helps
+(the packaged desktop app bundles no Playwright).
+A launch that fails with Playwright's own missing-executable error returns the same
+`browser_missing` shape rather than a render error.
+A render error returns `{available: true, error}` (502).
+It never writes a PTY, and never installs or downloads either half.
+See `features/processes-and-previews.md`.
 
 Git review routes are derived, read-only tooling APIs except for the existing worktree create and remove mutations.
 Every review read is Project-scoped and rejects unlisted parameters instead of accepting caller-supplied repositories or arbitrary refs.
@@ -2635,3 +2663,56 @@ name, `6` not found, `1` a `doctor` report with a failing check.
 `mux doctor` prints the consolidated diagnostics report from `GET /api/diagnostics/doctor` (see
 Delivery diagnostics); `mux doctor --export` prints the full `GET /api/diagnostics/export` bundle
 as JSON.
+
+### `mux doctor` without a running daemon
+
+`mux doctor` is the one command that answers when the daemon does not.
+When `GET /api/diagnostics/doctor` cannot be reached it prints the **local** report
+(`src/swe_mux/doctor_local.py`) instead of a bare connection error, because the daemon failing to
+start is the single most likely new-user failure and was precisely the case the command could not
+diagnose.
+A daemon that *answers* is unaffected: the remote report, its payload, and its rendered bytes are
+exactly what they were.
+An HTTP error is not a fallback trigger - a daemon answered, so it is a daemon fault rather than an
+install fault - and `--export` has no local form at all, since every section of that bundle is
+daemon state; it still exits `3`, naming `mux doctor` as the command that does answer.
+
+The local report runs the checks that are answerable from the machine alone: the Python floor, the
+package's own import graph, the config file, the frontend bundle in the installed package, the data
+directory's existence and writability, whether `mux.db` opens, whether the configured port is
+already held, whether this host's PTY backend imports, the frozen app's supervisor bundle, the
+prerequisite tools, harness detection, the first-use asset inventory, and the presence of each
+optional extra with the command to install it.
+Prerequisites, harness detection, and the first-use assets are produced by the daemon report's own
+builders (`_prerequisite_checks`, `_harness_checks`, `optional_asset_rows` +
+`_optional_asset_checks`) over the same detection functions, so there is one implementation of
+those rows rather than two that can disagree.
+The first-use assets need no daemon despite the daemon-side gatherer reading them off the live
+`VoiceService`: `capture_capability()` is an import plus a browsers-root read, and both model
+stores answer from a data directory.
+An extras row and an asset row are not duplicates of each other - an extra installed with nothing
+downloaded and a cached model with no extra are different states with different commands - but
+`preview-capture` has no extras row, because its capability row already separates "the extra is not
+installed" from "the extra is installed and has no Chromium" and carries the right remedy for each.
+
+Its report shape is the daemon report's, plus three fields: `mode: "local"`, `complete: false`, and
+a `daemon` block recording the unreachable URL and the transport failure.
+`ok` keeps its meaning from the daemon report - no check *failed* - and is deliberately not
+overloaded to mean "everything is fine"; `complete` and the summary's `unchecked` count say that.
+
+The status vocabulary gains **`unchecked`** beside `ok`/`warn`/`fail`/`unavailable`, for a check
+that did not run, and keeping it distinct is the point rather than a detail.
+Folding a skipped check into `ok` claims health nobody measured, and folding it into `unavailable`
+claims a capability was measured absent when it was not measured at all; either turns a degraded
+report into a confident wrong one, which is worse than the connection error it replaced.
+So every check the local report does not run is emitted as an `unchecked` row naming what is
+unknown *and why* - some need daemon runtime state, and some (remote access, the firewall, the WSL
+bridge) are simply not the question while nothing is listening - the summary counts them
+separately, and the renderer marks them `[????]` rather than reusing `[n/a ]`.
+`unchecked` never appears in a daemon report, which has an answer for everything it runs.
+
+Exit codes compose the two meanings that already existed rather than adding a scheme.
+A failing local check is still `1`, because a named broken check is the more actionable fact; a
+local report with nothing failing is `3`, which is exactly what `3` already meant.
+A degraded report therefore never exits `0`, and a script gating on `mux doctor` keeps working
+unchanged.

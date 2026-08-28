@@ -1,11 +1,26 @@
-"""On-demand, hash-verified acquisition of the Kokoro TTS model.
+"""On-demand acquisition of the local speech models, and the state machine over it.
 
-Models are downloaded, never bundled — the rule the Whisper weights and the
-Silero VAD assets already follow. What is different here is that this download
-is pinned: an immutable repository revision and a per-file SHA-256, checked
-while streaming, with an explicit ``not_downloaded → downloading → ready``
-state machine whose error state can never be loaded. A partial or tampered
-file is deleted and reported, not retried into service.
+Two stores live here and both answer the same four-state question — ``not_downloaded
+→ downloading → ready``, plus ``error`` — because a first-use download that a
+fresh install cannot see coming is the failure this module exists to remove.
+Neither store ever downloads without an explicit act.
+
+- :class:`KokoroModelStore` (TTS) is **pinned**: an immutable repository revision
+  and a per-file SHA-256, checked while streaming, whose error state can never be
+  loaded. A partial or tampered file is deleted and reported, not retried into
+  service. It hand-rolls the transfer, which is why it can report bytes.
+- :class:`WhisperModelStore` (STT) wraps ``faster_whisper``'s own resolver over
+  the Hugging Face cache, so the cache is authoritative for "ready" and there is
+  no second state file to drift from it. It reports **no** byte progress, because
+  ``faster_whisper.download_model`` disables the hub's progress hook and there is
+  nothing to observe: a percentage derived from an expected total would be an
+  estimate presented as a reading, and a wrong number is acted on where an absent
+  one is not.
+
+The third first-use asset, the browser-side Silero VAD, is **not** here and does
+not download: its ~11 MB WASM runtime and ~2.3 MB ONNX model are emitted into the
+frontend bundle by Vite and served same-origin by this daemon, so a fresh install
+already has them (`design/features/voice.md`).
 """
 
 from __future__ import annotations
@@ -314,3 +329,245 @@ class KokoroModelStore:
             except OSError:
                 pass
             raise
+
+
+# Approximate download sizes for the CTranslate2 conversions `faster_whisper`
+# pulls, in megabytes, so an operator knows what pressing Download costs before
+# they press it. Approximate and labelled as such: the exact byte count is not
+# known until the hub answers, and a fabricated exact figure would be worse than
+# a rounded honest one. An unlisted name - a bare Hugging Face repository id or a
+# local directory, both of which `download_model` accepts - reports no size at
+# all rather than a guessed one.
+WHISPER_APPROXIMATE_MB: dict[str, int] = {
+    "tiny": 75, "tiny.en": 75,
+    "base": 145, "base.en": 145,
+    "small": 484, "small.en": 484,
+    "medium": 1530, "medium.en": 1530,
+    "large": 3090, "large-v1": 3090, "large-v2": 3090, "large-v3": 3090,
+    "turbo": 1620, "large-v3-turbo": 1620,
+    "distil-small.en": 332, "distil-medium.en": 789,
+    "distil-large-v2": 1510, "distil-large-v3": 1510,
+}
+
+
+def whisper_size_hint(name: str) -> str | None:
+    """Human phrasing of the approximate download, or None when it is unknown."""
+    megabytes = WHISPER_APPROXIMATE_MB.get(name.strip())
+    if megabytes is None:
+        return None
+    if megabytes >= 1024:
+        return f"about {megabytes / 1024:.1f} GB"
+    return f"about {megabytes} MB"
+
+
+class WhisperModelStore:
+    """``not_downloaded`` → ``downloading`` → ``ready``/``error`` for Whisper weights.
+
+    The gap this closes: ``WhisperModel(name)`` fetches the weights from Hugging
+    Face on first use, *inside* the transcription path, in a worker thread, with
+    no surface anywhere. On a fresh install the first press of Talk was therefore
+    a silent multi-gigabyte download that presented as one very slow
+    transcription. Here the absence is a reported state and the fetch is a
+    separate, explicit act.
+
+    ``ready`` is answered by ``faster_whisper``'s own resolver under
+    ``local_files_only`` rather than by a state file of our own, for two reasons:
+    the hub writes atomically (blobs plus ``.incomplete`` temporaries, so a
+    partial download never resolves), and that resolver already understands every
+    form the setting accepts - a size alias, a bare repository id, or a local
+    directory. Re-deriving the mapping here would be a second copy that drifts.
+
+    Probes are memoized because the answer only changes when this process
+    downloads something or an operator installs weights by hand; ``forget``
+    exists for the latter and the download path clears its own entry.
+    """
+
+    def __init__(self) -> None:
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._errors: dict[str, str] = {}
+        self._started: dict[str, float] = {}
+        self._cached: dict[str, str | None] = {}
+        self._backend: bool | None = None
+
+    # ---- probing -----------------------------------------------------------
+
+    def backend_installed(self) -> bool:
+        """Whether ``faster_whisper`` imports at all - the ``voice-local`` extra."""
+        if self._backend is None:
+            self._backend = self._import_backend()
+        return self._backend
+
+    @staticmethod
+    def _import_backend() -> bool:
+        from . import av_stub
+
+        # Before the import, never after: `faster_whisper.audio` executes a
+        # module-level `import av`, and PyAV is deliberately absent from the
+        # resolved closure (GPL FFmpeg linkage). See `swe_mux.av_stub`.
+        av_stub.install()
+        try:
+            import faster_whisper  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
+    def local_path(self, name: str) -> str | None:
+        """Where these weights already are on this machine, or None if nowhere.
+
+        Never reaches the network: ``local_files_only`` is exactly what makes this
+        a probe rather than the download it exists to make explicit.
+        """
+        name = name.strip()
+        if not name:
+            return None
+        if name not in self._cached:
+            self._cached[name] = self._resolve_local(name)
+        return self._cached[name]
+
+    @staticmethod
+    def _resolve_local(name: str) -> str | None:
+        from . import av_stub
+
+        av_stub.install()
+        try:
+            from faster_whisper.utils import download_model
+        except ImportError:
+            return None
+        try:
+            return str(download_model(name, local_files_only=True))
+        except Exception:  # noqa: BLE001 - any resolver refusal means "not here"
+            return None
+
+    def cached(self, name: str) -> bool:
+        return self.local_path(name) is not None
+
+    def forget(self, name: str | None = None) -> None:
+        """Drop a memoized probe so weights installed out of band are noticed."""
+        if name is None:
+            self._cached.clear()
+        else:
+            self._cached.pop(name.strip(), None)
+
+    # ---- state -------------------------------------------------------------
+
+    def status(self, name: str) -> dict[str, Any]:
+        """The four-state report for one model name.
+
+        ``downloading`` carries elapsed seconds and the approximate total, and
+        deliberately no percentage or downloaded-byte count:
+        ``faster_whisper.download_model`` disables the hub's progress hook, so
+        there is nothing to observe, and a proportion derived from an expected
+        total would be an estimate presented as a reading.
+        """
+        name = name.strip()
+        task = self._tasks.get(name)
+        downloading = task is not None and not task.done()
+        backend = self.backend_installed()
+        status: str
+        error: str | None = None
+        if not backend:
+            status = "not_downloaded"
+        elif downloading:
+            status = "downloading"
+        elif self.cached(name):
+            status = "ready"
+        elif name in self._errors:
+            status, error = "error", self._errors[name]
+        else:
+            status = "not_downloaded"
+        started = self._started.get(name)
+        return {
+            "model": name,
+            "status": status,
+            "backend_installed": backend,
+            "path": self.local_path(name) if status == "ready" else None,
+            "size_hint": whisper_size_hint(name),
+            "approximate_mb": WHISPER_APPROXIMATE_MB.get(name),
+            "elapsed_seconds": (
+                round(time.monotonic() - started, 1) if downloading and started else None
+            ),
+            "error": error,
+        }
+
+    def statuses(self, *names: str) -> list[dict[str, Any]]:
+        """One report per distinct configured model, in the order asked."""
+        ordered: dict[str, None] = {}
+        for name in names:
+            cleaned = name.strip()
+            if cleaned:
+                ordered.setdefault(cleaned, None)
+        return [self.status(name) for name in ordered]
+
+    # ---- download ----------------------------------------------------------
+
+    def start_download(self, name: str, progress: ProgressCallback | None = None) -> bool:
+        """Begin the fetch for one model; False when one is already running.
+
+        Only ever reached from an explicit operator act - the Settings control or
+        its route. Nothing on the transcription path calls this.
+        """
+        name = name.strip()
+        if not name:
+            raise VoiceModelError("a model name is required")
+        task = self._tasks.get(name)
+        if task is not None and not task.done():
+            return False
+        self._errors.pop(name, None)
+        self.forget(name)
+        self._started[name] = time.monotonic()
+        self._tasks[name] = asyncio.create_task(
+            self._download(name, progress), name=f"whisper-download:{name}"
+        )
+        log.info("whisper model download requested model=%s", name, extra={"model": name})
+        return True
+
+    async def wait(self) -> None:
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+
+    async def _download(self, name: str, progress: ProgressCallback | None) -> None:
+        started = time.monotonic()
+        try:
+            if not self.backend_installed():
+                raise VoiceModelError(
+                    "faster-whisper is not installed; local dictation needs the "
+                    "voice-local extra (`uv sync --extra voice-local`)"
+                )
+            await asyncio.to_thread(self._fetch, name)
+            self.forget(name)
+            if not self.cached(name):
+                raise VoiceModelError(
+                    f"{name} downloaded but did not resolve locally afterwards"
+                )
+            elapsed = round(time.monotonic() - started, 1)
+            log.info(
+                "whisper model download complete model=%s seconds=%.1f",
+                name,
+                elapsed,
+                extra={"model": name, "seconds": elapsed},
+            )
+        except asyncio.CancelledError:
+            self._errors[name] = "the download was cancelled"
+            raise
+        except Exception as exc:  # noqa: BLE001 - every failure becomes a reported state
+            message = str(exc)[:400] or exc.__class__.__name__
+            self._errors[name] = message
+            log.warning(
+                "whisper model download failed model=%s: %s",
+                name,
+                message,
+                extra={"model": name, "diagnostic": message},
+            )
+        finally:
+            self._started.pop(name, None)
+            if progress is not None:
+                await progress(self.status(name))
+
+    @staticmethod
+    def _fetch(name: str) -> None:
+        from . import av_stub
+
+        av_stub.install()
+        from faster_whisper.utils import download_model
+
+        download_model(name)
