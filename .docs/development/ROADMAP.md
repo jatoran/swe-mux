@@ -3634,8 +3634,50 @@ the onboarding and launch subsections and is not restated here.
   an upgrade destroys rows, now recorded as an asserted exemption rather than as a surprise.)
 - [ ] Validate a TestPyPI alpha before reserving/publishing the PyPI package. Production
   publishing uses Trusted Publishing and no long-lived repository token.
-- [ ] Validate tag, source, frontend bundle, wheel/sdist metadata, migrations, documented
+- [x] Validate tag, source, frontend bundle, wheel/sdist metadata, migrations, documented
   commands, and capability/version diagnostics as one release unit.
+  (Done 2026-08-28. `packaging/verify_release_unit.py`, wired into `release.yml` beside the
+  existing artifact validation and before every publish path. The gap it closes is
+  **coherence**, which nothing covered: `verify_release_artifact.py` proves a wheel is
+  internally well-formed without ever looking at the tag or the tree, so a `v0.2.0` tag over a
+  `pyproject.toml` still saying `0.1.0` builds a perfectly valid wheel of the wrong version -
+  and because the update manifest is keyed by the tag while the installed package reports its
+  metadata version, every install would then be told a newer version exists forever.
+  Eleven checks, each a disagreement *between* the three: the tag against `[project] version`
+  and `__version__`; the six version literals `RELEASING.md` tabulates plus
+  `frontend/package.json`; a `CHANGELOG.md` entry that exists, is written, is not still under
+  `## [Unreleased]`, and whose foot links name the tag; the wheel's METADATA name and version;
+  `[project.urls]` absolute, https, placeholder-free, and actually carried into the artifact;
+  every entry point `README.md` and `RELEASING.md` tell a user to run, resolved through
+  `[project.scripts]` and on into the wheel's `entry_points.txt`; and the schema stamps.
+  Three decisions worth not re-deriving.
+  **The tag is required, not optional.** With no tag there is nothing to compare against, so a
+  run without one would have to report a pass it did not earn; `--tag` is mandatory (falling
+  back to `$GITHUB_REF_NAME` only when that names a tag) and refusing is exit 2. Before
+  tagging, the operator passes the tag they are about to cut, which is the last point a
+  mismatch is fixable.
+  **Migration contiguity is not checkable and is not faked.** Migrations here are
+  `PRAGMA table_info` column-add lists with no version attached to any step, so nothing maps a
+  version onto the steps that produce it and a contiguity check would either always pass or
+  assert an invention. What `.docs/technical/backend/sqlite.md` *does* state is checked: no
+  module executes `PRAGMA user_version` (read as syntax rather than text, so the three modules
+  that name it in a comment explaining why they do not are not violations), each store key is
+  stamped by exactly one module, and the stamped value is that module's own `*_SCHEMA_VERSION`
+  constant and at least 1 - because 0 is what an unstamped database already reads as. The
+  composition none of that can see stays `tests/test_migration_compatibility.py`'s.
+  **The documented-command scan uses a closed external allowlist**, the same shape
+  `license_audit.py` uses, because guessing which bare word is a third-party tool is how a
+  check starts reporting on text it did not understand. Unfenced inline code needs an argument
+  to count as an instruction (`verify`, `desktop`, `master` are nouns in these documents), and
+  HTML comments are stripped first so README's `TODO(release)` block does not gate the release
+  on a command the project deliberately is not yet giving.
+  Two halves of the item remain and are recorded rather than hidden. The **frontend bundle** is
+  `verify_release_artifact.py`'s and is deliberately not duplicated - both run in `release.yml`
+  and two answers that only probably agree is worse than one. The **sdist** is validated by
+  neither; `release.yml` already records why it carries no frontend, and closing that belongs
+  to `pyproject.toml`. `RELEASING.md` step 1's `TODO(release)` sweep is also deliberately not a
+  check: the tree legitimately carries those markers today, so requiring their absence would be
+  red on a healthy checkout, which is how a gate gets skipped.)
 - [ ] Decide Windows code signing before the first public binary: Azure Trusted Signing
   (cheapest), an OV certificate, or unsigned with the SmartScreen warning documented on the
   download page.
