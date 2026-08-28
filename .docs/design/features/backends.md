@@ -330,10 +330,28 @@ The guarded assertions themselves did not move: a real turn still has to produce
   diagnostic or nested `claude`/`codex` invocations cannot promote and then demote their
   parent agent session.
 - Executable resolution supports native binaries and package-manager shims. A stale
-  configured `codex.exe` falls back through Windows PATHEXT to an installed `codex.cmd`;
-  direct ConPTY sessions and nested shell launches resolve npm Codex shims to their underlying
+  configured `codex.exe` falls back to its suffix-stripped form - through Windows PATHEXT to
+  an installed `codex.cmd`, or to a bare extensionless `codex` on POSIX. That recovery is
+  **unconditional**, and was Windows-only until 2026-08-28: the guard pointed exactly the
+  wrong way, since an `.exe` suffix is at least plausible on Windows and certainly wrong on
+  POSIX, so the one host that could not launch `codex.exe` at all was the one host that never
+  attempted the repair. A config authored on Windows and carried to WSL Ubuntu produced
+  `Could not start codex: [Errno 2] No such file or directory: 'codex.exe'` with a working
+  `codex` on the same PATH.
+  Direct ConPTY sessions and nested shell launches resolve npm Codex shims to their underlying
   `node.exe` + `codex.js` entrypoint so JSON config remains one exact argv value. Other
   `.cmd`/`.bat` targets use `COMSPEC`, while `.exe` targets remain direct argv launches.
+- **A refusal and an absence are different answers, and are reported as such.**
+  `shim_paths.resolve_executable` returns one of `found`, `not_found`, `mux_shim`, or
+  `windows_interop`, each carrying the path it refused; `which_real` is the same call with
+  the reason dropped, for the callers that only need to know whether anything is launchable.
+  The distinction is not cosmetic: on WSL Ubuntu the only reachable `codex` was the Windows
+  one at `/mnt/c/.../npm/codex`, mux refused it correctly, and then reported it as a missing
+  file - which sent an operator looking for an install that was never the problem. The
+  message now names the binary that was found, says it was refused and why, and says to
+  install the Linux build inside the distribution. A refusal reaches `daemon.log` at WARNING
+  once per distinct `(command, reason, path)`; a find or a plain absence is DEBUG, because
+  detection re-resolves every registered harness on every registry read.
   Resolution never returns a mux agent shim (identified by content marker, `shim_paths.py`):
   a daemon relaunched from inside a session inherits the session's shim-first PATH, which
   would otherwise wire `MUX_*_EXE` and account login/status commands back at the shim and

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import math
 import os
 import shutil
@@ -20,15 +21,22 @@ from .background_tasks import background
 from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .harness import descriptor, provider_account_harnesses
+from .host_platform import IS_WINDOWS
 from .logsetup import bound_request_id, current_request_id, new_request_id
 from .models import MuxEvent
-from .shim_paths import which_real
+from .shim_paths import ExecutableResolution, combine_resolutions, resolve_executable
 from .subprocess_flags import background_creation_flags, reap_process_tree
+
+log = logging.getLogger(__name__)
 
 #: What one provider CLI invocation may hold in memory. Login and status output
 #: is a few lines; the cap exists because how much a third-party CLI decides to
 #: print is not a number this daemon gets to assume.
 MAX_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024
+#: How much of a failed invocation's tail reaches an operator, in the error and in
+#: `daemon.log` alike. One number rather than a repeated literal so the log can
+#: never quietly carry more of a third-party CLI's output than the error does.
+DIAGNOSTIC_TAIL_CHARS = 500
 QUOTA_POLL_LOOP = "provider-quota-poll"
 QUOTA_TURN_REFRESH_LOOP = "provider-quota-turn-refresh"
 SELECTION_GUARD_LOOP = "provider-selection-guard"
@@ -1553,21 +1561,89 @@ class ProviderAccountManager:
     ) -> dict[str, Any]:
         provider = _provider(provider_value)
         args = list(_provider_profile(provider).login_args)
+        # An interactive login is an administrative operation a human waited five
+        # minutes on; it is worth a line whether or not it worked. The argv is the
+        # provider profile's own fixed login arguments, so it carries nothing the
+        # user typed and no credential.
+        log.info(
+            "provider_login_started",
+            extra={"provider": provider, "argv": args, "replacing": replace_id},
+        )
         await self._run_command(provider, args, timeout_seconds=LOGIN_TIMEOUT_SECONDS)
-        return await self.capture_current(provider, label=label, replace_id=replace_id)
+        snapshot = await self.capture_current(provider, label=label, replace_id=replace_id)
+        log.info("provider_login_captured", extra={"provider": provider})
+        return snapshot
 
-    def _spawn_command(self, provider: Provider, args: list[str]) -> list[str]:
+    def _resolve_executable(self, provider: Provider) -> ExecutableResolution:
+        """Resolve the configured provider CLI, or carry back why nothing was.
+
+        `resolve_executable` never returns the mux's own ~/.mux/bin agent shim - a
+        daemon whose PATH inherited a session's shim dir would otherwise run
+        login/status through the shim, which recurses into itself - and never a
+        Windows binary reached through WSL interop.
+
+        The suffix-stripping retry is deliberately **unconditional**, where it used
+        to be gated on `os.name == "nt"`. That guard pointed exactly the wrong way.
+        On Windows an `.exe` suffix is at least plausible and PATHEXT usually has
+        the answer, so the retry mostly repaired a config that was only half wrong.
+        On POSIX an `.exe` suffix is *certainly* wrong, and that is the one host
+        where the repair never ran: a config authored on Windows and carried to a
+        WSL Ubuntu install produced `Could not start codex: [Errno 2] No such file
+        or directory: 'codex.exe'` while a perfectly good `codex` sat on the same
+        PATH (2026-08-28). npm-installed CLIs commonly expose only
+        `codex.cmd`/`claude.cmd`, or a bare extensionless `codex`, whichever host
+        this is.
+        """
         configured = self.executables[provider]
-        # which_real: never resolve to the mux's own ~/.mux/bin agent shim — a
-        # daemon whose PATH inherited a session's shim dir would otherwise run
-        # login/status through the shim, which recurses into itself.
-        executable = which_real(configured)
-        if executable is None and os.name == "nt" and Path(configured).suffix.casefold() == ".exe":
-            # npm-installed CLIs commonly expose only codex.cmd/claude.cmd even
-            # when the mux's compatibility default still names an .exe.
-            executable = which_real(str(Path(configured).with_suffix("")))
-        executable = executable or configured
-        if os.name == "nt" and Path(executable).suffix.casefold() in {".cmd", ".bat"}:
+        resolution = resolve_executable(configured)
+        if not resolution.usable and Path(configured).suffix.casefold() == ".exe":
+            stem = str(Path(configured).with_suffix(""))
+            resolution = combine_resolutions(resolution, resolve_executable(stem))
+        return resolution
+
+    def _spawn_command(
+        self, provider: Provider, args: list[str], *, windows: bool | None = None
+    ) -> list[str]:
+        """The argv for one provider CLI invocation.
+
+        ``windows`` exists so the COMSPEC branch can be exercised from either host;
+        it is the same seam `launchers.resolve_npm_shim_pty_command` already uses,
+        and it defaults to the real answer.
+        """
+        return self._command_for(provider, self._resolve_executable(provider), args, windows)
+
+    def _command_for(
+        self,
+        provider: Provider,
+        resolution: ExecutableResolution,
+        args: list[str],
+        windows: bool | None = None,
+    ) -> list[str]:
+        if resolution.reason in {"mux_shim", "windows_interop"}:
+            # A refusal is not an absence: something of that name *is* installed and
+            # would run. Falling through to exec the configured value anyway is how
+            # the shim used to recurse into itself, and on WSL it is how a Windows
+            # CLI would be driven from a Linux daemon - the exact thing the
+            # resolver refused a line earlier.
+            log.error(
+                "provider_cli_refused %s",
+                resolution.describe(),
+                extra={
+                    "provider": provider,
+                    "configured": self.executables[provider],
+                    "reason": resolution.reason,
+                    "rejected": resolution.rejected,
+                },
+            )
+            raise ProviderAccountError(f"Could not start {provider}: {resolution.describe()}")
+        # `not_found` still falls back to the configured value rather than refusing:
+        # an operator may have named something this daemon's PATH cannot see, and
+        # the OSError that follows now arrives with the resolution attached
+        # (`_run_command`) instead of bare.
+        executable = resolution.path or self.executables[provider]
+        if windows is None:
+            windows = IS_WINDOWS
+        if windows and Path(executable).suffix.casefold() in {".cmd", ".bat"}:
             return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", executable, *args]
         return [executable, *args]
 
@@ -1579,8 +1655,24 @@ class ProviderAccountManager:
         The cap is new: a login flow that decides to stream a QR code, a progress
         bar, or a stack trace is not this daemon's to size, and the diagnostic slice
         below reads the *tail*, which head-and-tail truncation preserves.
+
+        Every failure here is logged before it is raised. Until 2026-08-28 none of
+        them were: a provider CLI that could not start, timed out, or exited
+        nonzero existed only in the HTTP response body of whoever happened to ask,
+        and `daemon.log` held nothing about it at all. What is logged is the
+        *resolution* and the failure, never the payload.
         """
-        command = self._spawn_command(provider, args)
+        resolution = self._resolve_executable(provider)
+        command = self._command_for(provider, resolution, args)
+        log.debug(
+            "provider_command_started",
+            extra={
+                "provider": provider,
+                "argv": list(args),
+                "executable": command[0],
+                "timeout_seconds": timeout_seconds,
+            },
+        )
         try:
             outcome = await run_bounded(
                 command,
@@ -1595,13 +1687,54 @@ class ProviderAccountManager:
                 operation_id=current_request_id() or None,
             )
         except OSError as exc:
-            raise ProviderAccountError(f"Could not start {provider}: {exc}") from exc
+            log.error(
+                "provider_command_unstartable %s: %s",
+                resolution.describe(),
+                exc,
+                extra={
+                    "provider": provider,
+                    "configured": self.executables[provider],
+                    "reason": resolution.reason,
+                    "resolved": resolution.path,
+                    "argv": list(args),
+                },
+            )
+            raise ProviderAccountError(
+                f"Could not start {provider}: {exc} ({resolution.describe()})"
+            ) from exc
         if outcome.timed_out:
+            log.warning(
+                "provider_command_timed_out",
+                extra={
+                    "provider": provider,
+                    "executable": command[0],
+                    "argv": list(args),
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
             raise ProviderAccountError(f"{provider} login timed out")
         output = outcome.stdout.decode(errors="replace").strip()
         diagnostic = outcome.stderr.decode(errors="replace").strip()
         if outcome.exit_code:
-            detail = diagnostic[-500:] or output[-500:] or f"exit code {outcome.exit_code}"
+            detail = (
+                diagnostic[-DIAGNOSTIC_TAIL_CHARS:]
+                or output[-DIAGNOSTIC_TAIL_CHARS:]
+                or f"exit code {outcome.exit_code}"
+            )
+            log.warning(
+                "provider_command_failed",
+                extra={
+                    "provider": provider,
+                    "executable": command[0],
+                    "argv": list(args),
+                    "exit_code": outcome.exit_code,
+                    # stderr only, bounded to the same tail the operator-facing
+                    # error already carries. A provider CLI's *stdout* is where a
+                    # token or a credential blob would be, so it is never logged
+                    # even when it is the only thing a failure printed.
+                    "stderr_tail": diagnostic[-DIAGNOSTIC_TAIL_CHARS:],
+                },
+            )
             raise ProviderAccountError(f"{provider} command failed: {detail}")
         return output
 
