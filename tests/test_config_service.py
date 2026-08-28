@@ -577,14 +577,18 @@ def test_safe_update_is_atomic_and_revisioned(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)
 
-    hot, restart = update_config(config, {"theme": "tokyo-night", "port": 9010})
+    # Deliberately not the shipped default: `update_config` reports only fields
+    # that actually moved, so writing the value already in force is a no-op and
+    # would assert nothing about the hot/restart split this test is here for.
+    assert config.theme != "nord"
+    hot, restart = update_config(config, {"theme": "nord", "port": 9010})
 
     assert hot == {"theme"}
     assert restart == {"port"}
     assert config.revision == 2
     assert not path.with_suffix(".toml.tmp").exists()
     loaded = load_config(path)
-    assert loaded.theme == "tokyo-night"
+    assert loaded.theme == "nord"
     assert loaded.port == 9010
 
 
@@ -600,6 +604,45 @@ def test_note_opening_default_is_hot_reloadable_and_validated(tmp_path: Path) ->
     assert load_config(path).notes_default_open == "popout"
     with pytest.raises(ValueError, match="dock or popout"):
         update_config(config, {"notes_default_open": "window"})
+
+
+def test_a_brand_new_install_gets_tokyo_night(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    assert not path.exists()
+
+    config = load_config(path)
+
+    assert config.theme == "tokyo-night"
+    # Whatever ships as the default has to be a theme the picker and the backend
+    # both know, or the first load of a fresh install fails validation.
+    assert config.theme in BUILTIN_THEME_PAIRS
+
+
+def test_changing_the_default_theme_repaints_nobody_who_already_has_one(tmp_path: Path) -> None:
+    # The distinction that makes this safe is on disk rather than in a migration:
+    # `_serialize` writes every field unconditionally, so an install that has ever
+    # run swe-mux has its own `theme` key, and `load_config` copies it back over
+    # the dataclass default. That covers both cases equally - an operator who
+    # deliberately chose `dark`, and one who never touched the setting and simply
+    # had the old default written out for them - because on disk they are the same
+    # fact and neither is a request for whatever the current build prefers.
+    path = tmp_path / "config.toml"
+    fresh = load_config(path)
+    assert path.exists(), "the first load persists the canonical document"
+    assert 'theme = "dark"' not in path.read_text(encoding="utf-8")
+
+    for chosen in ("dark", "nord", "light"):
+        update_config(fresh, {"theme": chosen})
+        assert f'theme = "{chosen}"' in path.read_text(encoding="utf-8")
+        # Reloaded across a restart, and across a schema migration, which is the
+        # path a default change would take if it were ever going to reach anyone.
+        assert load_config(path).theme == chosen
+
+    stale = path.read_text(encoding="utf-8").replace(
+        f"schema_version = {SCHEMA_VERSION}", "schema_version = 1"
+    )
+    path.write_text(stale, encoding="utf-8")
+    assert load_config(path).theme == "light"
 
 
 def test_ui_scale_is_per_device_class_hot_reloadable_and_stepped(tmp_path: Path) -> None:

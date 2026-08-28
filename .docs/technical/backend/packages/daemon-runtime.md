@@ -12,6 +12,10 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 Daemon argument and config resolution, and the reusable aiohttp site lifecycle.
 The listeners bind as soon as `AppRunner.setup()` returns, which is now immediately — the runtime is built behind them (`server.runtime_context`).
 Mobile-voice Serve setup waits for `wait_runtime_ready` before running, because Serve reclamation asks whether a swe-mux daemon answers health on the port behind an existing route, and this daemon would answer "no" about itself for the whole of its own startup.
+It also carries the two install-facing surfaces, both reading `install_location.py`.
+`--where` is answered before the config is loaded, because a config that does not load is one of the states someone runs it in.
+The first-run `PATH` hint prints once per start, only when the commands this install shipped are unreachable by name, and is logged and ledgered because the terminal it printed to is gone by the time anyone investigates.
+`load_daemon_config` splits into parse and `resolve_daemon_config` for that ordering and keeps its old signature and contract for every other caller.
 
 **Not:** desktop window or tray state.
 
@@ -177,6 +181,8 @@ Copyleft ships only with an `ALLOWLIST` entry naming the reason and the relink s
 ### `desktop.py`
 
 Windows tray and WebView lifecycle, single instance, login startup, and daemon child supervision.
+It is a `[project.gui-scripts]` entry, so its launcher opens no console and the process has `sys.stdout is None` and `sys.stderr is None`; `redirect_gui_streams` runs first in `main` and points both at `<data_dir>/desktop-shell.log`, and `report_launch_failure` puts a startup failure in a message box, in the lifecycle ledger, and in that log with its traceback.
+Without those three the entry-point choice would be a net loss, since invisible is worse than a stray console window - `argparse` alone dies on `None.write` inside its own error reporter.
 
 **Not:** PTYs, HTTP composition, or Project and session state.
 
@@ -257,7 +263,8 @@ The pure assembly behind `mux doctor` and `GET /api/diagnostics/doctor`.
 ### `doctor_local.py`
 
 The degraded `mux doctor` report, run by the CLI when no daemon answers.
-It covers the install-integrity faults that stop a daemon starting: the Python floor, `swe_mux.server`'s import graph, the config file, the frontend bundle in the installed package, the data directory, `mux.db`, the configured port, the host PTY backend, the frozen supervisor bundle, and each optional extra.
+It covers the install-integrity faults that stop a daemon starting: where the copy is installed and whether its commands are on `PATH`, the Python floor, `swe_mux.server`'s import graph, the config file, the frontend bundle in the installed package, the data directory, `mux.db`, the configured port, the host PTY backend, the frozen supervisor bundle, and each optional extra.
+The two install rows come first, because they are the only faults whose symptom is nothing at all and every later check presupposes the reader found a way to run something.
 Prerequisite, harness, and first-use-asset rows are produced by `doctor.py`'s own builders over the same detection functions, so there is one implementation of them rather than two that can disagree.
 The asset probes need no daemon even though the route reads them off the live `VoiceService`: `capture_capability()` is an import plus a filesystem read, and both model stores answer from a data directory.
 Every check it does not run is emitted as an `unchecked` row naming what is unknown and why - a status that exists because "not measured" is neither healthy nor absent, and collapsing it into either is what turns a degraded report into a confident wrong one.
@@ -273,4 +280,25 @@ The `mux` control surface: config-based URL resolution with `MUX_URL` precedence
 Its local-only preamble, `[????]` mark, and `unchecked` tally are each conditioned on a field the daemon payload does not carry, so the bytes that path prints are unchanged.
 Its exit code composes the existing two rather than adding a scheme - `1` for a failing local check, `3` for a clean degraded one, never `0`.
 
+`install-shortcut` is the one subcommand that reaches no daemon, because the person who needs it is the one whose install produced no way to start one.
+
 **Not:** new client-side authorization or business logic, since actions route through the daemon ops; browser presentation actions; or accepting or printing a provider secret.
+
+### `install_location.py`
+
+Where this copy of swe-mux is installed and whether its commands can be reached: the install method (frozen, `uv tool`, `pipx`, virtual environment, system), the launcher directory, the tool-owned shim directory when one of ours is actually in it, and per command both its own path and what the bare name resolves to on `PATH`.
+It is the single source for the first-run hint `muxd` prints, `python -m swe_mux --where`, the `install.location` / `install.path` rows in `doctor_local.py`, and the target `shortcuts.py` points at, so the four cannot disagree about one filesystem.
+Every input is an argument with a live default - platform, `PATH`, scripts directory, environment, and the existence probe - so a Windows layout is described and asserted from any host.
+
+**Not:** changing anything, probing whether swe-mux *works*, or collapsing "the launcher is absent" into "the launcher is unreachable", which are different faults with different fixes.
+Nor reporting an install that shipped no commands as reachable: `all()` over an empty set is vacuously true and would answer the question backwards.
+
+### `shortcuts.py`
+
+Windows Start Menu, Desktop, and `shell:startup` shell links for the desktop app, created and removed by `mux install-shortcut` - the thing a wheel structurally cannot do, since `pip` and `uv` have no post-install hook.
+Known-folder destinations through `SHGetKnownFolderPath`, because a redirected Desktop makes `%USERPROFILE%\Desktop` the wrong directory and a link written there is invisible.
+`.lnk` authoring goes through PowerShell's `WScript.Shell`, so no dependency is added to reach the COM object.
+The plan and the script builder are pure with an injectable runner, and the write is idempotent, reporting `created`/`updated`/`unchanged`/`removed`/`absent`/`failed` per slot with its absolute path, also appended to the lifecycle ledger.
+The icon is rendered once from `desktop.create_tray_image` into `<data_dir>/icons/`, because `packaging/swe-mux.ico` is build output under `packaging/` and the wheel carries no `.ico` at all; a frozen bundle uses index 0 of its own executable instead.
+
+**Not:** a POSIX equivalent - it reports unsupported with the reason and writes nothing rather than failing obscurely - and not deciding where swe-mux is installed, which is `install_location.py`'s answer.

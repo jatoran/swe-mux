@@ -319,7 +319,7 @@ Toggling updates the `color-scheme` meta too, so form controls and scrollbars fo
 
 - **Square corners, 1px hairlines, no shadows, no gradients, no rounded cards.**
 - **Grid seams instead of gaps.** Panel grids use a 1px background line showing through, which reads as a TUI panel grid.
-- **Structure over decoration.** Numbered section rules, `[01]` style indices, `▸` and `[x]` markers, a blinking block cursor after the headline. The wordmark and the inline GitHub mark are the only two pieces of imagery in the chrome; there are no decorative icons.
+- **Structure over decoration.** Numbered section rules, `[01]` style indices, `▸` and `[x]` markers, a static block cursor after the headline. It used to blink, which put the only moving thing on the page directly beside the headline and pulled the eye off the words it was there to end; steady, it still reads as a terminal caret, and the `prefers-reduced-motion` override it needed is gone with it. The wordmark, the inline GitHub mark, the menu button's bars, and the footer's X mark are the only imagery in the chrome; there are no decorative icons.
 - **Self-contained.** One HTML file, inline CSS, inline JS, no external fonts, no CDN, no analytics, no third-party requests of any kind.
 - **The page must never scroll horizontally.** `tools/check.mjs` asserts `scrollWidth === clientWidth` at 360, 390, 768, and 1440, in both themes. Grid tracks need `minmax(min(Npx, 100%), 1fr)`, and any flex item that should shrink needs `min-width: 0`, because `overflow-x: auto` alone will not do it.
 
@@ -329,16 +329,66 @@ Toggling updates the `color-scheme` meta too, so form controls and scrollbars fo
 
 ## Top bar
 
-Brand left, section anchors centre (horizontally scrollable, fading on the right edge only), then a utility group behind a hairline divider: **docs, blog, GitHub, colour-scheme toggle**.
-The GitHub mark is inline SVG, because nothing on this page loads from a third-party host.
-Below 720px the utility links go icon-only.
+**Every page has the same bar, and that is the thing to protect.**
+It exists in two places - `shell()` in `tools/build.py` for the generated pages, and hand-written markup in `index.html` for the landing page - so a change to one and not the other makes the site read as two sites.
+Discipline is not what keeps them together: `tools/check.mjs`'s `bar and menu` section runs on every page and compares them, so an item added to one copy fails the gate rather than shipping.
 
-**The sub-pages replace the section anchors with a page nav** (home, docs, changelog, roadmap, acknowledgements) and drop `docs` and `blog` from the utility group, so nothing is offered twice in one bar.
+Brand left, page nav centre (horizontally scrollable, fading on the right edge only), then a utility group behind a hairline divider: **install, GitHub, colour-scheme toggle, menu button**.
+The nav is home, docs, blog, changelog, roadmap, acknowledgements, built from `PAGES` in `build.py`.
 The current page is marked with `aria-current="page"` and the same `▸` the rest of the site uses.
-That nav keeps the landing page's scroll-fade for narrow screens and adds a matching right padding, because at wide widths the last item would otherwise sit permanently under the gradient.
+The nav carries a right padding to give its scroll-fade empty space to fall on, because at wide widths the last item would otherwise sit permanently under the gradient.
+The GitHub mark is inline SVG, because nothing on this page loads from a third-party host.
+
+**Real pages only. No in-page section anchor appears in the bar or in the menu at any width.**
+The landing page's bar used to carry eight (`#mobile`, `#fleet`, `#workbench`, and so on) while the sub-pages carried a page nav in the same slot, so the same component meant two different things depending on which page you were on.
+An anchor is a position inside one document; a nav entry is a destination.
+`check.mjs` asserts it, because this is the change most likely to be quietly undone by somebody adding "just one" section link.
+
+**`install` is the single exception and is a call to action rather than a nav entry.**
+It is drawn as a bordered control, it points at the install callout (`#install`, or `../#install` from a sub-page), and it is the only fragment link the chrome is allowed to contain.
+
+## The menu
+
+**Below 860px the page nav is not drawn and a hamburger button takes its place.**
+The bar keeps exactly two links at those widths, `install` and `github`, and the menu holds everything including those two, so nothing is reachable only by remembering that it is there.
+Above 860px the button is not rendered at all: a menu beside a complete nav offers the same links twice in one bar.
+
+The panel is a plain block inside the sticky bar, below the bar row, full width.
+It is not absolutely positioned and not an overlay, which is what keeps it out of the horizontal-overflow assertions and off the top of the hero.
+
+**Its behaviour is written once**, between the `>>> menu` and `<<< menu` markers in `index.html`'s inline script, and `build.py`'s `index_block()` lifts it into every generated page - the same rule the stylesheet is already under, applied to behaviour.
+
+Four things it does, each of which `check.mjs` asserts on every page:
+
+- opening moves focus into the menu, so a keyboard user is where the menu is rather than one Tab behind it;
+- `Escape` closes it **and returns focus to the button**, because closing without the second half drops a keyboard user back at the top of the document;
+- `Tab` off the last item returns to the button instead of continuing into the page underneath, which is covered and cannot be read;
+- widening past the breakpoint closes it, because the button that would dismiss it stops being rendered.
+
+**`.wrap` is used by both the bar row and the menu panel, so the row's rules are scoped `.bar > .wrap`.**
+As a descendant selector they also matched the panel's own `.wrap`, which made it a second 44px-tall flex row and laid the menu's links out sideways across the hero.
+The panel had a positive height throughout, so "the menu draws something" did not catch it; `check.mjs` now asserts the geometry - panel below the row, every item inside the panel, items stacked rather than in a line.
+
+## Wordmark sizing
+
+18px in the bar, 15px below 860px, 13px below 460px.
+The wordmark is the widest thing in the bar and it now shares the row with two links and a menu button, which is what it was crowding at 360.
 
 The bar carried a `multiplexer · control plane · full mobile` descriptor next to the brand and it was cut.
 The H1 says the same thing forty pixels below it, and at 1280 it pushed the section nav into the utility group.
+
+## Footer
+
+Five columns on the landing page, four on the generated pages, in the ordinary order for a footer of this kind: brand, pages, source, **legal**, and on the landing page the citations.
+
+The legal column is license, then legal pages, then social, and that order is the convention rather than a preference:
+
+- `Apache-2.0` and `Third-party notices`, both to the repository;
+- `Privacy` and `Terms`, at `/privacy/` and `/terms/`;
+- the X account, icon only, at the weight of the text beside it.
+
+The X mark is inline SVG like the GitHub mark.
+A social button is the classic way the no-third-party-requests rule gets broken, and a script tag from a social host is not a link, it is a tracker.
 
 ## Install callout
 
@@ -507,6 +557,10 @@ Eight pages sit beside `index.html`, all generated by `tools/build.py` and all c
 It discovers pages by walking one directory level below the deploy root and fails on a directory holding an `index.html` that `build.py` does not generate.
 That is also the reason a sub-page cannot live at `/blog/<slug>/`: nothing there would be checked.
 
+`PAGES` in `build.py` also carries `blog`, which the nav draws and no builder writes.
+Registering the route there is what stops the nav being edited twice when the page lands; section 11 records the debt.
+Note that `check.mjs` cross-checks each *existing* page directory against `BUILDERS`, so whoever writes `site/blog/` writes its builder in the same change.
+
 ## Generated, and committed
 
 **The generated pages are not hand-editable.**
@@ -520,8 +574,12 @@ GitHub Pages deploys `site/` as a directory (`.github/workflows/pages.yml`), so 
 `build.py` reads the `<style>` block out of `index.html` and inlines it into each page, so there is one copy of the tokens and it is the one `contrast.py` audits.
 A second copy is how the light theme breaks on one page only, and `contrast.py` fails if any page stops carrying it byte for byte.
 
+**The menu's behaviour is extracted the same way**, by `index_block("menu")`, which lifts the run between the `>>> menu` and `<<< menu` markers in `index.html`'s inline script.
+Same argument, applied to behaviour: the header is the one component that must be identical everywhere.
+The theme scripts are still literal constants in `build.py` and are the remaining duplicate; `check.mjs` round-trips the toggle on every page, which is what has been standing in for extraction there.
+
 **`index.html` stays hand-authored and is not generated.**
-The only edits it needed for these pages were its `docs` link and a footer column pointing at them.
+Its bar and footer are hand-written copies of what `shell()` emits, which is a real hazard and is the reason `check.mjs` compares them on every page rather than trusting whoever edited one to remember the other.
 
 **Never commit `site/version.json`.**
 `release.yml` writes it at release time and `pages.yml` restores it from the latest Release on every deploy.
@@ -647,11 +705,15 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
 - **Fill the `data-todo` placeholders.**
   Every unfilled URL on the site carries one, and `check.mjs` fails on any value outside this list.
   A value leaves the list the moment its URL is decided, because a placeholder standing in for something known is just a dead link.
-  - `blog URL` - `index.html` only. **`/blog/` now exists** (section 15), so this placeholder is ready to be retired: point the top bar's `blog` link at `blog/`, drop the `data-todo`, and remove the value from `TODO_VALUES` in both `build.py` and `check.mjs` and from this list.
-    All four move together, because `check.mjs` fails on a `data-todo` value it does not know *and* on a page nothing generates.
 
+  **The list is empty and the guard stays**, the same posture as the `/OWNER/` assertion below it.
+  The last entry was `blog URL`, and it left when the blog got a decided address, `/blog/`.
   The `docs` link in the top bar is filled and points at `/docs/`.
   The repository URL is filled: `github.com/jatoran/swe-mux`, decided 2026-08-27.
+- **Three pages the chrome links to are not written yet**, and are listed in `PENDING_PAGES` in `check.mjs`: `/blog/`, `/privacy/`, `/terms/`.
+  They are not placeholders and are deliberately tracked by a different mechanism: a `data-todo` is a URL nobody has decided, while these are decided URLs whose file arrives with the branch that writes the page.
+  The list is checked in both directions - an entry whose file now exists is checked like any other link, and an entry no page links to fails, because a permanent exemption is how a broken link becomes permanent too.
+  Delete an entry when its page lands.
 - **The `OWNER` placeholder is gone from the whole repository** (swept 2026-08-27, after the owner was decided).
   `build.py` keeps normalizing any repository URL it lifts through `repo_url()` and still asserts that no `/OWNER/` reaches a page.
   The substitution now matches nothing, which is the point: it is a standing guard against a placeholder reappearing through a source this directory does not control, such as `CHANGELOG.md`, which the changelog page renders.

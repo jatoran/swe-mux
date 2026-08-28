@@ -82,6 +82,8 @@ import aiohttp
 from . import __version__
 from .bundle_archive import (
     ARCHIVE_ROOT,
+    TAR_GZ_SUFFIX,
+    ZIP_SUFFIX,
     ArchiveError,
     file_digest,
     read_archive_metadata,
@@ -125,8 +127,25 @@ log = logging.getLogger(__name__)
 # from `release_archive_name` here so the two cannot drift.
 
 #: Extensions per platform. Windows gets a zip because that is what Explorer and
-#: `Expand-Archive` open with nothing installed.
-_ARCHIVE_SUFFIX = {"windows": ".zip", "macos": ".tar.gz", "linux": ".tar.gz"}
+#: `Expand-Archive` open with nothing installed; POSIX gets a tarball because a
+#: zip does not carry the executable bit back out of `ZipFile.extractall`, so an
+#: extracted `swe-mux` binary would arrive unable to run.
+#:
+#: Both values are taken from `bundle_archive`, which is what can actually open
+#: one. Until 2026-08-28 the `.tar.gz` here was a name no reader honoured - a
+#: promise that would have turned the first POSIX desktop release into a refusal
+#: to install. Naming the reader's own constants is what keeps the two halves
+#: from drifting apart again.
+_ARCHIVE_SUFFIX = {
+    "windows": ZIP_SUFFIX,
+    "macos": TAR_GZ_SUFFIX,
+    "linux": TAR_GZ_SUFFIX,
+}
+
+#: The Windows installer's extension. Only Windows has one: it is an Inno Setup
+#: executable, and there is deliberately no invented equivalent for a platform
+#: that has no desktop wrapper yet.
+_INSTALLER_SUFFIX = {"windows": "-setup.exe"}
 
 
 def release_platform_tag() -> str:
@@ -147,10 +166,37 @@ def release_platform_tag() -> str:
 
 
 def release_archive_name(version: str, tag: str | None = None) -> str:
-    """The desktop bundle artifact's name for a version on this host."""
+    """The desktop bundle artifact's name for a version on this host.
+
+    This is the **portable** archive - the one the in-app updater downloads,
+    verifies and hands to the staged swap. The Windows installer beside it in a
+    release is a different artifact with a different name and a different job;
+    see `release_installer_name`.
+    """
     platform_tag = tag or release_platform_tag()
     host = platform_tag.split("-", 1)[0]
-    return f"swe-mux-{version}-{platform_tag}{_ARCHIVE_SUFFIX.get(host, '.zip')}"
+    return f"swe-mux-{version}-{platform_tag}{_ARCHIVE_SUFFIX.get(host, ZIP_SUFFIX)}"
+
+
+def release_installer_name(version: str, tag: str | None = None) -> str | None:
+    """The platform installer's artifact name, or None where there is no installer.
+
+    A second name on the same contract, and separate from `release_archive_name`
+    for a reason the updater depends on: it looks its own artifact up by *exact*
+    name, so the installer has to be unmistakably not that. `-setup.exe` cannot
+    collide with a `.zip` under any version string.
+
+    `None` rather than a guessed name off Windows. An invented
+    `swe-mux-1.2.3-linux-x64-setup.exe` would be a name the release will never
+    carry, and a caller looking for one would report "missing" about a thing that
+    was never promised.
+    """
+    platform_tag = tag or release_platform_tag()
+    host = platform_tag.split("-", 1)[0]
+    suffix = _INSTALLER_SUFFIX.get(host)
+    if suffix is None:
+        return None
+    return f"swe-mux-{version}-{platform_tag}{suffix}"
 
 
 #: Where verified archives rest, under the data dir rather than in the bundle:
@@ -1082,6 +1128,7 @@ __all__ = [
     "UpdateRefused",
     "detect_install_kind",
     "release_archive_name",
+    "release_installer_name",
     "release_platform_tag",
     "running_supervisor_protocol",
 ]

@@ -179,6 +179,7 @@ def _pyproject(
     version: str = VERSION,
     urls: dict[str, str] | None = None,
     scripts: dict[str, str] | None = None,
+    gui_scripts: dict[str, str] | None = None,
 ) -> str:
     lines = [
         "[project]",
@@ -193,6 +194,10 @@ def _pyproject(
     lines.extend(["", "[project.scripts]"])
     for command, target in (SCRIPTS if scripts is None else scripts).items():
         lines.append(f'{command} = "{target}"')
+    if gui_scripts:
+        lines.extend(["", "[project.gui-scripts]"])
+        for command, target in gui_scripts.items():
+            lines.append(f'{command} = "{target}"')
     return "\n".join(lines) + "\n"
 
 
@@ -262,10 +267,16 @@ def metadata_text(
     return "\n".join(lines) + "\n\n"
 
 
-def entry_points_text(scripts: dict[str, str] | None = None) -> str:
+def entry_points_text(
+    scripts: dict[str, str] | None = None, gui_scripts: dict[str, str] | None = None
+) -> str:
     lines = ["[console_scripts]"]
     for command, target in (SCRIPTS if scripts is None else scripts).items():
         lines.append(f"{command} = {target}")
+    if gui_scripts:
+        lines.extend(["", "[gui_scripts]"])
+        for command, target in gui_scripts.items():
+            lines.append(f"{command} = {target}")
     return "\n".join(lines) + "\n"
 
 
@@ -276,6 +287,7 @@ def build_wheel(
     name: str = "swe-mux",
     urls: dict[str, str] | None = None,
     scripts: dict[str, str] | None = None,
+    gui_scripts: dict[str, str] | None = None,
     with_metadata: bool = True,
     with_entry_points: bool = True,
 ) -> Path:
@@ -287,7 +299,7 @@ def build_wheel(
     if with_metadata:
         members[f"{DIST_INFO}/METADATA"] = metadata_text(version=version, name=name, urls=urls)
     if with_entry_points:
-        members[f"{DIST_INFO}/entry_points.txt"] = entry_points_text(scripts)
+        members[f"{DIST_INFO}/entry_points.txt"] = entry_points_text(scripts, gui_scripts)
     with zipfile.ZipFile(path, "w") as archive:
         for member, body in members.items():
             archive.writestr(member, body)
@@ -782,6 +794,49 @@ def test_a_wheel_with_no_entry_points_at_all_fails(tmp_path: Path, tree: Path) -
     assert "puts nothing on PATH" in message(report, "console-scripts")
 
 
+# --------------------------------------------------------------------------- gui scripts
+
+
+def _split_launchers() -> tuple[dict[str, str], dict[str, str]]:
+    """The real repository's split: two console launchers and one GUI launcher."""
+    console = {"mux": SCRIPTS["mux"], "muxd": SCRIPTS["muxd"]}
+    return console, {"swe-mux": SCRIPTS["swe-mux"]}
+
+
+def test_a_gui_script_is_a_command_this_project_ships(tmp_path: Path) -> None:
+    """`[project.gui-scripts]` builds a launcher in the same scripts directory.
+
+    Which table a command is declared in decides only whether its launcher opens
+    a console, which is invisible to "does this command exist". Reading only
+    `[project.scripts]` reported `swe-mux` as a command the README documents and
+    the project does not ship, the moment it moved to stop the tray popping a
+    console window.
+    """
+    console, gui = _split_launchers()
+    tree = build_tree(
+        tmp_path / "tree", pyproject=_pyproject(scripts=console, gui_scripts=gui)
+    )
+    wheel = build_wheel(tmp_path / "w.whl", scripts=console, gui_scripts=gui)
+    report = run(wheel, tree)
+    assert verdict(report, "documented-commands") is True
+    assert verdict(report, "console-scripts") is True
+    assert report.evidence["project_scripts"] == SCRIPTS
+
+
+def test_a_gui_script_missing_from_the_wheel_still_fails(tmp_path: Path) -> None:
+    """Widening the tables must not widen them into not checking anything."""
+    console, gui = _split_launchers()
+    tree = build_tree(
+        tmp_path / "tree", pyproject=_pyproject(scripts=console, gui_scripts=gui)
+    )
+    wheel = build_wheel(tmp_path / "w.whl", scripts=console)
+    report = run(wheel, tree)
+    assert only_failure(report) == "console-scripts"
+    assert "swe-mux (declared swe_mux.desktop:main, wheel has (absent))" in message(
+        report, "console-scripts"
+    )
+
+
 # ---------------------------------------------------------------------- migration coherence
 
 
@@ -1016,6 +1071,10 @@ def test_this_repository_simulated_as_its_own_release_is_coherent() -> None:
             version=version,
             urls=dict(project["urls"]),
             scripts=dict(project["scripts"]),
+            # Both launcher tables, because hatchling builds a wheel from both:
+            # a synthesized wheel that carried only `[console_scripts]` would
+            # report `swe-mux` as absent from an artifact that ships it.
+            gui_scripts=dict(project.get("gui-scripts") or {}),
         )
         report = module.verify(wheel, f"v{version}", REPO_ROOT)
     assert report.ok, module.render(report, subject="Release unit")

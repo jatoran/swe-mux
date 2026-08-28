@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -318,3 +319,138 @@ def test_the_daemon_report_renders_exactly_as_it_did(
         "\n"
         "swe-mux doctor: 2 ok, 1 warn, 0 fail, 1 unavailable - healthy"
     )
+
+
+# --------------------------------------------------------------------------- #
+# install-shortcut
+# --------------------------------------------------------------------------- #
+
+
+def _no_daemon_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail the test if anything reaches for the daemon.
+
+    `install-shortcut` exists for the person whose install produced no way to
+    start one, so a request here would make the command useless exactly where it
+    is the answer.
+    """
+
+    def _forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("install-shortcut must not talk to a daemon")
+
+    monkeypatch.setattr(cli, "request", _forbidden)
+
+
+def _report(**overrides: Any) -> Any:
+    from swe_mux import shortcuts
+
+    fields: dict[str, Any] = {"action": "install", "supported": True}
+    fields.update(overrides)
+    return shortcuts.ShortcutReport(**fields)
+
+
+def _outcome(slot: str, action: str, detail: str = "") -> Any:
+    from swe_mux import shortcuts
+
+    return shortcuts.ShortcutOutcome(
+        slot=slot, path=Path(f"{slot}.lnk"), action=action, detail=detail
+    )
+
+
+def test_install_shortcut_asks_for_a_start_menu_and_a_desktop_entry_by_default(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _no_daemon_allowed(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    def _apply(*, config: Any, slots: Any, remove: bool) -> Any:
+        seen["slots"] = list(slots)
+        seen["remove"] = remove
+        return _report(outcomes=(_outcome("desktop", "created"),))
+
+    monkeypatch.setattr("swe_mux.shortcuts.apply_shortcuts", _apply)
+    assert cli.main(["install-shortcut"]) == cli.EXIT_OK
+    assert seen == {"slots": ["start-menu", "desktop"], "remove": False}
+    assert "created" in capsys.readouterr().out
+
+
+def test_install_shortcut_flags_reach_the_plan(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _no_daemon_allowed(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    def _apply(*, config: Any, slots: Any, remove: bool) -> Any:
+        seen["slots"] = list(slots)
+        seen["remove"] = remove
+        return _report(outcomes=(_outcome("startup", "created"),))
+
+    monkeypatch.setattr("swe_mux.shortcuts.apply_shortcuts", _apply)
+    cli.main(["install-shortcut", "--startup", "--no-desktop"])
+    assert seen == {"slots": ["start-menu", "startup"], "remove": False}
+    cli.main(["install-shortcut", "--remove"])
+    assert seen["remove"] is True
+    capsys.readouterr()
+
+
+def test_install_shortcut_with_nothing_left_to_create_is_refused(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _no_daemon_allowed(monkeypatch)
+    code = cli.main(["install-shortcut", "--no-desktop", "--no-start-menu"])
+    assert code == cli.EXIT_LOCAL_FAIL
+    assert "nothing to do" in capsys.readouterr().err
+
+
+def test_an_unsupported_host_is_reported_and_still_exits_zero(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """POSIX asked for something this host does not have; nothing went wrong.
+
+    Exiting non-zero here would make the command red on every POSIX machine that
+    merely asked, which is a different fact from a shortcut that did not land.
+    """
+    _no_daemon_allowed(monkeypatch)
+    monkeypatch.setattr(
+        "swe_mux.shortcuts.apply_shortcuts",
+        lambda **_: _report(supported=False, reason="Shell shortcuts are Windows-only."),
+    )
+    assert cli.main(["install-shortcut"]) == cli.EXIT_OK
+    assert "Windows-only" in capsys.readouterr().out
+
+
+def test_a_shortcut_that_was_attempted_and_failed_exits_non_zero(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _no_daemon_allowed(monkeypatch)
+    monkeypatch.setattr(
+        "swe_mux.shortcuts.apply_shortcuts",
+        lambda **_: _report(outcomes=(_outcome("desktop", "failed", "denied"),)),
+    )
+    assert cli.main(["install-shortcut"]) == cli.EXIT_LOCAL_FAIL
+    assert "denied" in capsys.readouterr().out
+
+
+def test_a_config_that_will_not_load_says_so_instead_of_tracebacking(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _no_daemon_allowed(monkeypatch)
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise ValueError("port must be an integer")
+
+    monkeypatch.setattr("swe_mux.config.load_config", _boom)
+    assert cli.main(["install-shortcut"]) == cli.EXIT_LOCAL_FAIL
+    err = capsys.readouterr().err
+    assert "port must be an integer" in err
+    assert "mux doctor" in err
+
+
+def test_install_shortcut_json_carries_every_path_it_wrote(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _no_daemon_allowed(monkeypatch)
+    monkeypatch.setattr(
+        "swe_mux.shortcuts.apply_shortcuts",
+        lambda **_: _report(
+            target=Path("swe-mux.exe"),
+            outcomes=(_outcome("start-menu", "created"), _outcome("desktop", "unchanged")),
+        ),
+    )
+    cli.main(["install-shortcut", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert [row["path"] for row in payload["shortcuts"]] == ["start-menu.lnk", "desktop.lnk"]
+    assert [row["action"] for row in payload["shortcuts"]] == ["created", "unchanged"]

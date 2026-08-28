@@ -15,10 +15,13 @@
 //
 // The blob is stored server-side (deviceSettings `sessionRows`) in ONE canonical
 // bucket rather than per device class, with `mobileFields` deciding whether the
-// phone renders the configured sections or the identity-only row it has always
-// had. The alternative — a second full configuration under the mobile profile —
-// makes every edit a question ("which device did I just change?") for a layout
-// the user overwhelmingly wants to keep in sync.
+// phone renders the configured sections or an identity-only row. The alternative
+// — a second full configuration under the mobile profile — makes every edit a
+// question ("which device did I just change?") for a layout the user
+// overwhelmingly wants to keep in sync. There is consequently no such thing as a
+// "mobile default" to set separately: a phone reads this same blob, and the two
+// values that genuinely are per device class (`dotSizeMobile`, `mobileFields`)
+// are fields *inside* it.
 
 /** Every field the row can draw. Order here is the settings-UI catalog order. */
 export type RowFieldId =
@@ -64,11 +67,19 @@ export interface RowLineConfig {
  */
 export const DOT_SIZE_MIN = 10
 export const DOT_SIZE_MAX = 24
-export const DEFAULT_DOT_SIZE_DESKTOP = 15
 /**
- * Mobile runs larger than desktop, not smaller. The indicator is the one part of
- * a phone row that is read at arm's length and never hovered for a tooltip, and
- * it is competing with a touch target rather than with a dense scannable list.
+ * Near the top of the range on purpose. The indicator is the row's only
+ * always-drawn element and the only one carrying state, and everything else on
+ * the row is expressed in terms of it — so the size that makes a fleet scannable
+ * down a column of dots is larger than the size that merely fits the type.
+ */
+export const DEFAULT_DOT_SIZE_DESKTOP = 21
+/**
+ * Smaller than desktop, and the two are set independently because a physical
+ * size is the one property a shared layout cannot express: the screens are held
+ * at different distances. A phone row is read at arm's length and never hovered
+ * for a tooltip, but it also has far less width to spend on a gutter, so it does
+ * not simply inherit the desktop figure.
  */
 export const DEFAULT_DOT_SIZE_MOBILE = 17
 
@@ -77,6 +88,11 @@ export const DEFAULT_DOT_SIZE_MOBILE = 17
  * already exist: a stored blob is authoritative and an unplaced field is off, so
  * adding one to `defaultSessionRowConfig` alone reaches nobody who has ever
  * opened the settings panel.
+ *
+ * Rewriting the *shipped default* is the opposite case and deliberately does not
+ * bump it. That a stored blob is authoritative is exactly the guarantee wanted
+ * there: a device that has configured its rows keeps what it configured, and only
+ * a device with no stored blob sees the new layout.
  */
 export const ROW_CONFIG_VERSION = 3
 
@@ -235,8 +251,30 @@ const ALL_FIELD_IDS = new Set(ROW_FIELDS.map(field => field.id))
 
 /**
  * Shipped default. Identity on the top line and nothing else; the bottom line
- * carries work facts left and session facts right, almost all conditional, with
- * context drawn on the indicator so it costs no row width.
+ * carries work facts left and the model right, with context drawn on the
+ * indicator so it costs no row width.
+ *
+ * This is the layout swe-mux is actually operated with rather than a conservative
+ * guess at one, transcribed from the primary install's stored blob. Everything
+ * that changed from the earlier guess changed in the same direction: it turned
+ * out that a row is read as *one shape per session* rather than as a sentence, so
+ * a wide always-on time on the left and a wide always-on model on the right form
+ * two columns down the sidebar, and the conditional fields between them read as
+ * deviations from that shape. The earlier default made every bottom-line field
+ * conditional, which is the opposite: nothing lines up, and a row's width changes
+ * as the session works.
+ *
+ * Two consequences of transcribing a real layout, recorded so they read as
+ * decisions rather than as omissions:
+ *
+ *   - `state` is placed in `notable` mode, which for this field means it never
+ *     draws (the indicator already says the state). Placed-but-silent is the
+ *     useful position: switching it to `always` is one click in the settings
+ *     panel, where re-adding an unplaced field is a drag.
+ *   - `context` is *not* placed, unlike the earlier default. It is drawn on the
+ *     indicator as an arc, so it costs no row width — but a reader who then
+ *     switches the context rendering to `gauge` or `percent` has to place the
+ *     field themselves before anything appears.
  *
  * The top line's right section is the **flag strip**: presence-only marks that
  * are pinned to the row's right edge instead of queueing behind the title. Placed
@@ -244,6 +282,15 @@ const ALL_FIELD_IDS = new Set(ROW_FIELDS.map(field => field.id))
  * enough to fill the sidebar is a title long enough to hide everything following
  * it — and a flag whose whole content is "this is true" has nothing left to
  * ellipsize.
+ *
+ * `approvals` and `voice` lead that strip even though the transcribed blob holds
+ * neither. That blob is at version 2 and predates both fields, so their absence
+ * is this file's own "a field nobody could have configured yet is new rather than
+ * declined" case — `placeVoiceFlag` re-adds `voice` to that very blob on every
+ * read, and `approvals` reaches it through no migration at all, which is why it
+ * is missing rather than declined. Both are also the marks that report a standing
+ * mode whose entire effect is to make something *not* happen, so the fleet list
+ * is the only place either can still be seen.
  */
 export function defaultSessionRowConfig(): SessionRowConfig {
   return {
@@ -264,24 +311,14 @@ export function defaultSessionRowConfig(): SessionRowConfig {
     },
     bottom: {
       left: [
+        { id: 'duration', mode: 'always' },
         { id: 'worktree', mode: 'notable' },
-        { id: 'branch', mode: 'notable' },
-        { id: 'diff', mode: 'notable' },
+        // Never notable by definition; see the note above.
+        { id: 'state', mode: 'notable' },
         { id: 'queue', mode: 'notable' },
-        { id: 'detail', mode: 'notable' },
       ],
       right: [
-        { id: 'model', mode: 'notable' },
-        { id: 'account', mode: 'notable' },
-        // Silent until the turn stops being a fair answer to "how long has this
-        // been going" — see `sessionRowFields.ts`. A fleet nobody is feeding
-        // never draws it.
-        { id: 'sincePrompt', mode: 'notable' },
-        { id: 'duration', mode: 'always' },
-        // Placed but silent while `context` is drawn on the indicator, so
-        // switching the rendering to a gauge or a percentage puts it where it
-        // was always configured to go instead of nowhere.
-        { id: 'context', mode: 'always' },
+        { id: 'model', mode: 'always' },
       ],
       separator: 'dot',
     },
@@ -292,8 +329,8 @@ export function defaultSessionRowConfig(): SessionRowConfig {
     standing: 'row',
     diffStyle: 'numbers',
     countStyle: 'numbers',
-    gitGlyphs: false,
-    mobileFields: false,
+    gitGlyphs: true,
+    mobileFields: true,
   }
 }
 
@@ -301,7 +338,7 @@ export type RowPresetId = 'minimal' | 'default' | 'detailed'
 
 export const ROW_PRESETS: Array<{ id: RowPresetId; label: string; description: string }> = [
   { id: 'minimal', label: 'Minimal', description: 'Title and time. Context on the indicator.' },
-  { id: 'default', label: 'Standard', description: 'Git, queue, model, and time — each only when notable.' },
+  { id: 'default', label: 'Standard', description: 'Time and model always; worktree and queue when notable.' },
   { id: 'detailed', label: 'Detailed', description: 'Everything the row can say, always.' },
 ]
 
