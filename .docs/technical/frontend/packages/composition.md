@@ -19,6 +19,23 @@ Index: `../packages.md`.
 - `sessionFocusHistory.ts` owns the bounded per-Project most-recently-focused stack that session choice consults.
   It is fed from the settled active session rather than from `setActiveId`'s many call sites, and is held in memory because it answers "where was I just now" (`../workspace-state.md`).
 
+## Release update banner
+
+`UpdateBanner.tsx`, `updateCheck.ts`
+
+- A dismissible strip in the shell's banner row saying a newer swe-mux release exists, with the version and a link to the release notes.
+  It is a row of chrome rather than an overlay, so it cannot cover a terminal or arrive on top of a turn; `role="status"` with `aria-live="polite"` is the same promise for a screen reader.
+  Nothing here downloads or installs.
+- **Not the same thing as the UI-build banner above it.** That one says this tab is behind the daemon it is already talking to and reloads itself; this one says the installed swe-mux is behind the published release and never installs anything.
+- `updateCheck.ts` deliberately does **not** re-derive whether an update exists.
+  `banner` in the payload is the daemon's verdict, and a second version comparison in the browser would eventually make the desktop and the phone disagree about it.
+  What the browser owns is the narrow guard: a payload that failed to arrive, one from an older daemon with no such endpoint, and a verdict with no version to name all render nothing.
+- The poll is an hour and only re-reads an answer the daemon already holds (it checks once a day).
+  A failed poll leaves the previous answer in place rather than blinking the banner away and back through a daemon restart.
+- Dismissal hides the strip immediately and persists in the background: the press is the decision, and it is recorded per version by the daemon, so it holds across a reload, a restart, and the phone.
+- The switch, the last-check status, and a "Check now" button are in Settings → Diagnostics → **Software updates** (`update_check_enabled`).
+  Endpoint and reasoning: `../../design/interfaces.md`, `../../design/features/remote-access.md`.
+
 ## Fleet refresh
 
 `fleetRefresh.ts`, `fleetLayouts.ts`

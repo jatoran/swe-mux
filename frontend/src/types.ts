@@ -347,6 +347,17 @@ export interface VoiceClip {
   reused?:boolean
 }
 
+/** One dictation model's first-use state, in the same vocabulary as Kokoro's.
+ *  `backend_installed` is the other kind of absence: the `voice-local` extra
+ *  itself is missing, which downloading a model cannot fix. */
+export interface WhisperModelStatus {
+  model:string
+  status:'not_downloaded'|'downloading'|'ready'|'error'
+  backend_installed:boolean
+  path?:string|null; size_hint?:string|null; approximate_mb?:number|null
+  elapsed_seconds?:number|null; error?:string|null
+}
+
 export interface KokoroModelStatus {
   status:'not_downloaded'|'downloading'|'ready'|'error'
   revision:string; repo:string; total_bytes:number; downloaded_bytes:number
@@ -361,6 +372,7 @@ export interface VoiceStatus {
   kokoro_model?:KokoroModelStatus; kokoro_voice?:string
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
+  stt_models?:WhisperModelStatus[]
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]
   chat_patience_ms?:number
 }

@@ -715,8 +715,38 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
         daemon={"host": config.host, "port": config.port},
         now=now,
         wsl_bridges=await asyncio.to_thread(_wsl_bridge_report, config),
+        optional_assets=await asyncio.to_thread(_optional_asset_report, app),
     )
     return report
+
+
+def _optional_asset_report(app: web.Application) -> list[dict[str, Any]]:
+    """Probe the first-use assets: a local import and local filesystem reads only.
+
+    In a thread because every probe touches the disk (a Playwright browsers root,
+    the Hugging Face cache, the Kokoro state file) and one of them may import
+    `faster_whisper`, which is not a cost to pay on the event loop. Nothing here
+    downloads or launches anything - that is the property the whole task exists to
+    establish, and a diagnostics read is the last place to break it.
+    """
+    from ..doctor import optional_asset_rows
+    from ..preview_capture import capture_capability
+    from ..voice import COMMAND_PROFILE
+
+    config: Config = app[keys.CONFIG]
+    voice_service = app.get(keys.VOICE)
+    voice: dict[str, Any] = {
+        "tts_enabled": config.tts_enabled,
+        "tts_engine": config.tts_engine,
+        "stt_enabled": config.stt_enabled,
+        "stt_engine": config.stt_engine,
+    }
+    if voice_service is not None:
+        voice["kokoro"] = voice_service.kokoro_models.status()
+        voice["whisper"] = voice_service.whisper_models.statuses(
+            config.stt_whisper_model, voice_service.decode_model(COMMAND_PROFILE)
+        )
+    return optional_asset_rows(capture=capture_capability().as_dict(), voice=voice)
 
 
 def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:

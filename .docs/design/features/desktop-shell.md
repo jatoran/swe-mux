@@ -82,6 +82,19 @@ continues to own every terminal.
 
 ## Security boundary
 
+- **The packaged app makes one outbound request of its own, and it is not an updater.**
+  The daemon's daily release check (`update_check.py`, `design/interfaces.md`, and the
+  outbound bullet in `remote-access.md`) runs in the frozen build exactly as it does from
+  source, carries nothing that identifies the machine, and is off entirely under
+  `update_check_enabled`. It **detects and presents**; it downloads nothing, verifies no
+  hash, and touches no bundle. That distinction matters most here, because this is the
+  only place in the project where a real staged swap exists: the redeploy machinery
+  (`packaging/redeploy_desktop.py`, `POST /api/daemon/redeploy`) builds locally and is
+  triggered by an explicit press, and the frozen-app *updater* that would download a
+  release artifact, verify its SHA-256 against the manifest, and reuse that swap is a
+  separate, later item (`ROADMAP.md` Phase 11, "Update propagation"). A banner from the
+  check and a redeploy from the tray are two unrelated acts today, and the banner never
+  starts one.
 - `<data_dir>/desktop-control.token` is random, user-local control material.
 - The token reaches the child only through `SWE_MUX_DESKTOP_CONTROL_TOKEN`.
 - `/api/desktop/shutdown` is absent as authority for standalone daemons, rejects non-loopback

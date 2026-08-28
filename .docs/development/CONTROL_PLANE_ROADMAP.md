@@ -1370,8 +1370,17 @@ another agent can pick up mid-plan. Section links point to the design detail.
   hand-editing `.swe-mux/config.toml` still works and remains the source of truth.
 - [x] **Preview-shot retention.** Swept at 7 days by the media-cleanup loop across registered
   Project roots and the data-dir fallback.
-- [ ] **Preview capture assumes a locally installed Chromium.** A clean-machine desktop build
-  needs Chromium bundled or a first-run `playwright install` (Phase 11 packaging).
+- [x] **Preview capture assumes a locally installed Chromium.** Closed 2026-08-27 (Phase 11 W9)
+  by *reporting* the assumption rather than by satisfying it. Bundling Chromium was rejected
+  (a ~150 MB payload for an optional feature, in a bundle that already refuses `preview-capture`
+  from `DISTRIBUTED_EXTRAS`), and so was a first-run `playwright install` (a large silent network
+  fetch is the failure mode Phase 11 exists to remove, not a fix for it).
+  `capture_capability()` distinguishes `extra_missing` from `browser_missing` from `ready` and
+  hands back the command for that half alone; a launch that fails with Playwright's own
+  missing-executable error is promoted to the same state; and the packaged app says plainly that
+  no command on that machine helps. `mux doctor` carries it as an `optional` row.
+  What is still true and deliberately unchanged: preview capture does not work in the frozen
+  desktop app at all. That is a packaging decision, and it is now stated instead of silent.
 
 The through-line: substrate before consumers, deterministic before model, helps-you-today
 pulled forward, ranking genuinely last.

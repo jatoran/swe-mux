@@ -39,7 +39,13 @@ Windows-only detection and off-screen parking of headless-browser windows that D
 
 The optional headless preview screenshot (Playwright), typed-unavailable.
 
-**Not:** proxy transport, or PTY writes.
+`capture_capability()` is the single owner of *which* of the three states this install is in - `ready`, `extra_missing` (no Playwright package), `browser_missing` (Playwright present, no Chromium binary under any browsers root) - each with the command for that half and nothing else.
+Both readings are local: an import and a filesystem scan of `PLAYWRIGHT_BROWSERS_PATH` / the per-host `ms-playwright` cache / Playwright's in-package `.local-browsers`.
+The scan can be wrong in one direction (a browsers root this host uses that it does not know about), so `capture_loopback` promotes Playwright's own launch error into the same `browser_missing` state rather than letting it surface as an unactionable failure.
+
+Nothing here downloads a browser, and that is the rule rather than an omission: `playwright install chromium` is a large network fetch, and a daemon that runs it because someone pressed Capture is exactly the silent first-use cost this reporting exists to remove.
+
+**Not:** proxy transport, PTY writes, or installing either half of its own backend.
 
 ## `preview_store.py`
 
