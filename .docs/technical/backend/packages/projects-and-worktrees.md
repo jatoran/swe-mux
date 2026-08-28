@@ -88,7 +88,12 @@ It answers in **Project coordinates**, so a caller filtering relative paths does
 
 Leased non-recursive directory watches keyed by Project, exact root, path set, and watch id.
 
-**Not:** a recursive Project crawl, or deciding whether a requested root is a listed Git worktree.
+Also the platform seam over `watchfiles`: `watched_entry_path` is the single projection from a raw change onto a Project-relative *entry*, and it owns the host difference.
+`watchfiles` guarantees no event granularity, passing Rust `notify` straight through.
+So macOS FSEvents reports a watched directory's own node alongside the entry that bumped its mtime, while inotify and `ReadDirectoryChangesW` report only the entry.
+The self-event is dropped; an entry that happens to be a directory is kept.
+
+**Not:** a recursive Project crawl, deciding whether a requested root is a listed Git worktree, or a filter on whether a changed path *is* a directory - that would drop a new subfolder, which is real content on every host.
 
 ### `layouts.py`
 
