@@ -293,8 +293,14 @@ def _capture_spawn(
 @pytest.mark.parametrize(
     ("backend", "launcher_name", "executable", "command_args", "native_id"),
     [
-        ("claude", "_claude", "claude.exe", ["--session-id", "native"], "native"),
-        ("omp", "_omp", "omp.exe", ["--extension", "mux"], ""),
+        # Host-neutral names on purpose. These used to carry `.exe`, which was
+        # incidental to what the test is about (promote/exec/demote ordering) and
+        # became load-bearing: under WSL a bare `.exe` *is* the interop signal, so
+        # the launcher now refuses it and the lifecycle assertions never ran. The
+        # stale-`.exe` recovery has its own coverage in
+        # `test_executable_resolution.py`.
+        ("claude", "_claude", "claude", ["--session-id", "native"], "native"),
+        ("omp", "_omp", "omp", ["--extension", "mux"], ""),
     ],
 )
 def test_agent_launcher_demotes_terminal_when_agent_exits(
@@ -329,7 +335,11 @@ def test_agent_launcher_demotes_terminal_when_agent_exits(
         return _FakeChild(code=7)
 
     monkeypatch.setattr(agent_launcher.subprocess, "Popen", _popen)
-    monkeypatch.setattr(agent_launcher.shutil, "which", lambda command: command)
+    # `path=` is part of `shutil.which`'s signature and the resolver's second pass
+    # uses it; a one-argument stand-in raised `TypeError` from inside resolution
+    # the moment the first pass stopped being enough (caught by the Linux
+    # container, not by this host).
+    monkeypatch.setattr(agent_launcher.shutil, "which", lambda command, path=None: command)
 
     with pytest.raises(SystemExit, match="7"):
         agent_launcher.main()

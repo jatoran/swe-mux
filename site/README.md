@@ -336,9 +336,18 @@ The command, its `$` prompt, and the note all swap with the tab.
 
 **The four methods are `uv`, `pipx`, `pip`, `source`, in that order, and the order is the argument.**
 `uv tool install swe-mux` is first because it is the one that leaves you with a `mux` you can run, which is what a reader of this box wants.
-`pip` is third rather than absent because people will reach for it anyway, and its note is the only one that says what it does *not* do: a `pip install` into an environment you already have leaves `mux` reachable only inside that environment.
-That distinction cost the operator real time on publish day, so it is stated on the page rather than left to be inferred.
+`pip` is third rather than absent because people will reach for it anyway.
 There is no `powershell` or `curl` tab; see below.
+
+**Every note says what the method gives you *and* what it does not.**
+The callout previously said of `pip` only that it "installs into an environment you already have, and leaves `mux` reachable only inside that environment", and an operator read that sentence and was still stranded by it: it states a mechanism where a first-time reader needs a consequence.
+So each note now names the outcome in the words of somebody who has just run the command - on PATH globally or not, window and tray or not - and two consequences that no method delivers are stated outright rather than left to be inferred.
+**No Python install of any kind creates a desktop shortcut or a Start Menu entry**, because wheels have no post-install hook and pip runs no install-time code; that is structural, and a reader who is waiting for an icon should be told it is never coming.
+And `python -m swe_mux` is the daemon with no PATH setup at all (`muxd` is literally `swe_mux.__main__:main`), so it is the escape hatch the `pip` note points at.
+
+The same three facts carry into section 11, which additionally shows `python -c "import sysconfig; print(sysconfig.get_path('scripts'))"` and `pip show -f swe-mux` for finding an install you cannot see.
+Section 11's blocks carry **inline `#` comments** on the command lines for the same reason: a reader who skims the code block and nothing else should still learn what each command does and does not do.
+Anything longer than that belongs in `.docs/development/OPERATOR_LIFECYCLE.md`, which the page links rather than restates.
 
 **Every command in the box is one you can paste today.**
 Verified on 2026-08-28 against the published 0.1.0 wheel, by executing each one into a throwaway environment: `pip install swe-mux` in a clean venv, `uv tool install swe-mux` and `uv tool install "swe-mux[desktop]"` with `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` redirected, and `pipx install swe-mux` with `PIPX_HOME`/`PIPX_BIN_DIR` redirected.
