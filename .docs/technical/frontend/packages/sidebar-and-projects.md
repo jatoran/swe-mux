@@ -19,10 +19,14 @@ Its normalizer is where the layout invariants live, so the renderer never has to
 - Non-identity fields sit on the bottom line and nowhere else.
 - No field appears twice.
 
+The shipped default is transcribed from the primary install's own stored layout rather than composed here; the reasoning, and the three consequences worth checking before moving it, are in `design/features/ui.md`.
+Two of its scalars are duplicated in `style.css` as the `--session-dot` fallback, and the equality is asserted at both breakpoints (`test/renderer/session-row-layout.spec.ts`) rather than left to the comment on either side.
+
 The normalizer is also where the stored blob is migrated.
 Version 2 moved presence-only flags into the top line's right section (the flag strip) and placed the `draft` field, because changing the shipped default reaches nobody who has ever saved a layout.
 Version 3 places `voice` on the same rule, next to `approvals`.
 Each step runs only for a blob written before it, so a layout from a later build runs none of them and a relocation never repeats.
+Rewriting the default is the opposite case and deliberately does not bump the version: "a stored blob is authoritative" is precisely the non-repaint guarantee wanted there, so only a device that has never saved a layout sees the new one.
 Identity tokens are exempt from shedding, since the strip's section may hold nothing else and the narrow widths that trigger shedding are exactly where a flag is worth most.
 
 ### `sessionRowFields.ts` - the DOM-free engine

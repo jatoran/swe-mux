@@ -47,4 +47,4 @@ Every server is a liability with a monthly bill: something to secure, something 
 A tool built to outlive its maintainer's attention should depend on the smallest possible set of things that need maintaining.
 Static files and a git forge is about as small as that set gets.
 
-swe-mux: github.com/[org]/swe-mux - local-only by design, all the way down to how it updates itself.
+swe-mux: github.com/jatoran/swe-mux - local-only by design, all the way down to how it updates itself.

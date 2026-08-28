@@ -18,6 +18,6 @@ A local daemon + web UI that treats many sessions as one fleet:
 - Fully local, no telemetry; also runs Codex/opencode side by side
 
 Windows-first, Linux from source.
-Repo: github.com/[org]/swe-mux - install feedback very welcome, especially clean-machine failures.
+Repo: github.com/jatoran/swe-mux - install feedback very welcome, especially clean-machine failures.
 
 [gif: fleet view with live statuses]

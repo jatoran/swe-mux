@@ -99,9 +99,31 @@ Documentation = "https://swemux.dev/docs/"
 Changelog = "https://github.com/jatoran/swe-mux/blob/master/CHANGELOG.md"
 Issues = "https://github.com/jatoran/swe-mux/issues"
 
+# `mux` and `muxd` are console programs: they print tables, reports, and daemon
+# logs, and a console is where their output belongs.
 [project.scripts]
 mux = "swe_mux.cli:main"
 muxd = "swe_mux.__main__:main"
+
+# `swe-mux` is the tray and the native window, and it is here rather than above
+# because the two tables build different launchers. `[project.scripts]` builds a
+# console launcher, so starting the desktop shell popped a console window and
+# held it open for the life of the app - beside a native window that is the whole
+# point of the shell. `[project.gui-scripts]` builds the `pythonw`-style launcher
+# that opens none. `desktop.startup_command` has always reached for `pythonw.exe`
+# when it writes the login entry, so the intent was already in the code and only
+# the entry point disagreed with it.
+#
+# The tradeoff this makes, and how it is paid for: a GUI launcher gives the
+# process `sys.stdout is None` and `sys.stderr is None`, so a failure before the
+# window exists has nowhere to go and becomes *completely* invisible, which is
+# worse than a stray console. `desktop.redirect_gui_streams` runs first in
+# `main` and points both streams at `<data_dir>/desktop-shell.log`;
+# `desktop.report_launch_failure` puts every startup failure in a message box, in
+# the lifecycle ledger, and in that log with its traceback. Moving this line
+# without those is a net loss (`tests/test_desktop_gui_entry.py` holds the pair
+# together).
+[project.gui-scripts]
 swe-mux = "swe_mux.desktop:main"
 
 [project.optional-dependencies]
@@ -205,6 +227,7 @@ markers = [
   "live_automations: runs a real agent whose facts drive Tier 0 -> detectors -> mux memory tools in-process",
   "live_mcp: drives an isolated daemon on an ephemeral port and a real agent's session through the /mcp wire",
   "live_edge_tts: sends a fixed non-sensitive sentence to the unofficial Microsoft Edge TTS service",
+  "live_daemon: starts a real daemon on an ephemeral port and drives a shell session end to end",
   "conpty: real Windows ConPTY integration test; spawns a live shell (Windows-only)",
 ]
 
