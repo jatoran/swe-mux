@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Terms · swe-mux</title>
-<meta name="description" content="swe-mux is Apache-2.0 software you run yourself, so the licence is the terms. What that covers, and the four things it does not answer on its own." />
+<title>The prompt queue · swe-mux docs</title>
+<meta name="description" content="Stage ordered messages against a session that is mid-turn. Durable, head-of-line, and with automatic delivery off by default. What turning it on actually means." />
 <meta name="color-scheme" content="dark" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
@@ -739,20 +739,20 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 
 <div class="bar">
   <div class="wrap">
-    <a class="brand" href="../" aria-label="swe-mux, home">
-      <img class="dark" src="../img/logo.png" width="640" height="73" alt="" />
-      <img class="lite" src="../img/logo-light.png" width="640" height="73" alt="" />
+    <a class="brand" href="../../" aria-label="swe-mux, home">
+      <img class="dark" src="../../img/logo.png" width="640" height="73" alt="" />
+      <img class="lite" src="../../img/logo-light.png" width="640" height="73" alt="" />
     </a>
     <nav class="secnav pagenav" aria-label="Pages">
-      <a href="../">home</a>
-      <a href="../docs/">docs</a>
-      <a href="../blog/">blog</a>
-      <a href="../changelog/">changelog</a>
-      <a href="../roadmap/">roadmap</a>
-      <a href="../acknowledgements/">acknowledgements</a>
+      <a href="../../">home</a>
+      <a href="../../docs/" aria-current="page">docs</a>
+      <a href="../../blog/">blog</a>
+      <a href="../../changelog/">changelog</a>
+      <a href="../../roadmap/">roadmap</a>
+      <a href="../../acknowledgements/">acknowledgements</a>
     </nav>
     <div class="util">
-      <a class="cta" href="../#install">install</a>
+      <a class="cta" href="../../#install">install</a>
       <a href="https://github.com/jatoran/swe-mux" aria-label="Source on GitHub" title="Source on GitHub">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         <span class="lbl">github</span>
@@ -769,13 +769,13 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   <div class="menu" id="menu" hidden>
     <div class="wrap">
       <nav aria-label="Menu">
-        <a href="../">home</a>
-        <a href="../docs/">docs</a>
-        <a href="../blog/">blog</a>
-        <a href="../changelog/">changelog</a>
-        <a href="../roadmap/">roadmap</a>
-        <a href="../acknowledgements/">acknowledgements</a>
-        <a class="sep" href="../#install">install</a>
+        <a href="../../">home</a>
+        <a href="../../docs/" aria-current="page">docs</a>
+        <a href="../../blog/">blog</a>
+        <a href="../../changelog/">changelog</a>
+        <a href="../../roadmap/">roadmap</a>
+        <a href="../../acknowledgements/">acknowledgements</a>
+        <a class="sep" href="../../#install">install</a>
         <a href="https://github.com/jatoran/swe-mux">github</a>
       </nav>
     </div>
@@ -783,135 +783,123 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 </div>
 
 <main>
-<!-- The terms page, hand-authored.
-
-     swe-mux is Apache-2.0 software that runs on the reader's own machine. There is no
-     service, no account, and no contract between this project and anyone who downloads
-     it - so the licence is the terms, and this page's job is to say what the licence
-     already says rather than to invent a second agreement beside it.
-
-     Three rules, and the third is the one that keeps this page honest:
-
-     1. **Point at LICENSE for anything the licence covers.** Warranty, liability,
-        patent grant, and redistribution are all in there, already legally drafted, and
-        a paraphrase that drifts from it is worse than a link.
-     2. **Add only the facts the licence does not carry**: that there is no service and
-        therefore no service terms, that the vendors' CLIs run under the reader's own
-        agreements, and what the trademark reservation means in practice.
-     3. **Say where a lawyer is needed rather than guessing.** This page states no
-        governing law, no jurisdiction, no dispute procedure and no consumer-law
-        carve-out, because inventing any of those would be worse than their absence.
-        The licence's own terms are what apply.
--->
-<section class="page">
+<section class="page docs">
   <div class="wrap">
-    <div class="kick">the licence is the terms</div>
-    <h1>Terms</h1>
-    <div class="lede">
-      <p>swe-mux is free software you run on your own computer. <b>There is no service to
-      sign up for, so there is no service agreement.</b> What governs your use of it is
-      the <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache License
-      2.0</a>, which is a real licence written by lawyers and is not restated here.</p>
-      <p>This page covers the four things people ask that the licence does not answer on
-      its own. Last revised 2026-08-28.</p>
+    <div class="docsgrid">
+    <div class="dsaside">
+      <div class="dsearch" data-base="../">
+        <label class="dsvh" for="dsq">Search the documentation</label>
+        <input type="search" id="dsq" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="dsr" aria-expanded="false" aria-describedby="dskey" />
+        <div class="dskey" id="dskey" aria-hidden="true">/</div>
+        <p class="dsvh" id="dsstatus" role="status" aria-live="polite"></p>
+        <div class="dsr" id="dsr" hidden></div>
+      </div>
+      <button type="button" id="dsnavbtn" class="dsnavbtn" hidden aria-expanded="true" aria-controls="dsnav">All documentation</button>
+      <nav class="dsnav" id="dsnav" aria-label="Documentation">
+        <a href="../">Overview</a>
+        <div class="dsgroup">Getting started</div>
+        <a href="../install/">Install</a>
+        <a href="../first-session/">Your first session</a>
+        <a href="../phone/">Reach it from your phone</a>
+        <a href="../agent-setup/">Have an agent set it up</a>
+        <div class="dsgroup">Concepts</div>
+        <a href="../projects/">Projects and Groups</a>
+        <a href="../sessions/">Sessions, terminals, and harnesses</a>
+        <a href="../status/">Session status</a>
+        <a href="../control-plane/">What the control plane is</a>
+        <div class="dsgroup">Working in it</div>
+        <a href="../workspace/">Panes, tabs, and the drawer</a>
+        <a href="../queue/" aria-current="page">The prompt queue</a>
+        <a href="../git/">Git, worktrees, and landing</a>
+        <a href="../notes-files/">Notes, files, and previews</a>
+        <a href="../history/">History and transcripts</a>
+        <a href="../voice/">Voice and the assistant</a>
+        <a href="../automation/">Automation and alerts</a>
+        <a href="../usage/">Accounts, usage, and budgets</a>
+        <div class="dsgroup">Reference</div>
+        <a href="../settings/">Settings reference</a>
+        <a href="../cli/">Command line reference</a>
+        <a href="../keyboard/">Keyboard and the command palette</a>
+        <a href="../data/">Where data lives, and what leaves the machine</a>
+        <div class="dsgroup">Help</div>
+        <a href="../troubleshooting/">Troubleshooting</a>
+        <a href="../contributing/">Developing swe-mux</a>
+      </nav>
+      <script>(function () {
+  var btn = document.getElementById('dsnavbtn');
+  var nav = document.getElementById('dsnav');
+  if (!btn || !nav) return;
+  btn.hidden = false;
+  function set(open) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    nav.hidden = !open;
+  }
+  var narrow = window.matchMedia('(max-width: 899px)');
+  set(!narrow.matches);
+  btn.addEventListener('click', function () {
+    set(btn.getAttribute('aria-expanded') !== 'true');
+  });
+  narrow.addEventListener('change', function (e) { set(!e.matches); });
+})();</script>
     </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>The software</h2><span class="fill"></span></div>
-      <ul class="bullets">
-        <li><span><b>Licence: Apache-2.0.</b> You may use, modify, and redistribute
-        swe-mux, including commercially, provided you keep the notices the licence
-        requires. See <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">
-        <code>LICENSE</code></a> and
-        <a href="https://github.com/jatoran/swe-mux/blob/master/NOTICE"><code>NOTICE</code></a>.</span></li>
-        <li><span><b>No warranty, and limited liability.</b> The licence's sections 7 and
-        8 provide the software "as is", without warranties or conditions of any kind, and
-        limit the contributors' liability for damages arising from its use. That is the
-        operative text, not this sentence, and it is worth reading before you run an
-        autonomous agent against a repository you care about.</span></li>
-        <li><span><b>What that means in practice.</b> swe-mux launches coding agents with
-        the full privileges of the account running the daemon, and executing code on that
-        machine is its purpose rather than a defect. Back up your work, review what your
-        agents are configured to do without asking, and keep the approval floor in
-        place.</span></li>
-        <li><span><b>Third-party components</b> redistributed with swe-mux keep their own
-        licences, listed in
-        <a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">
-        <code>THIRD-PARTY-NOTICES.md</code></a> and on the
-        <a href="../acknowledgements/">acknowledgements page</a>. No GPL or AGPL code
-        ships.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>The agent CLIs are not ours</h2><span class="fill"></span></div>
-      <p class="prose">swe-mux launches and observes coding-agent CLIs published by other
-      vendors, including Anthropic's Claude Code and OpenAI's Codex CLI. It is <b>not
-      affiliated with, endorsed by, sponsored by, or certified by</b> any of them, and it
-      uses their names only to identify which tool a feature works with.</p>
-      <ul class="bullets">
-        <li><span>You run those CLIs under <b>your own account and your own agreement
-        with each vendor</b>. The same is true of the optional OpenRouter and Hugging
-        Face integrations, and of Tailscale if you use it to reach your machine.</span></li>
-        <li><span>swe-mux proxies nothing and resells nothing. It does not sit between
-        your agent and its vendor, and it holds no relationship with any of them on your
-        behalf.</span></li>
-        <li><span>Account switching is a convenience for <b>one person switching between
-        accounts they personally own and pay for</b>. It is not account pooling and not a
-        way around a usage limit: accounts are never shared between people, sessions are
-        never load-balanced across accounts, and switching is always an explicit
-        act.</span></li>
-        <li><span>Quota, billing, and account-sharing questions belong to that vendor.
-        Nothing here changes what your agreement with them permits.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>The name and the mark</h2><span class="fill"></span></div>
-      <p class="prose">Apache-2.0 grants copyright and patent rights and deliberately
-      does <b>not</b> grant trademark rights. The practical shape of that reservation is
-      written out in
-      <a href="https://github.com/jatoran/swe-mux/blob/master/TRADEMARK.md">
-      <code>TRADEMARK.md</code></a>: you may say your fork is derived from swe-mux and
-      you may not present a modified build as though it were this project.</p>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>This website</h2><span class="fill"></span></div>
-      <ul class="bullets">
-        <li><span>swemux.dev lives in <code>site/</code> in the public repository, so it
-        is under the same Apache-2.0 licence as the rest of it.</span></li>
-        <li><span>Every claim on it is meant to be checkable against the repository, and
-        several pages say which file to check. If one is wrong,
-        <a href="https://github.com/jatoran/swe-mux/issues">open an issue</a>; it will be
-        corrected.</span></li>
-        <li><span>The <a href="../compare/">comparison page</a> describes other people's
-        products from their own published documentation and carries the date those
-        sources were read. It is not a benchmark and it is not an endorsement in either
-        direction.</span></li>
-        <li><span>The <a href="../roadmap/">roadmap</a> is direction, not commitment, and
-        says so. A vote on a feature request is a signal, not an obligation.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Support</h2><span class="fill"></span></div>
-      <p class="prose">There is none to buy and none promised. Bugs go to
-      <a href="https://github.com/jatoran/swe-mux/issues">issues</a>, feature requests to
-      the Ideas discussions, and vulnerabilities privately through
-      <a href="https://github.com/jatoran/swe-mux/blob/master/SECURITY.md">the security
-      policy</a>. The response times in that policy are the targets of a maintainer-scale
-      project, stated so a reporter knows what to expect, and they are not a contractual
-      commitment.</p>
-      <p class="prose">Only the most recent release is supported. There is no long-term
-      support branch and no backport process; upgrading is the remedy for every reported
-      issue.</p>
-      <p class="note">This page is a plain-language summary of documents that are
-      themselves the agreement. It is not legal advice, and where it and
-      <a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE"><code>LICENSE</code></a>
-      differ, the licence governs. It states no choice of law and no dispute procedure,
-      because the licence's own terms are what apply and inventing a second set beside
-      them would create a conflict rather than resolve one.</p>
+    <article class="dsbody">
+      <div class="kick">working in it</div>
+      <h1>The prompt queue</h1>
+      <div class="lede"><p>The prompt queue is how you get work to an agent that is busy without typing into a terminal that is not listening. It is durable, head-of-line, and bound to the <em>conversation</em> rather than to the pane, so it survives a pane closing and a session being resumed.</p></div>
+      <nav class="toc" aria-label="On this page">
+        <a href="#staging-a-message">staging a message</a>
+        <a href="#automatic-delivery-is-off-by-default">automatic delivery is off by default</a>
+        <a href="#the-controls-and-what-each-one-is-for">the controls, and what each one is for</a>
+        <a href="#agent-to-agent-messages">agent-to-agent messages</a>
+        <a href="#the-fleet-queue">the fleet queue</a>
+        <a href="#seeding-a-new-session">seeding a new session</a>
+        <a href="#scheduled-runs">scheduled runs</a>
+      </nav>
+      <div class="docsec" id="staging-a-message">
+        <div class="head"><span class="n">#</span><h2>Staging a message</h2><span class="fill"></span></div>
+        <p class="prose">Open the <b>Queue</b> tab in the utility drawer while a session is mid-turn and write your next message. It sits there. Nothing is sent until either you send it or an automatic-delivery rule you turned on decides to.</p>
+        <p class="prose">Head-of-line means the queue delivers in order and one at a time: the second message does not overtake the first because the first is waiting on something.</p>
+      </div>
+      <div class="docsec" id="automatic-delivery-is-off-by-default">
+        <div class="head"><span class="n">#</span><h2>Automatic delivery is off by default</h2><span class="fill"></span></div>
+        <p class="prose">This is the single most important default on this page. A queued message waits for you. If you queue three messages and expect them to flow, nothing will happen, and that is the design rather than a fault.</p>
+        <p class="prose">When you do turn it on, it is per conversation, and it does not wait for a binary done signal, because no such signal exists that is reliable across vendors. It waits for a <b>readiness gate</b> and then a <b>stability window</b>: the session has to be ready, and it has to have stayed ready. A state that just changed and a state that has settled are different facts, and only the second is safe to act on.</p>
+      </div>
+      <div class="docsec" id="the-controls-and-what-each-one-is-for">
+        <div class="head"><span class="n">#</span><h2>The controls, and what each one is for</h2><span class="fill"></span></div>
+        <ul class="flat">
+          <li><b>Per-conversation default and override</b><span>Automatic delivery is decided per conversation, so one long-running worker can flow while everything else waits.</span></li>
+          <li><b>Quiet hours</b><span>A window where nothing is delivered automatically, for the case where you want the agent to have work waiting when you wake up rather than to have burned through it at 3am.</span></li>
+          <li><b>Emergency pause</b><span>One switch that stops all automatic delivery immediately, across every conversation.</span></li>
+          <li><b>Per-item expiry</b><span>A message can be given a deadline after which it is dropped rather than delivered late into a context it no longer fits.</span></li>
+          <li><b>Consecutive-send cap</b><span>A limit on how many messages can be delivered in a row without evidence that the agent replied to any of them, so a wedged session cannot be fed the whole queue.</span></li>
+        </ul>
+        <p class="note">All of these are in Settings, Prompt queue, under <b>Auto-delivery</b>. The shipped defaults are the conservative ones.</p>
+      </div>
+      <div class="docsec" id="agent-to-agent-messages">
+        <div class="head"><span class="n">#</span><h2>Agent-to-agent messages</h2><span class="fill"></span></div>
+        <p class="prose">One session can put a message into another session's queue. The floor is stated in one sentence: <b>a non-human sender's write ends at a human.</b> An unsolicited message from an agent is staged for you to approve, not delivered.</p>
+        <p class="prose">There are exactly two ways past that floor, and both are the <em>receiver's</em> authorization rather than the sender's claim. The receiving session can hold a standing grant to accept agent messages, or the message can answer a request that receiving session itself made. Answering a question somebody asked is narrower than the floor rather than an erosion of it, and the narrowing stays exactly as wide as the request: the requester alone, a fixed template, the run that asked, a cap, and it ends with the authority that accepted the request.</p>
+        <p class="note">Arming is still not delivery. A message that is allowed to be armed still goes through the same readiness gate and stability window as one you armed yourself.</p>
+      </div>
+      <div class="docsec" id="the-fleet-queue">
+        <div class="head"><span class="n">#</span><h2>The Fleet Queue</h2><span class="fill"></span></div>
+        <p class="prose">The application-wide view of who wrote what to whom: every staged message, its sender, and its state. It is a modal rather than a drawer tab, because it has no send button - it is where you watch, and the Queue tab is where you act.</p>
+      </div>
+      <div class="docsec" id="seeding-a-new-session">
+        <div class="head"><span class="n">#</span><h2>Seeding a new session</h2><span class="fill"></span></div>
+        <p class="prose">A message can be staged against a session that does not exist yet. Spawning binds it on the first run, which is how a scheduled run or a spawn request arrives with its instructions already attached rather than needing a second act to deliver them.</p>
+      </div>
+      <div class="docsec" id="scheduled-runs">
+        <div class="head"><span class="n">#</span><h2>Scheduled runs</h2><span class="fill"></span></div>
+        <p class="prose">Cron, interval, or one-off. A schedule is a <b>deferred press of a button you could have pressed yourself</b>, so it goes through the ordinary spawn path, the ordinary resume path, and the ordinary prompt queue, and grows no second authority anywhere.</p>
+        <p class="note">Definitions stay on the machine rather than in the repository, because a schedule committed to a repository would arm itself in every clone and every worktree. The Schedule drawer tab is where they live.</p>
+      </div>
+      <nav class="dsstep" aria-label="Page navigation">
+        <a class="prev" rel="prev" href="../workspace/"><span class="l">Previous</span><span class="t">Panes, tabs, and the drawer</span></a>
+        <a class="next" rel="next" href="../git/"><span class="l">Next</span><span class="t">Git, worktrees, and landing</span></a>
+      </nav>
+    </article>
     </div>
   </div>
 </section>
@@ -921,17 +909,17 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   <div class="wrap">
     <div class="cols">
       <div>
-        <img class="brandmark dark" src="../img/logo.png" width="640" height="73" alt="swe-mux" />
-        <img class="brandmark lite" src="../img/logo-light.png" width="640" height="73" alt="swe-mux" />
+        <img class="brandmark dark" src="../../img/logo.png" width="640" height="73" alt="swe-mux" />
+        <img class="brandmark lite" src="../../img/logo-light.png" width="640" height="73" alt="swe-mux" />
         <div>Agentic development environment and agent control plane.</div>
         <div>Windows-first. Local-only. No account.</div>
       </div>
       <div>
         <h4>pages</h4>
-        <div><a href="../">home</a> &middot; <a href="../docs/">docs</a>
-        &middot; <a href="../blog/">blog</a></div>
-        <div><a href="../changelog/">changelog</a> &middot; <a href="../roadmap/">roadmap</a>
-        &middot; <a href="../acknowledgements/">acknowledgements</a></div>
+        <div><a href="../../">home</a> &middot; <a href="../../docs/">docs</a>
+        &middot; <a href="../../blog/">blog</a></div>
+        <div><a href="../../changelog/">changelog</a> &middot; <a href="../../roadmap/">roadmap</a>
+        &middot; <a href="../../acknowledgements/">acknowledgements</a></div>
       </div>
       <div>
         <h4>source</h4>
@@ -944,7 +932,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h4>legal</h4>
         <div><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></div>
         <div><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></div>
-        <div><a href="../privacy/">Privacy</a> &middot; <a href="../terms/">Terms</a></div>
+        <div><a href="../../privacy/">Privacy</a> &middot; <a href="../../terms/">Terms</a></div>
         <div class="social">
           <a href="https://x.com/swemux" rel="me" aria-label="swe-mux on X" title="swe-mux on X">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817-5.966 6.817H1.68l7.73-8.835L1.254 2.25h6.826l4.713 6.231ZM17.083 19.77h1.833L7.084 4.126H5.117Z"/></svg>
@@ -1031,6 +1019,161 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
      button, so an open menu would be left behind with no way to dismiss it. */
   var wide = window.matchMedia('(min-width: 861px)');
   wide.addEventListener('change', function (e) { if (e.matches) open(false); });
+})();
+
+/* ----------------------------------------------------------------- search */
+(function () {
+  var box = document.querySelector('.dsearch');
+  if (!box) return;
+  var input = document.getElementById('dsq');
+  var out = document.getElementById('dsr');
+  var status = document.getElementById('dsstatus');
+  var base = box.getAttribute('data-base') || '';
+  var loading = false;
+
+  function load() {
+    if (loading || window.__MUXDOCS) return;
+    loading = true;
+    var s = document.createElement('script');
+    s.src = base + 'search-index.js';
+    s.onload = function () { run(); };
+    document.head.appendChild(s);
+  }
+
+  // A window around the first hit, snapped to word boundaries at both ends.
+  // Slicing on raw offsets opens a snippet mid-word ('...ding. Attention'),
+  // which reads as a rendering fault rather than as a truncation.
+  function snippet(body, term) {
+    var at = body.toLowerCase().indexOf(term);
+    if (at < 0) return body.slice(0, body.indexOf(' ', 120) + 1 || 120) + '\u2026';
+    var from = Math.max(0, at - 55);
+    var to = Math.min(body.length, from + 165);
+    if (from > 0) {
+      var space = body.indexOf(' ', from);
+      from = space >= 0 && space < at ? space + 1 : from;
+    }
+    if (to < body.length) {
+      var end = body.lastIndexOf(' ', to);
+      to = end > at ? end : to;
+    }
+    return (from ? '\u2026' : '') + body.slice(from, to).trim() +
+      (to < body.length ? '\u2026' : '');
+  }
+
+  function rank(query) {
+    var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    var hits = [];
+    (window.__MUXDOCS || []).forEach(function (page) {
+      var title = page.t.toLowerCase();
+      var body = page.b.toLowerCase();
+      var score = 0;
+      var heading = null;
+      for (var i = 0; i < terms.length; i++) {
+        var term = terms[i];
+        var here = 0;
+        if (title.indexOf(term) >= 0) here += 8;
+        for (var j = 0; j < page.h.length; j++) {
+          if (page.h[j][0].toLowerCase().indexOf(term) >= 0) {
+            here += 4;
+            if (!heading) heading = page.h[j];
+            break;
+          }
+        }
+        if (body.indexOf(term) >= 0) here += 1;
+        if (!here) return;
+        score += here;
+      }
+      hits.push({ page: page, score: score, heading: heading, term: terms[0] });
+    });
+    hits.sort(function (a, b) { return b.score - a.score; });
+    return hits.slice(0, 8);
+  }
+
+  function run() {
+    var query = input.value.trim();
+    if (!query) {
+      out.hidden = true;
+      out.textContent = '';
+      input.setAttribute('aria-expanded', 'false');
+      status.textContent = '';
+      return;
+    }
+    if (!window.__MUXDOCS) { load(); return; }
+    var hits = rank(query);
+    out.textContent = '';
+    if (!hits.length) {
+      var none = document.createElement('p');
+      none.className = 'dsnone';
+      none.textContent = 'No page matches "' + query + '".';
+      out.appendChild(none);
+    }
+    hits.forEach(function (hit) {
+      var a = document.createElement('a');
+      a.href = base + hit.page.u + (hit.heading ? '#' + hit.heading[1] : '');
+      var t = document.createElement('span');
+      t.className = 't';
+      t.textContent = hit.page.t + (hit.heading ? '  \u203a  ' + hit.heading[0] : '');
+      var d = document.createElement('span');
+      d.className = 'd';
+      d.textContent = snippet(hit.page.b, hit.term);
+      a.appendChild(t);
+      a.appendChild(d);
+      out.appendChild(a);
+    });
+    out.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    status.textContent = hits.length + (hits.length === 1 ? ' result' : ' results');
+  }
+
+  input.addEventListener('focus', load);
+  input.addEventListener('input', run);
+
+  function results() { return [].slice.call(out.querySelectorAll('a')); }
+
+  input.addEventListener('keydown', function (e) {
+    var found = results();
+    if (e.key === 'ArrowDown' && found.length) { e.preventDefault(); found[0].focus(); }
+    else if (e.key === 'Enter' && found.length) { e.preventDefault(); found[0].click(); }
+    else if (e.key === 'Escape') { input.value = ''; run(); input.blur(); }
+  });
+
+  out.addEventListener('keydown', function (e) {
+    var found = results();
+    var at = found.indexOf(document.activeElement);
+    if (at < 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      found[Math.min(at + 1, found.length - 1)].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (at === 0) input.focus(); else found[at - 1].focus();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      input.focus();
+      input.value = '';
+      run();
+    }
+  });
+
+  // `/` is the shortcut every documentation site has, so it is the one people
+  // try. Never while a field is focused, because then it is a character.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== '/' || e.ctrlKey || e.altKey || e.metaKey) return;
+    var el = document.activeElement;
+    var tag = el && el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable)) return;
+    e.preventDefault();
+    input.focus();
+    input.select();
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!box.contains(e.target)) {
+      out.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+  });
 })();
 </script>
 
