@@ -16,10 +16,14 @@ diagnostics), F22 (the shared nested-job helper). See
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import logging
 import struct
 import threading
+import warnings
+from collections.abc import Callable
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +36,7 @@ from swe_mux.nested_job import (
     FAILED_SUFFIX_PREFIX,
     create_nested_session_job,
 )
-from swe_mux.pty_host import PtyHost
+from swe_mux.pty_host import PtyHost, submit_queue_put
 from swe_mux.supervisor import (
     PROTOCOL_VERSION,
     SupervisorServer,
@@ -654,6 +658,169 @@ async def test_read_failure_counters_reach_the_daemon_through_the_session_invent
     assert info["last_read_error"] == "PtyError: pipe broken"
     assert info["last_read_error_at"] == 1_700_000_000.0
     assert isinstance(info["started_at"], float)
+
+
+# --------------------------------------------------------------------------
+# The cross-thread put handoff, at loop teardown
+#
+# The reader thread is a daemon thread that outlives the loop it feeds, so every
+# test here is about the ordering where it delivers into a loop that is already
+# gone. That used to leave an un-awaited `Queue.put` coroutine for the collector,
+# which reports it from a finalizer as an unraisable `RuntimeWarning` attributed
+# to whatever test was running at that moment - so under `filterwarnings =
+# ["error"]` it reddened somewhere else entirely. Two Windows real-console tests
+# failed that way on the first public shared-runner CI run (2026-08-27); neither
+# of them created the coroutine.
+# --------------------------------------------------------------------------
+
+
+class _FakePty:
+    """Minimal stand-in for the reader's thread-local PTY handle."""
+
+    def __init__(self, alive: bool = True) -> None:
+        self.alive = alive
+
+    def isalive(self) -> bool:
+        return self.alive
+
+
+def _orphaned_coroutines(action: Callable[[], None]) -> list[str]:
+    """Run `action` and report any coroutine it left for the collector to finalize.
+
+    The collection is forced here rather than left to its own schedule, because
+    the whole difficulty of this bug is that an unforced collection lands in an
+    unrelated test. This probe was checked against the pre-fix shape - a bare
+    `asyncio.run_coroutine_threadsafe(queue.put(...), closed_loop)` - and does see
+    the orphan, so an empty result means the orphan is gone rather than that the
+    probe is blind to it.
+    """
+    gc.collect()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        action()
+        gc.collect()
+    return [str(entry.message) for entry in caught if "never awaited" in str(entry.message)]
+
+
+def _host_bound_to_a_dead_loop() -> tuple[PtyHost, asyncio.AbstractEventLoop]:
+    """A host whose `prepare()` bound it to a loop that has since been closed."""
+
+    async def bind() -> PtyHost:
+        host = PtyHost("agent.exe")
+        host.prepare()
+        return host
+
+    loop = asyncio.new_event_loop()
+    host = loop.run_until_complete(bind())
+    loop.close()
+    return host, loop
+
+
+def test_a_put_submitted_to_a_closed_loop_hands_back_nothing_and_orphans_nothing() -> None:
+    loop = asyncio.new_event_loop()
+    loop.close()
+    queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
+    handed_back: list[Future[None] | None] = []
+
+    orphans = _orphaned_coroutines(lambda: handed_back.append(submit_queue_put(queue, loop, b"")))
+
+    assert orphans == []
+    assert handed_back == [None], "a closed loop has nothing to deliver and no future to wait on"
+
+
+def test_a_put_the_loop_accepts_but_never_runs_orphans_nothing() -> None:
+    """The half that cannot be fixed by guarding the scheduling call.
+
+    `call_soon_threadsafe` succeeds because the loop is not closed *yet*, and the
+    loop then stops for good without reaching the callback. `run_coroutine_
+    threadsafe` has already been handed the coroutine by that point, so the
+    coroutine dies inside the abandoned callback; building it on the loop instead
+    means there is nothing there to die.
+    """
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(asyncio.sleep(0))
+    queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
+
+    def submit_then_close() -> None:
+        assert submit_queue_put(queue, loop, b"") is not None, "the loop was still open"
+        loop.close()
+
+    assert _orphaned_coroutines(submit_then_close) == []
+
+
+def test_the_handoff_still_delivers_a_payload_from_a_foreign_thread() -> None:
+    """The contract the fix must not have cost: this is the reader's only route."""
+    loop = asyncio.new_event_loop()
+    queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
+    delivered: list[bytes] = []
+
+    async def drive() -> None:
+        def reader_thread() -> None:
+            future = submit_queue_put(queue, loop, b"payload")
+            assert future is not None
+            future.result(timeout=5)
+
+        await asyncio.to_thread(reader_thread)
+        delivered.append(await asyncio.wait_for(queue.get(), timeout=5))
+
+    try:
+        loop.run_until_complete(drive())
+    finally:
+        loop.close()
+
+    assert delivered == [b"payload"]
+
+
+def test_cancelling_the_handoff_cancels_the_queued_put() -> None:
+    """Both call sites abandon a put by cancelling its future; it must not land later."""
+    loop = asyncio.new_event_loop()
+    queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=1)
+
+    async def drive() -> None:
+        queue.put_nowait(b"already here")
+
+        def reader_thread() -> None:
+            future = submit_queue_put(queue, loop, b"payload")
+            assert future is not None
+            with pytest.raises(TimeoutError):
+                future.result(timeout=0.1)
+            assert future.cancel() is True
+
+        await asyncio.to_thread(reader_thread)
+        assert await asyncio.wait_for(queue.get(), timeout=5) == b"already here"
+        # A negative assertion ("the abandoned put never landed"), which is the one
+        # case a fixed wait is safe for: load can only make it safer.
+        await asyncio.sleep(0.1)
+        assert queue.empty()
+
+    try:
+        loop.run_until_complete(drive())
+    finally:
+        loop.close()
+
+
+def test_the_exit_sentinel_against_a_dead_loop_orphans_nothing() -> None:
+    """`stop()` returns, the test's loop closes, and only then does the reader finish.
+
+    That is exactly the ordering `test_contract_resize_and_stop` hits: its `finally`
+    stops the host in a thread and the test returns immediately afterwards, so on a
+    loaded host the reader's `finally` runs after the loop is gone.
+    """
+    host, _ = _host_bound_to_a_dead_loop()
+
+    assert _orphaned_coroutines(lambda: host._put_end_of_output(4242)) == []
+
+
+def test_a_backpressured_put_against_a_dead_loop_stops_the_reader_and_orphans_nothing() -> None:
+    host, _ = _host_bound_to_a_dead_loop()
+    stopped: list[bool] = []
+
+    orphans = _orphaned_coroutines(
+        lambda: stopped.append(host._put_with_backpressure(b"payload", _FakePty(alive=True)))
+    )
+
+    assert orphans == []
+    assert stopped == [False], "there is no loop left to deliver to, so the reader must stop"
 
 
 # --------------------------------------------------------------------------

@@ -18,12 +18,14 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import IO, Any
 
 import pytest
 
@@ -39,7 +41,7 @@ pytestmark = [
 
 if os.name == "nt":
     from swe_mux.pty_host import PtyHost
-    from swe_mux.supervisor import SupervisorServer, discovery_path
+    from swe_mux.supervisor import SupervisorServer, discovery_path, resolve_data_dir
     from swe_mux.supervisor_client import (
         RemotePtyHost,
         SupervisorClient,
@@ -311,6 +313,140 @@ async def _connect_with_retries(data_dir: Path, deadline_seconds: float = 20.0):
     raise AssertionError(f"could not connect to supervisor subprocess: {last}")
 
 
+class _StreamDrain:
+    """Drains a child's stdout on a thread and keeps what it read.
+
+    Two jobs. The supervisor's console log handler writes to this pipe, so an
+    undrained pipe is a 64 KB deadlock waiting for a chatty run. And when the
+    cwd-anchor assertion below fails, the supervisor's own warning about a
+    failed ``os.chdir`` is on this stream and nowhere else the CI log will show.
+    """
+
+    def __init__(self, stream: IO[bytes] | None) -> None:
+        self._chunks: list[bytes] = []
+        self._stream = stream
+        self._thread: threading.Thread | None = None
+        if stream is not None:
+            self._thread = threading.Thread(target=self._pump, daemon=True)
+            self._thread.start()
+
+    def _pump(self) -> None:
+        assert self._stream is not None
+        with contextlib.suppress(OSError, ValueError):
+            for line in iter(self._stream.readline, b""):
+                self._chunks.append(line)
+
+    def join(self, timeout: float) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def text(self) -> str:
+        return b"".join(self._chunks).decode("utf-8", "replace")
+
+
+# The probe below reads a real pseudoconsole, so its answer arrives wrapped in
+# ConPTY's startup escape sequences; the path is the only part that matters.
+_ANSI = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|[]P^_].*?(?:\x07|\x1b\\)|[@-Z\\-_])")
+
+
+def _raw_process_cwd(pid: int) -> str:
+    """psutil's view of a process's cwd, unresolved, never raising."""
+    import psutil
+
+    try:
+        return psutil.Process(pid).cwd()
+    except Exception as exc:  # noqa: BLE001 - diagnostic only
+        return f"<unavailable: {type(exc).__name__}: {exc}>"
+
+
+async def _cwd_as_the_supervisor_sees_it(data_dir: Path) -> str:
+    """Ask the supervisor itself, independently of psutil's PEB read.
+
+    A session spawned with ``cwd=None`` inherits the supervisor's own working
+    directory, so ``cmd /c cd`` prints it. This is the cross-check that tells a
+    genuinely mis-anchored supervisor apart from a misreported one.
+    """
+    try:
+        client = await _connect_with_retries(data_dir, deadline_seconds=10.0)
+    except AssertionError as exc:
+        return f"<no probe connection: {exc}>"
+    try:
+        probe = RemotePtyHost(
+            client,
+            "cwd-probe",
+            appname=CMD,
+            argv=("/c", "cd"),
+            cwd=None,
+            env=dict(os.environ),
+        )
+        probe.prepare()
+        await asyncio.to_thread(probe.spawn)
+        buffer = b""
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            try:
+                chunk = await asyncio.wait_for(
+                    probe.output_queue.get(), timeout=deadline - time.monotonic()
+                )
+            except TimeoutError:
+                break
+            if chunk == b"":
+                break
+            buffer += chunk
+        text = _ANSI.sub("", buffer.decode("utf-8", "replace")).strip()
+        return text or "<no output>"
+    except Exception as exc:  # noqa: BLE001 - diagnostic only
+        return f"<probe failed: {type(exc).__name__}: {exc}>"
+    finally:
+        with contextlib.suppress(Exception):
+            await client.close()
+
+
+def _read_tail(path: Path, limit: int = 8000) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"<unreadable: {exc}>"
+    return text[-limit:] if text else "<empty>"
+
+
+async def _cwd_anchor_report(
+    *,
+    config_file: Path,
+    data_dir: Path,
+    marks: list[tuple[str, str]],
+    drain: _StreamDrain,
+) -> str:
+    """Everything needed to decide *why* the anchor did not hold, in one place.
+
+    Deliberately built here rather than uploaded as a CI artifact: the answer
+    then travels with the failure instead of with the run.
+    """
+    probe = await _cwd_as_the_supervisor_sees_it(data_dir)
+    try:
+        listing = sorted(p.name for p in data_dir.iterdir())
+    except OSError as exc:
+        listing = [f"<unreadable: {exc}>"]
+    lines = [
+        "supervisor did not anchor its cwd in the data dir.",
+        f"  raw cwd (psutil, unresolved): {marks[-1][1]!r}",
+        f"  cwd per the supervisor itself: {probe!r}",
+        f"  expected data dir (raw):      {str(data_dir)!r}",
+        f"  expected data dir (resolved): {str(data_dir.resolve())!r}",
+        f"  resolve_data_dir(config):     {str(resolve_data_dir(config_file))!r}",
+        f"  config file bytes:            {config_file.read_bytes()!r}",
+        f"  TEMP={os.environ.get('TEMP')!r} TMP={os.environ.get('TMP')!r}",
+        f"  data dir contents:            {listing}",
+        "  cwd timeline (psutil, unresolved):",
+        *(f"    {label}: {value!r}" for label, value in marks),
+        "  supervisor console output:",
+        *(f"    {line}" for line in (drain.text().splitlines() or ["<empty>"])),
+        "  supervisor.log:",
+        *(f"    {line}" for line in _read_tail(data_dir / "supervisor.log").splitlines()),
+    ]
+    return "\n".join(lines)
+
+
 async def test_supervisor_process_outlives_client_and_reaps_on_command(
     tmp_path: Path,
 ) -> None:
@@ -322,9 +458,14 @@ async def test_supervisor_process_outlives_client_and_reaps_on_command(
         stderr=subprocess.STDOUT,
         cwd=str(tmp_path),
     )
+    drain = _StreamDrain(process.stdout)
+    marks: list[tuple[str, str]] = []
     child_pid = -1
     try:
         first = await _connect_with_retries(tmp_path)
+        # Sampled before any pseudoconsole exists, so a cwd that moves later
+        # points at the spawn rather than at the anchor never having held.
+        marks.append(("connected", _raw_process_cwd(process.pid)))
         host = RemotePtyHost(
             first,
             "proc-survive",
@@ -335,6 +476,7 @@ async def test_supervisor_process_outlives_client_and_reaps_on_command(
         )
         host.prepare()
         await asyncio.to_thread(host.spawn)
+        marks.append(("spawned", _raw_process_cwd(process.pid)))
         child_pid = host.pid
         await read_until(host.output_queue, b">")
         host.write("echo subprocess_marker\r")
@@ -350,7 +492,16 @@ async def test_supervisor_process_outlives_client_and_reaps_on_command(
         # The supervisor must anchor its cwd in the data dir: a cwd inherited
         # from the spawner (e.g. inside dist/) locks that directory on Windows
         # and blocks session-preserving app rebuilds.
-        assert Path(psutil.Process(process.pid).cwd()).resolve() == tmp_path.resolve()
+        marks.append(("client-aborted", _raw_process_cwd(process.pid)))
+        if Path(marks[-1][1]).resolve() != tmp_path.resolve():
+            raise AssertionError(
+                await _cwd_anchor_report(
+                    config_file=config_file,
+                    data_dir=tmp_path,
+                    marks=marks,
+                    drain=drain,
+                )
+            )
 
         assert psutil.pid_exists(child_pid), "agent process must outlive the client"
 
@@ -374,6 +525,8 @@ async def test_supervisor_process_outlives_client_and_reaps_on_command(
     finally:
         if process.poll() is None:
             process.kill()
+        # Let the drain thread see EOF before the stream is closed under it.
+        drain.join(timeout=5.0)
         if process.stdout is not None:
             process.stdout.close()
 
