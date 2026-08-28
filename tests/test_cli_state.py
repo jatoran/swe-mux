@@ -9,6 +9,7 @@ children — and never drives a SessionState transition.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,47 @@ from tests.support.detection_replay import ReplaySession
 
 OWN = "11111111-2222-4333-8444-555566667777"
 FOREIGN = "99999999-8888-4777-8666-555544443333"
+
+
+def _force_distinct_mtime(path: Path, before_ns: int | None) -> None:
+    """Make a rewrite of `path` visible to a `(st_mtime, st_size)` stat cache.
+
+    `CliStateMonitor.poll` skips re-parsing a file whose mtime and size both
+    match what it cached, which is the right production trade and the reason a
+    test that rewrites one state file twice is not deterministic by itself.
+    The two writes in such a test are usually **byte-identical in length** —
+    the statuses are four characters each (`busy`/`idle`), and the millisecond
+    timestamps are floats of the same repr width — so size discriminates
+    nothing and the whole distinction rests on the filesystem handing back a
+    different mtime for two writes microseconds apart. Measured 2026-08-28 on
+    NTFS: ~0.5 ms granularity, and the two writes landed in one tick 13 times
+    in 300, which is exactly the `windows-latest` failure of
+    `test_cli_state_layer_reading_follows_the_files_status` (it read
+    `['busy', 'absent']` for `['busy', 'idle', 'absent']` — the middle state
+    was never re-read, not mis-read).
+
+    Waiting for the filesystem clock to tick would also work, but it makes the
+    test's cost the host's timestamp granularity, which is 0.5 ms on NTFS and
+    two whole seconds on FAT-derived and some network mounts. Stamping the
+    mtime forward instead costs nothing and does not depend on wall-clock
+    progress at all. Nothing reads `CliSessionState.mtime` for its value —
+    cache invalidation is its only consumer — so moving it forward is honest
+    about the only thing it means: the file changed.
+
+    The step doubles rather than being a single nudge because a coarse
+    filesystem truncates a 1 ms bump straight back onto the value it was
+    supposed to leave.
+    """
+    if before_ns is None:
+        return
+    step = 1_000_000  # 1 ms, comfortably clear of NTFS's ~0.5 ms tick.
+    for _ in range(20):
+        stat = path.stat()
+        if stat.st_mtime_ns != before_ns:
+            return
+        os.utime(path, ns=(stat.st_atime_ns, before_ns + step))
+        step *= 2
+    raise AssertionError(f"could not move the mtime of {path} off {before_ns}")
 
 
 def write_state(
@@ -37,6 +79,10 @@ def write_state(
     job_id: str | None = None,
 ) -> Path:
     path = root / f"{pid}.json"
+    try:
+        before_ns: int | None = path.stat().st_mtime_ns
+    except OSError:
+        before_ns = None
     payload: dict[str, Any] = {
         "sessionId": session_id,
         "cwd": cwd,
@@ -55,6 +101,7 @@ def write_state(
     if parked_job_id is not None:
         payload["parkedJobId"] = parked_job_id
     path.write_text(json.dumps(payload), encoding="utf-8")
+    _force_distinct_mtime(path, before_ns)
     return path
 
 
@@ -94,6 +141,48 @@ def claude_session(cwd: str = ".") -> ReplaySession:
 
 def ledger(session: Any, kind: str) -> list[dict[str, Any]]:
     return [entry for entry in session.state_transitions if entry.get("kind") == kind]
+
+
+def test_rewriting_a_state_file_is_never_hidden_by_the_stat_cache(tmp_path: Path) -> None:
+    """A second `write_state` must reach `poll`, whatever the filesystem clock did.
+
+    Two halves, because the flake needed both to line up. First: the payloads a
+    status-flip test writes are the same *size*, so `poll`'s `(mtime, size)`
+    key is really just mtime — asserted rather than commented, so that a future
+    payload change which happens to make sizes differ cannot be read as making
+    the guarantee unnecessary. Second: `_force_distinct_mtime` moves the mtime
+    even when the write did not, which is the case the OS produced on the
+    runner and which no amount of retrying on an idle host reproduces on
+    demand — so it is provoked directly rather than waited for.
+    """
+    now = 1_800_000_000.0
+    busy = write_state(
+        tmp_path, 100, OWN, cwd=str(tmp_path), status="busy",
+        status_updated_at_ms=(now - 60) * 1000,
+    )
+    busy_size = busy.stat().st_size
+    idle = write_state(
+        tmp_path, 100, OWN, cwd=str(tmp_path), status="idle",
+        status_updated_at_ms=(now + 9) * 1000,
+    )
+    assert idle.stat().st_size == busy_size
+
+    # The write landed inside one filesystem timestamp tick: exactly the state
+    # the runner was in when it read `['busy', 'absent']`.
+    collided_ns = idle.stat().st_mtime_ns
+    os.utime(idle, ns=(collided_ns, collided_ns))
+    _force_distinct_mtime(idle, collided_ns)
+    assert idle.stat().st_mtime_ns != collided_ns
+
+    monitor = CliStateMonitor(tmp_path)
+    (first,) = monitor.poll()
+    assert first.status == "idle"
+    write_state(
+        tmp_path, 100, OWN, cwd=str(tmp_path), status="busy",
+        status_updated_at_ms=(now + 20) * 1000,
+    )
+    (second,) = monitor.poll()
+    assert second.status == "busy"
 
 
 def test_poll_parses_and_caches_by_stat(tmp_path: Path) -> None:

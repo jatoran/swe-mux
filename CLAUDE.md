@@ -71,6 +71,66 @@ Details, constraints, and the supervisor design: `.docs/development/archive/SESS
 `.docs/technical/backend/packages.md` (supervisor rules: hash-gated source closure, cwd-lock
 hazard, restart contract).
 
+## The repository is public, and CI is now a real audience
+
+Since 2026-08-27 this repository is published at `https://github.com/jatoran/swe-mux` under
+Apache-2.0, and `swemux.dev` serves from `site/` on every push that touches it. Two things
+follow that did not apply while it was local-only.
+
+**Everything you write is published.** Not just source: commit messages, `.docs/`, and the
+`.docs/marketing/` drafts are all visible. There is exactly one private place in the tree,
+`.private/`, which is gitignored and is for operator notes about running the project. It is
+not for secrets - a gitignore rule is one `git add -f` away from not protecting anything, so
+keys live in a password manager.
+
+**A red badge is the first thing a visitor sees.** CI (`.github/workflows/ci.yml`) runs on
+every push to `master`: the full Windows gate, plus Ubuntu and macOS legs. macOS is
+`continue-on-error` until it passes cleanly; Ubuntu and Windows block.
+
+### Pushing is the operator's, and landing is still yours
+
+Nothing about the landing flow below changed: reconcile in your worktree, verify, and
+fast-forward from the primary checkout. That is still yours to run and still needs no
+escalation.
+
+**What you must not do is push.** A `pre-push` hook refuses it and names an override; that
+override is the operator's to use, not a step you may take because it is documented. Land your
+branch and say so. The operator pushes, or an orchestrating session that has been given
+explicit standing authority does.
+
+The practical consequence: **master moves in batches, and CI reports on the batch rather than
+on your branch.** A green `.worktree-verify` is not a green CI run. They ask different
+questions, and the gap between them is where the last several days of real bugs were found.
+
+### What CI catches that a local gate cannot, measured rather than assumed
+
+The first public run failed nine ways in one go, and none of the nine could reproduce on the
+development host. Recorded so the next person does not rediscover them:
+
+- **The host is not the runner.** `[tool.mypy]` inherited its platform, so `uv run mypy`
+  asked a different question on every leg and could not be green on all three at once. It is
+  now pinned to `platform = "win32"`.
+- **A step that never ran is not a step that passes.** Three separate CI bugs were hiding
+  behind each other, each revealed only when the one before it was fixed:
+  `npm exec tsc -- --noEmit` typechecked *nothing* and printed help under `--prefix`; the
+  runner's Node 20 could not run `--experimental-strip-types`; and the marker expression had
+  drifted from `.worktree-verify`. Any step downstream of a failing one is unverified, not
+  working.
+- **Timer granularity differs by two orders of magnitude.** swe-mux raises this host's timer
+  resolution to 1 ms; a bare runner sits at Windows' 15.625 ms default. Two tests were betting
+  on the gap between writes exceeding filesystem timestamp granularity, and lost only there.
+  This is the same constant behind the bundle-holder scan cache bug.
+- **An external observer can be wrong.** A supervisor test asserted on `psutil`'s reading of a
+  process's cwd; on the runner that reading was simply false, and the supervisor was correct
+  all along. The fix was a better oracle - what a child actually inherits - not a weaker
+  assertion.
+
+The rule those add up to: **when CI fails and the local gate passes, the environment is the
+hypothesis, and evidence beats a patch.** Instrument the failure and let one CI run answer it,
+rather than shipping a plausible fix and re-reading the same red. Never weaken an assertion to
+green a badge; a test that no longer distinguishes its failure mode has been deleted, not
+fixed.
+
 ## Worktrees and parallel changes
 
 Use provider-native worktree lifecycle controls when available.
