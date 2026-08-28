@@ -613,6 +613,126 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
               letter-spacing: 0.06em; margin-top: 4px; }
 .post .prose, .post .bullets, .post table { max-width: 74ch; }
 .post h3 { margin-top: 24px; font-size: clamp(15px, 2vw, 17px); }
+
+/* -------------------------------------------------------- the docs browser
+
+   A persistent sidebar, one URL per page, search, and prev/next. Two columns
+   above 900px and one below it, and the sidebar is ONE list in the markup
+   rather than a desktop copy and a mobile copy - a second copy is how a page
+   ends up in one nav and not the other.
+
+   `minmax(0, 1fr)` on the content track is load-bearing: a `<pre>` inside a
+   grid item has a min-content width equal to its longest line, so without it
+   an install command pushes the whole page sideways and `tools/check.mjs`
+   fails at 360. */
+.docsgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px 0; }
+@media (min-width: 900px) {
+  .docsgrid { grid-template-columns: 224px minmax(0, 1fr); gap: 0 clamp(30px, 4vw, 58px);
+              align-items: start; }
+  /* 45px clears the 44px sticky bar with the hairline under it. */
+  .dsaside { position: sticky; top: 45px; max-height: calc(100vh - 60px);
+             overflow-y: auto; overscroll-behavior: contain;
+             padding: clamp(30px, 5vw, 54px) 0 20px; }
+  .dsbody { padding-top: clamp(30px, 5vw, 54px); }
+}
+.page.docs { padding-top: 0; }
+@media (max-width: 899px) { .dsaside { padding-top: clamp(28px, 6vw, 40px); } }
+@media (max-width: 899px) { .dsbody { padding-top: 4px; } }
+
+.dsvh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+        overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Search. The control is `position: relative` because the result list hangs
+   under it, and the list is in flow on the aside rather than absolutely
+   positioned so it cannot overlap the nav it sits above at any width. */
+.dsearch { position: relative; }
+.dsearch input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+  font-family: var(--mono); color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 0; padding: 8px 30px 8px 11px;
+  appearance: none;
+}
+.dsearch input::placeholder { color: var(--fg-3); }
+.dsearch input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+/* The `/` hint, drawn as a key. `--fg-3` rather than `--fg-4`, because `--fg-4`
+   does not clear AA and is restricted to borders and inert markers. */
+.dskey { position: absolute; right: 9px; top: 8px; pointer-events: none;
+         font-family: var(--mono); font-size: 11px; color: var(--fg-3);
+         border: 1px solid var(--line-2); padding: 0 5px; line-height: 1.45; }
+.dsearch input:focus + .dskey { display: none; }
+.dsr { margin-top: 8px; border: 1px solid var(--line-2); background: var(--panel); }
+.dsr[hidden] { display: none; }
+.dsr a { display: block; border: 0; padding: 9px 11px; border-top: 1px solid var(--line); }
+.dsr a:first-child { border-top: 0; }
+.dsr a:hover, .dsr a:focus-visible { background: var(--panel-2); outline: 0; }
+.dsr a:focus-visible { box-shadow: inset 2px 0 0 var(--green); }
+.dsr .t { display: block; font-family: var(--mono); font-size: 12.5px; color: var(--fg);
+          font-weight: 600; overflow-wrap: anywhere; }
+.dsr a:hover .t, .dsr a:focus-visible .t { color: var(--cyan); }
+.dsr .d { display: block; margin-top: 3px; font-size: 12.5px; line-height: 1.5;
+          color: var(--fg-2); overflow-wrap: anywhere; }
+.dsnone { margin: 0; padding: 10px 11px; font-size: 12.5px; color: var(--fg-2); }
+
+/* The sidebar. A disclosure below 900px, always open above it. */
+.dsnavbtn { display: block; width: 100%; margin-top: 12px; text-align: left; cursor: pointer;
+            font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em;
+            text-transform: uppercase; color: var(--fg-2); background: var(--panel);
+            border: 1px solid var(--line-2); padding: 9px 12px; }
+.dsnavbtn::before { content: "\25B8"; color: var(--green); display: inline-block;
+                    width: 15px; transition: transform 0.12s linear; }
+.dsnavbtn[aria-expanded="true"]::before { transform: rotate(90deg); }
+.dsnavbtn:hover { color: var(--fg); }
+.dsnavbtn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+@media (min-width: 900px) { .dsnavbtn { display: none; } }
+.dsnav { margin-top: 14px; display: flex; flex-direction: column; }
+.dsnav[hidden] { display: none; }
+.dsnav a { border: 0; color: var(--fg-2); font-size: 13.5px; line-height: 1.4;
+           padding: 6px 0 6px 11px; border-left: 1px solid var(--line);
+           overflow-wrap: anywhere; }
+.dsnav a:hover { color: var(--fg); border-left-color: var(--line-2); }
+.dsnav a:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.dsnav a[aria-current="page"] { color: var(--green); border-left-color: var(--green); }
+.dsgroup { margin: 18px 0 5px; font-family: var(--mono); font-size: 11px;
+           letter-spacing: 0.13em; text-transform: uppercase; color: var(--fg-3); }
+.dsnav > a:first-child + .dsgroup { margin-top: 14px; }
+
+/* Page body. The first section gets no top margin, because the heading list
+   above it already separates it from the lede. */
+.dsbody .docsec:first-of-type { margin-top: clamp(26px, 4vw, 36px); }
+.dsbody .prose, .dsbody .bullets, .dsbody .steps, .dsbody .flat, .dsbody .lede,
+.dsbody .note, .dsbody .proof { max-width: 76ch; }
+.dsbody .prose + .prose, .dsbody .prose + .note { margin-top: 12px; }
+.dsbody .code, .dsbody .tablewrap { margin-top: 14px; }
+.dsbody .head + .prose, .dsbody .head + .bullets, .dsbody .head + .flat,
+.dsbody .head + .steps { margin-top: 12px; }
+.dsbody .flat li { grid-template-columns: 180px minmax(0, 1fr); }
+@media (max-width: 760px) { .dsbody .flat li { grid-template-columns: minmax(0, 1fr); } }
+.dsbody .docsec .kbd, .dsbody kbd {
+  font-family: var(--mono); font-size: 0.86em; color: var(--fg);
+  border: 1px solid var(--line-2); background: var(--panel-2); padding: 1px 5px;
+  white-space: nowrap;
+}
+
+/* Previous and next. A grid rather than `space-between`, so a page with only a
+   next link keeps it on the right where every other page draws it. */
+.dsstep { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px;
+          margin-top: clamp(40px, 6vw, 62px); padding-top: 20px;
+          border-top: 1px solid var(--line-2); }
+.dsstep a { border: 0; display: block; padding: 12px 14px; border: 1px solid var(--line);
+            background: var(--panel); }
+.dsstep a:hover { border-color: var(--line-2); }
+.dsstep a:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.dsstep a.next { text-align: right; }
+.dsstep .l { display: block; font-family: var(--mono); font-size: 11px;
+             letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); }
+.dsstep .t { display: block; margin-top: 4px; font-size: 14px; color: var(--fg);
+             overflow-wrap: anywhere; }
+.dsstep a:hover .t { color: var(--cyan); }
+@media (max-width: 560px) {
+  .dsstep { grid-template-columns: minmax(0, 1fr); }
+  .dsstep a.next { text-align: left; }
+  .dsstep .gap { display: none; }
+}
 </style>
 </head>
 <body>
