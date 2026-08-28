@@ -32,6 +32,11 @@ ConPTY allocation with the bounded pywinpty PyO3-panic retry, Windows argv quoti
 `pty.fork` with a real controlling terminal, so Ctrl+C, SIGWINCH and `isatty` behave.
 Nonblocking master reads with EIO as end-of-output, `TIOCSWINSZ` resize, waitpid exit codes normalized to 128+signal, and process-group kill.
 
+It also owns the *handoff* to `posix_process_group.py`: `spawn` does not return until the child is out of the daemon's process group.
+`setsid` runs in the child after the fork, so an unsynchronised `getpgid(child)` in the parent can still answer the daemon's own group - the one value `ProcessGroupReaper.assign` refuses - and the session then runs with no ownership and no guardian.
+Measured 2026-08-27 in a Linux container against this exact path: idle, ownership was never refused; with every core pinned it was refused 21, 36 and 33 times out of 40, and zero times out of 40 in three runs with the wait in place.
+The wait belongs to the parent because the child may not do anything but `chdir` and `execvpe` (a multi-threaded parent makes any allocation there a potential deadlock).
+
 **Not:** anything shared; imported only on POSIX.
 
 ## `process_reaper.py`
@@ -46,6 +51,8 @@ It exists so no caller imports `win_jobobj` directly, which is what made the pac
 POSIX lifetime ownership by process group: refusing to own the daemon's *own* group, live group membership as the analogue of Job-object membership, and SIGTERM then a bounded wait then group SIGKILL.
 
 **Not:** daemon-death cleanup (`posix_guardian.py`), or the Windows Job object (`win_jobobj.py`).
+Also not *establishing* the group: `assign` states the precondition and refuses loudly when it does not hold, and `pty_backend_posix.py` is what makes it hold before calling.
+Relaxing that refusal into a retry would put the retry in the module that must never guess, so it stays where the fork is.
 
 ## `posix_guardian.py`
 

@@ -521,7 +521,16 @@ async def test_reap_process_tree_kills_grandchildren_and_never_hangs(tmp_path: P
     if os.name == "nt":
         command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", sys.executable, str(script)]
     else:
-        command = ["/bin/sh", "-c", f'"{sys.executable}" "{script}"']
+        # The trailing statement is what keeps the wrapper a wrapper. A `-c` shell
+        # whose whole script is one simple command may `exec` it in place instead
+        # of forking it, and then there is no tree to reap: `sh -c 'python x.py'`
+        # leaves one process named python and no descendants at all. Measured
+        # 2026-08-27 in a Linux container: dash forks either way, bash 5.2 execs
+        # the bare form and forks this one. macOS ships bash as `/bin/sh`, which
+        # is why this test built the two-level tree everywhere except there.
+        # Anything after the command defeats the optimisation on every shell,
+        # because the command is no longer the last thing the shell has to do.
+        command = ["/bin/sh", "-c", f'"{sys.executable}" "{script}"; exit $?']
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE,

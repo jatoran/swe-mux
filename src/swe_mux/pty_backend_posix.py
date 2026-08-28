@@ -13,10 +13,27 @@ the child in the correct order; hand-rolling that with `subprocess` plus a
 halves of POSIX lifetime management are designed against each other here rather
 than separately.
 
+**That handoff has to be waited for, not assumed.** ``setsid`` runs in the
+*child*, after the fork, inside `forkpty`/`login_tty`. The parent returns from
+`pty.fork()` the moment the fork syscall returns, with nothing ordering it
+against the child's first instruction, so `os.getpgid(child)` read immediately
+after the fork can still answer *this process's own group* - the one value
+``ProcessGroupReaper.assign`` refuses. Measured 2026-08-27 in a Linux container:
+on an idle 8-CPU host the parent never observed its own group across 60 spawns;
+with 8 busy-loop processes pinning every core it observed it in 15 of 60, and
+against the real spawn-then-assign path ownership was refused in 21, 36 and 33
+of 40. Contention is the whole story, so this was never macOS-only - a
+three-core runner under `pytest -n auto` is simply contended permanently, which
+is why that is where it surfaced. `spawn` therefore does not return until
+the child's own group is visible, so the documented contract - "one root child
+that leads its own session" - is true of the object it hands back rather than
+true shortly afterwards.
+
 The child is deliberately doing almost nothing between fork and exec. This
 process is multi-threaded, so any allocation in the child can deadlock against a
 lock held by a thread that does not exist after the fork. `chdir` and `execvpe`
-are all that runs.
+are all that runs, and the wait above is deliberately on the parent's side for
+the same reason.
 """
 
 from __future__ import annotations
@@ -29,6 +46,7 @@ import pty
 import signal
 import struct
 import termios
+import time
 
 from .pty_backend import PtyError
 
@@ -37,6 +55,13 @@ log = logging.getLogger(__name__)
 # One read syscall's ceiling. The shared reader coalesces across calls, so this
 # only bounds a single buffer rather than a burst.
 _READ_CHUNK = 65536
+
+# How long the parent waits for the child to reach `setsid`. Generously bounded
+# rather than unbounded: exceeding it means the child is starved or already gone,
+# and both are better reported by the caller's own error path than by hanging a
+# session start. The typical cost is a single `getpgid` that already answers.
+_SESSION_WAIT_SECONDS = 5.0
+_SESSION_POLL_SECONDS = 0.0005
 
 
 class PosixPtyProcess:
@@ -85,6 +110,7 @@ class PosixPtyProcess:
         self._master = master
         os.set_blocking(master, False)
         self._apply_size(self._cols, self._rows)
+        _await_own_session(pid)
 
     def read(self) -> bytes | None:
         if self._master < 0:
@@ -192,6 +218,50 @@ class PosixPtyProcess:
                 log.debug("could not close pseudoterminal master: %s", exc)
         # Reap if it has already exited, so a released session leaves no zombie.
         self.isalive()
+
+
+def _await_own_session(pid: int) -> None:
+    """Block until ``pid`` is out of this process's group, or give up loudly.
+
+    The one synchronisation point between the fork half and the ownership half of
+    POSIX lifetime management; see this module's docstring for why it cannot be
+    skipped. Never raises: every outcome other than success is something the
+    caller's own ownership step reports better than an exception thrown from
+    inside `spawn` would.
+
+    * Child gone already (a failed exec, an instant exit): nothing to wait for.
+      Its group is not this daemon's problem, and the pty's exit path reports it.
+    * Group unreadable: this host will not answer, so waiting cannot help.
+    * Deadline reached: the child is starved. Returning lets
+      ``ProcessGroupReaper.assign`` refuse ownership with its own explicit
+      message, which is a session running unowned rather than a session that
+      never starts.
+    """
+    own_pgid = os.getpgid(0)
+    deadline = time.monotonic() + _SESSION_WAIT_SECONDS
+    # unsupervised-loop-ok: not a daemon loop. This is a bounded synchronous wait
+    # inside one `spawn` call, capped by `_SESSION_WAIT_SECONDS` on the thread
+    # `asyncio.to_thread` already gave that spawn, and every path out of it is an
+    # explicit return in the body.
+    while True:
+        try:
+            if os.getpgid(pid) != own_pgid:
+                return
+        except ProcessLookupError:
+            return
+        except (PermissionError, OSError) as exc:
+            log.debug("could not read the process group of pty child %s: %s", pid, exc)
+            return
+        if time.monotonic() >= deadline:
+            log.warning(
+                "pty child %s was still in this process's group (%s) after %.1fs; "
+                "it cannot be owned as a session of its own",
+                pid,
+                own_pgid,
+                _SESSION_WAIT_SECONDS,
+            )
+            return
+        time.sleep(_SESSION_POLL_SECONDS)
 
 
 def _exit_code(status: int) -> int:

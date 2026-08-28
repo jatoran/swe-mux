@@ -274,6 +274,38 @@ Four traps the script encodes, each of which silently produces a wrong result ra
 The script's rule is that nothing moves unless it can be proved disposable: identical to `HEAD` modulo CR, or identical to some commit in the incoming range.
 Anything else stops the run untouched unless `--stash-unmatched` is given, and everything it does move is copied under `.trash/` and stashed rather than deleted.
 
+### What the first macOS run actually found (2026-08-27)
+
+The repository went public and `.github/workflows/ci.yml`'s `platform` leg executed on `macos-latest` for the first time.
+Both POSIX implementations had been written and typechecked for macOS and never run there, so the leg is `continue-on-error` until it passes once.
+It produced exactly two failures, both of which pass on Linux, and they have **two different root causes** rather than one.
+Recording them here because each is a case where the honest answer is "Linux was lucky", not "macOS is different".
+
+**1. `spawn` handed back a child the ownership half could refuse - a real bug on every POSIX host.**
+`test_a_posix_pty_runs_a_child_in_its_own_session_and_is_owned` failed on `assert 933 != 933`: the child's process group was still the daemon's own.
+`setsid` runs in the *child*, after the fork, inside `forkpty`/`login_tty`; the parent returns from `pty.fork()` the moment the fork syscall returns, with nothing ordering the two.
+So `os.getpgid(child)` read straight afterwards can answer the parent's group, which is precisely the value `ProcessGroupReaper.assign` is built to refuse.
+macOS did not need a `setsid` Linux does not need, and the ordering is not different there: **the window is the same on both, and only a contended host loses it.**
+Measured in a Linux container on an 8-core host: idle, the parent never observed its own group across 60 spawns; with eight busy-loop processes pinning every core it observed it in 15 of 60.
+Against the real `spawn` then `assign` path under the same contention, ownership was refused 21, 36 and 33 times out of 40.
+A three-core macOS runner executing `pytest -n auto` is the contended case permanently, which is why it surfaced there.
+This was never test-only: a lost race sets `reaper_assignment` to `daemon_job_failed:...`, and that session runs with no group ownership and no guardian - degraded silently, in the way this document warns a port degrades.
+`pty_backend_posix.spawn` now waits, on the parent's side, for the child to leave the daemon's group before returning; three further runs of 40 under full contention refused ownership zero times.
+The wait is bounded and gives up rather than hanging, because `assign`'s explicit refusal is a better report than a session that never starts.
+
+**2. `/bin/sh` is bash on macOS and dash on Linux, and only one of them forks.**
+`test_reap_process_tree_kills_grandchildren_and_never_hangs` failed on its *precondition* - the wrapper had no descendants to reap - rather than on the reaping.
+A `-c` shell whose entire script is one simple command may `exec` it in place instead of forking it (bash sets `CMD_NO_FORK` for `-c`), so `sh -c 'python x.py'` leaves one process named python and no tree at all.
+Measured in the same container: dash forks either way; bash 5.2 execs the bare form and forks as soon as anything follows the command.
+macOS ships bash 3.2 as `/bin/sh` while Debian and Ubuntu ship dash, so the test built its two-level tree everywhere except macOS.
+The bash measurement is 5.2, not the 3.2 macOS carries - the optimisation is the same longstanding `-c` case in both, but that step is reasoning from bash's behaviour rather than from a macOS run.
+This one is a test-fixture assumption, not a product defect - `reap_process_tree` walks descendants and kills the root either way - and the fix is a trailing statement in the POSIX command so the wrapper stays a wrapper on every shell.
+
+Both fixes were verified on Linux, which is the half that can be executed here: the full container suite still passes, and the ownership fix was measured against the contention that produces the failure.
+Neither is *confirmed on macOS*, because no macOS host was available and none can be licensed onto the proving hardware.
+The next `macos-latest` run is what closes them, and `continue-on-error` stays until it does.
+The general lesson matches the target-order section below: a POSIX implementation verified only on Linux is verified on the shell and the scheduler Linux happens to have.
+
 ### Native-platform CI
 
 - Run import and non-PTY tests first on Windows, Linux, and macOS.
