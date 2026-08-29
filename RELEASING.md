@@ -159,7 +159,21 @@ Its contract:
 The ordinary `ci` workflow still runs the full gate on Windows and the platform legs on
 Linux and macOS; the release workflow does not replace it and does not re-litigate it.
 
-### 5. TestPyPI before PyPI, every time
+### 5. TestPyPI, which a tag does not do for you
+
+**Read this before trusting the heading it used to carry.**
+This section said "TestPyPI before PyPI, every time", and the automation has never done that.
+The `publish-testpypi` job in `release.yml` carries an `if:` condition that requires the run to
+have come from a `workflow_dispatch` whose `index` input is testpypi, so **a `v*` tag skips it
+and publishes straight to PyPI**.
+Both 0.1.1 and 0.1.2 went out that way on 2026-08-28, and the job reported `skipped` rather than
+failing, so nothing drew attention to it.
+
+That is a real gap and it is stated rather than closed, because closing it is a decision:
+either make the tag path run TestPyPI first and gate PyPI on it, or accept that the tag is the
+rehearsal and stop claiming otherwise.
+Until one of those happens, a TestPyPI validation is a **manual act you perform before tagging**,
+using the `workflow_dispatch` path with `index: testpypi`.
 
 The TestPyPI upload is not a formality, and it is the only chance to catch a metadata or
 packaging defect before a version number is permanently consumed.
@@ -193,6 +207,45 @@ Only then promote the same commit's artifacts to PyPI.
 - Confirm the GitHub Release carries the changelog section and the desktop artifact.
 - Confirm the site's changelog page and `version.json` show the new version, and that a running
   older install offers the update banner.
+
+## What the first two releases actually taught, 2026-08-28
+
+Recorded so the next person does not rediscover them. Both were found by releasing, not by
+reading, and neither could have failed the local gate.
+
+**A release can succeed at PyPI and fail as a release.**
+0.1.1 published to PyPI and then `build-desktop` failed, which skipped `github-release` and
+`update-manifest`. The result was a version live on PyPI with **no GitHub Release and no
+refreshed `version.json`** - so every installed copy was still being told 0.1.0 was current
+while PyPI served 0.1.1. The publish jobs are independent of the desktop job, so "PyPI worked"
+is not "the release worked". Check the whole run, not the package.
+
+The repair is a new version, not a retag. A tag that has published to PyPI cannot be reused, so
+0.1.2 carried 0.1.1's contents plus the artifacts it failed to build. A PyPI version with no
+matching GitHub Release is untidy and harmless; leave it and say so in the changelog.
+
+**The installer's source path is resolved against the `.iss` file, not the working directory.**
+`build-desktop` failed on its first ever run because `build_installer.py` passed
+`/DAppSource=dist` - a relative path - and ISCC resolves a relative `Source:` against the
+script's own directory, so `[Files]` searched `packaging/installer/dist/` for a bundle at the
+repository root. `cwd=ROOT` on the subprocess looks like it should prevent that and does not.
+The `.iss` header had documented `AppSource` as absolute all along.
+`tests/test_windows_installer.py` now fails when any `/D` path define is relative. Note what the
+suite still cannot do: it reads the `.iss` as source text and never compiles it, so a real ISCC
+compile happens for the first time in CI on a tag.
+
+**A push-triggered Pages deploy can publish content older than itself.**
+`pages.yml` stages its bytes at checkout and deploys them after the `pages` concurrency queue
+clears. On v0.1.2 the release commit's Pages run restored `version.json` at 00:30:57, when the
+newest release was still v0.1.0; `release.yml` published the correct 0.1.2 manifest at 00:37:25;
+the queued Pages deploy finished at 00:38:56 and overwrote it. The site advertised 0.1.0 while
+PyPI served 0.1.2.
+
+The `concurrency` group does not prevent this - it serialises the two deployments, and the loser
+is whichever *finishes* first, not whichever holds newer content. `pages.yml` now also triggers
+on `workflow_run` of `release`, so the last deployment is the newest one. **After any release,
+confirm `https://swemux.dev/version.json` actually names the new version**, rather than assuming
+the job that wrote it was the job that won.
 
 ## What is not automated, on purpose
 
