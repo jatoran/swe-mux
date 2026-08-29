@@ -5311,6 +5311,196 @@ growing while it is held.
 - [ ] Status detection, delivery readiness, and the golden corpus are untouched by this phase, and
   the reason they are untouched is written down where the next person will look for it.
 
+## Phase 21 - Update cost: making a shipped fix reach a user in seconds rather than minutes
+
+Recorded 2026-08-29 after evaluation; not scheduled.
+The question that opened it was whether users must rebuild to receive a change.
+They do not - the PyInstaller build runs in CI, and `update_install.py` already downloads a
+verified archive and hands it to the same staged swap a local redeploy uses.
+The finding is that this is nonetheless multi-minute for a user and multi-minute again for the
+operator, that neither cost is where it looks, and that both are fixable without touching
+detection, the supervisor protocol, or the trust model.
+
+### How updating works today, for the record
+
+Three install kinds, three paths, and only the second is slow.
+
+- **Source / PyPI** (`uv tool install`, pipx, pip): `uv tool upgrade swe-mux` and a daemon
+  restart. `update_install.py` detects this case from `sys.frozen` plus the absence of a bundle
+  root and says so rather than trying to swap anything.
+- **Frozen desktop app**: `update_check.py` polls `https://swemux.dev/version.json`, the banner
+  offers the version, `POST /api/update/install` must name that exact version, the archive's
+  SHA-256 is verified against the manifest before anything is staged, and
+  `redeploy_desktop.py --from-archive` performs the same staged swap as a local redeploy with a
+  download where the build used to be. Sessions survive; a supervisor-protocol difference is
+  refused rather than shipped.
+- **Windows installer**: the initial-install path, not an update path.
+
+### What the minutes actually are, measured
+
+Not compilation. The user downloads the full bundle, extracts it, and then pays **Windows image
+scanning on a tree of files the machine has never seen**. `APP_HEALTH_TIMEOUT_SECONDS` is 600
+rather than 300 precisely because of this: measured 2026-08-21, an *already-scanned* build took
+225s to runtime-ready with 30 live sessions, so a cold one exceeded the old budget and the
+rollback fired on a healthy deploy.
+
+The bundle it is scanning, by group:
+
+| Group | Size | What it is for |
+|---|---|---|
+| spacy + blis + thinc + en_core_web_sm | ~130M | text-to-phoneme for Kokoro TTS, and nothing else |
+| ctranslate2 + faster-whisper + tokenizers + hf_xet | ~75M | local STT |
+| onnxruntime | 34M | Kokoro inference and VAD |
+| numpy + numpy.libs | 27M | audio buffers |
+| **voice subtotal** | **~265M** | already an install-time extra for PyPI installs |
+| PIL | 15M | Project image presentation |
+| winpty, cryptography, tree-sitter pack | ~21M | core |
+| `swe_mux` | 25M | 24M of which is `static/assets` |
+| our own Python source | ~1M | |
+
+**The part that changes on this project's commit cadence is about a megabyte of Python and a few
+megabytes of JavaScript. The part that makes an update multi-minute is roughly four hundred
+megabytes of machine-learning dependencies that change on their own upgrade cadence.**
+Every release currently rewrites all of it.
+
+### Four findings from the audit
+
+- **`--clean` is passed on every PyInstaller invocation** (`packaging/build_desktop.py`),
+  unconditionally and with no comment saying why. It discards the analysis cache before every
+  build, so a local redeploy re-derives the whole import graph over a ~400 MB closure every time.
+  Correct hygiene for a release build; the worst case paid repeatedly for the redeploy loop.
+  This is the prime suspect for local rebuild time and has not yet been measured.
+- **`upx=True` is set in both specs while UPX is not installed**, so it is silently a no-op. That
+  is a trap in two directions: installing UPX would slow builds substantially, and UPX-packed
+  binaries are a well-known antivirus heuristic trigger, which is the opposite of what the scan
+  cost above needs.
+- **A local bundle and a CI bundle are not the same product.** `dist/swe-mux` built 2026-08-27
+  carries 101 MB of `playwright/driver`, while `license_audit.py` states plainly that
+  `preview-capture` does not ship and CI's closure
+  (`uv sync --extra desktop --extra voice-local --group package`) prunes it. PyInstaller followed
+  the lazy `import playwright` in `preview_capture.py` because the package happened to be in the
+  build venv. `verify_bundle_licenses` cannot catch this - Playwright is Apache-2.0 and passes -
+  and nothing checks bundle membership or size.
+- **The runtime-download mechanism this phase needs already exists.** `voice_models.py` has
+  `KokoroModelStore` (size-and-SHA-256-verified fetch on an explicit press, pinned revision,
+  resumable state) and `G2P_WHEEL_URL` already fetches a **wheel** at runtime rather than only
+  weights. Extending it from models to the rest of the voice closure is an extension of a proven
+  mechanism rather than a new trust boundary.
+
+### Workstream A - the build loop
+
+Cheap, low risk, and the operator's daily cost rather than the user's.
+
+- [ ] Measure `--clean` on and off using `build_desktop.py --app-distpath` into a throwaway
+  directory, which touches nothing live and cannot disturb a running app.
+- [ ] Gate `--clean` to release builds if the measurement supports it, letting redeploys reuse
+  PyInstaller's cache.
+- [ ] Pin `upx=False` in both specs with the reasoning, rather than leaving a setting that only
+  does harm the day someone installs the tool.
+- [ ] Assert the built bundle's top-level package set against an expected manifest, so a stray
+  dependency in the build venv fails the build instead of silently adding a hundred megabytes.
+- [ ] Cache PyInstaller's workpath and the uv cache in CI.
+
+### Workstream B - delta updates
+
+The largest user-facing win, and the one that makes "just cut a release" a viable answer at all.
+
+- [ ] Publish a per-file hash manifest alongside the release archive.
+- [ ] The updater writes only the files that differ, falling back to a full replacement when the
+  Python version or the dependency set moves.
+- [ ] Keep the whole-archive SHA-256 verification exactly as it is; this adds no new trust
+  boundary, and `bundle_archive.py` already reads archives while `--from-archive` already stages
+  them.
+
+The second-order effect is the one that matters most: unchanged files are not rewritten, so they
+keep their existing scan verdict, and the cold-scan cost that forced the 600s health budget
+mostly disappears along with the bytes.
+
+### Workstream C - frontend overlay
+
+- [ ] The daemon prefers a hash-verified `static/` overlay in the data dir over its bundled tree.
+- [ ] The overlay carries a compatibility pin against the backend version, and a mismatch is
+  refused rather than served.
+- [ ] A one-press revert to the bundled tree.
+
+This is a named, mainstream pattern rather than a workaround - it is what Expo/EAS Update and
+CodePush do for React Native and what asar swapping does for Electron - and it retires a trap
+that `CLAUDE.md` currently spends two paragraphs warning about, in which a verified-correct
+frontend fix silently does nothing on the frozen app.
+
+### Workstream D - split the voice stack into a sidecar
+
+The structural fix, and a project rather than a change.
+
+- [ ] Extend `KokoroModelStore` from weights to the wheel closure, the way `G2P_WHEEL_URL`
+  already does for one wheel.
+- [ ] Decide where the LGPL `num2words` obligation lives once the closure is no longer in the app
+  bundle. It does not disappear: a sidecar is also a distribution and carries the same relink
+  condition, so `verify_bundle_licenses` has to follow it there. This is why
+  `verify_build_extras_installed` currently *refuses* to build without `voice-local`, and that
+  refusal is load-bearing rather than incidental.
+- [ ] Answer the first-use-download question, which `NEW_USER_RELEASE_READINESS.md` already
+  tracks as open and which this phase would otherwise decide by accident.
+- [ ] Apply the same treatment to Playwright, which is easier because it already does not ship.
+
+Base bundle goes from roughly 400 MB to roughly 135 MB, and most updates never touch the sidecar
+at all.
+
+### Considered and not taken
+
+**A remote data channel for harness descriptors, model catalogs, and pricing.**
+Recorded as rejected with its evidence, because the reasoning is not obvious and would otherwise
+be re-derived. Three comparable projects were checked. **cmux** has 87 changelog releases and
+shipped `0.64.21` and `0.64.22` on consecutive days, with Sparkle auto-update plus a `nightly`
+channel built on every commit to main, and no data channel of any kind. **orca** is at
+`1.4.178-rc.2` with `electron-updater` and separate stable and `rc` Homebrew casks, and its only
+matches for remote configuration are a compile-time feature flag and PostHog's local opt-out; it
+has no remote-config or flag-delivery channel. **herdr** ships roughly weekly across 55 releases
+*and* has an over-the-air channel - for detection rules and nothing else.
+
+Two of three answered this with release cadence and it was enough.
+The one that built a channel built it for the single category that is simultaneously pure data
+with no code, broken on a third party's schedule rather than its own, and product-breaking for
+every user at once when wrong.
+Model catalogs and pricing are none of those things; wrong is annoying rather than broken.
+And detection is explicitly out of scope by operator decision, so the one thing that would clear
+herdr's own bar is not on the table.
+
+The revisit trigger is measurable rather than a judgment call: a CLI vendor change that breaks
+detection for real users between releases, more than once.
+If that happens, herdr's design is the one to adopt, complexity budgets and hash-parity checks
+included.
+
+**Antivirus exclusions added by the installer.** Rejected outright. It is normal for a user or an
+IT organization to exclude a development toolchain, and it is not normal for an application
+installer to exclude itself: it requires elevation, it is MITRE ATT&CK T1562.001, endpoint
+security products alert on it, and it is the single most likely way for this project to be
+classified as malware in a managed environment. An exclusion `mux doctor` can *suggest*, for the
+user to run knowingly, is the acceptable form.
+
+**Authenticode code signing.** The legitimate answer to the scan-and-warn cost, deferred by
+operator decision on 2026-08-29 rather than rejected. `release.yml` already documents building
+unsigned as deliberate. Recorded here so that the reason the scan cost is being attacked
+structurally, through Workstream B, rather than at its source is visible.
+
+**A nightly or rc channel.** Not scheduled, but noted as the cheap version of everything the data
+channel was reaching for: opt-in users receive a fix within hours of the commit, at the cost of a
+workflow rather than a trust boundary. Both cmux and orca have one.
+
+### Phase 21 exit criteria
+
+- [ ] A local redeploy's build time is measured before and after the `--clean` change, and the
+  number is written down rather than assumed.
+- [ ] A release that does not move the dependency set transfers and rewrites only the files that
+  changed, and the health budget is revisited against a measurement rather than left at the
+  cold-scan worst case.
+- [ ] A frontend-only fix reaches the frozen app without a bundle swap, and the `CLAUDE.md`
+  warning about the frozen static tree is retired rather than reworded.
+- [ ] A bundle built locally and a bundle built by CI contain the same packages, and a difference
+  fails a build.
+- [ ] The voice closure is acquired on an explicit press, its LGPL obligation is verified wherever
+  it now lives, and a user who never enables voice never downloads it.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
