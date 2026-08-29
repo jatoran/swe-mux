@@ -54,6 +54,19 @@ to have handed back the same bytes, and the whole point of this module is that
 bytes are trusted only after a full-file digest. An archive that *did* verify is
 kept and reused, which is the resume that is actually worth having.
 
+**Most of a release is already on the machine, and the install says so before it
+starts.** A release publishes a per-file hash manifest beside its archive
+(`bundle_manifest.py`), verified against `version.json` exactly like the archive
+is, so this module can hash the installed bundle and report how much of the
+incoming one it already has *before* committing to a several-hundred-megabyte
+download. That preview is advisory and nothing branches on it: the swap
+recomputes the same plan authoritatively from the manifest inside the archive
+(`bundle_stage.py`), because that copy is covered by the whole-archive digest the
+swap has already checked. The preview exists so an operator watching a progress
+bar knows whether this update rewrites 32 MB or 420 MB, which is the difference
+between a swap that finishes in seconds and one that spends minutes in image
+scanning.
+
 **A source install is not a frozen app.** `uv tool install` and `pipx` users
 update with `uv tool upgrade swe-mux`; there is no bundle to swap and pretending
 otherwise would be the first thing most operators hit. The install kind is read
@@ -87,6 +100,12 @@ from .bundle_archive import (
     ArchiveError,
     file_digest,
     read_archive_metadata,
+)
+from .bundle_manifest import (
+    DELTA_NO_MANIFEST,
+    DeltaPlan,
+    parse_file_manifest,
+    plan_delta,
 )
 from .bundle_metadata import BundleMetadata
 from .config import Config
@@ -178,6 +197,24 @@ def release_archive_name(version: str, tag: str | None = None) -> str:
     return f"swe-mux-{version}-{platform_tag}{_ARCHIVE_SUFFIX.get(host, ZIP_SUFFIX)}"
 
 
+def release_file_manifest_name(version: str, tag: str | None = None) -> str:
+    """The per-file hash manifest's artifact name for a version on this host.
+
+    A third name on the same contract, and derived from the same two facts as
+    the archive's so a release cannot publish one without the other being
+    findable. It is the *sidecar* copy: identical bytes to the `files.json`
+    inside the archive, published separately so the updater can plan a delta -
+    and say how much of the bundle it will rewrite - before committing to a
+    several-hundred-megabyte download.
+
+    Its absence from a release is a normal state, not a failure. Every release
+    published before this existed has none, and the updater installs those
+    exactly as it always did.
+    """
+    platform_tag = tag or release_platform_tag()
+    return f"swe-mux-{version}-{platform_tag}.files.json"
+
+
 def release_installer_name(version: str, tag: str | None = None) -> str | None:
     """The platform installer's artifact name, or None where there is no installer.
 
@@ -215,6 +252,14 @@ MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 #: Read granularity. Large enough that hashing is not syscall-bound, small enough
 #: that progress moves visibly on a slow link.
 CHUNK_BYTES = 1024 * 1024
+
+#: Refuse a file manifest larger than this. It is one JSON object per file in the
+#: bundle, which for the 2937-file bundle measured 2026-08-29 is about 400 KB;
+#: this is the size past which the file is not that document. Held in memory
+#: rather than written to disk, because nothing downstream reads it from there
+#: and a small file under the downloads directory would compete with the
+#: archives `_prune_downloads` is counting.
+MAX_FILE_MANIFEST_BYTES = 32 * 1024 * 1024
 
 #: A download is minutes rather than seconds, so it gets its own budget: the
 #: manifest fetch's 10s ceiling would kill every real install. Bounded all the
@@ -432,6 +477,9 @@ class _State:
     #: Correlates every log line of one attempt, and the redeploy log it spawned.
     install_id: str = ""
     events: list[dict[str, Any]] = field(default_factory=list)
+    #: `DeltaPlan.as_dict()` for this release against the installed bundle, or
+    #: `{}` before one has been computed. Advisory: the swap recomputes it.
+    delta: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -447,6 +495,7 @@ class _State:
             "finished_at": self.finished_at,
             "install_id": self.install_id,
             "events": list(self.events),
+            "delta": dict(self.delta),
         }
 
 
@@ -561,6 +610,9 @@ class UpdateInstaller:
         events = payload.get("events")
         if isinstance(events, list):
             state.events = [item for item in events[:MAX_EVENTS] if isinstance(item, dict)]
+        delta = payload.get("delta")
+        if isinstance(delta, dict):
+            state.delta = delta
         # A daemon that died mid-download comes back saying so rather than
         # claiming a transfer is still running: nothing is transferring, because
         # the process that was doing it is gone.
@@ -648,6 +700,7 @@ class UpdateInstaller:
             "finished_at": state.finished_at,
             "install_id": state.install_id,
             "events": list(state.events),
+            "delta": dict(state.delta),
         }
 
     @property
@@ -753,6 +806,7 @@ class UpdateInstaller:
         """The whole attempt. Never raises out of the task."""
         try:
             release, artifact = await self._resolve_artifact(version)
+            await self._preview_delta(release)
             archive = await self._acquire(artifact)
             metadata = self._inspect(archive)
             self._gate_supervisor(metadata)
@@ -852,6 +906,115 @@ class UpdateInstaller:
                 else "Install it by hand from the release page."
             ),
         )
+
+    # -- step 1b: how much of this release is already here ---------------------
+
+    async def _preview_delta(self, release: Release) -> None:
+        """Record how much of `release` the installed bundle already has.
+
+        Advisory, and deliberately so. Nothing branches on the answer: the swap
+        recomputes the identical plan from the `files.json` **inside** the
+        archive, which is the copy covered by the whole-archive digest it has
+        already verified. This one is here because it is the only moment the
+        operator can be told what the install is about to cost, and because a
+        number that arrives after the swap is a number nobody needed.
+
+        It never raises and never refuses. Every failure - a release from before
+        the manifest existed, a manifest that will not parse, an unreadable
+        installed bundle - leaves the preview empty and the install proceeding
+        exactly as it did before this method was written.
+        """
+        wanted = release_file_manifest_name(release.version, self.platform_tag)
+        artifact = next(
+            (item for item in release.artifacts if item.name == wanted), None
+        )
+        if artifact is None:
+            self._record_delta(DeltaPlan(reason=DELTA_NO_MANIFEST))
+            return
+        try:
+            payload = await self._fetch_file_manifest(artifact)
+        except UpdateRefused as refusal:
+            log.info(
+                "update install could not preview the delta",
+                extra={
+                    "install_id": self._state.install_id,
+                    "update_reason": refusal.reason,
+                },
+            )
+            self._record_delta(DeltaPlan(reason=DELTA_NO_MANIFEST))
+            return
+        manifest, reason = parse_file_manifest(payload)
+        if manifest is None:
+            log.warning(
+                "the release's file manifest could not be read",
+                extra={"install_id": self._state.install_id, "update_reason": reason},
+            )
+            self._record_delta(DeltaPlan(reason=DELTA_NO_MANIFEST))
+            return
+        # Hashing a few hundred megabytes off a thread, because this daemon is
+        # serving a UI while it does it and a twenty-second stall in the event
+        # loop would read to every client as the app having died mid-update.
+        plan = await asyncio.to_thread(
+            plan_delta, manifest, self.install_kind.bundle_root
+        )
+        self._record_delta(plan)
+
+    def _record_delta(self, plan: DeltaPlan) -> None:
+        """Persist the plan and log its one line. Never raises."""
+        self._state.delta = plan.as_dict()
+        log.info(
+            "update install delta preview: %s",
+            plan.summary(),
+            extra={"install_id": self._state.install_id, **plan.as_dict()},
+        )
+        self._write_state()
+
+    async def _fetch_file_manifest(self, artifact: Artifact) -> object:
+        """The sidecar manifest's decoded JSON, verified against `version.json`.
+
+        Held entirely in memory and hashed as it arrives, the same posture the
+        archive download has and for the same reason: a document that failed its
+        digest must never exist under a name something downstream might read.
+        """
+        chunks = bytearray()
+        digest = hashlib.sha256()
+
+        def write(chunk: bytes) -> None:
+            digest.update(chunk)
+            chunks.extend(chunk)
+
+        try:
+            outcome = await self._download(
+                artifact.url,
+                write=write,
+                max_bytes=MAX_FILE_MANIFEST_BYTES,
+                headers=None,
+            )
+        except Exception as exc:  # noqa: BLE001 - offline is ordinary here
+            raise UpdateRefused(
+                REASON_DOWNLOAD_FAILED,
+                f"{artifact.name} could not be fetched ({type(exc).__name__}).",
+            ) from exc
+        if outcome.status != 200:
+            raise UpdateRefused(
+                REASON_UNREACHABLE, f"{artifact.name} answered HTTP {outcome.status}."
+            )
+        if outcome.received_bytes > MAX_FILE_MANIFEST_BYTES:
+            raise UpdateRefused(
+                REASON_OVERSIZED,
+                f"{artifact.name} exceeded the {MAX_FILE_MANIFEST_BYTES} byte ceiling.",
+            )
+        if digest.hexdigest() != artifact.sha256:
+            raise UpdateRefused(
+                REASON_HASH_MISMATCH,
+                f"{artifact.name} does not match the SHA-256 the manifest publishes.",
+            )
+        try:
+            return json.loads(bytes(chunks).decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise UpdateRefused(
+                REASON_MALFORMED, f"{artifact.name} was not JSON."
+            ) from exc
 
     # -- step 2: the bytes, and the hash over them ----------------------------
 
@@ -1128,6 +1291,7 @@ __all__ = [
     "UpdateRefused",
     "detect_install_kind",
     "release_archive_name",
+    "release_file_manifest_name",
     "release_installer_name",
     "release_platform_tag",
     "running_supervisor_protocol",

@@ -52,8 +52,16 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Protocol
+from typing import IO, Protocol
 
+from .bundle_manifest import (
+    BUNDLE_FILES_NAME,
+    FILES_MALFORMED,
+    FILES_MISSING,
+    FILES_OK,
+    FileManifest,
+    parse_file_manifest,
+)
 from .bundle_metadata import BUNDLE_METADATA_NAME, BundleMetadata, parse_bundle_metadata
 
 #: The archive's single top-level directory. Named rather than inferred from the
@@ -159,12 +167,21 @@ def _check_total_size(sizes: list[int]) -> None:
         )
 
 
-class _Reader(Protocol):
-    """The two things both formats have to answer before anything is extracted."""
+class ArchiveReader(Protocol):
+    """What both formats have to answer before anything is extracted.
+
+    `stream` exists beside `read` for the delta stager, which copies individual
+    members out to disk: a bundle carries members of tens of megabytes, and a
+    writer that holds each one whole in memory is paying for nothing. `read` is
+    kept for the small documents (`bundle.json`, `files.json`) that a decision is
+    made on, where having the bytes in hand is the point.
+    """
 
     def names(self) -> list[str]: ...
 
     def read(self, member: str) -> bytes: ...
+
+    def stream(self, member: str) -> IO[bytes]: ...
 
 
 class _ZipReader:
@@ -178,6 +195,9 @@ class _ZipReader:
     def read(self, member: str) -> bytes:
         return self._handle.read(member)
 
+    def stream(self, member: str) -> IO[bytes]:
+        return self._handle.open(member)
+
 
 class _TarReader:
     def __init__(self, handle: tarfile.TarFile) -> None:
@@ -189,6 +209,10 @@ class _TarReader:
         return [member.name for member in self._members]
 
     def read(self, member: str) -> bytes:
+        with self.stream(member) as stream:
+            return stream.read()
+
+    def stream(self, member: str) -> IO[bytes]:
         stream = self._handle.extractfile(member)
         if stream is None:
             # A directory, a symlink, or a special member under a name we asked
@@ -197,12 +221,11 @@ class _TarReader:
                 ARCHIVE_INVALID,
                 f"The archive's {member!r} is not a regular file, so it cannot be read.",
             )
-        with stream:
-            return stream.read()
+        return stream
 
 
 @contextmanager
-def _open_archive(archive: Path) -> Iterator[_Reader]:
+def open_archive(archive: Path) -> Iterator[ArchiveReader]:
     """Open a release archive in whichever of the two formats it is named for."""
     if archive_suffix(archive) == TAR_GZ_SUFFIX:
         with tarfile.open(archive, "r:gz") as tar:
@@ -233,7 +256,7 @@ def read_archive_metadata(archive: Path) -> BundleMetadata:
     binary to find out what it needs.
     """
     try:
-        with _open_archive(archive) as bundle:
+        with open_archive(archive) as bundle:
             names = bundle.names()
             validate_members(names)
             member = f"{ARCHIVE_ROOT}/{BUNDLE_METADATA_NAME}"
@@ -259,6 +282,48 @@ def read_archive_metadata(archive: Path) -> BundleMetadata:
             f"({reason}).",
         )
     return metadata
+
+
+def read_archive_file_manifest(archive: Path) -> tuple[FileManifest | None, str]:
+    """The incoming bundle's `files.json`, read without extracting anything.
+
+    `(None, reason)` rather than a raise for every outcome except an unreadable
+    archive, and the asymmetry with `read_archive_metadata` above is deliberate.
+    Missing supervisor metadata is a refusal because the property at stake is the
+    operator's live fleet; a missing or unreadable file manifest costs only the
+    delta, and the fallback is the full extraction that was the only behaviour
+    before this document existed. Anything that cannot be understood degrades to
+    "install it the slow way", which is never wrong.
+
+    A release archive written before this feature carries no `files.json` at all,
+    which is exactly the `missing` case - so an old archive installs today the
+    way it installed yesterday, with no version negotiation anywhere.
+    """
+    member = f"{ARCHIVE_ROOT}/{BUNDLE_FILES_NAME}"
+    try:
+        with open_archive(archive) as bundle:
+            names = bundle.names()
+            validate_members(names)
+            if member not in names:
+                return None, FILES_MISSING
+            raw = bundle.read(member)
+    except ArchiveError:
+        raise
+    except _UNREADABLE as exc:
+        raise ArchiveError(
+            ARCHIVE_INVALID,
+            f"The archive could not be read ({type(exc).__name__}).",
+        ) from exc
+    # Decoded outside the reader, so a JSON error is a malformed *manifest* and
+    # not a malformed archive: `_UNREADABLE` carries `ValueError` for the
+    # container libraries, and catching the two together would turn a typo in
+    # this one document into a refusal to install anything at all.
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None, FILES_MALFORMED
+    manifest, reason = parse_file_manifest(payload)
+    return (manifest, FILES_OK) if manifest is not None else (None, reason)
 
 
 def extract_bundle(archive: Path, staging_root: Path) -> Path:
