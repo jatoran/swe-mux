@@ -183,9 +183,18 @@ Three options were considered.
 
 **Recommendation and what is implemented: explicit press only.**
 The rule this section already states settles it - "an absent capability must say which kind of absent it is, and nothing is fetched without an explicit act" - and the speech libraries are simply a fourth asset under that rule rather than a new kind of thing.
-The one thing worth revisiting is the *number* of presses: acquiring the libraries, the Kokoro weights and the spaCy model are three separate acts today, and a user turning on read aloud needs all three.
-Collapsing them into one press with one combined size is a UI decision that changes nothing about the mechanism, and it is the obvious follow-up if the three-step sequence reads as friction in practice.
-It was not done here because the three stores fail independently, and a merged progress bar would have to lie about which one failed - the same reasoning that keeps the Kokoro weights and the spaCy model on two lines behind their one shared press.
+
+**The number of presses was left at three and that was wrong; it is one now.**
+The first draft of this section recorded the three-press sequence as an open UI question, on the reasoning that the three stores fail independently and a merged progress bar would have to lie about which one failed.
+The reasoning was right and the conclusion did not follow.
+It cost a real operator a failure the same day: he pressed two of the three, reasonably concluded he was done, and met a 500 at the first spoken sentence.
+
+Independent failure is an argument for three *lines*, not three controls.
+`POST /api/voice/models/kokoro/download` now starts all three stores and the panel draws a line each, so a failure names its own store; one button retries exactly what failed, because every store's `start_download` short-circuits when it is already `ready`.
+Dictation is one press too, and chains rather than parallelising: `WhisperModelStore._download` calls `backend_installed()`, so weights started beside the closure would fail immediately and read as a broken weights download.
+
+The general rule, worth stating because it will recur with the next first-use asset: **a capability gets one press, and its prerequisites are sub-steps rather than errands.**
+Making the user the integrator of N stores is the same defect as a silent fetch, arrived at from the opposite direction.
 
 ## Onboarding prerequisites
 

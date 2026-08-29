@@ -196,6 +196,7 @@ from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
 from .update_install import UpdateInstaller
 from .usage import UsageManager
 from .voice import (
+    VoiceError,
     VoiceService,
     VoiceStore,
 )
@@ -341,6 +342,31 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         # Typed assistant failures are user-visible refusals (disabled, budget
         # exhausted, unknown dialog), never internal errors.
         return json_response({"error": str(exc)}, 400)
+    except VoiceError as exc:
+        # Same class of refusal, translated centrally since 2026-08-29 rather than
+        # route by route. Most voice routes already caught this and returned 409;
+        # `check_lexicon` and `build_lexicon_entry` did not, and a frozen-app user
+        # who had not yet acquired the speech closure met `500 internal server
+        # error` on a surface that draws a tick or a cross - while the daemon log
+        # held the exact sentence naming the button he needed to press.
+        #
+        # The lesson generalises past voice: a typed, user-visible error class
+        # that is translated at the call sites can only be right where somebody
+        # remembered, and the places nobody remembered are the ones users find.
+        # The per-route clauses stay, because several of them choose a different
+        # status or add fields; this is the floor under them.
+        #
+        # 409 rather than 400: these are conflicts with the daemon's current state
+        # (an engine that is unavailable, an asset that is not downloaded), not
+        # malformed requests, and it is the status the voice routes already use.
+        log.info(
+            "voice refusal method=%s path=%s code=%s reason=%s",
+            request.method,
+            request.path,
+            exc.code or "-",
+            exc,
+        )
+        return json_response(exc.as_payload(), 409)
     except ScheduleError as exc:
         # A ValueError subclass, so it must be caught before the generic clause
         # below: the schedule editor branches on the machine code and highlights

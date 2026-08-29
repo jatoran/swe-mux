@@ -41,6 +41,7 @@ from .config import Config
 from .edge_tts_provider import EdgeTtsError, EdgeTtsProvider
 from .event_bus import EventBus
 from .harness import has_observable_transcript
+from .install_location import extra_install_command
 from .kokoro_tts import KokoroEngine, KokoroError, KokoroPaths, SpelledWordLog
 from .kokoro_tts import duration_seconds as wav_duration_seconds
 from .openrouter import OpenRouterClient, OpenRouterError
@@ -315,8 +316,48 @@ $recognizer.Dispose()
 """
 
 
+#: `VoiceError.code` for "the on-device speech closure has not been acquired".
+#: The one refusal a client can *fix by pressing something*, so it is the one
+#: that has to be distinguishable from every other voice failure by machine
+#: rather than by reading English.
+VOICE_RUNTIME_MISSING = "voice_runtime_missing"
+
+
 class VoiceError(RuntimeError):
-    """Typed, user-visible voice failure. Never affects the PTY lifecycle."""
+    """Typed, user-visible voice failure. Never affects the PTY lifecycle.
+
+    Carries a machine `code` and an optional `remedy` since 2026-08-29, after a
+    frozen-app user met `500 internal server error` where this class had already
+    written the exact sentence that would have told him what to press. Two things
+    were wrong and both are fixed here rather than at one call site.
+
+    The message was reaching handlers that turn `VoiceError` into a 409, and also
+    handlers that did not - `check_lexicon` and `build_lexicon_entry` handed out a
+    Kokoro engine and let its `KokoroError` escape to the generic 500 clause. So
+    `server._error_middleware` now translates this class centrally: a typed,
+    user-visible refusal can no longer become an internal error by being raised
+    from a route nobody remembered.
+
+    And a message alone is not enough for the case that matters. "The speech
+    libraries are not downloaded" is *actionable* - there is a button - while
+    "nothing speakable remained after preprocessing" is not, and a client cannot
+    tell them apart by string matching. `code` is what lets the browser attach the
+    acquire action to exactly the first one.
+    """
+
+    def __init__(self, message: str, *, code: str = "", remedy: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.remedy = remedy
+
+    def as_payload(self) -> dict[str, Any]:
+        """The JSON body a route returns for this refusal."""
+        payload: dict[str, Any] = {"error": str(self)}
+        if self.code:
+            payload["code"] = self.code
+        if self.remedy:
+            payload["remedy"] = self.remedy
+        return payload
 
 
 @dataclass(frozen=True)
@@ -1421,6 +1462,10 @@ class VoiceService:
         # either has spoken is an answer nobody re-asks.
         self.voice_runtime = voice_runtime or VoiceRuntimeStore(config.data_dir)
         self.voice_runtime.activate()
+        #: `_extra_remedy`'s memo. `None` means "not yet asked"; `""` is a real
+        #: answer meaning "no command helps this install", which is the frozen
+        #: desktop app and the audience most of these diagnostics are written for.
+        self._extra_command: str | None = None
         # The G2P model the Kokoro engine needs before it can phonemize anything.
         # A prerequisite of the same capability rather than a separate feature, so
         # it is acquired by the same press and reported on the same line - but it
@@ -2439,9 +2484,22 @@ class VoiceService:
                     "unspeakable": [],
                 }
                 continue
-            results[word] = await asyncio.to_thread(
-                engine.check_respelling, word.strip().casefold(), value.strip()
-            )
+            try:
+                results[word] = await asyncio.to_thread(
+                    engine.check_respelling, word.strip().casefold(), value.strip()
+                )
+            except KokoroError as exc:
+                # Advisory, so one unresolvable entry is a verdict rather than a
+                # failed request: the editor shows ✗ on that row and keeps the
+                # others. An escaping `KokoroError` here was a 500 on a surface
+                # that only ever renders a tick or a cross.
+                results[word] = {
+                    "ok": False,
+                    "phonemes": None,
+                    "spoken_as": None,
+                    "unspeakable": [],
+                    "diagnostic": str(exc)[:300],
+                }
         return {"available": True, "diagnostic": None, "results": results}
 
     async def build_lexicon_entry(self, word: Any, value: Any) -> dict[str, Any]:
@@ -2461,9 +2519,14 @@ class VoiceService:
                 "Settings → Voice first"
             )
         engine = self._ensure_kokoro()
-        return await asyncio.to_thread(
-            engine.build_respelling, word.strip().casefold(), value
-        )
+        try:
+            return await asyncio.to_thread(
+                engine.build_respelling, word.strip().casefold(), value
+            )
+        except KokoroError as exc:
+            raise VoiceError(
+                f"Kokoro could not build that pronunciation: {str(exc)[:300]}"
+            ) from exc
 
     async def lexicon_preview(self, text: str) -> bytes:
         """Audition one respelling with the configured Kokoro voice.
@@ -2899,6 +2962,11 @@ class VoiceService:
                 "the spaCy English model the Kokoro G2P needs is not present; "
                 "download it in Settings → Voice, or switch the engine to the OS voice"
             )
+        # Before the engine, not inside it. `KokoroEngine.__init__` touches
+        # neither onnxruntime nor misaki - both are lazy - so a construct here
+        # succeeds against an absent closure and defers the failure to whichever
+        # worker thread reaches `_ensure_g2p` first.
+        self._require_voice_runtime("read-aloud")
         if self._kokoro_engine is None:
             install = self.kokoro_models.install
             try:
@@ -3262,15 +3330,22 @@ class VoiceService:
         # module-level `import av`, and PyAV is deliberately absent from the
         # resolved closure (GPL FFmpeg linkage). See `swe_mux.av_stub`.
         av_stub.install()
+        # The same guard the read-aloud path takes, and for the same reason: this
+        # is the boundary where "the closure was never acquired" is still a
+        # pressable state rather than an ImportError several frames down.
+        self._require_voice_runtime("dictation")
         try:
             import numpy
             from faster_whisper import WhisperModel
         except ImportError as exc:
+            # Reached only when the closure reports itself present and does not
+            # import - a half-unpacked tree, or a platform whose wheels loaded and
+            # whose shared libraries did not. A different fault from the one above
+            # and it must not borrow that one's remedy.
             raise VoiceError(
-                "faster-whisper is not installed; local dictation needs the "
-                "on-device speech libraries - download them in Settings → Voice, "
-                "or install the voice-local extra (`uv sync --extra voice-local`), "
-                "or select Windows Speech Recognition in Settings"
+                "the on-device speech libraries are present but faster-whisper "
+                f"will not import ({str(exc)[:200]}); re-download them in "
+                "Settings → Voice, or select Windows Speech Recognition"
             ) from exc
         self._require_whisper_weights(profile)
         name = self._ensure_whisper_model(
@@ -3472,6 +3547,30 @@ class VoiceService:
             with suppress(OSError):
                 item.unlink(missing_ok=True)
 
+    def _extra_remedy(self) -> str:
+        """How *this* copy of swe-mux would install the voice extra, or "".
+
+        Empty for the frozen desktop app, which is the point. Its extras are
+        fixed when the bundle is built, so `uv sync --extra voice-local` is a
+        command its reader cannot run - and a remedy that cannot be run is worse
+        than none, because it ends the search. That is the same rule
+        `install_location.extra_install_command` was written for
+        (`.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 4); this is the
+        voice diagnostics finally obeying it.
+
+        Memoized because it reads the filesystem and the answer cannot change
+        inside one process.
+        """
+        if self._extra_command is None:
+            from .install_location import INSTALL_FROZEN, detect_install_location
+
+            location = detect_install_location()
+            self._extra_command = (
+                "" if location.kind == INSTALL_FROZEN
+                else extra_install_command("voice-local", location)
+            )
+        return self._extra_command
+
     def _runtime_diagnostic(self, capability: str) -> str:
         """Why the on-device speech libraries are unusable, and what to do next.
 
@@ -3479,14 +3578,20 @@ class VoiceService:
         line, and only one of them is still that. Since the desktop bundle stopped
         carrying the closure (ROADMAP Phase 21 Workstream D) the common case on a
         packaged install is "never acquired", whose remedy is a press rather than
-        a command a frozen app has no shell to run.
+        a command a frozen app has no shell to run - and until 2026-08-29 this
+        function named that command anyway, to the one audience that cannot run
+        it. It now asks how this copy was installed.
         """
         state = self.voice_runtime.status()
         if not state["supported"]:
+            extra = self._extra_remedy()
             return (
                 f"on-device {capability} is not available on this platform or "
-                "interpreter; install the voice-local extra "
-                "(`uv sync --extra voice-local`) to supply it yourself"
+                "interpreter"
+                + (f"; install the voice-local extra (`{extra}`) to supply it "
+                   "yourself" if extra else
+                   " - this build of swe-mux cannot supply it, so use the OS "
+                   "voice engine instead")
             )
         megabytes = state["total_bytes"] / 1024 / 1024
         if state["status"] == "downloading":
@@ -3500,6 +3605,27 @@ class VoiceService:
             f"the on-device speech libraries are not downloaded ({megabytes:.0f} MB); "
             "download them in Settings → Voice. Nothing is downloaded until you ask "
             "for it"
+        )
+
+    def _require_voice_runtime(self, capability: str) -> None:
+        """Refuse before constructing anything that needs the acquired closure.
+
+        The failure this replaces was not a missing check - it was a check in the
+        wrong place. `KokoroEngine` constructs happily without the closure and
+        raises from `_ensure_g2p`, on a worker thread, inside whichever call site
+        happened to be first; two of those call sites did not catch `KokoroError`
+        and returned `500 internal server error` to a user whose actual problem
+        was one unpressed button.
+
+        Asked once, at the boundary, where the answer is a typed refusal with the
+        code the browser needs to draw the button.
+        """
+        if self.voice_runtime.ready():
+            return
+        raise VoiceError(
+            self._runtime_diagnostic(capability),
+            code=VOICE_RUNTIME_MISSING,
+            remedy=self._extra_remedy(),
         )
 
     def _stt_readiness(self) -> tuple[bool, str | None, list[dict[str, Any]]]:
@@ -3519,7 +3645,12 @@ class VoiceService:
         dictation = self.config.stt_whisper_model
         routing = self.decode_model(COMMAND_PROFILE)
         models = self.whisper_models.statuses(dictation, routing)
-        if not self.whisper_models.backend_installed():
+        if not self.voice_runtime.ready() or not self.whisper_models.backend_installed():
+            # Asked in that order deliberately. `backend_installed()` memoizes an
+            # import attempt, so on an install that has just acquired the closure
+            # it can still answer `False` from before the `sys.path` entry
+            # existed; the store's own state is the fact, and the memo is a cache
+            # of a question asked at the wrong moment.
             return False, self._runtime_diagnostic("dictation"), models
         dictation_state = self.whisper_models.status(dictation)
         if dictation_state["status"] != "ready":

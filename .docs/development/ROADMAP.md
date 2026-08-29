@@ -5821,26 +5821,76 @@ Three details worth keeping:
   importable `num2words` package does not use it - only its console script does - and
   `tests/test_voice_wheels.py` asserts that rather than assuming it.
 
-#### Owed: one live rehearsal
+#### The rehearsal happened, and it found the defect it was written to find
 
-The third owed across this phase, and the same reason: a worktree isolates the working tree and
-not the runtime, so nothing here has redeployed a real frozen app. What it should measure, in
-one run:
+The item below predicted the one user-visible regression this workstream could cause: "an
+operator who had voice working before the update meets a stated `not_downloaded` and a press,
+rather than a broken engine." He met a broken engine. Recorded here in full, because the
+prediction being right about the *risk* and wrong about the *outcome* is the whole lesson.
 
-1. That a redeployed frozen app **starts healthy** with the closure absent, and that Settings ->
-   Voice reports `not_downloaded` rather than an error. The console probe proves the frozen
-   *import* path; it does not prove the daemon's own startup with `VoiceService.__init__`
-   calling `activate()` against an empty data dir.
-2. That the press acquires, and that read aloud and dictation both work **afterwards without a
-   restart** - which is what `WhisperModelStore.forget_backend()` exists for and the one part of
-   the wiring no unit test can reach.
+What happened, 2026-08-29, on the redeployed frozen app: read-aloud switched from Edge to
+Kokoro, the two assets the panel offered downloaded, and then `500 internal server error` on the
+first spoken sentence - while `daemon.log` held the exact sentence naming the third asset and the
+button that would acquire it.
+
+Four defects, each at a different layer, and none of them in the store:
+
+- **A typed refusal became an opaque 500.** Most voice routes caught `VoiceError` and answered
+  409; `check_lexicon` and `build_lexicon_entry` did not, and those two are the ones a user
+  found. `server._error_middleware` now translates the class centrally, so a route added later
+  cannot reintroduce it by forgetting. `VoiceError` also carries a machine `code`
+  (`voice_runtime_missing`) and a `remedy`, because "the libraries are not downloaded" has a
+  button behind it and "nothing speakable remained after preprocessing" does not, and no client
+  can tell them apart by reading English.
+- **The check was in the wrong place.** `KokoroEngine.__init__` touches neither onnxruntime nor
+  misaki - both imports are lazy - so it constructs happily against an absent closure and defers
+  the failure to whichever worker thread reaches `_ensure_g2p` first.
+  `VoiceService._require_voice_runtime` asks at the boundary now, on both the read-aloud and the
+  dictation path.
+- **Three presses was wrong, and this workstream's own notes had said so and shipped it
+  anyway.** The reasoning recorded at the time - the three stores fail independently, so a
+  merged progress bar would have to lie about which one failed - was correct and the conclusion
+  did not follow. Independent failure argues for three *lines*, not three controls.
+  `POST /api/voice/models/kokoro/download` starts all three stores; the panel draws a line each;
+  one button retries exactly what failed, because every store's `start_download` short-circuits
+  when it is already `ready`. Dictation is one press too and chains rather than parallelising,
+  because `WhisperModelStore._download` calls `backend_installed()` and weights started beside
+  the closure would fail immediately and read as a broken weights download.
+- **The remedy named a developer command to a desktop user.** `uv sync --extra voice-local` is
+  meaningless in the frozen app, whose extras are fixed when the bundle is built.
+  `install_location.extra_install_command` has derived a runnable answer since 2026-08-28 and
+  the voice diagnostics now use it; the frozen app is told to use the OS voice engine instead.
+
+Measured afterwards, in a console probe built from a copy of the shipped spec, against a data
+directory that started empty: one press acquired all three stores (81.9 MiB + 102.0 MiB +
+12.2 MiB) in **12 seconds** and synthesised **3.50 s of real audio at 24 kHz**. Voice-enabled and
+nothing downloaded to working speech, one press.
+
+The general rule the whole episode produces, and the one to carry to the next first-use asset:
+**a capability gets one press, and its prerequisites are sub-steps rather than errands.** Making
+the user the integrator of N stores is the same defect as a silent fetch, reached from the
+opposite direction.
+
+#### Still owed: the rest of the live rehearsal
+
+The first-use flow above was exercised on a real redeployed app and then re-proven in a frozen
+probe. The other three questions still need the operator's own machine, because a worktree
+isolates the working tree and not the runtime:
+
+1. ~~That a redeployed frozen app starts healthy with the closure absent~~ - **done**, and it
+   did; the failure was downstream of startup.
+2. That **dictation** works after the press **without a restart** - the read-aloud half is
+   proven, and the dictation half rests on `WhisperModelStore.forget_backend()` being called
+   from the runtime store's progress callback, which is unit-tested and has never run against a
+   real acquisition.
 3. **Time to runtime-ready** for a cold 111 MiB bundle against the 225s measured for an
    already-scanned 400 MiB one. This is the number that would justify revisiting
    `APP_HEALTH_TIMEOUT_SECONDS`, and it compounds with Workstream B's delta rather than
    duplicating it.
-4. That an operator who had voice working before the update meets a stated `not_downloaded` and
-   a press, rather than a broken engine. This is the one user-visible regression this workstream
-   can cause, and it is the reason to rehearse before cutting a release rather than after.
+4. ~~That an operator who had voice working before the update meets a stated `not_downloaded`
+   and a press, rather than a broken engine.~~ - **he met a broken engine**; see the section
+   above for the four defects and their fixes. Re-check it on the next redeploy, because that is
+   the run where the repaired flow meets a config that already has `tts_enabled` true.
 
 ### Considered and not taken
 
