@@ -547,8 +547,13 @@ def test_choosing_a_model_at_launch_is_declared_per_harness() -> None:
     know it, the CLI exits during startup, and the operator gets a pane that
     appears and dies. Every harness answers, including with `None`, which is what
     makes "this harness cannot be launched on a model" a sentence rather than an
-    omission. A declared selection has to be usable, so the flag and namespace it
+    omission. A declared selection has to be usable, so the flag and vocabulary it
     claims are asserted rather than trusted.
+
+    The vocabulary is the part that has to be per-harness rather than shared: a
+    namespace check invented for a fuzzy matcher refuses working models, and a
+    fuzzy pass applied to a CLI with a real namespace forwards a name that will
+    die at startup.
     """
     from swe_mux.harness import model_launch_args, model_selection, resolve_launch_model
 
@@ -558,11 +563,18 @@ def test_choosing_a_model_at_launch_is_declared_per_harness() -> None:
             assert resolve_launch_model(name, "anything") is None, name
             assert model_launch_args(name, "anything") == (), name
             continue
-        assert selection.argv and selection.id_prefixes, name
+        assert selection.argv, name
         # The canonical flag is what a launch is built from, and every declared
         # spelling has to be one the CLI would actually read.
         assert all(flag.startswith("-") for flag in selection.argv), name
-        sample = f"{selection.id_prefixes[0]}sample"
+        # A sample this harness's own vocabulary accepts, so the composition is
+        # asserted end to end rather than against a name only one family takes.
+        sample = {
+            "namespaced": f"{selection.id_prefixes[0]}sample" if selection.id_prefixes else "",
+            "qualified": "vendor/sample",
+            "pattern": "sample",
+        }[selection.vocabulary]
+        assert resolve_launch_model(name, sample) == sample, name
         assert model_launch_args(name, sample) == (selection.argv[0], sample), name
 
     # Non-harnesses fail closed rather than composing an argument for nobody.

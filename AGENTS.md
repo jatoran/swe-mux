@@ -114,7 +114,7 @@ tasks are short, prefer reusing a few long-lived worktrees over creating one per
 
 Backend: `uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent
 and not live_subagent and not live_telemetry and not live_quota and not live_automations
-and not live_mcp and not live_edge_tts and not live_daemon"`, `uv run ruff check
+and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag"`, `uv run ruff check
 src/swe_mux tests packaging`, `uv run mypy`.
 Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 

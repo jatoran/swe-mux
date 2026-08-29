@@ -14,6 +14,14 @@ READ_TOOL_NAMES = (
     "project_actions",
     "message_status",
     "spawn_requests",
+    # Which models a harness's CLI actually has on this machine, asked of the CLI
+    # itself. A read in the strictest sense - it runs the harness's own listing
+    # command and nothing else - and it is here rather than folded into
+    # `request_spawn`'s refusal because an agent choosing a model has to be able
+    # to look before it asks. Deliberately advisory: absence from the list never
+    # refuses a spawn, because a catalogue lags every vendor release
+    # (`model_catalog.py`).
+    "list_models",
     # Phase 7.5 cross-session memory reads (CP §6.1-6.3, §6.10). Deterministic
     # queries over Tier 0 facts, the git-provenance ledger, the experience
     # corpus, and the scan timeline. Each is per-project opt-in through the

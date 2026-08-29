@@ -235,9 +235,14 @@ its own is the default and nothing widens implicitly.
 - **Spawn under a `draft` grant is drafted, never granted** (CP §7.2/§16). `request_spawn`
   against a Project whose `spawn_grant` is `draft` appends a typed
   `spawn_request` item to `<project>/.swe-mux/observations.json` with the proposed prompt,
-  backend, cwd, and calling-session provenance, and emits `spawn_request_drafted`.
+  backend, model, cwd, and calling-session provenance, and emits `spawn_request_drafted`.
   Approving it (`POST …/observations/{id}/decide`) spawns through the ordinary spawn path
-  with the prompt as `seed_text`; dismissing marks it decided. A request can only be decided
+  with the prompt as `seed_text` and the model as `model`; dismissing marks it decided.
+  A requested model is validated when the *request* is written rather than when it is
+  approved, and it travels onto the card and into the approval's spawn: refusing at approval
+  time refuses in front of the wrong person, since the agent that named the model is the one
+  that can pick another and by then it has moved on - and a model the approval silently
+  dropped would be worse still, because the human has already agreed to it. A request can only be decided
   once. Since 2026-08-25 the *default* grant is `granted` - the call creates the session
   directly, inside the per-origin hourly budget - so the draft path is what a Project
   lowered to `draft` (or with the `session_control` automation switched off) gets. The
