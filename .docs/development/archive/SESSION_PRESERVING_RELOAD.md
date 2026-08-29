@@ -1,7 +1,10 @@
 # Session-preserving daemon reload (PTY supervisor split)
 
 Status: **implemented** (2026-07-23), shipped behind `pty_supervisor_enabled` (default off,
-per §7.5). Goal: update daemon and UI code and restart the daemon without killing live agent
+per §7.5). **The default moved to on on 2026-08-28**; §7.5's "flip the default only once the
+flagged path is solid" is the step that was taken, and what makes it safe rather than brave is
+the fallback that clause was written around - a daemon that cannot reach or spawn a supervisor
+starts unsupervised and says so, so the worst case of the new default is the old behaviour. Goal: update daemon and UI code and restart the daemon without killing live agent
 sessions, so agents keep running uninterrupted (even mid-work) across a reload. §7 is the
 implementation checklist; the rest is the design reference it points into.
 
@@ -252,8 +255,11 @@ implementation + tests + docs must agree.
   the `_attach_locked` shape one level down). Authoritative scrollback lives supervisor-side;
   the daemon seeds and maintains a mirror from the subscription stream.
 - [x] **7.5 Ship behind a flag with in-process fallback.** `pty_supervisor_enabled` (default
-  off). If IPC to the supervisor fails, spawning falls back to today's in-process path. Flip
-  the default only once the flagged path is solid.
+  off; **flipped to on 2026-08-28**). If IPC to the supervisor fails, spawning falls back to
+  today's in-process path. Flip the default only once the flagged path is solid. What made the
+  flip answerable rather than a judgement call: the `live_daemon` CI tier now runs the real
+  entry point *at the default* on Linux and Windows, and proves a shell spawned through the
+  supervisor outlives its daemon and is adopted - by the same child - by a successor.
 - [x] **7.6 Wire intent-signaled shutdown.** Desktop: Quit = mode `quit` → sessions stopped +
   `reap_all_and_exit`; new tray "Restart daemon (keep sessions)" = mode `restart` → detach.
   Terminal: Ctrl-C detaches; explicit `muxd --shutdown` is kill-server (also the

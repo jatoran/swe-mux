@@ -198,9 +198,12 @@ It closes the running app and the PTY supervisor to do that, so **an installer u
 The Ready page says so when it detects a previous version; finish or detach running agents first.
 
 **A daemon restart preserves sessions only when the PTY supervisor owns them.**
-`pty_supervisor_enabled` ships `False`.
-With it off, `POST /api/daemon/restart` refuses with HTTP 409 and `{"error": "supervisor_not_attached"}` rather than silently reaping, and `mux reload-daemon --force` is the explicit override that accepts the reap.
-The tray omits its "Restart daemon (keep sessions)" item entirely when the setting is off, because the item would be a footgun there.
+`pty_supervisor_enabled` ships `True` as of 2026-08-28; it shipped `False` before that, so an install carried forward from an older config file may still have it off.
+A source install (`pip`, `uv tool`, `pipx`) needs nothing extra for it: the supervisor runs as `python -m swe_mux.supervisor` out of the same installed package.
+A frozen install needs the `swe-mux-supervisor` bundle beside the app, which the Windows installer always packs.
+Where a supervisor cannot be reached or spawned the daemon still starts, unsupervised, and logs one ERROR naming the reason; `supervisor-console.log` in the data directory is what the child itself said.
+Without an attached supervisor, `POST /api/daemon/restart` refuses with HTTP 409 and `{"error": "supervisor_not_attached"}` rather than silently reaping, and `mux reload-daemon --force` is the explicit override that accepts the reap.
+The tray omits its "Restart daemon (keep sessions)" item entirely when the *setting* is off; with the setting on and no supervisor attached the item is shown and the route refuses it, because the route knows the runtime state and the tray does not.
 
 **The frozen app respawns its own executable.**
 `POST /api/daemon/restart` and a plain `npm run build` both reach a daemon that runs from source and neither reaches the frozen bundle, which serves its own copy at `dist/swe-mux/_internal/swe_mux/static` and respawns its own bundled backend.
@@ -451,10 +454,11 @@ A bound listener is not a ready daemon.
 
 Three different mechanisms are involved, and which one applies decides what you can get back.
 
-**The PTY supervisor is the primary path, and it ships off.**
-`pty_supervisor_enabled` defaults to `False`.
+**The PTY supervisor is the primary path, and it ships on.**
+`pty_supervisor_enabled` defaults to `True` (2026-08-28; it defaulted to `False` before then).
 With it on, PTYs are spawned in an out-of-process supervisor and survive a daemon restart, an app rebuild, and a redeploy.
-With it off, in-process spawning is the fallback and a restart reaps every session, which is why `POST /api/daemon/restart` refuses with HTTP 409 unless the caller passes `force: true`.
+With it off - or on a daemon that could not start one - in-process spawning is the fallback and a restart reaps every session, which is why `POST /api/daemon/restart` refuses with HTTP 409 unless the caller passes `force: true`.
+`GET /api/health` distinguishes the two: `supervisor_state` is `connected`, `lost`, or `absent`, and `supervisor_pid` names the process when there is one.
 
 **"Attached" is not the same as "connected".**
 The restart precondition accepts a supervisor that is alive but whose socket is currently down (`client.lost`), because in that state the sessions are running and adoptable, and a restart is precisely the recovery.
