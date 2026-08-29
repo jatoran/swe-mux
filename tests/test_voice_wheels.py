@@ -135,23 +135,40 @@ def test_the_table_covers_every_supported_platform() -> None:
     assert "any" in platforms
 
 
-def test_docopt_is_pinned_nowhere_and_imported_nowhere() -> None:
-    """The one acquired dependency with no wheel on PyPI, and why that is safe.
+def test_docopt_is_pinned_nowhere() -> None:
+    """The one acquired dependency with no wheel on PyPI.
 
     `num2words` declares `docopt`, which has published an sdist and never a wheel
-    since 2014. A wheel-only store cannot acquire it, and the generator says so on
-    stderr rather than failing. That is only acceptable because the *importable*
-    `num2words` package does not use it - only its console script does - so the
-    G2P path never touches it.
-
-    If `num2words` ever imports `docopt` at module scope, this test is where the
-    reasoning is recorded and the fix is a real one (vendor it, or drop misaki's
-    number handling), not a wider pin table.
+    since 2014, so a wheel-only store cannot acquire it and the generator says so
+    on stderr rather than failing. Whether that is *safe* is the sibling test
+    below; this half is a property of the generated table and runs everywhere.
     """
     assert not any(wheel.distribution == "docopt" for wheel in voice_wheels.WHEELS)
     assert "docopt" not in voice_wheels.DISTRIBUTIONS
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("num2words") is None,
+    reason=(
+        "reads num2words' installed source; it arrives with the voice-local extra, "
+        "which CI's Linux and macOS legs deliberately do not sync"
+    ),
+)
+def test_num2words_does_not_import_the_dependency_that_cannot_be_pinned() -> None:
+    """Why the omission above is safe, asserted rather than assumed.
+
+    The *importable* `num2words` package does not use `docopt` - only its console
+    script does - so the G2P path never touches it. If that ever stops being true
+    the fix is a real one (vendor it, or drop misaki's number handling), not a
+    wider pin table, and this is where the reasoning is recorded.
+
+    Skipped rather than rewritten where the package is absent, because there is no
+    honest way to ask what a package imports without the package. The pin-table
+    half above is what runs on those legs.
+    """
     import num2words as module
 
+    assert module.__file__ is not None
     source = Path(module.__file__).parent
     offenders = [
         path.name

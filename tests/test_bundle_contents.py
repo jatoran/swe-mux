@@ -37,6 +37,23 @@ def _load(name: str):
 build_desktop = _load("build_desktop")
 
 
+def _voice_metadata_installed() -> bool:
+    """Whether the acquired voice distributions are installed *here*.
+
+    False on CI's Linux and macOS legs, which sync no extras deliberately: that
+    bare `uv sync` is what proves `pip install swe-mux` yields an importable
+    package now that the voice closure sits behind an extra. Adding the extra
+    there to green a test would delete the coverage the leg exists for.
+    """
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        distribution("spacy")
+    except PackageNotFoundError:
+        return False
+    return True
+
+
 def _bundle(root: Path, packages: dict[str, int]) -> Path:
     """Build a stand-in bundle whose `_internal/` holds `packages` at given sizes."""
     internal = root / "swe-mux" / "_internal"
@@ -172,14 +189,45 @@ def test_nothing_the_spec_excludes_is_expected_in_the_bundle() -> None:
     assert not (excluded & set(build_desktop.EXPECTED_BUNDLE_PACKAGES))
 
 
-def test_the_acquired_voice_closure_is_excluded_and_not_expected() -> None:
+def test_no_acquired_distribution_is_also_a_bundle_package() -> None:
     """The two gates that keep 277 MB out of the bundle must not contradict.
 
-    `EXCLUDED_VOICE_CLOSURE` in the spec and `EXPECTED_BUNDLE_PACKAGES` here are
-    derived from different sources - installed distribution metadata and a
-    measured build - so nothing structural stops them disagreeing. A name in both
-    would mean the spec excludes a package the manifest requires, and every build
-    would fail on the missing-package half with a message about `collect_all`.
+    Read from `voice_wheels.DISTRIBUTIONS` - a generated data table that is always
+    present - rather than from installed metadata, so this runs on the CI legs
+    that sync no extras. Those are the legs where a bundle manifest claiming to
+    ship an acquired package would be least likely to be noticed.
+
+    Compared on canonical names because the two sides spell them differently: the
+    pin table carries distribution names (`hf-xet`) and the manifest carries
+    import names (`hf_xet`).
+    """
+    from swe_mux.voice_wheels import DISTRIBUTIONS
+
+    def canon(name: str) -> str:
+        return name.lower().replace("-", "_")
+
+    acquired = {canon(name) for name in DISTRIBUTIONS}
+    shipped = {canon(name) for name in build_desktop.EXPECTED_BUNDLE_PACKAGES}
+    assert "spacy" in acquired and "num2words" in acquired and "onnxruntime" in acquired
+    assert not (acquired & shipped)
+
+
+@pytest.mark.skipif(
+    not _voice_metadata_installed(),
+    reason=(
+        "reads the acquired distributions' installed metadata, which a build "
+        "environment has and a bare `uv sync` does not; the environment-free half "
+        "of this invariant is test_no_acquired_distribution_is_also_a_bundle_package"
+    ),
+)
+def test_the_metadata_derived_excludes_agree_with_the_manifest() -> None:
+    """The exact list the spec excludes, against the exact list the manifest expects.
+
+    Stronger than the name-level check above because it is the real derivation -
+    `top_level.txt` and recorded files, including the entries whose import name is
+    nothing like their distribution name. A name in both lists would mean the spec
+    excludes a package the manifest requires, and every build would fail on the
+    missing-package half with a message about `collect_all`.
     """
     closure = set(build_desktop.voice_closure_top_levels())
     assert "spacy" in closure and "num2words" in closure and "onnxruntime" in closure
@@ -193,12 +241,37 @@ def test_the_voice_closure_gate_names_the_packages_that_returned(tmp_path: Path)
     at the build venv. This one names the mechanism that was supposed to keep it
     out and the size that is at stake, because "an undeclared package appeared" and
     "the thing you deliberately stopped shipping is back" lead to different fixes.
+
+    The closure is injected rather than derived, so this runs everywhere. It is an
+    assertion about what the *refusal says*, and deriving the list from the machine
+    running the test would have made it a test of that machine - which is exactly
+    how it turned into a red CI leg instead of a verdict.
     """
+    closure = ["spacy", "misaki", "num2words", "onnxruntime"]
     bundle = _bundle(tmp_path, {"swe_mux": 10, "spacy": 40})
-    with pytest.raises(SystemExit, match="Voice closure regression"):
-        build_desktop.verify_voice_closure_absent(bundle)
+    with pytest.raises(SystemExit, match="Voice closure regression") as failure:
+        build_desktop.verify_voice_closure_absent(bundle, closure)
+    assert "spacy" in str(failure.value)
+    assert "swe_mux.spec" in str(failure.value)
     clean = _bundle(tmp_path / "clean", {"swe_mux": 10})
-    build_desktop.verify_voice_closure_absent(clean)
+    build_desktop.verify_voice_closure_absent(clean, closure)
+
+
+def test_the_gate_derives_its_closure_when_none_is_injected(tmp_path: Path) -> None:
+    """The default path is the one a build takes, so it is asserted too.
+
+    Without this, injecting a list in the test above would make the production
+    call - `verify_voice_closure_absent(root)` with no closure - untested.
+    """
+    calls: list[str] = []
+    clean = _bundle(tmp_path, {"swe_mux": 10})
+    original = build_desktop.voice_closure_top_levels
+    build_desktop.voice_closure_top_levels = lambda: calls.append("derived") or ("spacy",)
+    try:
+        build_desktop.verify_voice_closure_absent(clean)
+    finally:
+        build_desktop.voice_closure_top_levels = original
+    assert calls == ["derived"]
 
 
 def test_the_stable_abi_forwarder_is_required_in_a_windows_bundle(tmp_path: Path) -> None:

@@ -209,6 +209,22 @@ install-wide, so the tab edits them directly for the focused session.
   restart, and a verified tree that has since disappeared - each say which one they are, because
   a message that points at the wrong subsystem is worse than one that admits it does not know.
 
+- **Readiness is asked per capability, never over the whole closure**
+  (`voice_runtime.CAPABILITY_MODULES`).
+  Read-aloud needs the Kokoro engine and its phonemizer; dictation needs faster-whisper and its
+  runtime; neither needs the other's.
+  Asking the union refused a capability whose own modules were present, which CI's no-extras
+  Linux and macOS legs were the only thing able to see: they sync no extras deliberately, so
+  `_stt_readiness` reported dictation unavailable there while `faster_whisper` would have
+  imported perfectly.
+  The union is still what the store *acquires* and what `_unpack` verifies, because one press
+  acquires one closure - the split is about answering, not about fetching.
+  The staleness that first motivated consulting the store is fixed where it belongs:
+  `WhisperModelStore.backend_installed()` memoizes an import attempt, and the runtime store's
+  progress callback clears that memo when the closure lands.
+  A stale cache is a reason to invalidate the cache, not to put a stricter precondition in front
+  of it.
+
 - **A missing first-use asset is a typed refusal, never a 500** (`voice.VoiceError`,
   `server._error_middleware`).
   Learned on 2026-08-29, on a frozen desktop app, by an operator who met
