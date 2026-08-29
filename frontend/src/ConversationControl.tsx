@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import { api } from './api'
 import { requestSetting } from './settingTargets'
 import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, HOLD_ENTER_PHRASES, HOLD_RELEASE_PHRASES, isPlaybackControl, matchesBarePhrase, PersistentVoiceCapture, playbackTranscriptVerdict } from './conversation'
+import { captureFailureNote, desktopMediaReport } from './desktopShell'
 import type { CaptureDetector, ParsedMuxVoice } from './conversation'
 import { appendUtterance, clearDraft, editDraft, EMPTY_DRAFT, undoUtterance } from './conversationDraft'
 import type { Draft } from './conversationDraft'
@@ -148,6 +149,16 @@ export function useConversation(
   onIntent?:(spoken:string)=>VoiceCommandResult|Promise<VoiceCommandResult>,
   onAssistantUtterance?:(spoken:string)=>Promise<string|false>,
   assistantChatActive?:()=>boolean,
+  /**
+   * Re-read `/api/voice` and return it, for the press that finds no status at all.
+   *
+   * `status` is fetched once when the app mounts. A page that lost that fetch
+   * used to refuse every press for the rest of its life while claiming the
+   * daemon was at fault. That is the diagnosis for a microphone dead in the
+   * desktop shell - the one client whose page is opened once and kept for days -
+   * and healthy in a browser tab against the same daemon.
+   */
+  refreshStatus?:()=>Promise<VoiceStatus|null>,
 ):Conversation{
   const wake=primaryWake(status?.wake_words)
   const matcher=useMemo(
@@ -250,6 +261,7 @@ export function useConversation(
   // from props goes through a ref: a wake word or command phrase edited in Settings
   // mid-dictation has to take effect without restarting the microphone.
   const statusRef=useRef(status);statusRef.current=status
+  const refreshStatusRef=useRef(refreshStatus);refreshStatusRef.current=refreshStatus
   const matcherRef=useRef(matcher);matcherRef.current=matcher
   const wakeRef=useRef(wake);wakeRef.current=wake
   const onSessionRef=useRef(onSession);onSessionRef.current=onSession
@@ -954,9 +966,30 @@ export function useConversation(
       }catch(cause){reportFailure(cause)}
       return
     }
-    if(!capability.available||!statusRef.current?.stt_available){
-      setPhase('error');setDetail(capability.available?(statusRef.current?.stt_diagnostic||'Daemon transcription is unavailable.'):capability.reason);return
+    // Every refusal below goes through `reportFailure`, not a bare `setDetail`.
+    // That is not cosmetic: `respond` is what writes the sentence into Talk
+    // history, and history is persisted. A refusal that only set the phase left
+    // `talk:error` on screen and *nothing at all* on disk, which is why this
+    // failure survived so long - it produced no request for the access log, no
+    // history entry, and a chip with three words in it.
+    if(!capability.available){reportFailure(capability.reason);return}
+    // Ask before refusing. `status` is fetched once when the app mounts, so a
+    // page that lost that one fetch used to answer every press for the rest of
+    // its life with "Daemon transcription is unavailable" - a claim about a
+    // daemon it had never successfully asked. The desktop shell is where that
+    // bites, because its page is opened once and kept for days across daemon
+    // restarts, while a browser tab gets reloaded and quietly repairs itself.
+    let voice=statusRef.current
+    if(!voice&&refreshStatusRef.current){
+      setPhase('starting');setDetail('Reading the voice status from the daemon…')
+      voice=await refreshStatusRef.current()
     }
+    if(!voice){
+      reportFailure('swe-mux has not been able to read the voice status from the daemon. '
+        +'Check that the daemon is running, then press Talk again.')
+      return
+    }
+    if(!voice.stt_available){reportFailure(voice.stt_diagnostic||'Daemon transcription is unavailable.');return}
     setPhase('starting');setDetail('Requesting microphone…')
     // Unlock only: this is the gesture mobile browsers require before any later
     // programmatic play(), so the `read reply` command works. It turns nothing on.
@@ -1045,7 +1078,14 @@ export function useConversation(
       // yet. The displayed phase derives `warming` from `detector` being null, so
       // readiness has one source of truth rather than a phase and a flag to disagree.
       setPhase('listening');setDetail(WARMING_DETAIL)
-    }catch(cause){capture.stop();if(startingRef.current!==capture)return;startingRef.current=null;enabledRef.current=false;setActive(false);reportFailure(cause)}
+    }catch(cause){
+      capture.stop();if(startingRef.current!==capture)return
+      startingRef.current=null;enabledRef.current=false;setActive(false)
+      // Only here, and not in every `reportFailure`: the WebView2 note answers
+      // "was the microphone refused, and by whom", which is the question a
+      // failed `capture.start()` raises and no other failure does.
+      reportFailure(captureFailureNote(cause instanceof Error?cause.message:String(cause),desktopMediaReport()))
+    }
   }
 
   // Composed here rather than in the panel: the three states that feed it are
@@ -1388,6 +1428,14 @@ export function VoiceDock({
           assistant's never sends on its own, so only more speech resolves it. */}
       {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource==='assistant'&&<span class="dictation-phase standby" title="The assistant read that as half a thought with nothing to answer yet, so it stayed silent and kept your words. Finish the sentence and both halves go as one turn; “Mux, cancel” drops it.">unfinished · waiting for the rest</span>}
       {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource!=='assistant'&&<span class="dictation-phase standby" title={`That sentence ended on “${conversation.deferredTrigger}”, so the turn is held for one extra pause instead of being answered mid-clause. Keep talking and the two halves go together; stay quiet and it sends as-is.`}>unfinished · “{conversation.deferredTrigger}”</span>}
+      {/* The failure itself, on screen. `talk:error` names a phase and says
+          nothing about what went wrong; the sentence that does was reachable
+          only from the chip's tooltip and this live region, so an operator who
+          did not think to hover got three words and no lead. It truncates
+          rather than wrapping - the header is one row - and carries the whole
+          text in its title. */}
+      {conversation.phase==='error'&&!!conversation.detail&&
+        <span class="dictation-failure" role="alert" title={conversation.detail}>{conversation.detail}</span>}
       <span class="sr-only" role="status" aria-live="polite">{conversation.detail}</span>
       {dictating&&conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">

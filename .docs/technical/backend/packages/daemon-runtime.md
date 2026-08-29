@@ -206,6 +206,17 @@ Versioned normal-window bounds, maximized state, debounced atomic persistence, a
 
 **Not:** WebView creation, tray actions, or browser workspace layout.
 
+### `desktop_permissions.py`
+
+The WebView2 permission decision pywebview's Edge Chromium backend never makes.
+A `CoreWebView2.PermissionRequested` handler grants the microphone to the daemon's own origin and denies it to any other.
+Every other permission kind is left at the runtime's default, and nothing is persisted (`SavesInProfile = false`).
+What it did is published into the page as `window.__swemuxDesktopMedia`, for the UI to read when capture fails.
+The pure half - origin normalization, the per-request decision, the marker script - is platform-free and directly testable.
+The platform half touches WebView2 only on the WinForms UI thread, because `CoreWebView2` is thread affine and reading it from a worker wedges the process while holding the GIL.
+
+**Not:** the microphone repair it looks like (that was a client-side voice-status latch, `.docs/design/features/voice.md`), capture itself, or any permission the browser build needs.
+
 ## Remote reachability
 
 ### `tailscale.py`

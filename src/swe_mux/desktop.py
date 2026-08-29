@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from .config import Config, load_config
+from .desktop_permissions import WebviewMicrophoneGrant
 from .desktop_window_state import (
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
@@ -38,6 +39,8 @@ from .process_reaper import process_in_job
 from .subprocess_flags import popen_outside_job
 
 CONTROL_TOKEN_ENV = "SWE_MUX_DESKTOP_CONTROL_TOKEN"
+#: Opt-in CDP port for the shell's WebView2. Unset means no port at all.
+WEBVIEW_DEBUG_PORT_ENV = "SWE_MUX_WEBVIEW_DEBUG_PORT"
 CONTROL_TOKEN_NAME = "desktop-control.token"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "swe-mux"
@@ -286,6 +289,13 @@ class DesktopRuntime:
         self.icon: Any = None
         self.window_state_path = config.data_dir / WINDOW_STATE_NAME
         self.window_state_recorder: WindowStateRecorder | None = None
+        # pywebview's WebView2 backend answers no permission request at all, so
+        # without this the microphone is whatever the installed runtime does with
+        # an unhandled one, for whatever origin the shell has been pointed at.
+        # This makes it the daemon's origin, only, and nothing else.
+        self.microphone_grant = WebviewMicrophoneGrant(
+            self.url, note=lambda message: ledger(config.data_dir, message)
+        )
         self.exiting = False
         self.stop = threading.Event()
         assert config.config_path is not None
@@ -648,6 +658,34 @@ class DesktopRuntime:
                 return
             time.sleep(DAEMON_HEALTH_POLL_SECONDS)
 
+    def _enable_webview_debugging(self, webview: Any) -> None:
+        """Open a CDP port on the shell's WebView2 when asked, and only then.
+
+        The shell runs with ``debug=False``, so a client-side failure inside it
+        has no console, no devtools and no network tab, and the daemon's logs
+        cannot see it either: a request that never leaves the page leaves no
+        trace anywhere. That is not hypothetical - a `talk:error` whose whole
+        cause was client side cost an afternoon precisely because there was
+        nowhere to look. This is the somewhere.
+
+        Off unless ``SWE_MUX_WEBVIEW_DEBUG_PORT`` names a port, because it is a
+        real surface: anything that can reach the port can drive the page.
+        Chromium binds it to loopback only.
+        """
+        raw = os.environ.get(WEBVIEW_DEBUG_PORT_ENV, "").strip()
+        if not raw:
+            return
+        try:
+            port = int(raw)
+        except ValueError:
+            ledger(self.config.data_dir, f"{WEBVIEW_DEBUG_PORT_ENV}={raw!r} is not a port")
+            return
+        if not 1 <= port <= 65535:
+            ledger(self.config.data_dir, f"{WEBVIEW_DEBUG_PORT_ENV}={port} is out of range")
+            return
+        webview.settings["REMOTE_DEBUGGING_PORT"] = port
+        ledger(self.config.data_dir, f"webview remote debugging on 127.0.0.1:{port}")
+
     def run(self) -> None:
         try:
             import pystray
@@ -662,6 +700,7 @@ class DesktopRuntime:
         # the user with a healthy daemon and nothing to talk to it.
         healthy = self.ensure_daemon()
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+        self._enable_webview_debugging(webview)
         window_state = self._load_window_state(webview)
         self.window_state_recorder = WindowStateRecorder(
             self.window_state_path,
@@ -682,6 +721,10 @@ class DesktopRuntime:
             text_select=True,
             background_color="#090a0c",
         )
+        # Armed here rather than after `webview.start()`, which never returns
+        # while the app is up. The control it needs is built inside that call,
+        # so the grant polls for it on its own thread.
+        self.microphone_grant.attach(self.window)
         self.window.events.closing += self.close_to_tray
         self.window.events.shown += self._capture_initial_window_state
         self.window.events.moved += self.window_state_recorder.moved

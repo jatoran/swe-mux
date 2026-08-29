@@ -3441,6 +3441,9 @@ body {
    addressee, and a fixed three-column grid either clipped one or left a hole. */
 .voice-dock>header{display:flex;flex-wrap:wrap;align-items:center;gap:3px 7px;min-width:0}
 .dictation-phase{flex:none}
+/* Shrinks before anything else in the header and never wraps it to a second row:
+   the full sentence is in the title and the live region. */
+.dictation-failure{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--error,#f07178)}
 .dictation-phase.listening{color:var(--green,#8bd450)}
 .dictation-phase.hearing{color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
 .dictation-phase.starting,.dictation-phase.warming,.dictation-phase.transcribing,.dictation-phase.heard,.dictation-phase.sending{color:var(--blue,#7aa2f7)}

@@ -85,6 +85,14 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   //: *not* do: gate the Send button on the advisory, and let the composer estimate
   //: reach the verdict.
   'deliveryReadiness.test.ts': ['cross-language-contract', 'component-jsx', 'negative-invariant'],
+  //: `composition-root` because the wiring under test is the one that broke: `/api/voice`
+  //: is fetched in `App.tsx` and consumed through a prop, and the bug was that a single
+  //: failed fetch was never retried - a fact about how the loader is called, with no seam
+  //: between the two to unit-test. `negative-invariant` for the half that matters most,
+  //: that the latch is absent and that no consumer bypasses the one loader; an absence
+  //: over a whole file has no runtime to ask. `component-jsx` and `stylesheet` for the
+  //: failure line the header now draws.
+  'desktopShell.test.ts': ['composition-root', 'negative-invariant', 'component-jsx', 'stylesheet'],
   'drawerSegments.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'drawerTabs.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'findings.test.ts': ['composition-root', 'component-jsx'],

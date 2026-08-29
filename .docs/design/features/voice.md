@@ -638,6 +638,27 @@ install-wide, so the tab edits them directly for the focused session.
 
 ## Conversation mode (STT)
 
+### The Talk preflight, and the one lost fetch that used to be permanent
+
+Pressing Talk checks three things before it touches the microphone: the browser's capability (`conversationCapability`), the daemon's `stt_available`, and only then `capture.start()`.
+Two rules govern that guard, and both come from a defect that survived for months because it was invisible from every log the daemon writes.
+
+- **The voice status is never latched.**
+  `/api/voice` is fetched once when the app mounts.
+  That fetch used to end in `.catch(() => setVoiceStatus(null))`, so a page which lost it - a daemon restart landing mid-flight, a UI reload during one - answered *every* later press with "Daemon transcription is unavailable", a claim about a daemon it had never successfully asked, while the daemon itself went on reporting a healthy engine.
+  No request left the page, so nothing appeared in the access log either.
+  **The desktop shell is the client that pays for this**: its page is opened once and kept for days across daemon restarts and redeploys, where a browser tab gets reloaded and silently repairs itself.
+  That asymmetry is the diagnosis for the shell's reported `talk:error`, reached from three measurements rather than from reading the code: WebView2 grants the microphone at that origin (checked directly, twice, with the real constraints), the shell's profile records an explicit allow for it, and the shell's persisted Talk history is *empty* - which excludes every refusal that goes through `respond`, and leaves only this guard.
+  There is now one loader (`loadVoiceStatus` in `App.tsx`), it keeps the previous value on failure, it re-runs whenever the `/events` socket opens - unconditionally, not only on a resume, because a page whose first fetch failed has no cursor to resume from - and the Talk press itself re-asks before refusing.
+- **Every refusal goes through `respond`, never a bare `setDetail`.**
+  `respond` writes the sentence into Talk history, and Talk history is persisted; a refusal that only set the phase left `talk:error` on screen and *nothing at all* on disk.
+  That absence is what made the failure unattributable, and - once noticed - what identified it: a shell profile holding no history entry proved the refusal had come from the preflight rather than from `getUserMedia`.
+
+The failure sentence is also **drawn**, not merely announced.
+`talk:error` names a phase and says nothing; the sentence that says what went wrong was reachable only from the chip's tooltip and an `aria-live` region, so an operator who did not think to hover got three words and no lead.
+The voice dock header now renders it (`.dictation-failure`, truncated with the full text in its `title`).
+When capture fails inside the Windows desktop shell, the shell's own WebView2 permission report is appended to it (`frontend/src/desktopShell.ts`, `desktop-shell.md`), which distinguishes "the shell granted it" from "WebView2 never asked" from "the grant could not be installed".
+
 ### Capture pipeline (browser, `frontend/src/conversation.ts`)
 
 - `PersistentVoiceCapture` opens `getUserMedia` (mono, echo cancellation, noise suppression,
@@ -1426,6 +1447,9 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.
+- `frontend/src/desktopShell.ts` — reads the Windows shell's `window.__swemuxDesktopMedia`
+  report and turns it into the sentence appended to a capture failure; absent in a browser,
+  where its absence is the answer (`frontend/test/desktopShell.test.ts`).
 - `frontend/src/audioFrames.ts` — streaming resampler and 512-sample framing.
 - `frontend/src/speechGate.ts` — the frame-counted endpointing state machine and both gate
   configurations.

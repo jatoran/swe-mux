@@ -83,6 +83,38 @@ continues to own every terminal.
   shutdown, stops the tray, and destroys the window. A desktop crash or forced window-process
   exit leaves the daemon running for recovery.
 
+## WebView2 permissions, and seeing into the shell at all
+
+**pywebview's WebView2 backend answers no permission request.**
+In pywebview 6.2.1 the only platform file that mentions permissions is `platforms/qt.py`; `platforms/edgechromium.py`, the backend this app uses, never subscribes to `CoreWebView2.PermissionRequested`, although the interop assembly shipped beside it exposes the event.
+Every permission the app is asked about is therefore decided by whatever the installed runtime does with an unhandled request.
+The gap is upstream, but pywebview is a dependency here rather than something to patch in place, so `src/swe_mux/desktop_permissions.py` closes it on our side.
+
+**This is hardening, not a repair, and the difference was measured rather than assumed.**
+On WebView2 152.0.4191.53 an unhandled `getUserMedia` from a loopback origin **succeeds** silently, and the shell's profile at `<data_dir>/webview` already carried an explicit microphone allow for the daemon's origin.
+The microphone was not broken by permissions and the desktop shell's `talk:error` was a client-side voice-status latch (`voice.md`).
+What remains worth fixing is that the behaviour is undocumented, is not ours, and has no scope: whatever the runtime allows, it allows to whatever origin the embedded browser is pointed at, and persists it.
+
+- **`PermissionRequested`, not `SetPermissionStateAsync`.**
+  The event has existed since WebView2's first GA runtime, so nothing in the wild is too old for it; it carries the requesting document's URI, which is what makes the origin scope an enforced check rather than a claim made once at startup; and with `SavesInProfile = false` it writes no permission state into the user data folder at all.
+  `CoreWebView2Profile.SetPermissionStateAsync` needs runtime 1.0.2210.55 or newer and persists a grant that outlives the code which decided it.
+- **Microphone only, and only for the daemon's own origin.**
+  A microphone request from any other origin is **denied** rather than left alone, because on the runtime above "left alone" means "granted"; declaring a scope and then falling through to the default is not a scope.
+  Camera is deliberately not granted - swe-mux has no camera feature - and every kind other than the microphone is left at `State.Default`, which is unchanged behaviour.
+- **Nothing touches WebView2 off the UI thread.**
+  `CoreWebView2` is thread affine, and reading it from the installer thread does not merely fail: measured 2026-08-29, it wedged the process, and because pythonnet holds the GIL across that call it froze every other Python thread including the watchdog meant to catch it, leaving a "not responding" window.
+  The poll follows only Python attributes; readiness and subscription happen together in one `Form.Invoke`.
+- **The outcome is published into the page** as a frozen `window.__swemuxDesktopMedia`, via `ExecuteScriptAsync` (never `evaluate_js`, which is gated on pywebview's ready event and blocks its caller for up to 20s during startup).
+  A state file in the data dir was the alternative and is wrong: browser tabs that are not the shell would read it, and it would go stale the moment the shell stopped.
+  Its five states are a diagnostic ladder - `pending`, `armed`, `granted`, `refused`, `unsupported` - and only `unsupported` means the grant itself failed.
+  A runtime too old for the event reports `unsupported` with its own exception text; it never crashes the shell, because the shell's job is to put a window on screen.
+
+**`SWE_MUX_WEBVIEW_DEBUG_PORT` is the only way to see a client-side failure in the shell.**
+The window runs with `debug=False`: no console, no devtools, no network tab, and a request that never leaves the page leaves no trace in any log the daemon writes.
+That is not hypothetical - it is why a `talk:error` whose whole cause was client side cost an afternoon.
+Setting the variable to a port opens a Chromium remote-debugging (CDP) endpoint on loopback; unset, which is the default, opens nothing.
+It is a real surface - anything that can reach the port can drive the page - so it is opt-in per launch and never persisted.
+
 ## Security boundary
 
 - **The packaged app makes one outbound request of its own, and it is still not an
@@ -614,6 +646,9 @@ person with no shortcut, no tray, and no idea where anything went.
 
 - Desktop runtime: `src/swe_mux/desktop.py`
 - Desktop window-state validation and persistence: `src/swe_mux/desktop_window_state.py`
+- WebView2 microphone permission and its page-published report:
+  `src/swe_mux/desktop_permissions.py`, `frontend/src/desktopShell.ts`
+- Permission tests: `tests/test_desktop_permissions.py`, `frontend/test/desktopShell.test.ts`
 - Daemon runner: `src/swe_mux/__main__.py`
 - Shutdown boundary: `src/swe_mux/server.py`
 - Package metadata: `pyproject.toml`, `uv.lock`
