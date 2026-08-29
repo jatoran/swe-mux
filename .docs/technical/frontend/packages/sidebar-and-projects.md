@@ -118,7 +118,8 @@ It does not own workspace placement.
 It is also the one editor for every per-Project switch, which is what makes a `GrantGate` elsewhere additive-only (`settings-and-gates.md`).
 
 `projectConfigState.ts` holds **one** copy of `.swe-mux/config.toml` for the whole panel and every section reads and writes through it.
-Three sections draw over that one file - the defaults and repository options form, the automation opt-ins, the agent authority table - and each of them used to fetch and cache its own revision, so the first successful edit anywhere in the panel invalidated the other two and the second edit answered "project config changed externally".
+Three sections drew over that one file - the defaults and repository options form, the automation opt-ins, the agent authority table - and each of them used to fetch and cache its own revision, so the first successful edit anywhere in the panel invalidated the other two and the second edit answered "project config changed externally".
+Two of the three have since moved to the Automation dashboard (the opt-ins on 2026-08-26, the authority rows on 2026-08-29, which now render read-only here beside a `SettingLink`), so the shared store serves the form plus that summary; it stays shared because the writers it was built against - a grant gate, the land queue, the configurator - never went anywhere.
 The hook refreshes on `mux:project-automations-changed`, which `App.tsx` re-broadcasts from the daemon's `project_configuration_changed`, so an edit made by a grant gate, the land queue, the configurator agent or another device reaches an open panel instead of staling it.
 
 `projectConfig.ts` owns the pure rules, split out because the node test runner strips types from `.ts` and cannot load `.tsx`:

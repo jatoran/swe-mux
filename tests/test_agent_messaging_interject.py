@@ -64,8 +64,10 @@ async def test_a_granted_interject_is_carried_on_the_item_and_named_in_the_envel
     # A property of the item, checked in send_next - never a second delivery path.
     assert message["constraints"]["delivery"] == "now"
     # The receiver cannot tell a mid-turn arrival from an ordinary one out of the
-    # text: the CLI buffers the paste and hands it over at the turn boundary.
-    assert "delivery: written into a turn that was already running" in message["body"]
+    # text: the CLI buffers the paste and hands it over at the turn boundary. Named
+    # at the `compact` default as well as at `full`, since the default is what
+    # nearly every message actually gets.
+    assert "written into a turn that was already running" in message["body"]
     assert "urgency, not about authority" in message["body"]
 
 

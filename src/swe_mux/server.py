@@ -30,6 +30,7 @@ from . import (
     routes,
 )
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
+from .agent_authority import authority_resolver
 from .agent_context import AgentContextService
 from .agent_messaging import AgentMessagingService
 from .assistant import (
@@ -125,11 +126,7 @@ from .project_files import (
     ProjectResourceExists,
     append_observation,
     project_automations,
-    project_interject_grant,
-    project_land_grant,
     project_note_summaries,
-    project_session_control_grant,
-    project_spawn_grant,
     read_note,
     read_observations,
     read_project_config,
@@ -1127,7 +1124,8 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         auto_delivery,
         append_observation=append_observation,
         read_observations=read_observations,
-        interject_grant_field=project_interject_grant,
+        interject_grant_field=authority_resolver(config, "interject_grant"),
+        envelope_field=authority_resolver(config, "message_envelope"),
     )
     prompt_library = PromptLibrary(config.data_dir)
     settings_store = SettingsStore(config.data_dir)
@@ -1236,13 +1234,13 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         events=events,
         readiness_evaluate=prompt_queue.readiness.evaluate,
         automation_gate=_enabled_automations,
-        grant_field=project_session_control_grant,
+        grant_field=authority_resolver(config, "session_control_grant"),
         interrupt_op=lambda session: terminal_routes._interrupt_session_pty(app, session),
         graceful_end_op=lambda session, reason: terminal_routes._end_session_gracefully(
             app, session, reason
         ),
         is_daemon_owner=terminal_routes._session_owns_daemon,
-        spawn_grant_field=project_spawn_grant,
+        spawn_grant_field=authority_resolver(config, "spawn_grant"),
         # The granted spawn goes through the identical spawn path the browser and
         # the Fleet Queue approval use, so an agent-created session is spawned no
         # differently from any other.
@@ -1405,7 +1403,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         config=config,
         events=events,
         automation_gate=_enabled_automations,
-        grant_field=project_land_grant,
+        grant_field=authority_resolver(config, "land_grant"),
         project_values=_land_project_values,
         comparison_ref=_land_compare_ref,
         busy_sessions=_land_busy_sessions,

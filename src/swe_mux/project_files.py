@@ -18,6 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .agent_authority import ENVELOPE_COMPACT, ENVELOPE_FULL
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 from .harness import is_agent_harness
@@ -76,6 +77,18 @@ PROJECT_CONFIG_FIELDS = {
     # mid-turn is a property of a working repository, and reusing an actuation
     # grant for it would grant it to every Project that wanted interrupt/end.
     "interject_grant",
+    # How much metadata a delivered agent message carries into the receiving
+    # session's prompt. "full" states the whole relay policy, "compact" (the
+    # built-in default) keeps the four facts a receiver acts on, "bare" delivers
+    # the body alone and is textually indistinguishable from the operator
+    # typing. It is an authority field in the same sense as the four above -
+    # `bare` is the widest latitude, because an agent that need not announce
+    # itself has more of it - which is why a malformed config resolves to
+    # "full" here while it resolves to "draft"/"off" there. Attribution is not
+    # lost at any level: the queue, the audit trail, and Fleet Queue record the
+    # sender regardless, and what the level decides is only what the receiving
+    # *model* is told.
+    "message_envelope",
     # Which tool-permission requests mux may answer for sessions in this Project
     # while a conversation holds the `allowlisted` mode, as `Tool` /
     # `Tool(pattern)` rules. The rules live here rather than on the session
@@ -92,6 +105,11 @@ PROJECT_CONFIG_FIELDS = {
 #: The two authority levels a grant field may hold. "off" is not a value here -
 #: it is the absence of the `session_control` automation opt-in.
 SESSION_CONTROL_GRANTS = ("draft", "granted")
+#: What `message_envelope` may hold, **widest disclosure first** so it reads in
+#: the order a person thinks about it. `agent_authority.AUTHORITY_FIELDS` holds
+#: the same three in the opposite order, because comparison there is by
+#: latitude; a test pins the two against each other so they cannot drift.
+MESSAGE_ENVELOPES = ("full", "compact", "bare")
 #: What `interject_grant` may hold. "draft" is absent on purpose: a drafted
 #: interject is a contradiction - a human arming it later delivers it to whatever
 #: turn is running *then*, which is an ordinary queued message and already exists.
@@ -877,6 +895,32 @@ def project_spawn_grant(root: str | Path) -> str:
     return _authority_grant(root, "spawn_grant", SESSION_CONTROL_GRANTS, "draft")
 
 
+def read_project_authority(root: str | Path, field: str) -> tuple[str | None, bool]:
+    """One authority field as `(explicit value or None, whether it could be read)`.
+
+    The Project layer alone: it applies no install default and no ceiling, so
+    "unset" comes back as None rather than as a guess. That distinction is the
+    whole basis of the layering in `agent_authority` - an install default may
+    only reach a field nobody decided, so a reader that collapsed unset into a
+    default would make every Project look pinned.
+
+    `readable` is False for a config that exists but cannot be parsed, and True
+    for one that is absent entirely. Those are genuinely different: a repository
+    with no `.swe-mux/config.toml` has not decided anything, while one whose
+    file is corrupt has decisions in it that nobody can read, and only the
+    second must fail closed.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if not path.is_file():
+            return None, True
+        values = parse_project_config(path.read_bytes())
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        return None, False
+    value = values.get(field)
+    return (str(value) if isinstance(value, str) else None), True
+
+
 def _authority_grant(
     root: str | Path, field: str, allowed: tuple[str, ...], failed: str
 ) -> str:
@@ -887,16 +931,19 @@ def _authority_grant(
     the install default, "granted"; a config that cannot be read or parsed
     means `failed` - the narrow answer - because a corrupt file must degrade to
     less authority, never more.
+
+    This is the **Project layer only** and is not what the daemon enforces:
+    since 2026-08-29 the services resolve through
+    `agent_authority.resolve_authority`, which layers the install default and
+    ceiling over this reading. It survives as the answer to "what does this
+    repository itself say", which is what the Projects registry displays and
+    what the tests below pin.
     """
-    path = Path(root) / ".swe-mux" / "config.toml"
-    try:
-        if path.is_file():
-            values = parse_project_config(path.read_bytes())
-            grant = values.get(field)
-            if grant in allowed:
-                return str(grant)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+    explicit, readable = read_project_authority(root, field)
+    if not readable:
         return failed
+    if explicit in allowed:
+        return str(explicit)
     return "granted"
 
 
@@ -907,16 +954,13 @@ def project_land_grant(root: str | Path) -> str:
     `request_land` write an inert request a human approves; "granted" lets the
     pipeline start on the agent's word. Whether the capability exists at all is the
     `land_queue` automation opt-in, checked separately by the caller.
+
+    The Project layer only; see `_authority_grant` on what the daemon actually
+    enforces.
     """
-    path = Path(root) / ".swe-mux" / "config.toml"
-    try:
-        if path.is_file():
-            values = parse_project_config(path.read_bytes())
-            grant = values.get("land_grant")
-            if grant in SESSION_CONTROL_GRANTS:
-                return str(grant)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
-        pass
+    explicit, _readable = read_project_authority(root, "land_grant")
+    if explicit in SESSION_CONTROL_GRANTS:
+        return str(explicit)
     return "draft"
 
 
@@ -931,6 +975,25 @@ def project_interject_grant(root: str | Path) -> str:
     that costs something.
     """
     return _authority_grant(root, "interject_grant", INTERJECT_GRANTS, "off")
+
+
+def project_message_envelope(root: str | Path) -> str:
+    """How much metadata a delivered agent message carries into this Project.
+
+    "compact" when unset, "full" when the config cannot be read. The fallback is
+    the *most* disclosed level rather than the least, which is the opposite
+    direction to the grants above and is the point: the failure this guards is a
+    repository whose configuration nobody can parse silently delivering peer
+    messages that look exactly like its operator's.
+
+    The Project layer only; see `_authority_grant`.
+    """
+    explicit, readable = read_project_authority(root, "message_envelope")
+    if not readable:
+        return ENVELOPE_FULL
+    if explicit in MESSAGE_ENVELOPES:
+        return str(explicit)
+    return ENVELOPE_COMPACT
 
 
 def project_approval_rules(root: str | Path) -> list[str] | None:
@@ -1478,6 +1541,8 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError("land_grant must be draft or granted")
     if parsed.get("interject_grant") not in {None, *INTERJECT_GRANTS}:
         raise ValueError("interject_grant must be off or granted")
+    if parsed.get("message_envelope") not in {None, *MESSAGE_ENVELOPES}:
+        raise ValueError("message_envelope must be full, compact, or bare")
     if parsed.get("approval_ceiling") not in {None, *APPROVAL_CEILINGS}:
         raise ValueError("approval_ceiling must be wait, allowlisted, or allow_all")
     if "approval_allow" in parsed and (
@@ -1553,6 +1618,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "spawn_grant",
         "land_grant",
         "interject_grant",
+        "message_envelope",
         "approval_ceiling",
     ):
         if value := values.get(key):
