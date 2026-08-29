@@ -1737,22 +1737,40 @@ POST   /voice/deferral-diagnostic        one resolved unfinished-utterance defer
 GET    /voice/clips[?session=&run=&anchor=&kind=summary|verbatim&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
-GET    /voice/models/kokoro               pinned-download state, with `g2p` nested inside it
-POST   /voice/models/kokoro/download      202; starts BOTH stores; progress rides voice_model_progress
+GET    /voice/models/kokoro               pinned-download state, with `g2p` and `runtime` nested
+POST   /voice/models/kokoro/download      202; starts ALL THREE stores; progress rides voice_model_progress
+GET    /voice/models/runtime              the acquired speech closure's first-use state, probe only
+POST   /voice/models/runtime/download     202; the narrow door - both capability presses start it themselves
 GET    /voice/models/whisper[?model=]     {models[]}; per-model first-use state, probe only
-POST   /voice/models/whisper/download     {model?} → 202; the explicit act, never implicit
+POST   /voice/models/whisper/download     {model?} → 202; starts the closure first and chains the weights
 ```
 
 `/voice/models/kokoro` carries a nested `g2p` object - `{status, source, distribution, version,
 total_bytes, downloaded_bytes, error}` - for the spaCy model the Kokoro G2P loads before it can
-pronounce anything. Nested rather than merged, because a caller has to be able to tell which half
-of one capability is missing; `source` is `installed` (the environment resolves the distribution)
-or `downloaded` (this daemon fetched it into the data directory), which are the same working state
-reached two ways and only the second is anything an operator can act on. The download POST starts
-whichever store needs it and reports `started` if either did; its `voice_model_progress` events
-carry `model: "kokoro"` or `model: "g2p"`, and a consumer must branch on that - the Kokoro panel
-also accepts an event with `model` absent, so an unlabelled G2P event would overwrite a 106 MB
-download's progress with a 12 MB one.
+pronounce anything, and a nested `runtime` object for the speech libraries the engine itself needs.
+Nested rather than merged, because a caller has to be able to tell which part of one capability is
+missing; `source` is `installed` (the environment resolves the distribution) or `downloaded` (this
+daemon fetched it into the data directory), which are the same working state reached two ways and
+only the second is anything an operator can act on.
+
+**The download POST starts all three stores and is the only press read-aloud needs.** It started
+two until 2026-08-29, and an operator who pressed it, watched both bars finish and then met a
+failure is why it starts three: the stores fail independently, which is an argument for three
+*lines* in the panel rather than three controls. `started` is true if any of them began.
+
+**`voice_model_progress` carries `{model, asset}` and nothing else.** `model` is which store spoke
+(`"runtime"`, `"kokoro"`, `"g2p"`, or a weights name), and `asset` is that store's whole status
+object. A consumer must branch on `model`: an unlabelled event reaching the Kokoro panel would
+overwrite a 106 MB download's progress with a 12 MB one.
+
+The nesting of `asset` is load-bearing rather than tidy. The payload used to be the status
+*splatted* into `EventBus.emit`, which has keyword-only parameters - and two of the four stores
+answer with a `source` key of their own, meaning "installed or downloaded" rather than the event
+bus's "which subsystem emitted this". That collision raised `TypeError: got multiple values for
+keyword argument 'source'` inside the download task on the first real press, and the store could
+only describe the result as an interrupted transfer. Nesting removes the class: no key any store
+answers with, now or later, can reach `emit`'s signature, and neither can a keyword-only parameter
+added to `emit` later. `routes/voice.emit_model_progress` is the single producer.
 
 `/voice/models/whisper` reports the configured dictation and routing models under the same
 `not_downloaded | downloading | ready | error` vocabulary Kokoro uses, plus `backend_installed`

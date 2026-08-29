@@ -137,6 +137,37 @@ STATES = ("not_downloaded", "downloading", "ready", "error")
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+async def report_progress(
+    store: Any, progress: ProgressCallback | None, *args: Any
+) -> None:
+    """Publish a store's current state, and never fail the download by doing it.
+
+    Every store here calls this from its `finally` and from its progress points.
+    One function rather than a method on each, because the property it enforces is
+    the same for all of them and a fourth copy is a fourth chance to omit the
+    `try`.
+
+    A failure to *report* is not a failure to *acquire*. That distinction was not
+    made until 2026-08-29, when an unguarded `await progress(...)` in a `finally`
+    let a `TypeError` in the callback escape the download task - so the store's
+    own crash handler wrote a correct diagnosis and the `finally` immediately
+    threw it away by raising the same exception on the way out. The operator was
+    then told his download had been interrupted, and went looking at a disk with
+    436 GB free.
+
+    `CancelledError` is re-raised: a cancelled task must stay cancelled, and it is
+    not an observer defect.
+    """
+    if progress is None:
+        return
+    try:
+        await progress(store.status(*args))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - reporting must not fail acquiring
+        log.exception("%s progress callback failed", type(store).__name__)
+
+
 class VoiceModelError(RuntimeError):
     """A typed acquisition failure; the caller surfaces it, nothing loads."""
 
@@ -258,8 +289,7 @@ class KokoroModelStore:
                     await self._fetch_one(session, relative, destination, size, sha256)
                     downloaded += size
                     self._progress["downloaded_bytes"] = downloaded
-                    if progress is not None:
-                        await progress(self.status())
+                    await report_progress(self, progress)
             self._write_state(
                 {
                     "status": "ready",
@@ -288,9 +318,28 @@ class KokoroModelStore:
                 {"status": "error", "revision": KOKORO_REVISION, "error": message}
             )
             log.warning("kokoro model download failed: %s", message)
+        except Exception as exc:  # noqa: BLE001 - a defect must not read as a transfer failure
+            # The clause above names what goes wrong fetching bytes over a network
+            # onto a disk. Anything else here is a defect in this process, and
+            # reporting it in the same words sends the reader to the wrong
+            # subsystem - which is exactly what happened to the sibling store on
+            # 2026-08-29, when a `TypeError` in a progress callback was reported
+            # as an interrupted download and two people went looking at disk and
+            # network. `log.exception` is what makes the traceback findable.
+            self._write_state(
+                {
+                    "status": "error",
+                    "revision": KOKORO_REVISION,
+                    "error": (
+                        "the download failed unexpectedly "
+                        f"({exc.__class__.__name__}: {str(exc)[:200]}) - this is a "
+                        "defect rather than a network or disk problem"
+                    ),
+                }
+            )
+            log.exception("kokoro model download crashed")
         finally:
-            if progress is not None:
-                await progress(self.status())
+            await report_progress(self, progress)
 
     @staticmethod
     def _file_verified(path: Path, size: int, sha256: str) -> bool:
@@ -598,8 +647,7 @@ class WhisperModelStore:
             )
         finally:
             self._started.pop(name, None)
-            if progress is not None:
-                await progress(self.status(name))
+            await report_progress(self, progress, name)
 
     @staticmethod
     def _fetch(name: str) -> None:
@@ -824,9 +872,28 @@ class SpacyModelStore:
             message = str(exc)[:400] or exc.__class__.__name__
             self._write_state({"status": "error", "version": G2P_VERSION, "error": message})
             log.warning("g2p model download failed: %s", message)
+        except Exception as exc:  # noqa: BLE001 - a defect must not read as a transfer failure
+            # The clause above names what goes wrong fetching bytes over a network
+            # onto a disk. Anything else here is a defect in this process, and
+            # reporting it in the same words sends the reader to the wrong
+            # subsystem - which is exactly what happened to the sibling store on
+            # 2026-08-29, when a `TypeError` in a progress callback was reported
+            # as an interrupted download and two people went looking at disk and
+            # network. `log.exception` is what makes the traceback findable.
+            self._write_state(
+                {
+                    "status": "error",
+                    "version": G2P_VERSION,
+                    "error": (
+                        "the download failed unexpectedly "
+                        f"({exc.__class__.__name__}: {str(exc)[:200]}) - this is a "
+                        "defect rather than a network or disk problem"
+                    ),
+                }
+            )
+            log.exception("g2p model download crashed")
         finally:
-            if progress is not None:
-                await progress(self.status())
+            await report_progress(self, progress)
 
     async def _fetch_wheel(self, session: aiohttp.ClientSession) -> bytes:
         """The pinned wheel, in memory, verified before anything touches disk.
