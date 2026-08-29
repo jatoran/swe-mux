@@ -79,6 +79,24 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Fixed
 
+- **Voice could refuse to start on a page that had been open a long time, and say the daemon was
+  at fault.**
+  The voice status was fetched once when the page loaded, and a page that lost that one request
+  never asked again - so every later attempt was refused with "daemon transcription is
+  unavailable", a claim about a daemon it had never successfully reached and did not re-ask
+  before refusing.
+  The desktop application is what paid for this, because its page is opened once and kept for
+  days across daemon restarts and updates, while a browser tab gets reloaded and quietly repairs
+  itself.
+  The status is now re-read whenever the event stream reconnects and again by the attempt itself
+  before it refuses, and the reason is written where you can read it instead of appearing as a
+  bare `error`.
+- **The desktop application now decides its own microphone permission.**
+  It previously inherited whatever the installed WebView2 runtime happened to do with a request
+  nobody answered, for whatever address the embedded browser had been pointed at, and remembered
+  that answer in its profile.
+  The microphone is now granted to swe-mux's own address, denied to any other, and nothing is
+  persisted.
 - **A land stopped by a verification block now restarts when the block is cleared.**
   A refusal was terminal, so approving the gate's bytes fixed the *next* land and left the
   one that caused the block dead, to be asked for again by hand - or by an agent that had
