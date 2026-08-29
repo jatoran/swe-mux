@@ -493,6 +493,107 @@ async def test_a_gate_someone_else_wrote_is_refused_even_where_agents_may_edit_i
         store.close()
 
 
+async def test_a_refusal_keeps_the_message_it_wrote_even_with_nobody_to_send_it_to(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """An operator's Land has no origin session, so the explanation went nowhere.
+
+    The queue composes one bounded message per outcome and hands it to the session that
+    asked; `_solicited_reply` drops it when there is none. The requester standing in
+    front of the queue was the only one who never saw why it stopped, and the trail said
+    only that something had been said.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, _ = build_service(tmp_path, trunk, queue=queue, verify_grant="draft")
+    try:
+        row = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+        # Nothing was staged, because there is no session that asked.
+        assert queue.messages == []
+        refused = [
+            item for item in await store.events(row["id"]) if item["outcome"] == "refused"
+        ]
+        body = refused[0]["detail"]["body"]
+        assert "was refused" in body
+        assert row["branch"] in body
+        assert "not a problem with your branch" in body
+    finally:
+        store.close()
+
+
+async def test_a_fast_forward_refusal_names_the_two_object_ids_a_reader_needs(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """"Diverging branches can't be fast-forwarded" says nothing a reader can act on.
+
+    The cause is always that the trunk moved past the base the request was enqueued on,
+    and both object ids are on the row - so naming them turns the message into "you were
+    at X, the trunk is at Y, merge it and ask again" instead of a git error string an
+    operator has to go and reconstruct by hand.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    service, store, _ = build_service(tmp_path, trunk)
+    try:
+        row = {
+            "id": "lnd_x",
+            "branch": "worktree-alpha",
+            "kind": "land",
+            "worktree_root": str(worktree),
+            "project_root": str(trunk),
+            "trunk_ref": "main",
+            "requested_oid": "66200fbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        }
+        body = service._refused_body(
+            row,
+            reason="the fast-forward was refused: Diverging branches can't be fast-forwarded",
+            detail={"trunk_before": "2130b4daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        )
+        assert "66200fbaaaaa" in body
+        assert "2130b4daaaaa" in body
+        assert "request the land again" in body
+    finally:
+        store.close()
+
+
+async def test_a_refusal_the_trunk_has_since_absorbed_stops_speaking(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The branch landed by hand, which is what a fast-forward refusal tells you to do.
+
+    Until this, a refusal could only be answered by a *later request for the same
+    branch*, so landing outside the queue left the refusal standing forever over work
+    the trunk already had. Nothing is written back: `refused` stays terminal and the
+    trail goes on saying the refusal happened; what changes is the reading.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    tip = commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, _ = build_service(tmp_path, trunk, verify_grant="draft")
+    try:
+        row = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+        snapshot = await service.status(project_id="p", project_root=row["project_root"])
+        assert [item["absorbed_by_trunk"] for item in snapshot["requests"]] == [False]
+
+        # Landed by hand, exactly as the refusal's own message tells its reader to.
+        git(trunk, "merge", "--ff-only", "worktree-alpha")
+        assert git(trunk, "rev-parse", "HEAD") == tip
+
+        snapshot = await service.status(project_id="p", project_root=row["project_root"])
+        assert [item["absorbed_by_trunk"] for item in snapshot["requests"]] == [True]
+        # And the record is untouched: an audit does not stop saying what happened.
+        assert (await store.get(row["id"]) or {})["state"] == "refused"
+    finally:
+        store.close()
+
+
 async def test_approving_the_bytes_re_queues_the_land_the_block_ended(
     tmp_path: Path, trunk: Path
 ) -> None:

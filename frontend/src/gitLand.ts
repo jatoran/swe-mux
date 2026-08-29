@@ -106,6 +106,17 @@ export type LandRequest = {
    * command is not approved" cannot be told from any other sentence by matching on it.
    */
   refusalCode: LandRefusalCode
+  /**
+   * The trunk already contains the tip this request asked to land.
+   *
+   * Derived by the daemon at the reading and never stored: `refused` is terminal and
+   * the trail is an audit that must go on saying the refusal happened. What it changes
+   * is which row *speaks* for the queue. Until it existed, a refusal could only be
+   * answered by a later request for the same branch, so a branch landed by hand - which
+   * is exactly what a fast-forward refusal tells its author to go and do - left its
+   * refusal standing over work that was already on the trunk.
+   */
+  absorbedByTrunk: boolean
 }
 
 /**
@@ -175,6 +186,35 @@ export type LandVerifyCommand = {
   /** Whether the gate would run as things stand. `approved || runsWithoutApproval` is
    *  the question the strip actually has, and neither half answers it alone. */
   runsWithoutApproval: boolean
+}
+
+/**
+ * The daemon's own message about how a request ended, out of its event trail.
+ *
+ * Not composed here, and deliberately so. The queue already writes one bounded,
+ * template-only explanation per outcome - what stopped it, in which checkout, against
+ * which trunk, and what to do next - addressed to the session that asked. An operator's
+ * own Land has no such session, so that text was written and dropped, and the one
+ * requester standing in front of the queue was the only one who never got it. Reading it
+ * back off the trail hands them the same words rather than inventing a second set, which
+ * is the rule these messages already carry: no model and no second surface writes them.
+ *
+ * The newest event that carries one wins; `''` means the trail has none, which is every
+ * row written by a build that did not record it.
+ */
+export function landRequestMessage(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') return ''
+  const rows = (raw as Record<string, unknown>).events
+  if (!Array.isArray(rows)) return ''
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const event = rows[index]
+    if (!event || typeof event !== 'object') continue
+    const detail = (event as Record<string, unknown>).detail
+    if (!detail || typeof detail !== 'object') continue
+    const body = (detail as Record<string, unknown>).body
+    if (typeof body === 'string' && body.trim()) return body
+  }
+  return ''
 }
 
 /** A land the approval just put back in the queue. A redo is a new id by design, so this
@@ -332,6 +372,7 @@ function parseRequest(raw: unknown): LandRequest | null {
     refusalCode: state === 'refused' && (detail.code === 'unapproved' || detail.code === 'not_configured')
       ? detail.code
       : '',
+    absorbedByTrunk: row.absorbed_by_trunk === true,
   }
 }
 
@@ -547,6 +588,7 @@ export function landAttentionRow(requests: LandRequest[]): LandRequest | null {
   }
   return landHistoryOrder(requests).find(request =>
     (request.state === 'handed_back' || request.state === 'refused')
+    && !request.absorbedByTrunk
     && (answeredAt.get(branchKey(request)) ?? request.createdAt) <= request.createdAt) || null
 }
 
@@ -613,6 +655,9 @@ export function blockedVerifyWorktrees(
   for (const request of landHistoryOrder(requests)) {
     if (request.refusalCode !== 'unapproved') continue
     if ((answeredAt.get(branchKey(request)) ?? request.createdAt) > request.createdAt) continue
+    // Landed some other way since. Offering an approval here would clear a block over
+    // work the trunk already has, and the resume behind it would find nothing to do.
+    if (request.absorbedByTrunk) continue
     const root = normalizeRoot(request.worktreeRoot)
     if (!root || root === target || seenRoots.has(root)) continue
     seenRoots.add(root)

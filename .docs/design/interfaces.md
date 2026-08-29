@@ -2164,6 +2164,17 @@ with outcome `skipped` or `reused` - and a `reused` row carries the key it reuse
 and the request whose run produced the verdict), so the reuse is checkable rather than asserted.
 See `features/land-queue.md`.
 
+Every row also carries `absorbed_by_trunk`: the trunk already contains the tip that
+request asked to land, so a refusal or handback on it is answered whatever the queue's own
+history says. It is **derived at the reading and never stored** - a terminal row keeps its
+record - and it is how a branch landed by hand stops leaving a live-looking block behind.
+Absent reads as `false`, which leaves the row standing.
+
+`GET /land/{id}/events` carries the daemon's own message about how the request ended, as
+`detail.body` on the terminal event: the same bounded template the origin session receives,
+recorded so an operator's own Land - which has no origin session and therefore no delivery -
+can still read and copy it. Absent on rows written before it was recorded.
+
 Every row also carries `kind`: `"land"` or `"verify"`. `POST /land` accepts it and defaults it to
 `"land"`, so a caller written before verify-only existed asks for what it always asked for; an
 unrecognised value is `400`. A `"verify"` request runs every step except the fast-forward and

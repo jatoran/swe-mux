@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { GrantButton, GrantGate } from './GrantGate'
+import { LandMessage } from './LandMessage'
 import { SettingLink } from './SettingLink'
 import {
   formatDuration,
@@ -699,6 +700,15 @@ function LandRow({ request, busy, onCancel, position }: {
         && <button disabled={busy} onClick={onCancel}>Cancel</button>}
     </div>
     {request.reason && <p class="git-land-reason">{request.reason}</p>}
+    {/* Answered by the trunk rather than by the queue: the branch landed some other way,
+        which is exactly what a fast-forward refusal tells its author to go and do. The
+        row keeps saying what happened - the trail is an audit - and stops reading as
+        something still waiting on someone. */}
+    {request.absorbedByTrunk && <p class="git-land-absorbed">
+      The trunk already contains what this asked to land.
+    </p>}
+    {(request.state === 'refused' || request.state === 'handed_back')
+      && <LandMessage requestId={request.id} />}
     {request.paths.length > 0 && <ul class="git-land-paths">
       {request.paths.slice(0, 12).map(path => <li key={path}><code>{path}</code></li>)}
       {request.paths.length > 12 && <li><small>and {request.paths.length - 12} more</small></li>}

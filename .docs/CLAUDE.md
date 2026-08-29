@@ -340,6 +340,16 @@
   happened, and a terminal row may not gain a second writer - and it skips exactly the two
   checks that decide whether a *new agent* request should start (the per-origin budget and
   the `draft` grant), because a resume is neither new nor the agent's.
+  Two consequences for what a terminal row *says*. Its message is **recorded, not only
+  sent**: `_solicited_reply` writes to the session that asked and returns early when there
+  is none, so an operator's own Land composed its explanation and dropped it, and the one
+  requester standing in front of the queue never saw it - the terminal event now carries
+  the `body` and the row reads it back with a copy control, the daemon's own words rather
+  than a second set written in the browser. And **a later request is not the only thing
+  that can answer a branch**: a fast-forward refusal tells its author to merge and land by
+  hand, which produces no later request at all, so `absorbed_by_trunk` answers a refusal
+  whose tip the trunk already contains. Derived per reading, never written back, for the
+  same reason the supersession rule it extends is.
   *Which* gate runs is decided by a `classify` step, and it stays on the executing side of
   the same line: matching paths against a **closed** documentation allowlist is a total
   function with no model, heuristic, or configuration in it, so it is not a decision -

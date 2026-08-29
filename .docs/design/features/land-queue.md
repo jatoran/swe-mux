@@ -441,6 +441,14 @@ The template's job is to keep the reader from re-reading their own branch.
 A refusal is a statement about the *setup*, and an agent told only "your land was refused" goes looking for the defect in its own diff, which is the one place it is not.
 So the message names the cause, and for the two causes that are nobody's code - `unapproved`, `not_configured` - it says outright that this is not a problem with the branch, that nothing was run against it, that approving is a human act against the exact bytes in the Git tab's landing strip, and that the agent cannot approve it itself.
 
+**The message is recorded, not only sent.**
+`_solicited_reply` writes to the session that asked and returns early when there is none - and an *operator's* Land has no origin session, so the one requester standing in front of the queue was the only one who never saw why it stopped.
+Both terminal events now carry the composed `body` in their detail, and the row reads it back behind a `What the queue said` disclosure with a copy control, so the text can be handed to the agent that has to act on it.
+It is the daemon's own words rather than a second set composed in the browser: these messages are template-only by design, and a surface that wrote its own would be exactly the second author that rule exists against.
+Fetched when the disclosure opens rather than on the queue poll, because a handback carries a tail of gate output and a hundred of those every five seconds is a different feature; and shown as well as copied, for the reason the setup prompt already is.
+
+A **fast-forward** refusal also names the two object ids the reader would otherwise reconstruct by hand - the branch tip the request carried and the trunk when it ran - because "Diverging branches can't be fast-forwarded" states the mechanism and none of the fix.
+
 An `unapproved` refusal additionally names **which of the two authorities** did not cover the bytes.
 In a Project whose `land_verify_grant` is `granted`, a refusal reads as a contradiction without it, and the reader's next move is to doubt the switch rather than to look at who wrote the script - which is the one fact that decided it.
 So the message either states that this Project approves each digest by hand, or quotes the provenance verdict's reason, which names the foreign author where there is one.
@@ -606,6 +614,15 @@ The supersession rule is therefore: a bounced request stops being the queue's he
 `cancelled` deliberately does not supersede, because withdrawing a re-request is not an answer about the branch and the earlier handback is still the standing fact about it.
 Ties do not supersede either: two rows created in the same second are not ordered by anything the reading can see, and the safe direction for a row whose whole job is asking for attention is to keep asking.
 
+**A later request is not the only thing that can answer a branch, and assuming it was left the worst case standing forever.**
+A fast-forward refusal tells its author to merge the trunk and land again; doing that *by hand* - which is the ordinary response, and the whole point of the message - produces no later request at all, so the refusal went on speaking for a branch the trunk had already absorbed.
+Observed 2026-08-29 on `worktree-spawn-model-selection`, whose refusal was still describing a divergence the operator had resolved days earlier, and which an agent reading the queue then reported as current.
+
+So a refusal or handback is also answered when **the trunk contains the tip that request asked to land** (`absorbed_by_trunk`).
+It is asked of `requested_oid` rather than of the branch as it stands: a branch that has since gained commits needs a new request anyway, and "the trunk contains what *this* asked for" is the precise thing that makes *this* row spent.
+The daemon asks it, because the browser cannot run git - bounded to `MAX_ABSORBED_PROBES` distinct tips per reading, over rows nothing else has answered, which is none or one on an ordinary Project.
+A question git cannot answer is `None`, which leaves the refusal standing: a reader's second look is the cheap direction, a hidden block is not.
+
 It is **derived at the reading, not written back onto the row**, and that is the load-bearing half.
 The handback really did happen, and `land_events` and the history disclosure are an audit that must go on saying so - what was wrong was never the record, only which row spoke for the queue.
 A "closed" column would also be a second writer's opinion about a terminal row, in a store whose serialization is a property of its schema.
@@ -690,6 +707,7 @@ config-file edit can reach is a bound nobody adjusts and nobody can see.
 - The strip at the head of the map (queue, verification command, agent authority): `frontend/src/GitLandBar.tsx`
 - The retired segment and its migration: `frontend/src/drawerSegments.ts`, `frontend/src/drawerLayout.ts`, `src/swe_mux/keybindings.py`
 - Shared queue/gate reads: `frontend/src/landState.ts`; parsing, labels, supersession, and the strip's folded status model: `frontend/src/gitLand.ts`
+- The daemon's own message about how a request ended, read back off its trail and copyable: `frontend/src/LandMessage.tsx`, drawn by both the strip's rows and the Map row's last-outcome block
 - The copyable setup prompt for another repository: `frontend/src/landSetupPrompt.ts`
 - Tests: `tests/test_land_queue.py`, `tests/test_land_api.py`, `tests/test_verify_progress.py`,
   `tests/test_land_classify.py`,
