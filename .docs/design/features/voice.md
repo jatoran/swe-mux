@@ -192,6 +192,39 @@ install-wide, so the tab edits them directly for the focused session.
   A failed refresh retains the prior voices and records the error.
   A selected `ShortName` absent from the newest catalog remains configured and renders as
   missing instead of being replaced.
+- **A missing first-use asset is a typed refusal, never a 500** (`voice.VoiceError`,
+  `server._error_middleware`).
+  Learned on 2026-08-29, on a frozen desktop app, by an operator who met
+  `500 internal server error` while `daemon.log` held the exact sentence naming the button he
+  needed to press.
+  Three things were wrong and each is fixed at its own layer.
+
+  **The class was translated at call sites.** Most voice routes caught `VoiceError` and returned
+  409; `check_lexicon` and `build_lexicon_entry` did not, and those two are the ones a user
+  found. `server._error_middleware` now translates it centrally, so a route added later cannot
+  reintroduce the defect by forgetting.
+
+  **The check was in the wrong place.** `KokoroEngine.__init__` touches neither onnxruntime nor
+  misaki - both imports are lazy - so it constructs happily against an absent closure and defers
+  the failure to whichever worker thread reaches `_ensure_g2p` first.
+  `VoiceService._require_voice_runtime` now asks at the boundary, before anything is
+  constructed, on both the read-aloud and the dictation path.
+
+  **A message could not say whether it was actionable.**
+  "The speech libraries are not downloaded" has a button behind it and "nothing speakable
+  remained after preprocessing" does not, and no client can tell them apart by reading English.
+  `VoiceError` carries a machine `code` (`voice_runtime_missing`) and an optional `remedy`, and
+  `api()` puts the whole body on `error.detail`, so a surface that wants to draw the acquire
+  action can.
+
+- **A remedy is derived from how this copy was installed** (`install_location.
+  extra_install_command`).
+  The voice diagnostics named `uv sync --extra voice-local` to every reader, including the
+  frozen desktop app, whose extras are fixed when the bundle is built.
+  A remedy that cannot be run is worse than none, because it ends the search; the frozen app is
+  told to use the OS voice engine instead, and a `uv tool` install is told the `uv tool install
+  --force` line that actually works.
+
 - **The speech libraries are a first-use asset, not part of the app** (`voice_runtime.py`,
   `voice_wheels.py`, `packaging/generate_voice_pins.py`).
   ROADMAP Phase 21 Workstream D.
@@ -284,9 +317,14 @@ install-wide, so the tab edits them directly for the focused session.
   as a distinct `voice_g2p` optional-asset row, because `installed` (the environment resolves
   the distribution) and `downloaded` (this daemon fetched it) are one working state reached two
   ways and only the second is anything an operator can act on.
-  One press acquires both: `POST /api/voice/models/kokoro/download` starts each store, and the
-  `voice_model_progress` events carry `model: "kokoro"` or `model: "g2p"` so the panel can tell
-  them apart.
+  One press acquires **all three** - the speech libraries, the weights, and this model:
+  `POST /api/voice/models/kokoro/download` starts each store, and the `voice_model_progress`
+  events carry `model: "runtime"`, `"kokoro"` or `"g2p"` so the panel can tell them apart.
+  It started only two until 2026-08-29, and the missing third is the defect that failed a real
+  operator: he pressed the button, watched both its bars finish, and met a 500 at the first
+  spoken sentence because the libraries had a separate button in a separate panel.
+  The stores stay separate because they fail independently, but that is an argument for three
+  *lines*, not three controls - the user is not the integrator of three stores.
   The refusal in `kokoro_tts._ensure_g2p` is load-bearing rather than defensive: misaki's
   `G2P.__init__` reads `if not spacy.util.is_package(name): spacy.cli.download(name)`, which
   shells out to `pip install` from inside the synthesis path - into the venv of a source
@@ -1239,6 +1277,9 @@ and never touches the daemon or an LLM.
   of the first-use asset contract. The GET is a local probe; the POST is the only download path.
 - `GET  /api/voice/models/runtime` / `POST /api/voice/models/runtime/download` — the speech
   *libraries*, which the frozen app does not carry.
+  The POST is the narrow door: the two capability presses
+  (`/api/voice/models/kokoro/download`, `/api/voice/models/whisper/download`) start this store
+  themselves, so no flow requires a user to find it.
   Same shape and same contract as the two weight endpoints, plus `supported`: an interpreter or
   platform the pinned closure has no wheels for reports `error` with `supported: false`, because
   there is nothing there to press and drawing it as `not_downloaded` beside a button would be an

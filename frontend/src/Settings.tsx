@@ -2010,19 +2010,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </div>
           </section>
 
-          {/* Above the provider picker on purpose: one download serves both the
-              Kokoro engine and Whisper dictation, so it belongs to neither
-              provider's panel. Nothing is fetched until this button is pressed. */}
-          <section><h3>On-device speech libraries</h3>
-          <p>Kokoro read-aloud and Whisper dictation both run on this machine and need these libraries. The packaged app does not carry them; they are downloaded once, verified against pinned hashes, and never fetched on your behalf.</p>
-          <VoiceRuntimePanel initial={voiceInfo?.voice_runtime||null}/>
-          </section>
-
           {/* Provider-specific panels are mutually exclusive in the DOM, while their
               values remain independent fields in the complete Settings draft. */}
           <section><h3>TTS provider</h3>
           <p>Provider and voice used for the next speech stream.</p>
           <label data-setting="tts_engine">Provider<Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',label:'OS voice (offline, no download)'},{value:'kokoro',label:'Kokoro-82M (local neural, one-time download)'},{value:'edge',label:'Edge TTS (experimental external, online)'}]}/></label>
+          {/* At selection time, not at synthesis time. The engine's own status
+              line sits at the top of this tab among six other facts, and an
+              operator who switches provider here and finds the next thing to
+              press below it reasonably reads that as the whole errand - which is
+              what happened on 2026-08-29. This says, next to the control that
+              caused it, that the chosen provider cannot speak yet. */}
+          {voiceInfo&&voiceInfo.engine===draft.tts_engine&&!voiceInfo.engine_available&&voiceInfo.providers?.[draft.tts_engine as 'sapi'|'kokoro']?.diagnostic&&
+            <p class="tts-lexicon-hint tts-lexicon-error" role="alert">{draft.tts_engine==='kokoro'?'Kokoro cannot speak yet':'This provider cannot speak yet'}: {voiceInfo.providers?.[draft.tts_engine as 'sapi'|'kokoro']?.diagnostic}</p>}
           {draft.tts_engine==='sapi'&&<>
             <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
@@ -2085,7 +2085,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
-          {draft.stt_engine==='whisper'&&<WhisperModelPanel initial={voiceInfo?.stt_models||null}/>}
+          {draft.stt_engine==='whisper'&&<WhisperModelPanel initial={voiceInfo?.stt_models||null} runtime={voiceInfo?.voice_runtime||null}/>}
           <p>Talk keeps listening across pauses. Wake-word commands act immediately; other speech becomes dictation. Raw audio is deleted after transcription.</p>
           <h4>Wake words</h4>
           <p>Comma-separated spellings the recognizer may produce. Test them under Diagnostics.</p>
@@ -2522,17 +2522,19 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
 /**
  * The on-device speech libraries, as a first-use asset with an explicit press.
  *
- * Drawn above the provider picker rather than inside the Kokoro branch, because
- * it gates both halves of voice: the same closure carries the Kokoro engine and
- * the Whisper one. Folding it into the Kokoro panel would hide the reason
- * dictation does not work from the person configuring dictation.
+ * Rendered inside the dictation panel with `action={false}`, as a status line
+ * with no button of its own. The Kokoro panel draws this same store itself, and
+ * both presses acquire it: a control for it in a third place is what broke the
+ * flow on 2026-08-29, when an operator pressed the Kokoro button, saw its bars
+ * finish, and did not know a separate panel held a prerequisite. One press per
+ * capability; the sub-steps are lines, not controls.
  *
  * `supported: false` renders as a statement with no button. The pinned closure
  * covers Windows, Linux and macOS on the architectures swe-mux ships for; an
  * interpreter outside that set has nothing to press, and its remedy is the
  * install-time extra rather than this panel.
  */
-function VoiceRuntimePanel({initial}:{initial:VoiceRuntimeInfo|null}){
+function VoiceRuntimePanel({initial,action=true}:{initial:VoiceRuntimeInfo|null;action?:boolean}){
   const [runtime,setRuntime]=useState<VoiceRuntimeInfo|null>(initial)
   const [starting,setStarting]=useState(false)
   useEffect(()=>{
@@ -2578,7 +2580,7 @@ function VoiceRuntimePanel({initial}:{initial:VoiceRuntimeInfo|null}){
       {runtime.supported&&status==='not_downloaded'&&' · read aloud and dictation both need them'}
       {(!runtime.supported||status==='error')&&runtime.error&&` · ${runtime.error}`}
     </p>
-    {waiting&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':`Download speech libraries (~${megabytes} MB)`}</button>}
+    {action&&waiting&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':`Download speech libraries (~${megabytes} MB)`}</button>}
   </div>
 }
 
@@ -2604,6 +2606,13 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
         setModel(current=>current?{...current,g2p:{...(current.g2p as G2pModelInfo|undefined),...detail} as G2pModelInfo}:current)
         return
       }
+      // Same rule, third store. Checked before the Kokoro branch for the same
+      // reason the G2P branch is: that branch accepts an unlabelled event as its
+      // own, so an 82 MB total would overwrite a 106 MB download's progress.
+      if(detail.model==='runtime'){
+        setModel(current=>current?{...current,runtime:{...(current.runtime as VoiceRuntimeInfo|undefined),...detail} as VoiceRuntimeInfo}:current)
+        return
+      }
       if(detail.model===undefined||detail.model==='kokoro')setModel(current=>({...(current||{total_bytes:0,downloaded_bytes:0,voices:[]}),...detail} as KokoroModelInfo))
     }
     window.addEventListener('mux:voice-model',handler)
@@ -2624,17 +2633,43 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   const total=model?.total_bytes||0
   const done=model?.downloaded_bytes||0
   const pct=total?Math.min(100,Math.round(done/total*100)):0
-  // Two halves of one capability, drawn as two lines. One press acquires both,
-  // but they can fail independently, and a single "Kokoro model::error" that
-  // could mean either would send the reader after the wrong 106 MB.
+  // Three parts of one capability, drawn as three lines behind one press. They
+  // can fail independently, so a single merged bar would have to lie about which
+  // one failed - but that is an argument for three *lines*, not three buttons,
+  // and the two-button version failed a real operator on 2026-08-29: he pressed
+  // the one here, watched both its bars finish, and met a 500 at the first
+  // spoken sentence because the speech libraries had their own button in another
+  // panel. The user is not the integrator of three stores.
   const g2p=model?.g2p
   const g2pStatus=g2p?.status||'not_downloaded'
   const g2pWaiting=Boolean(g2p)&&g2pStatus!=='ready'&&g2pStatus!=='downloading'
+  const runtime=model?.runtime
+  const runtimeStatus=runtime?runtime.supported?runtime.status:'unsupported':'ready'
+  const runtimeWaiting=Boolean(runtime)&&runtime?.supported===true&&runtimeStatus!=='ready'&&runtimeStatus!=='downloading'
   const waiting=status!=='ready'&&status!=='downloading'
-  const label=status==='error'||g2pStatus==='error'?'Retry download'
-    :waiting?'Download Kokoro voices (~106 MB)'
-    :'Download the pronunciation model (~12 MB)'
+  const busy=status==='downloading'||g2pStatus==='downloading'||runtimeStatus==='downloading'
+  const failed=status==='error'||g2pStatus==='error'||runtimeStatus==='error'
+  // The size on the button is what this press is about to cost *now*, so a
+  // partly-acquired install is not quoted the full figure it already paid.
+  const outstanding=(runtimeWaiting?(runtime?.total_bytes||0):0)
+    +(waiting?total:0)
+    +(g2pWaiting?(g2p?.total_bytes||0):0)
+  // One button, and it retries exactly what failed: every store's
+  // `start_download` short-circuits when it is already `ready`, so pressing this
+  // after a partial failure re-runs the failed parts and no others. That is the
+  // per-store retry the three lines promise, without three controls to read.
+  const label=failed?'Retry what failed'
+    :`Download everything Kokoro needs (~${Math.max(1,Math.round(outstanding/1048576))} MB)`
   return <div class="kokoro-model-panel">
+    {runtime&&<p aria-live="polite">
+      <span class={`state-dot ${runtimeStatus==='ready'?'idle':runtimeStatus==='downloading'?'running':'stopped'}`}/>
+      Speech libraries::{runtimeStatus}
+      {runtimeStatus==='ready'&&runtime.source==='installed'&&' · installed in this environment'}
+      {runtimeStatus==='ready'&&runtime.source!=='installed'&&` · ${runtime.distributions} packages, ${Math.round((runtime.total_bytes||0)/1048576)} MB, hash-verified`}
+      {runtimeStatus==='downloading'&&` · ${Math.round((runtime.downloaded_bytes||0)/1048576)}/${Math.round((runtime.total_bytes||0)/1048576)} MB${runtime.current_file?` · ${runtime.current_file}`:''}`}
+      {runtimeStatus==='not_downloaded'&&' · Kokoro has no engine to load without them'}
+      {(runtimeStatus==='error'||runtimeStatus==='unsupported')&&runtime.error&&` · ${runtime.error}`}
+    </p>}
     <p aria-live="polite">
       <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>
       Kokoro model::{status}
@@ -2650,7 +2685,8 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
       {g2pStatus==='not_downloaded'&&' · Kokoro cannot pronounce anything without it'}
       {g2pStatus==='error'&&g2p.error&&` · ${g2p.error}`}
     </p>}
-    {(waiting||g2pWaiting)&&<button disabled={starting} onClick={()=>void download()}>{label}</button>}
+    {(waiting||g2pWaiting||runtimeWaiting)&&<button disabled={starting||busy} onClick={()=>void download()}>{label}</button>}
+    {runtime?.supported===false&&<p class="tts-lexicon-hint tts-lexicon-error">Kokoro cannot run on this platform: {runtime.error}. Use the OS voice engine instead.</p>}
   </div>
 }
 
@@ -2665,7 +2701,7 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
  * because `faster_whisper.download_model` disables the hub's progress hook and
  * there is nothing to read. Elapsed seconds is a reading; a bar would be fiction.
  */
-function WhisperModelPanel({initial}:{initial:WhisperModelInfo[]|null}){
+function WhisperModelPanel({initial,runtime}:{initial:WhisperModelInfo[]|null;runtime:VoiceRuntimeInfo|null}){
   const [models,setModels]=useState<WhisperModelInfo[]|null>(initial)
   const [busy,setBusy]=useState('')
   const refresh=()=>void api<{models:WhisperModelInfo[]}>('GET','/api/voice/models/whisper')
@@ -2691,21 +2727,32 @@ function WhisperModelPanel({initial}:{initial:WhisperModelInfo[]|null}){
     finally{setBusy('')}
   }
   if(!models?.length)return null
+  // The libraries are a *step*, not a separate errand. Drawn without a button
+  // because this panel's own Download starts them first and chains the weights
+  // when they land (`routes/voice.whisper_model_download`), and because the
+  // button that used to be hidden here - gated on `backend_installed`, which is
+  // false precisely when the libraries are absent - left a fresh install reading
+  // "faster-whisper not installed" with nothing to press.
+  const blocked=Boolean(runtime)&&runtime?.supported===false
   return <div class="kokoro-model-panel">
+    {runtime&&<VoiceRuntimePanel initial={runtime} action={false}/>}
     {models.map(entry=>{
       const size=entry.size_hint?` · ${entry.size_hint}`:''
+      const acquiring=Boolean(runtime)&&runtime?.status==='downloading'
       return <p key={entry.model} aria-live="polite">
-        <span class={`state-dot ${entry.status==='ready'?'idle':entry.status==='downloading'?'running':'stopped'}`}/>
-        Speech model {entry.model}::{entry.backend_installed?entry.status:'faster-whisper not installed'}
+        <span class={`state-dot ${entry.status==='ready'?'idle':entry.status==='downloading'||acquiring?'running':'stopped'}`}/>
+        Speech model {entry.model}::{entry.status}
         {entry.status==='downloading'&&` · downloading${size}${entry.elapsed_seconds?` · ${Math.round(entry.elapsed_seconds)}s elapsed`:''}`}
-        {entry.status==='not_downloaded'&&entry.backend_installed&&` · nothing has been downloaded${size}`}
+        {entry.status!=='downloading'&&acquiring&&' · waiting for the speech libraries'}
+        {entry.status==='not_downloaded'&&!acquiring&&` · nothing has been downloaded${size}`}
         {entry.status==='error'&&entry.error&&` · ${entry.error}`}
-        {entry.backend_installed&&entry.status!=='ready'&&entry.status!=='downloading'&&
+        {!blocked&&!acquiring&&entry.status!=='ready'&&entry.status!=='downloading'&&
           <button disabled={busy===entry.model} onClick={()=>void download(entry.model)}>
             {entry.status==='error'?'Retry download':`Download ${entry.model}${entry.size_hint?` (${entry.size_hint})`:''}`}
           </button>}
       </p>
     })}
+    {blocked&&<p class="tts-lexicon-hint tts-lexicon-error">On-device dictation cannot run on this platform: {runtime?.error}. Use Windows Speech Recognition instead.</p>}
   </div>
 }
 

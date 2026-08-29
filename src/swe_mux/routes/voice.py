@@ -147,17 +147,7 @@ async def voice_runtime_download(request: web.Request) -> web.Response:
     """
     voice: VoiceService = request.app[keys.VOICE]
     events: EventBus = request.app[keys.EVENTS]
-
-    async def progress(status: dict[str, Any]) -> None:
-        await events.emit("voice_model_progress", source="daemon", model="runtime", **status)
-        if status.get("status") == "ready":
-            # `WhisperModelStore` memoizes whether `faster_whisper` imports, and
-            # it answered "no" before this download existed. Without this the
-            # dictation panel keeps reporting a missing backend until a restart,
-            # on an install that just acquired one.
-            voice.whisper_models.forget_backend()
-
-    started = voice.voice_runtime.start_download(progress)
+    started = voice.voice_runtime.start_download(_runtime_progress(events, voice))
     return json_response({"started": started, **voice.voice_runtime.status()}, 202)
 
 
@@ -195,6 +185,33 @@ async def whisper_model_download(request: web.Request) -> web.Response:
     async def progress(status: dict[str, Any]) -> None:
         await events.emit("voice_model_progress", source="daemon", **status)
 
+    # One press for dictation as well, and the sequencing here is why this is a
+    # chain rather than three parallel starts like the Kokoro press.
+    # `WhisperModelStore._download` calls `backend_installed()`, so it cannot run
+    # until the speech closure is on `sys.path`; started in parallel it would fail
+    # immediately and read as "the weights download is broken".
+    #
+    # So the closure goes first and the weights are started from its completion.
+    # The alternative - refusing and telling the operator to press again in a
+    # minute - is the defect this whole change exists to remove.
+    if not voice.voice_runtime.ready():
+        base = _runtime_progress(events, voice)
+
+        async def chained(status: dict[str, Any]) -> None:
+            await base(status)
+            if status.get("status") == "ready":
+                with suppress(VoiceModelError):
+                    voice.whisper_models.start_download(name, progress)
+
+        runtime_started = voice.voice_runtime.start_download(chained)
+        return json_response(
+            {
+                "started": runtime_started,
+                "waiting_on": "voice_runtime",
+                **voice.whisper_models.status(name),
+            },
+            202,
+        )
     try:
         started = voice.whisper_models.start_download(name, progress)
     except VoiceModelError as exc:
@@ -286,18 +303,29 @@ async def voice_lexicon_preview(request: web.Request) -> web.Response:
 
 
 async def kokoro_model_download(request: web.Request) -> web.Response:
-    """Start the pinned, hash-verified Kokoro download (idempotent while running).
+    """Acquire everything Kokoro read-aloud needs, on one press.
 
     Progress reaches every client over the event stream, because the download
     outlives any single request and may have been started from another device.
 
-    Two downloads, one press. The spaCy G2P model is a prerequisite of the same
-    engine - Kokoro's weights cannot phonemize a word without it - so asking the
-    operator to find a second button for a 12 MB companion of a 106 MB download
-    would be an interface describing an implementation. They stay separate stores
-    and separate progress streams because they can fail independently, and a
-    single state would have to lie about one of them; `model` on the event says
-    which is speaking, and the Kokoro panel ignores the one that is not its own.
+    **Three downloads, one press**, and the third was added on 2026-08-29 after
+    the two-press version failed a real user. Kokoro needs the speech libraries
+    (`voice_runtime`), the voice weights, and the spaCy pronunciation model; until
+    this change the libraries had a separate button in a separate panel, so an
+    operator could press this one, watch both of its bars finish, reasonably
+    conclude he was done, and get a failure at the first spoken sentence. Asking
+    the user to be the integrator of three stores is the interface describing an
+    implementation.
+
+    They remain three stores with three progress streams, because they fail
+    independently and a single merged state would have to lie about which one
+    failed. `model` on the event says which is speaking (`runtime`, `kokoro`,
+    `g2p`) and the panel draws one line each, so a failure names its own store and
+    offers a retry for that store alone. The composition is here, in the route
+    that owns "make read-aloud work", rather than inside any store.
+
+    The three are started in parallel because none of them needs another: all
+    three are plain verified fetches, and only *loading* needs all three present.
     """
     voice: VoiceService = request.app[keys.VOICE]
     events: EventBus = request.app[keys.EVENTS]
@@ -314,9 +342,34 @@ async def kokoro_model_download(request: web.Request) -> web.Response:
 
     started = voice.kokoro_models.start_download(progress)
     g2p_started = voice.g2p_model.start_download(g2p_progress)
-    return json_response(
-        {"started": started or g2p_started, **voice.kokoro_model_status()}, 202
+    runtime_started = voice.voice_runtime.start_download(
+        _runtime_progress(events, voice)
     )
+    return json_response(
+        {
+            "started": started or g2p_started or runtime_started,
+            **voice.kokoro_model_status(),
+        },
+        202,
+    )
+
+
+def _runtime_progress(events: EventBus, voice: VoiceService) -> Any:
+    """The speech closure's progress callback, shared by every press that needs it.
+
+    Emitting under `model="runtime"` is what keeps three concurrent downloads
+    legible in one panel. Clearing `WhisperModelStore`'s memo on completion is not
+    cosmetic: that store caches an import attempt made before the closure existed
+    on `sys.path`, so without this an install that has just acquired the libraries
+    keeps reporting a missing dictation backend until it is restarted.
+    """
+
+    async def progress(status: dict[str, Any]) -> None:
+        await events.emit("voice_model_progress", source="daemon", model="runtime", **status)
+        if status.get("status") == "ready":
+            voice.whisper_models.forget_backend()
+
+    return progress
 
 
 async def voice_transcribe(request: web.Request) -> web.Response:
