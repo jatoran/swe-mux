@@ -133,7 +133,8 @@ Interrupt cancels the running task; nothing already executed is undone.
   `type_into_session` also stages text but needs the session's terminal already mounted on the device, so it is the wrong tool immediately after a spawn.
 - **`spawn_session` also carries the model, and an unusable one is a sentence rather than a dead pane.**
   "Open an opus session in X" passes `model` in the harness's own spelling; the daemon owns the mapping to that CLI's argv (`launch-profiles.md`, `backends.md`), so neither the assistant nor the browser ever names a flag.
-  The check happens in preflight, before a card exists, because the failure it replaces is a pane that appears and dies with the flag echoed back at it: a harness that declares no model argument and a name that harness would not recognize are both refused there, each naming what would work instead.
+  The check happens in preflight, before a card exists, because the failure it replaces is a pane that appears and dies with the flag echoed back at it: a name the harness would not recognize is refused there, naming the vocabulary that would work instead.
+  Which names those are is per harness and differs sharply between them (`backends.md`): two of the five fuzzy-match anything model-shaped, one takes `provider/model` only, and two have real namespaces.
   Preflight also rewrites the argument to the canonical spelling and **pins the harness it validated against**, so the card the operator confirms and the launch they get cannot differ - "opus 5" is restated and spawned as `claude-opus-5`.
   Pinning happens only when a model was asked for; an ordinary spawn still falls through the daemon's full default chain, which reads the Project's committed configuration this layer cannot see.
   A model asked for in a Project with no default harness is answered by asking for one rather than validated against a guess, because a guess would make the card name a CLI the spawn might not pick.

@@ -31,7 +31,7 @@ step "pytest"
 #
 # `--durations=25` stays on so a test that grows slow is visible in the gate's
 # own output rather than only in a run someone thought to ask for.
-uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
+uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag"
 
 step "ruff"
 uv run ruff check src/swe_mux tests packaging

@@ -82,6 +82,14 @@ Replacement is what makes the two coexist.
 Which names are accepted is `HarnessDescriptor.model_selection` (`backends.md`), so the refusal happens before anything spawns.
 The model is composed in after the profile slots and before a seed prompt, because it is a flag and the seed prompt is the positional that must stay last.
 
+The resolved value is also **retained on the session record** as `model_requested`, beside the argv it was composed into.
+The command line is not a readable answer to "what did this launch ask for": there are two spellings for Codex, a resume replays whatever the original launch built, and re-parsing a command line to recover one field is the kind of derivation that goes wrong quietly.
+It is deliberately not cleared when a conversation is replaced in place (`/clear`), because the flag on the command line still applies to whatever conversation the process is on.
+What is done with it is `model_agreement` (`backends.md`): the launch value against the model the harness reports running.
+
+`--smol`, `--slow`, and `--plan` (omp's models for its other roles) are deliberately **not** declared and therefore never stripped.
+They are not the session's model, and unsetting a profile's careful role assignment on behalf of a request that named only a model would change more than the request asked for.
+
 ### Reserved argv
 
 `HarnessDescriptor.reserved_launch_args` declares the argv an adapter builds for itself.
@@ -166,7 +174,8 @@ An agent profile named there would make every plain `New terminal` unspawnable.
 - `src/swe_mux/config.py` - `LaunchProfile`, validation, the reserved-argument check at save time.
 - `src/swe_mux/profiles.py` - `find_profile`, `resolve_profile` (shell), `resolve_agent_profile`, `derive_capabilities`, `profile_payload`.
 - `frontend/src/commandLine.ts` - the Windows-rules tokenizer and the launch preview.
-- `src/swe_mux/harness.py` - `reserved_launch_args`, `reserved_launch_arg_conflict`, `ModelSelection`, `strip_model_args`, `model_launch_args`, `model_refusal`.
+- `src/swe_mux/harness.py` - `reserved_launch_args`, `reserved_launch_arg_conflict`, `ModelSelection`, `ModelCatalog`, `strip_model_args`, `model_launch_args`, `model_refusal`, `model_agreement`.
+- `src/swe_mux/model_catalog.py` - asking a CLI which models it has, for a refusal that suggests and for `list_models`.
 - `src/swe_mux/server.py` - `_spawn_from_body`, `_project_agent_profile`.
 - `src/swe_mux/spawn_contract.py`
 - `frontend/src/Settings.tsx` - the profile editor.

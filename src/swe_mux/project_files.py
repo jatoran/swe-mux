@@ -1840,6 +1840,12 @@ MAX_SPAWN_REQUEST_PROMPT = 8000
 _REQUEST_STRING_FIELDS = (
     "prompt",
     "backend",
+    # The model the requester asked its new session's CLI to run. On the allowlist
+    # rather than merely written by the requester: this is a closed filter, so a
+    # field missing from it survives being written and then vanishes on the way
+    # back out - the card would show no model and the approval would spawn an
+    # ordinary session, with nothing anywhere saying the request had been dropped.
+    "model",
     "name",
     "reason",
     "cwd",

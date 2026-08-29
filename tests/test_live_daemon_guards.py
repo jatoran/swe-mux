@@ -35,6 +35,11 @@ LIVE_MARKS = (
     "live_mcp",
     "live_edge_tts",
     "live_daemon",
+    # Runs each installed agent CLI to re-ask it what mux's registry claims about
+    # its model flag. No provider quota - every invocation is either a local
+    # listing or a model the CLI is expected to refuse before sending anything -
+    # but it needs the CLIs installed and authenticated, so it is not a gate.
+    "live_model_flag",
 )
 
 #: Every file that carries a copy of the deselect expression, found by searching
