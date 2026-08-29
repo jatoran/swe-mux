@@ -356,6 +356,35 @@ continues to own every terminal.
   The build-extras preflight is skipped for an archive install: the released bundle already
   satisfies the LGPL relink obligation that check protects, and requiring a local build
   environment would refuse exactly the install that needs none.
+- **Installing a release writes the files that changed and hard-links the rest**, which is
+  where an update's minutes went. The cost was never the download or the compilation; it was
+  Windows image-scanning a tree of files the machine had never seen, and it is the measured
+  reason `APP_HEALTH_TIMEOUT_SECONDS` is 600 rather than 300. A hard-linked file is the same
+  filesystem object the scanner already has a verdict for, so the quantity being minimized is
+  **files touched** and not bytes transferred - those pull in different directions and only
+  the first collects the saving. Measured 2026-08-29 over two real consecutive builds of this
+  project, an interval that included a frontend rebuild *and* the eviction of 101 MB of
+  `playwright/driver`: 2874 of 2937 files and 92.3% of 420 MB were byte-identical, leaving 63
+  files and 32.4 MB to write, 25.1 MB of which is `swe-mux.exe` itself.
+  A file is reused only when its SHA-256 equals the one the incoming manifest publishes for
+  that path, so the staged tree is byte-for-byte the release by construction; nothing keys off
+  a version, a timestamp or a filename. The whole-archive SHA-256 is untouched and still the
+  root of all of it, because the manifest is a member of the archive that hash covers - this
+  adds one hash-verified document under an existing trust boundary rather than a new one.
+  And every refusal inside it is "extract the whole archive instead" rather than "do not
+  install", so a release from before the manifest existed, an unreadable installed bundle, a
+  manifest that disagrees with its archive, or a filesystem without hard links costs the
+  saving and never the update (`../../technical/backend/packages/daemon-runtime.md`,
+  `../../development/ROADMAP.md` Phase 21 Workstream B).
+- **The per-file manifest is published twice from one set of bytes.** `files.json` is the
+  release archive's first member, so the swap reads it out of the single file it was handed
+  and under the digest it already checked; and `swe-mux-<version>-<platform>-<arch>.files.json`
+  sits beside the archive as its own artifact, so the daemon can plan the delta - and tell the
+  operator whether this update rewrites 32 MB or 420 MB - *before* committing to the download.
+  The sidecar needs no step in `release.yml`: `github-release` uploads `dist/*` and
+  `update-manifest` enumerates the same directory, so it lands in `version.json` with a real
+  SHA-256 by construction. The daemon's plan is advisory and nothing branches on it; the swap
+  recomputes it authoritatively from the archive's own copy.
 - **Every built bundle describes itself in `bundle.json`** at its root (schema, version,
   `supervisor_protocol`, platform, build stamp), written by `build_desktop.describe_bundle`
   after the license verification. Every bundle, not only released ones: the updater refuses
@@ -528,8 +557,11 @@ person with no shortcut, no tray, and no idea where anything went.
 - Frozen-app updater: `src/swe_mux/update_install.py`, `src/swe_mux/routes/update.py`
 - Bundle self-description and archive rules: `src/swe_mux/bundle_metadata.py`,
   `src/swe_mux/bundle_archive.py`
+- Per-file manifest and delta staging: `src/swe_mux/bundle_manifest.py`,
+  `src/swe_mux/bundle_stage.py`
 - Shared redeploy launch (endpoint and updater): `src/swe_mux/redeploy_launch.py`
 - Updater tests: `tests/test_update_install.py`
+- Delta tests: `tests/test_bundle_manifest.py`, `tests/test_bundle_stage.py`
 - Closure license gate and notice generation: `packaging/license_audit.py`,
   `packaging/third_party_licenses.json`, `THIRD-PARTY-NOTICES.md`
 - Lifecycle tests: `tests/test_desktop.py`

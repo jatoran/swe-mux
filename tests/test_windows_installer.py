@@ -580,7 +580,7 @@ def test_the_writer_produces_the_container_its_own_name_promises(
     # `.tar.gz` name - which is a refusal on the far side of a 400 MB download.
     bundle = make_bundle(tmp_path / "swe-mux", version="2.0.0", platform="linux-x64")
     monkeypatch.setattr(package_desktop_release, "release_platform_tag", lambda: "linux-x64")
-    archive = package_desktop_release.build_archive(bundle, tmp_path / "out")
+    archive, _ = package_desktop_release.build_archive(bundle, tmp_path / "out")
     assert archive.name == "swe-mux-2.0.0-linux-x64.tar.gz"
     assert tarfile.is_tarfile(archive)
     assert read_archive_metadata(archive).platform == "linux-x64"
@@ -591,7 +591,7 @@ def test_the_windows_writer_still_produces_a_zip(tmp_path: Path) -> None:
     bundle = make_bundle(
         tmp_path / "swe-mux", version="2.0.0", platform=release_platform_tag()
     )
-    archive = package_desktop_release.build_archive(bundle, tmp_path / "out")
+    archive, _ = package_desktop_release.build_archive(bundle, tmp_path / "out")
     assert archive.name == release_archive_name("2.0.0", release_platform_tag())
     if archive.name.endswith(ZIP_SUFFIX):
         assert zipfile.is_zipfile(archive)
