@@ -354,11 +354,13 @@ async def _spawn_from_body(
                 profile_id,
                 len(agent_profile.argv),
             )
+    resolved_model = ""
     if spec.model:
         # After the profile slots and before the seed prompt: the model is a flag
         # that replaces whatever those slots set, and the seed prompt is the
         # positional that must stay last on the command line.
-        argv = apply_spawn_model(backend, argv, resolve_spawn_model(backend, spec.model))
+        resolved_model = resolve_spawn_model(backend, spec.model)
+        argv = apply_spawn_model(backend, argv, resolved_model)
     if spec.seed_text:
         if not is_agent_harness(backend):
             raise ValueError({"seed_text": "seed prompts require an agent backend"})
@@ -398,6 +400,11 @@ async def _spawn_from_body(
         extra_env=dict(spec.env),
         project_label=owning_project.name,
     )
+    if resolved_model:
+        # Only when a model was asked for, like every other optional key here: a
+        # test double or a future manager with a narrower signature must not have
+        # to grow an argument to serve an ordinary spawn.
+        spawn_values["model_requested"] = resolved_model
     if worktree_project_root is not None:
         spawn_values["worktree_project_root"] = worktree_project_root
     if initial_output:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import time
@@ -14,11 +15,14 @@ from swe_mux.background_tasks import background
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.provider_accounts import (
+    LOGIN_SUCCESS_LINGER_SECONDS,
     SELECTION_GUARD_LOOP,
+    ProviderAccountConflict,
     ProviderAccountError,
     ProviderAccountManager,
 )
 from swe_mux.server import create_app
+from tests.support.settle import until
 
 
 def claude_auth(token: str, email: str) -> dict[str, Any]:
@@ -1094,8 +1098,228 @@ def test_provider_account_routes_are_registered(tmp_path: Path) -> None:
 
     assert ("GET", "/api/provider-accounts") in routes
     assert ("POST", "/api/provider-accounts/{provider}/capture") in routes
+    assert ("POST", "/api/provider-accounts/{provider}/login") in routes
     assert ("POST", "/api/provider-accounts/{provider}/{account_id}/select") in routes
     assert ("DELETE", "/api/provider-accounts/{provider}/{account_id}") in routes
+
+
+def test_login_dismiss_is_not_reachable_as_an_account_named_login(tmp_path: Path) -> None:
+    """Three segments, so the two-segment account routes cannot claim it.
+
+    `DELETE /api/provider-accounts/{provider}/{account_id}` would happily read
+    "login" as an account id, which is why dismissal is not spelled that way.
+    """
+    app = create_app(Config(data_dir=tmp_path))
+    routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
+
+    assert ("POST", "/api/provider-accounts/{provider}/login/dismiss") in routes
+
+
+def _login_manager(
+    tmp_path: Path, run: Callable[..., Any]
+) -> tuple[ProviderAccountManager, Path]:
+    """A manager whose provider CLI is `run`, with everything else off the network."""
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    manager._run_command = MethodType(run, manager)  # type: ignore[method-assign]
+    return manager, system_auth
+
+
+@pytest.mark.asyncio
+async def test_sign_in_returns_at_once_and_reports_its_own_progress(
+    tmp_path: Path,
+) -> None:
+    """The request that starts a login is not the request that learns how it went.
+
+    A provider CLI can hold the daemon for the full `LOGIN_TIMEOUT_SECONDS` while a
+    human finishes an OAuth flow in a browser. While that was one blocked HTTP
+    request, whoever asked owned the only copy of the outcome: closing the panel,
+    reloading, or asking from a second device lost it entirely.
+    """
+    release = asyncio.Event()
+
+    async def run(self: ProviderAccountManager, provider: str, args: list[str], **kw: Any) -> str:
+        await release.wait()
+        return ""
+
+    manager, system_auth = _login_manager(tmp_path, run)
+    try:
+        started = await manager.start_login("claude")
+
+        # Returned while the CLI is still running, and says so.
+        assert started["login"]["claude"]["state"] == "running"
+        assert started["login"]["codex"] is None
+        assert not started["accounts"]
+        # Any other reader of the same daemon sees the same one.
+        assert manager.snapshot()["login"]["claude"]["state"] == "running"
+
+        system_auth.write_text(
+            json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8"
+        )
+        release.set()
+        await until(
+            lambda: manager.snapshot()["login"]["claude"]["state"] == "succeeded",
+            what="login reports success",
+        )
+
+        finished = manager.snapshot()
+        assert finished["login"]["claude"]["label"] == "one@example.com"
+        assert finished["login"]["claude"]["account_id"] == finished["selected"]["claude"]
+        assert finished["login"]["claude"]["error"] is None
+        assert len(finished["accounts"]) == 1
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_sign_in_keeps_its_reason_and_is_never_retried(
+    tmp_path: Path,
+) -> None:
+    """The record is the error's only home, and a relaunched browser is not a retry.
+
+    Logins run under the task supervisor, whose ordinary response to a raising
+    coroutine is to restart it. Restarting *this* one would reopen a login the
+    operator just cancelled, so the failure is recorded rather than raised.
+    """
+    attempts = 0
+
+    async def run(self: ProviderAccountManager, provider: str, args: list[str], **kw: Any) -> str:
+        nonlocal attempts
+        attempts += 1
+        raise ProviderAccountError("claude command failed: not logged in")
+
+    manager, _ = _login_manager(tmp_path, run)
+    try:
+        await manager.start_login("claude")
+        await until(
+            lambda: manager.snapshot()["login"]["claude"]["state"] == "failed",
+            what="login reports failure",
+        )
+
+        failed = manager.snapshot()["login"]["claude"]
+        assert failed["error"] == "claude command failed: not logged in"
+        assert failed["account_id"] is None
+        # A supervisor restart would show up here as a second run.
+        await asyncio.sleep(0.05)
+        assert attempts == 1
+        assert manager.snapshot()["login"]["claude"]["state"] == "failed"
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_second_sign_in_for_one_provider_is_refused_while_the_first_runs(
+    tmp_path: Path,
+) -> None:
+    release = asyncio.Event()
+
+    async def run(self: ProviderAccountManager, provider: str, args: list[str], **kw: Any) -> str:
+        await release.wait()
+        return ""
+
+    manager, system_auth = _login_manager(tmp_path, run)
+    try:
+        await manager.start_login("claude")
+        with pytest.raises(ProviderAccountConflict):
+            await manager.start_login("claude")
+        # The other provider is untouched: one login per provider, not per daemon.
+        assert (await manager.start_login("codex"))["login"]["codex"]["state"] == "running"
+    finally:
+        release.set()
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_dismissing_a_running_sign_in_reaps_it(tmp_path: Path) -> None:
+    """Cancel and clear are the same gesture, so they are the same endpoint.
+
+    Cancelling matters because a misclick otherwise books the provider for five
+    minutes: `start_login` refuses a second run while one is live.
+    """
+    started = asyncio.Event()
+
+    async def run(self: ProviderAccountManager, provider: str, args: list[str], **kw: Any) -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return ""
+
+    manager, _ = _login_manager(tmp_path, run)
+    try:
+        await manager.start_login("claude")
+        await started.wait()
+
+        cleared = await manager.dismiss_login("claude")
+
+        assert cleared["login"]["claude"] is None
+        # And the slot is free again rather than held by a task nobody is watching.
+        assert (await manager.start_login("claude"))["login"]["claude"]["state"] == "running"
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_finished_sign_in_lingers_only_long_enough_to_be_seen(
+    tmp_path: Path,
+) -> None:
+    """Success expires; failure does not.
+
+    The account appearing in the list is the real confirmation of a success, so its
+    banner only has to outlast the round trip that shows it. A failure carries the
+    only copy of the reason and stays until it is dismissed.
+    """
+
+    async def run(self: ProviderAccountManager, provider: str, args: list[str], **kw: Any) -> str:
+        return ""
+
+    manager, system_auth = _login_manager(tmp_path, run)
+    try:
+        system_auth.write_text(
+            json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8"
+        )
+        await manager.start_login("claude")
+        await until(
+            lambda: manager.snapshot()["login"]["claude"] is not None
+            and manager.snapshot()["login"]["claude"]["state"] == "succeeded",
+            what="login reports success",
+        )
+
+        manager._login["claude"]["finished_at"] = (
+            time.time() - LOGIN_SUCCESS_LINGER_SECONDS - 1
+        )
+        assert manager.snapshot()["login"]["claude"] is None
+
+        # The same age does nothing to a failure.
+        manager._login["claude"]["state"] = "failed"
+        manager._login["claude"]["error"] = "claude login timed out"
+        assert manager.snapshot()["login"]["claude"]["error"] == "claude login timed out"
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_sign_in_validates_its_replacement_target_before_starting_a_browser(
+    tmp_path: Path,
+) -> None:
+    """A bad `replace_id` is a rejected request, not a login to sit through first."""
+    ran = False
+
+    async def run(self: ProviderAccountManager, provider: str, args: list[str], **kw: Any) -> str:
+        nonlocal ran
+        ran = True
+        return ""
+
+    manager, _ = _login_manager(tmp_path, run)
+    try:
+        with pytest.raises(ProviderAccountError, match="not found"):
+            await manager.start_login("claude", replace_id="no-such-account")
+        assert not ran
+        assert manager.snapshot()["login"]["claude"] is None
+    finally:
+        await manager.stop()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows npm .cmd shim resolution")

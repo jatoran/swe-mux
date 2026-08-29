@@ -26,7 +26,13 @@ def test_provider_account_ui_surfaces_identity_verification_and_duplicates() -> 
     assert "identity_source?:IdentitySource|null" in source
     assert "conflict?:AccountConflict|null" in source
     assert "match_hint?:MatchHint|null" in source
-    assert "verified with the provider" in source
+    # Two identity states, so exactly two words, with the sentence in the tooltip.
+    # This used to be three strings ("verified with the provider", "unverified
+    # identity", "identity unverified") for those same two states, which reads on a
+    # crowded row as three distinct conditions.
+    assert "account.identity_source==='token'?'verified':'unverified'" in source
+    assert "Identity confirmed by asking the provider with these credentials." in source
+    assert "Identity has not been confirmed against the provider yet." in source
     assert "Quota polling is suspended" in source
     assert "relink only if this really is that account" in source
     assert "/adopt" in source
@@ -36,6 +42,99 @@ def test_provider_account_ui_surfaces_identity_verification_and_duplicates() -> 
     assert "Sessions already running follow the switch" in source
     assert ".account-conflict{" in css
     assert ".account-identity.verified{" in css
+
+
+def test_account_switcher_can_start_a_sign_in_without_opening_settings() -> None:
+    """The popover is a way in, not only a way to switch between what exists.
+
+    With nothing saved it used to print "No saved accounts" beside a `manage…`
+    button - which is the one screen a new install always lands on, and the one
+    with no path forward on it.
+    """
+    source = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "useProviderLogin" in source
+    assert "/login/dismiss" in source
+    # Per-provider control on the heading line, and the empty state itself is the
+    # call to action rather than a sentence about being empty.
+    assert 'class="account-section-head"' in source
+    assert 'class="account-signin"' in source
+    assert 'class="account-empty-cta"' in source
+    assert "sign in to {provider}" in source
+    assert "<p>No saved accounts</p>" not in source
+    assert ".account-section-head{" in css
+    assert ".account-popover button.account-empty-cta{" in css
+
+
+def test_running_sign_in_is_daemon_state_that_every_client_sees() -> None:
+    """A login outlives the request that started it, so its progress is polled.
+
+    The provider CLI can hold the daemon for `LOGIN_TIMEOUT_SECONDS` while a human
+    finishes an OAuth flow. While that was one blocked HTTP request, whoever asked
+    owned the only copy of the outcome: closing the panel, reloading, or asking
+    from a second device lost it.
+    """
+    source = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
+        encoding="utf-8"
+    )
+    display = (ROOT / "frontend" / "src" / "providerAccountDisplay.ts").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "login?:Record<ProviderName,LoginState|null>" in source
+    assert "state:'running'|'succeeded'|'failed'" in display
+    assert "function LoginProgress" in source
+    # Both surfaces draw the same one.
+    assert source.count("<LoginProgress ") == 2
+    # A running sign-in resolves on human time, so it gets its own poll cadence.
+    assert "const LOGIN_POLL_MS" in source
+    assert "awaitingLogin?LOGIN_POLL_MS:intervalMs" in source
+    for state in ("running", "succeeded", "failed"):
+        assert f".account-login.{state}{{" in css
+    # The command the tooltip names is the daemon's, built from the configured
+    # executable. A copy compiled into the browser would still have named the shipped
+    # default on an install that repointed `harness_exe` - which is the drift the
+    # harness-name rule exists to stop.
+    assert "login_commands?:Record<ProviderName,string>" in source
+    assert "signInTitle(status?.login_commands,provider)" in source
+    assert "claudeai" not in source
+
+
+def test_account_settings_states_policy_once_and_only_where_it_acts() -> None:
+    """The panel's prose was ~160 static words before any control, with two providers.
+
+    What is left is the part that changes: the live-auth block now renders only in
+    the states that need explaining and carry the relink action, the reference text
+    folds away, and the two add buttons carry their own explanation.
+    """
+    source = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    # Reference, not instruction: folded, but still the same sentences.
+    assert 'class="account-explainer"' in source
+    assert "<summary>How switching works</summary>" in source
+    assert "Sessions already running follow the switch" in source
+    assert "startup never restores an older saved account" in source
+    # Only drawn when it is not simply restating the row marked ◆ active below it.
+    assert "current?.state!=='saved'&&<div class={`account-current" in source
+    # The standing paragraph under the two add buttons became their tooltips, and
+    # the optional label input is gone - the daemon names a slot from the identity
+    # it just verified, and the list row renames in place.
+    assert 'class="account-help"' not in source
+    assert "optional label" not in source
+    assert "sign in + save" in source
+    assert "already signed in? save current login" in source
+    # `/verify` is one install-wide endpoint, so it is one button, not one per
+    # provider heading sharing a busy key with its twin.
+    assert source.count("'/api/provider-accounts/verify'") == 1
+    assert 'class="account-settings-head"' in source
+    assert ".account-explainer>summary{" in css
 
 
 def test_provider_account_ui_marks_external_and_unreadable_states() -> None:

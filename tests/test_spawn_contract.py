@@ -263,11 +263,30 @@ def test_a_model_meant_for_another_harness_is_refused_by_name() -> None:
     assert "does not recognize" in message and "gpt-" in message
 
 
-def test_a_harness_with_no_measured_model_argument_refuses_and_says_where_to_set_one() -> None:
-    for harness in ("omp", "pi", "opencode"):
-        with pytest.raises(ValueError) as error:
-            resolve_spawn_model(harness, "anything")
-        assert "launch profile" in error.value.args[0]["model"]
+def test_every_agent_harness_can_now_be_launched_on_a_model() -> None:
+    """No harness is left on the "unmeasured" branch, and each takes its own spelling.
+
+    All five were measured against their own CLIs on 2026-08-29 (`harness.py`
+    carries the evidence per declaration), so `model_selection=None` - and the
+    refusal naming a launch profile as the way through - is now unreachable
+    through the registry. The branch stays in `model_refusal` for a harness added
+    later whose flag nobody has measured yet; what must not happen is a *guessed*
+    flag, which is why this asserts the accepted spelling rather than only that
+    something was accepted.
+    """
+    assert resolve_spawn_model("claude", "opus") == "opus"
+    assert resolve_spawn_model("codex", "gpt-5.6-terra") == "gpt-5.6-terra"
+    # Fuzzy matchers: the CLI resolves the pattern, so mux checks only its shape.
+    assert resolve_spawn_model("omp", "opus") == "opus"
+    assert resolve_spawn_model("pi", "openai-codex/gpt-5.4:high") == "openai-codex/gpt-5.4:high"
+    # opencode addresses models one way only, and says so rather than forwarding a
+    # bare name its own error would not explain.
+    assert resolve_spawn_model("opencode", "anthropic/claude-sonnet-4-5") == (
+        "anthropic/claude-sonnet-4-5"
+    )
+    with pytest.raises(ValueError) as error:
+        resolve_spawn_model("opencode", "sonnet")
+    assert "provider-qualified" in error.value.args[0]["model"]
 
 
 def test_a_model_that_would_read_as_a_flag_is_never_accepted() -> None:

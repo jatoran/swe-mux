@@ -311,6 +311,30 @@ async def test_a_requested_model_replaces_the_profiles_and_precedes_the_seed_pro
     assert "sonnet" not in args
     assert args[:3] == ["--verbose", "--model", "claude-opus-5"]
     assert args[-1] == "fix the tests"
+    # Retained beside the argv it was composed into. The command line is not a
+    # readable answer - two spellings, and a resume replays whatever the original
+    # launch built - so nothing downstream should have to re-parse one to learn
+    # what the launch asked for.
+    assert captured[0]["model_requested"] == "claude-opus-5"
+
+
+async def test_a_spawn_that_names_no_model_carries_no_requested_one(
+    tmp_path: Path,
+) -> None:
+    """Optional like every other key here, so a manager with a narrower signature
+    does not have to grow an argument to serve an ordinary spawn."""
+    config = Config(shell_profiles=[agent_profile()])
+    captured: list[dict[str, Any]] = []
+
+    async def spawn(**kwargs: Any) -> Any:
+        captured.append(kwargs)
+        return SimpleNamespace(record=SimpleNamespace(snapshot=lambda: kwargs))
+
+    request = _spawn_request(
+        tmp_path, config, spawn, {"backend": "claude", "project_id": "default"}
+    )
+    await spawn_session(cast(Any, request))
+    assert "model_requested" not in captured[0]
 
 
 async def test_a_model_the_resolved_harness_cannot_take_refuses_the_spawn(

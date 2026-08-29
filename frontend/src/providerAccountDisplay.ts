@@ -54,6 +54,30 @@ export function providerQuotaWindows(
 }
 
 /** Shared severity band so every condensed indicator colours the same way. */
+/** A sign-in the daemon is running, or how the last one ended. */
+export type LoginDisplay={provider:string;state:'running'|'succeeded'|'failed';started_at:number;finished_at?:number|null;account_id?:string|null;label?:string|null;error?:string|null;replacing?:string|null}
+export type LoginMap=Record<string,LoginDisplay|null>
+
+export const loginOf=(login:LoginMap|undefined|null,provider:string):LoginDisplay|null=>login?.[provider]||null
+/** Whether anything is in flight, which is what tightens the accounts poll. A `succeeded`
+ *  or `failed` entry is a result to read, not something to keep asking about. */
+export const loginRunning=(login?:LoginMap|null):boolean=>Object.values(login||{}).some(entry=>entry?.state==='running')
+/** What "sign in" will actually run on the daemon host, for the control's tooltip.
+ *
+ *  Read from the accounts payload rather than compiled in here. The daemon builds it from
+ *  the *configured* executable and the provider profile's own login argv, so a browser copy
+ *  would be a second version of a daemon-owned fact - and would still have named the default
+ *  CLI on an install that pointed `harness_exe` somewhere else. A daemon that does not
+ *  report one gets a tooltip that describes the action instead of naming a command it
+ *  cannot vouch for. */
+export const loginCommand=(commands:Record<string,string>|undefined|null,provider:string):string=>commands?.[provider]||''
+export const signInTitle=(commands:Record<string,string>|undefined|null,provider:string):string=>{
+  const command=loginCommand(commands,provider)
+  return command
+    ?`Runs ${command} on the daemon host and saves the account it produces.`
+    :`Runs ${provider}'s login on the daemon host and saves the account it produces.`
+}
+
 export type UsageBand='unknown'|'ok'|'warn'|'critical'
 export const usageBand=(percent?:number|null):UsageBand=>
   typeof percent!=='number'?'unknown':percent>=90?'critical':percent>=75?'warn':'ok'
