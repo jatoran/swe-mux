@@ -27,3 +27,33 @@ export async function harnessReady(page: Page, ...globals: string[]): Promise<vo
     globals,
   )
 }
+
+/**
+ * Let the animation frames that publish measured layout run before reading their output.
+ *
+ * Some values are not in the markup and are not set on mount: they are measured and written
+ * to the document by a callback scheduled on `requestAnimationFrame`. `--rail-clearance` is
+ * the one this was written for - `registerRailClearance` measures every rail that reaches the
+ * bottom of the viewport and publishes the tallest, because rail height is a row count times a
+ * density variable and cannot be a constant.
+ *
+ * A spec that asserts on such a value right after `expect(...).toBeVisible()` is racing the
+ * frame that produces it: the element is visible one frame before the measurement lands. That
+ * read returns the CSS default (`:root{--rail-clearance:0px}`), which looks exactly like the
+ * feature being broken. It failed that way on this host while passing on CI.
+ *
+ * Two frames rather than one, because the `ResizeObserver` path costs a frame to fire and
+ * another for the coalesced `measure` it schedules.
+ *
+ * **Wait for the frame, not for the value.** `waitForFunction(() => value !== default)` would
+ * also go green, and would assert nothing - the test's whole subject is that the published
+ * value is not the default.
+ */
+export async function measuredLayoutSettled(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      }),
+  )
+}

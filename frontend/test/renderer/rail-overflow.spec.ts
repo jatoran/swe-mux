@@ -1,4 +1,5 @@
 import { expect, test, type Page } from 'playwright/test'
+import { measuredLayoutSettled } from './harnessReady'
 
 /**
  * The pinned rail drawer and its complete-row popover, against real geometry and compositing.
@@ -190,6 +191,10 @@ test('an app-level message pinned to the viewport is lifted clear of the rail', 
   // because rail height is a row count times a density variable.
   await page.goto('/rail-overflow-harness.html?rows=2&hud=Copied to clipboard')
   await expect(page.locator(HUD)).toBeVisible()
+  // The HUD is visible one frame before `registerRailClearance` publishes its measurement,
+  // so reading here without this returns the `0px` CSS default and reads as the feature
+  // being broken rather than as a race.
+  await measuredLayoutSettled(page)
   const boxes = await page.evaluate(() => ({
     hud: document.querySelector('.interaction-hud')!.getBoundingClientRect().bottom,
     rail: document.querySelector('.terminal-action-rail')!.getBoundingClientRect().top,
