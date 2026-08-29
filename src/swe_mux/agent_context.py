@@ -22,8 +22,9 @@ import time
 import tomllib
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from .harness import HARNESSES, descriptor, instruction_harnesses
@@ -87,6 +88,19 @@ LEGACY_SYNC_DIRECTIONS = {
     "agents_to_claude": ("AGENTS.md", "CLAUDE.md"),
 }
 
+EntryKind = Literal["missing", "regular", "symlink"]
+
+
+@dataclass(frozen=True, slots=True)
+class InstructionEntry:
+    """One Project-root instruction directory entry without following unknown links."""
+
+    kind: EntryKind
+    revision: str
+    data: bytes | None = None
+    mode: int | None = None
+    link_target: str | None = None
+
 
 def _sync_direction(source_id: str, target_id: str) -> str:
     return f"{source_id}->{target_id}"
@@ -114,6 +128,17 @@ class AgentContextConflict(ValueError):
 
 def _revision(data: bytes | None) -> str:
     return "missing" if data is None else hashlib.sha256(data).hexdigest()
+
+
+def _link_revision(target: str) -> str:
+    return "link:" + hashlib.sha256(target.encode("utf-8")).hexdigest()
+
+
+def _instruction_id_for_filename(filename: str) -> str | None:
+    for source_id, (_provider, declared, _readers) in INSTRUCTION_SOURCES.items():
+        if declared == filename:
+            return source_id
+    return None
 
 
 def _normalized_text(text: str) -> str:
@@ -201,7 +226,7 @@ def canonical_repository_root(root: Path) -> Path:
 
 
 class AgentContextService:
-    """Project-scoped discovery plus manual, reversible instruction sync."""
+    """Project-scoped discovery plus reversible instruction copy and linking."""
 
     def __init__(
         self,
@@ -226,6 +251,48 @@ class AgentContextService:
                 path
             )
 
+    @staticmethod
+    def _managed_link_target(root: Path, path: Path) -> tuple[str, Path, str]:
+        """Resolve only a relative link to another declared root instruction file."""
+
+        try:
+            raw_target = os.readlink(path)
+        except OSError as exc:
+            raise ValueError(f"{path.name} is an unreadable symbolic link: {exc}") from exc
+        source_id = _instruction_id_for_filename(raw_target)
+        if source_id is None or raw_target == path.name:
+            raise ValueError(f"{path.name} links outside the declared Project instruction files")
+        target = root / raw_target
+        if target.is_symlink():
+            raise ValueError(f"{path.name} links to another symbolic link")
+        if not target.exists():
+            raise ValueError(f"{path.name} links to missing {raw_target}")
+        try:
+            info = target.stat()
+        except OSError as exc:
+            raise ValueError(f"{path.name} link target is unreadable: {exc}") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"{path.name} link target is not a regular file")
+        return source_id, target, raw_target
+
+    def _instruction_entry(self, root: Path, path: Path) -> InstructionEntry:
+        if path.is_symlink():
+            _source_id, _target, raw_target = self._managed_link_target(root, path)
+            return InstructionEntry(
+                kind="symlink",
+                revision=_link_revision(raw_target),
+                link_target=raw_target,
+            )
+        if not path.exists():
+            return InstructionEntry(kind="missing", revision="missing")
+        data = _bounded_bytes(path, label=path.name)
+        return InstructionEntry(
+            kind="regular",
+            revision=_revision(data),
+            data=data,
+            mode=path.stat().st_mode,
+        )
+
     def capture_project(self, root: str | Path) -> None:
         project_root = Path(root).resolve()
         for _provider, filename, _readers in INSTRUCTION_SOURCES.values():
@@ -234,7 +301,12 @@ class AgentContextService:
             )
 
     def _file_revision(self, path: Path) -> str:
-        if not path.exists() or path.is_symlink() or not path.is_file():
+        if path.is_symlink():
+            try:
+                return _link_revision(os.readlink(path))
+            except OSError:
+                return "unreadable"
+        if not path.exists() or not path.is_file():
             return "missing"
         try:
             if path.stat().st_size > MAX_SOURCE_BYTES:
@@ -278,13 +350,46 @@ class AgentContextService:
             "size": 0,
             "modified_at": None,
             "entrypoint_kind": (
-                "project_root_instructions"
-                if scope == "project"
-                else "global_instructions"
+                "project_root_instructions" if scope == "project" else "global_instructions"
             ),
         }
         if path.is_symlink():
-            item.update(status="unsupported", detail="Symbolic links are not followed.")
+            if scope != "project":
+                item.update(status="unsupported", detail="Symbolic links are not followed.")
+            else:
+                try:
+                    target_id, target, raw_target = self._managed_link_target(root, path)
+                    info = target.stat()
+                    item.update(
+                        revision=_link_revision(raw_target),
+                        link_target_id=target_id,
+                        link_target=raw_target,
+                        revealable=True,
+                        detail=f"Relative link to {raw_target}.",
+                    )
+                    if info.st_size > MAX_SOURCE_BYTES:
+                        item.update(
+                            status="too_large",
+                            size=info.st_size,
+                            modified_at=info.st_mtime,
+                            detail=f"{raw_target} exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
+                        )
+                    else:
+                        data = target.read_bytes()
+                        _decode_text(data, label=filename)
+                        item.update(
+                            status="available",
+                            size=len(data),
+                            modified_at=info.st_mtime,
+                            content_revision=_revision(data),
+                            line_ending=_line_ending(data),
+                        )
+                except (OSError, ValueError) as exc:
+                    item.update(
+                        status="unsupported",
+                        detail=str(exc),
+                        revision=self._file_revision(path),
+                    )
         elif path.exists():
             try:
                 info = path.stat()
@@ -509,8 +614,17 @@ class AgentContextService:
         paths.extend([directory, self.home / ".claude" / "settings.json"])
         for path in paths:
             try:
-                info = path.stat()
-                marks.append((str(path), info.st_mtime_ns, info.st_size))
+                info = path.lstat()
+                link_target = os.readlink(path) if stat.S_ISLNK(info.st_mode) else None
+                marks.append(
+                    (
+                        str(path),
+                        stat.S_IFMT(info.st_mode),
+                        info.st_mtime_ns,
+                        info.st_size,
+                        link_target,
+                    )
+                )
             except OSError:
                 # "Absent" is a state the inventory reports, so it is part of the
                 # signature: a file appearing must invalidate, not read as unchanged.
@@ -547,9 +661,7 @@ class AgentContextService:
             self._inventory_cache.popitem(last=False)
         return payload
 
-    def _inventory(
-        self, project_id: str, project_name: str, project_root: Path
-    ) -> dict[str, Any]:
+    def _inventory(self, project_id: str, project_name: str, project_root: Path) -> dict[str, Any]:
         instructions = [
             self._instruction_item(project_root, source_id) for source_id in INSTRUCTION_SOURCES
         ]
@@ -561,7 +673,12 @@ class AgentContextService:
                 _normalized_text(self.read_source(project_root, str(item["id"]))["text"])
                 for item in available
             }
-            comparison = "in_sync" if len(normalized) == 1 else "different"
+            if len(normalized) != 1:
+                comparison = "different"
+            else:
+                identities = {str(item.get("link_target_id") or item["id"]) for item in available}
+                linked = any(item.get("link_target_id") for item in available)
+                comparison = "linked" if linked and len(identities) == 1 else "in_sync"
         return {
             "project": {"id": project_id, "name": project_name},
             "generated_at": time.time(),
@@ -572,9 +689,7 @@ class AgentContextService:
                     for source_id in GLOBAL_INSTRUCTION_SOURCES
                 ]
             },
-            "providers": [
-                self._memory_provider(name, project_root) for name in HARNESSES
-            ],
+            "providers": [self._memory_provider(name, project_root) for name in HARNESSES],
             "sync_options": _sync_options(),
             "backups": self._backups(project_id),
         }
@@ -618,13 +733,13 @@ class AgentContextService:
     def source_path(self, root: str | Path, source_id: str) -> Path:
         """Resolve an opaque source id to a regular file that the OS may reveal."""
 
-        path, _provider, _kind, _scope, _label, filename = self._source_descriptor(
-            root, source_id
-        )
+        path, _provider, kind, scope, _label, filename = self._source_descriptor(root, source_id)
+        if path.is_symlink():
+            if kind != "instructions" or scope != "project":
+                raise ValueError(f"{filename} is a symbolic link and cannot be revealed here")
+            _target_id, path, _raw_target = self._managed_link_target(Path(root).resolve(), path)
         if not path.exists():
             raise ValueError(f"{filename} is missing")
-        if path.is_symlink():
-            raise ValueError(f"{filename} is a symbolic link and cannot be revealed here")
         try:
             info = path.stat()
         except OSError as exc:
@@ -635,9 +750,21 @@ class AgentContextService:
 
     def read_source(self, root: str | Path, source_id: str) -> dict[str, Any]:
         path, provider, kind, scope, label, filename = self._source_descriptor(root, source_id)
-        if not path.exists():
+        read_path = path
+        link_fields: dict[str, Any] = {}
+        if path.is_symlink():
+            if kind != "instructions" or scope != "project":
+                raise ValueError(f"{filename} is a symbolic link and cannot be read here")
+            target_id, read_path, raw_target = self._managed_link_target(Path(root).resolve(), path)
+            link_fields = {
+                "link_target_id": target_id,
+                "link_target": raw_target,
+            }
+        if not read_path.exists():
             raise ValueError(f"{filename} is missing")
-        data = _bounded_bytes(path, label=filename)
+        data = _bounded_bytes(read_path, label=filename)
+        if link_fields:
+            link_fields["content_revision"] = _revision(data)
         readers = (
             list(INSTRUCTION_SOURCES[source_id][2])
             if source_id in INSTRUCTION_SOURCES
@@ -662,9 +789,12 @@ class AgentContextService:
                 "scope": scope,
                 "label": label,
                 "revealable": True,
-                "revision": _revision(data),
+                "revision": _link_revision(str(link_fields["link_target"]))
+                if link_fields
+                else _revision(data),
                 "size": len(data),
-                "modified_at": path.stat().st_mtime,
+                "modified_at": read_path.stat().st_mtime,
+                **link_fields,
                 "entrypoint_kind": entrypoint_kind,
             },
             "text": _decode_text(data, label=filename),
@@ -685,16 +815,22 @@ class AgentContextService:
 
     def _sync_snapshot(self, root: Path, direction: str) -> tuple[Path, Path, bytes, bytes | None]:
         source, target = self._sync_paths(root, direction)
+        if source.is_symlink():
+            raise ValueError(f"{source.name} is a symbolic link and cannot be copied")
         if not source.exists():
             raise ValueError(f"{source.name} is missing")
+        if not source.is_file():
+            raise ValueError(f"{source.name} is not a regular file")
         source_data = _bounded_bytes(source, label=source.name)
         _decode_text(source_data, label=source.name)
         target_data: bytes | None = None
+        if target.is_symlink():
+            raise ValueError(f"{target.name} is a symbolic link and cannot be replaced")
         if target.exists():
+            if not target.is_file():
+                raise ValueError(f"{target.name} is not a regular file")
             target_data = _bounded_bytes(target, label=target.name)
             _decode_text(target_data, label=target.name)
-        elif target.is_symlink():
-            raise ValueError(f"{target.name} is a symbolic link and cannot be replaced")
         return source, target, source_data, target_data
 
     def preview_sync(self, root: str | Path, direction: str) -> dict[str, Any]:
@@ -730,7 +866,9 @@ class AgentContextService:
         key = hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:24]
         return self.backup_root / key
 
-    def _create_backup(self, project_id: str, target: Path, data: bytes | None) -> dict[str, Any]:
+    def _create_backup(
+        self, project_id: str, target: Path, entry: InstructionEntry
+    ) -> dict[str, Any]:
         directory = self._project_backup_dir(project_id)
         if directory.is_symlink():
             raise ValueError("agent context backup directory cannot be a symbolic link")
@@ -740,12 +878,16 @@ class AgentContextService:
             "id": backup_id,
             "target": target.name,
             "created_at": time.time(),
-            "existed": data is not None,
-            "revision": _revision(data),
-            "size": len(data) if data is not None else 0,
+            "existed": entry.kind != "missing",
+            "entry_kind": entry.kind,
+            "revision": entry.revision,
+            "size": len(entry.data) if entry.data is not None else 0,
+            "mode": stat.S_IMODE(entry.mode) if entry.mode is not None else None,
         }
-        if data is not None:
-            self._atomic_write(directory / f"{backup_id}.bin", data)
+        if entry.link_target is not None:
+            manifest["link_target"] = entry.link_target
+        if entry.data is not None:
+            self._atomic_write(directory / f"{backup_id}.bin", entry.data)
         self._atomic_write(
             directory / f"{backup_id}.json",
             json.dumps(manifest, sort_keys=True).encode("utf-8"),
@@ -793,6 +935,33 @@ class AgentContextService:
             if temp.exists():
                 temp.unlink()
 
+    @staticmethod
+    def _stage_symlink(path: Path, link_target: str) -> Path:
+        temp = path.parent / f".agent-context-{uuid4().hex}.link"
+        try:
+            os.symlink(link_target, temp, target_is_directory=False)
+        except OSError as exc:
+            if temp.is_symlink() or temp.exists():
+                temp.unlink()
+            hint = (
+                " Enable Windows Developer Mode or grant symbolic-link privilege."
+                if os.name == "nt"
+                else ""
+            )
+            raise ValueError(
+                f"Could not create a symbolic link in {path.parent}.{hint} {exc}"
+            ) from exc
+        return temp
+
+    @classmethod
+    def _atomic_symlink(cls, path: Path, link_target: str) -> None:
+        temp = cls._stage_symlink(path, link_target)
+        try:
+            os.replace(temp, path)
+        finally:
+            if temp.is_symlink() or temp.exists():
+                temp.unlink()
+
     def sync(
         self,
         project_id: str,
@@ -809,7 +978,13 @@ class AgentContextService:
         eol = "\r\n" if target_data is not None and _line_ending(target_data) == "crlf" else "\n"
         output = source_text.replace("\n", eol).encode("utf-8")
         mode = target.stat().st_mode if target_data is not None else None
-        backup = self._create_backup(project_id, target, target_data)
+        target_entry = InstructionEntry(
+            kind="regular" if target_data is not None else "missing",
+            revision=_revision(target_data),
+            data=target_data,
+            mode=mode,
+        )
+        backup = self._create_backup(project_id, target, target_entry)
         self._atomic_write(target, output, mode=mode)
         return {
             "ok": True,
@@ -820,14 +995,132 @@ class AgentContextService:
             "backup": backup,
         }
 
+    def _link_snapshot(
+        self, root: Path, direction: str
+    ) -> tuple[Path, Path, bytes, InstructionEntry, bool]:
+        source, target = self._sync_paths(root, direction)
+        source_entry = self._instruction_entry(root, source)
+        if source_entry.kind != "regular" or source_entry.data is None:
+            if source_entry.kind == "symlink":
+                raise ValueError(
+                    f"{source.name} is already a link; unlink it before making it canonical"
+                )
+            raise ValueError(f"{source.name} must be an existing regular file")
+        _decode_text(source_entry.data, label=source.name)
+        target_entry = self._instruction_entry(root, target)
+        already_linked = target_entry.kind == "symlink" and target_entry.link_target == source.name
+        if target_entry.kind == "symlink" and not already_linked:
+            raise ValueError(f"{target.name} is linked to a different instruction file")
+        if target_entry.data is not None:
+            _decode_text(target_entry.data, label=target.name)
+        return source, target, source_entry.data, target_entry, already_linked
+
+    def preview_link(self, root: str | Path, direction: str) -> dict[str, Any]:
+        project_root = Path(root).resolve()
+        source, target, source_data, target_entry, already_linked = self._link_snapshot(
+            project_root, direction
+        )
+        target_data = (
+            source_data
+            if already_linked
+            else target_entry.data
+            if target_entry.kind == "regular"
+            else None
+        )
+        source_text = _normalized_text(_decode_text(source_data, label=source.name))
+        target_text = (
+            _normalized_text(_decode_text(target_data, label=target.name))
+            if target_data is not None
+            else ""
+        )
+        diff = "".join(
+            difflib.unified_diff(
+                target_text.splitlines(keepends=True),
+                source_text.splitlines(keepends=True),
+                fromfile=target.name,
+                tofile=source.name,
+            )
+        )
+        truncated = len(diff) > MAX_DIFF_CHARS
+        if truncated:
+            diff = diff[:MAX_DIFF_CHARS] + "\n... diff truncated ...\n"
+        return {
+            "direction": direction,
+            "source": {"label": source.name, "revision": _revision(source_data)},
+            "target": {"label": target.name, "revision": target_entry.revision},
+            "already_linked": already_linked,
+            "diff": diff,
+            "diff_truncated": truncated,
+        }
+
+    def link(
+        self,
+        project_id: str,
+        root: str | Path,
+        direction: str,
+        source_revision: str,
+        target_revision: str,
+    ) -> dict[str, Any]:
+        project_root = Path(root).resolve()
+        source, target, source_data, target_entry, already_linked = self._link_snapshot(
+            project_root, direction
+        )
+        if _revision(source_data) != source_revision or target_entry.revision != target_revision:
+            raise AgentContextConflict("instruction files changed since the link preview")
+        if already_linked:
+            raise ValueError(f"{target.name} already links to {source.name}")
+        temp = self._stage_symlink(target, source.name)
+        try:
+            backup = self._create_backup(project_id, target, target_entry)
+            os.replace(temp, target)
+        finally:
+            if temp.is_symlink() or temp.exists():
+                temp.unlink()
+        revision = _link_revision(source.name)
+        return {
+            "ok": True,
+            "direction": direction,
+            "source": source.name,
+            "target": target.name,
+            "revision": revision,
+            "backup": backup,
+        }
+
+    def unlink(
+        self,
+        project_id: str,
+        root: str | Path,
+        source_id: str,
+        target_revision: str,
+    ) -> dict[str, Any]:
+        if source_id not in INSTRUCTION_SOURCES:
+            raise ValueError("source_id must name a Project instruction file")
+        project_root = Path(root).resolve()
+        target = project_root / INSTRUCTION_SOURCES[source_id][1]
+        if not target.is_symlink():
+            raise ValueError(f"{target.name} is not a managed instruction link")
+        target_entry = self._instruction_entry(project_root, target)
+        if target_entry.revision != target_revision:
+            raise AgentContextConflict("instruction link changed before it was unlinked")
+        _canonical_id, canonical, raw_target = self._managed_link_target(project_root, target)
+        data = _bounded_bytes(canonical, label=raw_target)
+        _decode_text(data, label=raw_target)
+        backup = self._create_backup(project_id, target, target_entry)
+        self._atomic_write(target, data, mode=canonical.stat().st_mode)
+        return {
+            "ok": True,
+            "source_id": source_id,
+            "target": target.name,
+            "revision": _revision(data),
+            "backup": backup,
+        }
+
     def _backup_manifest(self, project_id: str, backup_id: str) -> dict[str, Any]:
         if not re.fullmatch(r"[0-9a-f]{32}", backup_id):
             raise ValueError("unknown agent context backup")
         path = self._project_backup_dir(project_id) / f"{backup_id}.json"
         try:
-            raw: Any = json.loads(
-                _bounded_bytes(path, label="backup manifest").decode("utf-8")
-            )
+            raw: Any = json.loads(_bounded_bytes(path, label="backup manifest").decode("utf-8"))
         except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("unknown agent context backup") from exc
         if not isinstance(raw, dict):
@@ -839,6 +1132,45 @@ class AgentContextService:
             raise ValueError("invalid agent context backup")
         return manifest
 
+    def _backup_entry(self, project_id: str, manifest: dict[str, Any]) -> InstructionEntry:
+        raw_kind = manifest.get("entry_kind")
+        if raw_kind is None:
+            raw_kind = "regular" if bool(manifest.get("existed")) else "missing"
+        raw_mode = manifest.get("mode")
+        mode = raw_mode if isinstance(raw_mode, int) else None
+        if raw_kind == "missing":
+            if manifest.get("revision") != "missing":
+                raise ValueError("agent context backup is corrupt")
+            return InstructionEntry(kind="missing", revision="missing")
+        if raw_kind == "regular":
+            backup_id = str(manifest["id"])
+            data_path = self._project_backup_dir(project_id) / f"{backup_id}.bin"
+            data = _bounded_bytes(data_path, label="backup")
+            if _revision(data) != manifest.get("revision"):
+                raise ValueError("agent context backup is corrupt")
+            return InstructionEntry(
+                kind="regular",
+                revision=_revision(data),
+                data=data,
+                mode=mode,
+            )
+        if raw_kind == "symlink":
+            link_target = manifest.get("link_target")
+            target_name = str(manifest.get("target") or "")
+            if (
+                not isinstance(link_target, str)
+                or _instruction_id_for_filename(link_target) is None
+                or link_target == target_name
+                or _link_revision(link_target) != manifest.get("revision")
+            ):
+                raise ValueError("agent context backup is corrupt")
+            return InstructionEntry(
+                kind="symlink",
+                revision=_link_revision(link_target),
+                link_target=link_target,
+            )
+        raise ValueError("agent context backup has an invalid entry kind")
+
     def restore(
         self,
         project_id: str,
@@ -849,26 +1181,32 @@ class AgentContextService:
         project_root = Path(root).resolve()
         manifest = self._backup_manifest(project_id, backup_id)
         target = project_root / str(manifest["target"])
-        if target.is_symlink():
-            raise ValueError(f"{target.name} is a symbolic link and cannot be restored")
-        current = _bounded_bytes(target, label=target.name) if target.exists() else None
-        if _revision(current) != target_revision:
+        current = self._instruction_entry(project_root, target)
+        if current.revision != target_revision:
             raise AgentContextConflict("instruction file changed before the backup was restored")
-        data: bytes | None = None
-        if bool(manifest["existed"]):
-            data_path = self._project_backup_dir(project_id) / f"{backup_id}.bin"
-            data = _bounded_bytes(data_path, label="backup")
-            if _revision(data) != manifest.get("revision"):
-                raise ValueError("agent context backup is corrupt")
-        undo = self._create_backup(project_id, target, current)
-        if data is not None:
-            mode = target.stat().st_mode if target.exists() else None
-            self._atomic_write(target, data, mode=mode)
-            revision = _revision(data)
-        else:
-            if target.exists():
-                target.unlink()
-            revision = "missing"
+        desired = self._backup_entry(project_id, manifest)
+        staged_link: Path | None = None
+        if desired.kind == "symlink" and desired.link_target is not None:
+            canonical = project_root / desired.link_target
+            if canonical.is_symlink() or not canonical.is_file():
+                raise ValueError(
+                    f"Cannot restore {target.name}: {desired.link_target} is not a regular file"
+                )
+            staged_link = self._stage_symlink(target, desired.link_target)
+        try:
+            undo = self._create_backup(project_id, target, current)
+            if desired.kind == "regular" and desired.data is not None:
+                mode = desired.mode if desired.mode is not None else current.mode
+                self._atomic_write(target, desired.data, mode=mode)
+            elif desired.kind == "symlink" and staged_link is not None:
+                os.replace(staged_link, target)
+            else:
+                if target.is_symlink() or target.exists():
+                    target.unlink()
+        finally:
+            if staged_link is not None and (staged_link.is_symlink() or staged_link.exists()):
+                staged_link.unlink()
+        revision = desired.revision
         return {
             "ok": True,
             "target": target.name,

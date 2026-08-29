@@ -123,9 +123,9 @@ Also holds `_start_project_action`, the one authority path that the MCP `run_act
 
 ### `routes/agent_context.py`
 
-Agent Context reads, source reveal, sync preview, sync, and restore.
+Agent Context reads, source reveal, copy preview and commit, link preview and commit, unlink, and restore.
 
-**Not:** discovery or the sync itself (`agent_context.py`).
+**Not:** discovery or filesystem mutation itself (`agent_context.py`).
 
 ### `routes/notes.py`
 

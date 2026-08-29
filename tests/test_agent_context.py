@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,10 +17,13 @@ from swe_mux.routes import agent_context as agent_context_routes
 from swe_mux.routes.agent_context import (
     get_agent_context,
     get_agent_context_source,
+    link_agent_context,
+    preview_agent_context_link,
     preview_agent_context_sync,
     restore_agent_context,
     reveal_agent_context_source,
     sync_agent_context,
+    unlink_agent_context,
 )
 from swe_mux.server import error_middleware
 
@@ -39,17 +43,13 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
     (memory / "MEMORY.md").write_text("# Learned\n", encoding="utf-8")
     (memory / "testing.md").write_bytes(b"Prefer focused tests.\n")
     (home / ".claude").mkdir()
-    (home / ".claude" / "CLAUDE.md").write_text(
-        "# Global Claude\n", encoding="utf-8"
-    )
+    (home / ".claude" / "CLAUDE.md").write_text("# Global Claude\n", encoding="utf-8")
     (home / ".claude" / "settings.json").write_text(
         '{"autoMemoryDirectory": "~/memories"}', encoding="utf-8"
     )
     (home / ".codex").mkdir()
     (home / ".codex" / "AGENTS.md").write_text("# Global Codex\n", encoding="utf-8")
-    (home / ".codex" / "config.toml").write_text(
-        "[features]\nmemories = true\n", encoding="utf-8"
-    )
+    (home / ".codex" / "config.toml").write_text("[features]\nmemories = true\n", encoding="utf-8")
 
     service = AgentContextService(tmp_path / "backups", home=home)
     service.capture_project(root)
@@ -74,10 +74,7 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
         "~/.claude/CLAUDE.md",
         "~/.codex/AGENTS.md",
     ]
-    assert all(
-        item["scope"] == "global"
-        for item in inventory["global_instructions"]["items"]
-    )
+    assert all(item["scope"] == "global" for item in inventory["global_instructions"]["items"])
     # A project-root instruction file is shared, so its readers are named in full:
     # AGENTS.md is read by every harness that is not Claude.
     project_readers = {
@@ -90,9 +87,7 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
     # Only the two globals this fixture created exist; the rest are reported as a
     # stated absence rather than omitted, which is what makes a missing harness
     # instruction file visible instead of invisible.
-    global_items = {
-        item["label"]: item for item in inventory["global_instructions"]["items"]
-    }
+    global_items = {item["label"]: item for item in inventory["global_instructions"]["items"]}
     assert global_items["~/.claude/CLAUDE.md"]["revealable"] is True
     assert global_items["~/.codex/AGENTS.md"]["revealable"] is True
     assert all(
@@ -125,9 +120,10 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
     assert global_source["source"]["scope"] == "global"
     assert global_source["source"]["label"] == "~/.codex/AGENTS.md"
     assert global_source["text"].replace("\r\n", "\n") == "# Global Codex\n"
-    assert service.source_path(root, "instruction:global:codex") == (
-        home / ".codex" / "AGENTS.md"
-    ).resolve()
+    assert (
+        service.source_path(root, "instruction:global:codex")
+        == (home / ".codex" / "AGENTS.md").resolve()
+    )
 
     (root / "AGENTS.md").write_text("changed\n", encoding="utf-8")
     changed = service.inventory("project-one", "Project One", root)
@@ -275,6 +271,125 @@ def test_sync_refuses_stale_preview_and_restore_can_remove_created_target(
     assert (root / "AGENTS.md").read_text(encoding="utf-8") == "second\n"
 
 
+def test_link_is_guarded_visible_unlinkable_and_reversible(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    claude_data = b"# Claude\nclaude-only\n"
+    agents_data = b"# Shared\nall agents\n"
+    (root / "CLAUDE.md").write_bytes(claude_data)
+    (root / "AGENTS.md").write_bytes(agents_data)
+    service = AgentContextService(tmp_path / "backups", home=tmp_path / "home")
+
+    stale = service.preview_link(root, "agents_to_claude")
+    (root / "CLAUDE.md").write_bytes(b"changed after preview\n")
+    with pytest.raises(AgentContextConflict, match="changed since"):
+        service.link(
+            "project",
+            root,
+            "agents_to_claude",
+            stale["source"]["revision"],
+            stale["target"]["revision"],
+        )
+    assert (root / "CLAUDE.md").read_bytes() == b"changed after preview\n"
+
+    (root / "CLAUDE.md").write_bytes(claude_data)
+    preview = service.preview_link(root, "agents_to_claude")
+    assert preview["source"]["label"] == "AGENTS.md"
+    assert preview["target"]["label"] == "CLAUDE.md"
+    assert preview["already_linked"] is False
+    try:
+        linked = service.link(
+            "project",
+            root,
+            "agents_to_claude",
+            preview["source"]["revision"],
+            preview["target"]["revision"],
+        )
+    except ValueError as exc:
+        if "Could not create a symbolic link" in str(exc):
+            pytest.skip(str(exc))
+        raise
+
+    alias = root / "CLAUDE.md"
+    canonical = root / "AGENTS.md"
+    assert alias.is_symlink()
+    assert os.readlink(alias) == "AGENTS.md"
+    assert linked["backup"]["entry_kind"] == "regular"
+    assert linked["backup"]["revision"] == revision(claude_data)
+
+    inventory = service.inventory("project", "Project", root)
+    assert inventory["instructions"]["comparison"] == "linked"
+    claude = inventory["instructions"]["items"][0]
+    assert claude["status"] == "available"
+    assert claude["link_target"] == "AGENTS.md"
+    assert claude["link_target_id"] == "instruction:codex"
+    assert service.read_source(root, "instruction:claude")["text"] == agents_data.decode()
+    assert service.source_path(root, "instruction:claude") == canonical.resolve()
+
+    unlinked = service.unlink("project", root, "instruction:claude", linked["revision"])
+    assert not alias.is_symlink()
+    assert alias.read_bytes() == agents_data
+    assert unlinked["backup"]["entry_kind"] == "symlink"
+
+    relinked = service.restore("project", root, unlinked["backup"]["id"], unlinked["revision"])
+    assert alias.is_symlink()
+    assert os.readlink(alias) == "AGENTS.md"
+    restored = service.restore("project", root, linked["backup"]["id"], relinked["revision"])
+    assert not alias.is_symlink()
+    assert alias.read_bytes() == claude_data
+    assert restored["revision"] == revision(claude_data)
+
+
+def test_unknown_instruction_link_remains_unsupported(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    (root / "CLAUDE.md").write_text("canonical\n", encoding="utf-8")
+    try:
+        os.symlink(outside, root / "AGENTS.md", target_is_directory=False)
+    except OSError as exc:
+        pytest.skip(f"host cannot create test symlink: {exc}")
+    service = AgentContextService(tmp_path / "backups", home=tmp_path / "home")
+
+    inventory = service.inventory("project", "Project", root)
+    agents = inventory["instructions"]["items"][1]
+    assert agents["status"] == "unsupported"
+    assert "outside the declared" in agents["detail"]
+    with pytest.raises(ValueError, match="outside the declared"):
+        service.read_source(root, "instruction:codex")
+    with pytest.raises(ValueError, match="outside the declared"):
+        service.preview_link(root, "claude_to_agents")
+
+
+def test_link_capability_failure_keeps_files_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "CLAUDE.md").write_text("canonical\n", encoding="utf-8")
+    original = b"independent\n"
+    (root / "AGENTS.md").write_bytes(original)
+    service = AgentContextService(tmp_path / "backups", home=tmp_path / "home")
+    preview = service.preview_link(root, "claude_to_agents")
+
+    def refused(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("symbolic links unavailable")
+
+    monkeypatch.setattr(os, "symlink", refused)
+    with pytest.raises(ValueError, match="Could not create a symbolic link"):
+        service.link(
+            "project",
+            root,
+            "claude_to_agents",
+            preview["source"]["revision"],
+            preview["target"]["revision"],
+        )
+    assert not (root / "AGENTS.md").is_symlink()
+    assert (root / "AGENTS.md").read_bytes() == original
+    assert service.inventory("project", "Project", root)["backups"] == []
+
+
 def test_sources_are_allowlisted_and_bounded(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
@@ -309,8 +424,7 @@ async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.M
     service = AgentContextService(tmp_path / "backups", home=home)
     revealed: list[Path] = []
     monkeypatch.setattr(
-        agent_context_routes,
-        "open_in_file_manager", lambda path: revealed.append(Path(path))
+        agent_context_routes, "open_in_file_manager", lambda path: revealed.append(Path(path))
     )
     app = web.Application(middlewares=[error_middleware])
     app[keys.PROJECTS] = SimpleNamespace(projects={project.id: project})
@@ -328,6 +442,12 @@ async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.M
         "/projects/{project_id}/agent-context/sync/preview", preview_agent_context_sync
     )
     app.router.add_post("/projects/{project_id}/agent-context/sync", sync_agent_context)
+    app.router.add_post(
+        "/projects/{project_id}/agent-context/link/preview",
+        preview_agent_context_link,
+    )
+    app.router.add_post("/projects/{project_id}/agent-context/link", link_agent_context)
+    app.router.add_post("/projects/{project_id}/agent-context/unlink", unlink_agent_context)
     app.router.add_post("/projects/{project_id}/agent-context/restore", restore_agent_context)
 
     async with TestClient(TestServer(app)) as client:
@@ -348,6 +468,11 @@ async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.M
             json={"direction": "claude_to_agents"},
         )
         preview = await preview_response.json()
+        link_preview_response = await client.post(
+            "/projects/project-one/agent-context/link/preview",
+            json={"direction": "claude_to_agents"},
+        )
+        link_preview = await link_preview_response.json()
         sync_response = await client.post(
             "/projects/project-one/agent-context/sync",
             json={
@@ -385,6 +510,8 @@ async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.M
     assert global_reveal_response.status == 200
     assert revealed == [(root / "CLAUDE.md").resolve(), global_claude.resolve()]
     assert preview_response.status == 200
+    assert link_preview_response.status == 200
+    assert link_preview["already_linked"] is False
     assert sync_response.status == 200
     assert conflict_response.status == 409
     assert conflict_payload["code"] == "revision_conflict"

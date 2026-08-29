@@ -1284,6 +1284,7 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "read_project_note",
         "project_actions",
         "spawn_requests",
+        "list_models",
         "notify",
         "revoke_message",
         "request_spawn",
@@ -1639,3 +1640,122 @@ def test_watch_session_is_declared_a_read_and_annotated_as_one() -> None:
     assert tool["annotations"]["readOnlyHint"] is True
     assert tool["annotations"]["idempotentHint"] is True
     assert "mcp__mux__watch_session" in claude_read_permissions()
+
+
+# ------------------------------------------------------------ model selection
+
+
+@pytest.mark.asyncio
+async def test_a_session_reports_the_model_it_was_launched_on_and_whether_it_took() -> None:
+    """Two facts, not one: what the launch asked for and what the harness reports.
+
+    They are separate because they genuinely disagree - two harnesses fuzzy-match
+    the launch value and a third does not validate it at all - so a single `model`
+    field could never answer "did the flag take", which is the question an agent
+    that chose a model has.
+    """
+    caller = live_session("s1", token="tok")
+    caller.record.model_requested = "opus"
+    caller.record.provider = "anthropic"
+    caller.record.model = "claude-sonnet-5"
+    service = service_for(caller)
+    detail = await service.get_session(caller, {"session_id": "s1"})
+    assert detail["model_requested"] == "opus"
+    assert detail["model_status"] == "divergent"
+    listed = await service.list_sessions(caller, {})
+    assert listed["sessions"][0]["model_status"] == "divergent"
+
+
+@pytest.mark.asyncio
+async def test_a_session_that_chose_no_model_carries_no_verdict_about_one() -> None:
+    """Absent, not null.
+
+    A caller that never asked for a model has no question to answer here, and two
+    empty fields on every row of a fleet listing would read as a reading that
+    failed rather than as a question nobody asked.
+    """
+    caller = live_session("s1", token="tok")
+    service = service_for(caller)
+    detail = await service.get_session(caller, {"session_id": "s1"})
+    assert "model_requested" not in detail
+    assert "model_status" not in detail
+    listed = await service.list_sessions(caller, {})
+    assert "model_status" not in listed["sessions"][0]
+
+
+@pytest.mark.asyncio
+async def test_list_models_asks_the_harness_and_says_what_it_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent choosing a model cannot know what this host is authenticated for.
+
+    The answer carries the command and the accepted vocabulary alongside the list,
+    so a thin result is a diagnosis rather than a shrug, and it says in the same
+    breath that the list is advisory - a model missing from it still spawns.
+    """
+    from swe_mux import model_catalog
+
+    async def fake_catalog(harness: str, **_kwargs: Any) -> Any:
+        return model_catalog.CatalogResult(
+            harness=harness,
+            command="opencode models",
+            models=("anthropic/claude-sonnet-4-5", "openai/gpt-5.4"),
+            exit_code=0,
+        )
+
+    monkeypatch.setattr(model_catalog, "catalog_for", fake_catalog)
+    caller = live_session("s1", token="tok", backend="opencode")
+    service = service_for(caller)
+    result = await service.dispatch_tool(caller, "list_models", {})
+    assert result["backend"] == "opencode"
+    assert result["models"] == ["anthropic/claude-sonnet-4-5", "openai/gpt-5.4"]
+    assert result["command"] == "opencode models"
+    assert "provider-qualified" in result["accepts"]
+    assert "advisory" in result["note"].lower()
+    narrowed = await service.dispatch_tool(caller, "list_models", {"query": "CLAUDE"})
+    assert narrowed["models"] == ["anthropic/claude-sonnet-4-5"]
+    assert narrowed["total"] == 1 and narrowed["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_models_refuses_a_backend_that_is_not_an_agent() -> None:
+    """A shell pane has no models, and "none" would read as an empty account
+    rather than as the wrong question having been asked."""
+    caller = live_session("s1", token="tok", backend="shell")
+    service = service_for(caller)
+    with pytest.raises(QueueError) as caught:
+        await service.dispatch_tool(caller, "list_models", {})
+    assert caught.value.code == "invalid_backend"
+
+
+@pytest.mark.asyncio
+async def test_request_spawn_hands_its_model_to_the_service_that_owns_the_bounds() -> None:
+    """MCP is transport. The model has to reach the service or it is not a feature.
+
+    This is the seam the plumbing failed at: `model` accepted on the wire and
+    dropped between the tool and the spawn would give an agent that asked for opus
+    an ordinary session and a success.
+    """
+    calls: list[dict[str, Any]] = []
+
+    class ControlStub:
+        async def spawn(self, _caller: Any, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            return {"status": "spawned", "session_id": "new-1"}
+
+    caller = live_session("s1", token="tok")
+    service = service_for(caller)
+    service.session_control = ControlStub()
+    await service.dispatch_tool(
+        caller, "request_spawn", {"prompt": "go", "backend": "claude", "model": "opus"}
+    )
+    assert calls[0]["model"] == "opus"
+
+
+def test_list_models_is_declared_a_read_and_annotated_as_one() -> None:
+    """It runs the harness's own listing command and changes nothing."""
+    assert "list_models" in READ_TOOL_NAMES
+    assert "list_models" not in WRITE_TOOL_NAMES
+    tool = next(item for item in TOOLS if item["name"] == "list_models")
+    assert tool["annotations"]["readOnlyHint"] is True
+    assert "mcp__mux__list_models" in claude_read_permissions()

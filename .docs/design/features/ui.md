@@ -1301,6 +1301,10 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   first-run surfaces contradicting each other about whether a thing is required now is worse than
   either answer alone.
   Nothing later in the walk needs a provider account: the session it starts is a Shell.
+  The step advances on an account actually existing - a captured login, or a sign-in the daemon
+  reports as `succeeded` - rather than on the sign-in request returning, which is a different
+  moment now that the request returns as soon as the provider CLI is running
+  (`provider-accounts.md`, "A sign-in is daemon state").
   Failures remain on the current step with the owning feature's normal error surface.
 - Drag coaching is gesture-aware. Before movement, only the source tab is marked. After the
   pointer gesture crosses the real five-pixel drag threshold, the spotlight moves to the tab bar
@@ -2705,9 +2709,14 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   right-click, using the Files browser's native reveal behavior; mobile keeps its native
   context-menu behavior.
   One `sync…` button opens a modal containing both deliberate Project-root whole-file copy
-  directions, normalized diff confirmation, and revision-guarded restore points. Global
-  instructions and learned memory are never write targets; nothing watches or synchronizes in
-  the background.
+  directions in a **Copy once** card, normalized diff confirmation, and revision-guarded restore points.
+  A separate **Keep linked** card offers every descriptor direction as an explicit **Use <file> as canonical** choice.
+  Link confirmation previews the content replacement before the other file becomes a relative symbolic link.
+  An active managed link shows its relationship and can be unlinked by materializing the canonical content.
+  The modal states the Windows Developer Mode or privilege requirement.
+  It also states the Git `core.symlinks` checkout caveat and atomic-save editor caveat.
+  Copy, link, unlink, and restore are revision-guarded and each creates a restore point.
+  Global instructions and learned memory are never write targets, and nothing watches or synchronizes in the background.
 - **Processes** is the process inspector, docked. It renders the same component as the
   Resources dialog's Processes segment (`ProcessFleetView`), so it has the same process trees, the same parent
   lineage, evidence state and confidence behind each row's expander, the same listener and

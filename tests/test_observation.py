@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 from collections import deque
@@ -2998,3 +2999,71 @@ async def test_the_watchdog_skips_a_session_with_no_process(tmp_path: Path) -> N
         # Untouched: no layer readings taken, no state moved, nothing published.
         assert session.record.state == state
         assert not getattr(session, "layer_readings", {})
+
+
+def _model_session(requested: str, observed: str, *, backend: str = "omp") -> Any:
+    return SimpleNamespace(
+        record=SimpleNamespace(
+            id="s1",
+            backend=backend,
+            model_requested=requested,
+            model=observed,
+            provider="anthropic",
+        ),
+        model_divergence_noted="",
+        observation_replay=False,
+        publish_update=lambda: None,
+    )
+
+
+def test_a_session_running_a_different_model_than_it_was_launched_on_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The operator's channel for the case where nobody thought to look.
+
+    The read surfaces answer this on demand, but a session quietly answering on
+    the wrong model costs money and quality with nothing on screen to say so. It
+    is checked in `_publish_update` rather than at each of the five sites that
+    assign `record.model`, so a new measurement source cannot arrive without it.
+    """
+    caplog.set_level(logging.WARNING, logger="swe_mux.observation")
+    session = _model_session("opus", "claude-sonnet-4-5")
+    observation._publish_update(session)
+    assert "session_model_divergent" in caplog.text
+    assert "requested=opus" in caplog.text and "observed=claude-sonnet-4-5" in caplog.text
+
+
+def test_the_divergence_is_logged_once_per_model_rather_than_per_update(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Observation updates arrive every few seconds; a model switch is a new fact.
+
+    Once per session would miss a mid-conversation switch, and once per update
+    would write the same line hundreds of times for one wrong model.
+    """
+    caplog.set_level(logging.WARNING, logger="swe_mux.observation")
+    session = _model_session("opus", "claude-sonnet-4-5")
+    for _ in range(3):
+        observation._publish_update(session)
+    assert caplog.text.count("session_model_divergent") == 1
+    session.record.model = "claude-haiku-4-5"
+    observation._publish_update(session)
+    assert caplog.text.count("session_model_divergent") == 2
+
+
+def test_a_session_that_is_running_what_it_asked_for_says_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Silence and agreement have to be silent, or the line stops being read.
+
+    Three quiet cases: the model matched, the harness has not reported one yet,
+    and the launch named a mode (`opusplan`) that no observed id can confirm.
+    """
+    caplog.set_level(logging.WARNING, logger="swe_mux.observation")
+    for session in (
+        _model_session("opus", "claude-opus-5", backend="claude"),
+        _model_session("opus", "", backend="claude"),
+        _model_session("opusplan", "claude-sonnet-5", backend="claude"),
+    ):
+        observation._publish_update(session)
+    assert "session_model_divergent" not in caplog.text

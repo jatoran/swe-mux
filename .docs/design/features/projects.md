@@ -276,7 +276,7 @@ overrides (`default_backend`, `default_profile_id`, `default_agent_profiles`,
 ### Writing the portable file
 
 `.swe-mux/config.toml` has several independent writers that own disjoint keys: the registry's
-own form, its automation opt-ins, its agent authority table, a grant gate
+own form, the Automation dashboard's opt-in matrix and its agent authority rows, a grant gate
 (`features/setting-links.md`), the land queue's verify command
 (`features/land-queue.md`), the configurator agent (`features/configurator.md`), and the file
 browser's per-Project ignore (`features/project-resources.md`).

@@ -7,9 +7,10 @@ instruction files and learned-memory files that a registered harness may carry b
 otherwise hidden provider state inspectable before switching agents. It does not inject context
 into a session, infer what an already-running process loaded, or create a second memory authority.
 
-The only ordinary mutation in the feature is a user-triggered whole-file copy between two
-distinct descriptor-declared Project-root instruction files. There is no automatic, watched,
-scheduled, or startup sync.
+Ordinary mutations are explicit whole-file copy, link, unlink, and restore operations between two distinct descriptor-declared Project-root instruction files.
+The user chooses which file remains canonical before creating a link.
+Copy remains the default one-time operation.
+There is no automatic, watched, scheduled, or startup synchronization.
 
 ## Surface
 
@@ -22,16 +23,16 @@ the project-scoped block. It contains:
   and whether each revision changed since this daemon run began;
 - an initially collapsed **Global instructions** disclosure for the corresponding
   descriptor-declared global files, with the same read-only metadata;
-- an `in_sync | different | missing` comparison after normalizing CRLF/CR to LF;
+- a `linked | in_sync | different | missing` comparison after normalizing CRLF/CR to LF;
 - one initially collapsed **Memories** disclosure whose badge counts the complete provider
   inventory; expanding it shows each harness's declared memory provider and explicit capability
   state, with harness and entrypoint attribution on each available source, using the same high-contrast file rows as the instruction disclosures;
 - a read-only preformatted viewer and manual rescan; one `sync…` button opens a focus-trapped
-  modal containing both copy directions, diff confirmation, and recent restore points.
+  modal containing copy-once controls, both canonical link directions, unlink confirmation, diff confirmation, platform caveats, and recent restore points.
 
-On a fine-pointer desktop, right-clicking any row backed by a real regular file opens the same
-one-action **Open in default explorer** menu used by the Project file browser. Missing,
-directory, and symlink rows cannot expose that action. The reveal changes no content.
+On a fine-pointer desktop, right-clicking a row backed by a real regular file or a safe managed instruction link opens the same one-action **Open in default explorer** menu used by the Project file browser.
+Managed links reveal their canonical target.
+Missing, directory, and unsupported link rows cannot expose that action, and reveal changes no content.
 
 Every body is rendered as text, never as an editor. Selecting or rescanning a source does not
 write it. A Project must be selected; live session focus and runtime cwd do not retarget the
@@ -63,20 +64,22 @@ SQLite memory store. When the flag is absent/false it reports `disabled`; malfor
 Harness descriptors that declare no stable memory inventory return an explicit `unsupported`
 provider result rather than inheriting another harness's source or appearing empty.
 
-Provider paths never cross the HTTP boundary. Global rows use stable `~/...` display labels,
-not resolved host paths. Browser reads address opaque source IDs that the daemon maps back through
-the descriptor-derived instruction allowlist or the freshly validated Claude memory filename shape. Source
-reads are UTF-8, regular-file only, reject symlinks, and cap each file at 512 KiB. An inventory
-contains at most 128 Claude memory rows while retaining the complete count. Blocking Git and
-filesystem work runs off the aiohttp event loop.
+Provider paths never cross the HTTP boundary.
+Global rows use stable `~/...` display labels instead of resolved host paths.
+Browser reads address opaque source IDs that the daemon maps back through the descriptor-derived instruction allowlist or the freshly validated Claude memory filename shape.
+Reads are UTF-8 and capped at 512 KiB.
+Global instructions and memories reject every symlink.
+A Project-root instruction symlink is readable only when its stored target is the exact relative filename of another declared root instruction file and that target is an existing non-symlink regular file.
+Arbitrary, absolute, broken, external, self-referential, and chained links remain unsupported.
+An inventory contains at most 128 Claude memory rows while retaining the complete count.
+Blocking Git and filesystem work runs off the aiohttp event loop.
 
-Reveal also accepts only an opaque source ID. The daemon re-resolves the declared instruction or
-validated memory source, requires an existing non-symlink regular file, then delegates to the
-shared OS file-manager launcher. Resolved host paths still never cross HTTP.
+Reveal accepts only an opaque source ID and applies the same managed-link rules before delegating to the shared OS file-manager launcher.
+Resolved host paths still never cross HTTP.
 
-## Manual instruction sync
+## Manual instruction operations
 
-The daemon returns the currently allowed source-to-target directions in each inventory.
+The daemon returns the currently allowed source-to-target directions for copy and link operations in each inventory.
 Each direction is between two distinct descriptor-declared Project-root instruction files.
 The UI does not own a fixed filename matrix.
 
@@ -91,21 +94,33 @@ using the destination's existing CRLF/LF convention (LF when creating it). Exist
 permissions are retained where the platform supports them. The write uses a same-directory
 temporary file, flush + fsync, and `os.replace`; a source or destination symlink is refused.
 
-Before replacement the daemon stores the exact prior destination bytes, or a record that it was
-missing, under `<data_dir>/agent-context-backups/<hashed-project-id>/`. Restore is also
-revision-guarded and creates a new restore point for the state it replaces. Restoring the
-"missing" record removes the file created by sync. Backup IDs, not backup paths, cross HTTP; the
-drawer lists the 20 newest valid manifests.
+### Persistent links
+
+A link preview uses the same descriptor direction and revision guard as copy.
+The selected source must be an existing non-symlink regular file and remains canonical.
+Commit replaces the other descriptor file with a relative symbolic link containing only the canonical filename.
+Unlink materializes the canonical bytes back into the linked filename, so both paths remain ordinary independent files afterward.
+Reversing canonical direction therefore requires unlinking the active relationship first.
+Link, unlink, and restore all use same-directory staging and atomic replacement.
+On Windows, link creation can require Developer Mode or symbolic-link privilege, and swe-mux reports the platform error without attempting elevation or changing either instruction file.
+Git portability remains repository-dependent because a checkout with `core.symlinks=false` materializes a tracked link as a plain text file, and editors that save by atomic replacement can turn a live link back into a regular file.
+Before every copy, link, unlink, or restore, the daemon records the exact prior destination entry under `<data_dir>/agent-context-backups/<hashed-project-id>/`.
+The typed manifest distinguishes a missing path, regular-file bytes and mode, and a managed relative-link target.
+Restore is revision-guarded and creates a new restore point for the state it replaces.
+Restoring a missing record removes the path created by the later operation.
+Restoring a link revalidates the canonical file and stages link creation before changing the current entry.
+Backup IDs, not backup paths, cross HTTP, and the drawer lists the 20 newest valid manifests.
 
 ## Freshness and events
 
-Existing Projects have their instruction revisions captured when the daemon starts. A Project
-registered later takes its baseline on first inventory. `changed_since_start` is informational,
-not a concurrency guard; sync always uses the current preview revisions.
+Existing Projects have their instruction revisions captured when the daemon starts.
+A Project registered later takes its baseline on first inventory.
+`changed_since_start` is informational, not a concurrency guard.
+Every copy, link, unlink, and restore commit uses the current preview or inventory revision.
 
-Successful sync/restore emits `agent_context_changed` with Project identity, operation, target
-or direction, and resulting revision. The initiating drawer refreshes immediately. Other clients
-can manually rescan; no filesystem watcher is kept alive for hidden provider directories.
+Successful copy, link, unlink, and restore operations emit `agent_context_changed` with Project identity, operation, target or direction, and resulting revision.
+The initiating drawer refreshes immediately.
+Other clients can manually rescan, and no filesystem watcher is kept alive for hidden provider directories.
 
 ### The inventory is cached on both ends
 
@@ -129,7 +144,7 @@ path-filtered `project_files_changed` refresh above.
 
 ## Non-goals and future boundary
 
-- no automatic instruction synchronization or canonical-file policy;
+- no automatic instruction synchronization or automatic canonical-file choice;
 - no editing of instructions or learned memory in the drawer;
 - no provider-memory writes, deletion, migration, or merge;
 - no claim that a running agent has loaded a newly changed file;

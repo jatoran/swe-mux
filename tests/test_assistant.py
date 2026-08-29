@@ -1997,8 +1997,13 @@ async def test_a_model_the_harness_cannot_take_is_refused_before_a_card_opens(
     """The refusal is the whole feature: no card, no spawn, no pane that dies.
 
     Two shapes of it, because they fail for different reasons and the operator
-    needs to hear which: a name that harness does not know, and a harness mux has
-    measured no model argument for at all.
+    needs to hear which: a name belonging to another vendor's namespace, and a
+    bare name given to the one harness that addresses models only as
+    `provider/model`.
+
+    pi is the counter-case and belongs here beside them: it fuzzy-matches, so
+    there is no vocabulary to fail, and refusing `opus` there would be mux
+    inventing a rule its CLI does not have.
     """
     service, _emitted, _queue, effects = make_service(tmp_path)
     try:
@@ -2006,10 +2011,13 @@ async def test_a_model_the_harness_cannot_take_is_refused_before_a_card_opens(
             "spawn_session", {"project": "pixel lab", "backend": "codex", "model": "opus"}
         )
         assert unknown is not None and "does not recognize" in unknown["error"]
-        unmeasured = await service._preflight_mutation(
-            "spawn_session", {"project": "pixel lab", "backend": "pi", "model": "opus"}
+        bare = await service._preflight_mutation(
+            "spawn_session", {"project": "pixel lab", "backend": "opencode", "model": "opus"}
         )
-        assert unmeasured is not None and "launch profile" in unmeasured["error"]
+        assert bare is not None and "provider-qualified" in bare["error"]
+        assert await service._preflight_mutation(
+            "spawn_session", {"project": "pixel lab", "backend": "pi", "model": "opus"}
+        ) is None
         assert effects["spawned"] == []
     finally:
         service.store.close()

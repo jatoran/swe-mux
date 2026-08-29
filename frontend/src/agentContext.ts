@@ -1,5 +1,5 @@
 export type AgentContextStatus = 'available' | 'missing' | 'disabled' | 'unsupported' | 'unreadable' | 'too_large'
-export type AgentContextComparison = 'in_sync' | 'different' | 'missing'
+export type AgentContextComparison = 'linked' | 'in_sync' | 'different' | 'missing'
 export type AgentContextDirection = string
 
 export interface AgentContextSource {
@@ -16,6 +16,9 @@ export interface AgentContextSource {
   revealable: boolean
   detail?: string
   revision?: string
+  content_revision?: string
+  link_target_id?: string
+  link_target?: string
   size: number
   modified_at: number | null
   line_ending?: 'lf' | 'crlf'
@@ -54,6 +57,9 @@ export interface AgentContextBackup {
   existed: boolean
   revision: string
   size: number
+  entry_kind?: 'missing' | 'regular' | 'symlink'
+  link_target?: string
+  mode?: number | null
 }
 
 export interface AgentContextInventory {
@@ -93,9 +99,18 @@ export interface AgentContextSyncPreview {
   diff_truncated: boolean
 }
 
+export interface AgentContextLinkPreview {
+  direction: AgentContextDirection
+  source: { label: string; revision: string }
+  target: { label: string; revision: string }
+  already_linked: boolean
+  diff: string
+  diff_truncated: boolean
+}
 export function comparisonLabel(value: AgentContextComparison): string {
   if (value === 'in_sync') return 'In sync'
   if (value === 'different') return 'Different'
+  if (value === 'linked') return 'Linked'
   return 'One or both missing'
 }
 
@@ -104,7 +119,12 @@ export function statusLabel(value: AgentContextStatus): string {
 }
 
 export function backupAction(backup: AgentContextBackup): string {
+  if (backup.entry_kind === 'symlink') return `Restore link for ${backup.target}`
   return backup.existed ? `Restore ${backup.target}` : `Remove created ${backup.target}`
+}
+
+export function canonicalLinkLabel(option: AgentContextSyncOption): string {
+  return `Use ${option.source} as canonical`
 }
 
 export function memoryFileCount(providers: AgentContextProvider[]): number {

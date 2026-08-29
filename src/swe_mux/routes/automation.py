@@ -14,6 +14,12 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
+from ..agent_authority import (
+    AUTHORITY_FIELDS,
+    install_ceiling,
+    install_default,
+    resolve_authority,
+)
 from ..assistant import (
     ASSISTANT_RULE_ID,
 )
@@ -983,6 +989,7 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
     *,
     llm: LlmReadiness | None = None,
     global_allow: dict[str, bool] | None = None,
+    install: Config | None = None,
 ) -> dict[str, Any]:
     """One project's opt-in table, resolved against the registry DAG.
 
@@ -997,10 +1004,16 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
     `globally_disabled` carries the requested ids it turns off, so the toggle
     surface greys them with the right fix (global policy) instead of rendering
     them as merely off for this Project.
+
+    `install` is the daemon `Config`, needed for the agent authority layers and
+    threaded rather than fetched for the same reason as the two above. Absent it
+    reports the Project layer alone, which is what the pre-2026-08-29 callers
+    saw.
     """
     identity = _registered_identity(project)
-    config = await read_project_config(project.root, project=identity)
-    values = config["values"] if config["status"] in {"ready", "read-only"} else {}
+    stored = await read_project_config(project.root, project=identity)
+    status = str(stored["status"])
+    values = stored["values"] if status in {"ready", "read-only"} else {}
     requested = {
         key: bool(value)
         for key, value in (values.get("automations") or {}).items()
@@ -1011,10 +1024,20 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         llm_ready=llm.ready if llm is not None else True,
         global_allow=global_allow,
     )
+    def _stored_authority(_root: str | Path, field: str) -> tuple[str | None, bool]:
+        """Resolve authority against the values already read above.
+
+        A closure rather than another file read: the matrix asks this for every
+        field of every Project in the fleet, and re-opening `config.toml` five
+        times per row would turn one read into six.
+        """
+        value = values.get(field)
+        return (value if isinstance(value, str) else None), status != "malformed"
+
     return {
         "project_id": project.id,
-        "revision": config["revision"],
-        "status": config["status"],
+        "revision": stored["revision"],
+        "status": status,
         "requested": requested,
         "enabled": sorted(resolution.enabled),
         "blocked": {key: list(value) for key, value in resolution.blocked.items()},
@@ -1022,6 +1045,24 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         "globally_disabled": sorted(resolution.globally_disabled),
         "llm": llm.as_dict() if llm is not None else None,
         "scan_timeline_auto_enable": bool(values.get("scan_timeline_auto_enable", False)),
+        # Two readings, because the matrix needs both and cannot derive one from
+        # the other: `authority` is what this repository's file explicitly says
+        # (None where it left the field alone, which is what makes "Follow
+        # global" a distinct third position rather than a synonym for the
+        # default), and `authority_effective` is what the daemon will actually
+        # enforce once the install default and ceiling are layered on. A row
+        # showing only the second could not tell a pinned Project from one
+        # inheriting the same value.
+        "authority": {
+            name: (values.get(name) if isinstance(values.get(name), str) else None)
+            for name in AUTHORITY_FIELDS
+        },
+        "authority_effective": {
+            name: resolve_authority(
+                install, project.root, name, read_project=_stored_authority
+            )
+            for name in AUTHORITY_FIELDS
+        },
     }
 
 
@@ -1037,7 +1078,10 @@ async def get_project_automations(request: web.Request) -> web.Response:
     project = _observations_project(request)
     config: Config = request.app[keys.CONFIG]
     state = await _project_automation_state(
-        project, llm=await _llm_readiness(request), global_allow=_global_allow(config)
+        project,
+        llm=await _llm_readiness(request),
+        global_allow=_global_allow(config),
+        install=config,
     )
     return json_response({**state, "automations": _automation_registry_payload(config)})
 
@@ -1057,7 +1101,9 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
     allow = _global_allow(config)
     rows = [
         {
-            **await _project_automation_state(project, llm=llm, global_allow=allow),
+            **await _project_automation_state(
+                project, llm=llm, global_allow=allow, install=config
+            ),
             "project_name": project.name,
         }
         for project in request.app[keys.PROJECTS].ordered_projects()
@@ -1077,6 +1123,28 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
                 "scheduled_runs_enabled": config.scheduled_runs_enabled,
                 "land_queue_enabled": config.land_queue_enabled,
             },
+            # The agent authority rows' Global cell, in the same two readings the
+            # per-Project rows carry. `authority_default` is what an unset field
+            # inherits - always a concrete level, since it falls through to the
+            # built-in - and `authority_ceiling` is null unless the operator
+            # locked the row, so the surface can tell "the default happens to be
+            # draft" from "nothing here may be anything but draft".
+            "authority_fields": [
+                {
+                    "field": name,
+                    "label": entry.label,
+                    "levels": list(entry.levels),
+                    "builtin": entry.builtin,
+                    "gated_by": entry.gated_by,
+                }
+                for name, entry in AUTHORITY_FIELDS.items()
+            ],
+            "authority_default": {
+                name: install_default(config, name) for name in AUTHORITY_FIELDS
+            },
+            "authority_ceiling": {
+                name: install_ceiling(config, name) for name in AUTHORITY_FIELDS
+            },
         }
     )
 
@@ -1088,8 +1156,9 @@ async def put_project_automations(request: web.Request) -> web.Response:
     of truth and a concurrent edit is still guarded.
 
     Two guard shapes, matching `PUT /api/project/config`. `base` - what the caller
-    believed the `automations` table and `scan_timeline_auto_enable` held - writes
-    only those two fields and collides only when one of them actually moved, which
+    believed the `automations` table, `scan_timeline_auto_enable`, and any
+    authority fields it is changing held - writes only those fields and collides
+    only when one of them actually moved, which
     is what the toggle list in the Projects editor needs: it shares one file with
     the authority table and the portable options beside it, and a whole-file guard
     made every one of those writes read as an external edit to the other two. A
@@ -1121,6 +1190,32 @@ async def put_project_automations(request: web.Request) -> web.Response:
     auto_enable = body.get("scan_timeline_auto_enable")
     if auto_enable is not None and not isinstance(auto_enable, bool):
         raise ValueError("scan_timeline_auto_enable must be a boolean")
+    # Agent authority arrives on the same write as the opt-ins it qualifies,
+    # because the matrix edits both and a Project's file is one revision. A
+    # field mapped to None is the "Follow global" position: the key is *removed*
+    # rather than written with the global's current value, which is the whole
+    # difference between a Project that inherits and one that happens to agree
+    # with the global today.
+    raw_authority = body.get("authority")
+    if raw_authority is not None and (
+        not isinstance(raw_authority, dict)
+        or any(not isinstance(key, str) for key in raw_authority)
+        or any(
+            value is not None and not isinstance(value, str) for value in raw_authority.values()
+        )
+    ):
+        raise ValueError("authority must map authority fields to a level or null")
+    authority: dict[str, Any] = dict(raw_authority or {})
+    unknown_authority = sorted(set(authority) - set(AUTHORITY_FIELDS))
+    if unknown_authority:
+        raise ValueError(f"unknown authority fields: {', '.join(unknown_authority)}")
+    invalid_levels = sorted(
+        f"{key} ({value})"
+        for key, value in authority.items()
+        if value is not None and AUTHORITY_FIELDS[key].rank(str(value)) < 0
+    )
+    if invalid_levels:
+        raise ValueError(f"invalid authority levels: {', '.join(invalid_levels)}")
     # `scan_timeline_daily_budget_usd` is deliberately not accepted here any
     # more: it is one global setting in Settings -> Automation. A body that
     # still sends it is ignored rather than refused, and the retired key is
@@ -1135,7 +1230,7 @@ async def put_project_automations(request: web.Request) -> web.Response:
         for key, value in requested.items()
         if value or AUTOMATION_REGISTRY[key].default_on
     }
-    changes: dict[str, Any] = {"automations": automations}
+    changes: dict[str, Any] = {"automations": automations, **authority}
     # Auto-enable is meaningless without the permission it rides on, and leaving
     # it set would silently re-arm every run the moment the Project is opted in
     # again. Opting out clears it.

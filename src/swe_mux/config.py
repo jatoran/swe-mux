@@ -928,6 +928,21 @@ class Config:
     # load (a registry that retired an id must not brick the config) and
     # refused on write (a typo must fail loudly, not silently allow).
     automation_global_allow: dict[str, bool] = field(default_factory=dict)
+    # Install-wide *default* for the per-Project agent authority fields
+    # (`agent_authority.AUTHORITY_FIELDS`): field id -> level. It applies only
+    # where a Project left the field unset, so it can never change what a
+    # Project that wrote a value already does, and an empty map reproduces the
+    # built-in defaults exactly. Unknown ids and levels are scrubbed on load and
+    # refused on write, the same asymmetry `automation_global_allow` uses: a
+    # retired field must not brick the config, a typo must fail loudly.
+    agent_authority_default: dict[str, str] = field(default_factory=dict)
+    # Install-wide *ceiling* over the same fields, and the only layer that can
+    # reach a Project whose file holds an explicit value. It can only narrow.
+    # Separate from the default above because they answer different questions:
+    # "what should an undecided Project do" against "what may no Project on this
+    # machine do, whatever its file says". A single map with a precedence rule
+    # would make the first silently mean the second for pinned Projects.
+    agent_authority_ceiling: dict[str, str] = field(default_factory=dict)
     automation_retention_days: int = 90
     # Prompt-queue history (sent/cancelled/failed/stranded items and their
     # delivery audit) ages out on this window; pending items never do.
@@ -1370,14 +1385,36 @@ class Config:
         # to ask whether it is holding the shape or the mapping.
         for name, spec in BUDGET_FIELDS.items():
             setattr(self, name, coerce_budget(getattr(self, name), fallback=spec.default))
-        # Scrub the global-allow map on construction so a file naming an id the
-        # registry has since retired still loads (`load_config` validates the
-        # loaded instance, and an unknown id must not brick the whole config).
-        # `update_config` assigns *after* construction, so a typo written over
-        # the API still reaches `_validate` unscrubbed and fails loudly there.
-        if isinstance(self.automation_global_allow, dict):
-            from . import automation_registry as _registry
+        self.scrub_registry_maps()
 
+    def scrub_registry_maps(self) -> None:
+        """Drop map entries naming something this build's registries do not have.
+
+        Three maps key off a registry that can retire an id: the automation
+        ceiling and the two agent-authority maps. A config file that outlived
+        one of those retirements must still *load* - the alternative is a daemon
+        that will not start because a setting mentions a feature that no longer
+        exists - while a typo written over the API must fail loudly rather than
+        silently allow. That asymmetry is what this method plus `_validate` buy
+        between them, and it only works if both callers run:
+
+        - `__post_init__`, which covers `update_config`'s candidate construction.
+        - `load_config`, explicitly, because it `setattr`s every stored value
+          onto an already-constructed instance and so never re-enters
+          `__post_init__` at all. That second call was missing until 2026-08-29,
+          which made this method's promise false for `automation_global_allow`
+          for as long as it had existed: a retired automation id in a stored
+          config raised `unknown automations` out of `_validate` and refused to
+          start. Measured before it was fixed, not assumed.
+
+        Deliberately not a `_validate` concern: validation reports what a caller
+        got wrong, and a build that retired an id is not something the operator
+        got wrong.
+        """
+        from . import automation_registry as _registry
+        from .agent_authority import AUTHORITY_FIELDS as _authority
+
+        if isinstance(self.automation_global_allow, dict):
             self.automation_global_allow = {
                 name: flag
                 for name, flag in self.automation_global_allow.items()
@@ -1386,6 +1423,22 @@ class Config:
                 and name in _registry.REGISTRY
                 and name not in _registry.DEDICATED_INSTALL_SWITCHES
             }
+        for map_name in ("agent_authority_default", "agent_authority_ceiling"):
+            current = getattr(self, map_name)
+            if not isinstance(current, dict):
+                continue
+            setattr(
+                self,
+                map_name,
+                {
+                    name: level
+                    for name, level in current.items()
+                    if isinstance(name, str)
+                    and isinstance(level, str)
+                    and name in _authority
+                    and _authority[name].rank(level) >= 0
+                },
+            )
 
     @property
     def database_path(self) -> Path:
@@ -1973,6 +2026,27 @@ def _validate(config: Config) -> None:
                     f"{name} ({_registry.DEDICATED_INSTALL_SWITCHES[name]})" for name in switched
                 )
             )
+    from .agent_authority import AUTHORITY_FIELDS as _authority_fields
+
+    for map_name in ("agent_authority_default", "agent_authority_ceiling"):
+        authority_map = getattr(config, map_name)
+        if not isinstance(authority_map, dict) or any(
+            not isinstance(name, str) or not isinstance(level, str)
+            for name, level in authority_map.items()
+        ):
+            errors[map_name] = "must map agent authority fields to levels"
+            continue
+        unknown_fields = sorted(set(authority_map) - set(_authority_fields))
+        if unknown_fields:
+            errors[map_name] = "unknown authority fields: " + ", ".join(unknown_fields)
+            continue
+        bad_levels = sorted(
+            f"{name} ({level})"
+            for name, level in authority_map.items()
+            if _authority_fields[name].rank(level) < 0
+        )
+        if bad_levels:
+            errors[map_name] = "invalid levels: " + ", ".join(bad_levels)
     if not isinstance(config.project_ignore_patterns, list) or not all(
         isinstance(item, str) for item in config.project_ignore_patterns
     ):
@@ -2908,6 +2982,10 @@ def load_config(path: Path | None = None) -> Config:
         migrated = True
     migrated = _migrate_legacy_ccusage_commands(cfg) or migrated
     cfg.schema_version = SCHEMA_VERSION
+    # Every stored value has been assigned by now, and none of it went through
+    # `__post_init__`, so this is where a retired registry id gets dropped
+    # rather than refused by the validation below.
+    cfg.scrub_registry_maps()
     _validate(cfg)
     if migrated or not path.exists():
         save_config(cfg, backup=path.exists())

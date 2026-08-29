@@ -1,0 +1,92 @@
+// The real `AccountSwitcher` over a stubbed daemon, in the shell it actually lives in.
+//
+// The switcher's sign-in path is only true at runtime and no unit test reaches any of it:
+// that a first account can be added from the popover at all, that the request goes to the
+// login route rather than to a capture, that a run started on the daemon keeps reporting
+// itself after the popover is dismissed and reopened, and that a failure carries its reason
+// instead of vanishing with the request that started it.
+//
+// `fetch` is stubbed rather than mocked at the module boundary, so what runs is the real
+// `useProviderAccounts` poll against the real component - including the fact that the
+// login state arrives on an ordinary accounts read rather than on the login's own response.
+import { render } from 'preact'
+import { AccountSwitcher } from '../../src/ProviderAccounts'
+import '../../src/style.css'
+
+type Call = { method: string; url: string }
+
+const calls: Call[] = []
+const params = new URLSearchParams(location.search)
+// `empty` is the state a new install is in and the one the popover had no answer for.
+const saved = params.get('saved') === '1'
+const outcome = params.get('outcome') || 'succeeded'
+
+const NOW = Math.floor(Date.now() / 1000)
+type Login = { provider: string; state: string; started_at: number; finished_at?: number; account_id?: string | null; label?: string | null; error?: string | null } | null
+
+const ACCOUNTS = [
+  {
+    id: 'account-claude', provider: 'claude', label: 'work', created_at: NOW, updated_at: NOW,
+    identity_source: 'token', email: 'work@example.com',
+    quota: { status: 'ok', session: { used_percent: 12, window_minutes: 300 }, weekly: { used_percent: 40, window_minutes: 10080 }, refreshed_at: NOW },
+  },
+]
+
+let login: Record<string, Login> = { claude: null, codex: null }
+
+const snapshot = () => ({
+  providers: ['claude', 'codex'],
+  selected: { claude: saved ? 'account-claude' : null, codex: null },
+  current: {
+    claude: { state: saved ? 'saved' : 'signed_out', account_id: saved ? 'account-claude' : null },
+    codex: { state: 'signed_out', account_id: null },
+  },
+  accounts: saved ? ACCOUNTS : [],
+  poll_minutes: 5,
+  stale_minutes: 30,
+  refreshing: false,
+  login,
+  login_commands: { claude: 'claude auth login --claudeai', codex: 'codex login' },
+})
+
+window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = String(typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url)
+  const method = init?.method || 'GET'
+  calls.push({ method, url })
+  if (url.includes('/login/dismiss')) {
+    login = { ...login, claude: null }
+  } else if (url.endsWith('/claude/login')) {
+    // Exactly what the daemon does: the response says a run is *running*, and the outcome
+    // lands on a later read. A harness that answered with the finished state here would
+    // prove the opposite of the thing under test.
+    login = { ...login, claude: { provider: 'claude', state: 'running', started_at: NOW } }
+    window.setTimeout(() => {
+      login = {
+        ...login,
+        claude: outcome === 'failed'
+          ? { provider: 'claude', state: 'failed', started_at: NOW, finished_at: NOW, error: 'claude command failed: browser login was cancelled' }
+          : { provider: 'claude', state: 'succeeded', started_at: NOW, finished_at: NOW, account_id: 'account-claude', label: 'work@example.com' },
+      }
+    }, 60)
+  }
+  return new Response(JSON.stringify(snapshot()), { status: 200, headers: { 'Content-Type': 'application/json' } })
+}) as typeof fetch
+
+document.body.style.margin = '0'
+document.body.style.width = '220px'
+document.documentElement.style.setProperty('--ui-scale', '1')
+// The status block sits at the *bottom* of the sidebar in the real shell, and the full
+// switcher's popover opens upward from wherever its trigger is. Rendered against the top of
+// the viewport it would be placed off-screen, so the column is given its real height.
+render(
+  <div class="app-shell" style="height:100vh">
+    <div class="sidebar" style="height:100vh;display:flex;flex-direction:column">
+      <div class="sidebar-status">
+        <AccountSwitcher onManage={() => { calls.push({ method: 'UI', url: 'manage' }) }}/>
+      </div>
+    </div>
+  </div>,
+  document.querySelector('#root')!,
+)
+
+Object.assign(window as unknown as Record<string, unknown>, { __calls: calls })
