@@ -42,6 +42,7 @@ lossless.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -454,7 +455,60 @@ def shot_desktop_git(page: Page, raw: Path) -> None:
 
 
 def shot_desktop_insight(page: Page, raw: Path) -> None:
-    panel_shot(page, raw, "Activity", 2200, expect="Findings")
+    """The Timeline segment, on the one session with a real harness transcript.
+
+    The segment is gated on `hasHarnessTranscript`, so this shot needs the agent
+    session `capture_env.py agent-run` produces (see SITE_SHOTS.md for why that
+    run is real rather than mocked). The Activity tab opens on whatever segment
+    the Project last showed, so the Timeline segment is chosen explicitly and
+    the heading asserted - a silent revert here would photograph the Findings
+    opt-in screen into the timeline's slot.
+    """
+    state = (
+        json.loads(capture_env.STATE_PATH.read_text(encoding="utf-8"))
+        if capture_env.STATE_PATH.exists()
+        else {}
+    )
+    if not state.get("agent_session"):
+        raise SystemExit(
+            "desktop-insight needs the real agent run behind it: bring the daemon up "
+            "with `capture_env.py up --claude-config`, then run `capture_env.py agent-run`."
+        )
+    open_workspace(page, session=capture_env.AGENT_SESSION_NAME)
+    collapse_sidebar(page)
+    # Two steps with different oracles. First reach the Activity *tab*: its
+    # segment buttons render only while it is the active tab, so probing for the
+    # Timeline button from another tab reads "absent" and a click on the
+    # already-active tab toggles the drawer shut - the loop therefore keys on
+    # the tab's possible headings, one per segment. Only then choose the
+    # Timeline *segment* from the strip.
+    headings = ("Scan Timeline", "Findings", "Change Map")
+    for _ in range(6):
+        if page.locator(".utility-rail").count():
+            page.locator(".utility-rail button").first.click()
+            page.wait_for_timeout(1000)
+            continue
+        if any(drawer(page).inner_text().startswith(item) for item in headings):
+            break
+        page.locator('.utility-drawer button[aria-label^="Activity"]').first.click()
+        page.wait_for_timeout(1200)
+    else:
+        raise SystemExit("could not show the Activity drawer tab")
+    heading = "Scan Timeline"
+    if not drawer(page).inner_text().startswith(heading):
+        segment = drawer(page).get_by_role("button", name="Timeline", exact=True)
+        if not segment.count():
+            raise SystemExit(
+                "the Activity tab offers no Timeline segment - the agent session has no "
+                "harness transcript bound; re-check `agent-run`"
+            )
+        segment.first.click()
+    page.wait_for_timeout(2400)
+    if not drawer(page).inner_text().startswith(heading):
+        raise SystemExit("the Activity drawer did not land on the Scan Timeline segment")
+    box = drawer(page).bounding_box()
+    assert box is not None
+    page.screenshot(path=str(raw), clip=clip_around(page, box, DESKTOP_ASPECT, MIN_PANEL_CLIP))
 
 
 def shot_desktop_notes(page: Page, raw: Path) -> None:
@@ -552,13 +606,11 @@ GEOMETRY = {
 # out.
 BLOCKED = {
     "desktop-insight.webp": (
-        "Activity's Timeline segment is gated on `hasHarnessTranscript(backend)` and every "
-        "session here is a shell, so the segment is not offered; its sibling Findings segment "
-        "renders the detector opt-in screen because no detector has anything to report without "
-        "an agent run. Both need a real agent CLI, which needs a provider credential - the one "
-        "thing this environment exists to keep out. Unblocking it means letting the daemon read "
-        "the operator's own agent credentials while its account chips stay synthetic; see "
-        "SITE_SHOTS.md."
+        "Activity's Timeline segment is gated on `hasHarnessTranscript(backend)`, and the "
+        "default environment holds only shells. This slot needs the one real agent run "
+        "`capture_env.py agent-run` produces (daemon up with `--claude-config`), which spends "
+        "real quota and is therefore an operator's decision rather than part of a routine "
+        "re-shoot. Name the slot explicitly to capture it; see SITE_SHOTS.md."
     ),
 }
 

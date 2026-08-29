@@ -83,26 +83,41 @@ The paths are deliberately free of a user directory, because a shell prompt rend
 | `desktop-workspace.webp` | atlas-api, two panes over one Project (the split is the Project's stored layout, seeded in `seed_fleet`), `git log`/`git status` in the left pane and `git diff`/`git branch -vv` in the right, Notes drawer open on the seeded note. The only shot allowed to include chrome. |
 | `desktop-alerts.webp` | Alerts → Now, sidebar collapsed, drawer widened to fill the crop, held-back digest expanded so the shot carries a suppressed item *and its reason* rather than a count. |
 | `desktop-git.webp` | Git → Map: `main` plus two checked-out worktrees, each 1 ahead and 1 behind. The trunk gets one commit *after* the branches are cut, so the counts have something to say in both directions. |
-| `desktop-insight.webp` | **Not captured. Still a placeholder.** See below. |
+| `desktop-insight.webp` | Activity → Timeline on the one real agent session (`Ingest receipt contract`): five phase-labelled behavioural records with a dead-end and a blocked badge, the budget line, and the this-run toggle. Needs the `agent-run` flow below; skipped by the default run. |
 | `desktop-notes.webp` | Notes → the seeded note, scrolled past the opening paragraph so headings, a nested ordered list, and the checkbox rows are all in one frame. |
 | `mobile-session.webp` | A phone, on a session of its own (`Ingest throughput bench`), with output typed *at phone width*. |
 | `mobile-nav.webp` | The navigation overlay, four Projects expanded with session rows, status dots, and elapsed times. |
 | `mobile-notes.webp` | The same note in the phone's side panel. |
 | `mobile-alerts.webp` | The Alerts tab in the phone's side panel. |
 
-## What this environment cannot photograph, and what it would take
+## The one shot that needs a real agent run: `desktop-insight.webp`
 
-`desktop-insight.webp` is the one slot still holding a placeholder.
+Activity's **Timeline** segment is gated on `hasHarnessTranscript(backend)`, and every seeded session here is a shell, so the segment is not offered at all.
+The way through is one real, bounded, read-only claude run in the synthetic `atlas-api` checkout, which is an operator's decision rather than an agent's because it spends real subscription quota.
+It is implemented (2026-08-28) and skipped by the default shoot:
 
-Activity's **Timeline** segment is gated on `hasHarnessTranscript(backend)`, and every session here is a shell, so the segment is not offered at all. Its sibling **Findings** segment renders the detector opt-in screen, because no detector has anything to report without an agent run behind it. Both need a real agent CLI, and a real agent CLI needs a provider credential - which is the one thing this environment exists to keep out.
+```
+uv run python trailer/capture_env.py up --claude-config
+uv run python trailer/capture_env.py agent-run
+uv run --with playwright --with pillow python trailer/capture_site_shots.py desktop-insight.webp
+```
 
-There is a way through it, and it is an operator's decision rather than an agent's, because it spends their subscription and writes into their real agent config:
+What `agent-run` does, and why each half is shaped the way it is:
 
-- point the capture daemon's `CLAUDE_CONFIG_DIR` (added back *after* `child_env()` strips it) at the operator's real `~/.claude`, while `USERPROFILE` stays synthetic. The CLI then authenticates and `ProviderAccountService` still reads the fixture credential, so the account chips stay invented.
-- spawn one `backend: "claude"` session into `atlas-api` with a short, bounded prompt about the synthetic repository.
-- re-key `capture_env.SCANS` from `capture-run-atlas-api` to the `agent_run_id` that run is given, so the seeded behavioural records attach to a session whose Timeline segment is now available.
+- **The daemon gets `CLAUDE_CONFIG_DIR` pointed at the real `~/.claude`** (`up --claude-config`), for its *discovery* half only: `harness._claude_data_home` reads the daemon's environment to find the run's transcript under `<dir>/projects`.
+- **The agent session gets the operator's real home per-session** (`USERPROFILE`/`HOME` in the spawn `env`), because the CLI's account state lives in `~/.claude.json` and its credential in `~/.claude/.credentials.json`, and any token refresh then writes back to the operator's own files rather than to a stray copy.
+  `CLAUDE_CONFIG_DIR` is masked with an **empty string** in the same spawn env: per-session env can override but never unset, the CLI treats empty as unset, and a CLI that *does* see `CLAUDE_CONFIG_DIR` keeps its account state in `<dir>/.claude.json` - which is not where the real state lives, so it opens a sign-in screen over a perfectly valid credential.
+  Both halves were measured on 2026-08-28; the failed shapes cost a run each.
+- **The trust dialog's default answer is "No, exit".** A bare Enter at that dialog confirms the exit and crashes the session; `agent-run` sends arrow-down then Enter, which is a no-op in an already-trusted prompt's empty composer.
+- **One anodyne, read-only prompt** goes through `POST /api/sessions/{sid}/input`, the app's own path, and the turn is waited out on `last_turn_ms`.
+- **The seeded `SCANS` are re-keyed** from `capture-run-atlas-api` onto the run's real `agent_run_id`, so the records attach to the one session whose Timeline segment exists.
+- **The whole enablement chain has to be green** or the panel renders the opt-in screen instead of the records (`ScanTimelineTab` gates on `global_enabled && project_enabled`): the `scan_timeline_enabled` install switch, a *configured* OpenRouter key (presence is all `llm_readiness` checks; `agent-run` stores a placeholder that authenticates against nothing, so any scan it lets through 401s at zero cost), and the Project opt-in at `atlas-api/.swe-mux/config.toml` - which must carry `version = 1` and the explicit dependency closure (`raw_store`, `tier0`, `scan_timeline`), because the parser rejects an unversioned file and the resolver treats an absent dependency as off.
+- **A scan attempt is the skip-reason reset.** A scan tried before the Project opt-in landed leaves a terminal "not permitted for this Project" reason in service memory, and the panel prints it in red over the records; `_scan` clears it on entry, so `agent-run` ends with one deliberate scan that then fails harmlessly on the placeholder key.
 
-Do not reach for the shortcut of spawning a session with `backend: "claude"` and a shell executable. It makes the segment appear, and it makes the UI assert something false about what is running, which is exactly the mockup the site's own rules forbid.
+Two cautions that survive the implementation:
+
+- **Only the Timeline segment is cleared for this shot.** With the real config dir visible to the daemon, the drawer's Actions → Skills panel lists the operator's real global skills by name, and the Agent tab reads their real CLI configuration. Frame nothing but the drawer on the Timeline segment.
+- Do not reach for the shortcut of spawning a session with `backend: "claude"` and a shell executable. It makes the segment appear, and it makes the UI assert something false about what is running, which is exactly the mockup the site's own rules forbid.
 
 ## Known cosmetic artifacts
 
