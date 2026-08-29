@@ -40,6 +40,7 @@ DIAGNOSTIC_TAIL_CHARS = 500
 QUOTA_POLL_LOOP = "provider-quota-poll"
 QUOTA_TURN_REFRESH_LOOP = "provider-quota-turn-refresh"
 SELECTION_GUARD_LOOP = "provider-selection-guard"
+LOGIN_LOOP_PREFIX = "provider-login"
 _REPLACE_RETRIES = 4
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
@@ -76,6 +77,13 @@ STALE_SECONDS = 30 * 60
 IDENTITY_PROBE_COOLDOWN_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 10
 LOGIN_TIMEOUT_SECONDS = 5 * 60
+# How long a *succeeded* sign-in keeps reporting itself after it finished. The
+# account appearing in the list is the real confirmation; this window only has to
+# outlast the round trip that lets a client say "signed in" rather than silently
+# growing a row. A *failed* sign-in has no such window — it carries the only copy
+# of the error a caller will ever see, so it stays until it is dismissed or until
+# another sign-in for that provider replaces it.
+LOGIN_SUCCESS_LINGER_SECONDS = 30.0
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
@@ -357,6 +365,13 @@ class ProviderAccountManager:
         # provider -> (pinned account id, monotonic deadline) for a switch that
         # is still defending itself against the outgoing login.
         self._selection_guard: dict[Provider, tuple[str, float]] = {}
+        # provider -> the running or last-finished interactive sign-in. It lives
+        # here rather than in whoever's HTTP request started it, because the
+        # thing being described is a child process this daemon owns for up to
+        # five minutes: the browser that started it may close, reload, or be a
+        # phone, and every other client should still be able to see that a login
+        # is in flight and how it ended.
+        self._login: dict[Provider, dict[str, Any]] = {}
         self._reconcile_current()
         self._mutation_lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
@@ -1152,7 +1167,19 @@ class ProviderAccountManager:
             "poll_minutes": self.poll_seconds / 60,
             "stale_minutes": STALE_SECONDS / 60,
             "refreshing": self._refresh_lock.locked(),
+            "login": {provider: self._login_state(provider) for provider in PROVIDERS},
+            "login_commands": {provider: self._login_command(provider) for provider in PROVIDERS},
         }
+
+    def _login_command(self, provider: Provider) -> str:
+        """What "sign in" will actually run, for a surface that has to say so.
+
+        Derived from the *configured* executable and the profile's own login argv,
+        because both halves are this daemon's to know: the browser used to compile
+        its own copy of the sentence, which would still have read `claude auth login
+        --claudeai` on an install that had pointed `harness_exe` somewhere else.
+        """
+        return " ".join([self.executables[provider], *_provider_profile(provider).login_args])
 
     async def capture_current(
         self, provider_value: str, *, label: str | None = None, replace_id: str | None = None
@@ -1556,6 +1583,159 @@ class ProviderAccountManager:
             self._write()
         return self.snapshot()
 
+    @staticmethod
+    def _login_task_name(provider: Provider) -> str:
+        return f"{LOGIN_LOOP_PREFIX}-{provider}"
+
+    def _login_state(self, provider: Provider) -> dict[str, Any] | None:
+        """The public view of one provider's sign-in, or nothing to report.
+
+        Reading never mutates: a success that has outlived its linger window
+        simply stops being reported, and the record itself is dropped the next
+        time a sign-in for that provider starts. A read path that pruned would
+        make two clients polling the same daemon disagree about which of them
+        saw the success.
+        """
+        record = self._login.get(provider)
+        if record is None:
+            return None
+        finished = _number(record.get("finished_at"))
+        if (
+            record.get("state") == "succeeded"
+            and finished is not None
+            and time.time() - finished > LOGIN_SUCCESS_LINGER_SECONDS
+        ):
+            return None
+        return dict(record)
+
+    async def start_login(
+        self, provider_value: str, *, label: str | None = None, replace_id: str | None = None
+    ) -> dict[str, Any]:
+        """Begin an interactive sign-in and return at once.
+
+        The provider CLI can hold the terminal for the full `LOGIN_TIMEOUT_SECONDS`
+        while a human finishes an OAuth flow in a browser, which is far too long to
+        keep an HTTP request open: whoever asked used to own the only copy of the
+        outcome, so closing the panel, reloading, or asking from a second device
+        lost it. The run is a supervised background task and its progress is part
+        of `snapshot()`, so every client sees the same one.
+        """
+        provider = _provider(provider_value)
+        running = self._login.get(provider)
+        if running is not None and running.get("state") == "running":
+            raise ProviderAccountConflict(f"a {provider} sign-in is already running")
+        if replace_id:
+            # Validate before spawning anything: a bad `replace_id` should be a
+            # rejected request, not a browser window the operator then has to
+            # finish before being told the target slot does not exist.
+            account = self._account(replace_id)
+            if account.get("provider") != provider:
+                raise ProviderAccountError("account provider does not match")
+        request_id = current_request_id() or new_request_id()
+        self._login[provider] = {
+            "provider": provider,
+            "state": "running",
+            "started_at": time.time(),
+            "finished_at": None,
+            "account_id": None,
+            "label": None,
+            "error": None,
+            "replacing": replace_id,
+            "request_id": request_id,
+        }
+        background.start(
+            self._login_task_name(provider),
+            lambda: self._run_login(provider, label, replace_id, request_id),
+        )
+        return self.snapshot()
+
+    async def _run_login(
+        self,
+        provider: Provider,
+        label: str | None,
+        replace_id: str | None,
+        request_id: str,
+    ) -> None:
+        """Run one sign-in to its end and record how it ended. Never raises.
+
+        The task supervisor restarts a loop that fails, which is right for a poll
+        and exactly wrong here: relaunching a provider's interactive login because
+        the last one exited nonzero would reopen a browser the operator just
+        cancelled. Returning normally on both outcomes is what tells the
+        supervisor this task finished on purpose.
+        """
+        # No `background.iteration` guard: it times wall clock inside the block, and
+        # this block is almost entirely a wait on a human in a browser. A five-minute
+        # login would report as this daemon's costliest loop while the event loop sat
+        # idle throughout, which is the exact misreading that guard's docstring warns
+        # about. It also has nothing to catch - every outcome is handled here.
+        with bound_request_id(request_id):
+            try:
+                await self.login_and_capture(provider, label=label, replace_id=replace_id)
+            except asyncio.CancelledError:
+                # `run_bounded` has already reaped the CLI on its way out. Record
+                # the cancellation as a terminal state rather than leaving a
+                # "running" that no process backs, then let the cancellation
+                # continue to the supervisor.
+                self._finish_login(provider, error=f"{provider} sign-in cancelled")
+                raise
+            except Exception as exc:  # noqa: BLE001 - the record is the error's only home
+                log.warning(
+                    "provider_login_failed",
+                    extra={"provider": provider, "error": str(exc)},
+                )
+                self._finish_login(provider, error=str(exc))
+                return
+            selected = _record(self._manifest.get("selected")).get(provider)
+            account = next(
+                (item for item in self._accounts() if str(item.get("id")) == str(selected)),
+                None,
+            )
+            self._finish_login(
+                provider,
+                account_id=None if account is None else str(account["id"]),
+                label=None if account is None else _string(account.get("label")),
+            )
+
+    def _finish_login(
+        self,
+        provider: Provider,
+        *,
+        account_id: str | None = None,
+        label: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        record = self._login.get(provider)
+        if record is None or record.get("state") != "running":
+            # Dismissed or superseded while the CLI was still running; the newer
+            # record is the one clients are watching and must not be overwritten.
+            return
+        record.update(
+            {
+                "state": "failed" if error else "succeeded",
+                "finished_at": time.time(),
+                "account_id": account_id,
+                "label": label,
+                "error": error,
+            }
+        )
+
+    async def dismiss_login(self, provider_value: str) -> dict[str, Any]:
+        """Cancel a running sign-in, or clear one that has already finished.
+
+        Both are the same gesture from the operator's side - "I am done with
+        this" - and collapsing them into one endpoint means a client never has to
+        decide which it is against state that may have changed since it rendered.
+        """
+        provider = _provider(provider_value)
+        record = self._login.get(provider)
+        if record is not None and record.get("state") == "running":
+            # Cancelling reaps the provider CLI: `run_bounded` kills the process
+            # tree on any exception leaving it, `CancelledError` included.
+            await background.stop(self._login_task_name(provider))
+        self._login.pop(provider, None)
+        return self.snapshot()
+
     async def login_and_capture(
         self, provider_value: str, *, label: str | None = None, replace_id: str | None = None
     ) -> dict[str, Any]:
@@ -1756,6 +1936,11 @@ class ProviderAccountManager:
         self._selection_guard.clear()
         for provider in PROVIDERS:
             await background.stop(f"{SELECTION_GUARD_LOOP}-{provider}")
+            # An interactive login outlives nothing: it is a child holding this
+            # daemon's pipes, and a daemon that stops without reaping it leaves a
+            # provider CLI attached to a dead parent.
+            await background.stop(self._login_task_name(provider))
+        self._login.clear()
         if self._event_queue:
             self.events.unsubscribe(self._event_queue)
             self._event_queue = None

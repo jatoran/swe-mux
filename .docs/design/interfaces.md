@@ -2378,9 +2378,10 @@ GET    /provider-accounts/audit[?limit=]
 POST   /provider-accounts/refresh
 POST   /provider-accounts/verify
 POST   /provider-accounts/{provider}/capture
-POST   /provider-accounts/{provider}/login
+POST   /provider-accounts/{provider}/login {label?, replace_id?}
+POST   /provider-accounts/{provider}/login/dismiss
 PATCH  /provider-accounts/{provider}/{account_id}
-POST   /provider-accounts/{provider}/{account_id}/select {force?: bool}
+POST   /provider-accounts/{provider}/{account_id}/select
 POST   /provider-accounts/{provider}/{account_id}/adopt
 POST   /provider-accounts/{provider}/{account_id}/purge-telemetry {since?: epoch}
 DELETE /provider-accounts/{provider}/{account_id}
@@ -2404,6 +2405,16 @@ from the system auth file rather than restored from registry memory. Explicit se
 only the provider's system auth file; polling covers saved active and inactive accounts.
 Quota fields are derived from the newest durable sample.
 
+Every provider-accounts route answers with the same whole payload the browser replaces its
+state with, durable quota readings and unreviewed reset alert included; a mutation that
+answered with the bare manager snapshot dropped both until the next poll. `login[provider]`
+reports a sign-in the daemon is running (`running`), the account a finished one saved
+(`succeeded`), or why it did not finish (`failed`), so the outcome does not belong to the
+request that started it. `POST .../{provider}/login` returns as soon as the provider CLI is
+running and is a 409 while another sign-in for that provider is live;
+`POST .../{provider}/login/dismiss` cancels a running one, reaping the CLI, or clears a
+finished one.
+
 Account identity carries its provenance. `identity_source` is `token` when the owner was
 resolved by asking the provider with that credential, and `cli`/`file` for weaker readings that
 describe machine state rather than the token. Only a `token` identity or an exact digest match
@@ -2411,9 +2422,10 @@ lets reconciliation move credentials into a saved account; a weaker match is rep
 `current.match_hint` and applied only through `…/adopt`. `POST /provider-accounts/verify`
 re-derives every saved account's owner. Saved accounts resolving to one provider account carry
 `conflict`, and every non-primary duplicate stops being polled and reports quota status
-`conflict`. Selecting a different account while live sessions of that provider are running
-returns HTTP 409 with `conflict: true` until the caller passes `force`; those sessions hold the
-outgoing token and rotate it back into the shared credential file. `GET
+`conflict`. Selection is never refused and never confirmed, including while live sessions of
+that provider are running: those processes re-read the shared credential file when its mtime
+changes, and a selection guard defends the switch against a token rotation that was already in
+flight from the outgoing login. `GET
 /provider-accounts/audit` returns the append-only record of credential-affecting decisions
 (action, matched-by, truncated digests) and never credential contents. Quota samples carry
 `provider_account_uuid`, the verified account a sample describes independent of the slot it was

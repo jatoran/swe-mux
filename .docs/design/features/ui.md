@@ -1301,6 +1301,10 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   first-run surfaces contradicting each other about whether a thing is required now is worse than
   either answer alone.
   Nothing later in the walk needs a provider account: the session it starts is a Shell.
+  The step advances on an account actually existing - a captured login, or a sign-in the daemon
+  reports as `succeeded` - rather than on the sign-in request returning, which is a different
+  moment now that the request returns as soon as the provider CLI is running
+  (`provider-accounts.md`, "A sign-in is daemon state").
   Failures remain on the current step with the owning feature's normal error surface.
 - Drag coaching is gesture-aware. Before movement, only the source tab is marked. After the
   pointer gesture crosses the real five-pixel drag threshold, the spotlight moves to the tab bar
