@@ -1,4 +1,5 @@
 import { devices, expect, test } from 'playwright/test'
+import { harnessReady } from './harnessReady'
 
 // Kept in step with `Scenario` in jumpLatest.ts by hand: that module is browser-only
 // (it imports CSS and touches the DOM at load), so Node cannot import a list from it.
@@ -15,6 +16,7 @@ test.use({ ...devices['Pixel 7'] })
 for (const scenario of SCENARIOS) {
   test(`tapping the jump-to-latest chip reaches the tail (${scenario})`, async ({ page }) => {
     await page.goto('/jump-latest-harness.html')
+    await harnessReady(page, 'setupJumpLatest')
     const before = await page.evaluate(name => window.setupJumpLatest(name), scenario)
     expect(before.onTail, 'setup should leave the viewport off the tail').toBe(false)
 
@@ -33,6 +35,7 @@ for (const scenario of SCENARIOS) {
 // two is the shape of this bug, and it is the pair — not the chip alone — that has to hold.
 test('the chip and the command rail agree in every scroll state', async ({ page }) => {
   await page.goto('/jump-latest-harness.html')
+  await harnessReady(page, 'runJumpLatestScenarios')
   const cases = await page.evaluate(() => window.runJumpLatestScenarios())
   const summary = cases.map(item =>
     `${item.name}: ${item.before.viewportY}/${item.before.baseY} -> ${item.after.viewportY}/${item.after.baseY}` +
