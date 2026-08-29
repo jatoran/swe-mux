@@ -548,7 +548,20 @@ class SupervisorClient:
             return await cls.connect(config.data_dir)
         except SupervisorUnavailable:
             pass
-        assert config.config_path is not None
+        if config.config_path is None:
+            # A `Config` built in code rather than loaded from a file - a test's
+            # app object, an embedded runtime - has nothing to hand the
+            # supervisor, which is keyed on its config path for both its
+            # single-instance mutex and its identity check. This used to be a
+            # bare `assert`, which is two wrong things at once now that the
+            # supervisor is on by default: it reaches the caller as an
+            # `AssertionError` rather than as the one exception the caller
+            # handles, and `python -O` strips it and spawns a supervisor with
+            # the literal string "None" as its config path.
+            raise SupervisorUnavailable(
+                "this daemon has no config file, so there is nothing to key a "
+                "supervisor on; sessions will run in-process"
+            )
         command = supervisor_command(config.config_path)
         log_path = config.data_dir / SUPERVISOR_LOG_NAME
         config.data_dir.mkdir(parents=True, exist_ok=True)

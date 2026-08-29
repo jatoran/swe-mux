@@ -2,10 +2,11 @@
 
 ## Vocabulary
 
-- Daemon: `muxd`; owns persistence, HTTP, WebSockets, and background workers. Owns PTYs
-  in-process by default; with the PTY supervisor enabled it is a supervisor client instead.
-- PTY supervisor: optional standalone `swe_mux.supervisor` process (flag:
-  `pty_supervisor_enabled`). Owns ConPTYs, their read loops, authoritative scrollback, and the
+- Daemon: `muxd`; owns persistence, HTTP, WebSockets, and background workers. By default it
+  is a client of the PTY supervisor; it owns PTYs in-process only when no supervisor could
+  be reached, which is a degraded start rather than a mode.
+- PTY supervisor: standalone `swe_mux.supervisor` process (flag: `pty_supervisor_enabled`,
+  **on by default since 2026-08-28**; the in-process path remains the automatic fallback). Owns ConPTYs, their read loops, authoritative scrollback, and the
   kill-on-close reaper Job so live sessions survive a daemon restart. Deliberately small and
   near-frozen; volatile code stays in the daemon.
 - Desktop supervisor: optional Windows `swe-mux` process; owns WebView2 window, tray, login
@@ -35,8 +36,8 @@ WebView2/browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ─�
                                └── global + per-session Win32 jobs
 ```
 
-With `pty_supervisor_enabled` the PTY column moves one process out (session-preserving
-reload): the daemon becomes a client of a token-authenticated loopback IPC socket, and the
+With `pty_supervisor_enabled` - the default - the PTY column moves one process out
+(session-preserving reload): the daemon becomes a client of a token-authenticated loopback IPC socket, and the
 supervisor owns the ConPTYs, their read loops, authoritative scrollback, and the reaper Job.
 Restarting the daemon then leaves agents running; the next daemon discovers the supervisor
 via `<data_dir>/supervisor.json`, reattaches, and rebuilds each live session from mirrored

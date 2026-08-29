@@ -14,7 +14,10 @@ continues to own every terminal.
 - Quit: explicit tray action that confirms live terminals and stops the managed daemon
   (shutdown `mode=quit`; with the PTY supervisor this also reaps every supervised session, so
   the end state matches the in-process mode).
-- Restart daemon (keep sessions): tray action shown only when `pty_supervisor_enabled`. Sends
+- Restart daemon (keep sessions): tray action shown only when `pty_supervisor_enabled`,
+  which is the default, so it is shown almost always. The gate is the *setting*, not
+  evidence a supervisor attached: a daemon whose supervisor failed to spawn still shows
+  the item, and `POST /api/daemon/restart` refuses it with 409 `supervisor_not_attached`. Sends
   shutdown `mode=restart` (the daemon detaches from the PTY supervisor without reaping), waits
   for the old daemon to exit, and starts a fresh one, which reattaches to the still-running
   sessions. This is the session-preserving "reload with my changes" path.
