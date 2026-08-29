@@ -662,7 +662,9 @@ def verify_stable_abi_forwarder(bundle_root: Path) -> None:
     )
 
 
-def verify_voice_closure_absent(bundle_root: Path) -> None:
+def verify_voice_closure_absent(
+    bundle_root: Path, closure: Collection[str] | None = None
+) -> None:
     """Fail the build when the acquired speech closure rode along anyway.
 
     `verify_bundle_contents` already rejects any unexpected top-level package, so
@@ -672,11 +674,17 @@ def verify_voice_closure_absent(bundle_root: Path) -> None:
     shipping is back", and names the mechanism (`EXCLUDED_VOICE_CLOSURE`) and the
     consequence (a 400 MB bundle again). The failure being guarded is a silent
     regrowth that only a size measurement would otherwise reveal.
+
+    `closure` is injectable for the same reason `verify_bundle_contents`'s
+    `expected` is: the default reads installed distribution metadata, which a
+    build environment has and a bare `uv sync` does not - and the assertion this
+    function makes is about a *bundle*, not about the machine checking it. CI's
+    Linux and macOS legs sync no extras on purpose, and the test that proves this
+    refusal reports the right thing should run there most of all.
     """
     internal = bundle_root / "_internal"
-    present = sorted(
-        name for name in voice_closure_top_levels() if (internal / name).exists()
-    )
+    names = voice_closure_top_levels() if closure is None else closure
+    present = sorted(name for name in names if (internal / name).exists())
     if present:
         raise SystemExit(
             "Voice closure regression: the bundle carries packages that are "
