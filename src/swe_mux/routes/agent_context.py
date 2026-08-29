@@ -1,4 +1,4 @@
-"""Agent Context: what an agent reads, where it came from, and syncing it."""
+"""Agent Context inventory, reveal, copy, linking, unlinking, and restore routes."""
 
 from __future__ import annotations
 
@@ -82,12 +82,104 @@ async def sync_agent_context(request: web.Request) -> web.Response:
         )
     except AgentContextConflict as exc:
         return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+    log.info(
+        "agent_context_synced project_id=%s direction=%s source=%s target=%s revision=%s",
+        project.id,
+        direction,
+        result["source"],
+        result["target"],
+        result["revision"],
+    )
     await request.app[keys.EVENTS].emit(
         "agent_context_changed",
         source="user",
         operation="sync",
         project_id=project.id,
         direction=direction,
+        revision=result["revision"],
+    )
+    return json_response(result)
+
+
+async def preview_agent_context_link(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    body = await request.json()
+    direction = str(body.get("direction") or "")
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
+    return json_response(await asyncio.to_thread(service.preview_link, project.root, direction))
+
+
+async def link_agent_context(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    body = await request.json()
+    direction = str(body.get("direction") or "")
+    source_revision = str(body.get("source_revision") or "")
+    target_revision = str(body.get("target_revision") or "")
+    if not source_revision or not target_revision:
+        raise ValueError("source_revision and target_revision are required")
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
+    try:
+        result = await asyncio.to_thread(
+            service.link,
+            project.id,
+            project.root,
+            direction,
+            source_revision,
+            target_revision,
+        )
+    except AgentContextConflict as exc:
+        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+    log.info(
+        "agent_context_linked project_id=%s direction=%s source=%s target=%s revision=%s",
+        project.id,
+        direction,
+        result["source"],
+        result["target"],
+        result["revision"],
+    )
+    await request.app[keys.EVENTS].emit(
+        "agent_context_changed",
+        source="user",
+        operation="link",
+        project_id=project.id,
+        direction=direction,
+        target=result["target"],
+        revision=result["revision"],
+    )
+    return json_response(result)
+
+
+async def unlink_agent_context(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    body = await request.json()
+    source_id = str(body.get("source_id") or "")
+    target_revision = str(body.get("target_revision") or "")
+    if not source_id or not target_revision:
+        raise ValueError("source_id and target_revision are required")
+    service: AgentContextService = request.app[keys.AGENT_CONTEXT]
+    try:
+        result = await asyncio.to_thread(
+            service.unlink,
+            project.id,
+            project.root,
+            source_id,
+            target_revision,
+        )
+    except AgentContextConflict as exc:
+        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+    log.info(
+        "agent_context_unlinked project_id=%s source_id=%s target=%s revision=%s",
+        project.id,
+        source_id,
+        result["target"],
+        result["revision"],
+    )
+    await request.app[keys.EVENTS].emit(
+        "agent_context_changed",
+        source="user",
+        operation="unlink",
+        project_id=project.id,
+        target=result["target"],
         revision=result["revision"],
     )
     return json_response(result)
@@ -111,6 +203,13 @@ async def restore_agent_context(request: web.Request) -> web.Response:
         )
     except AgentContextConflict as exc:
         return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+    log.info(
+        "agent_context_restored project_id=%s backup_id=%s target=%s revision=%s",
+        project.id,
+        backup_id,
+        result["target"],
+        result["revision"],
+    )
     await request.app[keys.EVENTS].emit(
         "agent_context_changed",
         source="user",
@@ -139,6 +238,18 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post(
         "/api/projects/{project_id}/agent-context/sync",
         sync_agent_context,
+    ),
+    web.post(
+        "/api/projects/{project_id}/agent-context/link/preview",
+        preview_agent_context_link,
+    ),
+    web.post(
+        "/api/projects/{project_id}/agent-context/link",
+        link_agent_context,
+    ),
+    web.post(
+        "/api/projects/{project_id}/agent-context/unlink",
+        unlink_agent_context,
     ),
     web.post(
         "/api/projects/{project_id}/agent-context/restore",
