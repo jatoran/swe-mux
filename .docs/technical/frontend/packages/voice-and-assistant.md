@@ -11,7 +11,8 @@ Design: `../../../design/features/voice.md`, `../../../design/features/assistant
 `fleetStatus.ts`, `insertTarget.ts`, `audioFrames.ts`, `speechGate.ts`, `utteranceCompleteness.ts`,
 `utteranceDeferral.ts`, `sileroVad.ts`, `voiceCaptureWorklet.ts`, `voiceLatency.ts`, `wakeWordTest.ts`,
 `VoiceLatencyReport.tsx`, `WakeWordTester.tsx`, `VoiceReadTab.tsx`, `voiceDock.ts`, `voiceMode.ts`,
-`voice.ts`, `mobileVoice.ts`, `smartTurnFeatures.ts`, `smartTurn.ts`, `smartTurnLab.tsx`
+`voice.ts`, `mobileVoice.ts`, `smartTurnFeatures.ts`, `smartTurn.ts`, `smartTurnLab.tsx`,
+`desktopShell.ts`
 
 `EdgeTtsSettings.tsx` owns the selected Edge provider panel: versioned disclosure,
 user-gesture-gated managed installation/repair with polled phases, external-interpreter override and
@@ -52,6 +53,8 @@ Scope: app-owned capture, draft, and history; one app-level dock holding every v
 The worklet, resampler and framer, Silero, and the frame-counted gate remain separate pure or narrowly stateful layers.
 `terminalActions.ts` owns the 180 ms paste-to-submit settle plus the generic request and acknowledgement envelope used by Talk rail actions.
 `insertTarget.ts` owns one-shot non-DOM editor claims used by spoken Notes navigation.
+`desktopShell.ts` reads the Windows shell's `window.__swemuxDesktopMedia` permission report and turns it into the sentence appended to a capture failure; a browser never has the global, and that absence is the answer rather than a missing value.
+The Talk preflight itself never latches a failed `/api/voice` read and never refuses through a bare `setDetail` - both rules exist because their absence made a client-side refusal produce no request, no history entry, and a three-word chip (`.docs/design/features/voice.md`).
 
 ### Playback
 

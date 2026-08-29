@@ -23,6 +23,7 @@ from swe_mux.build_support import (
 )
 from swe_mux.config import Config
 from swe_mux.desktop import (
+    WEBVIEW_DEBUG_PORT_ENV,
     DesktopRuntime,
     daemon_command,
     dispatch_internal_module,
@@ -580,6 +581,38 @@ def test_a_daemon_that_dies_while_waiting_warns_instead_of_hanging(
 
     assert len(warnings) == 1
     assert "exited during startup" in warnings[0][1]
+
+
+class FakeWebviewModule:
+    def __init__(self) -> None:
+        self.settings: dict[str, Any] = {}
+
+
+def test_the_webview_debug_port_stays_shut_unless_it_is_asked_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell runs with no devtools; this is the only way to see into it."""
+    monkeypatch.delenv(WEBVIEW_DEBUG_PORT_ENV, raising=False)
+    runtime = tray_runtime(tmp_path)
+    module = FakeWebviewModule()
+    runtime._enable_webview_debugging(module)
+    assert module.settings == {}
+
+    monkeypatch.setenv(WEBVIEW_DEBUG_PORT_ENV, "9333")
+    runtime._enable_webview_debugging(module)
+    assert module.settings["REMOTE_DEBUGGING_PORT"] == 9333
+
+
+@pytest.mark.parametrize("value", ["", "   ", "not-a-port", "0", "65536", "-1", "8765.5"])
+def test_an_unusable_webview_debug_port_opens_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """A mistyped diagnostic must never become an open port or a crash."""
+    monkeypatch.setenv(WEBVIEW_DEBUG_PORT_ENV, value)
+    runtime = tray_runtime(tmp_path)
+    module = FakeWebviewModule()
+    runtime._enable_webview_debugging(module)
+    assert module.settings == {}
 
 
 def test_desktop_control_accepts_only_ip_loopback_peers() -> None:

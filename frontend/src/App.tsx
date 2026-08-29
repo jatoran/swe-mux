@@ -1800,6 +1800,33 @@ export function App() {
     setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')
   }
 
+  /**
+   * Re-read the voice status, keeping the last good one when the daemon blips.
+   *
+   * This used to be a single fetch at mount with `.catch(()=>setVoiceStatus(null))`.
+   * A page that lost that fetch once never asked again, `stt_available` stayed
+   * unreadable for the life of that page, and Talk answered every press with
+   * `talk:error` and "Daemon transcription is unavailable" *without contacting
+   * the daemon*, so nothing appeared in any log while the daemon's own
+   * `/api/voice` went on reporting a perfectly healthy engine.
+   *
+   * The desktop shell is the client that pays for it, and that is the diagnosis
+   * for its reported dead microphone: its page is opened once and lives for days
+   * across daemon restarts and redeploys, where a browser tab gets reloaded and
+   * silently repairs itself.
+   *
+   * So: never latch a failure, and re-ask whenever the event stream says the
+   * daemon is back.
+   */
+  const loadVoiceStatus = ():Promise<VoiceStatus|null> =>
+    api<VoiceStatus>('GET','/api/voice')
+      .then(status=>{setVoiceStatus(status);return status})
+      // Deliberately keeps the previous value: a stale `stt_available` is a far
+      // better basis for the next press than "unavailable", and the reconnect
+      // path below re-asks anyway. The answer is *returned* as well as stored so
+      // a caller that needs it now does not have to wait for a render.
+      .catch(()=>null)
+
   const loadConfig = (includeTheme:boolean) =>
     api<AppConfig>('GET','/api/config')
       .then(config=>applyConfig(config,includeTheme))
@@ -1848,7 +1875,7 @@ export function App() {
     void refresh()
     void loadConfig(true)
     void loadProfiles()
-    void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>setVoiceStatus(null))
+    void loadVoiceStatus()
     void loadNotifications()
     const loadKeys = () => void api<{ bindings: Record<string, string> }>('GET', '/api/keybindings').then(result => { setKeybindingsStore(result.bindings); setKeybindings(current => JSON.stringify(current) === JSON.stringify(result.bindings) ? current : result.bindings) })
     loadKeys()
@@ -2186,6 +2213,12 @@ export function App() {
         // (a redundant push, never a missing one) but only briefly.
         presence.report()
         window.dispatchEvent(new CustomEvent('mux:events-connected',{detail:{resumed:hadCursor}}))
+        // Unconditional, unlike the resume-only refreshes below: this is the one
+        // cache whose absence is silent and permanent. `configuration_changed`
+        // only fires when someone edits a setting, so a page whose first
+        // `/api/voice` was lost has no other way back, and the socket opening
+        // is the app's own evidence that the daemon is answering again.
+        void loadVoiceStatus()
         if (hadCursor) {
           // Catch-up events are bounded and may omit state-independent audit hooks.
           // Refresh each global cache once instead of once per replayed event.
@@ -2303,7 +2336,7 @@ export function App() {
           // Another device (or another tab) changed the ring; an open picker refetches.
           if (event.type === 'clipboard_changed') window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT))
           if (!isReplay && event.type === 'configuration_changed') {
-            void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
+            void loadVoiceStatus()
             void assistantStatus().then(setAssistantInfo).catch(()=>{})
             // A change made from another device (or by editing the config file)
             // has to reach this tab's copy of *every* config-derived setting, not
@@ -2780,6 +2813,7 @@ export function App() {
   const conversation = useConversation(
     voiceStatus, updateSession, conversationTarget, handleVoiceIntent, sendAssistantTurn,
     ()=>voicePanelMode==='chat'&&!!assistantInfo?.enabled,
+    loadVoiceStatus,
   )
   const talkActive=conversation.phase!=='off'
   // Who plain speech reaches right now. Named for the addressee rather than the "mode" it
@@ -4881,7 +4915,7 @@ export function App() {
     onMode={mode => { if (focusedAgentSession) void setVoiceMode(focusedAgentSession, mode) }}
     onContent={content => { if (focusedAgentSession) void setVoiceContent(focusedAgentSession, content) }}
     onOpenSettings={() => openSettings('Voice')}
-    onStatusChanged={() => { void api<VoiceStatus>('GET', '/api/voice').then(setVoiceStatus).catch(() => {}) }}
+    onStatusChanged={() => { void loadVoiceStatus() }}
   />
   const speakLastReply = async (session: Session) => {
     unlockPlayback()
