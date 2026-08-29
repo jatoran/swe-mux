@@ -5674,20 +5674,173 @@ in it. The first hop is still a redeploy; every hop after it is not.
 ### Workstream D - split the voice stack into a sidecar
 
 The structural fix, and a project rather than a change.
+Done 2026-08-29.
+`src/swe_mux/voice_runtime.py`, `src/swe_mux/voice_wheels.py` (generated),
+`packaging/generate_voice_pins.py`, and the spec's `EXCLUDED_VOICE_CLOSURE`.
 
-- [ ] Extend `KokoroModelStore` from weights to the wheel closure, the way `G2P_WHEEL_URL`
+- [x] Extend `KokoroModelStore` from weights to the wheel closure, the way `G2P_WHEEL_URL`
   already does for one wheel.
-- [ ] Decide where the LGPL `num2words` obligation lives once the closure is no longer in the app
-  bundle. It does not disappear: a sidecar is also a distribution and carries the same relink
-  condition, so `verify_bundle_licenses` has to follow it there. This is why
-  `verify_build_extras_installed` currently *refuses* to build without `voice-local`, and that
-  refusal is load-bearing rather than incidental.
-- [ ] Answer the first-use-download question, which `NEW_USER_RELEASE_READINESS.md` already
-  tracks as open and which this phase would otherwise decide by accident.
-- [ ] Apply the same treatment to Playwright, which is easier because it already does not ship.
+- [x] Decide where the LGPL `num2words` obligation lives once the closure is no longer in the app
+  bundle. ~~It does not disappear: a sidecar is also a distribution~~ - **the premise was half
+  wrong and the correction is the useful part.** See below.
+- [x] Answer the first-use-download question
+  (`NEW_USER_RELEASE_READINESS.md`, "The first-use download question": three options, one
+  recommendation, implemented).
+- [x] Apply the same treatment to Playwright ~~, which is easier because it already does not
+  ship~~ - **half of it was already done by Workstream A and the other half should not be done.**
+  See below.
 
-Base bundle goes from roughly 400 MB to roughly 135 MB, and most updates never touch the sidecar
-at all.
+#### The re-examination the brief asked for, and its answer
+
+This workstream was justified as "base bundle goes from roughly 400 MB to roughly 135 MB, and
+most updates never touch the sidecar at all". Workstream B landed first and took the second
+clause away: a delta update writes 63 files and 32.4 MB whatever the bundle's size, and a
+measured pair that *removed an entire 101 MB top-level package* still shared 92.3% of its bytes.
+So bundle size is no longer the lever on update cost, and D had to be re-justified or dropped.
+
+It earns its cost on a different argument, and the numbers are stronger than the original ones.
+**`tts_enabled` and `stt_enabled` both ship `False`**, so every new install downloaded and let
+Windows scan 277.1 MiB of speech machinery for a capability it had not been asked to provide.
+That is the same defect the first-use asset contract exists to prevent, read from the other
+side: a surprise fetch at first Talk and a surprise 277 MB at first install are the same
+decision made for the user. The win is on first install - the least-proven path in the product,
+and the one B's reuse cannot help because there is no previous bundle - and on disk, permanently.
+
+| | before | after |
+|---|---|---|
+| bundle | 400.6 MiB, 2937 files | 111.2 MiB, 1497 files |
+| `_internal/` | 376.7 MiB, 51 packages | 79 MB, 30 packages |
+| `swe-mux.exe` (PYZ) | 23.9 MiB | 13.6 MiB |
+| acquired on a press | - | 81.9 MiB over 45 wheels |
+
+**The honest cost, because the win is not universal.** Unpacked, the closure is ~315 MB against
+the 277 MB it replaced, because wheels carry test suites and type stubs PyInstaller pruned. A
+user who never enables voice saves 289 MB of download and disk permanently. A user who does
+downloads 193 MB instead of 400 MB and stores about 26 MB more. Everyone downloads less; only
+the non-voice user - which is every new install - saves disk.
+
+#### Feasibility was measured before anything was built, and it found two invariants
+
+The question that decides the whole workstream is whether a frozen PyInstaller app can load a
+downloaded *native* closure from a `sys.path` directory. Answered with a throwaway frozen probe
+before a line of the real thing was written, and then again end to end with a console probe
+built from a copy of the shipped spec - same excludes, same hidden imports, same binaries. The
+second run acquired 81.9 MiB, verified it, unpacked it, activated it, and imported numpy,
+onnxruntime (with providers), CTranslate2 (with a device probe), tokenizers, faster-whisper,
+spaCy (with `spacy.load("en_core_web_sm")` and its full pipeline), thinc, blis, misaki (real IPA
+out of the G2P) and num2words - in 9 seconds.
+
+Two things the base bundle must carry **for code it does not contain**, both found by that probe
+and neither visible from the source:
+
+- **`python3.dll`, Windows' stable-ABI forwarder.** Every `abi3` wheel in the closure
+  (`tokenizers`, `hf_xet`) links against it by name, and PyInstaller collects it only when an
+  `abi3` extension is in the analysis - which the acquired closure by definition is not. Without
+  it every non-abi3 package loaded perfectly and `tokenizers` failed with `DLL load failed while
+  importing tokenizers: The specified module could not be found`, which names neither the file
+  nor the reason. `cryptography` happens to ship an abi3 `.pyd` and would collect it today; that
+  is a coincidence of the base closure, so the spec collects it explicitly and
+  `verify_stable_abi_forwarder` asserts the result.
+- **The whole standard library.** Excluding the closure hides its import graph from the analysis,
+  which is the point, but the graph did not stop existing. The probe failed on `platform`, then
+  `ctypes`, then `json`, then `http.cookies` - one at a time, each revealed only by fixing the
+  one before it. Guessing the list is the wrong shape of answer; the base bundle owns the
+  standard library, and owning all of it is what makes the boundary total rather than
+  probabilistic. `tkinter` is the one deliberate exception (4.5 MB of Tcl/Tk through
+  `PIL.ImageTk` and the stdlib's own `turtle`; no speech library reaches it).
+
+#### The LGPL premise was half wrong, and the correction matters
+
+The item above assumed "a sidecar is also a distribution and carries the same relink condition".
+That is true of a sidecar this project *builds and publishes*, and it is not what was built. The
+pins point at `files.pythonhosted.org`: the bytes go from PyPI to the user, and what swe-mux
+distributes is a URL and a SHA-256. So the obligation did not move to a new artifact - **it left
+the distribution**, the way it already had for `en_core_web_sm`, and the shipped closure now
+contains one LGPL package instead of two, which is a strict compliance improvement.
+
+What remains true, and is asserted rather than assumed, is that the copy which *lands* is
+readable `.py` source a recipient can replace, because `THIRD-PARTY-NOTICES.md` promises exactly
+that. `voice_runtime._verify_relinkable` checks it on the unpacked tree, and
+`license_audit.ACQUIRED_AT_FIRST_USE` is what stops the generated notices telling a reader to
+look under `_internal/num2words/` for a package that is not there.
+
+**`verify_build_extras_installed`'s refusal is still load-bearing, for the opposite reason.**
+It used to refuse a build without `voice-local` because `collect_all` on an absent package
+collects nothing silently. It now refuses because `verify_bundle_contents` proves the closure is
+*absent*, and an absence is vacuous in an environment that never had it - and because
+`voice_closure_top_levels()` reads those distributions' installed metadata to *build* the spec's
+excludes list, so a build without them excludes too little and reships everything while every
+gate passes.
+
+#### The Playwright item, refuted in half and answered in half
+
+"Easier because it already does not ship" was right about the *keeping it out* half and that
+half was already done: Workstream A's `verify_bundle_contents` asserts the bundle's package set
+in both directions, so the 101 MB of `playwright/driver` that rode in behind a lazy import in
+`preview_capture.py` cannot return silently.
+
+The other half - giving the packaged app a way to *acquire* it - is now mechanically possible
+and is deliberately not done. Playwright is two acquisitions, not one: a ~40 MB wheel this store
+handles, and a ~150 MB Chromium that `playwright install` fetches through its own installer,
+with its own cache and its own trust story. `NEW_USER_RELEASE_READINESS.md` already rejected
+bundling that browser and auto-running that installer. Two presses with two stated sizes is the
+honest version, and it is worth building when somebody wants preview capture in the packaged
+app; nobody has asked.
+
+#### The pin table is generated, and that is the load-bearing part
+
+`swe_mux/voice_wheels.py` is produced from `uv.lock` by `packaging/generate_voice_pins.py`, and
+`tests/test_voice_wheels.py` regenerates it and fails on any difference. A hand-maintained
+description of this repository's resolution drifts the first time anybody runs `uv lock
+--upgrade`, and the failure that produces is not a broken build or a failed import - it is a
+first-use download of a closure nobody audited, which no other gate here would notice.
+
+Which distributions are acquired is a set difference over the lockfile's own graph -
+`closure(root + desktop + voice-local + g2p-model)` minus `closure(root + desktop)` - so it is a
+graph question rather than a judgement. That matters more than it sounds: `numpy`, `jinja2`,
+`wrapt`, `pyyaml` and `setuptools` all look like base infrastructure, and all of them are, in
+this project, reachable only through spaCy and faster-whisper. `setuptools` in particular was
+recorded by Workstream A as an unexplained passenger; it was not one, and it left with the
+closure it belonged to.
+
+Three details worth keeping:
+
+- **`packaging` had to become a declared dependency.** `voice_wheels` imports `packaging.tags`
+  to choose which pinned wheel this interpreter can load - the same matching pip and uv use, and
+  the cases that justify it are exactly the ones a hand-rolled `(platform, machine, version)`
+  key gets wrong. It used to arrive transitively through spaCy and onnxruntime, which are
+  precisely the packages that stopped shipping: an undeclared direct import of a package the
+  bundle just dropped is an ImportError inside the code that exists to recover from a missing
+  closure.
+- **`en_core_web_sm` is deliberately outside this closure.** `SpacyModelStore` has owned it since
+  2026-08-28. Two stores fetching one wheel into two directories is two answers to "is the G2P
+  model ready", and the wrong one is whichever the reader did not look at. It is also the only
+  entry in `uv.lock` with no `size`, which is why it needed a store with a measured constant.
+- **`docopt` is pinned nowhere.** `num2words` declares it; it has published an sdist and never a
+  wheel since 2014, so a wheel-only store cannot acquire it. That is safe only because the
+  importable `num2words` package does not use it - only its console script does - and
+  `tests/test_voice_wheels.py` asserts that rather than assuming it.
+
+#### Owed: one live rehearsal
+
+The third owed across this phase, and the same reason: a worktree isolates the working tree and
+not the runtime, so nothing here has redeployed a real frozen app. What it should measure, in
+one run:
+
+1. That a redeployed frozen app **starts healthy** with the closure absent, and that Settings ->
+   Voice reports `not_downloaded` rather than an error. The console probe proves the frozen
+   *import* path; it does not prove the daemon's own startup with `VoiceService.__init__`
+   calling `activate()` against an empty data dir.
+2. That the press acquires, and that read aloud and dictation both work **afterwards without a
+   restart** - which is what `WhisperModelStore.forget_backend()` exists for and the one part of
+   the wiring no unit test can reach.
+3. **Time to runtime-ready** for a cold 111 MiB bundle against the 225s measured for an
+   already-scanned 400 MiB one. This is the number that would justify revisiting
+   `APP_HEALTH_TIMEOUT_SECONDS`, and it compounds with Workstream B's delta rather than
+   duplicating it.
+4. That an operator who had voice working before the update meets a stated `not_downloaded` and
+   a press, rather than a broken engine. This is the one user-visible regression this workstream
+   can cause, and it is the reason to rehearse before cutting a release rather than after.
 
 ### Considered and not taken
 
@@ -5753,8 +5906,15 @@ workflow rather than a trust boundary. Both cmux and orca have one.
   which needs a real frozen app and is deliberately not faked in a test.
 - [ ] A bundle built locally and a bundle built by CI contain the same packages, and a difference
   fails a build.
-- [ ] The voice closure is acquired on an explicit press, its LGPL obligation is verified wherever
+- [x] The voice closure is acquired on an explicit press, its LGPL obligation is verified wherever
   it now lives, and a user who never enables voice never downloads it.
+  **Met 2026-08-29** (Workstream D): 400.6 MiB over 2937 files becomes 111.2 MiB over 1497, the
+  closure is 81.9 MiB acquired on a press against pinned SHA-256s, and the LGPL obligation
+  turned out to leave the distribution entirely rather than move to a new artifact - so it is
+  proven on the tree that is unpacked (`voice_runtime._verify_relinkable`) rather than on a
+  bundle that no longer contains it. Still owed: the live rehearsal recorded under Workstream D,
+  which is the only thing that can show a real frozen app starting healthy without the closure
+  and acquiring it afterwards without a restart.
 
 ## Phase 22 - Agent authority scopes and the message envelope (2026-08-29)
 

@@ -60,6 +60,7 @@ from .voice_models import (
     SpacyModelStore,
     WhisperModelStore,
 )
+from .voice_runtime import VoiceRuntimeStore
 
 
 def _last_exchange(
@@ -1403,6 +1404,7 @@ class VoiceService:
         kokoro_models: KokoroModelStore | None = None,
         whisper_models: WhisperModelStore | None = None,
         g2p_model: SpacyModelStore | None = None,
+        voice_runtime: VoiceRuntimeStore | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -1411,6 +1413,14 @@ class VoiceService:
         self.automation_store = automation_store
         self.provider = provider
         self.kokoro_models = kokoro_models or KokoroModelStore(config.data_dir)
+        # The speech *libraries*, which the desktop bundle no longer carries
+        # (ROADMAP Phase 21 Workstream D). Activated first, and before the two
+        # stores below, because both of them ask questions this answers: the G2P
+        # model store resolves `en_core_web_sm` and the Whisper store memoizes
+        # whether `faster_whisper` imports, and a `sys.path` entry added after
+        # either has spoken is an answer nobody re-asks.
+        self.voice_runtime = voice_runtime or VoiceRuntimeStore(config.data_dir)
+        self.voice_runtime.activate()
         # The G2P model the Kokoro engine needs before it can phonemize anything.
         # A prerequisite of the same capability rather than a separate feature, so
         # it is acquired by the same press and reported on the same line - but it
@@ -3258,8 +3268,9 @@ class VoiceService:
         except ImportError as exc:
             raise VoiceError(
                 "faster-whisper is not installed; local dictation needs the "
-                "voice-local extra (`uv sync --extra voice-local`), or select "
-                "Windows Speech Recognition in Settings"
+                "on-device speech libraries - download them in Settings → Voice, "
+                "or install the voice-local extra (`uv sync --extra voice-local`), "
+                "or select Windows Speech Recognition in Settings"
             ) from exc
         self._require_whisper_weights(profile)
         name = self._ensure_whisper_model(
@@ -3461,6 +3472,36 @@ class VoiceService:
             with suppress(OSError):
                 item.unlink(missing_ok=True)
 
+    def _runtime_diagnostic(self, capability: str) -> str:
+        """Why the on-device speech libraries are unusable, and what to do next.
+
+        Four absences that used to render as one "install the voice-local extra"
+        line, and only one of them is still that. Since the desktop bundle stopped
+        carrying the closure (ROADMAP Phase 21 Workstream D) the common case on a
+        packaged install is "never acquired", whose remedy is a press rather than
+        a command a frozen app has no shell to run.
+        """
+        state = self.voice_runtime.status()
+        if not state["supported"]:
+            return (
+                f"on-device {capability} is not available on this platform or "
+                "interpreter; install the voice-local extra "
+                "(`uv sync --extra voice-local`) to supply it yourself"
+            )
+        megabytes = state["total_bytes"] / 1024 / 1024
+        if state["status"] == "downloading":
+            return (
+                f"downloading the on-device speech libraries ({megabytes:.0f} MB) - "
+                "this runs once"
+            )
+        if state["status"] == "error":
+            return f"the on-device speech libraries failed to download: {state['error']}"
+        return (
+            f"the on-device speech libraries are not downloaded ({megabytes:.0f} MB); "
+            "download them in Settings → Voice. Nothing is downloaded until you ask "
+            "for it"
+        )
+
     def _stt_readiness(self) -> tuple[bool, str | None, list[dict[str, Any]]]:
         """Whether dictation can run *right now*, why not, and each model's state.
 
@@ -3479,12 +3520,7 @@ class VoiceService:
         routing = self.decode_model(COMMAND_PROFILE)
         models = self.whisper_models.statuses(dictation, routing)
         if not self.whisper_models.backend_installed():
-            return (
-                False,
-                "faster-whisper is missing; install the voice-local extra "
-                "(`uv sync --extra voice-local`)",
-                models,
-            )
+            return False, self._runtime_diagnostic("dictation"), models
         dictation_state = self.whisper_models.status(dictation)
         if dictation_state["status"] != "ready":
             size = f" ({dictation_state['size_hint']})" if dictation_state["size_hint"] else ""
@@ -3522,12 +3558,23 @@ class VoiceService:
         below and `GET /api/voice/models/kokoro` both read this, so the settings
         panel and the doctor cannot disagree about what "ready" means here.
         """
-        return {**self.kokoro_models.status(), "g2p": self.g2p_model.status()}
+        return {
+            **self.kokoro_models.status(),
+            "g2p": self.g2p_model.status(),
+            # The third half, and it is a prerequisite of the other two rather
+            # than a peer: without the speech libraries there is no engine to
+            # feed the weights to. Nested here for the same reason `g2p` is - a
+            # caller has to be able to tell which part is missing - and reported
+            # again at the top level of `status` because it gates dictation too.
+            "runtime": self.voice_runtime.status(),
+        }
 
     async def status(self) -> dict[str, Any]:
         kokoro_model = self.kokoro_model_status()
         kokoro_ready = (
-            kokoro_model["status"] == "ready" and kokoro_model["g2p"]["status"] == "ready"
+            kokoro_model["status"] == "ready"
+            and kokoro_model["g2p"]["status"] == "ready"
+            and kokoro_model["runtime"]["status"] == "ready"
         )
         sapi_available = os.name == "nt" and bool(shutil.which("powershell.exe"))
         providers = {
@@ -3553,6 +3600,11 @@ class VoiceService:
                 # the 106 MB download they already ran is the one that failed.
                 "diagnostic": None
                 if kokoro_ready
+                else (
+                    self._runtime_diagnostic("read-aloud")
+                    + ", or switch the engine to the OS voice"
+                )
+                if kokoro_model["runtime"]["status"] != "ready"
                 else (
                     "the Kokoro voice model is not downloaded; download it in "
                     "Settings → Voice, or switch the engine to the OS voice"
@@ -3609,6 +3661,11 @@ class VoiceService:
             "cache_limit_bytes": self.config.tts_cache_mb * 1024 * 1024,
             "clip_count": stats["count"],
             "kokoro_model": kokoro_model,
+            # Hoisted out of `kokoro_model` as well as nested inside it: it gates
+            # dictation, which has nothing to do with Kokoro, so a settings panel
+            # reading it from under the read-aloud engine would be reading it from
+            # the wrong place.
+            "voice_runtime": kokoro_model["runtime"],
             "kokoro_voice": self.config.tts_kokoro_voice,
             "kokoro_spelled_words": self.spelled_words.entries(),
             "stt_enabled": self.config.stt_enabled,

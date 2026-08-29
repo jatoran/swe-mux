@@ -917,14 +917,23 @@ def test_stt_readiness_separates_no_extra_from_no_weights(
 ) -> None:
     """Three kinds of absence that used to render as one `stt_available: false`.
 
-    "the extra is missing" and "the weights were never downloaded" need different
-    acts, and the second is the one a fresh install is actually in.
+    "the libraries are missing" and "the weights were never downloaded" need
+    different acts, and both are states a fresh install is actually in.
+
+    The first diagnostic changed on 2026-08-29 and the change is the point. It
+    used to say `uv sync --extra voice-local`, which the packaged app - the
+    audience most likely to be in this state, now that the bundle no longer
+    carries the closure - has no shell to run it in. It names the press instead,
+    and states the size before anything is fetched.
     """
     service, _events, _emitted, _record = make_service(tmp_path)
     try:
         monkeypatch.setattr(service.whisper_models, "backend_installed", lambda: False)
         available, diagnostic, models = service._stt_readiness()
-        assert available is False and "voice-local" in (diagnostic or "")
+        assert available is False
+        assert "not downloaded" in (diagnostic or "")
+        assert "Settings" in (diagnostic or "")
+        assert "Nothing is downloaded until you ask for it" in (diagnostic or "")
         assert [entry["model"] for entry in models] == ["turbo", "small.en"]
 
         monkeypatch.setattr(service.whisper_models, "backend_installed", lambda: True)

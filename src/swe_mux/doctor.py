@@ -681,6 +681,13 @@ def optional_asset_rows(
     and `stt_enabled` both shipping false, an untouched install has downloaded
     nothing, and reporting that as a missing capability would invent a problem.
 
+    Since 2026-08-29 there are four voice rows rather than three, and the new one
+    is first because it is a prerequisite of the other three. The desktop bundle
+    stopped carrying the speech *libraries* (ROADMAP Phase 21 Workstream D), so
+    "the Kokoro weights are missing" and "there is no engine to load them into"
+    are now different states with different remedies, and a report that showed
+    only the first would send a reader to press a button that cannot help.
+
     `voice_local_install` is passed in rather than computed here, and that is what
     keeps this function pure while still being right. The command that installs an
     extra depends on how swe-mux was installed - `uv sync --extra voice-local` is
@@ -697,6 +704,40 @@ def optional_asset_rows(
             "remedy": capture.get("remedy"),
         }
     ]
+    runtime = dict(voice.get("runtime") or {})
+    if runtime:
+        # First in the voice group, because it gates the other three: without the
+        # speech libraries there is nothing for any of those weights to load into.
+        # A reader who sees three "not downloaded" model rows and no explanation
+        # would go and press three buttons that cannot help.
+        used = bool(voice.get("tts_enabled")) or bool(voice.get("stt_enabled"))
+        megabytes = float(runtime.get("total_bytes") or 0) / 1024 / 1024
+        rows.append(
+            {
+                "id": "voice_runtime",
+                "label": "On-device speech libraries (Kokoro + Whisper engines)",
+                "state": "unsupported" if not runtime.get("supported") else runtime.get("status"),
+                "detail": (
+                    "the on-device speech libraries are present "
+                    f"({runtime.get('source')})"
+                    if runtime.get("status") == "ready"
+                    else str(runtime.get("error") or "")
+                    if not runtime.get("supported")
+                    else _asset_detail(
+                        str(runtime.get("status") or ""),
+                        f"the on-device speech libraries ({megabytes:.0f} MB)",
+                        used=used,
+                        unused_note="read aloud and hands-free conversation are both off",
+                        error=runtime.get("error"),
+                    )
+                ),
+                "remedy": None
+                if runtime.get("status") == "ready"
+                else voice_local_install
+                if not runtime.get("supported")
+                else "Settings -> Voice -> Download speech libraries",
+            }
+        )
     kokoro = dict(voice.get("kokoro") or {})
     if kokoro:
         used = bool(voice.get("tts_enabled")) and voice.get("tts_engine") == "kokoro"

@@ -58,14 +58,27 @@ NPM_LOCK = ROOT / "frontend" / "package-lock.json"
 SIDECAR = Path(__file__).resolve().parent / "third_party_licenses.json"
 NOTICES = ROOT / "THIRD-PARTY-NOTICES.md"
 
-# Extras whose packages are redistributed in the desktop bundle. `desktop` ships
-# (tray icon + webview) and so does `voice-local` (on-device Kokoro TTS and
-# faster-whisper dictation): both are built into the bundle, so both are part of
-# the distributed closure whatever a given developer happens to have synced.
+# Extras whose packages a swe-mux install puts on a user's machine. `desktop` is
+# redistributed - the tray icon and the webview are built into the bundle.
+# `voice-local` no longer is: since 2026-08-29 (ROADMAP Phase 21 Workstream D) the
+# on-device speech closure is acquired at first use from PyPI, by
+# `swe_mux.voice_runtime`, from pins generated out of this same `uv.lock`.
+#
+# It is still walked here, and the difference between "redistributed" and
+# "acquired" is a difference in *obligations*, not in whether the audit covers it.
+# swe-mux causes those packages to be installed, names the exact versions, and
+# imports them into its own process. A GPL package reached that way is no more
+# acceptable than one inside the bundle, and the espeak-ng ban has to hold for a
+# closure this project pins whether or not it hosts the bytes. What changes is the
+# LGPL relink proof: `build_desktop.verify_bundle_licenses` cannot assert anything
+# about a package the bundle does not contain, so `voice_runtime._verify_relinkable`
+# asserts it on the tree that is unpacked instead. `ACQUIRED_AT_FIRST_USE` below
+# is what keeps the generated notices honest about which is which.
+#
 # That distinction is the whole point of defining the walk over a declared set of
-# extras rather than over the installed environment - `voice-local` carries the
+# extras rather than over the installed environment: `voice-local` carries the
 # LGPL `num2words`, and a closure walked over a bare `uv sync` would report a
-# clean, copyleft-free bundle that ships it anyway.
+# clean, copyleft-free install that pulls it in anyway.
 #
 # `preview-capture` does NOT ship: Playwright is an optional local install the
 # user opts into, never bundled, which is the known gap CONTROL_PLANE_ROADMAP.md
@@ -83,11 +96,11 @@ DISTRIBUTED_EXTRAS = ("desktop", "voice-local")
 # `g2p-model` is the exception and needs naming rather than assuming. It holds
 # `en-core-web-sm`, which is a group member only because it cannot be published
 # in `Requires-Dist` at all (it exists on no index; see the note on
-# `voice-local` in `pyproject.toml`), and `packaging/swe_mux.spec` collects it
-# into `_internal/en_core_web_sm/`. So it is unpublished and shipped at the same
-# time, and a walk that could not see it would report a bundle it does not
-# describe - the same failure `DISTRIBUTED_EXTRAS` exists to prevent for
-# `voice-local`'s LGPL `num2words`.
+# `voice-local` in `pyproject.toml`). The bundle no longer collects it - since
+# 2026-08-28 `voice_models.SpacyModelStore` fetches it on a press - so it is now
+# unpublished and *acquired* rather than unpublished and shipped, and it is walked
+# for the same reason `voice-local` is: a walk that could not see it would report
+# an install it does not describe.
 DISTRIBUTED_GROUPS = ("g2p-model",)
 
 # The environments swe-mux is distributed for. A dependency counts as shipped if
@@ -120,9 +133,29 @@ ALLOWLIST: dict[str, str] = {
     "num2words": (
         "LGPL-2.1. Required by `misaki.en`, which imports it at module scope "
         "to speak numbers in the Kokoro G2P; there is no misaki English path "
-        "without it. Same weak-copyleft reasoning and same relink treatment as "
-        "pystray. NOT part of the 2026-08-17 audit baseline - it entered with "
-        "the espeak-free TTS replacement, which is why the gate exists."
+        "without it. Same weak-copyleft reasoning as pystray, and since "
+        "2026-08-29 a weaker obligation: swe-mux does not redistribute it at "
+        "all. The desktop bundle stopped carrying the voice closure (ROADMAP "
+        "Phase 21 Workstream D) and `swe_mux.voice_runtime` fetches this wheel "
+        "from PyPI on an explicit press, so the bytes travel from the index to "
+        "the user. The relink condition still holds for the copy that lands and "
+        "is asserted on it (`voice_runtime._verify_relinkable`). NOT part of the "
+        "2026-08-17 audit baseline - it entered with the espeak-free TTS "
+        "replacement, which is why the gate exists."
+    ),
+}
+
+
+# Allowlisted packages the desktop bundle does not contain, mapped to where a
+# recipient finds the copy that is actually running. Every entry is a package
+# swe-mux pins and imports but does not host, so the notices must not tell a
+# reader to look under `_internal/` for it - they would find nothing and conclude
+# the relink promise was false.
+ACQUIRED_AT_FIRST_USE: dict[str, str] = {
+    "num2words": (
+        "`<data-dir>/voice-runtime/site/num2words/` - acquired on an explicit "
+        "press by `swe_mux.voice_runtime`, from the same PyPI wheel this "
+        "repository pins in `swe_mux/voice_wheels.py`"
     ),
 }
 
@@ -574,6 +607,35 @@ def membership_drift(recorded: list[Package]) -> list[str]:
     return problems
 
 
+def _replacement_lines(name: str) -> list[str]:
+    """Where the running copy of an allowlisted package is, and how to replace it.
+
+    Two shapes, and the difference is load-bearing rather than cosmetic. A
+    redistributed package is inside the bundle and a recipient overwrites it
+    there. An acquired one was never hosted by this project: telling a reader to
+    look under `_internal/` for it would send them to a path that does not exist
+    and read as a broken promise.
+    """
+    landing = ACQUIRED_AT_FIRST_USE.get(name)
+    if landing is not None:
+        return [
+            f"**To replace it:** swe-mux does not redistribute `{name}`. The desktop",
+            "bundle does not contain it; the packaged app downloads the pinned wheel",
+            "from PyPI on an explicit press and unpacks it as plain, readable Python",
+            f"source under {landing}.",
+            "Overwrite those files with your own build of the same version and relaunch;",
+            "the application imports them from disk at startup.",
+            *_source_replacement_lines(name),
+        ]
+    return [
+        f"**To replace it:** the desktop bundle ships `{name}` as plain, readable",
+        f"Python source under `swe-mux/_internal/{name}/`, not compiled into the",
+        "executable archive. Overwrite those files with your own build of the same",
+        "version and relaunch; the application imports them from disk at startup.",
+        *_source_replacement_lines(name),
+    ]
+
+
 def _source_replacement_lines(name: str) -> list[str]:
     """How a source install substitutes its own build of an allowlisted package."""
     extra = owning_extra(name)
@@ -600,9 +662,14 @@ def render_notices(packages: list[Package]) -> str:
         "contains none, which is checked against the built tree on every build rather than",
         "asserted here, and no GPL package resolves into the dependency closure either.",
         "",
-        "swe-mux does ship two weak-copyleft (LGPL) libraries. Weak copyleft imposes",
-        "nothing on swe-mux's own license: the obligation is to say the library is there,",
-        "provide its license, and let you replace it with your own build.",
+        "swe-mux uses weak-copyleft (LGPL) libraries. Weak copyleft imposes nothing on",
+        "swe-mux's own license: the obligation is to say the library is there, provide",
+        "its license, and let you replace it with your own build.",
+        "",
+        "Some of them are redistributed inside the desktop bundle and some are acquired",
+        "from PyPI on an explicit press and never hosted by this project. Each section",
+        "below says which, because where the copy lives is exactly what a replacement",
+        "instruction has to name.",
         "",
     ]
     for name, reason in sorted(ALLOWLIST.items()):
@@ -614,11 +681,7 @@ def render_notices(packages: list[Package]) -> str:
             "",
             reason,
             "",
-            f"**To replace it:** the desktop bundle ships `{name}` as plain, readable",
-            f"Python source under `swe-mux/_internal/{name}/`, not compiled into the",
-            "executable archive. Overwrite those files with your own build of the same",
-            "version and relaunch; the application imports them from disk at startup.",
-            *_source_replacement_lines(name),
+            *_replacement_lines(name),
             "",
         ]
     # Rendered only when there is something to render. A standing heading over an

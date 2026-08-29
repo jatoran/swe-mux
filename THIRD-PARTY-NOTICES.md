@@ -12,18 +12,25 @@ Do not edit it by hand.
 contains none, which is checked against the built tree on every build rather than
 asserted here, and no GPL package resolves into the dependency closure either.
 
-swe-mux does ship two weak-copyleft (LGPL) libraries. Weak copyleft imposes
-nothing on swe-mux's own license: the obligation is to say the library is there,
-provide its license, and let you replace it with your own build.
+swe-mux uses weak-copyleft (LGPL) libraries. Weak copyleft imposes nothing on
+swe-mux's own license: the obligation is to say the library is there, provide
+its license, and let you replace it with your own build.
+
+Some of them are redistributed inside the desktop bundle and some are acquired
+from PyPI on an explicit press and never hosted by this project. Each section
+below says which, because where the copy lives is exactly what a replacement
+instruction has to name.
 
 ### num2words 0.5.14 - LGPL
 
-LGPL-2.1. Required by `misaki.en`, which imports it at module scope to speak numbers in the Kokoro G2P; there is no misaki English path without it. Same weak-copyleft reasoning and same relink treatment as pystray. NOT part of the 2026-08-17 audit baseline - it entered with the espeak-free TTS replacement, which is why the gate exists.
+LGPL-2.1. Required by `misaki.en`, which imports it at module scope to speak numbers in the Kokoro G2P; there is no misaki English path without it. Same weak-copyleft reasoning as pystray, and since 2026-08-29 a weaker obligation: swe-mux does not redistribute it at all. The desktop bundle stopped carrying the voice closure (ROADMAP Phase 21 Workstream D) and `swe_mux.voice_runtime` fetches this wheel from PyPI on an explicit press, so the bytes travel from the index to the user. The relink condition still holds for the copy that lands and is asserted on it (`voice_runtime._verify_relinkable`). NOT part of the 2026-08-17 audit baseline - it entered with the espeak-free TTS replacement, which is why the gate exists.
 
-**To replace it:** the desktop bundle ships `num2words` as plain, readable
-Python source under `swe-mux/_internal/num2words/`, not compiled into the
-executable archive. Overwrite those files with your own build of the same
-version and relaunch; the application imports them from disk at startup.
+**To replace it:** swe-mux does not redistribute `num2words`. The desktop
+bundle does not contain it; the packaged app downloads the pinned wheel
+from PyPI on an explicit press and unpacks it as plain, readable Python
+source under `<data-dir>/voice-runtime/site/num2words/` - acquired on an explicit press by `swe_mux.voice_runtime`, from the same PyPI wheel this repository pins in `swe_mux/voice_wheels.py`.
+Overwrite those files with your own build of the same version and relaunch;
+the application imports them from disk at startup.
 Running from source (`uv sync --extra voice-local && uv run muxd`) replaces it the
 usual way, with `pip install num2words==<your build>`.
 

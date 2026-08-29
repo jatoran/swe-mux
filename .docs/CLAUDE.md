@@ -214,18 +214,27 @@
   both stay alive - `license_audit.py --check` reads the resolved closure's metadata and runs
   in the verification gate, and `build_desktop.verify_bundle_licenses` reads the built tree
   for the payloads by artifact name. Neither substitutes for the other.
-  GPL and AGPL may never enter. LGPL needs an `ALLOWLIST` entry *and* must ship as
-  replaceable source under `_internal/<pkg>/`, which is why `pystray` and `num2words` sit in
-  the spec's `collect_all` loop. No espeak-ng in any form, which is a dependency-review rule
+  GPL and AGPL may never enter. LGPL needs an `ALLOWLIST` entry *and* a proof that a recipient
+  can substitute their own build - which is why `pystray` sits in the spec's `collect_all` loop,
+  landing as readable source under `_internal/pystray/`. Since 2026-08-29 `num2words` is proven
+  the other way: the bundle does not contain it, `voice_runtime` fetches its wheel from PyPI on
+  a press, and `voice_runtime._verify_relinkable` asserts the unpacked copy is source.
+  `license_audit.ACQUIRED_AT_FIRST_USE` names which packages are in which case, and
+  `tests/test_license_audit.py` fails if an allowlisted package has no proof or two. No espeak-ng in any form, which is a dependency-review rule
   rather than a preference (`development/ROADMAP.md` Phase 10.5 holds the measurements).
   After any dependency change: `uv sync --extra desktop --extra voice-local` then
   `uv run python packaging/license_audit.py --write`, and commit both generated files.
+  **And `uv run python packaging/generate_voice_pins.py --write`** if the change touches the
+  `voice-local` extra, the `g2p-model` group, or anything they resolve, because the desktop app
+  downloads that closure at first use and the pin table is what says which bytes are acceptable.
   Both extras, because the closure walk is defined over `DISTRIBUTED_EXTRAS` and
   `--write` reads licenses out of what is actually installed. `voice-local` is
-  optional to install and mandatory to build from: `num2words` reaches the closure
-  through it, so `build_desktop.verify_build_extras_installed` and the
-  `redeploy_desktop` preflight both refuse a build without it rather than shipping
-  a bundle whose `_internal/num2words/` is missing.
+  optional to install and mandatory to build from, and the reason inverted on 2026-08-29:
+  the bundle no longer ships that closure, so the extra is what makes
+  `verify_bundle_contents`'s proof of its *absence* meaningful, and what lets
+  `build_desktop.voice_closure_top_levels()` read the metadata that builds the spec's excludes.
+  `build_desktop.verify_build_extras_installed` and the `redeploy_desktop` preflight both refuse
+  a build without it rather than silently reshipping 277 MB.
   A second rule, added 2026-08-28 after `swe-mux[voice-local]` turned out to be
   **uninstallable by anyone** for the whole life of 0.1.0
   (`development/DEPENDENCY_AUDIT_2026-08-28.md` § 4): **a `[tool.uv.sources]` entry is a
@@ -287,6 +296,26 @@
   `design/features/ui.md`, `design/interfaces.md`, `design/data-model.md`
 - Changing root-session or quota-reset sounds: `design/features/notifications.md`,
   `design/features/voice.md`
+- Changing what the desktop bundle carries, or adding a first-use asset it acquires instead:
+  `design/features/desktop-shell.md`, `design/features/voice.md`,
+  `development/NEW_USER_RELEASE_READINESS.md`,
+  `technical/backend/packages/voice-and-assistant.md`, `packaging/license_audit.py`.
+  Three rules the split exists to enforce, all of them learned by measuring rather than reading.
+  **The pin table is generated from `uv.lock` and never edited**
+  (`packaging/generate_voice_pins.py` -> `src/swe_mux/voice_wheels.py`): a hand-maintained
+  description of this repository's resolution drifts the first time anybody upgrades, and the
+  failure that produces is not a broken build - it is a first-use download of a closure nobody
+  audited, which no other gate here would notice.
+  **A bundle that stops shipping a closure must still carry what that closure's *imports* need**
+  - the whole standard library and, on Windows, `python3.dll` for the `abi3` wheels that link
+  against it by name. Excluding a package hides its import graph from PyInstaller's analysis
+  without making the graph go away, and both of these were found only by building a frozen probe
+  and watching it fail one module at a time.
+  **An obligation follows the copy, not the package name.** `num2words` is LGPL; the bundle no
+  longer contains it, so `verify_bundle_licenses` proves nothing about it and
+  `voice_runtime._verify_relinkable` proves the relink condition on the tree that is unpacked
+  instead. `license_audit.ACQUIRED_AT_FIRST_USE` is what keeps the generated notices from
+  pointing a reader at `_internal/` for a package that is not there.
 - Changing web push, which device a notification reaches, or the notification preference
   shape: `design/features/notifications.md`, `design/features/device-presence.md`,
   `design/interfaces.md`, `technical/backend/packages.md`,

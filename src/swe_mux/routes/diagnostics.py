@@ -744,6 +744,7 @@ def _optional_asset_report(app: web.Application) -> list[dict[str, Any]]:
     }
     if voice_service is not None:
         voice["kokoro"] = voice_service.kokoro_model_status()
+        voice["runtime"] = voice["kokoro"]["runtime"]
         voice["whisper"] = voice_service.whisper_models.statuses(
             config.stt_whisper_model, voice_service.decode_model(COMMAND_PROFILE)
         )
