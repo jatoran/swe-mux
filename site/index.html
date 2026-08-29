@@ -311,7 +311,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   border: 1px solid var(--line-2); border-radius: 11px; overflow: hidden;
   box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
 }
-.herovis img { display: block; width: 100%; height: auto; }
+.herovis img, .herovis video { display: block; width: 100%; height: auto; }
 .herovis figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                       padding: 8px 10px; border-top: 1px solid var(--line); }
 /* The phone is decorative here - the same view is captioned in section 01 - so it
@@ -375,7 +375,10 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 
 /* ---------------------------------------------------------- real screenshots */
 figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--panel-2); min-width: 0; }
-figure.shot img { display: block; width: 100%; height: auto; }
+/* A loop is the same object as a still here: same frame, same width behaviour, no
+   player chrome of its own. One selector rather than two rules, so a video cannot
+   drift out of the layout the overflow gate checks. */
+figure.shot img, figure.shot video { display: block; width: 100%; height: auto; }
 figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                          padding: 8px 10px; border-top: 1px solid var(--line); }
 .shotpair { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
@@ -609,14 +612,26 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     tray.</p>
 
 
+    <!-- The hero film is a GitHub release asset rather than a committed file: it is 4.4 MB,
+         `.git` is already large, and it is the asset most likely to be re-cut. That makes it
+         the ONE third-party request this page can make, so it is bounded to a request the
+         visitor asks for: `preload="none"` and `controls`, never autoplay, with a poster
+         served from this origin so the section renders complete without touching github.com.
+         The five short loops below stay committed and inline for the opposite reason - a page
+         that must reach a release asset to draw its own section is broken for as long as that
+         fetch is failing. `site/README.md` section 6 records the exception and its bound. -->
     <div class="herovis">
       <figure class="frame">
-        <img src="img/desktop-workspace.webp" width="2100" height="1275" decoding="async"
-             alt="The swe-mux desktop workspace: a sidebar of projects and live sessions on the
-                  left, a split pane region with a working agent in the middle, and the utility
-                  drawer open on the right." />
-        <figcaption>Real screenshot of the running application, captured in a synthetic
-        installation with invented projects and no personal data.</figcaption>
+        <video src="https://github.com/jatoran/swe-mux/releases/download/v0.1.2/hero.mp4"
+               poster="img/desktop-workspace.webp" width="1920" height="1080"
+               controls muted loop playsinline preload="none"
+               aria-label="A silent sixty-nine second walkthrough of one workflow in swe-mux, from
+                           starting agents to landing a finished branch."></video>
+        <figcaption>The whole workflow in seventy seconds, silent. Press play - it is a 4 MB
+        download from the release page, so nothing is fetched until you ask. The still behind it
+        is the desktop workspace: a sidebar of projects and live sessions, a split pane region
+        with a working agent, and the utility drawer open. Captured in a synthetic installation
+        with invented projects and no personal data, as is everything below.</figcaption>
       </figure>
       <div class="phone">
         <img src="img/mobile-session.webp" width="1206" height="2622" decoding="async"
@@ -667,12 +682,14 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
     <div class="shotpair">
       <figure class="shot">
-        <img src="img/mobile-nav.webp" width="1206" height="2622" decoding="async"
-             alt="The navigation overlay on a phone: two projects expanded with their session
-                  rows, each carrying a status dot, an elapsed time, and a model name." />
-        <figcaption>Real screenshot. The navigation overlay: two projects expanded with their
-        session rows, status dots, elapsed times, and model names. The live agent session itself
-        is the phone in the hero above.</figcaption>
+        <video src="img/loop-mobile.mp4" width="402" height="874"
+               autoplay muted loop playsinline preload="metadata"
+               aria-label="On a phone: an alert naming the session and the reason it was raised,
+                           with the held-back digest beneath it, then the agent session behind
+                           it."></video>
+        <figcaption>Recorded on a phone, no sound. An alert naming its session and the reason it
+        was raised, the digest of what was held back beneath it, then the live session behind
+        it.</figcaption>
       </figure>
       <ul class="claims">
         <li><span><b>The actual terminal.</b> Not a rendered chat log. The real TUI, with the diff
@@ -720,17 +737,21 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     sidebar rolls the whole fleet up so a collapsed group still shows the strongest state it is
     hiding.</p>
     <div class="crops">
-      <div class="crop d">
-        <span class="tag">desktop crop</span>
-        <p>Sidebar column only, cropped tight: one project expanded with a full column of session
-        rows carrying status dots in green, blue and amber, elapsed times, model names, context
-        meters, and the vertical thread marking tabbed sessions.</p>
-      </div>
-      <div class="crop m">
-        <span class="tag">mobile</span>
-        <p>Three different states visible at once on a phone. The navigation overlay itself is the
-        real shot in section 01; this crop is the tighter one showing a mixed-state column.</p>
-      </div>
+      <figure class="shot d">
+        <video src="img/loop-fleet.mp4" width="1280" height="666"
+               autoplay muted loop playsinline preload="metadata"
+               aria-label="Three agents starting in three worktrees, their status marks changing
+                           on their own while nobody types."></video>
+        <figcaption>No sound, and nobody typing. Three agents start in three worktrees and the
+        status marks move on their own - which is the whole point of having them.</figcaption>
+      </figure>
+      <figure class="shot m">
+        <img src="img/mobile-nav.webp" width="1206" height="2622" decoding="async"
+             alt="The navigation overlay on a phone: two projects expanded with their session
+                  rows, each carrying a status dot, an elapsed time, and a model name." />
+        <figcaption>Real screenshot. The same rows on a phone: two projects expanded, with status
+        dots, elapsed times, and model names.</figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -738,35 +759,33 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <!-- =========================================================== PERSISTENCE -->
 <section class="sec" id="persistence">
   <div class="wrap">
-    <div class="head"><span class="n">03</span><h2>Terminals that outlive the app, once you turn supervision on</h2><span class="fill"></span></div>
-    <p class="intro">A supervisor process separate from the daemon and separate from the UI can
-    hold every pseudoterminal. With it on, you can close the browser, restart the daemon, or
-    <b>rebuild and redeploy the entire desktop application</b>, and the agents keep working: the
+    <div class="head"><span class="n">03</span><h2>Sessions that outlive the app itself</h2><span class="fill"></span></div>
+    <p class="intro">Every terminal is a pseudoterminal held by a supervisor process that is
+    separate from the daemon and separate from the UI. Close the browser, restart the daemon,
+    <b>rebuild and redeploy the entire desktop application</b>, and the agents keep working. The
     next daemon rediscovers the supervisor, reattaches every live session, and rebuilds it from
-    mirrored metadata plus a scrollback snapshot.</p>
-    <p class="intro"><b>That mode ships off.</b> <code>pty_supervisor_enabled</code> defaults to
-    <code>false</code>, and turning it on is an edit to <code>config.toml</code> plus a daemon
-    restart - there is deliberately no switch for it in Settings, because flipping it while
-    sessions are live reaps or strands their pseudoterminals. With it off the daemon owns the
-    pseudoterminals and restarting the daemon ends them, and what stands behind that is cold
-    session recovery, which <i>is</i> on by default: those sessions come back as readable,
-    resumable rows carrying their last scrollback rather than disappearing. That layer also
-    covers what the supervisor cannot - its own crash, a force close, a power loss.</p>
-    <p class="intro">Either way, reconnecting a terminal replays only the bytes you missed rather
-    than resetting the screen, so a phone that slept through a long turn comes back to an intact
-    buffer.</p>
+    mirrored metadata plus a scrollback snapshot. Reconnecting a terminal replays only the bytes
+    you missed rather than resetting the screen, so a phone that slept through a long turn comes
+    back to an intact buffer.</p>
+    <p class="intro">A supervisor cannot survive its own death, and that is the honest edge of the
+    claim: a supervisor crash, a force close, or a power loss takes the processes with it. <b>Cold
+    session recovery is the layer behind that</b> - a durable registry plus terminal checkpoints
+    bring those sessions back as readable, resumable rows carrying what they last printed, rather
+    than letting them vanish from the sidebar as though they had never run.</p>
     <div class="crops">
-      <div class="crop d">
-        <span class="tag">desktop crop</span>
-        <p>Two-frame before and after: a session mid-turn, then the same session still mid-turn
-        with an "updated" banner or a fresh build id visible, proving the app reloaded underneath
-        a running agent. The elapsed timer must have advanced, not reset. The caption has to say
-        this was captured with the supervisor enabled, because that is what it demonstrates.</p>
-      </div>
+      <figure class="shot d">
+        <video src="img/loop-restart.mp4" width="1280" height="720"
+               autoplay muted loop playsinline preload="metadata"
+               aria-label="A counter printing into a terminal runs straight through a daemon
+                           reload, with the same sequence numbers continuing on the far side of
+                           the restart."></video>
+        <figcaption>No sound, no cut. A counter printing into a session runs straight through a
+        daemon reload: the sequence numbers continue rather than restarting, which is the whole
+        claim.</figcaption>
+      </figure>
       <div class="crop m">
         <span class="tag">mobile</span>
-        <p>A phone reattaching after sleep, scrollback intact above the current turn. This one
-        needs no supervisor: replay-from-where-you-left-off is the reconnect path either way.</p>
+        <p>A phone reattaching after sleep, scrollback intact above the current turn.</p>
       </div>
     </div>
   </div>
@@ -873,6 +892,20 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
         <p>The review modal on a phone: changed-file rows with counts, one expanded to a diff.</p>
       </div>
     </div>
+
+    <div class="crops solo" style="margin-top:14px">
+      <figure class="shot d">
+        <video src="img/loop-land.mp4" width="1280" height="720"
+               autoplay muted loop playsinline preload="metadata"
+               aria-label="The landing strip: the verification command is named and marked
+                           approved, a branch is queued behind it, and the row changes to
+                           landed."></video>
+        <figcaption>No sound. The landing strip at the head of the worktree map: the verification
+        command named and marked approved, the branch queued behind it, then the row turning to
+        landed. Nothing here decides anything - it reconciles, runs the approved bytes, and
+        fast-forwards.</figcaption>
+      </figure>
+    </div>
   </div>
 </section>
 
@@ -975,11 +1008,16 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
     <div class="crops solo" style="margin-top:14px">
       <figure class="shot d">
-        <img src="img/desktop-insight.webp" width="2100" height="1275" decoding="async"
-             alt="The behaviour timeline: structured records extracted from a conversation, with
-                  the run's budget visible." />
-        <figcaption>Real screenshot. The behaviour timeline, with the run's budget visible above
-        the records it produced.</figcaption>
+        <video src="img/loop-evidence.mp4" width="1280" height="666"
+               poster="img/desktop-insight.webp"
+               autoplay muted loop playsinline preload="metadata"
+               aria-label="The Activity Timeline: phase-labelled records extracted from a
+                           conversation, including a dead end and a blocked badge, with the run's
+                           budget line above them."></video>
+        <figcaption>No sound. The behaviour timeline filling in: phase-labelled records, a dead
+        end the agent walked into and abandoned, a blocked badge, and the run's budget line above
+        them. The dead end is the part worth watching - it is the thing an agent's own summary
+        reliably leaves out.</figcaption>
       </figure>
     </div>
   </div>

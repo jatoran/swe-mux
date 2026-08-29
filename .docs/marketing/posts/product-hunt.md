@@ -26,7 +26,7 @@ This is the one place the brand tagline is the right string: a 60-character list
 Everywhere with room for a sentence uses the positioning line instead.
 
 **Deleted, and do not restore it:** "Run parallel coding agents that never lose a session."
-Sessions are not immortal and the supervisor that makes them durable ships off.
+Sessions are not immortal: a supervisor crash, a force close, or a power loss ends them, and what covers that is cold session recovery rather than immortality.
 
 **Topics:** Developer Tools, Open Source, Artificial Intelligence, GitHub
 

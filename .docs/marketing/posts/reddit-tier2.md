@@ -31,7 +31,7 @@ If one lands, do not immediately submit the next - it reads as farming.
 **Body (short):**
 
 If tmux is how you keep shells alive, swe-mux is that idea rebuilt for coding agents: the daemon owns real pseudoterminals (real signals, real Unicode widths, real bracketed paste, anything that runs in a terminal runs unchanged), and adds status detection, prompt queues, a deterministic record of what each agent wrote, and a merge pipeline on top. The client is a web UI, desktop or phone, instead of a terminal.
-An optional supervisor process can own the PTYs so sessions outlive a daemon restart; it ships off, because updating that supervisor reaps every live session.
+A separate supervisor process owns the PTYs so sessions outlive a daemon restart; it is treated as near-frozen, because updating it is the one act that reaps every live session.
 Runs Claude Code, Codex, opencode and friends unchanged.
 Open source, Apache 2.0, runs on your own machine.
 Windows-first, which I know is unusual in this room; Linux runs headless plus a browser.

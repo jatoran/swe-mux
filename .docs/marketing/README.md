@@ -109,11 +109,18 @@ Copy them rather than paraphrasing them, and shorten by deleting clauses rather 
 
 ### Supervision
 
-> Terminals can be owned by a supervisor process separate from the daemon and the UI, so a daemon restart or a full app redeploy leaves the agents working with their scrollback intact.
-> That mode ships **off**: `pty_supervisor_enabled` defaults to `false`, and turning it on is an edit to `config.toml` in the data directory plus a daemon restart.
-> With it off, the daemon owns the pseudoterminals and a restart ends them; cold session recovery, which is on by default, brings those sessions back as readable, resumable rows carrying their last scrollback rather than losing them silently.
+**The default is being flipped on, so the claim is unconditional.**
+Decision taken by the operator 2026-08-28, reversing the "record it, do not change it" position this package started from; the code change is a separate agent's and this copy must not land ahead of it.
 
-Never write "sessions never die", "sessions survive everything", or any sentence that presents survival as what happens out of the box.
+> Terminals are held by a supervisor process separate from the daemon and the UI, so a daemon restart or a full app rebuild leaves the agents working with their scrollback intact, and reconnecting replays only the bytes you missed.
+> A supervisor cannot survive its own death, and that is the honest edge of the claim: a crash, a force close, or a power loss takes the processes with it.
+> Cold session recovery is the layer behind that, bringing those sessions back as readable, resumable rows carrying what they last printed.
+
+Two rules follow and both matter.
+
+**No config key names in user-facing copy.** `pty_supervisor_enabled` belongs in `.docs/` and in this file, never in a post, the README's feature list, or the site. A reader who needs the key is reading documentation, not marketing.
+
+**Still never write "sessions never die" or "sessions survive everything".** The default moving makes the ordinary case true; it does not make the absolute true, and the second sentence of the block above is what keeps the claim from being attacked on the one case it does not cover. Conceding that edge is what makes the rest credible.
 
 ### Where it runs, and what crosses the network
 

@@ -19,7 +19,8 @@ Done 2026-08-28, recorded in [`GTM_ROADMAP.md`](GTM_ROADMAP.md) § The claim aud
 
 | Item | State | Kind |
 |---|---|---|
-| No draft presents session survival as default behaviour | Done. `pty_supervisor_enabled` defaults to `False`; every draft now names the switch | Blocker, and it was the sharpest one |
+| Session survival is claimed unconditionally, **and the default matches** | **Not yet true, and asserted rather than trusted.** The operator decided 2026-08-28 to flip `pty_supervisor_enabled` to `True` rather than qualify the sentence; the copy is written that way and the code change belongs to another branch. `site/tools/check.mjs` fails while the two disagree | **Blocker, and it is the one holding this branch.** It was the sharpest finding of the audit and it is now the last open item from it |
+| No config key name appears in user-facing copy | Done. `pty_supervisor_enabled` is in `.docs/` only - not in a post, not in the README's feature list, not on the site | Blocker |
 | No draft says "sessions never die" or "sessions survive everything" | Done. The Show HN alternate title and the Product Hunt alternate tagline both carried it and both are deleted | Blocker |
 | No draft says "no server anywhere" or "zero servers" | Done. swe-mux is a local aiohttp daemon; the copy now says "no vendor-operated backend or relay" | Blocker |
 | No draft says "fully local" unqualified | Done. Every instance now names what crosses the network and which switch governs it | Blocker |
@@ -68,7 +69,7 @@ Enabling Discussions and creating a category named so its slug is `ideas` makes 
 | Install from the published wheel onto a machine with no checkout and no Node | **Not done** | Blocker for step 3 |
 | Install from the **unsigned Windows installer** onto the same machine | **Not done.** Different failure surface: SmartScreen, the Start Menu entry, the run-at-login task, and the bundled supervisor | Blocker for step 3 |
 | Every gap found is fixed, or written into the README as a known limit | - | Blocker for step 3 |
-| The same run with `pty_supervisor_enabled = true` | Not done. It is the precondition for the open decision on that default ([`GTM_ROADMAP.md`](GTM_ROADMAP.md) § Open decisions) | Note for the launch; blocker for that decision |
+| The supervisor specifically: it starts, a session survives a daemon restart, and shutdown leaves no process behind | **Not done, and now a blocker rather than a note.** The default is being flipped on, so every new install spawns a supervisor on a machine nobody has tested ([`GTM_ROADMAP.md`](GTM_ROADMAP.md) § Open decisions) | Blocker |
 
 Clean-install testing needs real isolation (Windows Sandbox or a Hyper-V VM); Docker cannot host a GUI Windows session.
 
@@ -92,9 +93,10 @@ Clean-install testing needs real isolation (Windows Sandbox or a Hyper-V VM); Do
 |---|---|---|
 | Real screenshots on `swemux.dev` | **Done.** Nine real captures, taken in a synthetic installation with invented projects, all wired into the landing page as of this branch | - |
 | PII-free capture environment | **Done.** `trailer/capture_env.py` plus `trailer/capture_site_shots.py`, whose leak scan refuses to write a file containing the host's home directory, account name, or git identity | - |
-| Hero video, 60-90 seconds | Does not exist. The environment that would produce it does | Blocker for step 6, and for YouTube outreach entirely |
-| Feature GIFs: the evidence view, land queue landing branches, provenance in the commit log, phone and voice, status board | Do not exist | Blocker for step 6 |
-| `README.md` leads with the hero asset | `README.md` carries a `TODO(release)` marker where it goes | Blocker for step 6 |
+| Hero video, 60-90 seconds | **Done.** 68.9s, silent, published as a v0.1.2 release asset and referenced by the landing page with a local poster and `preload="none"`, so it costs nothing until a visitor presses play | - |
+| Feature loops: the fleet starting, the phone alert, the evidence timeline, the land queue, the daemon reload | **Done.** Five committed under `site/img/`, all five on the page, each used once | - |
+| `README.md` leads with the hero asset | `README.md` carries a `TODO(release)` marker where it goes. The asset now exists, so this is a paste rather than a shoot | Blocker for step 6 |
+| Every committed asset is actually referenced by a page | **Done, and now gated.** `site/tools/check.mjs` walks `img/` and fails on any committed asset no page references, and names the hero release asset explicitly. This is the reverse of the check it already had, and it exists because the failure recurred twice: eight of nine screenshots sat unreferenced in the deploy root, then all five loops did | - |
 | Desktop artifact | **Done.** v0.1.2 carries an unsigned Windows installer and a portable archive; `swemux.dev/#download` fills itself from the release manifest | - |
 | **Signed** desktop installer | No signing certificate. Needs a purchase | Blocker for step 6 - see below |
 | Capture scripts and scene notes kept beside the assets | **Done.** `trailer/SITE_SHOTS.md` | - |

@@ -67,22 +67,30 @@ Run 2026-08-28 against the source rather than against the drafts, because the en
 
 The rule being enforced, which [`README.md`](README.md) already stated: **a claim must be true of the shipped artifact, in its default configuration, on the day it posts.**
 
-### Session survival is a mode, not the default
+### Session survival: the finding, and the decision that answered it
 
-`pty_supervisor_enabled` defaults to `False` (`src/swe_mux/config.py`).
-There is no control for it in Settings, deliberately: flipping it reaps or strands live PTYs, so it is a `config.toml` edit plus a daemon restart, and `frontend/test/settingsCoverage.test.ts` records that as the reason it is exempt from the settings surface.
+**The finding.** `pty_supervisor_enabled` defaulted to `False` (`src/swe_mux/config.py`) while almost every draft led with sessions surviving restarts.
+That was the sharpest overstatement in the set and the one a hostile reader finds in about ninety seconds, because the default is one grep away in a public repository.
 
-Almost every draft led with sessions surviving restarts.
-That is the sharpest overstatement in the set and the one a hostile reader finds in about ninety seconds, because the default is one grep away in a public repository.
+**The decision, taken by the operator on 2026-08-28: flip the default rather than qualify the sentence.**
+This reverses the position this package started from, which was to fix the copy and record the default as an open question.
+The reasoning behind the reversal is that session survival is a headline capability rather than a power-user mode, and marketing that reads like a config manual is the wrong way to resolve a mismatch that the product can resolve instead.
 
-The copy now says what is true:
+So the copy is unconditional:
 
-> Terminals can be owned by a supervisor process separate from the daemon and the UI, so a daemon restart or a full app redeploy leaves the agents working with their scrollback intact.
-> That mode ships **off**: `pty_supervisor_enabled` defaults to `false`, and turning it on is an edit to `config.toml` in the data directory plus a daemon restart.
-> With it off, the daemon owns the pseudoterminals and a restart ends them; cold session recovery, which is on by default, brings those sessions back as readable, resumable rows carrying their last scrollback rather than losing them silently.
+> Terminals are held by a supervisor process separate from the daemon and the UI, so a daemon restart or a full app rebuild leaves the agents working with their scrollback intact, and reconnecting replays only the bytes you missed.
+> A supervisor cannot survive its own death, and that is the honest edge of the claim: a crash, a force close, or a power loss takes the processes with it.
+> Cold session recovery is the layer behind that, bringing those sessions back as readable, resumable rows carrying what they last printed.
 
-**The fix is the copy, not the default.**
-Whether the supervisor should default to on is recorded in § Open decisions, because it is a runtime-architecture change for every install and not a marketing edit.
+Three things about that are worth keeping.
+
+**The conceded edge is not a hedge and must not be cut.** It is what stops the claim being absolute, and an absolute claim about process survival is the one a reader can disprove. It also happens to describe a real second layer, so it adds a capability rather than subtracting confidence.
+
+**No config key name appears in user-facing copy.** The key is in this document and in `.docs/`; it is in no post, no README feature bullet, and nothing on the site.
+
+**The copy does not land ahead of the default**, and that is asserted rather than remembered.
+The default flip is a separate agent's change on a separate branch, and `site/tools/check.mjs` now fails if `index.html` states the claim unconditionally while `config.py` still reads `False`.
+Two branches holding two halves of one truthful sentence is exactly the shape that ships a lie when somebody lands them in the wrong order.
 
 ### The other five
 
@@ -453,24 +461,34 @@ No real people are named there; the categories are described by role.
 
 Recorded here rather than acted on, because each one is a change to the product that a copy edit is not allowed to make on its own.
 
-### Should the PTY supervisor default to on?
+### Should the PTY supervisor default to on? - **Decided: yes. Now a dependency, not a decision.**
 
-**The finding that raised it:** `pty_supervisor_enabled` defaults to `False`, and almost every draft led with sessions surviving restarts.
-The copy was fixed and the default was not, deliberately.
+**Decided by the operator 2026-08-28.** The default flips to `True`; the copy is unconditional; the code change belongs to a separate agent and this package does not make it.
 
-**Why not just flip it.** It is a runtime-architecture change for every install, not a setting.
-It interacts with the supervisor-update rules in the root `CLAUDE.md`: updating the supervisor reaps every live session, which makes the update story materially different once a supervisor is in the path.
-And clean-machine validation has not happened, so nobody knows what the supervisor does on a machine that is not this one.
-The safety defaults are defensible; the marketing was not, and only one of those two was wrong.
+Kept here rather than deleted because the requirements below did not go away when the decision was taken - they moved from being reasons to hesitate to being **what the flip owes before it lands**, and this package's copy is blocked on them either way.
+The risk the original hesitation named is real and unchanged: it is a runtime-architecture change for every install, it interacts with the supervisor-update rules in the root `CLAUDE.md` (updating the supervisor reaps every live session), and clean-machine validation has not happened, so nobody knows what the supervisor does on a machine that is not this one.
 
 **What flipping it would require first, in order:**
 
 1. **Clean-machine testing** (step 2), with the supervisor on, on a machine with no checkout. Its spawn path, its discovery file, and its socket have only ever run here.
 2. **Failure testing.** What a user sees when the supervisor cannot start, when it dies while the daemon lives, and when a daemon finds a supervisor from an older build. The daemon already falls back to in-process spawning and logs it; the question is whether a person can tell, not whether the code copes.
 3. **A redeploy and update story.** A supervisor in the path means a release that bumps `PROTOCOL_VERSION` ends every live session, and `mux update --install` already refuses such a release for exactly that reason. Defaulting the supervisor on makes that refusal something every user meets rather than something the operator meets.
+4. **A resolution for the `live_daemon` orphan assertion, decided before the flip rather than after CI goes red.**
+   `tests/test_live_daemon.py::test_the_muxd_entry_point_starts_serves_and_stops_without_orphans` collects every descendant of the daemon while it is up and then asserts none of them survives shutdown.
+   A supervisor is by design a descendant that survives, so with the default on that test fails on Ubuntu and Windows CI - correctly reporting a behaviour change rather than a bug.
+   The assertion cannot simply be relaxed: it is the only thing in the suite that proves `muxd` takes its children with it, and a version that tolerates any survivor stops detecting the leak it exists for.
+   What it has to become is a check that distinguishes **the** supervisor, identified rather than assumed, from everything else, and still fails on any other survivor - which means the test needs a way to learn the supervisor's pid from the daemon rather than inferring it from what is left alive, because "the process still running is the one that was supposed to be" is the reasoning the test exists to refuse.
+   That is a real piece of test design and it is the reason this decision is not a one-line change.
 
-Until all three, the honest copy stands and the default stays.
-Revisit after step 2 and record the outcome here either way.
+**None of the four is done, and the copy is already written as though the flip has happened.**
+That is a deliberate, bounded exposure rather than an oversight, and it is held closed by two things.
+
+The ordering rule: **the copy does not land ahead of the default.**
+`site/tools/check.mjs` asserts it - `index.html` stating the claim unconditionally while `config.py` reads `False` is a gate failure, with a message naming both directions of the fix.
+So this branch is red until the flip lands, on purpose, and going green is the signal that the two halves agree rather than a thing anyone has to remember to check.
+
+The fallback: if the flip turns out to be unsafe, the strong claim does not ship and the qualified version returns.
+That version is not lost - it is in this file's history and its shape is the block in `README.md` § Supervision, which is the one to restore.
 
 ### Should onboarding offer a "recommended fleet setup"?
 

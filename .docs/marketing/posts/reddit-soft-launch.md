@@ -29,7 +29,7 @@ swe-mux is what I built for myself over the past months, now open source (Apache
 - **Real status per session** (working / ready / awaiting-you / blocked), built from Claude Code's hooks plus the transcript plus terminal detection, hardened against a corpus of captured real sessions, and conservative where the layers disagree.
 - **A prompt queue** per session with gated auto-delivery, off by default.
 - **Phone client** over Tailscale (PWA + push), voice control with speech-to-text that decodes on my own machine.
-- **A supervisor process can own the PTYs** so sessions ride through daemon restarts and app updates. It ships off - it's a config edit plus a restart - because updating the supervisor reaps every live session and I haven't validated it on machines that aren't mine. With it off, cold session recovery brings sessions back as readable, resumable rows.
+- **A separate supervisor owns the PTYs**, so sessions ride through daemon restarts and app updates with scrollback intact. It cannot survive its own death, so behind it cold session recovery brings sessions back as readable, resumable rows after a crash, a force close, or a power loss.
 
 Worth saying plainly: **most of the control plane ships off.** Automations are per-Project opt-in, the land queue needs a switch plus an opt-in plus a grant plus an approved command, and the model-backed parts are off. A fresh install is quieter than that list.
 

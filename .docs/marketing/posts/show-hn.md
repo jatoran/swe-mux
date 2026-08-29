@@ -27,7 +27,7 @@ Alternate:
 > Show HN: I built a control plane for running many coding agents at once
 
 **Deleted, and do not restore it:** "run parallel coding agents whose sessions never die".
-Sessions are not immortal, and the supervisor that makes them durable ships off.
+Sessions are not immortal: a supervisor crash, a force close, or a power loss ends them, and the post concedes that rather than claiming otherwise.
 That title is the fastest possible way to have the top comment be a link to `config.py`.
 
 ## Text (first comment, posted immediately by the submitter)
@@ -41,14 +41,14 @@ The core ideas:
 - **Agents work in parallel git worktrees, and a land queue merges finished branches**: reconcile, run the verification gate, fast-forward-only onto trunk, one at a time. Fast-forward-only is the load-bearing part - Git refuses it on divergence and refuses to overwrite local changes, so the trunk step cannot lose work by construction rather than by the pipeline being clever. Conflicts and failed gates go back to the agent that owns the branch, and an agent cannot approve its own gate: the verify command is human-approved as exact bytes, and editing it invalidates the approval.
 - **Status detection that is conservative rather than confident** (working / ready / awaiting-you / blocked), built from harness hooks, the transcript, the terminal and the CLI's own state, hardened against a regression corpus of captured real sessions, with every transition in a durable ledger you can read hours later. Ambiguous evidence resolves to the prior; there are explicit unknown states and they stay unknown.
 - **The whole fleet is operable from a phone over your tailnet** (PWA + push), including by voice. Speech-to-text decodes on your own machine in both shipped configurations - faster-whisper, or Windows Speech Recognition. No cloud speech path.
-- **A separate supervisor process can own the PTYs**, so sessions survive daemon restarts, app rebuilds and full redeploys; I ship new builds of swe-mux from an agent session running inside swe-mux. **This ships off** (`pty_supervisor_enabled` defaults to false) because a supervisor update reaps every live session and I have not validated it on machines that aren't mine. With it off, cold session recovery brings sessions back as readable, resumable rows rather than losing them.
+- **A separate supervisor process owns the PTYs**, so sessions survive daemon restarts, app rebuilds and full redeploys; I ship new builds of swe-mux from an agent session running inside swe-mux. It cannot survive its own death, which is the honest edge of that claim - a supervisor crash, a force close or a power loss takes the processes with it - and cold session recovery is the layer behind it, bringing those sessions back as readable, resumable rows.
 - **It runs on your own machine** - SQLite on your disk, no account, no telemetry, and no backend or relay I operate, updates included (static manifest plus GitHub Releases). It is not a tool with no network in it: your CLIs talk to their own vendors under your subscription, and OpenRouter, web push, Hugging Face model downloads and Edge TTS are each optional and off until you turn them on. The one request swe-mux makes for itself is a daily static `version.json` fetch with no identifier on it, and it is disableable.
 
 Honest caveats, up front:
 
 - It's **Windows-first** (my daily machine). Linux runs headless plus a browser; macOS is implemented but its CI leg isn't required to pass yet, so I won't claim it.
 - It's **a lot of software**, and the tutorial covers the minimum.
-- **Almost all of the control plane ships off.** Automations are per-Project opt-in, the land queue needs a switch plus an opt-in plus a grant plus an approved command, and the model-backed pieces are off. That's deliberate and it means a fresh install is quieter than this list.
+- **Almost all of the control plane ships off.** Automations are per-Project opt-in, the land queue needs a switch plus an opt-in plus a grant plus an approved command, and the model-backed pieces are off. That's deliberate and it means a fresh install is quieter than this list. Session survival is not in that set - it is on.
 - The Windows installer is **unsigned**, so SmartScreen warns. PyPI avoids that.
 
 There are several tools in this space now (herdr, Orca, claude-squad, Vibe Kanban), and several of them do persistence, worktrees, mobile and Windows as well as or better than I do.

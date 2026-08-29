@@ -310,7 +310,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   border: 1px solid var(--line-2); border-radius: 11px; overflow: hidden;
   box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
 }
-.herovis img { display: block; width: 100%; height: auto; }
+.herovis img, .herovis video { display: block; width: 100%; height: auto; }
 .herovis figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                       padding: 8px 10px; border-top: 1px solid var(--line); }
 /* The phone is decorative here - the same view is captioned in section 01 - so it
@@ -374,7 +374,10 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 
 /* ---------------------------------------------------------- real screenshots */
 figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--panel-2); min-width: 0; }
-figure.shot img { display: block; width: 100%; height: auto; }
+/* A loop is the same object as a still here: same frame, same width behaviour, no
+   player chrome of its own. One selector rather than two rules, so a video cannot
+   drift out of the layout the overflow gate checks. */
+figure.shot img, figure.shot video { display: block; width: 100%; height: auto; }
 figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                          padding: 8px 10px; border-top: 1px solid var(--line); }
 .shotpair { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);

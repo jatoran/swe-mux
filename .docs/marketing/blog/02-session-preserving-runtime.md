@@ -29,11 +29,9 @@ This one endpoint changed how fast I can iterate more than anything else in the 
 [gif: daemon restart with eight live sessions, scrollback intact]
 
 **One disclosure before the rest of this, because it changes how you should read it.**
-The supervisor ships **off** in swe-mux (`pty_supervisor_enabled` defaults to `false`), and turning it on is a config-file edit plus a daemon restart.
-That is not modesty about the mechanism; it is the mechanism's own logic applied one level up.
-A supervisor update reaps every live session, so the supervisor is the thing I am least willing to change, and until it has been validated on machines that are not mine, defaulting it on would make my iteration speed everybody's risk.
-Everything below is what the mode does and what it cost to build.
-Whether it should be the default is a decision I have written down rather than made.
+The supervisor is the component I am least willing to change, and that is this mechanism's own logic applied one level up: updating the supervisor is the single act that reaps every live session.
+So it is treated as near-frozen, and everything that evolves lives on the other side of the split.
+That asymmetry is the whole design, and it is why the rest of this post is about what the daemon may do rather than about what the supervisor does.
 
 ## Redeploying the frozen app, staged
 

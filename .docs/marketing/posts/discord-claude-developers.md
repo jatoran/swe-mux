@@ -17,9 +17,9 @@ A local daemon + web UI whose job is answering "what did each of these actually 
 - Per-session status (working / ready / needs-you / blocked) built on Claude Code's hooks + the transcript + terminal detection, conservative where the layers disagree.
 - Prompt queue with gated auto-delivery, off by default.
 - Phone client over Tailscale (PWA + push), voice with speech-to-text decoded on your own machine.
-- A supervisor process can own the PTYs so sessions ride through daemon restarts and app updates - **it ships off**, it's a config edit plus a restart, and cold session recovery covers the default case.
+- A separate supervisor owns the PTYs, so sessions ride through daemon restarts and app updates with scrollback intact. Behind it, cold session recovery covers what a supervisor cannot survive - its own crash, a force close, a power loss.
 
-Fair warning: most of the control plane is per-Project opt-in and ships off, so a fresh install is quieter than that list. Runs on your own machine, no telemetry, no backend I operate; also runs Codex/opencode side by side.
+Fair warning: most of the control plane is per-Project opt-in and ships off, so a fresh install is quieter than that list. Session survival is not one of those - that one is on. Runs on your own machine, no telemetry, no backend I operate; also runs Codex/opencode side by side.
 
 Windows-first, Linux headless plus a browser.
 Repo: github.com/jatoran/swe-mux - install feedback very welcome, especially clean-machine failures.

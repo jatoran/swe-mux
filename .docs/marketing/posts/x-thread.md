@@ -54,7 +54,7 @@ Not a tool with no network in it - the optional bits that reach out are named in
 
 **8/**
 Two things I'd rather you hear from me.
-Session survival needs a config switch (`pty_supervisor_enabled`) - it ships off, because updating that supervisor reaps every live session.
+Session survival has one edge worth naming: the supervisor cannot survive its own crash, a force close, or a power loss. Cold session recovery covers that, bringing sessions back readable and resumable.
 And most of the control plane is per-Project opt-in and off. A fresh install is quieter than this thread.
 
 **9/**

@@ -50,7 +50,7 @@ Two angles that might fit Changelog News beyond "new tool":
 
 1. The merge-safety model for letting agents land their own branches: fast-forward-only trunk, so the step cannot lose work whatever the pipeline believes, and gate commands approved by content digest so an agent cannot approve the gate its own land runs.
    Write-up: [blog 03 URL]
-2. A runtime that redeploys itself without killing sessions - a near-frozen supervisor owns the PTYs, and I routinely ship new builds from an agent session running inside the app being replaced. The mode ships off by default, which is itself part of the argument: the component that makes sessions durable is the one whose update destroys them.
+2. A runtime that redeploys itself without killing sessions - a near-frozen supervisor owns the PTYs, and I routinely ship new builds from an agent session running inside the app being replaced. The sharp edge of the design is that the component making sessions durable is the one whose own update destroys them, which is exactly why it is treated as near-frozen.
    Write-up: [blog 02 URL]
 
 Repo: github.com/jatoran/swe-mux - happy to provide anything else useful.

@@ -24,7 +24,7 @@ The entire distribution stack is static files:
   Fallback endpoint: the GitHub Releases API, whose unauthenticated rate limit is laughably sufficient for a daily check.
 - **Artifacts live on GitHub Releases.** Free hosting, unlimited bandwidth, download counts available if I'm curious.
 - **The updater reuses the staged-swap machinery** the app already had for development redeploys: download, verify the hash, stage next to the running install, swap, health-check, roll back on failure.
-  Where the PTY supervisor is enabled - it ships off, and it is a config edit to turn on - live agent sessions ride through the update on it, the same mechanism as every other restart.
+  Live agent sessions ride through the update on the PTY supervisor, the same mechanism as every other restart.
   The interesting consequence is the refusal: an update that would need a *new* supervisor ends every live session by construction, so the updater declines to install it rather than doing that quietly. A distribution stack made of static files still has to know which of its own updates are destructive.
 - **The second channel is PyPI.** Developers `uv tool install swe-mux` and upgrades are `uv tool upgrade`. Zero infrastructure by definition.
 

@@ -26,14 +26,13 @@ A local daemon that owns your agent sessions, and a web UI that is the control p
 - **Real status, not vibes.** swe-mux knows whether each agent is working, ready, awaiting your approval, or blocked - built from harness hooks, the transcript, the terminal, and the CLI's own state, hardened against a corpus of captured real sessions, with every transition in a durable ledger.
 - **A prompt queue with rules.** Stage prompts per session; they deliver when the agent is actually ready. Auto-delivery is gated, capped, and off by default.
 - **Your phone is a first-class client.** Over your tailnet, as a PWA, with push notifications. Voice works too: speech-to-text decodes on your own machine, with a wake word, so you can send a prompt or check the fleet without touching a keyboard.
-- **Terminals that outlive the app, once you turn supervision on.** A separate supervisor process can own the PTYs, so a daemon restart or a full app redeploy leaves every session running. It ships off; see below.
+- **Terminals that outlive the app.** A separate supervisor process owns the PTYs, so a daemon restart or a full app redeploy leaves every session running, scrollback intact. Behind it, cold session recovery covers what a supervisor cannot survive - its own crash, a force close, a power loss - by bringing those sessions back readable and resumable.
 - **Agents can see each other, within limits.** An MCP surface lets a session read fleet status, watch a sibling until it settles, and request messages or new sessions - with a human approving anything that crosses a boundary.
 
 ## What ships off, because you should know before you install it
 
 This is the part I would rather you read here than discover.
 
-- **Session survival is a mode.** `pty_supervisor_enabled` defaults to `false`, and turning it on is a `config.toml` edit plus a daemon restart. There is no switch for it in Settings, deliberately: flipping it while sessions are live reaps or strands their pseudoterminals. With it off, the daemon owns the PTYs and restarting the daemon ends them - and cold session recovery, which *is* on by default, brings those sessions back as readable, resumable rows carrying their last scrollback rather than losing them silently.
 - **Every automation is per-Project opt-in and ships off**, with one exception: a permission gate that reads nothing, runs nothing, and spends nothing.
 - **The land queue needs four things** before an agent can trigger one: the install-wide switch, the Project's opt-in, an authority level raised from its default of "a human approves the request", and an approved verification command. Running it yourself needs the last of those.
 - **The model-backed pieces ship off**: the behaviour timeline, the attention observers, the assistant. So does read aloud.
