@@ -421,6 +421,47 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
 .sub-h { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3);
          margin: clamp(24px, 3.5vw, 34px) 0 12px; }
 
+/* ---------------------------------------------------------------- download */
+/* The desktop download, drawn from `version.json` - the release manifest
+   `release.yml` generates from a release's own assets and the in-app update
+   check already reads. There is no second list of artifacts here, because a
+   hand-written one beside a generated one is a second manifest and the copy is
+   what drifts.
+   The markup in the page is the EMPTY state, which is what ships until the
+   first release carries a desktop artifact. A reader with JavaScript off gets
+   that same true sentence rather than a dead control, and the script replaces
+   it only once a manifest actually names one. */
+.dl { border: 1px solid var(--line-2); background: var(--panel);
+      padding: 15px 18px 17px; max-width: 780px; }
+.dl-head { display: flex; align-items: baseline; gap: 10px 16px; flex-wrap: wrap;
+           border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 13px; }
+.dl-label { font-family: var(--mono); font-size: 12px; letter-spacing: .12em;
+            text-transform: uppercase; color: var(--fg); }
+.dl-label::before { content: "▸ "; color: var(--green); }
+.dl-state { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em;
+            color: var(--fg-3); margin-left: auto; }
+.dl p { margin: 0 0 13px; font-size: 14.5px; line-height: 1.6; color: var(--fg-2);
+        max-width: 72ch; }
+.dl > :last-child { margin-bottom: 0; }
+.dl .dl-meta, .dl .dl-warn, .dl .dl-alt { font-size: 13.5px; color: var(--fg-3); }
+.dl .dl-warn b { color: var(--fg); }
+/* A bordered control rather than a filled button: the page has no filled
+   buttons anywhere else, and the green border is the same accent the install
+   callout's call to action uses. `max-width` plus `overflow-wrap` because an
+   artifact name is the longest unbroken string on the page and 360px is a
+   width this site must not scroll sideways at. */
+.dl-btn { font-family: var(--mono); font-size: 13px; color: var(--fg);
+          border: 1px solid var(--green); padding: 9px 14px; display: inline-block;
+          max-width: 100%; overflow-wrap: anywhere; }
+.dl-btn::before { content: "↓ "; color: var(--green); }
+.dl-btn:hover { color: var(--green); border-bottom-color: var(--green); }
+.dl-hash { margin-bottom: 13px; }
+.dl-hash summary { cursor: pointer; font-family: var(--mono); font-size: 11.5px;
+                   letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); }
+.dl-hash summary:hover { color: var(--fg-2); }
+.dl-hash p { margin: 9px 0 0; font-size: 13.5px; color: var(--fg-3); }
+.dl-hash code { overflow-wrap: anywhere; color: var(--fg-2); }
+
 footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
          padding: clamp(26px, 4vw, 38px) 0 54px; font-size: 13px; color: var(--fg-3); }
 /* Brand row above the link columns rather than a first column beside them: the
@@ -853,10 +894,53 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     </div>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.0...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.1...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
       <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.1.1">0.1.1</a></h2>
+        <span class="when">2026-08-28</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.1.1">release notes</a>
+      </div>
+      <p class="prose">A repair release. <code>swe-mux[voice-local]</code> could not be installed from PyPI at all in 0.1.0, and a configuration file carried between two hosts left the daemon unable to launch an agent.</p>
+      <p class="prose">This release also adds the first Windows installer, so swe-mux can be installed without Python.</p>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">7 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">7 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">2 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 16 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>A Windows installer</b> (<code>swe-mux-0.1.1-windows-x64-setup.exe</code>), attached to this release. It installs the application and its PTY supervisor, creates a Start Menu entry, and offers a desktop shortcut and a run-at-login task. It is <b>not code signed</b>, so Windows SmartScreen warns on first run; signing is planned. The portable archive is published alongside it for anyone who would rather not run an installer.</span></li>
+          <li><span><code>mux install-shortcut</code>, which creates Start Menu and desktop shortcuts for an install that came from <code>uv tool</code>, <code>pipx</code>, or <code>pip</code>. No Python packaging mechanism can create a shortcut at install time, so this is the equivalent for those installs.</span></li>
+          <li><span><code>mux doctor</code> now reports how swe-mux was installed, which directory its commands are in, and whether that directory is on <code>PATH</code>.</span></li>
+          <li><span><code>python -m swe_mux --where</code> answers the same question with nothing but an interpreter, for the case where the commands are not reachable by name.</span></li>
+          <li><span><code>muxd</code> prints a one-time hint at startup when its own commands are not on <code>PATH</code>, naming the directory and the command that fixes it.</span></li>
+          <li><span>A Help surface: a modal reachable from the command palette and by voice, from which the guided tour can be reopened.</span></li>
+          <li><span>Support for <code>.tar.gz</code> desktop bundles, which the updater already expected on macOS and Linux.</span></li>
+        </ul>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b><code>pip install &quot;swe-mux[voice-local]&quot;</code> failed for everyone.</b> The published wheel required <code>en-core-web-sm</code>, which is on no package index, so both pip and uv refused the extra outright. The model is now acquired at first use and verified against a pinned hash, and the extra installs.</span></li>
+          <li><span><b>A <code>config.toml</code> written on one host and loaded on another kept values the new host cannot use.</b> A file written on Windows and loaded on Linux launched <code>claude.exe</code> and <code>codex.exe</code>, so the Run menu could not start an agent while typing <code>claude</code> in a shell worked. In the other direction a POSIX <code>worktree_root</code> made the daemon refuse to load its own configuration. Ten settings are now re-derived when their stored value is shaped for a different host. A deliberate override the host can run, such as <code>claude.cmd</code> on Windows, is left alone.</span></li>
+          <li><span><b>A refused executable reported the wrong reason.</b> Under WSL the Windows agent CLIs are reachable through interop, and swe-mux refuses them because such a session writes its transcript where no Linux path points and joins no Linux process group. That refusal reported "no such file or directory" rather than naming the binary it found and why it was rejected.</span></li>
+          <li><span>Provider login and harness launch failures now reach <code>daemon.log</code>, with the configured value and the resolution that failed.</span></li>
+          <li><span>The recovery that retries a configured <code>codex.exe</code> as <code>codex</code> ran only on Windows, where an <code>.exe</code> suffix is at least plausible, and not on POSIX, where it is certainly wrong.</span></li>
+          <li><span><code>cryptography</code> and <code>py-vapid</code> are imported when the daemon starts and were not declared as dependencies; they arrived only by way of another package's requirements.</span></li>
+          <li><span>The desktop application opened a console window behind its native window. It is now a GUI entry point, and startup failures are reported in a dialog and written to <code>desktop-shell.log</code> rather than to a console that no longer exists.</span></li>
+        </ul>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span>The default theme is now Tokyo Night, and the default sidebar session row shows more at a glance. An existing installation keeps whatever it already had; neither default is applied to a configuration that has been written before.</span></li>
+          <li><span>The wheel no longer ships precompressed copies of the frontend bundle, which were duplicating content the wheel already compresses. They are regenerated once on first start, which takes under a second and makes the download about a third smaller.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

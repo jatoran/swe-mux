@@ -10,6 +10,8 @@
  *  - the docs browser: its sidebar, its search, its prev/next chain, and that
  *    no page in it links back into `.docs/`
  *  - the install callout swaps command, note, tab state and platform lights
+ *  - the desktop download section, in both of its states: empty, which is what
+ *    ships until a release carries an artifact, and populated from a manifest
  *  - the theme toggle round-trips
  *
  * A gate that covers one page while five ship is not a gate, so PAGES is derived
@@ -425,6 +427,167 @@ console.log(
     `indicator (lit, marked "${macos?.qualifier}") inspected`,
 )
 await p.close()
+
+// --------------------------------------------------------- desktop download
+// The download section is drawn from `site/version.json` - the release manifest
+// `release.yml` generates from a release's own assets - rather than from
+// hand-written markup, so it lights up by itself on the first release carrying a
+// desktop artifact.
+//
+// BOTH states are asserted, and the empty one is the one that matters most: it
+// is what ships today, it is what a fresh clone and a pre-release deploy get,
+// and an untested empty state is exactly how a dead link reaches production. The
+// populated one is driven through the page's own renderer with a synthetic
+// manifest, because `file://` cannot fetch a sibling file and the manifest it
+// would fetch does not exist yet either.
+console.log('desktop download')
+{
+  const d = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  await d.goto(url(PAGES[0]), { waitUntil: 'networkidle' })
+
+  // Empty: a true sentence and nothing to press. No anchor at all, rather than
+  // one pointing at `#` or at a release that does not exist, and no disabled
+  // control - a greyed-out button reads as broken rather than as honest.
+  const empty = await d.evaluate(() => {
+    const host = document.getElementById('download')
+    if (!host) return null
+    return {
+      state: host.getAttribute('data-dl'),
+      links: [...host.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')),
+      buttons: host.querySelectorAll('button, .dl-btn').length,
+      text: host.textContent.replace(/\s+/g, ' ').trim(),
+      renderer: typeof window.__swemuxDownload === 'function',
+    }
+  })
+  if (!empty) fail('the landing page has no #download section')
+  else {
+    if (!empty.renderer) fail('download: the page exposes no renderer to drive with a manifest')
+    if (empty.state !== 'none') fail(`download: with no manifest the state is "${empty.state}"`)
+    if (empty.links.length) fail(`download: the empty state offers links [${empty.links}]`)
+    if (empty.buttons) fail(`download: the empty state draws ${empty.buttons} control(s) to press`)
+    // It has to say the thing is not published, and it has to send the reader
+    // at the install that does work. A "coming soon" that does neither reads as
+    // abandonment.
+    if (!/not published yet/i.test(empty.text)) {
+      fail('download: the empty state does not say the build is not published yet')
+    }
+    if (!/python/i.test(empty.text)) {
+      fail('download: the empty state does not point at the Python install that works today')
+    }
+  }
+
+  // Populated, through the page's own renderer. The artifact names are the ones
+  // `update_install.release_installer_name` and `release_archive_name` build, so
+  // a rename on either side fails here rather than shipping a section that
+  // quietly matches nothing.
+  const TAG = 'v9.9.9'
+  const BASE = `https://github.com/jatoran/swe-mux/releases/download/${TAG}`
+  const MANIFEST = {
+    schema: 1,
+    version: '9.9.9',
+    tag: TAG,
+    published: '2026-09-01T00:00:00Z',
+    changelog: `https://github.com/jatoran/swe-mux/releases/tag/${TAG}`,
+    artifacts: [
+      { name: 'swe_mux-9.9.9-py3-none-any.whl', url: `${BASE}/swe_mux-9.9.9-py3-none-any.whl`, sha256: 'a'.repeat(64) },
+      { name: 'swe-mux-9.9.9-windows-x64-setup.exe', url: `${BASE}/swe-mux-9.9.9-windows-x64-setup.exe`, sha256: 'b'.repeat(64) },
+      { name: 'swe-mux-9.9.9-windows-x64.zip', url: `${BASE}/swe-mux-9.9.9-windows-x64.zip`, sha256: 'c'.repeat(64) },
+    ],
+  }
+  const full = await d.evaluate((m) => {
+    const state = window.__swemuxDownload(m)
+    const host = document.getElementById('download')
+    return {
+      state,
+      attr: host.getAttribute('data-dl'),
+      primary: host.querySelector('.dl-btn')?.getAttribute('href') ?? null,
+      primaryLabel: host.querySelector('.dl-btn')?.textContent.trim() ?? '',
+      hrefs: [...host.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')),
+      text: host.textContent.replace(/\s+/g, ' ').trim(),
+      digests: [...host.querySelectorAll('.dl-hash code')].map((c) => c.textContent),
+    }
+  }, MANIFEST)
+  if (full.state !== 'installer' || full.attr !== 'installer') {
+    fail(`download: a manifest carrying an installer rendered "${full.state}"/"${full.attr}"`)
+  }
+  if (full.primary !== `${BASE}/swe-mux-9.9.9-windows-x64-setup.exe`) {
+    fail(`download: the primary control points at ${full.primary}`)
+  }
+  if (!full.primaryLabel.includes('swe-mux-9.9.9-windows-x64-setup.exe')) {
+    fail(`download: the primary control is labelled "${full.primaryLabel}"`)
+  }
+  // The wheel shares the manifest with the desktop artifacts and is not one; a
+  // section that offered it would be handing a Windows visitor a file they
+  // cannot run.
+  if (full.hrefs.some((h) => h.endsWith('.whl'))) {
+    fail('download: the wheel is offered as a desktop download')
+  }
+  if (!full.hrefs.some((h) => h.endsWith('swe-mux-9.9.9-windows-x64.zip'))) {
+    fail('download: the portable archive in the manifest is not offered')
+  }
+  if (!full.text.includes('9.9.9')) fail('download: the populated state names no version')
+  if (!full.digests.includes('b'.repeat(64))) {
+    fail(`download: the installer's SHA-256 is not shown (got ${full.digests})`)
+  }
+  // Unsigned until a certificate is bought, so SmartScreen is what a reader
+  // meets. It is named rather than left as a surprise, and this assertion is
+  // what stops it being quietly dropped as the section is tidied.
+  if (!/SmartScreen/.test(full.text)) {
+    fail('download: the populated state does not say what SmartScreen will do with an unsigned build')
+  }
+  if (!/not code-signed/i.test(full.text)) {
+    fail('download: the populated state does not say the build is unsigned')
+  }
+
+  // A schema this page has never seen must not render as "not published yet":
+  // that is a confident false answer about a release that may carry everything.
+  const future = await d.evaluate(
+    (m) => window.__swemuxDownload({ ...m, schema: 2 }), MANIFEST)
+  if (future !== 'unknown') fail(`download: an unknown manifest schema rendered "${future}"`)
+
+  // And nothing at all is the empty state again, not a crash.
+  const none = await d.evaluate(() => window.__swemuxDownload(null))
+  if (none !== 'none') fail(`download: a missing manifest rendered "${none}"`)
+
+  // Overflow, in the populated state, at the two widths the strings it draws are
+  // most likely to blow out. The empty-state pass above never sees them, and
+  // they are the longest unbroken runs anywhere on this site: an artifact name
+  // with a prerelease version in it, and the 64 hex characters of a SHA-256,
+  // which is why the digest disclosure is opened rather than measured shut.
+  const LONG = {
+    ...MANIFEST,
+    version: '9.9.9-rc.1',
+    artifacts: MANIFEST.artifacts.map((a) => ({
+      ...a,
+      name: a.name.replace('9.9.9', '9.9.9-rc.1'),
+      url: a.url.replace('9.9.9', '9.9.9-rc.1'),
+    })),
+  }
+  for (const [w, h] of [[360, 800], [1440, 900]]) {
+    for (const theme of ['dark', 'light']) {
+      const o = await browser.newPage({ viewport: { width: w, height: h } })
+      await o.goto(url(PAGES[0]), { waitUntil: 'load' })
+      await o.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
+      await o.evaluate((m) => {
+        window.__swemuxDownload(m)
+        document.querySelectorAll('#download details').forEach((d) => { d.open = true })
+      }, LONG)
+      const r = await o.evaluate(() => ({
+        s: document.documentElement.scrollWidth,
+        c: document.documentElement.clientWidth,
+      }))
+      if (r.s !== r.c) {
+        fail(`download: populated at ${w}x${h} ${theme}: scrollWidth ${r.s} vs clientWidth ${r.c}`)
+      }
+      await o.close()
+    }
+  }
+  await d.close()
+  console.log(
+    '  empty state (no manifest, no control), installer state, portable archive, ' +
+      'unknown schema, and populated overflow at 360/1440 in both themes inspected',
+  )
+}
 
 // ------------------------------------------------------------ bar and menu
 // The header and footer exist in two places - `tools/build.py`'s `shell()` for
