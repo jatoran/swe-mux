@@ -311,8 +311,7 @@ FIRST_SESSION = Page(
                 "as you normally would.",
                 "<b>The terminal is promoted in place.</b> Same pane, same scrollback, now "
                 "carrying a transcript, a status, a prompt queue, and a context meter. swe-mux "
-                "puts its own launchers first on that terminal's PATH, which is the whole "
-                "mechanism.",
+                "puts its own launchers first on that terminal's PATH.",
                 "Give it something to do, and watch the pane's status strip. "
                 "<em>Working</em>, <em>ready</em>, <em>awaiting</em>, and <em>blocked</em> mean "
                 "the same thing whichever vendor's CLI produced them.",
@@ -478,7 +477,7 @@ AGENT_SETUP = Page(
         (
             "note",
             'The guide is <a href="../../agent-guide.md"><code>https://swemux.dev/agent-guide.md</code></a>. '
-            "Reading it costs nothing, and it tells your agent to ask before it installs anything.",
+            "It tells your agent to ask before it installs anything.",
         ),
         ("h2", "What the guide covers"),
         (
@@ -608,11 +607,10 @@ PROJECTS = Page(
         ),
         (
             "p",
-            "There is a second rule stacked on top of that one, and it is what makes an opt-in "
-            "reachable from a drawer pane safe: <b>a gate can only ever turn something on</b>. "
-            "Many surfaces may switch a thing on in place; exactly one editor may switch it off. "
-            "For automation that editor is the Automation dashboard's Policy tab, and it holds "
-            "both the install-wide ceiling and every per-Project opt-in.",
+            "A second rule sits on top of that one: <b>a gate can only ever turn something "
+            "on</b>. Many surfaces may switch a thing on in place; exactly one editor may switch "
+            "it off. For automation that editor is the Automation dashboard's Policy tab, which "
+            "holds both the install-wide ceiling and every per-Project opt-in.",
         ),
         ("h2", "The Project context card"),
         (
@@ -684,8 +682,7 @@ SESSIONS = Page(
             "p",
             "swe-mux is a terminal multiplexer first. Anything that runs in a terminal runs here "
             "unchanged. An unrecognised CLI gets a real pseudoterminal and nothing else; a "
-            "recognised one gets the layer. That is the whole distinction, and it is worth being "
-            "clear about because it is easy to read a harness list as a support list.",
+            "recognised one gets the layer. A harness list is not a support list.",
         ),
         ("h2", "Sessions that outlive the application"),
         (
@@ -736,9 +733,8 @@ SESSIONS = Page(
         (
             "note",
             "The WSL agent bridge reports whether the distro can actually reach the daemon rather "
-            "than assuming it. Its failure mode is silence by construction - a bridged agent that "
-            "cannot reach the daemon runs perfectly and simply never reports - so the "
-            "reachability probe is not decoration.",
+            "than assuming it. Its failure mode is silence: a bridged agent that cannot reach the "
+            "daemon runs perfectly and never reports.",
         ),
         ("h2", "An ended session stays readable"),
         (
@@ -835,9 +831,9 @@ STATUS = Page(
         ),
         (
             "p",
-            "Every transition is kept in a durable ledger, which is what makes a status that went "
-            "wrong investigable afterwards rather than a matter of opinion. A watchdog exists for "
-            "the case a session gets stuck reporting one state.",
+            "Every transition is kept in a durable ledger, so a status that went wrong can be "
+            "investigated afterwards. A watchdog exists for the case a session gets stuck "
+            "reporting one state.",
         ),
         ("h2", "Approvals"),
         (
@@ -887,7 +883,7 @@ CONTROL_PLANE = Page(
         "approve, or spawn."
     ),
     blocks=[
-        ("h2", "The argument, in one paragraph"),
+        ("h2", "Where the facts come from"),
         (
             "p",
             "Every other account of what an agent did is the transcript, which is the agent's own "
@@ -1030,7 +1026,7 @@ WORKSPACE = Page(
         (
             "p",
             "A pane is not only a terminal. Notes, files, previews, and static documents all open "
-            "into one, which is what makes it worth building a layout at all.",
+            "into one.",
         ),
         ("h2", "The utility drawer"),
         (
@@ -1119,8 +1115,8 @@ WORKSPACE = Page(
         ("h2", "Watch here, act there"),
         (
             "p",
-            "Two pairs of surfaces look like duplicates and are not, for the same reason each "
-            "time. The Queue <em>tab</em> is beside the terminal because deciding whether to send "
+            "Two pairs of surfaces look like duplicates. "
+            "The Queue <em>tab</em> is beside the terminal because deciding whether to send "
             "a message is a judgement about the agent's live state, and that state is only legible "
             "in the terminal; the <b>Fleet Queue</b> is a modal because it has no send button and "
             "nothing in it needs a terminal beside it. The Processes tab answers \"what is "
@@ -1181,9 +1177,9 @@ QUEUE = Page(
         ("h2", "Automatic delivery is off by default"),
         (
             "p",
-            "This is the single most important default on this page. A queued message waits for "
-            "you. If you queue three messages and expect them to flow, nothing will happen, and "
-            "that is the design rather than a fault.",
+            "A queued message waits for you. If you queue three messages and expect them to "
+            "flow, nothing will happen. That is the design, and it is the default most likely to "
+            "catch you out.",
         ),
         (
             "p",
@@ -1328,11 +1324,11 @@ GIT = Page(
         (
             "p",
             "Removal is <b>declined rather than forced</b> wherever Git itself would refuse: a "
-            "locked worktree, one carrying submodules, one that is unclean. Git's refusals stay "
-            "Git's. What actually happens on a removal is that the checkout is renamed out of the "
-            "way and purged in the background, so a large tree does not hold the request open, and "
-            "the registration is dropped with a targeted removal rather than a global prune - a "
-            "prune would take every other checkout whose directory merely happens to be missing.",
+            "locked worktree, one carrying submodules, one that is unclean. A removal renames the "
+            "checkout out of the way and purges it in the background, so a large tree does not "
+            "hold the request open, and the registration is dropped with a targeted removal "
+            "rather than a global prune - a prune would take every other checkout whose directory "
+            "merely happens to be missing.",
         ),
         ("h2", "Commit provenance"),
         (
@@ -1542,8 +1538,8 @@ NOTES_FILES = Page(
         (
             "p",
             "Saved reusable messages, in the Actions tab. Selecting one <b>inserts and never "
-            "submits</b>, which is deliberate: a template is text, not an action, and a template "
-            "that sent itself would be a macro with no confirmation step.",
+            "submits</b>: a template is text, not an action, and a template that sent itself "
+            "would be a macro with no confirmation step.",
         ),
         ("h2", "The clipboard history"),
         (
@@ -1657,8 +1653,7 @@ VOICE = Page(
         ("h2", "Read aloud, in three ordered layers"),
         (
             "p",
-            "Getting this wrong is what makes a talking application unbearable, so the policy is "
-            "three explicit layers rather than one switch:",
+            "The policy is three explicit layers rather than one switch:",
         ),
         (
             "steps",
@@ -1832,9 +1827,8 @@ AUTOMATION = Page(
         ("h2", "The interrupt budget"),
         (
             "p",
-            "This is the part that makes an alert inbox usable rather than another thing to "
-            "ignore. Items are <b>ranked</b>, and there is a <b>hard daily interrupt budget, four "
-            "a day by default</b>. Four channels split by how expensive the item is to resolve.",
+            "Items are <b>ranked</b>, and there is a <b>hard daily interrupt budget, four a day "
+            "by default</b>, across four channels split by how expensive the item is to resolve.",
         ),
         (
             "ul",
@@ -1845,8 +1839,7 @@ AUTOMATION = Page(
                 "to raise, and those rules time out rather than accumulating into a filter nobody "
                 "remembers writing.",
                 "<b>The suppressed count is always shown.</b> You are told how many items did not "
-                "make the budget, with their reason, so the ranking is auditable rather than a "
-                "black box.",
+                "make the budget, and why each one did not.",
             ],
         ),
         ("h2", "The Automation dashboard"),
@@ -2040,8 +2033,8 @@ SETTINGS = Page(
     ),
     lede=(
         "Settings is seventeen tabs in four groups. <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd> "
-        "opens it, and the sidebar is the only navigation - a tab that is several screens long is "
-        "a real collection of pages rather than one scrolling document."
+        "opens it, and the sidebar is the only navigation: the longer tabs are several pages "
+        "each rather than one scrolling document."
     ),
     blocks=[
         ("h2", "Workspace"),
@@ -2188,9 +2181,9 @@ SETTINGS = Page(
             "p",
             "<code>config.toml</code> in the data directory is the same configuration, and it is "
             "schema-versioned with a pre-migration backup written beside it. Settings is the "
-            "better route because it validates; a config that does not validate is the single most "
-            "common reason a daemon will not start, and <code>mux doctor</code> names it as the "
-            "first failing check when it happens.",
+            "better route because it validates. A config that does not validate is one of the "
+            "four common causes of a daemon that will not start, and it is the first check "
+            "<code>mux doctor</code> reports on.",
         ),
     ],
 )
@@ -2718,10 +2711,9 @@ TROUBLESHOOTING = Page(
         ("h2", "The page loads but there is no interface"),
         (
             "p",
-            "This is the most confusing first-run symptom in the project, and it is not a bug. The "
-            "frontend bundle is build output and is not carried in the repository, so a fresh "
-            "clone, a fresh worktree, and a CI checkout all have none: the daemon answers the API "
-            "perfectly and serves no interface.",
+            "Not a bug. The frontend bundle is build output and is not carried in the repository, "
+            "so a fresh clone, a fresh worktree, and a CI checkout all have none: the daemon "
+            "answers the API perfectly and serves no interface.",
         ),
         (
             "code",
@@ -2913,14 +2905,13 @@ CONTRIBUTING = Page(
         (
             "note",
             "The frontend bundle is git-ignored build output. A fresh clone serves a blank page "
-            "rather than an error until that build has run once, and it is the single most "
-            "confusing first-run symptom in the project.",
+            "rather than an error until that build has run once.",
         ),
         ("h2", "The verification gate"),
         (
             "p",
-            "Run it before opening a pull request. It is the same set continuous integration runs, "
-            "and it is deliberately cheap enough to run often.",
+            "Run it before opening a pull request. It is the same set continuous integration "
+            "runs.",
         ),
         (
             "code",
@@ -2932,18 +2923,17 @@ CONTRIBUTING = Page(
         ),
         (
             "p",
-            "The Python suite runs across the host's cores and the whole gate is a matter of "
-            "seconds rather than minutes. Continuous integration mirrors it on Windows and adds "
-            "Linux and macOS legs, the production frontend build, and the full browser renderer "
-            "suite.",
+            "The Python suite runs across the host's cores: about 45 seconds on a 16-core "
+            "machine against 242 serial, plus about 17 for the four checks after it. Continuous "
+            "integration mirrors the same set on Windows and adds Linux and macOS legs, the "
+            "production frontend build, and the full browser renderer suite.",
         ),
         ("h2", "Contributions arrive under a DCO"),
         (
             "p",
-            "<code>git commit -s</code>, not a contributor licence agreement. The difference is "
-            "the point: a CLA would let the project relicense your contribution later, and a "
-            "developer certificate of origin does not. That is the intended trade rather than an "
-            "oversight.",
+            "<code>git commit -s</code>, not a contributor licence agreement. A CLA would let "
+            "the project relicense your contribution later. A developer certificate of origin "
+            "does not, and that is the intended trade.",
         ),
         ("h2", "A dependency change carries extra rules"),
         (

@@ -2,6 +2,11 @@
 
 This folder contains the complete source, live captures, original score, intermediate assets, and final renders for the swe-mux trailers.
 
+**The 2:11 feature cut described below is superseded as the site's hero video.**
+[`HERO.md`](HERO.md) is the current brief: one complete workflow in sixty to seventy-five seconds, recorded by `capture_hero.py` against the synthetic environment and cut by `encode_hero.py`, with the site's short loops cut from the same takes by `encode_loops.py`.
+A feature montage reinforces the product's worst marketing problem - it reads as an enormous pile of features rather than one reason to switch - and `storyboard.md` is kept only as the record of that earlier plan.
+The feature cut also records the *live* daemon and its footage is not cleared for publication, which the hero video's environment fixes by construction.
+
 **Website screenshots are a separate job with opposite rules, and they live in [`SITE_SHOTS.md`](SITE_SHOTS.md).**
 The trailer scripts record the *live* daemon on 8765 and their footage is not cleared for publication.
 `capture_env.py` and `capture_site_shots.py` never touch 8765: they stand up a second, synthetic install with invented Projects and invented data, and everything they record is meant to be published.
