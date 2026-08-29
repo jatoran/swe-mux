@@ -68,7 +68,7 @@ from typing import Any
 
 import aiohttp
 
-from .voice_models import ProgressCallback
+from .voice_models import ProgressCallback, report_progress
 from .voice_wheels import (
     CLOSURE_DIGEST,
     VoiceWheel,
@@ -293,7 +293,7 @@ class VoiceRuntimeStore:
             else:
                 status = "error"
                 state.setdefault(
-                    "error", "the download was interrupted or the unpacked closure is gone"
+                    "error", self._interrupted_reason(str(state.get("status") or ""))
                 )
         return {
             "status": status,
@@ -308,6 +308,37 @@ class VoiceRuntimeStore:
             "current_file": self._progress.get("current_file") if downloading else None,
             "error": None if status in {"downloading", "not_downloaded"} else state.get("error"),
         }
+
+    def _interrupted_reason(self, recorded: str) -> str:
+        """Why the state file and the world disagree, said specifically.
+
+        Four different situations reached this branch and had one sentence
+        between them - "the download was interrupted or the unpacked closure is
+        gone" - which named two subsystems, neither of which was at fault the day
+        it first mattered. The task object still knows what happened, so it is
+        asked rather than guessed at.
+
+        `recorded` is the status the state file claims, and it is what separates
+        the two halves of the old sentence: `ready` means a tree that was verified
+        and is now unloadable, while `downloading` means a transfer that never
+        finished.
+        """
+        task = self._task
+        if task is not None and task.cancelled():
+            return "the download was cancelled"
+        error = task.exception() if task is not None and task.done() else None
+        if error is not None:
+            return (
+                "the acquisition failed unexpectedly "
+                f"({error.__class__.__name__}: {str(error)[:200]}) - this is a "
+                "defect rather than a network or disk problem"
+            )
+        if recorded == "ready":
+            return "the unpacked closure is gone; press Download again"
+        return (
+            "the daemon restarted while the download was running; press Download "
+            "again"
+        )
 
     # ---- download ----------------------------------------------------------
 
@@ -350,11 +381,9 @@ class VoiceRuntimeStore:
                         await self._fetch_one(session, wheel, destination, downloaded)
                     downloaded += wheel.size
                     self._progress["downloaded_bytes"] = downloaded
-                    if progress is not None:
-                        await progress(self.status())
+                    await report_progress(self, progress)
             self._progress["current_file"] = "unpacking"
-            if progress is not None:
-                await progress(self.status())
+            await report_progress(self, progress)
             await asyncio.to_thread(self._unpack, wheels, cache)
             # The cache is 82 MiB of wheels whose contents are now on disk twice.
             # Dropped once the tree is verified rather than kept for a re-unpack:
@@ -391,10 +420,31 @@ class VoiceRuntimeStore:
                 {"status": "error", "closure": CLOSURE_DIGEST, "error": message}
             )
             log.warning("voice runtime download failed: %s", message)
+        except Exception as exc:  # noqa: BLE001 - a defect here must not read as a transfer failure
+            # The clause above names the four things that go wrong when fetching
+            # 82 MiB over a network onto a disk. Anything else reaching here is a
+            # defect in this process, and until 2026-08-29 it escaped the task
+            # entirely - leaving `status()` to infer from a `downloading` state
+            # file and a finished task that the transfer had been *interrupted*.
+            #
+            # It said "the download was interrupted or the unpacked closure is
+            # gone" for a `TypeError` in the progress callback. It was neither,
+            # and the operator and a peer agent both went looking at disk and
+            # network; the disk had 436 GB free. A message that points at the
+            # wrong subsystem is worse than one that admits it does not know.
+            message = f"{exc.__class__.__name__}: {str(exc)[:300]}"
+            self._write_state(
+                {
+                    "status": "error",
+                    "closure": CLOSURE_DIGEST,
+                    "error": f"the acquisition failed unexpectedly ({message})",
+                    "crashed": True,
+                }
+            )
+            log.exception("voice runtime acquisition crashed")
         finally:
             self._progress["current_file"] = None
-            if progress is not None:
-                await progress(self.status())
+            await report_progress(self, progress)
 
     async def _fetch_one(
         self,

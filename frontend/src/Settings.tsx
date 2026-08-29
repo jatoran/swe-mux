@@ -2534,6 +2534,21 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
  * interpreter outside that set has nothing to press, and its remedy is the
  * install-time extra rather than this panel.
  */
+// The `voice_model_progress` payload, as the daemon now sends it: which store
+// spoke, and that store's whole status nested rather than splatted. The flat
+// shape it replaced passed a store's data into `EventBus.emit`'s parameters, and
+// two of the four stores answer with a `source` key that collided with emit's
+// own - which killed the download task and reported itself as an interrupted
+// transfer (`routes/voice.emit_model_progress`).
+type ModelProgressEvent = {model?:string;asset?:Record<string,unknown>}
+
+function assetFor(raw:Event,model:string):Record<string,unknown>|null{
+  const detail=(raw as CustomEvent).detail as ModelProgressEvent|undefined
+  if(detail?.model!==model)return null
+  const asset=detail.asset
+  return asset&&typeof asset.status==='string'?asset:null
+}
+
 function VoiceRuntimePanel({initial,action=true}:{initial:VoiceRuntimeInfo|null;action?:boolean}){
   const [runtime,setRuntime]=useState<VoiceRuntimeInfo|null>(initial)
   const [starting,setStarting]=useState(false)
@@ -2543,11 +2558,12 @@ function VoiceRuntimePanel({initial,action=true}:{initial:VoiceRuntimeInfo|null;
   },[initial])
   useEffect(()=>{
     const handler=(raw:Event)=>{
-      const detail=(raw as CustomEvent).detail as Partial<VoiceRuntimeInfo>&{model?:string}
-      // Labelled events only. The Kokoro panel treats an unlabelled event as its
-      // own, so this one must never claim one it did not send.
-      if(detail?.model!=='runtime'||!detail.status)return
-      setRuntime(current=>({...(current||{supported:true,closure:'',distributions:0,total_bytes:0,downloaded_bytes:0}),...detail} as VoiceRuntimeInfo))
+      // Labelled events only, and matched on the label rather than on the
+      // absence of one: two panels listen to this stream and a claim on the
+      // wrong event overwrites a live download's progress with another's total.
+      const asset=assetFor(raw,'runtime')
+      if(!asset)return
+      setRuntime(current=>({...(current||{supported:true,closure:'',distributions:0,total_bytes:0,downloaded_bytes:0}),...asset} as VoiceRuntimeInfo))
     }
     window.addEventListener('mux:voice-model',handler)
     return()=>window.removeEventListener('mux:voice-model',handler)
@@ -2596,24 +2612,22 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   },[initial])
   useEffect(()=>{
     const handler=(raw:Event)=>{
-      const detail=(raw as CustomEvent).detail as Partial<KokoroModelInfo>&Partial<G2pModelInfo>&{model?:string}
-      if(!detail?.status)return
-      // The G2P model rides the same event stream and is merged into its own
-      // sub-object. Checked before the Kokoro branch because that branch accepts
-      // an absent `model` as its own, so an unlabelled event reaching it would
-      // replace a 106 MB download's progress with a 12 MB one.
-      if(detail.model==='g2p'){
-        setModel(current=>current?{...current,g2p:{...(current.g2p as G2pModelInfo|undefined),...detail} as G2pModelInfo}:current)
+      // Three stores behind one press, three labels, three sub-objects. Every
+      // branch matches its own label exactly; none of them accepts an unlabelled
+      // event, which is what used to let a 12 MB companion's progress overwrite
+      // a 106 MB download's mid-transfer.
+      const g2pAsset=assetFor(raw,'g2p')
+      if(g2pAsset){
+        setModel(current=>current?{...current,g2p:{...(current.g2p as G2pModelInfo|undefined),...g2pAsset} as G2pModelInfo}:current)
         return
       }
-      // Same rule, third store. Checked before the Kokoro branch for the same
-      // reason the G2P branch is: that branch accepts an unlabelled event as its
-      // own, so an 82 MB total would overwrite a 106 MB download's progress.
-      if(detail.model==='runtime'){
-        setModel(current=>current?{...current,runtime:{...(current.runtime as VoiceRuntimeInfo|undefined),...detail} as VoiceRuntimeInfo}:current)
+      const runtimeAsset=assetFor(raw,'runtime')
+      if(runtimeAsset){
+        setModel(current=>current?{...current,runtime:{...(current.runtime as VoiceRuntimeInfo|undefined),...runtimeAsset} as VoiceRuntimeInfo}:current)
         return
       }
-      if(detail.model===undefined||detail.model==='kokoro')setModel(current=>({...(current||{total_bytes:0,downloaded_bytes:0,voices:[]}),...detail} as KokoroModelInfo))
+      const kokoroAsset=assetFor(raw,'kokoro')
+      if(kokoroAsset)setModel(current=>({...(current||{total_bytes:0,downloaded_bytes:0,voices:[]}),...kokoroAsset} as KokoroModelInfo))
     }
     window.addEventListener('mux:voice-model',handler)
     return()=>window.removeEventListener('mux:voice-model',handler)
@@ -2709,8 +2723,13 @@ function WhisperModelPanel({initial,runtime}:{initial:WhisperModelInfo[]|null;ru
   useEffect(()=>{setModels(initial);refresh()},[initial])
   useEffect(()=>{
     const handler=(raw:Event)=>{
-      const detail=(raw as CustomEvent).detail as Partial<WhisperModelInfo>
-      if(detail?.model&&detail.status&&models?.some(entry=>entry.model===detail.model))refresh()
+      // The weights stores are labelled by model name rather than by store name,
+      // because this panel tracks several at once and each row is one of them.
+      const detail=(raw as CustomEvent).detail as ModelProgressEvent|undefined
+      if(detail?.model&&models?.some(entry=>entry.model===detail.model))refresh()
+      // The libraries are a step of this panel's own press, so its line has to
+      // move while they are being acquired.
+      if(assetFor(raw,'runtime'))refresh()
     }
     window.addEventListener('mux:voice-model',handler)
     return()=>window.removeEventListener('mux:voice-model',handler)

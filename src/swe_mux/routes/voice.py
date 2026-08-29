@@ -49,6 +49,37 @@ from . import terminal
 log = logging.getLogger(__name__)
 
 
+async def emit_model_progress(events: EventBus, model: str, status: dict[str, Any]) -> None:
+    """Publish one first-use asset's state, without splatting it into a signature.
+
+    The shape is `{"model": <which store>, "asset": <its whole status>}` and the
+    nesting is the fix rather than a preference.
+
+    Every one of these call sites used to read
+    `events.emit("voice_model_progress", source="daemon", model=..., **status)`,
+    which passes a *store's data* into a *function's parameters*. `EventBus.emit`
+    has two keyword-only parameters, `session_id` and `source`, and two of the four
+    stores answer with a `source` key of their own - meaning "installed in this
+    environment" or "downloaded by this daemon", which is a different thing
+    entirely from the event bus's "which subsystem emitted this". Splatting one
+    into the other raised `TypeError: got multiple values for keyword argument
+    'source'` *inside the download task*, on 2026-08-29, on the operator's first
+    real press.
+
+    Two stores carried the hazard and only one fired, which is why it survived a
+    green gate and a frozen probe: the spaCy model was already on that machine, so
+    its `start_download` short-circuited and its callback never ran.
+
+    Nesting removes the class rather than the instance. No key any store answers
+    with today, and no key any store adds later, can reach `emit`'s signature -
+    and the same is true if `emit` gains a keyword-only parameter tomorrow. That
+    is worth one level of indirection on the wire, because the alternative is a
+    rule ("do not name a status field like an event-bus parameter") that nothing
+    checks and that reads as arbitrary to whoever breaks it.
+    """
+    await events.emit("voice_model_progress", source="daemon", model=model, asset=status)
+
+
 async def voice_status(request: web.Request) -> web.Response:
     voice: VoiceService = request.app[keys.VOICE]
     return json_response(await voice.status())
@@ -183,7 +214,9 @@ async def whisper_model_download(request: web.Request) -> web.Response:
     name = str(body.get("model") or voice.config.stt_whisper_model).strip()
 
     async def progress(status: dict[str, Any]) -> None:
-        await events.emit("voice_model_progress", source="daemon", **status)
+        # The label is the weights name rather than a store name: this panel
+        # tracks several models at once and each row is one of them.
+        await emit_model_progress(events, str(status.get("model") or name), status)
 
     # One press for dictation as well, and the sequencing here is why this is a
     # chain rather than three parallel starts like the Kokoro press.
@@ -331,14 +364,13 @@ async def kokoro_model_download(request: web.Request) -> web.Response:
     events: EventBus = request.app[keys.EVENTS]
 
     async def progress(status: dict[str, Any]) -> None:
-        await events.emit("voice_model_progress", source="daemon", model="kokoro", **status)
+        await emit_model_progress(events, "kokoro", status)
 
     async def g2p_progress(status: dict[str, Any]) -> None:
-        # `model` is not optional here. The Kokoro panel accepts an event whose
-        # `model` is absent as well as one that says `kokoro`, so an unlabelled
-        # G2P event would overwrite the Kokoro download's own progress with a
-        # 12 MB total mid-transfer.
-        await events.emit("voice_model_progress", source="daemon", model="g2p", **status)
+        # The label is not optional. The Kokoro panel would otherwise have no way
+        # to tell a 12 MB companion's progress from the 106 MB download's, and an
+        # unlabelled event would overwrite one with the other mid-transfer.
+        await emit_model_progress(events, "g2p", status)
 
     started = voice.kokoro_models.start_download(progress)
     g2p_started = voice.g2p_model.start_download(g2p_progress)
@@ -365,7 +397,7 @@ def _runtime_progress(events: EventBus, voice: VoiceService) -> Any:
     """
 
     async def progress(status: dict[str, Any]) -> None:
-        await events.emit("voice_model_progress", source="daemon", model="runtime", **status)
+        await emit_model_progress(events, "runtime", status)
         if status.get("status") == "ready":
             voice.whisper_models.forget_backend()
 

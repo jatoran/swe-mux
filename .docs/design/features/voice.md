@@ -192,6 +192,23 @@ install-wide, so the tab edits them directly for the focused session.
   A failed refresh retains the prior voices and records the error.
   A selected `ShortName` absent from the newest catalog remains configured and renders as
   missing instead of being replaced.
+- **Reporting progress may never fail an acquisition** (`voice_models.report_progress`).
+  Every store publishes its state from a `finally`, and until 2026-08-29 that `await` was
+  unguarded - so a defect in the callback escaped the download task, and the store's own correct
+  diagnosis was thrown away on the way out and replaced by "the download was interrupted or the
+  unpacked closure is gone".
+  Two readers went looking at a disk with 436 GB free.
+  One shared helper now swallows an observer's failure (logging it with a traceback) and
+  re-raises `CancelledError` alone, because a cancelled task must stay cancelled.
+
+- **A crash is reported as a crash** (`voice_runtime._interrupted_reason`).
+  The `except` clause in each `_download` names the four things that go wrong fetching bytes over
+  a network onto a disk; anything else reaching it is a defect in this process and now says so,
+  naming its own exception type.
+  The four situations that used to share one sentence - a crashed task, a cancelled one, a daemon
+  restart, and a verified tree that has since disappeared - each say which one they are, because
+  a message that points at the wrong subsystem is worse than one that admits it does not know.
+
 - **A missing first-use asset is a typed refusal, never a 500** (`voice.VoiceError`,
   `server._error_middleware`).
   Learned on 2026-08-29, on a frozen desktop app, by an operator who met
@@ -319,7 +336,14 @@ install-wide, so the tab edits them directly for the focused session.
   ways and only the second is anything an operator can act on.
   One press acquires **all three** - the speech libraries, the weights, and this model:
   `POST /api/voice/models/kokoro/download` starts each store, and the `voice_model_progress`
-  events carry `model: "runtime"`, `"kokoro"` or `"g2p"` so the panel can tell them apart.
+  events carry `{model, asset}` with `model` naming which store spoke, so the panel can tell them
+  apart.
+  The status is *nested* under `asset` rather than splatted into the event, and that is a repair
+  rather than a style: splatting a store's dict into `EventBus.emit` passed its `source` key -
+  "installed or downloaded" - into emit's own keyword-only `source`, which raised inside the
+  download task on the first real press and was then reported as an interrupted transfer.
+  `routes/voice.emit_model_progress` is the single producer and its payload is two keys whatever
+  a store answers with.
   It started only two until 2026-08-29, and the missing third is the defect that failed a real
   operator: he pressed the button, watched both its bars finish, and met a 500 at the first
   spoken sentence because the libraries had a separate button in a separate panel.

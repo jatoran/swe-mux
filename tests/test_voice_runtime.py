@@ -77,16 +77,24 @@ def test_a_tree_built_from_a_different_closure_is_not_loaded(
     assert store.status()["status"] == "not_downloaded"
 
 
-def test_a_ready_state_over_a_missing_tree_is_an_error(
+def test_a_ready_state_over_a_missing_tree_names_the_missing_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`ready` on disk with nothing to load is the one case that is a fault."""
+    """`ready` on disk with nothing to load is the one case that is a fault.
+
+    It used to share one sentence with three other situations - "the download was
+    interrupted or the unpacked closure is gone" - which names two subsystems and
+    commits to neither. That vagueness cost real time on 2026-08-29, when the
+    sentence was printed for a `TypeError` in a progress callback and sent two
+    readers to look at a disk with 436 GB free.
+    """
     monkeypatch.setattr(voice_runtime, "closure_importable", lambda: False)
     store = voice_runtime.VoiceRuntimeStore(tmp_path)
     store._write_state({"status": "ready", "closure": CLOSURE_DIGEST})
     state = store.status()
     assert state["status"] == "error"
-    assert "interrupted" in (state["error"] or "")
+    assert "the unpacked closure is gone" in (state["error"] or "")
+    assert "restarted" not in (state["error"] or "")
 
 
 def test_an_unreadable_state_file_reads_as_never_downloaded(tmp_path: Path) -> None:

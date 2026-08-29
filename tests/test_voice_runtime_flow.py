@@ -310,18 +310,175 @@ async def test_the_dictation_press_acquires_the_libraries_first_and_chains_the_w
 async def test_the_runtime_progress_clears_the_dictation_backend_memo(
     tmp_path: Path,
 ) -> None:
-    """Otherwise a just-acquired install reports a missing backend until restart."""
+    """Otherwise a just-acquired install reports a missing backend until restart.
+
+    Driven with the store's **real** status rather than a hand-built dict, which
+    is not a detail: the first version of this test passed `{"status": "ready"}`
+    and therefore never carried the `source` key that killed the download task on
+    the operator's machine. A fake payload tests the callback's branch and not the
+    seam the callback sits on.
+    """
     service, _events, _emitted, _record = make_service(tmp_path)
     try:
         forgotten: list[bool] = []
         service.whisper_models.forget_backend = lambda: forgotten.append(True) is None  # type: ignore[method-assign]
         progress = voice_routes._runtime_progress(EventBus(), service)
-        await progress({"status": "downloading"})
+        real = service.voice_runtime.status()
+        await progress({**real, "status": "downloading"})
         assert forgotten == []
-        await progress({"status": "ready"})
+        await progress({**real, "status": "ready"})
         assert forgotten == [True]
     finally:
         service.store.close()
+
+
+# ------------------------------------------------- 5. the progress-emit seam
+
+
+@pytest.mark.parametrize("model", ["runtime", "kokoro", "g2p", "turbo"])
+async def test_every_store_status_survives_the_progress_emit(
+    tmp_path: Path, model: str
+) -> None:
+    """Each store's **real** status through the **real** emit, which is the seam.
+
+    `EventBus.emit` has keyword-only parameters, and two of the four stores answer
+    with a `source` key of their own - "installed in this environment" or
+    "downloaded by this daemon", which is a different thing from the event bus's
+    "which subsystem emitted this". The old call sites splatted one into the
+    other, and on 2026-08-29 that raised `TypeError: got multiple values for
+    keyword argument 'source'` *inside the download task* on the operator's first
+    real press.
+
+    6106 tests were green. They were green because every test that touched this
+    used a hand-built status dict, and a hand-built dict does not carry `source`.
+    """
+    from swe_mux.voice_models import KokoroModelStore, SpacyModelStore, WhisperModelStore
+    from swe_mux.voice_runtime import VoiceRuntimeStore
+
+    statuses = {
+        "runtime": lambda: VoiceRuntimeStore(tmp_path).status(),
+        "kokoro": lambda: KokoroModelStore(tmp_path).status(),
+        "g2p": lambda: SpacyModelStore(tmp_path).status(),
+        "turbo": lambda: WhisperModelStore().status("turbo"),
+    }
+    status = statuses[model]()
+    events = EventBus()
+    received: list[Any] = []
+    queue = events.subscribe(name="progress-seam-test")
+
+    await voice_routes.emit_model_progress(events, model, status)
+
+    while not queue.empty():
+        received.append(queue.get_nowait())
+    assert [event.type for event in received] == ["voice_model_progress"]
+    payload = received[0].payload
+    # Exactly two keys, whatever the store answered with. That is the property
+    # that makes the class impossible rather than this instance fixed.
+    assert set(payload) == {"model", "asset"}
+    assert payload["model"] == model
+    assert payload["asset"] == status
+    assert received[0].source == "daemon"
+
+
+async def test_the_emit_helper_cannot_be_broken_by_a_new_status_key() -> None:
+    """A status carrying every reserved name still emits cleanly.
+
+    Derived from `EventBus.emit`'s own signature rather than from a list, so a
+    keyword-only parameter added to `emit` tomorrow is covered by this test
+    today.
+    """
+    import inspect
+
+    reserved = {
+        name
+        for name, parameter in inspect.signature(EventBus.emit).parameters.items()
+        if parameter.kind is parameter.KEYWORD_ONLY
+    }
+    assert reserved, "emit has no keyword-only parameters; this guard would assert nothing"
+    hostile = {name: "store-meaning" for name in reserved}
+    hostile["status"] = "ready"
+
+    events = EventBus()
+    queue = events.subscribe(name="hostile-status-test")
+    await voice_routes.emit_model_progress(events, "runtime", hostile)
+    event = queue.get_nowait()
+    assert event.source == "daemon", "the store's value must not become the event's"
+    assert event.payload["asset"] == hostile
+
+
+async def test_a_broken_progress_callback_does_not_fail_the_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reporting is not acquiring, and the exact failure proved they were coupled.
+
+    The `TypeError` that killed the operator's download was raised by the progress
+    callback, awaited unguarded in a `finally`. So the store's own crash handler
+    wrote a correct diagnosis and the `finally` immediately threw it away by
+    raising the same exception on the way out - which is how a defect in the
+    *observer* came to be reported as an interrupted transfer.
+    """
+    from swe_mux.voice_runtime import VoiceRuntimeStore
+
+    store = VoiceRuntimeStore(tmp_path)
+    monkeypatch.setattr(store, "selection", lambda: ())
+    calls: list[str] = []
+
+    async def hostile(_status: dict[str, Any]) -> None:
+        calls.append("called")
+        raise TypeError("got multiple values for keyword argument 'source'")
+
+    store._write_state({"status": "downloading", "closure": "x" * 64})
+    await store._download(hostile)  # must not raise
+
+    assert calls, "the callback must still be invoked"
+    state = store._read_state()
+    # The empty selection means `_unpack` builds an empty tree and refuses it, so
+    # the recorded failure is the store's own honest diagnosis of that - not
+    # anything about the observer that failed while reporting it. Which of its
+    # two checks fires first is not the point and is deliberately not pinned.
+    assert state["status"] == "error"
+    assert state.get("crashed") is not True
+    assert "TypeError" not in state["error"]
+    assert "keyword argument" not in state["error"]
+
+
+async def test_an_internal_defect_reports_a_crash_not_a_transfer_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `except` clause names four transfer failures; everything else is a bug.
+
+    Before this, anything outside that clause escaped the task entirely and left
+    `status()` to infer from a `downloading` state file beside a finished task
+    that the *transfer* had been interrupted. It said so, and the disk had 436 GB
+    free.
+    """
+    from swe_mux.voice_runtime import VoiceRuntimeStore
+
+    store = VoiceRuntimeStore(tmp_path)
+    monkeypatch.setattr(store, "selection", lambda: ())
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("a defect in this process, not in the network")
+
+    monkeypatch.setattr(store, "_unpack", broken)
+    store._write_state({"status": "downloading", "closure": "x" * 64})
+    await store._download(None)
+
+    state = store._read_state()
+    assert state["status"] == "error"
+    assert state.get("crashed") is True
+    assert "TypeError" in state["error"]
+    assert "unexpectedly" in state["error"]
+    assert "interrupted" not in state["error"]
+
+
+def test_the_interrupted_reason_names_which_situation_it_is(tmp_path: Path) -> None:
+    """Four situations shared one sentence naming two subsystems; now each says itself."""
+    from swe_mux.voice_runtime import VoiceRuntimeStore
+
+    store = VoiceRuntimeStore(tmp_path)
+    assert "restarted" in store._interrupted_reason("downloading")
+    assert "the unpacked closure is gone" in store._interrupted_reason("ready")
 
 
 # ------------------------------------------------------------------- 4. the remedy
