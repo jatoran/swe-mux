@@ -116,7 +116,7 @@ async def test_the_lexicon_surfaces_refuse_before_handing_out_an_engine(
     service, _events, _emitted, _record = make_service(tmp_path)
     try:
         monkeypatch.setattr(service.kokoro_models, "ready", lambda: True)
-        monkeypatch.setattr(service.voice_runtime, "ready", lambda: False)
+        monkeypatch.setattr(service.voice_runtime, "ready", lambda *_a: False)
         monkeypatch.setattr(service.voice_runtime, "status", lambda: _absent_runtime())
 
         with pytest.raises(VoiceError) as refusal:
@@ -142,7 +142,7 @@ async def test_a_kokoro_failure_inside_the_lexicon_check_is_a_verdict_not_a_500(
     service, _events, _emitted, _record = make_service(tmp_path)
     try:
         monkeypatch.setattr(service.kokoro_models, "ready", lambda: True)
-        monkeypatch.setattr(service.voice_runtime, "ready", lambda: True)
+        monkeypatch.setattr(service.voice_runtime, "ready", lambda *_a: True)
 
         class Engine:
             @staticmethod
@@ -183,7 +183,7 @@ async def test_the_kokoro_provider_reports_unavailable_before_anything_is_spoken
         # `status()` is what the report renders. A test that stubbed only the
         # first would pass against a service that reports the closure ready and
         # refuses to use it.
-        monkeypatch.setattr(service.voice_runtime, "ready", lambda: False)
+        monkeypatch.setattr(service.voice_runtime, "ready", lambda *_a: False)
         monkeypatch.setattr(service.voice_runtime, "status", lambda: _absent_runtime())
         service.config.tts_engine = "kokoro"
 
@@ -197,25 +197,63 @@ async def test_the_kokoro_provider_reports_unavailable_before_anything_is_spoken
         service.store.close()
 
 
-async def test_dictation_readiness_reads_the_store_rather_than_a_stale_memo(
+async def test_the_import_gates_dictation_and_the_store_only_explains(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`backend_installed()` caches an import attempt made before the closure existed.
+    """Which question decides, and which question only supplies the sentence.
 
-    An install that has just acquired the libraries would keep reporting a missing
-    dictation backend until a restart if that memo were the only question asked.
+    This test asserted the opposite between 2026-08-29 and the CI run that caught
+    it, and the opposite was wrong. Consulting the store *first* made "can
+    dictation run" depend on read-aloud's phonemizer being present, so a
+    no-extras environment with faster-whisper installed - and every Ubuntu and
+    macOS leg, which sync no extras on purpose - was told dictation was
+    unavailable while it worked.
+
+    So: `backend_installed()` decides, because it is the capability's own truth.
+    The store supplies the diagnostic when the answer is no, because it is the
+    thing with a button behind it. The staleness that motivated asking the store
+    first is real and is fixed by invalidating the memo when the closure lands
+    (`routes/voice._runtime_progress`), not by a stricter precondition.
     """
     service, _events, _emitted, _record = make_service(tmp_path)
     try:
         service.config.stt_engine = "whisper"
-        monkeypatch.setattr(service.voice_runtime, "ready", lambda: False)
+        monkeypatch.setattr(service.voice_runtime, "ready", lambda *_a: False)
         monkeypatch.setattr(service.voice_runtime, "status", lambda: _absent_runtime())
+
+        # The backend imports: the store's opinion about the *other* capability's
+        # modules must not veto this one.
         monkeypatch.setattr(service.whisper_models, "backend_installed", lambda: True)
+        monkeypatch.setattr(service.whisper_models, "cached", lambda _name: True)
+        available, diagnostic, _models = service._stt_readiness()
+        assert available is True, "a working faster-whisper must not be vetoed"
+        assert "speech libraries" not in (diagnostic or "")
+
+        # The backend does not import: now the store is what explains why.
+        monkeypatch.setattr(service.whisper_models, "backend_installed", lambda: False)
         available, diagnostic, _models = service._stt_readiness()
         assert available is False
         assert "speech libraries" in (diagnostic or "")
     finally:
         service.store.close()
+
+
+def test_readiness_is_asked_per_capability_not_over_the_whole_closure() -> None:
+    """Read-aloud and dictation are two capabilities; neither needs the other's.
+
+    The union was the question until CI found it wrong. `numpy` is deliberately in
+    both sets - it is the only module either capability shares - and the union of
+    the two must stay exactly what the store acquires and what `_unpack` verifies,
+    because one press acquires one closure.
+    """
+    from swe_mux.voice_runtime import CAPABILITY_MODULES, REQUIRED_MODULES
+
+    read_aloud = set(CAPABILITY_MODULES["read-aloud"])
+    dictation = set(CAPABILITY_MODULES["dictation"])
+    assert read_aloud & dictation == {"numpy"}
+    assert "faster_whisper" not in read_aloud
+    assert "misaki" not in dictation and "spacy" not in dictation
+    assert set(REQUIRED_MODULES) == read_aloud | dictation
 
 
 # ------------------------------------------------------------------- 3. one press
@@ -277,7 +315,7 @@ async def test_the_dictation_press_acquires_the_libraries_first_and_chains_the_w
     try:
         chained: list[Any] = []
         weights_started: list[str] = []
-        monkeypatch.setattr(service.voice_runtime, "ready", lambda: False)
+        monkeypatch.setattr(service.voice_runtime, "ready", lambda *_a: False)
         monkeypatch.setattr(
             service.voice_runtime,
             "start_download",

@@ -87,23 +87,31 @@ DOWNLOAD_CHUNK = 1 << 16
 #: where `voice_models.DOWNLOAD_TIMEOUT_SECONDS` covers a single file.
 DOWNLOAD_TIMEOUT_SECONDS = 3600.0
 
-# The modules a working voice stack must be able to find. Probed with
-# `find_spec`, which locates a top-level package without importing it - importing
-# `spacy` costs a second and this question is asked on every status read.
+# The modules each capability must be able to find, **per capability**, because
+# they are two capabilities and not one. Read-aloud needs the Kokoro engine and
+# its phonemizer; dictation needs faster-whisper and its runtime. Nothing needs
+# both.
 #
-# Every entry is a *top-level* name for that reason: `find_spec("a.b")` imports
-# `a`, and a probe with an import in it is not a probe.
-REQUIRED_MODULES = (
-    "ctranslate2",
-    "faster_whisper",
-    "misaki",
-    "num2words",
-    "numpy",
-    "onnxruntime",
-    "spacy",
-    "thinc",
-    "tokenizers",
-)
+# Split on 2026-08-29 after asking the union was found to be wrong in two places:
+# `_stt_readiness` and `_require_voice_runtime` both refused a capability whose
+# own modules were present because some *other* capability's were not. The extra
+# always installs all of them together and the store always acquires all of them
+# together, so the partial case is a hand-assembled environment - but a readiness
+# check that answers "no" about a stack that works is wrong whether or not the
+# case is common, and it is the shape that makes a diagnostic untrustworthy.
+#
+# Probed with `find_spec`, which locates a top-level package without importing it:
+# importing `spacy` costs a second and this question is asked on every status
+# read. Every entry is a *top-level* name for that reason - `find_spec("a.b")`
+# imports `a`, and a probe with an import in it is not a probe.
+CAPABILITY_MODULES: dict[str, tuple[str, ...]] = {
+    "read-aloud": ("misaki", "num2words", "numpy", "onnxruntime", "spacy", "thinc"),
+    "dictation": ("ctranslate2", "faster_whisper", "numpy", "tokenizers"),
+}
+
+#: Everything the store acquires, and what `_unpack` verifies it built. The union
+#: rather than either half: one press acquires one closure.
+REQUIRED_MODULES = tuple(sorted(set().union(*CAPABILITY_MODULES.values())))
 
 #: LGPL packages the acquired closure carries, which must land as replaceable
 #: source. Kept in agreement with `license_audit.ALLOWLIST` and
@@ -115,15 +123,21 @@ class VoiceRuntimeError(RuntimeError):
     """A refusal from this store, safe to show a user verbatim."""
 
 
-def closure_importable() -> bool:
-    """Whether every required module is already findable in this interpreter.
+def closure_importable(capability: str | None = None) -> bool:
+    """Whether the modules are already findable in this interpreter.
 
     True for a source checkout synced with ``--extra voice-local`` and for any
     environment that installed the extra, which is why this is checked first
     everywhere: the store is for installs that do not have the closure, and it
     must be inert for the ones that do.
+
+    `capability` narrows the question to one of :data:`CAPABILITY_MODULES`, which
+    is what every *readiness* caller wants: "can dictation run" must not be
+    answered by whether read-aloud's phonemizer is present. `None` asks about the
+    whole closure and is what *acquisition* wants - one press, one closure.
     """
-    for name in REQUIRED_MODULES:
+    names = CAPABILITY_MODULES[capability] if capability else REQUIRED_MODULES
+    for name in names:
         try:
             if importlib.util.find_spec(name) is None:
                 return False
@@ -228,8 +242,15 @@ class VoiceRuntimeStore:
         importlib.invalidate_caches()
         return closure_importable()
 
-    def ready(self) -> bool:
-        return self.activate()
+    def ready(self, capability: str | None = None) -> bool:
+        """Whether `capability` can run right now, activating the tree if needed.
+
+        `activate()` is called for its effect and its answer discarded: it asks
+        about the whole closure, and a partially-provisioned environment that can
+        run one capability is a working environment for that capability.
+        """
+        self.activate()
+        return closure_importable(capability)
 
     def _source(self) -> str:
         """Which kind of present this is, read rather than remembered.
