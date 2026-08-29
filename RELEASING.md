@@ -45,6 +45,17 @@ one test should assert `swe_mux.__version__` equals the `[project] version` pars
 `pyproject.toml`.
 Neither is in place today, which is why this is a checklist rather than a single edit.
 
+**Started at 0.1.3, and the reason it started is the argument for finishing it.**
+`src/swe_mux/routes/diagnostics.py` carried two copies of the version and **was never in the
+table above**, so the checklist could be followed exactly and still ship a daemon reporting the
+previous version through `/api/health` and the doctor export.
+`verify_release_unit.py` caught it while the tag was still uncut, which is what that script is
+for; the table did not, because a hand-maintained list of copies cannot know about a copy nobody
+added to it.
+Those two now read `__version__`, so that file needs no row here at all - which is the shape the
+remaining locations should end in.
+Until then, prefer the `grep` above to the table: it asks the tree rather than a list.
+
 ## Release procedure
 
 ### 1. Prepare the release commit
