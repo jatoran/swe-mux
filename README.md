@@ -50,7 +50,7 @@ Four optional capabilities reach out, and each is off until you turn it on:
 
 The one request swe-mux makes on its own behalf is a daily fetch of `https://swemux.dev/version.json` to check for a newer release - nothing downloads, and the file is identical for every install, with no query string, header, cookie, or identifier on it.
 Settings → Diagnostics → Software updates (`update_check_enabled`) turns it off entirely.
-Installing an update is a separate act you take: `mux update --install <version>` downloads that release, checks its SHA-256 against the published manifest before anything is staged, and refuses rather than installs if the release would need a new PTY supervisor - which would end your live sessions.
+Installing an update is a separate act you take: `swemux update --install <version>` downloads that release, checks its SHA-256 against the published manifest before anything is staged, and refuses rather than installs if the release would need a new PTY supervisor - which would end your live sessions.
 
 ## Install
 
@@ -61,10 +61,12 @@ Installing an update is a separate act you take: `mux update --install <version>
      stays manual, so it is the one to remember. -->
 
 swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so this needs no Node and no checkout.
-Every install below writes the same three commands: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
+Every install below writes the same five commands, which are three programs: `swemux` (the CLI), `swemuxd` (the daemon), and `swe-mux` (the desktop window and tray).
+`mux` and `muxd` are kept as aliases of the first two - the same programs under shorter names, so anything written against them keeps working.
+Prefer `swemux` and `swemuxd` in anything you write down: `mux` is a name shared with at least one unrelated tool, and on a machine that has both, whichever installed last is the one your shell finds.
 
 ```
-# Recommended. Isolated environment, and all three commands on your PATH globally.
+# Recommended. Isolated environment, and every command on your PATH globally.
 uv tool install swe-mux
 
 # Windows: the `desktop` extra is what adds the native window and the tray icon.
@@ -74,15 +76,15 @@ uv tool install "swe-mux[desktop]"
 pipx install swe-mux
 
 # NOT the same act. Installs into whichever environment is currently active and
-# puts nothing on PATH globally, so `mux` works only inside that environment.
+# puts nothing on PATH globally, so `swemux` works only inside that environment.
 pip install swe-mux
 ```
 
-Then run `muxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop window on Windows.
-`mux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
+Then run `swemuxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop window on Windows.
+`swemux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
 
 **No Python install of any kind creates a desktop shortcut or a Start Menu entry.**
-Wheels have no post-install hook and pip runs no install-time code, so that is structural rather than a step somebody forgot: start swe-mux from a terminal, or run `mux install-shortcut` afterwards.
+Wheels have no post-install hook and pip runs no install-time code, so that is structural rather than a step somebody forgot: start swe-mux from a terminal, or run `swemux install-shortcut` afterwards.
 
 A **Windows installer** that does create one is published from v0.1.2 onward, alongside a portable archive, on the [releases page](https://github.com/jatoran/swe-mux/releases); <https://swemux.dev/#download> is drawn from the same release manifest and says which desktop builds the current release actually carries.
 It is **not code signed**, so Windows SmartScreen warns on first run and you have to choose to continue past it.
@@ -95,13 +97,13 @@ The extra wants the WebView2 Runtime, and it is Windows-only by declaration - `p
 If nothing is on your PATH afterwards, which is the ordinary outcome of `pip install` and whose `WARNING: The scripts ... are installed in '...' which is not on PATH` scrolls past unread:
 
 ```
-# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `muxd`.
+# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `swemuxd`.
 python -m swe_mux
 
-# Where the three executables went (a `Scripts` directory on Windows).
+# Where the executables went (a `Scripts` directory on Windows).
 python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
 
-# Every file this install wrote, those three included.
+# Every file this install wrote, those included.
 pip show -f swe-mux
 ```
 
