@@ -48,15 +48,17 @@ agreement, and the self-check that the phase derivation finds anything at all -
 live in `test_live_daemon_guards.py`, because a module-level mark would deselect
 them from the gate they exist to protect.
 
-**Known noise on a credentialed host, and why the separate CI step contains it.**
-`_teardown_runtime` never closes `ProviderAccountManager`'s `aiohttp.ClientSession`,
-which the `provider-accounts-reconcile` phase opens whenever this machine has a
-live Claude login. Shutting the in-process daemon down therefore leaves it to a
-finalizer, which prints "Unclosed client_session"/"Unclosed connector" at some
-later, unrelated moment. It is a daemon defect rather than a harness one (the
-`live_mcp` tier has always had it), it is invisible on a CI runner because there
-is no credential to reconcile, and running this tier as its own pytest process
-keeps the finalizer from reporting against a neighbouring test.
+**The unclosed-session noise was a real defect, and it is now asserted against.**
+This tier used to print "Unclosed client session"/"Unclosed connector" from a
+finalizer on any host with a live Claude login, and that was written off here as
+known noise. It was not noise: `_teardown_runtime` had been reading its handles
+by string name since the move to `aiohttp`'s `AppKey`, so it stopped no service
+and closed no store at all, and `ProviderAccountManager`'s session - opened by
+the `provider-accounts-reconcile` phase - was simply the one skipped service that
+owns a socket and therefore the only one loud enough to notice. The fix is in
+`server.py`; `tests/test_shutdown_teardown.py` keeps the teardown honest in the
+default tier, and `isolated_daemon` now fails the test that leaks a session
+rather than letting a finalizer report it against a neighbour.
 """
 
 from __future__ import annotations
