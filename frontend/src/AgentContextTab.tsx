@@ -5,12 +5,14 @@ import {
   AGENT_CONTEXT_DISCLOSURE_DEFAULTS,
   agentContextSourceMenuEnabled,
   backupAction,
+  canonicalLinkLabel,
   comparisonLabel,
   memoryFileCount,
   statusLabel,
   type AgentContextBackup,
   type AgentContextDirection,
   type AgentContextInventory,
+  type AgentContextLinkPreview,
   type AgentContextRead,
   type AgentContextSource,
   type AgentContextSyncPreview,
@@ -149,6 +151,8 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
   const [selected, setSelected] = useState<AgentContextRead | null>(null)
   const [sourceNonce, setSourceNonce] = useState(0)
   const [preview, setPreview] = useState<AgentContextSyncPreview | null>(null)
+  const [linkPreview, setLinkPreview] = useState<AgentContextLinkPreview | null>(null)
+  const [unlinkConfirm, setUnlinkConfirm] = useState<AgentContextSource | null>(null)
   const [restoreConfirm, setRestoreConfirm] = useState<AgentContextBackup | null>(null)
   const [syncOpen, setSyncOpen] = useState(false)
   const [sourceMenu, setSourceMenu] = useState<SourceMenu | null>(null)
@@ -164,6 +168,8 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     setSyncOpen(false)
     setPreview(null)
     setRestoreConfirm(null)
+    setLinkPreview(null)
+    setUnlinkConfirm(null)
   }, [])
   useModalFocus(syncPanel, closeSync, syncOpen)
 
@@ -305,6 +311,8 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     setBusy(`preview:${direction}`)
     setMessage('')
     setRestoreConfirm(null)
+    setLinkPreview(null)
+    setUnlinkConfirm(null)
     try {
       setPreview(await api<AgentContextSyncPreview>(
         'POST',
@@ -335,12 +343,81 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         { timeoutMs: REQUEST_TIMEOUT_MS },
       )
       setMessage(`${result.target} now matches ${preview.source.label}. A restore point was saved.`)
-      setSelectedId(result.target === 'CLAUDE.md' ? 'instruction:claude' : 'instruction:codex')
+      setSelectedId(inventory?.sync_options.find(option => option.direction === preview.direction)?.target_id || '')
       setPreview(null)
       await refresh()
     } catch (cause) {
       setError(errorMessage(cause))
       if ((cause as ApiError)?.detail?.code === 'revision_conflict') await refresh()
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const openLinkPreview = async (direction: AgentContextDirection) => {
+    setBusy(`link-preview:${direction}`)
+    setMessage('')
+    setPreview(null)
+    setRestoreConfirm(null)
+    setUnlinkConfirm(null)
+    try {
+      setLinkPreview(await api<AgentContextLinkPreview>(
+        'POST',
+        `/api/projects/${project.id}/agent-context/link/preview`,
+        { direction },
+        { timeoutMs: REQUEST_TIMEOUT_MS },
+      ))
+      setError('')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const commitLink = async () => {
+    if (!linkPreview) return
+    setBusy('link')
+    try {
+      const result = await api<{ target: string; revision: string }>(
+        'POST',
+        `/api/projects/${project.id}/agent-context/link`,
+        {
+          direction: linkPreview.direction,
+          source_revision: linkPreview.source.revision,
+          target_revision: linkPreview.target.revision,
+        },
+        { timeoutMs: REQUEST_TIMEOUT_MS },
+      )
+      setMessage(`${result.target} now links to ${linkPreview.source.label}. A restore point was saved.`)
+      setSelectedId(inventory?.sync_options.find(option => option.direction === linkPreview.direction)?.target_id || '')
+      setLinkPreview(null)
+      await refresh()
+    } catch (cause) {
+      setError(errorMessage(cause))
+      if ((cause as ApiError)?.detail?.code === 'revision_conflict') await refresh()
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const commitUnlink = async (item: AgentContextSource) => {
+    if (!item.revision) return
+    setBusy(`unlink:${item.id}`)
+    try {
+      const result = await api<{ target: string; revision: string }>(
+        'POST',
+        `/api/projects/${project.id}/agent-context/unlink`,
+        { source_id: item.id, target_revision: item.revision },
+        { timeoutMs: REQUEST_TIMEOUT_MS },
+      )
+      setMessage(`${result.target} is independent again and keeps the current linked content.`)
+      setSelectedId(item.id)
+      setUnlinkConfirm(null)
+      await refresh()
+    } catch (cause) {
+      setError(errorMessage(cause))
+      await refresh()
     } finally {
       setBusy('')
     }
@@ -384,10 +461,17 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
   }
 
   const instructions = inventory?.instructions.items || []
+  const managedLinks = instructions.filter(item => item.link_target)
+  const linkableSources = new Map(
+    instructions.map(item => [item.id, item.status === 'available' && !item.link_target]),
+  )
+  const linkableTargets = new Map(
+    instructions.map(item => [item.id, ['available', 'missing'].includes(item.status) && !item.link_target]),
+  )
   const globalInstructions = inventory?.global_instructions.items || []
   const providers = inventory?.providers || []
   const memories = memoryFileCount(providers)
-  const sourceExists = new Map(instructions.map(item => [item.label, item.status === 'available']))
+  const sourceExists = new Map(instructions.map(item => [item.label, item.status === 'available' && !item.link_target]))
   const focusedAgent = session && session.project_id === project.id && session.backend !== 'shell'
     ? session
     : null
@@ -540,7 +624,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
           </p>}
           <section class="agent-context-sync-card">
             <header>
-              <div><strong>Project root files</strong><small>{project.root}</small></div>
+              <div><strong>Copy once</strong><small>{project.root}</small></div>
               {inventory && <i class={`context-comparison ${inventory.instructions.comparison}`}>
                 {comparisonLabel(inventory.instructions.comparison)}
               </i>}
@@ -549,7 +633,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
             <div class="agent-context-sync">
               {(inventory?.sync_options || []).map(option => <button
                 key={option.direction}
-                disabled={!sourceExists.get(option.source) || !!busy}
+                disabled={!sourceExists.get(option.source) || managedLinks.length > 0 || !!busy}
                 onClick={() => void openPreview(option.direction)}
               >
                 {busy === `preview:${option.direction}` ? 'preparing…' : `${option.source} → ${option.target}`}
@@ -573,8 +657,69 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
             </footer>
           </section>}
 
+          <section class="agent-context-sync-card">
+            <header>
+              <div><strong>Keep linked</strong><small>Relative Project-root symbolic link</small></div>
+              {managedLinks.length > 0 && <i class="context-comparison linked">Linked</i>}
+            </header>
+            <p>Choose which file remains canonical. The other filename becomes a relative link to it, and both agents read the same content.</p>
+            {managedLinks.length > 0
+              ? managedLinks.map(item => {
+                const confirming = unlinkConfirm?.id === item.id
+                return <div class="agent-context-backup" key={`link:${item.id}`}>
+                  <span>
+                    <strong>{item.label} links to {item.link_target}</strong>
+                    <small>Unlinking keeps the current shared content in an independent file.</small>
+                  </span>
+                  {confirming
+                    ? <span class="agent-context-backup-confirm">
+                      <button onClick={() => setUnlinkConfirm(null)}>cancel</button>
+                      <button class="danger" disabled={!!busy} onClick={() => void commitUnlink(item)}>
+                        {busy === `unlink:${item.id}` ? 'unlinking...' : 'unlink and keep content'}
+                      </button>
+                    </span>
+                    : <button disabled={!!busy} onClick={() => {
+                      setUnlinkConfirm(item)
+                      setLinkPreview(null)
+                      setPreview(null)
+                      setRestoreConfirm(null)
+                    }}>unlink...</button>}
+                </div>
+              })
+              : <div class="agent-context-sync">
+                {(inventory?.sync_options || []).map(option => <button
+                  key={`link:${option.direction}`}
+                  disabled={!linkableSources.get(option.source_id) || !linkableTargets.get(option.target_id) || !!busy}
+                  title={`${option.target} will become a relative link to ${option.source}`}
+                  onClick={() => void openLinkPreview(option.direction)}
+                >
+                  {busy === `link-preview:${option.direction}` ? 'preparing...' : canonicalLinkLabel(option)}
+                </button>)}
+              </div>}
+            <p>Availability depends on the host filesystem. Windows requires Developer Mode or symbolic-link privilege; swe-mux does not elevate. A committed symlink can check out as plain text when Git symlink support is disabled.</p>
+          </section>
+
+          {linkPreview && <section class="agent-context-confirm" aria-label="Confirm instruction link">
+            <header>
+              <strong>Link {linkPreview.target.label} to {linkPreview.source.label}?</strong>
+              <small>{linkPreview.source.label} remains canonical. {linkPreview.target.label} stops being an independent file. A restore point is created first.</small>
+            </header>
+            {linkPreview.already_linked
+              ? <p>These files are already linked.</p>
+              : linkPreview.diff
+                ? <pre>{linkPreview.diff}</pre>
+                : <p>The destination is missing or already has matching content.</p>}
+            <p>Future writes through either filename normally change the canonical file. A tool that replaces the linked directory entry can break the relationship; Rescan will show that state.</p>
+            <footer>
+              <button onClick={() => setLinkPreview(null)}>cancel</button>
+              <button class="danger" disabled={linkPreview.already_linked || busy === 'link'} onClick={() => void commitLink()}>
+                {busy === 'link' ? 'linking...' : `link ${linkPreview.target.label}`}
+              </button>
+            </footer>
+          </section>}
+
           <section class="agent-context-sync-card agent-context-backups">
-            <header><div><strong>Restore points</strong><small>Created before every sync or restore.</small></div></header>
+            <header><div><strong>Restore points</strong><small>Created before every copy, link, unlink, or restore.</small></div></header>
             {(inventory?.backups.length || 0) === 0
               ? <p>No restore points yet.</p>
               : inventory!.backups.map(backup => {

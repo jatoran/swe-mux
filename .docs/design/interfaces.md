@@ -761,16 +761,19 @@ GET  /projects/{project_id}/agent-context/sources/{source_id}
 POST /projects/{project_id}/agent-context/sources/{source_id}/reveal
 POST /projects/{project_id}/agent-context/sync/preview   {direction}
 POST /projects/{project_id}/agent-context/sync           {direction, source_revision, target_revision}
+POST /projects/{project_id}/agent-context/link/preview   {direction}
+POST /projects/{project_id}/agent-context/link           {direction, source_revision, target_revision}
+POST /projects/{project_id}/agent-context/unlink         {source_id, target_revision}
 POST /projects/{project_id}/agent-context/restore        {backup_id, target_revision}
 ```
 
-`direction` is a descriptor-declared synchronization pair such as `claude_to_agents | agents_to_claude`.
-Inventory returns every harness-declared Project-root instruction item, their normalized `in_sync | different | missing` comparisons,
+`direction` is a descriptor-declared source-to-target pair shared by copy and link operations.
+Inventory returns every harness-declared Project-root instruction item, their normalized `linked | in_sync | different | missing` comparisons,
 descriptor-declared global instruction sources, provider rows with complete `item_count`, and the newest valid
 restore-point manifests. Source/provider status is typed:
 `available | missing | disabled | unsupported | unreadable | too_large`. Claude learned memory
-items and root instructions carry opaque source ids; `revealable` marks an existing regular
-non-symlink file. No route accepts a path.
+items and root instructions carry opaque source ids.
+`revealable` marks an existing regular file or a safe managed Project-root instruction link, and no route accepts a path.
 
 Inventory is memoized per Project on a stat signature - path, `st_mtime_ns`, and size - over exactly the
 files it reads, plus the Claude memory directory and `~/.claude/settings.json`; an absent file is part of
@@ -778,26 +781,33 @@ the signature, so one appearing invalidates rather than reading as unchanged. `r
 memo outright and is what the tab's rescan control sends, because a stat signature cannot see a same-size
 rewrite landing in the same nanosecond and "rescan" has to mean rescan.
 
-Source reads return `{source, text}` and are UTF-8, regular-file, non-symlink, and 512 KiB
-bounded. Instruction sources carry `scope: project | global`; resolved global host paths never
+Source reads return `{source, text}`, are UTF-8, and are 512 KiB bounded.
+Global instruction and memory symlinks are always refused.
+A Project-root instruction link is followed only when it is relative, names exactly another descriptor-declared root instruction file, and resolves directly to an existing regular file.
+Instruction sources carry `scope: project | global`; resolved global host paths never
 cross the API. Inventory caps Claude memory rows at 128 direct Markdown children while
 `item_count` reports the complete count. Codex returns an explicit provider status and no files
 until its CLI publishes a stable project-memory file inventory; the daemon does not expose
 private database rows.
 
-Reveal re-resolves the opaque source ID, refuses missing, symlink, and non-file targets, and
-passes the resolved file to the same OS launcher as the Project file browser. Windows Explorer
-selects the file; other platforms retain the shared launcher's native behavior.
+Reveal re-resolves the opaque source ID, refuses missing and non-file targets, and applies the same managed-link allowlist as reads.
+Managed links reveal the canonical file through the same OS launcher as the Project file browser.
+Windows Explorer selects the file, and other platforms retain the shared launcher's native behavior.
 
-Preview remains Project-root-only. It returns a bounded unified diff plus SHA-256
-`source.revision` and `target.revision`
-(`missing` when absent). Commit is a complete destination overwrite and succeeds only while both
-revisions still match; otherwise `409 {code:"revision_conflict"}`. It preserves an existing
-destination's CRLF/LF convention and mode, uses same-directory atomic replace, and creates a
-data-dir restore point first. Restore is guarded by the destination revision too and backs up the
-state it replaces. A restore point recording an originally missing destination removes the file
-created by sync. Successful writes emit `agent_context_changed`; see
-`features/agent-context.md`.
+Copy and link previews remain Project-root-only.
+Each returns a bounded unified diff plus `source.revision` and `target.revision`, with `missing` as the absent-target sentinel.
+Commit succeeds only while both revisions still match, otherwise it returns `409 {code:"revision_conflict"}`.
+Copy completely overwrites the destination, preserves its CRLF/LF convention and mode, and refuses a source or destination symlink.
+Link keeps the selected source as the canonical regular file and atomically replaces the destination with a relative symlink to its descriptor filename.
+The link endpoint does not elevate privileges.
+On Windows, an unavailable symlink capability returns a normal validation error with a Developer Mode or privilege hint and leaves both instruction files unchanged.
+Unlink requires the current link revision and atomically materializes the canonical content into the linked filename.
+Link reversal requires unlinking first.
+Every copy, link, unlink, and restore creates a typed data-dir restore point for the prior missing, regular-file, or managed-link entry.
+Restore is guarded by the destination revision and creates its own undo restore point.
+A restore point can remove a later-created path, restore exact bytes and mode, or recreate a revalidated managed link.
+Successful writes emit `agent_context_changed` with operation `sync | link | unlink | restore`.
+See `features/agent-context.md` for portability and editor-save caveats.
 
 ## Prompt templates
 

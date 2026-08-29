@@ -7,8 +7,9 @@ Design: `../../../design/features/agent-context.md`, `../../../design/features/a
 
 `AgentContextTab.tsx`, `agentContext.ts`
 
-Descriptor-driven Project and global read-only instruction and memory inventory in consistent disclosures, desktop right-click reveal over opaque source IDs, and focus-trapped diff/confirm synchronization for declared Project instruction-file pairs plus revision-guarded restore points.
-It never accepts paths, edits bodies, writes global instructions or provider memory, or auto-syncs.
+Descriptor-driven Project and global read-only instruction and memory inventory in consistent disclosures, desktop right-click reveal over opaque source IDs, and focus-trapped copy/link management for declared Project instruction-file pairs.
+The modal keeps one-time copy as the default, lets the user choose either descriptor file as canonical, previews link replacement, shows active relationships, unlinks by retaining content, explains platform caveats, and exposes typed revision-guarded restore points.
+It never accepts paths, edits bodies, writes global instructions or provider memory, selects a canonical file automatically, or synchronizes in the background.
 
 The inventory is held in a bounded module-scoped `INVENTORY_CACHE` keyed by Project, the same shape the sibling Config/Tools segments already use, because this tab is not `keepMounted` and every remount was otherwise a full rescan of every instruction file in front of an empty pane.
 A remount draws the last reading and the fetch replaces it; the daemon memoizes its half on a stat signature over the same files.
