@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { GrantButton, GrantGate } from './GrantGate'
+import { SettingLink } from './SettingLink'
 import {
   formatDuration,
   landAttentionRow,
@@ -177,11 +178,24 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
               <GrantButton id="project.landGrant" projectId={project.id} onGranted={onChanged}
                 title="Lets an agent start a land without waiting for you · writes to this Project’s .swe-mux/config.toml"
               >Let agents start one directly</GrantButton>{' '}
-              (still fast-forward-only, still gated on the approved verification command,
-              and still inside {queue.hourlyBudget} requests per session per hour).</p>
+              (still fast-forward-only, still running the verification command, and still
+              inside {queue.hourlyBudget} requests per session per hour).</p>
             : <p class="git-land-authority-row">Agents start lands directly, inside
               {' '}{queue.hourlyBudget} requests per session per hour. Lower it back to
               approve-each-one in this Project's settings.</p>}
+        {/* The second authority, and deliberately its own sentence rather than a clause
+            on the first. `agentGrant` decides who may *start* a land; this decides what
+            the daemon may *execute* while running one, and the two are lowered
+            independently. */}
+        {queue.projectEnabled && <p class="git-land-authority-row">{queue.verifyGrant === 'granted'
+          ? <>Gate edits written on this machine run without a fresh approval. A
+            <code>{' '}.worktree-verify</code> changed by anyone else still presents its
+            bytes for you to read.</>
+          : <>Every change to the verification command presents its bytes for approval,
+            whoever wrote it.{' '}
+            <GrantButton id="project.landVerifyGrant" projectId={project.id} onGranted={onChanged}
+              title="Lets this Project's own agents change the verification command without a fresh approval · writes to this Project’s .swe-mux/config.toml"
+            >Stop asking for edits made here</GrantButton></>}</p>}
       </details>}
 
       {/* The queue, in the order the pipeline will reach it. Oldest first: the request
@@ -233,9 +247,15 @@ function LandPipeline({ queue, gate, summary }: {
   const kindNote = lead ? landKindNote(lead) : ''
   const attention = lead ? null : landAttentionRow(queue?.requests || [])
   const blocked = summary.blockedWorktrees.length
+  // The folded cell has to agree with the summary's tone, which is drawn from
+  // `approved || runsWithoutApproval`. Reading `approved` alone here would say
+  // "Needs approval" in `ok` tone over a gate that is about to run, which is the one
+  // reading a collapsed strip cannot afford to get wrong.
   const gateLabel = gate === null ? 'Reading gate'
     : !gate.configured ? 'Not configured'
-      : !gate.approved || blocked ? 'Needs approval' : 'Gate ready'
+      : blocked ? 'Needs approval'
+        : gate.approved ? 'Gate ready'
+          : gate.runsWithoutApproval ? 'Gate authorised' : 'Needs approval'
   const gateDetail = blocked
     ? `${blocked} worktree${blocked === 1 ? '' : 's'} awaiting approval`
     : gate?.configured ? gate.display : gate?.scriptName || '.worktree-verify'
@@ -353,23 +373,32 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
     ? '[worktree] verify_command'
     : gate?.source === 'convention' ? `the executable ${gate.scriptName}` : ''
 
+  // Whether the next land runs this gate, which is not the same question as whether a
+  // human read it. A Project that lets its own agents change the command authorises
+  // bytes nobody approved, and a block that drew "Needs approval" over them would send
+  // the operator to clear a block that is not there — the mirror of the reassurance
+  // failure the worktree gates were added for.
+  const willRun = !!gate?.configured && (gate.approved || gate.runsWithoutApproval)
+
   const standing = !gate?.configured
     ? 'No verification command'
-    : gate.approved ? 'Approved' : 'Needs approval'
+    : gate.approved ? 'Approved' : gate.runsWithoutApproval ? 'Authorised' : 'Needs approval'
 
-  return <details class={`git-land-gate ${gate?.approved ? 'ok' : 'warn'}`}
+  return <details class={`git-land-gate ${willRun ? 'ok' : 'warn'}`}
     open={settingsOpen} onToggle={event => setSettingsOpen(event.currentTarget.open)}>
     <summary class="git-land-gate-summary">
       <span>Verification settings</span>
       {gate?.configured && <code>{gate.display}</code>}
-      <em class={gate?.approved ? 'ok' : 'warn'}>{standing}</em>
+      <em class={willRun ? 'ok' : 'warn'}>{standing}</em>
     </summary>
 
     <div class="git-land-gate-content">
       <div class="git-land-gate-head">
         <strong>{!gate?.configured
           ? 'No verification command'
-          : gate.approved ? 'Verification approved' : 'Verification not approved'}</strong>
+          : gate.approved ? 'Verification approved'
+            : gate.runsWithoutApproval ? 'Verification authorised, not read'
+              : 'Verification not approved'}</strong>
         {gate?.configured && <button onClick={() => setShowing(value => !value)}>
           {showing ? 'Hide bytes' : 'Review bytes'}
         </button>}
@@ -391,9 +420,18 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
     </p>}
 
     {gate?.configured && !gate.approved && <p class="git-state">
-      {gate.previouslyApproved
-        ? 'It changed since it was approved. Review it again before anything runs it.'
-        : 'Review the exact command a land will run, then approve it.'}
+      {gate.runsWithoutApproval
+        // Not a block, so this must not read as one. It states why the command runs
+        // anyway and where the standing decision lives, and leaves Review bytes as an
+        // ordinary thing to do rather than a step someone is waiting on.
+        ? <>These bytes were written on this machine, and this Project lets its own
+          agents change the verification command, so a land runs them without waiting
+          for you. Review them whenever you like, or lower{' '}
+          <SettingLink target="project.landVerifyGrant" projectId={project.id} variant="link"
+          >this Project's verification authority</SettingLink> back to approve-each-one.</>
+        : gate.previouslyApproved
+          ? 'It changed since it was approved. Review it again before anything runs it.'
+          : 'Review the exact command a land will run, then approve it.'}
     </p>}
 
     {showing && gate && <div class="git-land-gate-body">
@@ -485,8 +523,10 @@ function BlockedWorktreeGate({ project, worktreeRoot, branch, busy, setBusy, onE
   const [showing, setShowing] = useState(false)
 
   // Approved between the refusal and this render: the row is history now and the block
-  // would only be a control for something already done.
-  if (gate?.approved) return null
+  // would only be a control for something already done. `runsWithoutApproval` closes it
+  // for the same reason — the Project's authority was raised after the refusal, so the
+  // next request runs these bytes and there is nothing left here to decide.
+  if (gate?.approved || gate?.runsWithoutApproval) return null
 
   const approve = async () => {
     if (!gate?.digest) return
@@ -527,12 +567,30 @@ function BlockedWorktreeGate({ project, worktreeRoot, branch, busy, setBusy, onE
       <h5>What this worktree would run</h5>
       <pre class="git-land-source">{gate.currentSource || gate.display}</pre>
     </div>}
+    {/* Why the Project's standing authority did not cover these bytes. Without it, a
+        refusal inside a Project that lets agents change the gate reads as a
+        contradiction, and the reader's next move is to doubt the switch rather than to
+        look at who wrote the script — which is the one fact that decided it. */}
+    {gate?.provenance && !gate.provenance.trusted && gate.verifyGrant === 'granted'
+      && <p class="git-state">This Project does let agents change the gate, but that
+        authority did not reach these bytes: {gate.provenance.reason}.</p>}
     {gate?.configured && <div class="git-map-actions">
       <button disabled={busy || !gate.digest} onClick={() => void approve()}>
         Approve this worktree's bytes
       </button>
       {!showing && <small>Review them first — approving is what lets them run unattended.</small>}
     </div>}
+    {/* The standing answer beside the one-off one, offered only where it would change
+        this outcome: bytes this machine wrote, refused because the Project approves each
+        digest by hand. Raising the authority is the same decision as approving, made
+        once. Where the provenance is untrusted the grant would not have helped and is
+        deliberately absent — a control that cannot clear the block is worse than none. */}
+    {gate?.configured && gate.verifyGrant !== 'granted' && gate.provenance?.trusted
+      && <p class="git-land-authority-row">These bytes were written on this machine.{' '}
+        <GrantButton id="project.landVerifyGrant" projectId={project.id} onGranted={onApproved}
+          title="Lets this Project's own agents change the verification command without a fresh approval · writes to this Project’s .swe-mux/config.toml"
+        >Stop asking for edits made here</GrantButton>{' '}
+        (a gate edited by anyone else still presents for approval).</p>}
   </div>
 }
 

@@ -225,6 +225,33 @@ def test_the_authority_grants_default_granted_and_fail_closed(tmp_path: Path) ->
     assert project_spawn_grant(root) == "draft"
 
 
+def test_the_verification_authority_defaults_granted_and_fails_closed(tmp_path: Path) -> None:
+    """Unset means granted; unreadable means the narrow answer, not the default.
+
+    The direction matters more here than for the other grants: this one ends in the
+    daemon executing a script, so a corrupt config must never be the thing that widens
+    it.
+    """
+    from swe_mux.project_files import project_land_verify_grant
+
+    root = tmp_path / "repo"
+    (root / ".swe-mux").mkdir(parents=True)
+    assert project_land_verify_grant(root) == "granted"
+
+    (root / ".swe-mux" / "config.toml").write_bytes(
+        serialize_project_config({"land_verify_grant": "draft"})
+    )
+    assert project_land_verify_grant(root) == "draft"
+
+    (root / ".swe-mux" / "config.toml").write_bytes(b"version = 1\nnot toml")
+    assert project_land_verify_grant(root) == "draft"
+
+
+def test_land_verify_grant_rejects_an_unknown_level() -> None:
+    with pytest.raises(ValueError, match="land_verify_grant must be draft or granted"):
+        parse_project_config(b'version = 1\nland_verify_grant = "off"\n')
+
+
 def test_interject_grant_rejects_an_unknown_level() -> None:
     with pytest.raises(ValueError, match="interject_grant must be off or granted"):
         parse_project_config(b'version = 1\ninterject_grant = "draft"\n')

@@ -231,6 +231,10 @@ export const SETTING_TARGETS = {
     surface: 'project', setting: 'land_grant',
     label: 'Agent-initiated landing', where: 'Project settings',
   },
+  'project.landVerifyGrant': {
+    surface: 'project', setting: 'land_verify_grant',
+    label: 'Agent edits to the verification command', where: 'Project settings',
+  },
   'project.sessionControlGrant': {
     surface: 'project', setting: 'session_control_grant',
     label: 'Agent interrupt and end', where: 'Project settings',

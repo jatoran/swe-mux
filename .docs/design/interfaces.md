@@ -2177,6 +2177,16 @@ carries the editable half (`config_command`, `config_revision`, `config_status`,
 which convention applies (`script_name`, `script_present`), and the `plan` a byte-identical passing
 run recorded (`{steps, duration_ms, observed_at}`) or `null`.
 
+`approved` is not the whole answer, and a client must not draw a standing from it alone. The same
+payload (and `PUT`'s echo of it) carries `verify_grant` (`"draft" | "granted"`, this Project's
+`land_verify_grant`), `runs_without_approval`, and `provenance`
+(`{verdict, trusted, reason, authors}`) or `null`. A Project may let its own agents change the
+gate, so unapproved bytes this machine wrote run while unapproved bytes another author wrote do
+not: the question "will the next land run this" is `approved || runs_without_approval`.
+`provenance` is `null` when it was not asked - it is read only for unapproved bytes, so an
+approved gate costs no git - which is not the same as an unknown answer, and `verdict:
+"unknown"` is the untrusted one. See `features/land-queue.md`.
+
 `PUT /land/verify-command` sets `[worktree] verify_command` in the Project's `.swe-mux/config.toml`,
 or clears it when `command` is empty, falling back to the `.worktree-verify` convention. It writes
 exactly that one key under the config's own revision guard: `409 revision_conflict` on a stale

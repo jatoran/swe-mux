@@ -285,6 +285,53 @@ async def test_a_queued_request_can_be_cancelled(tmp_path: Path, trunk: Path) ->
 # -- the verification command's approval -------------------------------------
 
 
+async def test_the_gate_reports_whether_it_would_run_not_only_whether_it_is_approved(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """`approved` alone stopped answering the strip's question on 2026-08-29.
+
+    A Project may let its agents' own edits run, so unapproved bytes this machine wrote
+    are fine while unapproved bytes a contributor wrote are not. Drawing only the
+    digest's approval state would warn over a gate that is about to run.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        body = await (
+            await client.get(
+                f"/api/land/verify-command?project_id=proj-1&worktree_root={worktree}"
+            )
+        ).json()
+        assert body["approved"] is False
+        assert body["verify_grant"] == "granted"
+        assert body["runs_without_approval"] is True
+        assert body["provenance"]["trusted"] is True
+        # The provenance read is a question about unapproved bytes and is not asked of
+        # approved ones - the ordinary reading of this endpoint spends no git at all.
+        approved = await client.post(
+            "/api/land/verify-command/approve",
+            json={
+                "project_id": "proj-1",
+                "worktree_root": str(worktree),
+                "digest": body["digest"],
+            },
+        )
+        assert approved.status == 200, await approved.text()
+        after = await (
+            await client.get(
+                f"/api/land/verify-command?project_id=proj-1&worktree_root={worktree}"
+            )
+        ).json()
+        assert after["approved"] is True
+        assert after["provenance"] is None
+        assert after["runs_without_approval"] is False
+    finally:
+        await client.close()
+        store.close()
+
+
 async def test_the_gate_reads_as_unapproved_until_it_is_approved(
     tmp_path: Path, trunk: Path
 ) -> None:

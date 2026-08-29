@@ -12,22 +12,57 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
+from ..git_monitor import read_git
 from ..http_support import json_response
 from ..land_queue import LandRefusal
 from ..land_store import LandConflict, LandStore
 from ..project_files import (
+    project_land_verify_grant,
     read_project_config,
     write_project_config,
 )
+from ..verify_provenance import read_verify_provenance, verify_bypass_allowed
 from ..worktree_verify import (
     MAX_VERIFY_COMMAND_CHARS,
     VerifyApprovalStore,
+    VerifyCommandInfo,
     describe_verify_command,
 )
 from ..worktree_verify import SCRIPT_NAME as VERIFY_SCRIPT_NAME
 from .support import _config_identity
 
 log = logging.getLogger(__name__)
+
+
+async def _verify_standing(
+    info: VerifyCommandInfo, *, worktree_root: str, project_root: str
+) -> dict[str, Any]:
+    """Whether this checkout's gate would run as things stand, and on whose authority.
+
+    The strip cannot answer "will my next land be refused" from `approved` alone any
+    more: a Project may let its agents' own edits run, and then unapproved bytes this
+    machine wrote are fine while unapproved bytes a contributor wrote are not. Drawing
+    only the digest's approval state would show a warning over a gate that is about to
+    run, and - far worse - would show reassurance over one that is not.
+
+    The provenance read is skipped for an approved gate, so the ordinary reading of this
+    endpoint spends no git at all.
+    """
+    grant = project_land_verify_grant(project_root)
+    standing: dict[str, Any] = {"verify_grant": grant, "provenance": None}
+    if not info.configured or info.approved:
+        standing["runs_without_approval"] = False
+        return standing
+    provenance = await read_verify_provenance(
+        git=read_git,
+        worktree_root=worktree_root,
+        project_root=project_root,
+        source=str(info.source or ""),
+        script_name=VERIFY_SCRIPT_NAME,
+    )
+    standing["provenance"] = provenance.public_dict()
+    standing["runs_without_approval"] = verify_bypass_allowed(grant, provenance)
+    return standing
 
 
 def _land_project(request: web.Request) -> Any:
@@ -124,9 +159,13 @@ async def read_land_verify_command(request: web.Request) -> web.Response:
         configured = str(worktree_config.get("verify_command") or "")
     store: LandStore = request.app[keys.LAND_STORE]
     plan = await store.verify_plan(project.root, info.digest or "")
+    standing = await _verify_standing(
+        info, worktree_root=str(worktree_root), project_root=project.root
+    )
     return json_response(
         {
             **info.public_dict(),
+            **standing,
             "project_id": project.id,
             "worktree_root": worktree_root,
             "approved_source": info.approved_snapshot,
@@ -215,9 +254,13 @@ async def write_land_verify_command(request: web.Request) -> web.Response:
         request.app[keys.VERIFY_APPROVALS],
         project_root=project.root,
     )
+    standing = await _verify_standing(
+        refreshed, worktree_root=worktree_root, project_root=project.root
+    )
     return json_response(
         {
             **refreshed.public_dict(),
+            **standing,
             "project_id": project.id,
             "worktree_root": worktree_root,
             "approved_source": refreshed.approved_snapshot,

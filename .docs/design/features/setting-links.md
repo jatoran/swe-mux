@@ -186,7 +186,9 @@ only route to the owning overlay.
 | Findings pane (no observer notes) | `automation_enabled` | install | grant (inline) |
 | Git → Provenance | `provenance_graph` | Project | grant |
 | Git → Map landing strip (install stop) | `land_queue_enabled` | install | grant |
-| Git → Map landing strip (agent authority) | `land_queue`, `land_grant` | Project | grant |
+| Git → Map landing strip (agent authority) | `land_queue`, `land_grant`, `land_verify_grant` | Project | grant |
+| Git → Map landing strip (verification settings) | `land_verify_grant` | Project | link, because the act there is lowering it |
+| Git → Map landing strip (blocked worktree gate) | `land_verify_grant` | Project | grant, offered only where raising it clears that block |
 | Git → Map row, landing blocked | the two above | install + Project | opens the strip that holds them |
 | Alerts tab (ranked inbox empty) | `attention_ranking` | Project | grant |
 | Alerts tab (delivery muted) | device alert master | device | compact grant (local write) |

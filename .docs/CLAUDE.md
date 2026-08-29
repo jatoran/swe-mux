@@ -319,6 +319,19 @@
   which is what stops an agent approving the command its own land runs - editing the
   command and approving it stay two acts against two routes, and a write can never produce
   an approved command because the approval is a digest over the bytes it just moved.
+  Approval stopped being the *only* authority a run can have on 2026-08-29, and the rule
+  that replaced it is decided by **who wrote the bytes rather than by what they say**: a
+  Project's `land_verify_grant` lets its own agents' gate edits run unapproved, where "its
+  own" is `verify_provenance.py` tracing the bytes to this machine, and a gate any other
+  author put on the branch still presents for approval. Both halves are required and
+  neither is redundant - the switch alone would make landing a contributor branch an
+  unattended execution of that branch's script, which is a live risk now the repository is
+  public, and the provenance alone would ignore a Project that asked to be asked. The
+  bypass is scoped to the run and writes nothing to the approval store, so lowering the
+  authority takes the permission away completely rather than leaving auto-granted digests
+  standing beside ones a human read; what it owes instead is the trail, which carries the
+  verdict and a bounded approved-to-current diff. Every standing readout is therefore drawn
+  from `approved || runs_without_approval`, never from `approved` alone.
   *Which* gate runs is decided by a `classify` step, and it stays on the executing side of
   the same line: matching paths against a **closed** documentation allowlist is a total
   function with no model, heuristic, or configuration in it, so it is not a decision -

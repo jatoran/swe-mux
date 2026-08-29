@@ -92,10 +92,57 @@ The pipeline needs an exit code and bounded output inside a tree that lives outs
 
 It carries the exact-content approval model Project Actions established: a machine-local SHA-256 over the bytes that will run, keyed by canonical Project root, retained alongside the approved text so the prompt can show a diff.
 Any edit un-approves it.
-**An agent therefore cannot approve the command its own land runs** - writing a verification script is a proposal, and a human turns it into an authority.
+**An agent still cannot approve the command its own land runs** - writing a verification script is a proposal, and no write anywhere produces an approval, because approving is a digest over bytes and a write has moved them.
 
 The digest covers the command's *source kind* alongside its bytes, so approving a config string never silently approves a script with identical content.
-The script is fingerprinted from the **worktree's** copy, because that is the copy that will run: a branch that edits its verification script must present for approval again.
+The script is fingerprinted from the **worktree's** copy, because that is the copy that will run: a branch that edits its verification script resolves to different bytes from the primary's.
+
+Approval is not the only authority a run can have.
+`land_verify_grant` is described in "Provenance is the second authority".
+
+### Provenance is the second authority
+
+A Project may declare that its **own agents'** edits to the gate need no fresh reading (`land_verify_grant`, `granted` by default).
+The queue then runs those bytes and records that it did; it does not approve them, and the approval store is never written by this path.
+
+The distinction that decides the whole design is *who wrote the bytes*, not *what they say*.
+
+An agent working in a worktree here already runs arbitrary commands in that checkout, so requiring a human to read its gate edits bought very little - and cost a stall on every parallel wave that touched the script, which this repository's own rules make routine (adding a live test mark requires editing `.worktree-verify`).
+What is not cheap is that the gate's bytes are **branch content**, and since this repository went public a branch can arrive from a stranger.
+Landing a fetched contributor branch that edited the gate would execute their script unattended, under `base_session_env`, with no permission prompt and nobody watching.
+
+So `verify_provenance.py` traces the bytes before anything runs, read-only, through the same `--no-optional-locks` git seam every monitor uses:
+
+| Verdict | Trusted | What it means |
+| --- | --- | --- |
+| `project_config` | yes | The command is `[worktree] verify_command` from `.swe-mux/config.toml`, which is git-ignored per-machine state. No branch carries one. |
+| `uncommitted` | yes | The script differs from `HEAD` in this checkout - modified, staged, or untracked. Only this machine can have done that. |
+| `local_author` | yes | Every author who put these bytes here is this repository's configured `user.email`: the commits in `trunk..HEAD` that touched the script, or - where the branch did not touch it - whoever last touched it in the repository's history. |
+| `foreign_author` | no | At least one was not. The addresses are named in the refusal. |
+| `unknown` | no | Git could not answer. |
+
+**Both halves are required and neither is redundant.**
+The grant without the provenance is unattended execution of any branch's script; the provenance without the grant is a Project that asked to be asked.
+`unknown` is untrusted because this check runs to *widen* authority, so it fails closed - "I could not tell" and "it is fine" are the two answers an authority check must never conflate.
+`local_author` requires *every* commit that touched the script, not the newest: letting the last commit decide would let a stranger's line survive under a local commit made afterwards.
+
+**"The trunk already carries it" is deliberately not a verdict**, and leaving it out is the difference between this being safe and this being a hole.
+It reads as trustworthy - those bytes landed once - but only in a repository whose trunk is the operator's.
+A Project can be a clone of somebody else's repository, and there the trunk's own `.worktree-verify` is a stranger's script nobody here ever read; trusting it by position would execute it unattended on the very first land, which is precisely the failure the provenance half exists to prevent.
+So a branch that did not touch the script is judged on who wrote the copy it inherited, and a repository whose gate this machine never wrote presents it for approval exactly once.
+
+**A bypass is scoped to the run and leaves nothing behind.**
+Recording an auto-approval in the store instead would launder an agent's bytes into standing human-equivalent authority that outlives the switch, compete with human approvals for the sixteen-digest cap, and make the eviction of an auto-grant indistinguishable from the eviction of something somebody read.
+Lowering `land_verify_grant` therefore takes the permission away completely.
+
+**What the run owes in exchange is the trail.**
+A bypassed run replaces "a human reads this before it runs" with "a human can read what ran afterwards", which is only true if it is written down while it is still resolvable - the file moves on with the branch.
+So the request's event trail carries an `approval_bypassed` event with the digest, the provenance verdict and its reason, and a bounded unified diff from the bytes standing approved to the bytes that ran; the `verify` outcome itself carries `approval: "approved" | "bypassed"`, recorded rather than derived, because a reader auditing who said it could run must not have to reconstruct that from a grant that may since have moved.
+`daemon.log` carries `worktree_verify_approval_bypassed` at WARNING for the same reason.
+
+`land_verify_grant` is its own field rather than a level of `land_grant`, and that separation is the point: `land_grant` says who may **start** a land, this says what the daemon may **execute** while running one.
+Folding them together would have handed the second authority to every Project that had already granted the first, silently, on upgrade.
+It fails closed on a malformed config (`draft`, not the `granted` default), because corruption must never be the thing that widens an authority that ends in executing a script.
 
 ### Approval is scoped to bytes, not to a Project
 
@@ -252,9 +299,22 @@ The blocks are bounded to three and are transient by construction, and the colla
 
 The digest-scoped store above is what makes the control safe rather than a loop: before it, approving this copy withdrew the primary's, so a control here would have automated the very oscillation it exists to end.
 
+**"Approved" stopped being the question the strip asks.**
+Every standing readout - the Project gate's chip and headline, the summary line's tone, and whether the strip unfolds itself - is drawn from `approved || runs_without_approval` rather than from `approved` alone.
+Under `land_verify_grant`, unapproved bytes this machine wrote are about to run while unapproved bytes a contributor wrote are not, and a surface drawn from the digest's approval state alone would warn over a gate that is running and reassure over one that is refusing.
+A gate that runs on the standing authority reads *authorised* rather than *approved*, in `ok` tone, and says so in words: these bytes were written here, this Project lets its own agents change the command, review them whenever you like.
+It offers the setting link that lowers the authority rather than an approval nobody is waiting on.
+A blocked worktree gate closes itself on `runs_without_approval` for the same reason it closes on `approved` - there is nothing left there to decide - and where the provenance is *untrusted* in a Project that grants the authority, the block states which of the two decided it.
+The block offers the grant only where raising it would actually clear that block, because a control that cannot fix what it sits under is worse than no control.
+
+The daemon answers this on the same two routes: `GET /api/land/verify-command` (and the write route's echo) carry `verify_grant`, `provenance`, and `runs_without_approval`.
+The provenance read is skipped entirely for an approved gate, so the ordinary reading of the endpoint spends no git.
+
 **Editing never approves, and the two are separate acts against separate routes.**
 An edit cannot produce an approved command even by accident: the approval is a digest over the bytes, so moving the bytes invalidates it without the write saying anything about approval at all.
 That is what keeps "an agent cannot approve the command its own land runs" true regardless of who reaches the editor - writing a verification script is a proposal, and a human turns it into an authority.
+`land_verify_grant` does not change that sentence.
+It lets a Project decide once that its own agents' proposals may run; it gives no agent the ability to approve anything, and the write route is as inert as it ever was.
 
 The editor writes exactly one key, guarded by the Project config's own revision, so a concurrent edit to another field loses the race rather than being clobbered by a surface that round-tripped the whole file.
 An empty command **clears** the override and falls back to the `.worktree-verify` convention, which is a decision ("run the script in the tree") rather than a no-op.
@@ -313,12 +373,16 @@ Plans are durable (`land_verify_plans`, keyed by trunk root and digest) because 
   `off` refuses both, because `off` is the operator saying agents do not drive this machinery here.
   `draft` drafts a *land* - a human decides before a trunk moves - and enqueues a *verify*, because a verify-only run moves nothing: it merges the trunk into the requester's own branch, in the requester's own worktree, and runs bytes a human already approved.
   There is nothing for a human to decide in advance about that, and drafting it would put the cheap half of the pipeline behind the approval the expensive half exists to protect - which is precisely how a gate ends up being run by hand instead.
+- **Per-Project** `land_verify_grant` is `draft` / `granted`, defaulting to `granted`.
+  It decides what the daemon may **execute** while running a land, where `land_grant` decides who may **start** one, and the two are lowered independently.
+  Granted, an unapproved gate whose bytes this machine authored runs anyway; a gate anyone else authored still presents for approval.
+  It is described in "Provenance is the second authority".
 - **Per-origin** `land_hourly_budget` bounds a runaway requester. A land costs wall-clock rather than tokens, so the cap is about a request loop, not spend.
 
 An operator request bypasses the grant, because the operator is the authority the grant defers to.
 It passes every precondition unchanged.
 
-All three are reported by `GET /api/land` (`installed_enabled`, `project_enabled`, `agent_grant`), because none of them could be told apart from an ordinary quiet queue.
+All of them are reported by `GET /api/land` (`installed_enabled`, `project_enabled`, `agent_grant`, `verify_grant`), because none of them could be told apart from an ordinary quiet queue.
 The install stop is the sharpest case: it is checked by the sweep before anything else, so with it off a request enqueues and then sits at `queued` forever - identical, on screen, to a pipeline working through a backlog.
 It also had no control in any overlay until it gained one in the Automation workspace (Policy → Limits & budgets → Land queue).
 
@@ -326,6 +390,7 @@ It also had no control in any overlay until it gained one in the Automation work
 A control that answers "for every branch in this repository" copied into each expanded row is a standing fixture in a per-checkout pane, which is exactly what `setting-links.md` forbids - and it is the same repetition that sent the verification block up here.
 The **install stop**'s gate is rendered outside the strip's disclosure so a collapsed strip cannot hide it: a gate is what a surface renders *instead of* working, and hiding one behind a summary is the same defect as rendering the surface empty.
 The **Project opt-in** and **`land_grant`** decide what happens to an *agent's* `request_land` and never touch the operator's own button, so they sit inside the disclosure as one statement.
+**`land_verify_grant`** sits there too, as its own sentence rather than a clause on that one, because it is the only one of them that also changes what the *operator's* own Land button executes.
 All three grant in place through the ordinary additive path; the Projects registry's **Agent authority** table is where any of them is lowered again.
 
 A Map row that cannot land because of one of them names it and **sends the reader to the control** rather than drawing a second copy: one press opens the strip.
@@ -350,6 +415,10 @@ It is the same authority under the same five bounds below, for the same reason: 
 The template's job is to keep the reader from re-reading their own branch.
 A refusal is a statement about the *setup*, and an agent told only "your land was refused" goes looking for the defect in its own diff, which is the one place it is not.
 So the message names the cause, and for the two causes that are nobody's code - `unapproved`, `not_configured` - it says outright that this is not a problem with the branch, that nothing was run against it, that approving is a human act against the exact bytes in the Git tab's landing strip, and that the agent cannot approve it itself.
+
+An `unapproved` refusal additionally names **which of the two authorities** did not cover the bytes.
+In a Project whose `land_verify_grant` is `granted`, a refusal reads as a contradiction without it, and the reader's next move is to doubt the switch rather than to look at who wrote the script - which is the one fact that decided it.
+So the message either states that this Project approves each digest by hand, or quotes the provenance verdict's reason, which names the foreign author where there is one.
 A refusal also carries a machine-readable `code` in its detail beside the sentence, plus the worktree root it resolved: a reason string cannot be matched on, and the landing strip has to know *which* checkout's bytes to offer.
 
 ### It arrives armed, because the request is the consent
@@ -574,6 +643,7 @@ Two tools make the safe call the short one and let the grant say different thing
 | `land_verify_memo_seconds` | global | How long a queue-executed green verdict stands for its (tree, digest). `0` disables reuse. |
 | `land_queue` | `<project>/.swe-mux/config.toml` `automations` | Per-Project opt-in. |
 | `land_grant` | `<project>/.swe-mux/config.toml` | `off` / `draft` / `granted`, default `draft`. |
+| `land_verify_grant` | `<project>/.swe-mux/config.toml` | `draft` / `granted`, default `granted`. Whether this Project's own agents' gate edits run unapproved. Falls to `draft` on a malformed config. |
 | `[worktree] verify_command` | `<project>/.swe-mux/config.toml` | Explicit override of the `.worktree-verify` convention. |
 
 Every `global` row above is edited in the Automation workspace: the install stop is the Land queue row's Global switch on the Policy matrix, and the numeric bounds live under Policy → Limits & budgets → **Land queue**.

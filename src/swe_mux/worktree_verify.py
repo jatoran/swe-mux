@@ -7,9 +7,16 @@ repeatedly, unattended, on an agent's request - so it carries the exact-content
 approval model Project Actions established: a machine-local SHA-256 over the bytes
 that will actually run, keyed by canonical Project root, and any edit un-approves it.
 
-That is the whole reason an agent cannot author the command its own land runs. Writing
-a verification script is a proposal; a human turns it into an authority, which is the
-same sentence `project-actions.md` already ends on.
+Approving is still a human act and nothing here can perform one: a write moves the
+bytes, which invalidates the digest rather than granting it, so **no caller of this
+module can approve the command its own land runs.** What changed on 2026-08-29 is that
+approval is no longer the *only* authority a run can have. A Project may declare
+(`land_verify_grant`) that its agents' own edits to the gate need no fresh reading, and
+the queue then passes `bypass_approval` for a run whose bytes `verify_provenance.py`
+traced to this machine. The store is untouched by that: a bypass is scoped to the one
+run and leaves no grant behind, so lowering the Project's authority takes the permission
+away completely rather than leaving auto-granted digests standing beside ones a human
+read. Bytes some other author put on the branch present for approval exactly as before.
 
 The gate's exit status is reported exactly as the process gave it. Nothing here pipes,
 filters, or re-derives it: a gate command trimmed inside its own pipeline has already
@@ -18,6 +25,7 @@ shipped a failing suite green in this repository once.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import logging
@@ -52,6 +60,11 @@ MAX_APPROVED_SNAPSHOT_BYTES = 128 * 1024
 #: worktrees editing it at once, and the oldest is what falls off - which is a genuine
 #: un-approval and is why the cap is not smaller.
 MAX_APPROVED_DIGESTS = 16
+#: How much of the approved-to-current diff a bypassed run records on the request's
+#: event trail. A bypass trades "a human reads this before it runs" for "a human can
+#: read what ran afterwards", so the diff has to actually be there - but the trail is
+#: not a place to store a 128 KiB script twice.
+MAX_BYPASS_DIFF_CHARS = 4000
 
 CONFIG_KEY = "verify_command"
 SCRIPT_NAME = ".worktree-verify"
@@ -115,6 +128,12 @@ class WorktreeVerifyResult:
     #: Lines the gate emitted. Not progress toward an end - the honest fallback for a
     #: gate that declares no steps of its own.
     output_lines: int = 0
+    #: Which authority let these bytes run: `approved` (a human read this exact digest)
+    #: or `bypassed` (the Project's standing `land_verify_grant`, over bytes traced to
+    #: this machine). Recorded rather than derived, because "the gate passed" answers a
+    #: different question from "who said it could run", and a reader auditing the second
+    #: one must not have to reconstruct it from a grant that may since have moved.
+    approval: Literal["", "approved", "bypassed"] = ""
 
     @property
     def passed(self) -> bool:
@@ -132,6 +151,7 @@ class WorktreeVerifyResult:
             "error": self.error,
             "steps": list(self.steps),
             "output_lines": self.output_lines,
+            "approval": self.approval,
         }
 
     def failure_summary(self) -> str:
@@ -352,6 +372,30 @@ def describe_verify_command(
     )
 
 
+def approval_diff(info: VerifyCommandInfo, *, limit: int = MAX_BYPASS_DIFF_CHARS) -> str:
+    """A bounded unified diff from the bytes standing approved to the bytes about to run.
+
+    What a bypassed run leaves behind instead of a prompt. "The verify script changed"
+    cannot separate a new test target from a new `curl | sh`, which is why the approval
+    prompt shows a diff - and a run that skipped the prompt owes the trail the same
+    thing, or the authority it exercised is unauditable.
+
+    Empty when there are no current bytes to show (a `project_config` command carries no
+    script) or when nothing was retained to compare against, which reads correctly as
+    "no diff available" rather than as "no change".
+    """
+    if not info.current_source:
+        return ""
+    before = (info.approved_snapshot or "").splitlines(keepends=True)
+    after = info.current_source.splitlines(keepends=True)
+    text = "".join(
+        difflib.unified_diff(before, after, fromfile="approved", tofile="current", n=3)
+    )
+    if len(text) > limit:
+        text = text[:limit] + "\n... diff truncated ...\n"
+    return text
+
+
 async def run_worktree_verify(
     worktree: Path,
     project_values: dict[str, Any],
@@ -360,18 +404,38 @@ async def run_worktree_verify(
     project_root: str,
     request_id: str,
     progress: VerifyProgress | None = None,
+    bypass_approval: bool = False,
 ) -> WorktreeVerifyResult:
-    """Run the approved verification command, or refuse without running anything.
+    """Run the verification command, or refuse without running anything.
 
     `progress` observes the gate's output while it runs, so a caller can report which
     step it is on instead of an opaque "verifying". It reads the stream and never
     touches it: the bytes captured and the exit status reported are exactly what the
     process produced, which is the one property this module refuses to compromise.
+
+    `bypass_approval` says the caller has established authority for these bytes some
+    other way - the Project's `land_verify_grant` over provenance this machine can
+    trace (`verify_provenance.py`). It is a parameter rather than a config read here on
+    purpose: this module owns what "approved" means and must not also own the policy
+    that widens it, and a caller that has to pass the flag explicitly cannot acquire it
+    by inheriting a default. It grants nothing durable - the approval store is not
+    written - so the permission ends with the run.
     """
     info = describe_verify_command(worktree, project_values, store, project_root=project_root)
     if not info.configured:
         return WorktreeVerifyResult("not_configured")
-    if not info.approved:
+    if not info.approved and bypass_approval:
+        # WARNING rather than INFO: this is the line that says a script no human read
+        # is about to be executed by the daemon, and it is the first thing anyone asks
+        # for when auditing what the gate ran.
+        log.warning(
+            "worktree_verify_approval_bypassed request_id=%s path=%s source=%s digest=%s",
+            request_id,
+            worktree,
+            info.source,
+            info.digest,
+        )
+    elif not info.approved:
         log.info(
             "worktree_verify_unapproved request_id=%s path=%s source=%s",
             request_id,
@@ -399,11 +463,13 @@ async def run_worktree_verify(
     # inputs. The guard keeps the type honest rather than covering a real branch.
     if command is None:  # pragma: no cover - defensive
         return WorktreeVerifyResult("not_configured")
+    approval: Literal["approved", "bypassed"] = "approved" if info.approved else "bypassed"
     log.info(
-        "worktree_verify_started request_id=%s path=%s source=%s",
+        "worktree_verify_started request_id=%s path=%s source=%s approval=%s",
         request_id,
         worktree,
         command.source,
+        approval,
     )
     outcome = await run_bounded_command(
         command,
@@ -438,6 +504,7 @@ async def run_worktree_verify(
             outcome.error,
             steps,
             output_lines,
+            approval,
         )
     if outcome.exit_code is None:
         return WorktreeVerifyResult(
@@ -452,6 +519,7 @@ async def run_worktree_verify(
             outcome.error,
             steps,
             output_lines,
+            approval,
         )
     status: VerifyStatus = "passed" if outcome.exit_code == 0 else "failed"
     log.log(
@@ -477,4 +545,5 @@ async def run_worktree_verify(
         None,
         steps,
         output_lines,
+        approval,
     )
