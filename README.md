@@ -31,8 +31,11 @@ Installing an update is a separate act you take: `mux update --install <version>
 
 ## Install
 
-<!-- TODO(release): desktop download - there is no signed release artifact yet. Link it here and say
-     which Windows builds and architectures it is signed for. -->
+<!-- TODO(release): desktop download - there is no signed release artifact yet. Name the file here
+     and say which Windows builds and architectures it is signed for. The site does not need this
+     edit: https://swemux.dev/#download is drawn from the release manifest and fills itself in on
+     the first release carrying an installer (site/README.md section 7). This file is the copy that
+     stays manual, so it is the one to remember. -->
 
 swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so this needs no Node and no checkout.
 Every install below writes the same three commands: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
@@ -57,6 +60,7 @@ Then run `muxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop w
 
 **No Python install of any kind creates a desktop shortcut or a Start Menu entry.**
 Wheels have no post-install hook and pip runs no install-time code, so that is structural rather than a step somebody forgot: start swe-mux from a terminal.
+A Windows installer that does create one is built by the release workflow but has not been published yet; <https://swemux.dev/#download> is drawn from the release manifest and says which desktop builds the current release actually carries.
 
 **On Windows, take the `desktop` extra.**
 Without it you still get a `swe-mux` command, and it fails on a missing import rather than opening a window.

@@ -28,6 +28,24 @@ on:
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"
+  # After a release, because a push-triggered run stages its bytes at checkout
+  # and deploys them after the `pages` queue clears, so it can publish content
+  # older than itself.
+  #
+  # Measured on v0.1.2 (2026-08-29): the release commit's `pages` run checked out
+  # at 00:30:57, when the newest release was still v0.1.0, and restored that
+  # `version.json`. `release.yml`'s `update-manifest` then published the correct
+  # 0.1.2 manifest at 00:37:25. The queued `pages` deploy finished at 00:38:56
+  # and overwrote it, so the site advertised 0.1.0 while PyPI served 0.1.2 and
+  # the download section had no artifacts to name.
+  #
+  # The `concurrency` group below does not prevent that: it serialises the two
+  # deployments, and the loser is whichever *finishes* first, not whichever holds
+  # newer content. Re-running after the release is what makes the last deployment
+  # the newest one, and it is cheap - this workflow is 20 seconds.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
   workflow_dispatch:
 
 # `pages: write` and `id-token: write` are what `deploy-pages` exchanges for its

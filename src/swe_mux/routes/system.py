@@ -118,7 +118,7 @@ async def health(request: web.Request) -> web.Response:
     timeline: StartupTimeline | None = request.app.get(keys.STARTUP)
     startup = timeline.snapshot() if timeline is not None else {"status": "ready"}
     if timeline is not None and not timeline.ready:
-        return json_response({"ok": False, "version": "0.1.1", **startup}, 503)
+        return json_response({"ok": False, "version": "0.1.2", **startup}, 503)
     sessions: SessionManager | None = request.app.get(keys.SESSIONS)
     live = sum(s.pty.isalive() for s in sessions.sessions.values()) if sessions else 0
     supervisor = request.app.get(keys.SUPERVISOR)
@@ -132,7 +132,7 @@ async def health(request: web.Request) -> web.Response:
         {
             "ok": True,
             "live_sessions": live,
-            "version": "0.1.1",
+            "version": "0.1.2",
             "ui_build_id": read_ui_build_id(request.app[keys.FRONTEND_DIR]),
             "supervisor": connected,
             "supervisor_state": "connected" if connected else ("lost" if lost else "absent"),

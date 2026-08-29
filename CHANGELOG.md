@@ -15,6 +15,30 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-28
+
+0.1.1 published to PyPI but produced no desktop artifact and no GitHub Release, so an
+installed copy was still told 0.1.0 was the newest version.
+This release carries everything 0.1.1 did, and the artifacts it could not build.
+
+### Added
+
+- The **Windows installer** and the portable desktop archive, which 0.1.1 intended to publish
+  and did not.
+  See the 0.1.1 notes below for what they are.
+- The website's download section, filled from the release manifest rather than by hand, so it
+  names the artifacts a release actually carries.
+
+### Fixed
+
+- **The Windows installer did not build.**
+  Inno Setup resolves a relative source path against the installer script's own directory
+  rather than against the working directory it is compiled from, so the build looked for the
+  application bundle inside `packaging/installer/` and found nothing.
+  Every earlier step of the release had succeeded, which is why 0.1.1 reached PyPI without it.
+- The site now ships real screenshots, taken in a synthetic installation with invented
+  projects and no personal data, rather than generated placeholders.
+
 ## [0.1.1] - 2026-08-28
 
 A repair release.
@@ -256,6 +280,7 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.2
 [0.1.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.1
 [0.1.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.0

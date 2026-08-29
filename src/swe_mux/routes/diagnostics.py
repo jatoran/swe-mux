@@ -578,7 +578,7 @@ async def diagnostics_export(request: web.Request) -> web.Response:
     live = sum(session.pty.isalive() for session in sessions.sessions.values())
     export = {
         "generated_at": time.time(),
-        "swe_mux_version": "0.1.1",
+        "swe_mux_version": "0.1.2",
         "platform": {
             "system": sys.platform,
             "python": sys.version.split()[0],
@@ -671,7 +671,7 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
     )
     health = {
         "ok": True,
-        "version": "0.1.1",
+        "version": "0.1.2",
         "live_sessions": live,
         "ui_build_id": read_ui_build_id(app[keys.FRONTEND_DIR]),
         "supervisor_state": supervisor_state,
