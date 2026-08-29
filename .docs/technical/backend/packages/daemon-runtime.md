@@ -240,7 +240,10 @@ Then the streaming bounded download hashed as it arrives, the promotion of a `.p
 Its refusal vocabulary is closed and durable in `<data_dir>/update-install.json`, because the daemon does not survive the swap it starts.
 Every phase transition is logged with the attempt's `install_id` and persisted at the moment of decision.
 
-**Not:** the swap (`packaging/redeploy_desktop.py`, unchanged except for the flag), the archive's shape rules or extraction (`bundle_archive.py`), what a bundle claims about itself (`bundle_metadata.py`), or the decision that an update exists at all (`update_check.py`).
+It also previews the delta: it fetches the release's sidecar `files.json`, verifies it against `version.json` like any other artifact, and records how many files and bytes of the incoming bundle this machine already has.
+That preview is advisory and nothing branches on it - the swap recomputes the identical plan from the copy inside the archive - and every way it can fail leaves the install proceeding exactly as it did before it existed.
+
+**Not:** the swap (`packaging/redeploy_desktop.py`, unchanged except for the flag), the archive's shape rules or extraction (`bundle_archive.py`), what a bundle claims about itself (`bundle_metadata.py`), which files a delta writes (`bundle_manifest.py` / `bundle_stage.py`), or the decision that an update exists at all (`update_check.py`).
 It never updates `dist/swe-mux-supervisor/`: that reaps every live session, so a release needing it is refused with the manual flow named.
 
 ### `bundle_metadata.py` / `bundle_archive.py`
@@ -248,8 +251,20 @@ It never updates `dist/swe-mux-supervisor/`: that reaps every live session, so a
 What a built bundle says about itself (`bundle.json`: schema, version, `supervisor_protocol`, platform, build stamp) and the rules for reading a release archive.
 Split from the updater because two processes need them - the daemon interrogates the archive before deciding anything, and the redeploy script re-validates and extracts it minutes later in its own process, so a rule enforced in only one of them is a rule the other does not have.
 An archive is exactly one top-level `swe-mux/` directory; an absolute path, a drive letter, a `..` segment, or a second root is refused rather than normalized, because a hash proves which file arrived and nothing about what extracting it would write.
+`read_archive_file_manifest` reads the second document an archive carries and is deliberately the *only* reader here that answers `(None, reason)` for everything short of an unreadable archive: missing supervisor metadata risks the operator's fleet and is a refusal, while a missing file manifest costs only the delta.
 
 **Not:** deciding what to do about a mismatch (that is the updater's refusal, with the message an operator can act on).
+
+### `bundle_manifest.py` / `bundle_stage.py`
+
+The per-file hash manifest a release publishes (`files.json`: schema, version, platform, the interpreter and top-level `_internal/` names as observations, and one entry per file with size, SHA-256 and POSIX mode), the plan it makes possible, and the staging that executes one.
+An update's dominant cost is Windows image-scanning a tree of files the machine has never seen - the measured reason `APP_HEALTH_TIMEOUT_SECONDS` is 600 rather than 300 - so the quantity minimized is **files touched**, and the mechanism is a hard link: a linked file is the same filesystem object the scanner already has a verdict for, where a copy is a new object with none.
+A file is reused only when its SHA-256 equals the incoming manifest's for that path, so the staged tree is byte-for-byte the release by construction, and the whole-archive SHA-256 the updater and `--from-archive` already verify stays the root of all of it because the manifest is a member of the archive that hash covers.
+Measured 2026-08-29 over two real consecutive builds of this project: 2874 of 2937 files and 92.3% of 420 MB unchanged, so 63 files and 32.4 MB are written.
+
+**Not:** a delta against a previous release. The manifest describes only the bundle it ships with, names no other version, and is therefore valid for a user updating from anything or from nothing; what gets written is decided by hashing this machine, which is the one source that cannot be stale.
+**Not** a refusal, ever: every failure path is "extract the whole archive instead", which is what shipped before, so an unreadable installed tree, a manifest that disagrees with its archive, or a filesystem with no hard links costs the saving and never the install.
+And **not** a structural fallback: Phase 21 asked for a full replacement when the Python version or the dependency set moves, and the measurement refuted the reasoning (the same pair removed 101 MB of `playwright/driver` and still shared 92.3% of its bytes), so the trigger is `DELTA_REUSE_FLOOR` on the measured share and those facts are recorded as observations instead.
 
 ### `redeploy_launch.py`
 
