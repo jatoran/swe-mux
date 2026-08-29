@@ -127,9 +127,31 @@ Documentation = "https://swemux.dev/docs/"
 Changelog = "https://github.com/jatoran/swe-mux/blob/master/CHANGELOG.md"
 Issues = "https://github.com/jatoran/swe-mux/issues"
 
-# `mux` and `muxd` are console programs: they print tables, reports, and daemon
-# logs, and a console is where their output belongs.
+# These are console programs: they print tables, reports, and daemon logs, and a
+# console is where their output belongs.
+#
+# **Four names, two programs, and the pairs are aliases rather than variants.**
+# `swemux` and `mux` are the same client; `swemuxd` and `muxd` are the same
+# daemon. Nothing dispatches on the name it was invoked under, so an alias can
+# never drift into behaving differently from the name beside it.
+#
+# The `swemux` pair is the primary spelling and the `mux` pair is kept working
+# because `mux` is not a name this project can rely on owning. The npm package
+# `mux` installs a `mux` executable of its own and is published from the same
+# category of tool (0.28.2, 2026-08-12), and the repository behind it,
+# `coder/mux`, has since renamed itself to `coder/xum`. Why they renamed is not
+# a question this project can answer and no claim about it is made here; what is
+# observable is that a four-letter name in this category is contested, and that
+# whichever of the two installs second wins PATH order on a machine with both.
+#
+# Adding rather than replacing is the whole point. Every document, script, and
+# habit that says `mux` keeps working, so this costs no user anything and can be
+# revisited from either direction. `packaging/verify_release_unit.py` joins these
+# names to the documents that mention them, so a future removal fails the release
+# check rather than silently telling a new user to run something that is gone.
 [project.scripts]
+swemux = "swe_mux.cli:main"
+swemuxd = "swe_mux.__main__:main"
 mux = "swe_mux.cli:main"
 muxd = "swe_mux.__main__:main"
 

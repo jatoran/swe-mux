@@ -454,3 +454,68 @@ def test_install_shortcut_json_carries_every_path_it_wrote(
     assert payload["ok"] is True
     assert [row["path"] for row in payload["shortcuts"]] == ["start-menu.lnk", "desktop.lnk"]
     assert [row["action"] for row in payload["shortcuts"]] == ["created", "unchanged"]
+
+
+# --------------------------------------------------------------------------- #
+# Launcher names
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("argv0", "expected"),
+    [
+        (r"C:\Users\x\.venv\Scripts\swemux.exe", "swemux"),
+        (r"C:\Users\x\.venv\Scripts\mux.exe", "mux"),
+        ("/home/x/.local/bin/swemux", "swemux"),
+        ("/home/x/.local/bin/mux", "mux"),
+    ],
+)
+def test_the_usage_line_names_the_command_that_was_actually_typed(
+    argv0: str, expected: str
+) -> None:
+    """Four launchers, one program: a hardcoded `prog` prints the wrong one.
+
+    `[project.scripts]` declares `swemux` and `mux` for this client, so half of
+    every usage line and every argparse error would have named a command the user
+    did not type. The `.exe` case is the one that matters on the proving platform
+    - a console script there is a real executable, and argparse's own default
+    would print `swemux.exe`.
+    """
+    assert cli.invoked_as(argv0) == expected
+    assert cli.build_parser(prog=cli.invoked_as(argv0)).format_usage().startswith(
+        f"usage: {expected}"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv0",
+    ["", "/usr/lib/python3.12/site-packages/swe_mux/cli.py", "/opt/renamed-copy", "/tmp/"],
+)
+def test_a_name_this_project_does_not_ship_prints_the_documented_one(argv0: str) -> None:
+    """`invoked_as` is display text, so an unknown `argv[0]` falls back rather than echoes.
+
+    Reached by `python -m swe_mux.cli`, by an embedder that leaves `argv[0]`
+    empty, and by a copy someone renamed. Printing that name back would tell the
+    reader to run a command no document describes and no install provides.
+    """
+    assert cli.invoked_as(argv0) == cli.DEFAULT_PROG
+    assert cli.DEFAULT_PROG in cli.LAUNCHER_NAMES
+
+
+def test_the_daemon_resolves_its_own_pair_by_the_same_rule() -> None:
+    """The rule is shared; only the vocabulary differs, and the two must not overlap.
+
+    A daemon launcher that resolved to a client name (or the reverse) would print
+    a usage line for the other program's flags.
+    """
+    from swe_mux.__main__ import DAEMON_LAUNCHER_NAMES, DEFAULT_DAEMON_PROG
+
+    for name in DAEMON_LAUNCHER_NAMES:
+        assert (
+            cli.invoked_as(
+                f"/bin/{name}", names=DAEMON_LAUNCHER_NAMES, default=DEFAULT_DAEMON_PROG
+            )
+            == name
+        )
+    assert not (DAEMON_LAUNCHER_NAMES & cli.LAUNCHER_NAMES)
+    assert DEFAULT_DAEMON_PROG in DAEMON_LAUNCHER_NAMES

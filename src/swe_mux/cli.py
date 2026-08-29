@@ -67,6 +67,16 @@ EXIT_NOT_FOUND = 6
 
 DEFAULT_URL = "http://127.0.0.1:8765"
 
+#: The launcher names `[project.scripts]` declares for this client, and the only
+#: values `invoked_as` will echo back into help and error text. A closed set
+#: rather than "whatever `argv[0]` says": the value is printed to the user, and a
+#: renamed or symlinked copy naming itself something else should read as the
+#: command this project documents rather than as whatever it was called.
+LAUNCHER_NAMES = frozenset({"swemux", "mux"})
+#: What an unrecognizable `argv[0]` prints. The primary spelling, so the fallback
+#: teaches the name the documents use.
+DEFAULT_PROG = "swemux"
+
 
 class CliError(Exception):
     """A CLI-level failure carrying the process exit code to report it with.
@@ -520,7 +530,34 @@ def local_doctor_report(*, base: str, detail: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def build_parser() -> argparse.ArgumentParser:
+def invoked_as(
+    argv0: str | None = None,
+    *,
+    names: frozenset[str] = LAUNCHER_NAMES,
+    default: str = DEFAULT_PROG,
+) -> str:
+    """The name this process was launched under, for `usage:` and error text.
+
+    `[project.scripts]` declares four launchers over two programs - `swemux` and
+    `mux` for this client, `swemuxd` and `muxd` for the daemon - so a hardcoded
+    `prog` would print one name at a user who typed the other. Nothing here
+    dispatches on the answer; it is display text only, which is why an
+    unrecognizable `argv[0]` falls back rather than failing. `names` and `default`
+    are arguments because the daemon has its own pair (`swemuxd`, `muxd`) and the
+    rule is identical; only the vocabulary differs.
+
+    The `.exe` strip is Windows-specific and load-bearing there: a console script
+    is a real executable, so `sys.argv[0]` ends in `.exe` and argparse's own
+    default would print `usage: swemux.exe`. `python -m swe_mux.cli` gives an
+    `argv[0]` that is a path to a module file, and an empty or directory-like
+    `argv[0]` (an embedder, a test) gives nothing usable - both take the default.
+    """
+    raw = sys.argv[0] if argv0 is None else argv0
+    stem = Path(raw).stem if raw else ""
+    return stem if stem and stem in names else default
+
+
+def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--json", action="store_true", help="print the raw daemon JSON instead of a table"
@@ -529,7 +566,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--url", help="daemon base URL (overrides MUX_URL and config)", default=None
     )
 
-    parser = argparse.ArgumentParser(prog="mux", description="Control the swe-mux daemon.")
+    parser = argparse.ArgumentParser(
+        prog=prog or invoked_as(),
+        description=(
+            "Control the swe-mux daemon. `swemux` and `mux` are the same command; "
+            "`swemuxd` and `muxd` start the daemon itself, and `swe-mux` opens the "
+            "desktop app rather than printing anything."
+        ),
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     ls = sub.add_parser("ls", parents=[common], help="list sessions (filterable)")

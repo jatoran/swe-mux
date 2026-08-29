@@ -256,6 +256,24 @@ def test_the_desktop_entry_point_is_a_gui_script_and_the_others_are_not() -> Non
     manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert manifest["project"]["gui-scripts"] == {"swe-mux": "swe_mux.desktop:main"}
     assert manifest["project"]["scripts"] == {
+        "swemux": "swe_mux.cli:main",
+        "swemuxd": "swe_mux.__main__:main",
         "mux": "swe_mux.cli:main",
         "muxd": "swe_mux.__main__:main",
     }
+
+
+def test_the_alias_pairs_are_the_same_program_rather_than_two_of_them() -> None:
+    """`swemux` may not drift into meaning something `mux` does not.
+
+    The pair exists because `mux` is a contested name, not because there are two
+    clients. Pointing one of them at a different target - a "v2" entry point, a
+    thin wrapper - would make every document that says `mux` quietly describe a
+    different program, and nothing else in this suite compares the two targets.
+    """
+    root = Path(__file__).resolve().parent.parent
+    manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    scripts = manifest["project"]["scripts"]
+    assert scripts["swemux"] == scripts["mux"]
+    assert scripts["swemuxd"] == scripts["muxd"]
+    assert scripts["swemux"] != scripts["swemuxd"]
