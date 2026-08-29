@@ -21,13 +21,14 @@ from uuid import uuid4
 from aiohttp import web
 
 from . import (
-    app_keys as keys,
-)
-from . import (
+    __version__,
     git_init,
     git_review,
     mcp_tools,
     routes,
+)
+from . import (
+    app_keys as keys,
 )
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_authority import authority_resolver
@@ -59,6 +60,12 @@ from .device_presence import DevicePresenceStore
 from .errors import NotFound
 from .event_bus import EventBus
 from .fleet_intelligence import FleetIntelligence
+from .frontend_overlay import (
+    OverlayStore,
+    daemon_api_digest,
+    log_choice,
+    resolve_frontend_dir,
+)
 from .ghost_windows import GhostWindowSweeper
 from .git_monitor import GitMonitor
 from .git_provenance import GitProvenanceService
@@ -563,7 +570,38 @@ def create_app(
     # daemon adopts supervisor-owned PTYs, so revision alone cannot distinguish
     # a stale pre-restart response from the new daemon's current state.
     app[keys.DAEMON_GENERATION] = uuid4().hex
-    app[keys.FRONTEND_DIR] = frontend_dir or Path(__file__).parent / "static"
+    # The single point where "which static tree does this daemon serve" is
+    # decided, and deliberately still single: `FRONTEND_DIR` is read by the
+    # assets/notification-sounds/icons static mounts below, by the precompressor,
+    # and by three route modules, and teaching each of those about overlays would
+    # be six places to keep in agreement instead of one.
+    #
+    # An explicit `frontend_dir` still wins outright. That is what an override
+    # means to the callers that pass one, and it keeps every test that points the
+    # daemon at a fixture tree independent of whatever is installed in a data dir.
+    bundled_frontend = Path(__file__).parent / "static"
+    # Both halves of the overlay's compatibility pin, computed once per start.
+    # The API digest is the route table this process is about to register, which
+    # is what catches a frontend built against endpoints this daemon does not
+    # have - `__version__` cannot, because the frozen app is rebuilt from a
+    # checkout that moves between releases while the version string does not.
+    api_digest = daemon_api_digest()
+    if frontend_dir is not None:
+        app[keys.FRONTEND_DIR] = frontend_dir
+    else:
+        choice = resolve_frontend_dir(
+            data_dir=config.data_dir,
+            bundled=bundled_frontend,
+            backend_version=__version__,
+            api_digest=api_digest,
+            enabled=bool(getattr(config, "frontend_overlay_enabled", True)),
+        )
+        log_choice(choice)
+        app[keys.FRONTEND_CHOICE] = choice
+        app[keys.FRONTEND_DIR] = choice.directory
+    app[keys.FRONTEND_OVERLAY] = OverlayStore(
+        config.data_dir, backend_version=__version__, api_digest=api_digest
+    )
     app[keys.PREVIEW_HTTP_SEMAPHORE] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
     app[keys.PREVIEW_WS_SEMAPHORE] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app[keys.HOOK_INGRESS_WINDOWS] = {}

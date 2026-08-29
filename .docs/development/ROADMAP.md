@@ -5503,15 +5503,73 @@ mostly disappears along with the bytes.
 
 ### Workstream C - frontend overlay
 
-- [ ] The daemon prefers a hash-verified `static/` overlay in the data dir over its bundled tree.
-- [ ] The overlay carries a compatibility pin against the backend version, and a mismatch is
-  refused rather than served.
-- [ ] A one-press revert to the bundled tree.
+Done 2026-08-29.
+`src/swe_mux/frontend_overlay.py`, `src/swe_mux/routes/frontend.py`,
+`packaging/build_frontend_overlay.py`, `frontend/src/frontendOverlay.ts`, and
+`mux ui-overlay`.
+
+- [x] The daemon prefers a hash-verified `static/` overlay in the data dir over its bundled tree.
+- [x] The overlay carries a compatibility pin against the backend version, and a mismatch is
+  refused rather than served. **Two pins, not one** - see the correction below.
+- [x] A one-press revert to the bundled tree.
 
 This is a named, mainstream pattern rather than a workaround - it is what Expo/EAS Update and
-CodePush do for React Native and what asar swapping does for Electron - and it retires a trap
-that `CLAUDE.md` currently spends two paragraphs warning about, in which a verified-correct
-frontend fix silently does nothing on the frozen app.
+CodePush do for React Native and what asar swapping does for Electron.
+
+#### What it costs, measured
+
+A production build packaged as an overlay is **10.85 MiB** against the ~370 MB the bundle path
+rewrites: 34x smaller, and every byte of it is content the OS has to scan either way, so the
+saving is the whole difference. Installing one (extract, verify, promote) is **1.9 s**. The
+verification the daemon pays on every start afterwards is **70-91 ms** over 101 files and
+23.05 MiB, and the start it refuses on - the common one, after an app update - is **0.5 ms**,
+because both pins are checked before anything is hashed. Against a start measured in tens of
+seconds, that closes the question of whether a cheaper stat-and-mtime signature is worth having:
+it is not, which is fortunate, because this repository has twice paid for trusting filesystem
+timestamps at 15.625 ms granularity.
+
+#### One pin was not enough, and the second one is the interesting result
+
+The item above says "a compatibility pin against the backend **version**", and implementing
+exactly that produces a pin that cannot catch the failure the same paragraph describes.
+`__version__` moves per *release*. This project's frozen desktop app is rebuilt by
+`redeploy_desktop.py` from a checkout that moves per *commit*. So a frontend built from master
+today and an app redeployed from master last week both report `0.1.2` and disagree about which
+endpoints exist - and a version-only pin would serve that pairing happily, which is precisely
+the arbitrary rather than legible failure the pin exists to prevent.
+
+So the manifest carries a second required pin, `requires_api`: a SHA-256 over the daemon's whole
+`(method, path)` route table, computed identically by the producer from the checkout it packages
+and by the consumer from its own live table. It is the whole table rather than an allowlist of
+"interesting" routes, because an overlay refused after an unrelated endpoint moved is a legible
+"rebuild or redeploy" while an allowlist is a second thing to keep in agreement whose failure is
+silent. The operator-facing rule it produces: **package an overlay from the same checkout the
+running app was redeployed from**; if the backend has moved, `api_mismatch` says so and a
+redeploy is the honest answer, because a backend change is not something an overlay can carry.
+
+#### The `CLAUDE.md` warning is narrowed, not retired, and the exit criterion overstates it
+
+The exit criterion below reads "the `CLAUDE.md` warning about the frozen static tree is retired
+rather than reworded". It cannot be, and the reason is structural rather than a shortfall.
+
+The warning has two halves. Its **detection** half - compare the hashed asset the live daemon
+serves against the one you just built - is still exactly right and is still the only way to know
+which build you are talking to; nothing here changes it. Its **premise** is also still true:
+`npm run build` alone still does not reach the frozen app, and cannot, because the only mechanism
+that would make it reach one is a build step that writes into the live daemon's data directory,
+which would push a *worktree's* frontend into the operator's running application the first time
+anyone ran the frontend build from a worktree. That is the runtime-collision hazard `CLAUDE.md`
+forbids everywhere else, and it is not worth a saved keystroke.
+
+What changes is the **remedy**, and it changes by two orders of magnitude: from a multi-minute
+staged PyInstaller swap of a ~370 MB tree to
+`uv run python packaging/build_frontend_overlay.py --build --install` plus one
+session-preserving daemon reload. So the paragraph is rewritten around the new remedy and keeps
+its trap and its detection. Retiring it outright would delete a true warning.
+
+One consequence worth stating: **the overlay reaches the frozen app only after that app has been
+redeployed once with this code**, because the running bundle's daemon has no `frontend_overlay.py`
+in it. The first hop is still a redeploy; every hop after it is not.
 
 ### Workstream D - split the voice stack into a sidecar
 
@@ -5579,8 +5637,17 @@ workflow rather than a trust boundary. Both cmux and orca have one.
 - [ ] A release that does not move the dependency set transfers and rewrites only the files that
   changed, and the health budget is revisited against a measurement rather than left at the
   cold-scan worst case.
-- [ ] A frontend-only fix reaches the frozen app without a bundle swap, and the `CLAUDE.md`
-  warning about the frozen static tree is retired rather than reworded.
+- [x] A frontend-only fix reaches the frozen app without a bundle swap, and the `CLAUDE.md`
+  warning about the frozen static tree is ~~retired rather than reworded~~ **narrowed to its
+  true half**. The first clause is done (Workstream C: 10.85 MiB and ~2 s against ~370 MB and
+  minutes). The second was written from a code read and is wrong: the warning's premise -
+  `npm run build` alone does not reach the frozen app - remains true and cannot be made false
+  without a build step that writes into the live daemon's data dir, which would push a
+  worktree's frontend into the operator's running app. Its detection half is also still exactly
+  right. What changed is the remedy, and the paragraph is rewritten around that. See
+  Workstream C above for the reasoning; retiring it outright would delete a true warning.
+  Still owed: the live end-to-end check that a **frozen** app prefers an overlay in `~/.mux`,
+  which needs a real frozen app and is deliberately not faked in a test.
 - [ ] A bundle built locally and a bundle built by CI contain the same packages, and a difference
   fails a build.
 - [ ] The voice closure is acquired on an explicit press, its LGPL obligation is verified wherever

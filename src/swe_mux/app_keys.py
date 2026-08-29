@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from .device_presence import DevicePresenceStore
     from .event_bus import EventBus
     from .fleet_intelligence import FleetIntelligence
+    from .frontend_overlay import FrontendChoice, OverlayStore
     from .ghost_windows import GhostWindowSweeper
     from .git_monitor import GitMonitor
     from .git_provenance import GitProvenanceService
@@ -103,6 +104,16 @@ CONFIG: web.AppKey[Config] = web.AppKey("config")
 #: stale pre-restart response from the new daemon's current state.
 DAEMON_GENERATION: web.AppKey[str] = web.AppKey("daemon_generation")
 FRONTEND_DIR: web.AppKey[Path] = web.AppKey("frontend_dir")
+#: Why `FRONTEND_DIR` is what it is: a verified overlay in the data dir, or the
+#: bundled tree and the reason the overlay was not used. Per process rather than
+#: persisted, because it describes what this daemon is serving right now and a
+#: record that outlived its process would be a false claim about that.
+#: Absent when a caller passed an explicit `frontend_dir` override.
+FRONTEND_CHOICE: web.AppKey[FrontendChoice] = web.AppKey("frontend_choice")
+#: Installs, reverts and describes the data dir's overlay. Present in every app,
+#: including one built with an explicit frontend override, because "what is
+#: installed" is a question about the data dir and not about what is served.
+FRONTEND_OVERLAY: web.AppKey[OverlayStore] = web.AppKey("frontend_overlay")
 NETWORK_USAGE: web.AppKey[NetworkUsage] = web.AppKey("network_usage")
 STARTUP: web.AppKey[StartupTimeline] = web.AppKey("startup")
 RUNTIME_BUILD: web.AppKey[asyncio.Task[None]] = web.AppKey("runtime_build")

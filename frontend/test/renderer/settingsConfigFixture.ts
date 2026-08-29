@@ -109,6 +109,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "drawer_tab_display": "icon",
   "ghost_window_poll_seconds": 5.0,
   "ghost_window_sweep_enabled": true,
+  "frontend_overlay_enabled": true,
   "git_poll_seconds": 5.0,
   "harness_args": {
     "claude": [],

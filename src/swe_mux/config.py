@@ -733,6 +733,15 @@ class Config:
     # deferred one. Read live at each check, so a toggle takes effect without a
     # restart.
     update_check_enabled: bool = True
+    # Whether the daemon will prefer a hash-verified `static/` overlay in the data
+    # dir over its own bundled frontend (`frontend_overlay.py`). On by default,
+    # because an overlay only exists at all when somebody deliberately installed
+    # one and every failure resolves back to the bundled tree. Off is for an
+    # operator who wants the mechanism gone: the daemon then serves the bundle and
+    # says so, without removing anything that is installed. Read at app
+    # construction, so a change takes effect at the next daemon start - the same
+    # moment the overlay itself would.
+    frontend_overlay_enabled: bool = True
     terminal_renderer: str = "auto"
     # Desktop width envelope for Claude panes, in columns. Claude Code's live-region
     # renderer can leave stale and duplicated cells across large column changes, so a

@@ -45,6 +45,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .harness import agent_harnesses
@@ -112,17 +114,24 @@ def request(
     *,
     base: str,
     headers: dict[str, str] | None = None,
+    timeout: float = 10,
 ) -> Any:
     # `headers` exists for the explicit-gesture routes (the update check and the
     # updater), which refuse a request that does not carry one. Typing a command
     # is exactly the deliberate act that header stands for, so the CLI is
     # entitled to send it - and it is spelled at the call site rather than
     # defaulted here, so nothing acquires the gesture by accident.
+    #
+    # `timeout` is 10s because every command here is a state read or a signal that
+    # returns immediately. The exceptions raise it explicitly: a handler that does
+    # real synchronous work (hashing and extracting a frontend tree) can outlast
+    # the default, and a client that gave up while the server succeeded would
+    # report a failure that did not happen.
     headers = {"Content-Type": "application/json", **(headers or {})}
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace").strip()
@@ -366,6 +375,126 @@ def _render_update_install(result: Any) -> str:
     return f"{head}\n{message}".strip()
 
 
+def _render_ui_overlay(result: Any) -> str:
+    """What is installed, what is being served, and why they might differ.
+
+    The last of those is the line worth having. A frontend overlay that is
+    installed and refused looks, from the browser, exactly like one that was never
+    installed - the same "verified-correct fix that still does nothing" this
+    feature exists to end - so the refusal reason is printed rather than folded
+    into a boolean.
+    """
+    payload = result if isinstance(result, dict) else {}
+    if not payload.get("supported", True):
+        return "this daemon has no frontend overlay support"
+    state = payload.get("state") or {}
+    serving = payload.get("serving") or {}
+    lines = [
+        f"backend    {payload.get('backend_version', '?')}",
+        f"serving    {serving.get('serving', '?')} ({serving.get('directory', '?')})",
+    ]
+    if payload.get("installed"):
+        lines.append(
+            f"installed  {(state.get('digest') or '')[:16]} "
+            f"pinned to swe-mux {state.get('requires_backend') or '?'}"
+            + ("" if state.get("active") else "  [reverted]")
+        )
+        if state.get("installed_from"):
+            lines.append(f"from       {state['installed_from']}")
+        if not payload.get("tree_exists"):
+            lines.append("           its files are no longer on disk")
+    else:
+        lines.append("installed  none")
+    if serving.get("faulted"):
+        lines.append(f"refused    {serving.get('reason', '?')}: {serving.get('message', '')}")
+    elif serving.get("reason") and serving.get("reason") != "ok":
+        lines.append(f"reason     {serving['reason']}")
+    for key in ("message", "error"):
+        if payload.get(key):
+            lines.append(str(payload[key]))
+            break
+    return "\n".join(lines)
+
+
+def _ui_overlay_command(args: Any, base: str) -> tuple[Any, Callable[[Any], str] | None]:
+    """Dispatch one `mux ui-overlay` action.
+
+    `install` sends a much longer timeout than the CLI's default: the daemon
+    hashes and extracts the whole tree, and a client that gave up at ten seconds
+    while the server went on to succeed would report a failure that did not
+    happen.
+    """
+    if args.action == "revert":
+        return (
+            request(
+                "POST",
+                "/api/frontend/overlay/revert",
+                {},
+                base=base,
+                headers={"X-Mux-User-Gesture": "frontend-overlay-revert"},
+            ),
+            _render_ui_overlay,
+        )
+    if args.action == "restore":
+        return (
+            request(
+                "POST",
+                "/api/frontend/overlay/restore",
+                {},
+                base=base,
+                headers={"X-Mux-User-Gesture": "frontend-overlay-restore"},
+            ),
+            _render_ui_overlay,
+        )
+    if args.action == "install":
+        if not args.source:
+            raise CliError(
+                "install needs a source: an overlay .zip, a built static directory, or "
+                "an https URL with --sha256",
+                EXIT_NOT_FOUND,
+            )
+        body = _ui_overlay_source(args.source, args.sha256)
+        return (
+            request(
+                "POST",
+                "/api/frontend/overlay/install",
+                body,
+                base=base,
+                headers={"X-Mux-User-Gesture": "frontend-overlay-install"},
+                timeout=300,
+            ),
+            _render_ui_overlay,
+        )
+    return request("GET", "/api/frontend/overlay", base=base), _render_ui_overlay
+
+
+def _ui_overlay_source(source: str, sha256: str | None) -> dict[str, object]:
+    """Classify what the operator typed into the one field the endpoint wants.
+
+    A URL is recognized by its scheme and a path by what it is on disk, and a path
+    that is neither a file nor a directory fails here rather than at the daemon:
+    the daemon would have to answer "source_missing" about a path it cannot see
+    the way the shell that typed it can.
+    """
+    lowered = source.lower()
+    if lowered.startswith(("http://", "https://")):
+        if not sha256:
+            raise CliError(
+                "installing from a URL requires --sha256. Nothing can vouch for bytes "
+                "that arrived over a network, so an unverifiable download is refused "
+                "rather than installed.",
+                EXIT_NOT_FOUND,
+            )
+        return {"url": source, "sha256": sha256}
+    path = Path(source).expanduser()
+    resolved = str(path.resolve())
+    if path.is_dir():
+        return {"directory": resolved}
+    if path.is_file():
+        return {"archive": resolved, "sha256": sha256 or ""}
+    raise CliError(f"{source} is neither a file, a directory, nor a URL", EXIT_NOT_FOUND)
+
+
 def local_doctor_report(*, base: str, detail: str) -> dict[str, Any]:
     """The degraded report, built when no daemon answered at ``base``.
 
@@ -482,6 +611,37 @@ def build_parser() -> argparse.ArgumentParser:
             "download exactly this version, verify its SHA-256 against the published "
             "manifest, and hand it to the staged swap (frozen desktop app only)"
         ),
+    )
+
+    overlay = sub.add_parser(
+        "ui-overlay",
+        parents=[common],
+        help="inspect, install, or revert the daemon's frontend overlay",
+        description=(
+            "A frontend overlay is a hash-verified static tree in the data dir that "
+            "the daemon serves in place of its own bundled one, so a UI fix reaches a "
+            "frozen desktop app without a bundle swap. `revert` is the reason this "
+            "command exists rather than only an endpoint: an overlay's own failure "
+            "mode is a UI that will not load, and a control reachable only through "
+            "that UI would be no control at all. Every subcommand takes effect at the "
+            "next daemon start; `mux reload-daemon` applies one while preserving "
+            "sessions."
+        ),
+    )
+    overlay.add_argument(
+        "action",
+        choices=("status", "install", "revert", "restore"),
+        nargs="?",
+        default="status",
+    )
+    overlay.add_argument(
+        "source",
+        nargs="?",
+        help="for install: an overlay .zip, a built static directory, or an https URL",
+    )
+    overlay.add_argument(
+        "--sha256",
+        help="the digest the payload must match; required for a URL, optional for a path",
     )
 
     shortcut = sub.add_parser(
@@ -672,6 +832,8 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
                 None,
             )
         return request("GET", "/api/provider-accounts", base=base), None
+    if args.command == "ui-overlay":
+        return _ui_overlay_command(args, base)
     if args.command == "install-shortcut":
         return install_shortcut_command(args)
     if args.command == "resume":

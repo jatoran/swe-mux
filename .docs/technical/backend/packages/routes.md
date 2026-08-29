@@ -58,6 +58,17 @@ A runtime with no checker or installer published answers a quiet 200 rather than
 
 **Not:** the interval, the schema handling, or the comparison (`update_check.py`); the download, the hash check, the supervisor gate, or the handoff (`update_install.py`).
 
+### `routes/frontend.py`
+
+`GET /api/frontend/overlay` (what is installed, and what *this process* resolved to serve; reads the small state file and never re-verifies, so polling is free), plus install, revert and restore.
+Two access rules, deliberately different from each other.
+Installing is **loopback-only** and carries the `frontend-overlay-install` gesture, because the request names a path on the daemon's own filesystem or a URL it will fetch and it replaces the application's UI.
+Reverting is neither loopback-only nor sharing that gesture word: it is the safe direction, and a control for "the overlay broke the UI" reachable from fewer places than the thing that broke it would be the wrong way round.
+A URL source additionally requires its SHA-256, refused as `digest_required` before a byte is fetched.
+A runtime with no store published answers a quiet 200 carrying `supported: false`, for the reason `routes/update.py` does.
+
+**Not:** verification, the pin, the tree layout, or the revert's semantics (`frontend_overlay.py`); producing an overlay (`packaging/build_frontend_overlay.py`); or restarting the daemon so an install takes effect (`POST /api/daemon/restart`, which the UI presses next to it).
+
 ### `routes/settings.py`
 
 `/api/config` and its reset, the settings bundle, keybindings, meta-hooks, and `/api/settings`.
