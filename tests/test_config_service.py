@@ -559,6 +559,62 @@ def test_harness_enabled_rejects_unknown_harnesses_and_non_bool_values(tmp_path:
         update_config(config, {"harness_enabled": {"claude": "yes"}})
 
 
+def test_agent_authority_maps_refuse_typos_and_scrub_retired_names(tmp_path: Path) -> None:
+    """Loud on write, quiet on load - the same asymmetry `automation_global_allow` uses.
+
+    A typo written over the API must fail rather than silently allow, and a file
+    naming a field or a level this build no longer knows must still load: a
+    retired name is not a reason to brick an install's whole config.
+    """
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    with pytest.raises(ValueError, match="unknown authority fields"):
+        update_config(config, {"agent_authority_default": {"land_grants": "granted"}})
+    with pytest.raises(ValueError, match="invalid levels"):
+        update_config(config, {"agent_authority_ceiling": {"land_grant": "sometimes"}})
+    with pytest.raises(ValueError, match="authority fields to levels"):
+        update_config(config, {"agent_authority_default": {"land_grant": True}})
+
+    hot, restart = update_config(config, {"agent_authority_default": {"land_grant": "granted"}})
+    assert "agent_authority_default" in hot | restart
+    assert config.agent_authority_default == {"land_grant": "granted"}
+
+    stale = tmp_path / "stale.toml"
+    stale.write_text(
+        "schema_version = 21\n"
+        "[agent_authority_default]\n"
+        'retired_grant = "granted"\n'
+        'land_grant = "sometimes"\n'
+        'spawn_grant = "draft"\n',
+        encoding="utf-8",
+    )
+    assert load_config(stale).agent_authority_default == {"spawn_grant": "draft"}
+
+
+def test_a_retired_registry_id_in_a_stored_config_does_not_brick_startup(
+    tmp_path: Path,
+) -> None:
+    """`scrub_registry_maps` has to run on load, not only on construction.
+
+    `load_config` builds a bare `Config` and `setattr`s every stored value onto
+    it, so it never re-enters `__post_init__`. Until 2026-08-29 that meant the
+    scrub's whole promise was false for `automation_global_allow`: a config
+    naming an automation the registry had since retired raised `unknown
+    automations` out of `_validate` and refused to start the daemon. Measured,
+    then fixed.
+    """
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 21\n"
+        "[automation_global_allow]\n"
+        "retired_id = false\n"
+        "doc_debt = false\n",
+        encoding="utf-8",
+    )
+    loaded = load_config(path)
+    assert loaded.automation_global_allow == {"doc_debt": False}
+
+
 def test_invalid_update_changes_neither_memory_nor_disk(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)

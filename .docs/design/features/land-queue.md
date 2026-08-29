@@ -326,7 +326,7 @@ It also had no control in any overlay until it gained one in the Automation work
 A control that answers "for every branch in this repository" copied into each expanded row is a standing fixture in a per-checkout pane, which is exactly what `setting-links.md` forbids - and it is the same repetition that sent the verification block up here.
 The **install stop**'s gate is rendered outside the strip's disclosure so a collapsed strip cannot hide it: a gate is what a surface renders *instead of* working, and hiding one behind a summary is the same defect as rendering the surface empty.
 The **Project opt-in** and **`land_grant`** decide what happens to an *agent's* `request_land` and never touch the operator's own button, so they sit inside the disclosure as one statement.
-All three grant in place through the ordinary additive path; the Projects registry's **Agent authority** table is where any of them is lowered again.
+All three grant in place through the ordinary additive path; the Automation dashboard's **Agent authority** rows are where any of them is lowered again, and where an install-wide default or ceiling over `land_grant` is set (`automation-enablement.md`).
 
 A Map row that cannot land because of one of them names it and **sends the reader to the control** rather than drawing a second copy: one press opens the strip.
 Naming a switch still obliges offering it, and pointing one section up on the same pane is offering it - the rule was written against a walk to an overlay, not against a scroll.

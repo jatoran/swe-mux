@@ -5501,6 +5501,49 @@ workflow rather than a trust boundary. Both cmux and orca have one.
 - [ ] The voice closure is acquired on an explicit press, its LGPL obligation is verified wherever
   it now lives, and a user who never enables voice never downloads it.
 
+## Phase 22 - Agent authority scopes and the message envelope (2026-08-29)
+
+Two asks, one seam. Agent authority was per-Project only, which is right for the decision and
+wrong for the ergonomics; and the metadata a delivered agent message carried was measured at
+958 characters of envelope on a 67-character body.
+
+- [x] `agent_authority.py` owns one registry of five fields, each with its levels ordered
+  narrowest-first by *agent latitude*, so the ceiling, the install default, and the sender's
+  clamp are one signed comparison rather than three.
+- [x] Four resolution layers: the Project's explicit value, `agent_authority_default` (reaches
+  unset fields only), the built-in default, and `agent_authority_ceiling` (caps all three, may
+  only narrow). Every service injects `authority_resolver`, bound to the live `Config` so a
+  runtime change needs no restart.
+- [x] The authority controls move from the Projects registry to the Automation policy matrix,
+  finishing the migration the automation opt-ins made on 2026-08-26. The registry keeps a
+  read-only summary and a `SettingLink`. The Project cell gains a third position, "Follow
+  global", which removes the key rather than writing the global's current value.
+- [x] `message_envelope`: `full` / `compact` (default) / `bare`. `notify(envelope=...)` lets a
+  sender disclose more than the Project requires and never less. `bare` is permitted on the
+  mid-turn path, deliberately.
+- [x] `message_id`, `correlation_id` and `from_run` dropped from the envelope at every level:
+  sender bookkeeping with no receiver-side consumer.
+- [x] `Config.scrub_registry_maps` is called from `load_config` as well as `__post_init__`.
+  The scrub's promise had been false since it was written - a stored `automation_global_allow`
+  naming a retired automation id raised out of `_validate` and refused to start the daemon.
+  Measured, then fixed, with a regression test.
+
+Measured after (cross-Project, armed, mid-turn, 67-character body): 819 chars at `full`, 428 at
+`compact`, 0 at `bare`.
+
+Not taken: a "apply to all Projects" bulk writer. It writes N repository files from one click,
+each one a widening that travels to whoever clones. The install default answers the same need
+without touching a single repository, and the ceiling answers the case the default cannot reach.
+
+### Phase 22 exit criteria
+
+- [ ] An install default set on the matrix changes what an unset Project does and leaves a
+  pinned one alone, confirmed against a real fleet rather than in tests only.
+- [ ] The coverage line ("applies to N of M Projects") is checked against a fleet where at least
+  one Project is pinned, since it is the whole disclosure that makes a global edit safe.
+- [ ] A `bare` Project is run for a working session and the receiving agent's behaviour is
+  observed, because the argument for the level is a claim about how a message reads.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new

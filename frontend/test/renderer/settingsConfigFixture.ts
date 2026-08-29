@@ -67,6 +67,8 @@ export const SETTINGS_CONFIG_FIXTURE = {
   },
   "automation_enabled": false,
   "automation_global_allow": {},
+  "agent_authority_default": {},
+  "agent_authority_ceiling": {},
   "automation_hourly_call_cap": 1200,
   "automation_max_input_tokens": 4096,
   "automation_max_output_tokens": 1000,
