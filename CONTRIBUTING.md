@@ -129,7 +129,7 @@ not a description of its shipped binaries.
 Run the full gate before opening a pull request:
 
 ```bash
-uv run pytest tests -q -n auto --dist loadgroup -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
+uv run pytest tests -q -n auto --dist loadgroup -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag"
 uv run ruff check src/swe_mux tests packaging
 uv run mypy
 cd frontend && npx tsc --noEmit && npm test

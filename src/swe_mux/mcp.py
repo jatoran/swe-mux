@@ -71,7 +71,7 @@ from .deterministic_consumers import (
     normalize_target,
 )
 from .git_projects import ProjectIdentity
-from .harness import agent_harnesses, is_agent_harness
+from .harness import agent_harnesses, is_agent_harness, model_agreement, model_selection
 from .land_queue import LandRefusal
 from .mcp_contract import (
     CONFIGURATOR_READ_TOOL_NAMES,
@@ -126,6 +126,10 @@ SEARCH_DEFAULT_OUTPUT_BYTES = 16 * 1024
 SEARCH_MAX_OUTPUT_BYTES = 64 * 1024
 PARSE_TIMEOUT_SECONDS = 2.0
 NOTE_MAX_BYTES = 512 * 1024
+#: Model ids returned by one `list_models` call. One harness lists ~470 through
+#: OpenRouter, which is a page of context spent on a question `query` narrows in
+#: one round; the total is always reported, so a truncated list says so.
+MODEL_LIST_LIMIT = 60
 RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
 # Phase 7.11 scan-timeline reads. A projected record measures ~730 bytes on the
 # live store, so the page bound is what keeps a timeline read affordable - field
@@ -244,6 +248,30 @@ _UNKNOWN_TOKEN = (
 )
 
 
+def _model_request_fields(record: Any) -> dict[str, Any]:
+    """What a launch asked for and whether the session bears it out.
+
+    Absent on a session whose launch named no model, rather than present and
+    empty. A caller that never asked for a model has no question to answer here,
+    and two null fields on every row would read as a reading that failed.
+
+    `model_status` is `pending` until the harness reports a model of its own,
+    which happens on the first turn that produces usage. That is the ordinary
+    state of a session that has just been spawned, and it is why a spawning agent
+    is told to come back and read it rather than being handed a verdict at spawn
+    time it could not possibly have.
+    """
+    requested = str(getattr(record, "model_requested", "") or "")
+    if not requested:
+        return {}
+    return {
+        "model_requested": requested,
+        "model_status": model_agreement(
+            record.backend, requested, getattr(record, "provider", None), record.model
+        ),
+    }
+
+
 def session_summary(record: Any, *, display_name: str | None = None) -> dict[str, Any]:
     """Explicit field allowlist for a session record.
 
@@ -260,6 +288,7 @@ def session_summary(record: Any, *, display_name: str | None = None) -> dict[str
         "awaiting_reason": record.awaiting_reason,
         "idle_reason": record.idle_reason,
         "model": record.model,
+        **_model_request_fields(record),
         # How this session ends and how it ended. Without them a caller that ran a
         # Project Action could see the session leave `running` and had no way to
         # learn whether the command succeeded, which made running one pointless.
@@ -328,6 +357,7 @@ def _session_list_summary(
         "state_detail": record.state_detail,
         "awaiting_reason": record.awaiting_reason,
         "model": record.model,
+        **_model_request_fields(record),
         "agent_run_id": record.agent_run_id,
         "agent_run_seq": record.agent_run_seq,
         "last_activity_ts": record.last_activity_ts,
@@ -753,6 +783,37 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "list_models",
+        "description": (
+            "Which models an agent CLI actually has on this machine, asked of the "
+            "CLI itself. Use it before request_spawn when you have to choose a "
+            "model rather than confirm one: nothing else can tell you which "
+            "providers this host is authenticated for. The list is advisory - a "
+            "model missing from it is not refused, because a CLI's catalogue lags "
+            "new releases - and two harnesses (claude, codex) publish no list at "
+            "all, which is reported as such rather than as an empty account."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "backend": {
+                    "type": "string",
+                    "enum": list(agent_harnesses()),
+                    "description": "Agent CLI to ask (defaults to yours)",
+                },
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Case-insensitive substring to narrow the list; one harness "
+                        "publishes several hundred models"
+                    ),
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "request_spawn",
         "description": (
             "Start a new agent session with a prompt you supply, in your Project "
@@ -785,6 +846,19 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": list(agent_harnesses()),
                     "description": "Preferred agent CLI (defaults to yours)",
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "Model the new session's CLI should run, in that CLI's own "
+                        "spelling. Which names are accepted is a property of the "
+                        "harness, so a name it could not be told is refused here "
+                        "with what it does take - call list_models to see what this "
+                        "machine actually has. Omit it to take the Project's "
+                        "default. What the session ends up running is not confirmed "
+                        "until its first turn: read model_status back from "
+                        "get_session."
+                    ),
                 },
                 "name": {"type": "string", "description": "Suggested session name"},
                 "reason": {"type": "string", "description": "Why a separate session is warranted"},
@@ -3602,6 +3676,45 @@ class McpService:
             await self._messaging().spawn_requests(caller, project=args.get("project"))
         )
 
+    async def list_models(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.listModels`: one harness's own model listing, cached and bounded.
+
+        The answer always names the command it came from and the vocabulary the
+        harness accepts, including when the list is empty. That pairing is the
+        whole point: a caller told "no models" and nothing else cannot tell an
+        unauthenticated host from a CLI whose output format moved, and the second
+        one is mux's bug rather than the operator's.
+        """
+        from .model_catalog import catalog_for, matches
+
+        backend = str(args.get("backend") or "").strip() or str(
+            getattr(caller.record, "backend", "") or ""
+        )
+        if not is_agent_harness(backend):
+            raise QueueError(
+                "invalid_backend",
+                "name an agent harness to list models for; this session is not one",
+                status=400,
+            )
+        result = await catalog_for(backend)
+        found = matches(result.models, str(args.get("query") or ""))
+        selection = model_selection(backend)
+        return {
+            "backend": backend,
+            "command": result.command,
+            "models": list(found[:MODEL_LIST_LIMIT]),
+            "total": len(found),
+            "truncated": len(found) > MODEL_LIST_LIMIT,
+            "accepts": selection.describe() if selection is not None else None,
+            "error": result.error,
+            "note": (
+                "Advisory. A model missing from this list is not refused - a CLI's "
+                "catalogue lags new releases - and a model on it is still only "
+                "confirmed once the session runs a turn (model_status on "
+                "get_session)."
+            ),
+        }
+
     # --------------------------------------------------- memory reads (7.5)
 
     def _record_memory_outcome(
@@ -4854,6 +4967,7 @@ class McpService:
         name = str(args.get("name") or "")
         reason = str(args.get("reason") or "")
         project = str(args.get("project") or "")
+        model = str(args.get("model") or "")
         if self.session_control is not None:
             result = await self.session_control.spawn(
                 caller,
@@ -4863,6 +4977,7 @@ class McpService:
                 reason=reason,
                 correlation_id=str(args.get("correlation_id") or "") or None,
                 project=project,
+                model=model,
             )
         else:
             result = await self._messaging().request_spawn(
@@ -4872,6 +4987,7 @@ class McpService:
                 name=name,
                 reason=reason,
                 project=project,
+                model=model,
             )
         return dict(result)
 
@@ -5202,6 +5318,7 @@ class McpService:
             "project_actions": self.project_actions,
             "message_status": self.message_status,
             "spawn_requests": self.spawn_requests,
+            "list_models": self.list_models,
             "provenance": self.provenance,
             "verified_status": self.verified_status,
             "prior_resolutions": self.prior_resolutions,

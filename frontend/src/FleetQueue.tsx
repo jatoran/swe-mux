@@ -261,6 +261,7 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                     <span class="observation-request-tag">spawn request</span>
                     <span>{request.from_name || request.from_session || 'an agent'}</span>
                     {request.backend && <span>{request.backend}</span>}
+                    {request.model && <span class="observation-request-model">on {request.model}</span>}
                     <span class="fleet-queue-project">
                       Project: {projectNames.get(request.project_id) || request.project_name || request.project_id}
                     </span>

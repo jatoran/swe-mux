@@ -193,7 +193,8 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `watch_session` | arms a one-shot watch on another session and returns having delivered nothing. Exactly one deterministic notice then enters the **caller's own** prompt queue: when the target leaves working for a settled state and holds it, when it ends, or when the caller's timeout elapses - whichever is first. The notice names which case fired and the target's state, including the `awaiting` sub-reason and any background work still running. It is staged **armed** (`solicited_by` naming the watch), because the watch is the receiver's own request for it - armed is still not delivered. Bounded per watcher, one per target, ephemeral (see "Session-settle watches" below) |
 | `notify` | stages a message behind an envelope whose size is the *target* Project's `message_envelope` — `compact` by default (sender, whether a human reviewed it, the conflict instruction, the reply route), `full` for the whole standing-grant statement, `bare` for the body alone; names the sender's Project when it crossed one and the mid-turn arrival when it landed in a running turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, the `envelope` actually used, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not. `dry_run:true` runs every one of those bounds and answers with the same verdict having staged nothing and spent nothing, so an unreachable peer is chosen rather than discovered after the item is armed |
 | `revoke_message` | withdraws one message the caller sent that nothing has delivered, cancelling it as `revoked`. Attribution is the whole check and a miss answers `unknown_message`; a delivered message answers `not_revocable`, because the text is already in another terminal |
-| `request_spawn` | creates a session in the target Project directly under the default `granted` grant (since 2026-08-25), inside the per-origin spawn budget; against a Project lowered to `draft` it writes an inert spawn approval row into that Project's Fleet Queue and starts nothing |
+| `list_models` | which models a harness's CLI actually has on this machine, asked of the CLI itself through the command that harness declares. Carries the command it ran and the vocabulary the harness accepts, so a thin list is a diagnosis rather than a shrug. Advisory: a model missing from it is not refused, and a harness with no listing command (`claude`, `codex`) says so rather than answering with an empty list |
+| `request_spawn` | creates a session in the target Project directly under the default `granted` grant (since 2026-08-25), inside the per-origin spawn budget; against a Project lowered to `draft` it writes an inert spawn approval row into that Project's Fleet Queue and starts nothing. Takes an optional `model`, refused before anything spawns if that harness could not be told it, and proves the pane survived its own startup before answering |
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Acts directly under the default `granted` grant (since 2026-08-25); a Project lowered to `draft` gets an inert approval instead |
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Acts directly under the default `granted` grant; a Project lowered to `draft` gets an inert approval instead |
@@ -432,6 +433,27 @@ operator's.
   `agent_session_control` event with `action:"spawn"`. The budget stays enforced whatever the
   messaging rate-limit toggle says, because a spawn's blast radius is one injection into
   fan-out; a Project lowered to `draft` puts a human back in front of each spawn.
+- **Choosing the model, and finding out whether the choice took.** A spawn may name a
+  `model` in the harness's own spelling (`backends.md` owns which names each CLI accepts).
+  Three layers, and each exists because the one before it provably cannot answer.
+  *Before the spawn*, the vocabulary refuses a name the CLI would die on, and where the
+  harness can list its models the refusal names the closest ones this machine actually has -
+  which turns "that name is wrong" into a next call rather than a guess. `list_models` is the
+  same data asked for deliberately, because an agent that has to *choose* a model cannot know
+  what this host is authenticated for.
+  *At the spawn*, the granted path waits out a settle window and discards a pane that died in
+  it, answering `spawn_failed` with the harness's own dying words. This is on the agent path
+  and deliberately not on the browser's: an operator watching a pane appear sees it die, and
+  an agent gets a session id, plans around it, and finds out much later or never.
+  *After the first turn*, `model_status` on `get_session`/`list_sessions` compares the launch
+  value against the model the harness reports running - `pending` until it reports one, which
+  is the ordinary state of a new session. The spawn result says so in as many words rather
+  than implying a verdict it cannot have.
+  The third layer is not belt-and-braces. Two harnesses fuzzy-match the launch value and can
+  land on a different real model silently, and Codex does not validate the flag at all: it
+  starts, warns, and dies on the provider's 400 at the first turn, where nothing at spawn time
+  can see it. A model asked for through the `draft` path travels on the request row and onto
+  the card, because the human approves what the card says.
 - **What stays impossible at any grant.** A target outside the requested scope is
   indistinguishable from nonexistent; a shell or other non-agent pane is refused; and the
   session that hosts the running daemon is refused (`_session_owns_daemon`, a psutil ancestry
@@ -539,6 +561,9 @@ Both tiers are excluded from `.worktree-verify` and CI.
   `src/swe_mux/models.py`; path-scoped device-settings edits:
   `src/swe_mux/settings_patch.py`, `src/swe_mux/settings_store.py`
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
+- Model vocabulary, the observed-model comparison, and the per-harness listing command:
+  `src/swe_mux/harness.py`, `src/swe_mux/model_catalog.py`; the spawn-side resolution and its
+  suggesting refusal: `src/swe_mux/spawn_contract.py`; the settle proof: `src/swe_mux/spawn_probe.py`
 - Session-control authority and bounds (grant, budget, cycle, idempotency, readiness gate):
   `src/swe_mux/session_control.py`
 - Settle-watch bounds, the fire rules, and the notice template:

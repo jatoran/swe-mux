@@ -15,6 +15,17 @@ Declared harness identity, capability axes, derived display level, delivery etiq
 
 `tests/test_harness_adapter_matrix.py` fails when a harness is added to the registry with no adapter or spawn coverage.
 
+## `model_catalog.py`
+
+Asking a harness's own CLI which models it has, through the command that harness declares (`ModelSelection.catalog`), with a per-harness parser, a 15-minute cache, and `bounded_subprocess` around the run.
+Also the substring narrowing and the "did you mean" suggestions a refused model gets.
+
+The rule that governs the whole module: **it informs, it never refuses.**
+A model absent from a listing still spawns, because every such listing lags the vendor that fills it - the failure `claude_models.py` had to grow a family fallback to escape.
+The parser is declared per format rather than sniffed, because a parser that guesses at an unrecognized layout returns *fewer* models, and a short list is indistinguishable from a small account; an unparseable listing therefore returns nothing **paired with the command that produced it**, which is a diagnosis rather than a shrug.
+
+**Not:** deciding whether a model may be launched (`harness.ModelSelection`), deciding whether one actually ran (`harness.model_agreement`), or holding a list of released models anywhere.
+
 ## `adapters/`, `agent_launcher.py`, `hook_client.py`, `assets/omp_mux_hook.ts`
 
 Provider command, resume, and transcript normalization; additive Claude and Codex lifecycle-hook launch wiring; adapter-owned worktree trust preflight and primary-root access argv; the packaged OMP in-process lifecycle extension; authenticated hook delivery and spooling; and relaying a daemon-composed permission decision to the CLI's stdout.

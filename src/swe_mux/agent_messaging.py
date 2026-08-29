@@ -93,6 +93,7 @@ from .prompt_queue import (
     PromptQueueService,
     QueueError,
 )
+from .spawn_contract import field_refusal, requested_spawn_model
 
 log = logging.getLogger("swe_mux.agent_messaging")
 
@@ -930,6 +931,7 @@ class AgentMessagingService:
         name: str = "",
         reason: str = "",
         project: Any = None,
+        model: str = "",
     ) -> dict[str, Any]:
         """Write an inert spawn request for review in the Fleet Queue.
 
@@ -957,6 +959,18 @@ class AgentMessagingService:
                 "invalid_backend", "backend must be a registered agent", status=400
             )
         record = caller.record
+        # Validated here, against the backend the approval will actually use,
+        # rather than when a human presses approve. A model refused at approval
+        # time is refused in front of the wrong person: the agent that asked for
+        # it is the one that can pick another, and by then it has moved on.
+        try:
+            resolved_model = await requested_spawn_model(
+                backend or str(record.backend or ""), model
+            )
+        except ValueError as exc:
+            raise QueueError(
+                "invalid_model", field_refusal(exc, "model"), status=400
+            ) from exc
         # One request starts one session in one Project, so this argument names
         # a Project rather than widening to several. Defaults to the caller's.
         scope = self._scope(caller, project)
@@ -985,11 +999,17 @@ class AgentMessagingService:
         )
         body = (
             f"Spawn request from {getattr(record, 'name', record.id)}{origin}"
-            f"{f' - {label}' if label else ''}: {summary}"
+            f"{f' - {label}' if label else ''}"
+            f"{f' on {resolved_model}' if resolved_model else ''}: {summary}"
         )
         request = {
             "prompt": text,
             "backend": backend or str(record.backend or ""),
+            # Carried on the row and shown on the card. A model the requester
+            # asked for that the approval silently dropped would be the worst of
+            # both: the human approves "an opus session" and an ordinary one
+            # starts, with nobody in a position to notice.
+            "model": resolved_model,
             "name": label,
             "reason": str(reason or "")[:500],
             "cwd": str(getattr(record, "cwd", "") or ""),
@@ -1058,6 +1078,7 @@ class AgentMessagingService:
                     "status": str(payload.get("status") or "pending"),
                     "prompt": str(payload.get("prompt") or ""),
                     "backend": str(payload.get("backend") or ""),
+                    "model": str(payload.get("model") or ""),
                     "name": str(payload.get("name") or ""),
                     "reason": str(payload.get("reason") or ""),
                     "from_session": str(payload.get("from_session") or ""),
