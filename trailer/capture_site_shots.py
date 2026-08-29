@@ -122,10 +122,32 @@ WIDE_PANEL_VIEWPORT = {"width": 1400, "height": 638}
 
 # ------------------------------------------------------------------- plumbing
 def write_webp(image: Image.Image, path: Path) -> None:
+    """Encode both ways and keep the smaller file.
+
+    Measured on the 2026-08-28 set: lossless wins on every mobile shot (flat
+    colour, few gradients - lossy q80 was still 5-40% *larger*), while lossy wins
+    on every desktop shot (2.5-4x smaller at q84). q84 was chosen by eye against
+    the lossless originals at 2x magnification - terminal text, coloured commit
+    hashes, and the dark gradients all survive it with no visible difference -
+    so raising it buys bytes for nothing and lowering it was not re-verified.
+    """
+    import io
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, "WEBP", lossless=True, quality=100, method=6)
+    encodings: list[bytes] = []
+    for options in (
+        {"lossless": True, "quality": 100, "method": 6},
+        {"lossless": False, "quality": 84, "method": 6},
+    ):
+        buffer = io.BytesIO()
+        image.save(buffer, "WEBP", **options)
+        encodings.append(buffer.getvalue())
+    path.write_bytes(min(encodings, key=len))
     if path.stat().st_size > MAX_BYTES:
-        image.save(path, "WEBP", lossless=False, quality=92, method=6)
+        raise SystemExit(
+            f"{path.name} is {path.stat().st_size} bytes in its smaller encoding, over the "
+            f"{MAX_BYTES} ceiling; reframe the shot rather than shipping it."
+        )
     print(f"  wrote {path.name:24} {image.width}x{image.height} {path.stat().st_size:>7} bytes")
 
 
