@@ -1,7 +1,11 @@
-# Reddit soft launch
+# Reddit and Discord community posts
 
-Post these BEFORE Show HN, a day or two apart, and fix whatever they surface.
-These communities forgive rough onboarding and will find the clean-machine failures.
+**Exactly one of these is the niche launch at step 4** ([`../GTM_ROADMAP.md`](../GTM_ROADMAP.md) § Launch sequencing) - r/ClaudeAI or the Claude Developers Discord, whichever the design partners came from least, so the post reaches people the beta did not.
+The rest move to step 7 and are staggered there, a week or more apart.
+
+The previous plan fired all four inside one week while also claiming at most one attention-day per week.
+Do not restore that.
+
 Each post is differentiated - never the same text twice.
 Check each sub's self-promo rules the week of posting; flair as appropriate.
 
@@ -11,23 +15,27 @@ Check each sub's self-promo rules the week of posting; flair as appropriate.
 
 **Title:**
 
-> I built an open-source control plane for running many Claude Code sessions at once - sessions survive restarts, branches land themselves, and it works from my phone
+> I built an open-source control plane for running many Claude Code sessions at once - it records what each one actually did, and lands their branches behind my test gate
 
 **Body:**
 
-I run several Claude Code sessions in parallel most days, and the tooling gap was never the agent - it was everything around it: dead sessions after a restart, no idea which session actually needs me, and being the human merge queue for five worktree branches finishing at once.
+I run several Claude Code sessions in parallel most days, and the tooling gap was never the agent.
+It was that after an afternoon of parallel work I had five branches, five summaries written by the agents that produced them, and no independent account of what any of them had actually touched.
 
 swe-mux is what I built for myself over the past months, now open source (Apache 2.0):
 
-- A supervisor process owns the PTYs, so every session survives daemon restarts and app updates - scrollback and all.
-- Real status per session (working / idle / awaiting-you), built from Claude Code's hooks plus terminal detection, hardened against a corpus of captured real sessions.
-  Push notifications only when a session genuinely needs you.
-- A prompt queue per session with gated auto-delivery.
-- Agents work in git worktrees; a land queue reconciles, runs your test gate, and fast-forwards trunk - one branch at a time, conflicts handed back to the session that owns them.
-- Phone client over Tailscale (PWA + push), voice control with local Whisper.
-- Everything local. No cloud, no accounts, no telemetry.
+- **A deterministic record**: every file write hashed on the bytes actually written, every command with its exit class, test output parsed to the failing set. Commits carry which session and conversation produced them, split into committer and contributor. Read from the work, not from the agent's summary of it.
+- **A land queue**: agents work in git worktrees, and finished branches get reconciled, run through the verification command whose exact bytes I approved, and fast-forwarded onto trunk one at a time. Conflicts and failed gates go back to the session that owns them. An agent cannot approve its own gate.
+- **Real status per session** (working / ready / awaiting-you / blocked), built from Claude Code's hooks plus the transcript plus terminal detection, hardened against a corpus of captured real sessions, and conservative where the layers disagree.
+- **A prompt queue** per session with gated auto-delivery, off by default.
+- **Phone client** over Tailscale (PWA + push), voice control with speech-to-text that decodes on my own machine.
+- **A supervisor process can own the PTYs** so sessions ride through daemon restarts and app updates. It ships off - it's a config edit plus a restart - because updating the supervisor reaps every live session and I haven't validated it on machines that aren't mine. With it off, cold session recovery brings sessions back as readable, resumable rows.
 
-Windows-first (Linux from source; WSL bridge for Claude living inside WSL).
+Worth saying plainly: **most of the control plane ships off.** Automations are per-Project opt-in, the land queue needs a switch plus an opt-in plus a grant plus an approved command, and the model-backed parts are off. A fresh install is quieter than that list.
+
+It runs on your own machine - SQLite on your disk, no account, no telemetry, no backend I operate. Your Claude Code subscription and config are untouched.
+
+Windows-first (Linux headless plus a browser; WSL bridge for Claude living inside WSL).
 It also runs Codex and opencode side by side with Claude, which is genuinely useful for cross-checking.
 
 Repo: github.com/jatoran/swe-mux - would honestly appreciate people trying the install on a clean machine and telling me where it falls over.
@@ -54,13 +62,16 @@ Mention: your existing CLI configs and subscriptions are untouched; swe-mux runs
 
 **Title:**
 
-> swe-mux: open-source, fully local mission control for coding agents - no cloud, no accounts, voice via local Whisper
+> swe-mux: open-source control plane for coding agents that runs entirely on your own machine - no accounts, speech-to-text decoded locally
 
 **Body:**
 
 Angle for this sub: locality and ownership.
-Lead with: everything on your machine (SQLite, your filesystem), no telemetry, the phone path is your own tailnet with no relay, STT is local faster-whisper, TTS is local Kokoro, and even the update mechanism is static files - the project has zero servers.
-The agents themselves are whatever CLIs you run; the control plane doesn't care whose model is behind them.
-Be upfront that the agent CLIs people mostly run (Claude Code, Codex) are cloud models - the *control plane* is what's local - or the sub will make that point for you, less kindly.
+Lead with: the data is SQLite on your disk, there is no telemetry and no account, the phone path is your own tailnet with no relay, speech-to-text decodes on the host in both shipped configurations (faster-whisper or Windows Speech Recognition), TTS can be local Kokoro, and even the update mechanism is a static manifest plus GitHub Releases - there is no backend this project operates.
+
+**Get the two qualifications in before someone else does, because this sub will and will be right.**
+
+1. The agent CLIs people mostly run (Claude Code, Codex) are cloud models. The *control plane* is what's local. Say it in the post.
+2. "Fully local" is not the claim. swe-mux is itself a local HTTP daemon, and four optional capabilities reach the network when you turn them on: OpenRouter-compatible model calls with your key, web push through your browser vendor, the speech models downloaded once from Hugging Face, and experimental Edge TTS. Plus one daily static `version.json` fetch with no identifier, which is disableable. Naming all five is stronger here than a slogan, because this is the sub that checks.
 
 [Adapt body from r/ClaudeAI; do not copy verbatim.]

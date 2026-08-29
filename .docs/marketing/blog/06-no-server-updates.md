@@ -5,8 +5,12 @@
 ---
 
 swe-mux has users, releases, an update check, and auto-update for a frozen desktop bundle.
-Total server count: zero.
-Not "serverless" as in someone else's servers with extra billing - zero, as in there is no backend anywhere, and no path by which the project learns anything about you.
+Servers I operate: zero.
+
+Be precise about what that claims, because the loose version of this sentence is wrong and gets corrected in public.
+swe-mux *is* a local HTTP daemon - that is the whole architecture, and it is running on your machine right now if you use it.
+What does not exist is a backend or relay **this project operates**: nothing I run sits between you and anything, and there is no path by which the project learns anything about you.
+"Zero servers" is a fun line and a false one. "No vendor-operated backend" is the true one and is just as good.
 
 This was a design decision, not a budget one, and it turned out to cost nothing.
 
@@ -20,7 +24,8 @@ The entire distribution stack is static files:
   Fallback endpoint: the GitHub Releases API, whose unauthenticated rate limit is laughably sufficient for a daily check.
 - **Artifacts live on GitHub Releases.** Free hosting, unlimited bandwidth, download counts available if I'm curious.
 - **The updater reuses the staged-swap machinery** the app already had for development redeploys: download, verify the hash, stage next to the running install, swap, health-check, roll back on failure.
-  Live agent sessions survive the update, because the session-owning supervisor rides through it - same mechanism as every other restart.
+  Where the PTY supervisor is enabled - it ships off, and it is a config edit to turn on - live agent sessions ride through the update on it, the same mechanism as every other restart.
+  The interesting consequence is the refusal: an update that would need a *new* supervisor ends every live session by construction, so the updater declines to install it rather than doing that quietly. A distribution stack made of static files still has to know which of its own updates are destructive.
 - **The second channel is PyPI.** Developers `uv tool install swe-mux` and upgrades are `uv tool upgrade`. Zero infrastructure by definition.
 
 ## What a server would have bought
@@ -38,7 +43,8 @@ The remaining argument for a server is habit.
 ## The part that does cost money
 
 Windows code signing.
-An unsigned frozen executable means SmartScreen warnings and the occasional antivirus false positive, and that is the real distribution tax on indie desktop software - not hosting.
+The installer exists and is unsigned, which means a SmartScreen warning on first run and the occasional antivirus false positive.
+That is the real distribution tax on indie desktop software, and it is the one line item in this whole stack that hosting was never going to be.
 [verify: state what was actually chosen - Trusted Signing / OV cert / documented-unsigned - and what it cost]
 
 ## The principle
@@ -47,4 +53,4 @@ Every server is a liability with a monthly bill: something to secure, something 
 A tool built to outlive its maintainer's attention should depend on the smallest possible set of things that need maintaining.
 Static files and a git forge is about as small as that set gets.
 
-swe-mux: github.com/jatoran/swe-mux - local-only by design, all the way down to how it updates itself.
+swe-mux: github.com/jatoran/swe-mux - it runs on your own machine, and there is no backend I operate anywhere in it, including in how it updates itself.

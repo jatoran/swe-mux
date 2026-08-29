@@ -1,17 +1,37 @@
 # Launch checklist
 
-The preconditions behind each stage of [`GTM_ROADMAP.md`](GTM_ROADMAP.md), and the per-venue preflight.
+The preconditions behind each step of [`GTM_ROADMAP.md`](GTM_ROADMAP.md), and the per-venue preflight.
 
 Two kinds of item live here and they are marked differently.
-A **blocker** means the stage does not fire until it is true.
+A **blocker** means the step does not fire until it is true.
 A **note** means it is worth doing and does not hold anything up.
 
 Every repository-state fact below was checked against the GitHub API or the working tree on **2026-08-28** and carries the check that produced it, so a reader can re-run it rather than trust it.
 
-## Stage 0 - Repository hygiene
+## 1. Artifact and claim audit
 
-No audience depends on this stage, which is exactly why it gets skipped.
+No audience depends on this step, which is exactly why it gets skipped.
 A visitor arriving from any venue lands here first.
+
+### The claim half
+
+Done 2026-08-28, recorded in [`GTM_ROADMAP.md`](GTM_ROADMAP.md) § The claim audit.
+
+| Item | State | Kind |
+|---|---|---|
+| No draft presents session survival as default behaviour | Done. `pty_supervisor_enabled` defaults to `False`; every draft now names the switch | Blocker, and it was the sharpest one |
+| No draft says "sessions never die" or "sessions survive everything" | Done. The Show HN alternate title and the Product Hunt alternate tagline both carried it and both are deleted | Blocker |
+| No draft says "no server anywhere" or "zero servers" | Done. swe-mux is a local aiohttp daemon; the copy now says "no vendor-operated backend or relay" | Blocker |
+| No draft says "fully local" unqualified | Done. Every instance now names what crosses the network and which switch governs it | Blocker |
+| No draft says notifications fire only when an agent genuinely needs a human | Done. The five alert reasons and three suppression rules are named instead | Blocker |
+| Control-plane copy names the opt-ins | Done. Automations, the land queue's four gates, and the model-backed features are all described as off | Blocker |
+| "STT runs locally" names its configuration | Done, and the claim itself was **verified accurate**: both shipped engines decode on the host | Blocker |
+| Version and artifact facts current | Done. 0.1.2 on PyPI, v0.1.2 carries an unsigned installer and a portable archive | Blocker |
+
+### The artifact half
+
+These are **repository settings, not files**, so no work package owns them and they will not arrive as part of anyone's branch.
+They are the operator's to set.
 
 | Item | State on 2026-08-28 | Kind | How it was checked |
 |---|---|---|---|
@@ -27,10 +47,7 @@ A visitor arriving from any venue lands here first.
 | `LICENSE`, `CONTRIBUTING.md`, `README.md`, `SECURITY.md` | Present | - | as above |
 | Community profile health | 57% | - | as above |
 
-The description, homepage, topics, and Discussions switch are **repository settings, not files**, so no work package owns them and they will not arrive as part of anyone's branch.
-They are the operator's to set.
-
-Suggested description, matching the tagline exactly:
+Suggested description, which is where the **tagline** belongs (a repository description is a name, not an explanation):
 
 > Mission control for your coding-agent fleet. Self-hosted terminal multiplexer and control plane for Claude Code, Codex, and other agent CLIs.
 
@@ -44,42 +61,54 @@ The template's own header comment records the binding that makes this fragile: t
 
 Enabling Discussions and creating a category named so its slug is `ideas` makes the README true and activates a form that already exists.
 
-## Stage 1 - Assets and clean-machine trial
+## 2. Clean-machine testing
 
 | Item | State | Kind |
 |---|---|---|
-| Real screenshots on `swemux.dev` | `site/img/` carries deliberate placeholders; real captures leaked project names and were pulled | Blocker for Stages 3-5 |
-| PII-free capture environment | Planned, not built. A second daemon with its own data dir and port plus synthetic projects is sufficient; no VM needed | Blocker for the above |
-| Hero video, 60-90 seconds | Does not exist | Blocker for Stages 4-5, and for YouTube outreach entirely |
-| Feature GIFs: orchestrator fan-out, land queue landing branches, phone and voice, status board, session-preserving redeploy | Do not exist | Blocker for Stage 4 |
-| `README.md` leads with the hero asset | `README.md` carries a `TODO(release)` marker where it goes | Blocker for Stage 4 |
-| Clean-machine install trial from the published wheel | Not done | Blocker for Stage 2 |
-| Signed desktop installer | No release artifact exists; the v0.1.0 release page carries the wheel, the sdist, and `version.json` | **Not a blocker.** A PyPI-only launch is defensible if the copy says so plainly. `blog/01-launch.md` already carries a `[verify]` marker on exactly this sentence |
-| Capture scripts and scene notes kept beside the assets | Not applicable yet | Note - do it while capturing, not after |
+| Install from the published wheel onto a machine with no checkout and no Node | **Not done** | Blocker for step 3 |
+| Install from the **unsigned Windows installer** onto the same machine | **Not done.** Different failure surface: SmartScreen, the Start Menu entry, the run-at-login task, and the bundled supervisor | Blocker for step 3 |
+| Every gap found is fixed, or written into the README as a known limit | - | Blocker for step 3 |
+| The same run with `pty_supervisor_enabled = true` | Not done. It is the precondition for the open decision on that default ([`GTM_ROADMAP.md`](GTM_ROADMAP.md) § Open decisions) | Note for the launch; blocker for that decision |
 
 Clean-install testing needs real isolation (Windows Sandbox or a Hyper-V VM); Docker cannot host a GUI Windows session.
-Capture does not - the isolated second daemon is enough for screenshots and recordings.
 
-## Stage 2 - Quiet trial
+**What CI does and does not cover here**, so this step is not skipped on a misreading: CI builds, validates and install-smokes the wheel on all three hosts, and the `live_daemon` tier starts a real daemon on Linux and Windows from the **source checkout** and proves it serves a shell session and exits cleanly. No CI job starts a daemon from a published artifact on any host.
 
-| Item | Kind |
-|---|---|
-| Stage 1 clean-machine trial passed, and every gap it found is fixed or written into the README as a known limit | Blocker |
-| Issue templates live, so a tester has somewhere to put a report | Blocker |
-| The ask names bug reports rather than adoption ([`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md)) | Blocker |
-| A reply is ready within a day of each response | Blocker in practice - a tester who waits three days does not send a second report |
-
-## Stage 3 - Soft launch
+## 3. The two-cohort beta
 
 | Item | Kind |
 |---|---|
-| Stage 2 defects fixed | Blocker |
-| Real screenshots on the site | Blocker |
-| Discussions live and the README's links resolving | Blocker |
-| Each subreddit's current rules read from its own sidebar in the week of posting | Blocker, per venue |
-| A differentiated draft per venue, never the same text twice | Blocker |
+| Step 2 passed, and every gap it found is fixed or written into the README as a known limit | Blocker |
+| Issue templates live, so a participant has somewhere to put a report | Blocker |
+| Cohort A's twenty-minute script written and fixed, so results are comparable across people ([`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md)) | Blocker |
+| Cohort B's three check-in question sets written, and the two-week window scheduled | Blocker |
+| The asks are differentiated: cohort A is asked for defects, cohort B is asked to use it | Blocker. Sending one ask to both is how the previous plan measured only the install |
+| A reply is ready within a day of each response | Blocker in practice - a participant who waits three days does not send a second report |
+| Recruitment does not draw both cohorts from the same pool | Note, and it matters at step 4: the niche launch should reach people the beta did not |
+
+### The assets question, which is smaller than it was
+
+| Item | State | Kind |
+|---|---|---|
+| Real screenshots on `swemux.dev` | **Done.** Nine real captures, taken in a synthetic installation with invented projects, all wired into the landing page as of this branch | - |
+| PII-free capture environment | **Done.** `trailer/capture_env.py` plus `trailer/capture_site_shots.py`, whose leak scan refuses to write a file containing the host's home directory, account name, or git identity | - |
+| Hero video, 60-90 seconds | Does not exist. The environment that would produce it does | Blocker for step 6, and for YouTube outreach entirely |
+| Feature GIFs: the evidence view, land queue landing branches, provenance in the commit log, phone and voice, status board | Do not exist | Blocker for step 6 |
+| `README.md` leads with the hero asset | `README.md` carries a `TODO(release)` marker where it goes | Blocker for step 6 |
+| Desktop artifact | **Done.** v0.1.2 carries an unsigned Windows installer and a portable archive; `swemux.dev/#download` fills itself from the release manifest | - |
+| **Signed** desktop installer | No signing certificate. Needs a purchase | Blocker for step 6 - see below |
+| Capture scripts and scene notes kept beside the assets | **Done.** `trailer/SITE_SHOTS.md` | - |
+
+## 4. The one niche launch
+
+| Item | Kind |
+|---|---|
+| Step 3 complete, and each finding fixed or written into the README as a known limit | Blocker |
+| **One venue chosen**, not four. r/ClaudeAI or the Claude Developers Discord, whichever the design partners came from least | Blocker |
+| That venue's current rules read from its own sidebar in the week of posting | Blocker |
 | Authorship disclosed in the post body regardless of whether the rules demand it | Blocker |
 | Half a day free after posting | Blocker |
+| The other three venues scheduled at step 7, a week or more apart, never the same text twice | Blocker |
 
 ### The Reddit rules gap, stated plainly
 
@@ -99,16 +128,26 @@ Before posting to any subreddit, read its sidebar and its wiki rules page and co
 If any of these cannot be established from the sidebar, ask the moderators before posting.
 A modmail costs a day; a ban costs the venue.
 
-## Stage 4 - Show HN
+## 5. Fix what it finds
 
 | Item | Kind |
 |---|---|
-| Everything in Stages 1-3 | Blocker |
-| A week of soft-launch fixes landed, and week 4 spent posting nothing | Blocker |
+| Every finding from steps 3 and 4 closed or documented | Blocker |
+| The cohorts' named abandonment points specifically addressed, not merely recorded | Blocker |
+| No posting at all during this step | Blocker, and the one most likely to be skipped |
+
+## 6. Show HN
+
+| Item | Kind |
+|---|---|
+| Everything in steps 1 through 5 | Blocker |
+| **Activation demonstrated**: repeat users exist, and at least one design partner is still running it after the beta ended without being asked to | **Blocker, and it is the new one.** The front page cannot be retried |
+| Hero video live | Blocker |
+| **A signed Windows installer** | Blocker - see below |
 | A whole working day free, Tuesday to Thursday | Blocker |
 | Title final, no editorializing, no superlative | Blocker |
 | First comment drafted and ready to paste immediately after submission | Blocker |
-| Prepared answers ready for the five predictable questions ([`posts/show-hn.md`](posts/show-hn.md)) | Blocker |
+| Prepared answers ready for the predictable questions ([`posts/show-hn.md`](posts/show-hn.md)), including "so sessions don't actually survive by default?" | Blocker |
 | Nobody asked to upvote or comment. Not one person | Blocker - it is against the guidelines and it is detectable |
 | The X thread queued for the same morning | Note |
 | Every `[verify]` marker in every draft re-measured against the shipped artifact | Blocker |
@@ -116,33 +155,48 @@ A modmail costs a day; a ban costs the venue.
 Show HN requires "something you've made that other people can play with", easy to try "without barriers such as signups or emails".
 swe-mux clears this and has no signup at all; one sentence saying so is worth including, because the absence of a signup is unusual enough in this category to be a point rather than a footnote.
 
-## Stage 5 - Product Hunt
+### The signing gate, stated rather than scheduled
 
-| Item | Kind |
-|---|---|
-| Show HN happened, and at least a week has passed | Blocker |
-| The listing rewritten around what the HN thread proved resonated, not what the draft guessed | Blocker |
-| Hero video first in the gallery | Blocker |
-| Nobody asked to upvote. Asking people to visit and comment is permitted; asking for votes is not, and paid or coordinated voting is detected and penalized | Blocker |
-| Scheduled for 12:01am PT | Note |
-| A day free | Blocker |
+The installer exists as of v0.1.2 and is **unsigned**, so SmartScreen warns on first run.
 
-## Stage 6 - Slow burn
+That is fine for steps 3 and 4, where every participant was invited and can be told what to expect.
+It is avoidable conversion loss at step 6, where the traffic is unrepeatable and the alternative on offer is "install Python, then uv, then an extra, then the WebView2 Runtime".
+
+Signing needs a certificate the operator has to buy.
+**This is a gate to state, not work to schedule**, and it is recorded here so that firing step 6 without it is a decision somebody made rather than a thing that happened.
+
+## 7. Slow burn
 
 | Item | Kind |
 |---|---|
 | Blog posts published on `swemux.dev/blog` first, cross-posts carrying the canonical URL back | Blocker per post |
 | At most one aggregator submission per fortnight | Blocker |
 | Never two aggregator submissions back to back after one lands | Blocker |
+| The community venues deferred from step 4 posted one at a time, a week or more apart | Blocker |
 | lobste.rs invite in hand, and some non-swe-mux activity on the account | Blocker for lobste.rs only |
 | Each awesome list's current rules re-read the week of submission | Blocker per list |
 | `awesome-claude-code` 14-day eligibility floor cleared (first commit 2026-08-16, so 2026-08-30) | Blocker for that list only |
+| Hero video exists before any YouTube outreach | Blocker for that channel only |
+
+## 8. Product Hunt, conditional
+
+| Item | Kind |
+|---|---|
+| **Evidence of interest beyond the terminal-tool audience** | **The condition.** Absent it, this step does not happen and nothing is lost |
+| Step 6 happened, and at least a week has passed | Blocker |
+| The listing rewritten around what the HN thread proved resonated, not what the draft guessed | Blocker |
+| Hero video first in the gallery | Blocker |
+| Nobody asked to upvote. Asking people to visit and comment is permitted; asking for votes is not, and paid or coordinated voting is detected and penalized | Blocker |
+| Scheduled for 12:01am PT | Note |
+| A day free | Blocker |
+
+What counts as the evidence: traffic or installs from a non-developer-tooling referrer, requests from people who are not already running agent CLIs, or a newsletter pickup that reached a general audience.
 
 ## Cross-cutting: things that must be true of every draft before it posts
 
-- Every claim is true of the shipped artifact on the day it posts, not of the roadmap.
+- **Every claim is true of the shipped artifact, in its default configuration, on the day it posts.** The default-configuration clause is what the 2026-08-28 audit added and it is the one that moved the most copy.
 - Every `[verify]` marker has been re-measured, not assumed.
-- The positioning line is the one string, verbatim.
-- The platform claims match `.github/workflows/ci.yml` rather than a prose summary. Specifically: CI builds and install-smokes the wheel on all three hosts, but **no CI job on any host starts a daemon**, so no draft may say a platform is verified working end to end. Windows is the only platform that proves the product running.
+- The positioning line is the one string, verbatim. The tagline is a tagline and never substitutes for it.
+- The platform claims match `.github/workflows/ci.yml` rather than a prose summary. Specifically: CI builds and install-smokes the wheel on all three hosts, and the `live_daemon` tier starts a daemon from the **source checkout** on Linux and Windows, but **no CI job starts a daemon from a published artifact**, so no draft may say a platform is verified working end to end from what a user installs. Windows is the only platform that proves the product running.
 - No em dashes.
 - No real names, no operator identity, no personal paths, no screenshots carrying either.

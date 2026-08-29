@@ -28,6 +28,13 @@ This one endpoint changed how fast I can iterate more than anything else in the 
 
 [gif: daemon restart with eight live sessions, scrollback intact]
 
+**One disclosure before the rest of this, because it changes how you should read it.**
+The supervisor ships **off** in swe-mux (`pty_supervisor_enabled` defaults to `false`), and turning it on is a config-file edit plus a daemon restart.
+That is not modesty about the mechanism; it is the mechanism's own logic applied one level up.
+A supervisor update reaps every live session, so the supervisor is the thing I am least willing to change, and until it has been validated on machines that are not mine, defaulting it on would make my iteration speed everybody's risk.
+Everything below is what the mode does and what it cost to build.
+Whether it should be the default is a decision I have written down rather than made.
+
 ## Redeploying the frozen app, staged
 
 The desktop build is a frozen bundle, which raises the stakes: a redeploy replaces the executable, not just the code.

@@ -43,12 +43,25 @@ There's an incident runbook, because status bugs recur in families.
 
 A watchdog sits on top for the worst case: a session stuck reporting "working" past plausibility gets re-evaluated rather than trusted forever.
 
+## What "trustworthy" is allowed to mean
+
+It does not mean right.
+A layered detector with four evidence sources has states where the sources disagree and states where none of them can say anything, and the honest design goal is not to eliminate those - it is to make them *conservative* rather than confident.
+Ambiguous or absent evidence resolves to the prior, never to a guessed active state.
+A terminal read that cannot be classified degrades to `unknown` and stops speaking, rather than voting.
+A transition from a source that has no business producing it is still applied, because refusing would strand the session, and is *ledgered as a contract violation and counted* - so the thing that would otherwise be an invisible bug is a number somebody can watch.
+
+That distinction matters most downstream, where it is easy to overclaim.
+Alerts here fire on a small set of normalized events - a turn completing, a session going ready, an approval or question, a failure, a confirmed quota reset - with three rules holding back the ones not worth interrupting for: a turn that ended while background work is still running, a session merely settling after startup, and a "ready" that has not stabilized.
+That is a great deal better than a spinner.
+It is not "only when an agent genuinely needs a human", and a detector's marketing copy should not claim a precision its own state machine has an `unknown` branch for.
+
 ## The payoff
 
-When status is trustworthy, you can build on it.
-Notifications that only fire when an agent genuinely needs a human.
+When status is conservative and its evidence is durable, you can build on it.
 A prompt queue that delivers when the agent is *ready*, not merely quiet.
-Agent-to-agent watches that report "settled" instead of guessing.
+Agent-to-agent watches that report "settled" instead of guessing, and that deliberately never report bare `idle` as finished, because idle-with-background-work and actually-done render identically and mean the opposite.
+An interrupt budget that is worth having, because the things it is spending are worth interrupting for.
 None of that is buildable on vibes.
 
 The unglamorous layer is the load-bearing one.

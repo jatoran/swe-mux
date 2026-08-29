@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>swe-mux</title>
-<meta name="description" content="Terminal multiplexer, agent control plane, full mobile parity. Agents don't need replacing, they need infrastructure around them: terminals that outlive the app, a deterministic record of what each agent actually did, and a hard budget of four interruptions a day. Windows-first, no cloud, no relay." />
+<meta name="description" content="For developers running multiple coding agents locally, swe-mux shows what each agent actually did and lands finished branches behind checks you approved. A deterministic record read from the work rather than the agent's account of it, commit-level provenance, a fast-forward-only land queue, and a hard budget of four interruptions a day. Windows-first, runs on your own machine, no vendor backend and no relay." />
 <meta name="color-scheme" content="dark" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
@@ -297,30 +297,29 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 
 
 /* ------------------------------------------------------------- hero visual */
+/* Two real captures rather than the dashed frames that stood here: the desktop
+   workspace at full width, with the phone overlapping its lower right. Both are
+   solid-bordered, because a dashed frame around a real screenshot reads as "not
+   done yet" and this is the first thing anyone sees. */
 .herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
 .herovis .frame {
-  border: 1px dashed var(--line-2); aspect-ratio: 16 / 9; padding: 11px 13px;
-  display: flex; flex-direction: column; gap: 7px; background:
-    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+  border: 1px solid var(--line-2); background: var(--panel-2); overflow: hidden;
 }
 .herovis .phone {
   position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
-  width: clamp(84px, 15%, 186px); aspect-ratio: 9 / 19.5;
-  border: 1px dashed var(--line-2); border-radius: 11px; padding: 8px 7px;
-  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 0 0 7px var(--bg); background:
-    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch-2) 8px 9px), var(--panel);
+  width: clamp(84px, 15%, 186px);
+  border: 1px solid var(--line-2); border-radius: 11px; overflow: hidden;
+  box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
 }
-.herovis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
-                border-bottom: 1px solid var(--line); padding-bottom: 5px; }
-.herovis .frame .tag { color: var(--cyan); }
-.herovis .phone .tag { color: var(--orange); border-bottom-color: var(--line-2); font-size: 8px;
-                       padding-bottom: 4px; letter-spacing: .06em; }
-.herovis p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-3); max-width: 62ch; }
-.herovis .phone p { font-size: 8.5px; line-height: 1.4; }
+.herovis img { display: block; width: 100%; height: auto; }
+.herovis figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
+                      padding: 8px 10px; border-top: 1px solid var(--line); }
+/* The phone is decorative here - the same view is captioned in section 01 - so it
+   carries no caption of its own at any width; a caption inside a 186px column is
+   unreadable and a caption outside it fights the frame's. */
 @media (max-width: 620px) {
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
-  .herovis .phone p { display: none; }
 }
 
 /* --------------------------------------------------- inline visualizations */
@@ -388,6 +387,16 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                        padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
                        line-height: 1.58; color: var(--fg-2); }
 .shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
+
+/* A real capture standing in a `.crops` grid cell, where a `.crop` placeholder
+   used to be. It reuses `.crops` rather than getting a grid of its own so a
+   section can hold one of each while the remaining placeholders are filled.
+   The mobile column is capped rather than filled: a 1206x2622 capture at the
+   0.46fr column's natural width is over 750px tall beside a 470px desktop crop,
+   which pushes the section past two screens for nothing. */
+.crops figure.shot { align-self: start; }
+.crops figure.shot.m { max-width: 240px; justify-self: start; }
+@media (max-width: 460px) { .crops figure.shot.m { max-width: 190px; } }
 .shotpair .claims li::before { content: "▸"; color: var(--green); }
 .shotpair .claims b { color: var(--fg); }
 
@@ -555,15 +564,23 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <!-- ================================================================== HERO -->
 <section class="hero">
   <div class="wrap">
+    <!-- The positioning line, verbatim and in one piece. It is the same string in
+         `README.md` and `.docs/marketing/README.md`; the `<br />`s are line breaks in the
+         sentence and not edits to it. "Mission control for your coding-agent fleet" survives
+         as a brand tagline elsewhere and is deliberately not the explanatory claim here:
+         persistence, worktrees, mobile and arbitrary-CLI support are commodity in this
+         category now, and evidence, provenance and approved landing are not. -->
     <div class="kick">for the coding agents you already run</div>
-    <h1>Terminal multiplexer. Agent control plane.<br />
-      Full mobile parity.<span class="cur"></span></h1>
-    <p class="sub"><b>Infrastructure built on what agents do, rather than what they are.</b></p>
+    <h1>For developers running multiple coding agents locally,<br />
+      swe-mux shows what each agent actually did<br />
+      and lands finished branches behind checks you approved.<span class="cur"></span></h1>
+    <p class="sub"><b>Evidence taken from the work, not from the agent's account of it.</b></p>
     <div class="lede">
-      <p>Your harness does the work. <b>swe-mux is the structure around it:</b> terminals that
-      outlive the app itself, a deterministic record of what every agent actually did, and one
-      place to reach all of it from. It sits beside the agents rather than in front of them, so
-      whatever your CLI ships next already works here, and what the record measures does not
+      <p>Your harness does the work. <b>swe-mux is the record and the gate around it:</b> every
+      file write hashed on the bytes actually written, every commit attributed to the session and
+      conversation that produced it, and finished worktree branches landed one at a time behind a
+      verification command you approved. It sits beside the agents rather than in front of them,
+      so whatever your CLI ships next already works here, and what the record measures does not
       change when the agents do.</p>
     </div>
     <div class="ic">
@@ -593,17 +610,18 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
 
     <div class="herovis">
-      <div class="frame">
-        <span class="tag">hero visual · full width</span>
-        <p>The desktop workspace at full width, real screenshot, scrubbed: sidebar of projects and
-        live sessions on the left, a split pane region in the middle with a working agent beside a
-        second tab strip, and the utility drawer open on the right. Wide crop, chrome included,
-        because this one shot has to read as a whole application rather than a panel.</p>
-      </div>
+      <figure class="frame">
+        <img src="img/desktop-workspace.webp" width="2100" height="1275" decoding="async"
+             alt="The swe-mux desktop workspace: a sidebar of projects and live sessions on the
+                  left, a split pane region with a working agent in the middle, and the utility
+                  drawer open on the right." />
+        <figcaption>Real screenshot of the running application, captured in a synthetic
+        installation with invented projects and no personal data.</figcaption>
+      </figure>
       <div class="phone">
-        <span class="tag">phone</span>
-        <p>Same workspace on a device shell, overlapping the lower right corner: a live agent pane
-        with the touch key rail.</p>
+        <img src="img/mobile-session.webp" width="1206" height="2622" decoding="async"
+             alt="The same workspace on a phone: a live agent session with its status line,
+                  context meter, and touch key rail." />
       </div>
     </div>
 
@@ -649,12 +667,12 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
     <div class="shotpair">
       <figure class="shot">
-        <img src="img/mobile-session.webp" width="1206" height="2622" loading="lazy" decoding="async"
-             alt="Placeholder panel labelled Mobile session, standing in for a screenshot that has
-                  not been taken yet." />
-        <figcaption>Placeholder. The shot going here is a live agent mid-turn on a phone: tab
-        rail, status line, context meter, quota chips, and the touch key rail that makes a TUI
-        usable without a keyboard.</figcaption>
+        <img src="img/mobile-nav.webp" width="1206" height="2622" decoding="async"
+             alt="The navigation overlay on a phone: two projects expanded with their session
+                  rows, each carrying a status dot, an elapsed time, and a model name." />
+        <figcaption>Real screenshot. The navigation overlay: two projects expanded with their
+        session rows, status dots, elapsed times, and model names. The live agent session itself
+        is the phone in the hero above.</figcaption>
       </figure>
       <ul class="claims">
         <li><span><b>The actual terminal.</b> Not a rendered chat log. The real TUI, with the diff
@@ -669,17 +687,13 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
         port exposed anywhere.</span></li>
         <li><span><b>Built for touch, not shrunk for it.</b> Long-press drag reorder, a touch key
         rail, sticky read mode, and a keyboard that stays down until you ask for it.</span></li>
-        <li><span><b>No relay.</b> It reaches your machine over your own tailnet. Nothing is
-        brokered through a third party, because there is no third party.</span></li>
+        <li><span><b>No relay.</b> It reaches your machine over your own tailnet, and there is no
+        swe-mux login and no backend this project operates. What the phone talks to is the same
+        local daemon your desktop browser talks to.</span></li>
       </ul>
     </div>
 
     <div class="crops trio" style="margin-top:22px">
-      <div class="crop m">
-        <span class="tag">mobile</span>
-        <p>Navigation overlay: two projects expanded with their session rows, status dots, elapsed
-        times, and model names. The quota footer visible at the bottom.</p>
-      </div>
       <div class="crop m">
         <span class="tag">mobile</span>
         <p>Git review on a phone: changed-file rows with added and removed counts, one file
@@ -714,7 +728,8 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
       </div>
       <div class="crop m">
         <span class="tag">mobile</span>
-        <p>The same rows in the mobile nav overlay, three different states visible at once.</p>
+        <p>Three different states visible at once on a phone. The navigation overlay itself is the
+        real shot in section 01; this crop is the tighter one showing a mixed-state column.</p>
       </div>
     </div>
   </div>
@@ -723,24 +738,35 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <!-- =========================================================== PERSISTENCE -->
 <section class="sec" id="persistence">
   <div class="wrap">
-    <div class="head"><span class="n">03</span><h2>Sessions that outlive the app itself</h2><span class="fill"></span></div>
-    <p class="intro">Every terminal is a pseudoterminal held by a supervisor process that is
-    separate from the daemon and separate from the UI. Close the browser, restart the daemon,
-    <b>rebuild and redeploy the entire desktop application</b>, and the agents keep working. The
+    <div class="head"><span class="n">03</span><h2>Terminals that outlive the app, once you turn supervision on</h2><span class="fill"></span></div>
+    <p class="intro">A supervisor process separate from the daemon and separate from the UI can
+    hold every pseudoterminal. With it on, you can close the browser, restart the daemon, or
+    <b>rebuild and redeploy the entire desktop application</b>, and the agents keep working: the
     next daemon rediscovers the supervisor, reattaches every live session, and rebuilds it from
-    mirrored metadata plus a scrollback snapshot. Reconnecting a terminal replays only the bytes
-    you missed rather than resetting the screen, so a phone that slept through a long turn comes
-    back to an intact buffer.</p>
+    mirrored metadata plus a scrollback snapshot.</p>
+    <p class="intro"><b>That mode ships off.</b> <code>pty_supervisor_enabled</code> defaults to
+    <code>false</code>, and turning it on is an edit to <code>config.toml</code> plus a daemon
+    restart - there is deliberately no switch for it in Settings, because flipping it while
+    sessions are live reaps or strands their pseudoterminals. With it off the daemon owns the
+    pseudoterminals and restarting the daemon ends them, and what stands behind that is cold
+    session recovery, which <i>is</i> on by default: those sessions come back as readable,
+    resumable rows carrying their last scrollback rather than disappearing. That layer also
+    covers what the supervisor cannot - its own crash, a force close, a power loss.</p>
+    <p class="intro">Either way, reconnecting a terminal replays only the bytes you missed rather
+    than resetting the screen, so a phone that slept through a long turn comes back to an intact
+    buffer.</p>
     <div class="crops">
       <div class="crop d">
         <span class="tag">desktop crop</span>
         <p>Two-frame before and after: a session mid-turn, then the same session still mid-turn
         with an "updated" banner or a fresh build id visible, proving the app reloaded underneath
-        a running agent. The elapsed timer must have advanced, not reset.</p>
+        a running agent. The elapsed timer must have advanced, not reset. The caption has to say
+        this was captured with the supervisor enabled, because that is what it demonstrates.</p>
       </div>
       <div class="crop m">
         <span class="tag">mobile</span>
-        <p>A phone reattaching after sleep, scrollback intact above the current turn.</p>
+        <p>A phone reattaching after sleep, scrollback intact above the current turn. This one
+        needs no supervisor: replay-from-where-you-left-off is the reconnect path either way.</p>
       </div>
     </div>
   </div>
@@ -808,16 +834,18 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     deliberately outside any Project, because its whole job is to survive switching between
     them.</p>
     <div class="crops">
-      <div class="crop d">
-        <span class="tag">desktop crop</span>
-        <p>The note editor body only, cropped out of the drawer: real rendered headings, nested
-        bullets, a table, and a fenced code block, with the outline rail visible on one side.</p>
-      </div>
-      <div class="crop m">
-        <span class="tag">mobile</span>
-        <p>The same editor on a phone with the soft keyboard up and the formatting toolbar sitting
-        above it. This is the shot that proves editing is real on mobile.</p>
-      </div>
+      <figure class="shot d">
+        <img src="img/desktop-notes.webp" width="2100" height="1275" decoding="async"
+             alt="The note editor body cropped out of the drawer, showing rendered headings,
+                  nested lists, and a checkbox row." />
+        <figcaption>Real screenshot. The editor body cropped out of the drawer: rendered
+        headings, nested lists, a checkbox row.</figcaption>
+      </figure>
+      <figure class="shot m">
+        <img src="img/mobile-notes.webp" width="1206" height="2622" decoding="async"
+             alt="The same Markdown editor on a phone, with rendered document structure." />
+        <figcaption>Real screenshot. The same editor on a phone.</figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -833,12 +861,13 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     provenance: <b>which session and which conversation produced it</b>, split into committer and
     contributor, with a confidence level and the files each contributor's writes account for.</p>
     <div class="crops">
-      <div class="crop d">
-        <span class="tag">desktop crop</span>
-        <p>The worktree map list alone: trunk row plus several worktree rows with branch names,
-        clean or dirty markers, ahead and behind counts, and live or locked state. Or the commit
-        log with session-attribution badges showing committer against contributor.</p>
-      </div>
+      <figure class="shot d">
+        <img src="img/desktop-git.webp" width="2100" height="1275" decoding="async"
+             alt="The Git drawer's worktree map: branch rows carrying ahead and behind counts and
+                  a commit provenance column." />
+        <figcaption>Real screenshot. The worktree map: branch rows with ahead and behind counts
+        and the commit provenance column.</figcaption>
+      </figure>
       <div class="crop m">
         <span class="tag">mobile</span>
         <p>The review modal on a phone: changed-file rows with counts, one expanded to a diff.</p>
@@ -851,12 +880,22 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <section class="sec" id="voice">
   <div class="wrap">
     <div class="head"><span class="n">08</span><h2>Drive it without touching it</h2><span class="fill"></span></div>
-    <p class="intro">Local voice activity detection and local Whisper, with a configurable wake
-    word and no audio leaving the machine. Dictate a prompt across natural pauses and send it.
-    Navigate by spoken coordinate, ask the fleet for status, approve a prompt, interrupt a run.
-    Completed replies play back as short clips you can talk over to stop, and Comms mode pins one
-    agent into a back-and-forth conversation. <b>Push notifications reach your lock screen</b> when
-    a session actually needs a person, routed to the device you are actually at.</p>
+    <p class="intro">Voice activity detection in the browser and <b>speech-to-text that decodes on
+    your own machine in both shipped configurations</b>: faster-whisper by default (the
+    <code>voice-local</code> extra, whose models download once from Hugging Face and then run
+    offline), or Windows Speech Recognition. There is no cloud speech path and no browser
+    speech-recognition fallback - without an engine, transcription returns a typed error rather
+    than sending audio anywhere. Dictate a prompt across natural pauses and send it. Navigate by
+    spoken coordinate, ask the fleet for status, approve a prompt, interrupt a run. Read aloud and
+    hands-free conversation are each off until you turn them on.</p>
+    <p class="intro"><b>Push notifications reach your lock screen</b>, routed to the device you
+    are actually at. They are raised from normalized lifecycle events - a root turn completing, a
+    session going ready, an approval or question, a failure, a confirmed unexpected quota reset -
+    rather than from terminal activity, and three rules hold back the ones not worth interrupting
+    for: a turn that ended while background work is still running, a session merely settling after
+    startup, and a "ready" that has not stabilized. That is a good deal better than a spinner, and
+    it is not the same claim as never being wrong: the detector reads several layers, has explicit
+    unknown states, and resolves ambiguity to the conservative prior rather than to a guess.</p>
     <div class="crops">
       <div class="crop d">
         <span class="tag">desktop crop</span>
@@ -881,7 +920,15 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     <b>It never types, approves, spawns, or edits anything</b>, and every write path ends at a
     human pressing something. Cost escalates one layer at a time: capture and detection are
     deterministic and spend nothing, a model is reached for only at the last mile and under a hard
-    cap, and nothing runs at all on a Project that did not opt in.</p>
+    cap.</p>
+    <p class="intro"><b>And nothing here runs until you switch it on, per Project.</b> Every
+    automation below ships off, with one exception - a permission gate that reads nothing, runs
+    nothing, and spends nothing on its own. The land queue needs four separate things before an
+    agent can trigger one: the install-wide switch, the Project's opt-in, an authority level
+    raised from its default of "a human approves the request", and a verification command whose
+    exact bytes you approved. The model-backed pieces - the behaviour timeline, the attention
+    observers, the assistant - are off too. That is deliberate, and it means the screenshots below
+    are of a configured install rather than a fresh one.</p>
 
     <div class="grouplabel">What it records <span>deterministic, no model, no tokens</span></div>
     <ul class="flat">
@@ -912,16 +959,28 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     </ul>
 
     <div class="crops" style="margin-top:26px">
-      <div class="crop d">
-        <span class="tag">desktop crop</span>
-        <p>The attention inbox, on a project with ranking enabled. Must show the budget line, the
-        fan-out reading, and at least one item held back with its suppressed reason visible. An
-        empty inbox proves nothing and is the wrong screenshot.</p>
-      </div>
-      <div class="crop m">
-        <span class="tag">mobile</span>
-        <p>Two ranked items and the same budget line on a phone.</p>
-      </div>
+      <figure class="shot d">
+        <img src="img/desktop-alerts.webp" width="2100" height="1275" decoding="async"
+             alt="The ranked attention inbox with its interrupt budget line and a suppressed item
+                  showing the reason it was held back." />
+        <figcaption>Real screenshot. The ranked inbox with its interrupt budget line and held-back
+        items carrying the reason they were suppressed.</figcaption>
+      </figure>
+      <figure class="shot m">
+        <img src="img/mobile-alerts.webp" width="1206" height="2622" decoding="async"
+             alt="The same attention inbox on a phone, with ranked items and the budget line." />
+        <figcaption>Real screenshot. The same inbox on a phone.</figcaption>
+      </figure>
+    </div>
+
+    <div class="crops solo" style="margin-top:14px">
+      <figure class="shot d">
+        <img src="img/desktop-insight.webp" width="2100" height="1275" decoding="async"
+             alt="The behaviour timeline: structured records extracted from a conversation, with
+                  the run's budget visible." />
+        <figcaption>Real screenshot. The behaviour timeline, with the run's budget visible above
+        the records it produced.</figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -1033,8 +1092,8 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     <div class="fbrand">
       <img class="brandmark dark" src="img/logo.png" width="640" height="73" alt="swe-mux" />
       <img class="brandmark lite" src="img/logo-light.png" width="640" height="73" alt="swe-mux" />
-      <p>Agentic development environment and agent control plane.<br />
-      Windows-first. Local-only. No account.</p>
+      <p>Mission control for your coding-agent fleet.<br />
+      Windows-first. Runs on your machine. No account, no relay.</p>
     </div>
     <div class="fcols">
       <div class="fcol">

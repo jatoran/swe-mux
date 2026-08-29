@@ -519,7 +519,7 @@ Verified by compositing both variants over dark, light, and a hostile mid-grey: 
 Diagrams carry their own placeholder class (`.vis`) separate from screenshot crops (`.crop`), because they are illustrations to be drawn rather than shots to be taken.
 Two are specified so far: the workbench split tree, and the control plane's escalating-cost stack with a human gate on every arrow leaving it.
 
-## Current status: EIGHT OF NINE SCREENSHOTS ARE REAL, TAKEN IN A SYNTHETIC INSTALL
+## Current status: ALL NINE SCREENSHOTS ARE REAL, AND ALL NINE ARE ON THE PAGE
 
 **No capture of the operator's own machine may ever be committed here.**
 That rule is unchanged and is the whole reason this section exists.
@@ -535,27 +535,84 @@ when it contains the host's home directory, account name, or configured git iden
 derives that list at run time rather than carrying a copy.
 So the failure recorded below cannot recur quietly; it fails the capture instead.
 
-`img/desktop-insight.webp` is **still a placeholder**, and it is the only one.
-Activity's Timeline segment is gated on a session having a harness transcript and every
-session in the capture environment is a shell, so it renders its empty state.
-Filling it needs an authenticated agent CLI, which is the one thing the synthetic environment
-exists to exclude; `trailer/SITE_SHOTS.md` records the way through.
+`img/desktop-insight.webp` was the last placeholder, and it is the one to check before believing
+this heading.
+Activity's Timeline segment is gated on a session having a harness transcript and every session in
+the capture environment is a shell, so it rendered its empty state; filling it needs an
+authenticated agent CLI, which is the one thing the synthetic environment exists to exclude, and
+`trailer/SITE_SHOTS.md` records the way through and why it is an operator's call.
 
-The table below is what each slot must show, and it remains the specification for a re-shoot.
+**The page wires all nine slots, and that file's real capture arrives on a separate branch.**
+The wiring is correct either way - the placeholder carries the same declared dimensions, so layout
+and `check.mjs` are unaffected - but a placeholder under a caption reading `Real screenshot.` is
+exactly the kind of quiet falsehood the rest of this document exists to prevent.
+**Before publishing, confirm `img/desktop-insight.webp` is a capture rather than a placeholder.**
+The cheap test is its size: the generated placeholders are around 19 KB, and every real capture in
+`img/` is over 45 KB.
 
-| File | Label it draws | What the real capture must contain |
+The table below is where each slot is used and what it shows.
+It remains the specification for a re-shoot.
+
+| File | Where it is used | What the capture contains |
 |---|---|---|
-| `img/desktop-workspace.webp` | Desktop workspace | The hero composite: sidebar, a split pane region with a working agent, the utility drawer open. The one shot allowed to include chrome. |
-| `img/desktop-alerts.webp` | Attention inbox | The ranked inbox cropped to the panel, with the interrupt budget line and at least one suppressed item and its reason. Not an empty inbox. |
-| `img/desktop-git.webp` | Git map | The Git drawer's map cropped to the rows: branches with ahead/behind counts and the commit provenance column. |
-| `img/desktop-insight.webp` | Behaviour timeline | The Insight tab's timeline cropped to the records, budget visible, actual records present. |
-| `img/desktop-notes.webp` | Note editor | The note editor body only, cropped out of the drawer: rendered headings, nested lists, a checkbox row. |
-| `img/mobile-session.webp` | Mobile session | A live agent mid-turn on a phone: tab rail, status line, context meter, touch key rail. **This is the only one the page currently references** (section 01). |
-| `img/mobile-nav.webp` | Mobile navigation | The navigation overlay: two projects expanded with session rows, status dots, elapsed times, model names. |
-| `img/mobile-notes.webp` | Mobile notes | The Markdown editor on a phone with rendered structure. |
-| `img/mobile-alerts.webp` | Mobile alerts | The attention inbox on a phone with ranked items present and the budget line visible. |
+| `img/desktop-workspace.webp` | Hero, the full-width frame | The hero composite: sidebar, a split pane region with a working agent, the utility drawer open. The one shot allowed to include chrome. |
+| `img/mobile-session.webp` | Hero, the phone overlapping its lower right | A live agent mid-turn on a phone: tab rail, status line, context meter, touch key rail. |
+| `img/mobile-nav.webp` | Section 01, the `.shotpair` figure | The navigation overlay: two projects expanded with session rows, status dots, elapsed times, model names. |
+| `img/desktop-notes.webp` | Section 06, desktop | The note editor body only, cropped out of the drawer: rendered headings, nested lists, a checkbox row. |
+| `img/mobile-notes.webp` | Section 06, mobile | The Markdown editor on a phone with rendered structure. |
+| `img/desktop-git.webp` | Section 07, desktop | The Git drawer's map cropped to the rows: branches with ahead/behind counts and the commit provenance column. |
+| `img/desktop-alerts.webp` | Section 09, desktop | The ranked inbox cropped to the panel, with the interrupt budget line and at least one suppressed item and its reason. Not an empty inbox. |
+| `img/mobile-alerts.webp` | Section 09, mobile | The attention inbox on a phone with ranked items present and the budget line visible. |
+| `img/desktop-insight.webp` | Section 09, the solo row under the alerts pair | The Insight tab's timeline cropped to the records, budget visible, actual records present. |
 
-That table is a copy of `SLOTS` in `tools/placeholders.py`, which is where it is maintained; the script is the thing that has to agree with the files.
+Each file is used **exactly once**, which is deliberate: the same capture appearing twice on one
+page a few hundred pixels apart reads as filler, and the assignment above is the one that lets all
+nine have a home without repeating any.
+
+That table's slot list is a copy of `SLOTS` in `tools/placeholders.py`, which is where the
+filenames and dimensions are maintained; the script is the thing that has to agree with the files.
+The *placement* column belongs here, because `index.html` is what it describes.
+
+### Screenshots are eager, and that is the gate's doing rather than an oversight
+
+None of the nine carries `loading="lazy"`.
+
+`check.mjs` asserts that every image on every page resolves, and it does so by loading the page at
+1280x900 and reading `naturalWidth`.
+A lazy image far below the fold never starts loading under that check, so it reports
+`image did not load:` with an empty filename - the filename is empty precisely because
+`currentSrc` was never set.
+Seven of the nine failed that way on the first attempt.
+
+The cost is about 1.3 MB of WebP loaded eagerly on the landing page.
+That is the honest price of a gate that proves every image on the site resolves, and it is worth
+paying: the alternative is either weakening the gate or shipping a page whose screenshots are
+unverified.
+If it ever needs to change, the fix is on the check's side (scroll the page before reading
+`naturalWidth`), not on the markup's.
+
+### The page's own copy
+
+Every caption now reads `Real screenshot.`
+The instruction not to restore that caption applied while the file under it was a placeholder, and
+it no longer does.
+The hero's phone deliberately carries **no** caption: the same view is captioned in section 01, and
+a caption inside a 186px column is unreadable while one outside it fights the frame's.
+
+The dashed `.crop` and `.vis` placeholders that remain are unchanged: they are CSS, they carry no
+image, and each already states what its replacement must contain.
+Nine `.crop`s survive, and every one is a shot nobody has taken: mobile git review and a mobile
+preview tab (section 01), the desktop sidebar column alone (02), the redeploy before-and-after pair
+(03), the review modal on a phone (07), and the voice overlay pair (08).
+The two `.vis` diagrams are unchanged too.
+
+Two of those are worth their own note.
+The **redeploy pair in section 03** is the hardest shot on this list and the only one whose caption
+has to name a configuration: it proves a session surviving a rebuild, which requires
+`pty_supervisor_enabled` to be on, and a shot of that presented without the caveat would contradict
+the section above it.
+The **02 sidebar crop** deliberately does not reuse `mobile-nav.webp` for its mobile half; it points
+at section 01's copy instead, because the same capture twice on one page is filler.
 
 ### Why the originals were replaced outright rather than scrubbed
 
@@ -595,7 +652,13 @@ Each of these was wrong on this page at some point.
 
 - **Four interrupts a day, two an hour.** `attention_daily_interrupt_budget` defaults to 4.
 - **Windows-first, Linux supported, macOS installs but is not required to pass.** Roadmap Phase 10 has every Linux box checked and the macOS box open. The page claimed "Windows only, WSL is not a supported host" long after the WSL bridge shipped.
-- **The install claim stops at the CLI.** The wheel installs and `mux`/`muxd` run on all three hosts, and CI proves that on all three. No CI job on any host starts a daemon, so nothing on this page may say a platform is verified working end to end.
+- **The install claim stops at the published artifact.** The wheel installs and `mux`/`muxd` run on all three hosts, and CI proves that on all three. Since 2026-08-28 the `live_daemon` tier also starts a real daemon on Linux and Windows and proves it serves a shell session - **from the source checkout**, on an ephemeral port, under a temporary data directory. No CI job starts a daemon from a *published artifact* on any host, so nothing on this page may say a platform is verified working end to end from what a user installs.
+- **Session survival is a mode, not the default.** `pty_supervisor_enabled` defaults to `False` (`src/swe_mux/config.py`), and there is no Settings control for it because flipping it while sessions are live reaps or strands their PTYs. Any copy about sessions outliving a restart names the switch. What is on by default is cold session recovery, which brings those sessions back as readable, resumable rows. This was the sharpest overstatement the 2026-08-28 claim audit found.
+- **"No server" is false and "no vendor-operated backend or relay" is true.** swe-mux is a local aiohttp daemon; that is the architecture, not a caveat. The distinction is one grep from being checked by a reader.
+- **"Fully local" is not a claim this page may make.** The agent CLIs call cloud providers, and OpenRouter, web push, the Hugging Face model downloads, the update check and Edge TTS all reach the network. Each is off until switched on and the update check is disableable, which is the honest and stronger version.
+- **Alerts are not "only when an agent genuinely needs a human".** They come from five normalized reasons - turn complete, ready, approval or question, failure, confirmed quota reset - with three suppression rules. The detector has explicit `unknown` states and resolves ambiguity to the conservative prior.
+- **Speech-to-text really is local**, in both shipped engines: faster-whisper (`stt_engine = "whisper"`, the default, needs the `voice-local` extra) and Windows Speech Recognition. There is no browser or cloud speech path. Checked 2026-08-28; this one survived the audit.
+- **Almost the whole control plane ships off**, per Project. Exactly one automation is default-on and it reads nothing, runs nothing and spends nothing. The land queue needs an install switch, a Project opt-in, a grant, and an approved command.
 - **Every supported harness has conversation discovery and resume**, including the store-backed one. Confirmed in `harness.py` and `adapters/`.
 - **swe-mux finds hung processes, it does not kill them.** Suspected orphans are never terminated automatically. Do not write copy promising automatic cleanup.
 - **The queue waits on a readiness gate and a stability window**, not on a binary "done" signal.
@@ -881,16 +944,17 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
   The two `get.swe-mux.dev` one-liners are gone; section 7 records what replaced them, what was executed to verify it, and the `check.mjs` assertion that keeps a dead host from coming back.
   The clone URL no longer says `REPLACE`: it resolves to `github.com/jatoran/swe-mux`, in the hero command and in the footer, alongside the license links added in Phase 10.5.
   If the project is ever published under an organisation rather than that account, both places and the footer's two license links change together.
-- **Publish a desktop artifact, and the download section fills itself in.**
-  `packaging/build_installer.py` and the `build-desktop` job in `.github/workflows/release.yml` exist, but that job runs only on a `v*` tag or a manual dispatch, so it has never run: `v0.1.0` carries the wheel, the sdist and `version.json` and nothing else.
-  Section 7 has the mechanism.
-  Nothing on the site needs editing when that changes, and the thing to check afterwards is the state that ships in between, not the one that arrives with the release.
+- **Done: a desktop artifact is published, and the download section fills itself in.**
+  `v0.1.2` carries an unsigned Windows installer and a portable archive beside the wheel and the sdist, and `version.json` names all four.
+  The section on the live site is drawn from that manifest.
+  **The static markup in `index.html` is still the empty state, and it must stay that way**: `version.json` is restored into the deploy root by `pages.yml` rather than committed, `file://` cannot fetch a sibling file, and `check.mjs` asserts the empty state's exact copy ("not published yet", plus a pointer at the Python install) before driving the renderer with a synthetic manifest.
+  Editing that fallback to say the installer exists breaks the gate and describes a state no reader ever sees.
 - **Buy a code-signing certificate, or keep the SmartScreen paragraph.**
   `.docs/development/RELEASE_MANUAL_TASKS.md` § 1 holds the decision and its options.
   Until it is made the download section says the build is unsigned and what Windows will do about it, and `check.mjs` asserts both halves so neither can be quietly tidied away while it is still true.
-- **Re-shoot every screenshot.** All nine files in `img/` are generated placeholders and none of them is a capture; section 8 has the table of what each replacement must contain.
-  Shoot them on an install with no personal or third-party data on screen: no unrelated project names, no account or operator name, no spend or quota percentages, no absolute local paths, no competitor checkouts in the file tree, no real transcript prose.
-  Delete `tools/placeholders.py` and its row in section 8 once the last slot holds a real shot.
+- **Done: every screenshot is real, and all nine are on the page.**
+  Section 8 records the rig, the leak guard, and the table of what each slot shows.
+  `tools/placeholders.py` and its row in section 8 can be deleted once nothing needs regenerating; it is kept for now because it is the only record of the dimensions the markup declares.
 - **Draw the two diagrams.** See section 8.
 - **Enable Discussions and create the Ideas category.** Section 12 has the exact steps; until they are done the vote block never appears and the roadmap page links to a 404.
 - **Decide whether `/compare/` joins the top nav.**

@@ -3,35 +3,116 @@
 The plan for taking swe-mux from published-but-unannounced to known, written for one maintainer.
 
 Nothing has been announced anywhere as of 2026-08-28.
-The repository is public, `swe-mux` 0.1.0 is on PyPI, `swemux.dev` is live, CI runs on three hosts, and an X account exists at <https://x.com/swemux>.
+The repository is public, `swe-mux` 0.1.2 is on PyPI, v0.1.2 on GitHub Releases carries an unsigned Windows installer and a portable archive beside the wheel, `swemux.dev` is live with real screenshots, CI runs on three hosts, and an X account exists at <https://x.com/swemux>.
 No post, submission, or email has gone out.
 That is a good position: every mistake below is still cheap, and the first impression has not been spent.
 
 This document is the strategy and the sequence.
-Its supports are [`LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md) (what must be true before each beat fires), [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md) (the tester ask and its tracker), and the per-venue copy in [`posts/`](posts/) and [`blog/`](blog/).
+Its supports are [`LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md) (what must be true before each beat fires), [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md) (the two beta cohorts and their trackers), and the per-venue copy in [`posts/`](posts/) and [`blog/`](blog/).
 
 ## Positioning
 
 ### The line
 
-The tagline is fixed and used verbatim everywhere, unchanged from `README.md` and `site/index.html`:
+Used verbatim everywhere the project explains itself:
 
-> **swe-mux - mission control for your coding-agent fleet.**
+> **For developers running multiple coding agents locally, swe-mux shows what each agent actually did and lands finished branches behind checks you approved.**
 
 Do not restate it in other words in any draft.
 One string, everywhere, or the project reads as several projects.
 
-### One sentence
+### The tagline is a tagline
 
-swe-mux is a self-hosted control plane for the coding-agent CLIs you already run: a supervisor process owns their terminals so sessions outlive the daemon and the app, one status vocabulary tells you which agent actually needs a human, and finished worktree branches land behind a verification gate you approved - from a browser tab or from your phone.
+> swe-mux - mission control for your coding-agent fleet.
+
+This survives as a **brand tagline**: the repository description, a directory listing name, an X bio.
+It is never the explanatory claim and never stands in for the line above.
+
+### Why this centre, and not the four the project used to have
+
+The project told at least four stories at once: "mission control for your coding-agent fleet", "terminal multiplexer / agent control plane / mobile parity", deterministic evidence and attention as the moat, and session persistence plus landing plus provenance plus mobile.
+Consolidating them is the whole point of this section, and the choice of which one to keep is an argument about the market rather than about taste.
+
+**Persistence, worktrees, mobile, Windows, and arbitrary-CLI support are commodity in this space now.**
+Checked 2026-08-28: Orca advertises Windows, native mobile apps, parallel worktrees, persistent scrollback, account switching, and arbitrary CLI agents.
+Herdr owns much of the persistent-runtime story with a far smaller install and a large head start on adoption.
+Leading with any of those means leading with a row the reader can already tick against two other tools, and inviting a comparison that is not flattering on install size or platform count.
+
+**What is hard to copy here is evidence, provenance, controlled interruption, and approved landing.**
+Those rest on a corpus, a fact store, a ledger, and a git pipeline that took a long time to build and are not a weekend of work for a competitor.
+That is where the line points.
+
+The one to under-claim rather than over-claim is unchanged: **the phone and voice path is genuinely differentiating, and Orca ships native mobile apps.**
+Say "installable PWA over your own tailnet with no relay", not "the only one with mobile".
+
+### The five proof points, in this order
+
+1. **One normalized view across agent CLIs.** One status vocabulary, one transcript reader, one history search, one account switcher, over every harness in the registry.
+2. **Deterministic evidence rather than agent self-report.** Facts hashed on the exact bytes written, commit provenance split into committer and contributor, model-free detectors, and a status ledger readable hours later.
+3. **Safe serialized landing.** Reconcile, run the human-approved verification command, fast-forward only, one branch at a time. An agent cannot approve the gate its own land runs.
+4. **Full phone access over your own tailnet.** Terminals, git review, approvals, and local speech-to-text, with no relay and no swe-mux login.
+5. **Durable terminals when supervision is enabled.** A separate supervisor process can own the pseudoterminals so sessions outlive a daemon restart and a full redeploy. It ships off; see § The claim audit.
 
 ### One paragraph
 
 If you run one coding agent, the vendor's CLI is enough and swe-mux is overhead.
-If you run five across three repositories, you have quietly taken a second job: keeping terminals alive, polling each pane to find out which agent is stuck versus thinking, retyping prompts into a session that was not ready for them, and hand-merging branches that all finish within the same hour.
+If you run five across three repositories, you have quietly taken a second job: polling each pane to find out which agent is stuck versus thinking, taking each agent's word for what it did, retyping prompts into a session that was not ready for them, and hand-merging branches that all finish within the same hour.
 swe-mux is that second job, made into software.
-It does not replace the agents and does not proxy them - your CLIs keep talking to their own vendors under your own subscription, in real pseudoterminals, with their own transcripts untouched.
-It replaces the pile of terminal windows around them, and it runs entirely on your machine: SQLite on your disk, no account, no telemetry, and no server the project operates anywhere.
+It does not replace the agents and does not proxy them: your CLIs keep talking to their own vendors under your own subscription, in real pseudoterminals, with their own transcripts untouched.
+What it adds is a record of what each of them actually did, taken from the bytes they wrote rather than from their account of the work, and a pipeline that lands a finished branch behind a command you approved.
+
+## The claim audit
+
+Run 2026-08-28 against the source rather than against the drafts, because the engineering documentation in this repository is markedly more precise than the marketing copy was, and the gap was all in one direction.
+
+The rule being enforced, which [`README.md`](README.md) already stated: **a claim must be true of the shipped artifact, in its default configuration, on the day it posts.**
+
+### Session survival is a mode, not the default
+
+`pty_supervisor_enabled` defaults to `False` (`src/swe_mux/config.py`).
+There is no control for it in Settings, deliberately: flipping it reaps or strands live PTYs, so it is a `config.toml` edit plus a daemon restart, and `frontend/test/settingsCoverage.test.ts` records that as the reason it is exempt from the settings surface.
+
+Almost every draft led with sessions surviving restarts.
+That is the sharpest overstatement in the set and the one a hostile reader finds in about ninety seconds, because the default is one grep away in a public repository.
+
+The copy now says what is true:
+
+> Terminals can be owned by a supervisor process separate from the daemon and the UI, so a daemon restart or a full app redeploy leaves the agents working with their scrollback intact.
+> That mode ships **off**: `pty_supervisor_enabled` defaults to `false`, and turning it on is an edit to `config.toml` in the data directory plus a daemon restart.
+> With it off, the daemon owns the pseudoterminals and a restart ends them; cold session recovery, which is on by default, brings those sessions back as readable, resumable rows carrying their last scrollback rather than losing them silently.
+
+**The fix is the copy, not the default.**
+Whether the supervisor should default to on is recorded in § Open decisions, because it is a runtime-architecture change for every install and not a marketing edit.
+
+### The other five
+
+| Claim as written | Verdict | What it says now |
+|---|---|---|
+| "Sessions never die" | False as an absolute, and false as a default in either reading | Deleted. The Show HN alternate title carrying it is deleted too |
+| "No server anywhere", "zero servers" | False. The product is a local aiohttp daemon; that is the whole architecture | "No vendor-operated backend or relay." Just as strong a line and survives the correction |
+| "Fully local" | Misleading. The agent CLIs call cloud providers, and OpenRouter, web push, Hugging Face model downloads, the update check and Edge TTS all reach the network | "Runs on your own machine", followed by the list of what crosses the network and which switch governs it |
+| "Notifications only fire when an agent genuinely needs a human" | Too absolute for a multi-signal detector with explicit `unknown` readings. Alerts also fire on plain turn completion, which is not "needs a human" | The five reasons named, the three suppression rules named, and the detector described as resolving ambiguity to a conservative prior rather than as being right |
+| "STT runs locally" | **Accurate**, and it was worth checking. Both shipped engines decode on the host: faster-whisper (the default, `stt_engine = "whisper"`) and Windows Speech Recognition. There is no browser or cloud speech path | Kept, with the configuration named and the one-time Hugging Face model download stated |
+
+### What was checked and found already accurate
+
+Recorded so the next audit does not re-derive it.
+
+- **The update check.** `README.md`'s description of the daily static `version.json` fetch, its lack of any identifier, and `update_check_enabled` all match `config.py`.
+- **The land queue's safety model.** Fast-forward-only, the exact-bytes gate approval, an agent being unable to approve its own gate, and conflicts and failed gates returning to the branch's agent are all as the drafts describe them.
+- **Provenance.** The committer/contributor split from deterministic capture is real and is not the agent's self-report.
+- **The platform claims.** They already stopped at the right place: the wheel installs and the CLI runs on all three hosts in CI, and no CI job starts a daemon from a published artifact anywhere.
+- **"Nothing runs on a Project that did not opt in."** True. Exactly one automation is default-on (`session_control`), and the registry enforces that a default-on automation must read nothing, run nothing, and spend nothing.
+
+### The rest of the control plane, stated the way the supervisor now is
+
+Automations are per-Project opt-in and ship off.
+The land queue needs the install-wide switch, the Project opt-in, a `land_grant` raised from its default of `draft`, and an approved verification command.
+The scan timeline, the attention observers, the assistant, and read-aloud all ship off.
+
+Copy implying any of them is on is wrong, and correcting it costs the drafts a real amount of impact.
+The honest way to buy that impact back is a clearly labelled **recommended fleet setup** in onboarding, which is proposed in § Open decisions and is not built.
+Until it is, no draft describes it.
 
 ### Who it is for
 
@@ -42,8 +123,8 @@ It replaces the pile of terminal windows around them, and it runs entirely on yo
 ### Who it is not for
 
 - Someone running a single agent in a single terminal. Say this out loud in the launch copy. It is the fastest way to stop the "this is over-engineered" comment, because for that reader it genuinely is.
-- Teams wanting shared/hosted orchestration. There is no multi-user model and no server.
-- Anyone who needs a signed installer today.
+- Teams wanting shared/hosted orchestration. There is no multi-user model and no vendor-operated backend.
+- Anyone who needs a **signed** installer today. There is an installer as of v0.1.2, and it is unsigned.
 
 ### The comparison, stated so it survives the comment thread
 
@@ -54,17 +135,20 @@ A comparison that overclaims gets dismantled publicly, and the dismantling is wh
 |---|---|---|---|
 | **tmux** | The general-purpose terminal multiplexer that keeps shells alive | Universality, decades of hardening, zero-cost ubiquity, remote-over-SSH by default | Nothing about tmux understands what a coding agent is doing. swe-mux is not a better multiplexer; it is a multiplexer that knows the difference between an agent working, an agent waiting on you, and an agent stuck |
 | **herdr** ([herdrdev/herdr](https://github.com/herdrdev/herdr), Apache-2.0, ~33.2k stars, checked 2026-08-28) | "The runtime your coding agents live on" - one Rust binary, background runtime owning agent terminals, working/blocked/idle pane marks, agents drive it over a CLI and socket API | The closest neighbour and ahead on most axes: three-platform support, a single static binary, reattach from any terminal or SSH, an enormous head start in adoption, and a far smaller install | The land queue (herdr does not merge anything), commit-level provenance, a browser and phone client rather than a terminal one, and voice. Windows is beta there and is the proving platform here |
-| **Orca** ([stablyai/orca](https://github.com/stablyai/orca), MIT) | Agentic development environment, desktop on three platforms plus native iOS and Android apps and a headless `orca serve` | Real native mobile apps rather than a PWA, three-platform desktop, GitHub and Linear integration, remote SSH worktrees | The land queue and the approved-bytes gate, the session-preserving redeploy, provenance, and a local-only posture with no relay of any kind |
+| **Orca** ([stablyai/orca](https://github.com/stablyai/orca), MIT) | Agentic development environment, desktop on three platforms plus native iOS and Android apps and a headless `orca serve` | Real native mobile apps rather than a PWA, three-platform desktop, GitHub and Linear integration, remote SSH worktrees. It also advertises Windows, parallel worktrees, persistent scrollback, account switching, and arbitrary CLI agents, which is why none of those is a differentiator here any more | The land queue and the approved-bytes gate, deterministic evidence and commit provenance, and a posture with no relay of any kind |
 | **Conductor** (<https://conductor.build>) | "Run parallel Claude Code, Codex, and Cursor agents in isolated workspaces" - Mac, closed source | A focused, polished single-purpose product with a review workflow, and it is not trying to be nine things | Open source, not Mac-only, and everything the workspace layer adds beyond parallel-worktrees-with-review |
-| **Warp** (<https://www.warp.dev>) | Now an agent platform: an open-source terminal plus Warp Factories, cloud fleets of agents defined as code, with evals and benchmarking | Funding, a real cloud product, evaluation infrastructure, and a terminal that is excellent on its own | Different business entirely. Warp sells the cloud that runs the fleet; swe-mux has no server, and the fleet is on hardware you own |
+| **Warp** (<https://www.warp.dev>) | Now an agent platform: an open-source terminal plus Warp Factories, cloud fleets of agents defined as code, with evals and benchmarking | Funding, a real cloud product, evaluation infrastructure, and a terminal that is excellent on its own | Different business entirely. Warp sells the cloud that runs the fleet; swe-mux operates no backend, and the fleet is on hardware you own |
 | **claude-squad**, **cmux**, **vibe-kanban**, **agent-manager** and the rest of [awesome-agent-orchestrators](https://github.com/andyrewlee/awesome-agent-orchestrators) (191 entries, checked 2026-08-28) | Mostly narrower: a TUI, a Kanban board, a worktree spawner | Simplicity. Each is one afternoon to understand, and several are one binary | swe-mux is not simpler and should never claim to be. It is what you reach for after one of those stops scaling |
 
-The four differences to lead with, because each is checkable in the repository rather than a matter of taste:
+The four differences to lead with, because each is checkable in the repository rather than a matter of taste, and because none of them is a row a neighbour already ticks:
 
-1. **The session-preserving split.** A separate supervisor owns the pseudoterminals, so daemon restarts, app rebuilds, and full frozen-app redeploys leave every session running with its scrollback. New builds of swe-mux ship from an agent session running inside swe-mux.
-2. **The land queue.** Reconcile, run the verification command whose exact bytes a human approved, fast-forward-only onto trunk, one branch at a time. Fast-forward-only is what makes it safe for a machine: Git refuses it on divergence and refuses to overwrite local changes, so the trunk step cannot lose work by construction. An agent cannot approve the gate its own land runs.
-3. **Commit-level provenance.** Which session and conversation produced a commit, split into committer and contributor, from deterministic capture rather than from the agent's account of its own work.
-4. **The phone is a client, not a status page.** An installable PWA over your own tailnet, no relay and no swe-mux login, with terminals, git review, approvals, and local speech-to-text.
+1. **Deterministic evidence.** Facts hashed on the exact bytes an agent wrote, commands with their exit class, test output parsed down to the failing set. What the agent did, not what it said it did.
+2. **Commit-level provenance.** Which session and conversation produced a commit, split into committer and contributor, from deterministic capture rather than from the agent's account of its own work.
+3. **Approved landing.** Reconcile, run the verification command whose exact bytes a human approved, fast-forward-only onto trunk, one branch at a time. Fast-forward-only is what makes it safe for a machine: Git refuses it on divergence and refuses to overwrite local changes, so the trunk step cannot lose work by construction. An agent cannot approve the gate its own land runs.
+4. **Controlled interruption.** Findings merge into incidents and route by what they cost you to resolve, under a hard daily interrupt budget with an hourly burst limit, and a held-back item stays counted and visible with the reason it was suppressed.
+
+The session-preserving split is a fifth and is **demoted rather than dropped**, for two reasons: it is off by default, and the persistent-runtime story is the one a neighbour most credibly claims.
+It is still the best engineering post in the set (`blog/02`), which is a different job from being the lead claim.
 
 The one to under-claim rather than over-claim: **the phone and voice path is genuinely differentiating, and Orca ships native mobile apps.**
 Say "installable PWA over your own tailnet with no relay", not "the only one with mobile".
@@ -74,101 +158,136 @@ Say "installable PWA over your own tailnet with no relay", not "the only one wit
 Every one of these will surface in a comment thread.
 Conceding them in the post costs nothing and buys the thread.
 
-- **Windows-first is unusual here and costs adoption.** Windows is the only platform proven end to end; CI install-smokes the wheel on all three hosts but no CI job on any host starts a daemon, and macOS is still `continue-on-error`.
+- **Windows-first is unusual here and costs adoption.** Windows is the only platform that proves the product running from what a user installs. CI install-smokes the wheel on all three hosts and the `live_daemon` tier starts a daemon from the source checkout on Linux and Windows, but no CI job starts one from a published artifact, and macOS is still `continue-on-error`.
 - **It is a lot of software.** The surface is large and the tutorial covers a small slice of it. "Not magic, it is a lot of software" is already in the launch draft; keep it.
-- **No signed desktop installer yet**, so an unsigned frozen executable means SmartScreen friction for anyone who is not installing from PyPI.
+- **Almost all of it is off until you turn it on.** This is the concession the claim audit added, and it is a real one: a fresh install has no automations, no land queue opt-in, no behaviour timeline, no attention ranking, no read-aloud, and the daemon owns the PTYs rather than a supervisor. That is defensible as a safety posture and indefensible as a surprise, so the copy says it and the onboarding proposal in § Open decisions exists to shorten the distance.
+- **No signed desktop installer.** The installer exists as of v0.1.2 and is unsigned, so SmartScreen warns on first run for anyone who is not installing from PyPI.
 - **One maintainer.** Say the support expectation out loud rather than implying an SLA.
-- **`pip install swe-mux[voice-local]` does not install at all.** Measured 2026-08-28 ([`../development/DEPENDENCY_AUDIT_2026-08-28.md`](../development/DEPENDENCY_AUDIT_2026-08-28.md) § 4): the published wheel declares `en-core-web-sm`, which is on no index, so both pip and uv refuse the extra outright. Concede this as a packaging bug rather than as the `av` caveat it was previously written up as - the `av>=11` residue is real in principle but currently unreachable, because nothing resolves at all. Fixing the extra is what activates it, so both are owed before this bullet can be softened. Do not let a diligence scan surface either one first.
+- **The `voice-local` extra was uninstallable for the whole life of 0.1.0**, because the published wheel declared `en-core-web-sm`, which is on no index ([`../development/DEPENDENCY_AUDIT_2026-08-28.md`](../development/DEPENDENCY_AUDIT_2026-08-28.md) § 4). Fixed in 0.1.1 by moving it to an unpublished dependency group that an installed copy acquires on an explicit press. Kept in this list because it is the kind of thing a diligence scan surfaces and it is better conceded than discovered: the honest line is that the first published release had a broken optional extra and the repair shipped the same week.
 
 ## Launch sequencing
 
-Six stages.
+Eight steps, and **exactly one community launch before Show HN.**
 Each states the precondition that must be true before it fires and the signal that says it worked.
-The staging exists because the two irreversible beats (Show HN, Product Hunt) are one-shot, and a first impression against placeholder screenshots and no binary converts badly and cannot be retried.
 
-### Stage 0 - Make the repository survivable
+Two things changed from the six-stage version, and both are corrections rather than refinements.
 
-**Precondition:** none. This is the only stage with no dependency, and it is the cheapest work in the whole plan.
+The old plan claimed at most one attention-day per week and then scheduled four community launches inside one week, which is not a schedule, it is four half-days pretending to be one.
+And it treated Product Hunt as a committed beat while ranking it tenth by expected value.
+A beat that is tenth on the list does not get a whole attention day reserved for it in advance; it gets a condition.
 
-The repository is public and currently answers a visitor badly.
+### 1. Artifact and claim audit
+
+**Precondition:** none. Cheapest work in the plan and the only step with no dependency.
+
+Two halves.
+The **claim** half is done as of 2026-08-28 and is recorded in § The claim audit.
+The **artifact** half is repository hygiene, which is settings rather than files: description, homepage, topics, Discussions, issue templates.
 Verified against the GitHub API on 2026-08-28: no description, no topics, no homepage, Discussions **disabled**, no issue templates, no code of conduct, community profile at 57%.
-`README.md` already links to `discussions/categories/ideas` as the route for feature requests, and that link resolves to nothing today.
+`README.md` links to `discussions/categories/ideas` as the route for feature requests, and that link resolves to nothing today.
 
-Full list and owners: [`LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md) § Stage 0.
+Full list and owners: [`LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md) § 1.
 
-**Success signal:** a stranger landing on the repository can tell what it is in five seconds, and every route the README promises resolves.
+**Success signal:** a stranger landing on the repository can tell what it is in five seconds, every route the README promises resolves, and no sentence anywhere describes a capability that a fresh install does not have.
 
-### Stage 1 - Assets and the clean-machine trial
+### 2. Clean-machine testing
 
-**Precondition:** Stage 0 done.
+**Precondition:** step 1.
 
-Three things block every public beat and none of them are marketing work:
+Install from the published artifacts onto a machine with no checkout, and record every place it falls over.
+This has never been done, and the plan should stop implying that CI covers it: CI proves the wheel installs and the CLI runs on three hosts, and the `live_daemon` tier proves a daemon starts from a source checkout on two of them. Neither proves what a stranger gets.
 
-- **Real screenshots.** `site/` ships deliberate placeholder images because real captures leaked project names. The fix is the PII-free capture environment already planned - a second daemon with its own data dir and port, plus synthetic projects.
-- **A hero video and a small set of feature GIFs.** There is no video or GIF anywhere yet. Every venue below assumes one; several are worth skipping entirely without one.
-- **A clean-machine trial.** Not done. Install from the published wheel onto a machine with no checkout, and record every place it falls over.
+Both install paths, because they fail differently: `uv tool install swe-mux`, and the unsigned Windows installer from the v0.1.2 release page, which is where SmartScreen enters the conversation.
 
-A signed desktop installer is a fourth item, and it is the only one that may be deferred: a PyPI-only launch is defensible if the copy says so plainly.
-A launch with placeholder screenshots is not defensible at all.
+**Success signal:** someone who is not the maintainer reaches a running session on their own machine without being told anything that is not in the README, on both paths.
 
-**Success signal:** someone who is not the maintainer installs from PyPI on their own machine and reaches a running session without being told anything that is not in the README.
+### 3. The two-cohort beta, two weeks
 
-### Stage 2 - The quiet trial (5 to 15 people, invited directly)
+**Precondition:** step 2. The install works on a machine that is not the development host.
 
-**Precondition:** Stage 1. The install works on a machine that is not the development host.
+This is the largest change in the plan and § The beta explains why.
+The short version: the old trial asked people to spend twenty minutes finding install defects, which is usability testing and answers nothing about whether anyone wants to keep using this.
 
-Direct outreach only.
-No public post.
-The ask is explicitly for bug reports and honest reactions, not adoption, because that framing roughly doubles the response rate and completely changes what comes back.
-Template and categories: [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md).
+- **Clean-install testers**, 5 to 10 people, one scripted twenty-minute install and first session.
+- **Design partners**, 5 to 10 actual parallel-agent users, two weeks, running multiple sessions, using status, and landing at least one worktree branch.
 
-This stage exists to spend the embarrassing failures on people who will not screenshot them.
+Both run under direct outreach only, no public post.
+Asks, scripts, check-in cadence and trackers: [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md).
 
-**Success signal:** at least five people install it, and at least three distinct install-path or first-run defects are found and fixed.
-If nobody hits anything, the trial was too small or too friendly - widen it before believing the number.
+**Success signal:** the install cohort's completion rate and its abandonment points are known, and at least half the design partners used it on three separate days.
+The second half is the one that decides whether step 6 happens at all.
 
-### Stage 3 - Niche soft launch
+### 4. One niche launch
 
-**Precondition:** Stage 2 defects fixed, and each defect either fixed or written down in the README as a known limit.
+**Precondition:** step 3 complete, and each finding either fixed or written into the README as a known limit.
 
-Venues, one at a time, two or three days apart: r/ClaudeAI, r/ChatGPTCoding, r/LocalLLaMA, and the Claude Developers Discord.
-Never the same text twice; drafts in [`posts/reddit-soft-launch.md`](posts/reddit-soft-launch.md) and [`posts/discord-claude-developers.md`](posts/discord-claude-developers.md) are already differentiated by audience.
+**One venue, not four.** Either r/ClaudeAI or the Claude Developers Discord, whichever the design partners came from least, so the post reaches people the beta did not.
+Drafts in [`posts/reddit-soft-launch.md`](posts/reddit-soft-launch.md) and [`posts/discord-claude-developers.md`](posts/discord-claude-developers.md).
 
-These communities forgive rough onboarding, are full of people who already run the CLIs, and will find the clean-machine failures the trial missed.
+The sibling venues (r/ChatGPTCoding, r/LocalLLaMA, and whichever of the two above was not used) move to step 7 and are staggered there.
+They were never worth an attention day each before the main beat, and grouping them into one week was the plan's least defensible line.
 
-**Success signal:** unsolicited bug reports from people you did not invite.
-That is the signal, not upvotes.
-Zero bug reports after a post that got attention means the post reached readers but not installers - the copy is describing something people do not want to try, and that is a positioning finding, not a product one.
+**Success signal:** installs reported by people you did not invite, and at least one of them comes back a second time.
+Not upvotes, and not bug reports alone: a bug report proves an install, not a use.
 
-### Stage 4 - The main beat: Show HN, with the X thread the same morning
+### 5. Fix what it finds
 
-**Precondition:** Stages 1 through 3 complete, a week of soft-launch fixes landed, real screenshots on the site, the hero video live, and a whole working day free.
+**Precondition:** step 4.
 
-One shot.
-Tuesday to Thursday, roughly 8-10am ET.
+No posting at all.
+This is the step most likely to be skipped and it is the reason the launch has anything to launch.
+
+**Success signal:** every finding from steps 3 and 4 is closed or documented, and the two cohorts' abandonment points specifically have been addressed rather than noted.
+
+### 6. Show HN, only after activation is demonstrated
+
+**Precondition:** everything above, **plus demonstrated activation**: repeat users exist, at least one design partner is still running it after the beta ended without being asked to, and the hero video is live.
+A whole working day free, Tuesday to Thursday, roughly 8-10am ET.
+
+Activation as a precondition is new and is the point of the resequence.
+Show HN cannot be retried, and sending the front page at a tool that people install once and abandon spends the one distribution moment this project gets for free on proving that.
+
 Submit the repository (Show HN convention for open source; the site is in the README's first line), post the prepared text as the first comment immediately, and then be in the thread all day.
+The X launch thread goes out the same morning so the two reinforce rather than compete; Bluesky and LinkedIn the same day, single posts, no thread.
 
-The X launch thread goes out the same morning so the two reinforce rather than compete.
-Bluesky and LinkedIn the same day, single posts, no thread.
+**Success signal:** front page at any point during the day, and **installs that turn into repeat use** in the following weeks.
+Not issue count: see § Metrics for why that criterion was removed.
 
-**Success signal:** front page at any point during the day, and 10 or more issues opened in the following week.
-Points are vanity; the front page is binary and the issues are the thing that persists.
+### 7. Engineering articles and awesome-list submissions
 
-### Stage 5 - Product Hunt
+**Precondition:** none of the above blocks it, and none of it is time-critical.
 
-**Precondition:** Show HN has happened and its thread has been mined for what actually resonated. At least a week later, so the two beats do not share an attention day.
+Engineering posts on a roughly fortnightly rhythm, awesome-list and directory submissions, newsletter submissions, YouTube outreach, and the sibling community venues deferred from step 4.
+This is where durable traffic comes from, and it is the part a solo maintainer can actually sustain indefinitely.
 
-Rewrite the listing around whatever the HN thread proved, not around what the draft guessed.
+### 8. Product Hunt, conditional
+
+**Precondition:** step 6 happened, at least a week has passed, **and earlier evidence shows interest beyond the terminal-tool audience.**
+
+That last clause is the whole change.
+Product Hunt is ranked tenth by expected value in this document's own venue table, and the previous plan still reserved a full attention day for it in week 7.
+It is now conditional and unscheduled.
+
+The evidence that would trigger it: meaningful traffic or installs from a non-developer-tooling referrer, requests from people who are not already running agent CLIs, or a newsletter pickup that reached a general audience.
+Absent that, this step does not happen and nothing is lost, because the audience there skews away from people who will install a Python daemon or accept a SmartScreen warning.
+
+If it does fire, rewrite the listing around whatever the HN thread proved, not around what the draft guessed.
 
 **Success signal:** comments and maker replies rather than upvote count.
 Product Hunt's own guidance is explicit that you may not ask for upvotes, and the ranking weights engagement over raw votes.
 
-### Stage 6 - The slow burn, indefinitely
+### The gates that hold the sequence
 
-**Precondition:** none of the above blocks it, and none of it is time-critical.
+Two, and both are stated rather than worked, because neither is an agent's to do.
 
-Engineering posts on a roughly fortnightly rhythm, awesome-list and directory submissions, newsletter submissions, YouTube outreach.
-This is where durable traffic comes from, and it is the part a solo maintainer can actually sustain.
+- **A signed Windows installer before the main public beat (step 6).**
+  The installer exists as of v0.1.2 and is unsigned.
+  Asking strangers to click through SmartScreen, or alternatively to install Python plus uv plus an extra plus the WebView2 Runtime, is avoidable conversion loss at exactly the moment the traffic is unrepeatable.
+  Signing needs a certificate the operator has to buy, so this is a gate to state, not work to schedule.
+  PyPI plus an unsigned installer is fine for steps 3 and 4, where every participant was invited and can be told.
+- **A hero video before step 6, and before any YouTube outreach at all.**
+  Unchanged from the previous plan and still true.
+  The capture environment now exists (`trailer/capture_env.py`), so this is recording rather than building.
 
 ## Venues, ranked by expected value for this specific project
 
@@ -180,12 +299,12 @@ Ranked on: does the audience already run coding-agent CLIs, does the format suit
 | 2 | **r/ClaudeAI + Claude Developers Discord** | Highest install-conversion per reader. These people have Claude Code open right now | Low, and repeatable across the sibling subs |
 | 3 | **Awesome-list entries** | Durable, compounding, cheap, and `awesome-agent-orchestrators` is precisely this category with 191 entries and no swe-mux in it | An hour each, mostly waiting |
 | 4 | **Engineering blog posts, submitted to HN and lobste.rs** | The best-quality inbound this project can generate, and the raw material already exists as post-mortems | Half a day each to write |
-| 5 | **r/selfhosted** | Large, and the local-only/zero-server/Tailscale story is native to it rather than a stretch | Low |
+| 5 | **r/selfhosted** | Large, and the runs-on-your-own-machine, no-vendor-backend, Tailscale story is native to it rather than a stretch | Low |
 | 6 | **X (<https://x.com/swemux>)** | Where the multi-agent-orchestration conversation lives; short clips of specific moments outperform announcements | Ongoing, low per post, needs clips to exist |
 | 7 | **Newsletters (Console.dev, TLDR AI, Changelog News)** | One submission, potentially thousands of the right readers, no ongoing cost | An hour total |
 | 8 | **r/commandline, r/opensource, r/codex, r/vibecoding** | Each is a real but narrower slice; the licensing angle is unusually strong in r/opensource | Low each |
 | 9 | **lobste.rs** | Small but unusually high-quality readership; needs an invite and rewards engineering content only | Blocked on sourcing an invite |
-| 10 | **Product Hunt** | Real traffic, poor fit for a self-hosted developer tool with no hosted demo, and the audience skews away from people who will install a Python daemon | A day |
+| 10 | **Product Hunt** | Real traffic, poor fit for a self-hosted developer tool with no hosted demo, and the audience skews away from people who will install a Python daemon. **Conditional and unscheduled** (step 8): its rank is the reason | A day, if it fires at all |
 | 11 | **YouTube outreach** | Highest variance. A single small-channel video can outperform everything above it, and most emails get nothing | An hour per personalized email |
 | 12 | **Directories (AlternativeTo, selfh.st)** | Slow trickle, near-zero effort, occasionally the top referrer a year later | Half an hour each |
 
@@ -226,15 +345,15 @@ Ranked on: does the audience already run coding-agent CLIs, does the format suit
 - **Audience:** real, and mostly not this project's. Self-hosted developer tooling with no hosted demo underperforms there relative to the effort.
 - **Format:** hero video first in the gallery, then feature GIFs. Self-hunting is normal and carries no penalty.
 - **Rules** ([Product Hunt launch guide](https://www.producthunt.com/launch)): you may not ask anyone to upvote. You may ask people to visit, comment, and give feedback. Coordinated voting and paid upvotes are detected and penalized. Ranking weights engagement - comments, maker replies, time on page - over raw upvotes.
-- **Timing:** 12:01am PT, at least a week after Show HN.
-- **Failure mode:** asking for upvotes in a group chat and getting the launch penalized. The second failure mode is launching it before Show HN and burning the assets on the weaker venue.
+- **Timing:** **conditional, and not on the calendar** (step 8). 12:01am PT, at least a week after Show HN, and only if there is evidence of interest beyond the terminal-tool audience.
+- **Failure mode:** asking for upvotes in a group chat and getting the launch penalized. The second is launching it before Show HN and burning the assets on the weaker venue. The third, and the one this plan actually made, is reserving an attention day in advance for the venue it ranks tenth.
 
 ### Developer Discords and Slacks
 
 - **Audience:** the Claude Developers Discord is the single highest same-day-install audience available.
 - **Format:** one message in the showcase/community-projects channel, one GIF, then stay in the thread.
 - **Rules:** confirm the current channel and its self-promotion policy before posting. Most such servers permit one showcase post and treat a second as spam.
-- **Timing:** with the Reddit soft launch, not with Show HN.
+- **Timing:** it is one of the two candidates for the single niche launch at step 4. Whichever of the two is not used there moves to step 7.
 - **Failure mode:** posting in a general channel instead of the designated one.
 
 ### YouTube and short video
@@ -267,21 +386,112 @@ Two findings from that pass that change the plan:
 Ranked by expected value:
 
 1. **[andyrewlee/awesome-agent-orchestrators](https://github.com/andyrewlee/awesome-agent-orchestrators)** - the exact category, curated rather than exhaustive, 191 entries, actively maintained, and swe-mux is not on it. Every named neighbour except Conductor and Warp already is. Highest fit of any list.
-2. **[hesreallyhim/awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code)** - by far the largest audience of people who run the primary harness. Note the maintainer's own stated position: getting on the list is a poor promotional strategy and a good consequence of already having users. Submit after the soft launch, not before.
+2. **[hesreallyhim/awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code)** - by far the largest audience of people who run the primary harness. Note the maintainer's own stated position: getting on the list is a poor promotional strategy and a good consequence of already having users. Submit after the niche launch, not before.
 3. **[awesome-selfhosted/awesome-selfhosted](https://github.com/awesome-selfhosted/awesome-selfhosted)** - enormous, and a legitimate fit. Post-launch only, once a release history exists.
 4. **[e2b-dev/awesome-ai-agents](https://github.com/e2b-dev/awesome-ai-agents)** - broadest reach and weakest fit. It lists autonomous agents, and swe-mux is not one. Submit, expect nothing, and do not build any plan around it.
 5. **AlternativeTo and selfh.st** - directories rather than lists. Cheap, slow, occasionally the top referrer a year later.
 
 **Deliberately not submitted: the awesome-MCP-server lists.** swe-mux does expose an MCP surface, but it is a per-session, token-gated surface the daemon offers to agents it is already running, not a server anyone installs on its own. Listing it there would be a category error, would be rejected or miscategorized, and would spend credibility on a list that cannot send a single relevant user. Recorded here so the next person does not re-derive it.
 
-## Direct outreach for testers
+## The beta
 
-The goal at this stage is **bug reports and honest reactions, not adoption**, and the ask must say so.
-"Would you try my tool" gets a polite yes and no install.
-"I need someone to install this on a clean machine and tell me where it falls over, I expect it to fall over" gets an install, because it offers the recipient a defined and finite job with an obvious end.
+### What the old one tested, and why that was the wrong question
 
-Categories, the specific ask for each, and the templates are in [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md), which also holds the tracker table.
+The previous plan ran one cohort: five to fifteen people, invited directly, asked to spend twenty minutes finding install defects.
+
+That is **usability testing of the install path**, and it is worth doing.
+What it cannot answer is whether anybody wants to keep using this, which is the question that decides whether step 6 is worth firing at all.
+A trial whose success criterion is "three distinct install-path defects found" is satisfied perfectly by ten people who install it, hit three bugs, and never open it again.
+
+So it splits into two cohorts with two different questions.
+
+### Cohort A: clean-install testers
+
+**5 to 10 people. One session each, twenty minutes, scripted.**
+
+Recruit for platform coverage and for not having seen the project, not for enthusiasm.
+The script is fixed so the results are comparable: install, start the daemon, register a Project, reach one running agent session, stop.
+
+Measured:
+
+- **Completion rate.** How many of them reached a running agent session at all.
+- **Time to first session.** Wall clock from starting the install to the first agent prompt.
+- **Where people abandon.** The specific step, named. This is the output that matters; a completion rate with no abandonment point is a number with nothing to do.
+
+This is the cohort that runs on both install paths, because the unsigned installer and the PyPI route fail at different places and only one of them involves SmartScreen.
+
+### Cohort B: design partners
+
+**5 to 10 people who already run multiple coding agents. Two weeks.**
+
+Not scripted, and explicitly not a bug hunt.
+The ask is to use it the way they already work, and specifically to do three things at least once: run multiple sessions at the same time, use the status column to decide where to look, and land at least one worktree branch through the queue.
+
+Those three are named because they are the three the positioning line rests on.
+A design partner who never lands a branch has not tested the claim.
+
+Measured:
+
+- **How many used it on three separate days.** The single best proxy available for "this survived contact with an actual workflow", and the one number that gates step 6.
+- **Which capability became habitual.** Asked directly, per partner, in their own words. If the answers do not cluster, the positioning is wrong and the line above needs to move again.
+- **Whether they came back after the novelty.** One check-in a week after the two weeks end, asking only whether they still have it running and whether they opened it since.
+
+### How any of this is measured without telemetry
+
+**Telemetry is deliberately absent and stays absent.**
+That is a design decision the plan does not get to quietly recover, so the measurement is consent-shaped by construction.
+
+Two mechanisms, both of which the participant chooses to send:
+
+- **Structured check-ins.** Cohort A gets one, at the end of the session. Cohort B gets three: day 3, day 10, and one week after the end. Each is a fixed short list of questions so the answers are comparable across people, and each is a message the participant writes and sends, not a payload anything collects. The question sets are in [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md).
+- **A locally generated adoption summary the participant chooses to share.** Everything cohort B's numbers need is already on the participant's own disk: `mux doctor --export` carries the diagnostics bundle, and the durable status ledger, the land-queue event trail, and the usage history are all local SQLite. A summary the operator can read is a summary the participant can generate, read, and decide to send, which is exactly the posture the bug form already takes with the diagnostics export. **This is a proposal, not a feature**: no such summary command exists, and § Open decisions records it as a decision rather than as a plan. Until it does, cohort B is measured entirely by the structured check-ins.
+
+Asks, scripts, question sets, and both trackers are in [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md).
 No real people are named there; the categories are described by role.
+
+## Open decisions
+
+Recorded here rather than acted on, because each one is a change to the product that a copy edit is not allowed to make on its own.
+
+### Should the PTY supervisor default to on?
+
+**The finding that raised it:** `pty_supervisor_enabled` defaults to `False`, and almost every draft led with sessions surviving restarts.
+The copy was fixed and the default was not, deliberately.
+
+**Why not just flip it.** It is a runtime-architecture change for every install, not a setting.
+It interacts with the supervisor-update rules in the root `CLAUDE.md`: updating the supervisor reaps every live session, which makes the update story materially different once a supervisor is in the path.
+And clean-machine validation has not happened, so nobody knows what the supervisor does on a machine that is not this one.
+The safety defaults are defensible; the marketing was not, and only one of those two was wrong.
+
+**What flipping it would require first, in order:**
+
+1. **Clean-machine testing** (step 2), with the supervisor on, on a machine with no checkout. Its spawn path, its discovery file, and its socket have only ever run here.
+2. **Failure testing.** What a user sees when the supervisor cannot start, when it dies while the daemon lives, and when a daemon finds a supervisor from an older build. The daemon already falls back to in-process spawning and logs it; the question is whether a person can tell, not whether the code copes.
+3. **A redeploy and update story.** A supervisor in the path means a release that bumps `PROTOCOL_VERSION` ends every live session, and `mux update --install` already refuses such a release for exactly that reason. Defaulting the supervisor on makes that refusal something every user meets rather than something the operator meets.
+
+Until all three, the honest copy stands and the default stays.
+Revisit after step 2 and record the outcome here either way.
+
+### Should onboarding offer a "recommended fleet setup"?
+
+**The finding that raised it:** correcting the control-plane copy costs the drafts real impact, because a fresh install genuinely has almost none of it on.
+The gap between "what swe-mux can do" and "what swe-mux does when you install it" is wide, and the copy is now obliged to say so.
+
+**The proposal.** One clearly labelled step in onboarding that turns on a named set of capabilities in a single press, showing exactly what it enables and what each one costs, with everything reachable individually afterwards through the surfaces that already own it.
+That is the honest way to close the gap: it makes the configured install easy to reach rather than making the fresh install sound like the configured one.
+
+**Why it is recorded rather than built.** It is a product change with a real design question inside it: which capabilities belong in the recommended set, given that some of them spend money and the enablement graph has dependency edges. It also has to respect the existing rule that a grant may only ever turn something on while exactly one editor may turn it off.
+Naming it here is worth more than guessing at it, and no draft may describe it until it exists.
+
+### Should there be a shareable local adoption summary?
+
+**The finding that raised it:** the beta needs numbers and the project has no telemetry, by design.
+
+**The proposal.** A command that reads what is already on the user's own disk and writes a short summary they can read and choose to send: days used, sessions run, branches landed, capabilities enabled.
+The precedent is `mux doctor --export`, which the bug form already asks for on exactly these terms.
+
+**Why it is recorded rather than built.** It is small, but it is a new surface that reports on a person's usage, and the whole posture of this project is that such a thing is something a person hands over rather than something that is collected. Getting that boundary right is the work, not the SQL.
+Until it exists, the beta is measured by structured check-ins alone, which is slower and is honest.
 
 ## Blog cadence
 
@@ -321,7 +531,7 @@ If one lands well, do **not** submit the next one immediately - back-to-back sub
 ## Feedback and issue funnels
 
 Traffic arriving at a repository with no templates and no triage plan is traffic wasted, and it arrives all at once.
-Everything here must exist **before Stage 3**, not before Stage 4, because the soft launch is the first traffic.
+Everything here must exist **before step 3**, not before step 6, because the beta cohorts are the first people who need somewhere to put a report.
 
 ### The routes
 
@@ -355,7 +565,7 @@ Turning it on is a settings change, not a code change, and it unblocks the READM
 
 ### Triage plan for one person
 
-- **Launch weeks (Stages 3-5):** first response within 48 hours on everything. This is the promise that converts a drive-by reporter into a returning one, and it is only affordable for a bounded number of weeks. Budget it as part of the attention day, not as extra.
+- **Launch weeks (steps 3 through 6):** first response within 48 hours on everything. This is the promise that converts a drive-by reporter into a returning one, and it is only affordable for a bounded number of weeks. Budget it as part of the attention day, not as extra.
 - **After:** weekly triage pass. Say so in `CONTRIBUTING.md` rather than implying an SLA that will be missed.
 - **Labels, minimal:** `bug`, `install`, `platform:windows`, `platform:linux`, `platform:macos`, `harness:<name>`, `needs-info`, `wontfix-by-design`. The last one exists so a boundary can be closed with a link to the roadmap section rather than a re-argued paragraph.
 - **The rule worth keeping:** close with a reason and a link, never with silence. A silently closed issue costs more reputation than an unanswered one.
@@ -390,22 +600,28 @@ Show HN day is a working day gone; plan nothing else for it.
 - One metrics read against the thresholds below, and a written decision: continue, change approach, or stop buying reach.
 - Roadmap page refreshed against the most-voted open ideas, since the README promises that the roadmap is drawn from them.
 
-### The first eight weeks, concretely
+### The first nine weeks, concretely
 
-| Week | Beat | Attention cost |
-|---|---|---|
-| 0 | Stage 0 repository hygiene, Stage 1 assets begin | Low, but it is real work |
-| 1 | Clean-machine trial, hero video capture | Low |
-| 2 | Stage 2 quiet trial: send the outreach, then fix what comes back | Medium, spread |
-| 3 | Soft launch: r/ClaudeAI, then Discord, then r/ChatGPTCoding, then r/LocalLLaMA, spaced | One half-day per post |
-| 4 | Fix what the soft launch found. No posting at all | Low |
-| 5 | **Show HN + X thread + Bluesky + LinkedIn, one morning** | One full day |
-| 6 | Blog 02 published, submitted to r/programming. Awesome-agent-orchestrators PR | Half a day |
-| 7 | Product Hunt. Newsletter submissions | One day |
-| 8 | Blog: the licensing post. Awesome-claude-code issue form | Half a day |
+One beat per week at most, and the beta is two weeks because it is two weeks.
 
-Week 4 posting nothing is deliberate and is the part most likely to get skipped.
-It is the week the soft-launch findings get fixed, and skipping it means arriving at Show HN with known defects.
+| Week | Step | Beat | Attention cost |
+|---|---|---|---|
+| 0 | 1 | Repository hygiene: description, homepage, topics, Discussions, issue templates. Hero video capture begins | Low, but it is real work |
+| 1 | 2 | Clean-machine testing, both install paths. Fix what it finds | Medium |
+| 2 | 3 | Beta opens: cohort A's scripted sessions run, cohort B's two weeks start | Medium, spread |
+| 3 | 3 | Cohort B day-3 check-ins. Fix cohort A's abandonment points while B is still running | Medium |
+| 4 | 3 | Cohort B day-10 check-ins, then the two weeks close | Low |
+| 5 | 4 | **One niche launch**, one venue, and be in the thread | One half-day |
+| 6 | 5 | Fix what it found. No posting at all | Low |
+| 7 | 6 | **Show HN + X thread + Bluesky + LinkedIn, one morning** - only if activation cleared | One full day |
+| 8 | 7 | Blog 02 published, submitted to r/programming. Awesome-agent-orchestrators PR | Half a day |
+| 9 | 7 | Cohort B's one-week-after check-in reads. Blog: the licensing post. Awesome-claude-code issue form | Half a day |
+
+Week 6 posting nothing is deliberate and is the part most likely to get skipped.
+It is the week the niche launch's findings get fixed, and skipping it means arriving at Show HN with known defects.
+
+Product Hunt appears nowhere in this table on purpose.
+It is step 8, it is conditional, and the condition is evidence that does not exist yet.
 
 ## Metrics
 
@@ -415,40 +631,68 @@ GitHub stars, HN points, Product Hunt upvotes, X impressions, star-per-day spike
 None of them indicates that a single person is running the software.
 Stars in particular: this category has neighbours at 33k stars, and a star count read as market position will produce exactly the wrong decision.
 
+### "Ten issues after Show HN" is not a success criterion, and has been removed
+
+It was one, and it was measuring the wrong thing in a way that would have produced a confidently wrong decision.
+
+**Issues select for failure.**
+A tool that ten people install and abandon after hitting a bug each generates ten issues.
+A tool that ten people install and quietly use every day generates none.
+Those are opposite outcomes and the metric scores the first one higher, which is exactly backwards for a project whose actual risk is that people try it once and stop.
+
+Issue count stays on the watch list as a **proxy for reach and for install-path roughness**, which is what it honestly measures.
+It is not a success criterion for any step.
+
 ### What actually measures adoption, and the honest limit
 
 swe-mux has **no telemetry by design**, so almost every conventional adoption metric is unavailable by construction.
 That is a deliberate trade and the plan should not quietly try to recover it.
-What remains measurable:
+
+The four that matter, in order:
+
+- **Activated installs.** Someone reached a running agent session. Measurable in the beta cohorts by their check-ins, and not measurable in the wild at all, which is the honest limit and the reason the beta exists.
+- **Repeat users.** Someone used it on three or more separate days. The single most informative number in this plan and the one that gates step 6.
+- **Successful landings.** Someone other than the maintainer put a branch through the land queue. It is the deepest point in the product a person can reach, so one of these is worth a great deal more than a hundred stars.
+- **People returning with a second report or a contribution.** Not the first report, the second. A first report is a stranger; a second is a user.
+
+What remains measurable without asking anyone:
 
 - **PyPI download counts** (pypistats). Noisy - mirrors and CI inflate it - so read the trend and the shape, not the number.
-- **GitHub release asset downloads**, once a desktop artifact exists. Much cleaner than PyPI, because nothing automated pulls it.
+- **GitHub release asset downloads.** Much cleaner than PyPI, because nothing automated pulls an installer. Available from v0.1.2 onward, which is the first release carrying desktop artifacts.
 - **GitHub traffic** (clones and unique visitors, 14-day rolling window). Sample it weekly or it is lost.
-- **Issues opened by someone who is not the maintainer.** The single best proxy for real use in this whole list.
 - **Discussions ideas with more than one voter.** Proves at least two people wanted the same thing.
 - **Unsolicited mentions** anywhere.
 
+### Named as vanity, and watched anyway because they are free
+
+GitHub stars, HN points, Product Hunt upvotes, X impressions, star-per-day spikes, and raw issue count.
+None of them indicates that a single person is running the software.
+Stars in particular: this category has neighbours at 33k stars, and a star count read as market position will produce exactly the wrong decision.
+
 ### Thresholds
 
-| Stage | Success | Signal to change approach |
+| Step | Success | Signal to change approach |
 |---|---|---|
-| Quiet trial | 5+ install, 3+ distinct defects found | Fewer than 3 install - the ask is wrong, or the install is worse than believed |
-| Soft launch | Unsolicited bug reports from uninvited people; 5+ installs reported | Attention but zero bug reports - the copy is describing something people do not want to try |
-| Show HN | Front page at any point; 10+ issues in the following week | Front page but no issues - the site or the install is where people stop, not the pitch |
-| Week 8 | 1+ issue per week from a non-maintainer; 3+ people who have reported twice | No recurring non-maintainer participant - the problem is onboarding, not reach. **Stop buying reach and fix the first run** |
+| 3, cohort A | 7 of 10 reach a running session, and every abandonment point is named | Fewer than half complete - the install is worse than believed, and nothing downstream is worth doing until it is fixed |
+| 3, cohort B | Half or more used it on three separate days, and at least two landed a branch | Everyone installs and nobody returns in week two - the problem is the product's value, not its onboarding, and the positioning line is what to revisit |
+| 4 | Installs reported by uninvited people, and at least one returns a second time | Attention with no installs - the copy is describing something people do not want to try, which is a positioning finding rather than a product one |
+| 6 | Front page at any point; **activated installs and repeat users** in the following weeks | Front page and no repeat use - the front page was spent, and the thing to fix is the first week of use rather than the next channel |
+| Week 9 | 3+ people who have come back a second time; 1+ successful landing by a non-maintainer | No recurring non-maintainer participant - **stop buying reach and fix the first run** |
 | Month 6 | A contributor who is not the maintainer; a request the roadmap adopts | Nothing but stars - the project has an audience and no users, which is a worse position than no audience |
 
-The week-8 row is the one to take seriously.
-Reach is the cheap half of this plan and onboarding is the expensive half, and it is very easy to keep spending on the cheap half because it produces visible numbers.
+The week-9 row is the one to take seriously.
+Reach is the cheap half of this plan and activation is the expensive half, and it is very easy to keep spending on the cheap half because it produces visible numbers.
 
 ## The single biggest risk
 
-**Spending the one-shot beat before the artifact can absorb it.**
+**Spending the one-shot beat before the product can absorb it.**
 
-Show HN cannot be retried, the front page is the only distribution moment this project gets for free, and today it would send a few thousand developers to a site with placeholder screenshots, no video, no installer, an unverified install path, a README linking to a Discussions page that does not exist, and a repository with no description.
-Every one of those is fixable in under two weeks.
-None of them is fixable after the traffic has come and gone.
+The asset half of this risk has largely closed since the plan was written: the site carries real screenshots, v0.1.2 publishes an installer and a portable archive, and three install commands have been run into throwaway environments.
+What is left is smaller and harder: no video, an unsigned installer, no clean-machine validation, Discussions still off, and no repository description.
 
-The temptation the plan exists to resist is that the copy is already written and the repository is already public, so the beat feels available now.
-It is available now.
-It is worth roughly a tenth of what it will be worth in three weeks.
+But the risk that replaced it is the more serious one, and it is the reason activation is now a precondition rather than a hoped-for outcome.
+**Show HN cannot be retried**, the front page is the only distribution moment this project gets for free, and a front page spent on a tool that people install once and abandon does not merely waste the moment - it produces a specific, durable, wrong conclusion in public about a product whose actual problem was its first week of use.
+
+The temptation the plan exists to resist is that the copy is written, the repository is public, and the artifacts now exist, so the beat feels available.
+It is available.
+It is worth what the beta says it is worth, and the beta has not run.

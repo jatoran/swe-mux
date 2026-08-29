@@ -9,13 +9,17 @@ Create the listing post-launch (they want live, downloadable software).
 **Short description:**
 
 Open-source mission control for AI coding-agent fleets.
-A local daemon owns agent terminal sessions (Claude Code, Codex, opencode and others) so they survive restarts and updates; adds reliable per-agent status, prompt queues, parallel git-worktree execution with a verification-gated merge queue, and phone/voice operation over Tailscale.
-Fully local: no cloud, no accounts, no telemetry.
+A local daemon runs your agent CLIs (Claude Code, Codex, opencode and others) and records what each one actually did: file writes hashed on the bytes written, commands with their exit class, and commit-level provenance.
+Finished worktree branches land through a fast-forward-only merge queue behind a verification command you approved.
+Adds one status vocabulary across CLIs, prompt queues, optional supervisor-owned persistent terminals, and phone and voice operation over Tailscale.
+Runs on your own machine: no account, no telemetry, no vendor backend.
 Apache 2.0.
+
+The name field takes the tagline; this field takes the sentences, so the positioning line belongs in the swe-mux entry's own description above rather than being compressed into the listing name.
 
 **License:** Open Source (Apache-2.0)
 
-**Platforms:** Windows; Linux (source install)
+**Platforms:** Windows (installer and PyPI); Linux (PyPI, headless plus a browser)
 
 **Tags:** ai-coding-agents, terminal-multiplexer, developer-tools, self-hosted, agent-orchestration
 
@@ -29,4 +33,4 @@ Submit to their apps directory post-launch (they index self-hosted software, ope
 
 Reuse the AlternativeTo short description; their format wants a one-liner:
 
-> swe-mux - Self-hosted control plane for AI coding agents with persistent sessions, merge automation, and a mobile PWA client.
+> swe-mux - Self-hosted control plane for AI coding agents with deterministic change records, commit provenance, a verification-gated merge queue, and a mobile PWA client.

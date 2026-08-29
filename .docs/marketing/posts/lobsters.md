@@ -1,5 +1,7 @@
 # lobste.rs
 
+**Step 7 (the slow burn)**, with the second engineering post rather than the first.
+
 Requires an invite - source one from the network before launch week, or ask in the HN thread if someone offers (they sometimes do).
 New users cannot send invites for their first 70 days, so an invite has to come from an established account.
 

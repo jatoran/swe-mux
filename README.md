@@ -1,29 +1,60 @@
 # swe-mux
 
-**swe-mux - mission control for your coding-agent fleet.**
+**For developers running multiple coding agents locally, swe-mux shows what each agent actually did and lands finished branches behind checks you approved.**
 
 swe-mux is a local, browser-based terminal multiplexer and control plane for the coding-agent CLIs you already run.
 It owns the pseudoterminals, so Claude Code, Codex, opencode, and any other CLI or shell run in a real terminal exactly as they do outside it, while swe-mux adds the layer around them.
-There is no server, no account, and no telemetry.
+It runs on your own machine: no vendor-operated backend, no relay, no account, and no telemetry.
 
-<!-- TODO(release): hero demo - video/GIF goes here. Asset does not exist yet; the operator records
-     it, to the shot list in site/README.md section 2. -->
+<!-- TODO(release): hero demo - video/GIF goes here. The capture rig exists
+     (`trailer/capture_env.py`, a synthetic install with invented projects) and the video does not;
+     the operator records it, to the shot list in site/README.md section 2. -->
 
 [![ci](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ## What it adds
 
-- **Sessions that outlive the app.** A supervisor process separate from the daemon and the UI holds every pseudoterminal, so a daemon restart or a full app rebuild leaves the agents working, and reconnecting replays only the bytes you missed. ([sessions](.docs/design/features/sessions.md), [recovery](.docs/design/features/session-recovery.md))
-- **One status vocabulary across vendors.** Working, ready, awaiting approval, or blocked - read from provider hooks, the transcript, the PTY, and the CLI's own state, with every transition kept in a durable ledger. ([status detection](.docs/design/features/status-detection.md))
+- **Deterministic evidence of what each agent did.** Every file write hashed on the exact bytes written, every command with its exit class, test output parsed down to the failing set, git operations, tool calls - each keeping a pointer back to the moment it happened. Read from the work rather than from the agent's account of it. ([Tier 0 facts](.docs/design/features/tier0-facts.md))
+- **Commit-level provenance.** Which session and conversation produced a commit, split into committer and contributor, from that same deterministic capture. ([Tier 0 facts](.docs/design/features/tier0-facts.md))
+- **Parallel worktrees, landed behind a verification gate.** One branch at a time: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only. A conflict or a failed gate goes back to the branch's own agent, and an agent cannot approve the gate its own land runs. ([land queue](.docs/design/features/land-queue.md))
+- **One status vocabulary across vendors.** Working, ready, awaiting approval, or blocked - read from provider hooks, the transcript, the PTY, and the CLI's own state, with every transition kept in a durable ledger. Ambiguous evidence resolves to the conservative prior rather than to a guess. ([status detection](.docs/design/features/status-detection.md))
 - **A prompt queue that waits for a real gate.** Stage ordered messages against a mid-turn conversation. The queue is durable, head-of-line, bound to the conversation, and automatic delivery is off by default. ([prompt queue](.docs/design/features/prompt-queue.md), [auto-delivery](.docs/design/features/auto-delivery.md))
-- **Parallel worktrees, landed behind a verification gate.** One branch at a time: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only. A conflict or a failed gate goes back to the branch's own agent. ([land queue](.docs/design/features/land-queue.md))
-- **Commit-level provenance.** Which session and conversation produced a commit, split into committer and contributor, from deterministic capture rather than the agent's account of its work. ([Tier 0 facts](.docs/design/features/tier0-facts.md))
-- **The whole workspace on a phone.** An installable PWA over your own Tailscale tailnet, with no relay and no swe-mux login. Terminals, git review, the editor, previews, local voice, and optional web push. ([remote access](.docs/design/features/remote-access.md), [voice](.docs/design/features/voice.md))
+- **The whole workspace on a phone.** An installable PWA over your own Tailscale tailnet, with no relay and no swe-mux login. Terminals, git review, the editor, previews, on-device voice, and optional web push. ([remote access](.docs/design/features/remote-access.md), [voice](.docs/design/features/voice.md))
 - **Any CLI, and any shell.** Anything that runs in a terminal runs here unchanged, including one swe-mux has never heard of; the harnesses in its registry get normalized input, status, transcripts, history, and accounts. Native transcripts are never moved or rewritten. ([backends](.docs/design/features/backends.md))
+- **Terminals that outlive the daemon, when you turn supervision on.** A supervisor process separate from the daemon and the UI can hold every pseudoterminal, so a daemon restart or a full app rebuild leaves the agents working and reconnecting replays only the bytes you missed. **This ships off**; see [Session survival is a mode](#session-survival-is-a-mode) below. ([sessions](.docs/design/features/sessions.md), [recovery](.docs/design/features/session-recovery.md))
 
-Your agent CLIs keep talking to their own vendors under your own subscription, and swe-mux proxies nothing and resells nothing.
-Three optional features reach the network and each is off until you turn it on: summarization through an OpenRouter-compatible endpoint with your key, web push through your browser vendor, and experimental Edge TTS.
+### Session survival is a mode
+
+`pty_supervisor_enabled` defaults to `false`.
+Turning it on is an edit to `config.toml` in the data directory plus a daemon restart; there is deliberately no switch for it in Settings, because flipping it while sessions are live reaps or strands their pseudoterminals.
+
+With it off, the daemon owns the pseudoterminals and restarting the daemon ends them.
+Cold session recovery, which **is** on by default, is what stands behind that: those sessions come back as readable, resumable rows carrying their last scrollback rather than disappearing, and the durable registry plus terminal checkpoints also cover the cases the supervisor cannot - its own crash, a force close, a power loss.
+
+### Almost everything else is off until you ask for it
+
+This is the shape of the whole product and it is worth knowing before you install it rather than after.
+
+- **Automations are per-Project opt-in and every one of them ships off**, with one exception: `session_control`, a permission gate that reads nothing, runs nothing, and spends nothing on its own.
+- **The land queue needs four things** before an agent can trigger one: the install-wide switch, the Project's opt-in, a `land_grant` raised from its default of `draft`, and a verification command whose exact bytes you approved. Running it yourself from the Git drawer needs the last of those.
+- **The model-backed capabilities ship off**: the behaviour timeline, the attention observers, and the Mux assistant.
+- **Read aloud ships off** (`tts_enabled`), and hands-free conversation is a separate opt-in beside it.
+
+Nothing in the control plane runs on a Project that did not opt in, and nothing reaches a model without a budget you set.
+
+### What crosses the network
+
+swe-mux runs on your own machine, and the project operates no backend and no relay: your data is SQLite on your disk, there is no swe-mux account, and nothing reports usage anywhere.
+It is not a tool with no network in it, and the difference matters.
+
+Your agent CLIs keep talking to their own vendors under your own subscription; swe-mux proxies nothing and resells nothing.
+Four optional capabilities reach out, and each is off until you turn it on:
+
+- Model calls through an OpenRouter-compatible endpoint, with your key.
+- Web push, through your browser vendor.
+- The on-device speech models, downloaded once from Hugging Face and then run locally.
+- Experimental Edge TTS, which additionally requires an explicit service and privacy acknowledgement before any text leaves the machine.
 
 The one request swe-mux makes on its own behalf is a daily fetch of `https://swemux.dev/version.json` to check for a newer release - nothing downloads, and the file is identical for every install, with no query string, header, cookie, or identifier on it.
 Settings → Diagnostics → Software updates (`update_check_enabled`) turns it off entirely.
@@ -31,10 +62,10 @@ Installing an update is a separate act you take: `mux update --install <version>
 
 ## Install
 
-<!-- TODO(release): desktop download - there is no signed release artifact yet. Name the file here
-     and say which Windows builds and architectures it is signed for. The site does not need this
-     edit: https://swemux.dev/#download is drawn from the release manifest and fills itself in on
-     the first release carrying an installer (site/README.md section 7). This file is the copy that
+<!-- TODO(release): the installer exists as of v0.1.2 and is NOT code signed. When a signing
+     certificate is in hand, say here which Windows builds and architectures it is signed for and
+     drop the SmartScreen sentence below. The site does not need that edit:
+     https://swemux.dev/#download is drawn from the release manifest. This file is the copy that
      stays manual, so it is the one to remember. -->
 
 swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so this needs no Node and no checkout.
@@ -59,8 +90,11 @@ Then run `muxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop w
 `mux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
 
 **No Python install of any kind creates a desktop shortcut or a Start Menu entry.**
-Wheels have no post-install hook and pip runs no install-time code, so that is structural rather than a step somebody forgot: start swe-mux from a terminal.
-A Windows installer that does create one is built by the release workflow but has not been published yet; <https://swemux.dev/#download> is drawn from the release manifest and says which desktop builds the current release actually carries.
+Wheels have no post-install hook and pip runs no install-time code, so that is structural rather than a step somebody forgot: start swe-mux from a terminal, or run `mux install-shortcut` afterwards.
+
+A **Windows installer** that does create one is published from v0.1.2 onward, alongside a portable archive, on the [releases page](https://github.com/jatoran/swe-mux/releases); <https://swemux.dev/#download> is drawn from the same release manifest and says which desktop builds the current release actually carries.
+It is **not code signed**, so Windows SmartScreen warns on first run and you have to choose to continue past it.
+Signing is planned and needs a certificate; until then, the PyPI install avoids that prompt entirely.
 
 **On Windows, take the `desktop` extra.**
 Without it you still get a `swe-mux` command, and it fails on a missing import rather than opening a window.
@@ -104,7 +138,13 @@ Packaging rules: [`.docs/design/features/desktop-shell.md`](.docs/design/feature
 - Optionally Tailscale, to reach the daemon from a phone.
 
 On-device speech (Kokoro text-to-speech and faster-whisper dictation) is `--extra voice-local`, roughly 400 MB of wheels and model machinery, and the desktop bundle always carries it.
-Without it swe-mux speaks through the OS voice engine and dictates through the browser.
+Its models are downloaded once, from Hugging Face, on an explicit press, and verified against a pinned hash; nothing is fetched until then.
+
+**Speech-to-text decodes on your own machine in both shipped configurations.**
+The default is faster-whisper, which needs the extra; the alternative is Windows Speech Recognition, which needs Windows and no extra.
+The `stt_engine` setting selects between them, as `whisper` or `sapi`.
+There is no cloud speech path and no browser speech-recognition fallback: without either engine available, transcription returns a typed error rather than sending audio anywhere.
+Text-to-speech has the same shape, except that the explicitly experimental Edge TTS provider is the one option that does leave the machine, and selecting it requires an acknowledgement first.
 
 ## First run
 
@@ -119,7 +159,8 @@ The **Run** menu starts an agent, a shell, a worktree session, or an imported ta
 ## Platform support
 
 The wheel is `py3-none-any`, and CI builds it, validates it, and install-smokes it on `windows-latest`, `ubuntu-latest` and `macos-latest` on every push, so installing and running the CLI is checked on all three.
-No CI job on any host starts a daemon, so that is exactly where the proof stops. Beyond it:
+CI also starts a real daemon on `ubuntu-latest` and `windows-latest` from the **source checkout**, on an ephemeral port under a temporary data directory, and proves it serves a shell session and exits cleanly.
+No CI job on any host starts a daemon from a **published artifact**, so that is exactly where the proof stops. Beyond it:
 
 - **Windows 10 or 11 is the proving platform.** The full gate runs there in CI (the `verify` job), including the real ConPTY integration tests and the Playwright renderer suite, and it is the only platform the desktop app ships on. PowerShell 7 is the primary shell contract; 5.1, CMD, and a WSL distro shell are separately supported profiles.
 - **Linux runs headless plus a browser**, on a required CI leg that syncs with no extras. There is no Linux desktop app, by design.

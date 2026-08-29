@@ -295,30 +295,29 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 
 
 /* ------------------------------------------------------------- hero visual */
+/* Two real captures rather than the dashed frames that stood here: the desktop
+   workspace at full width, with the phone overlapping its lower right. Both are
+   solid-bordered, because a dashed frame around a real screenshot reads as "not
+   done yet" and this is the first thing anyone sees. */
 .herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
 .herovis .frame {
-  border: 1px dashed var(--line-2); aspect-ratio: 16 / 9; padding: 11px 13px;
-  display: flex; flex-direction: column; gap: 7px; background:
-    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+  border: 1px solid var(--line-2); background: var(--panel-2); overflow: hidden;
 }
 .herovis .phone {
   position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
-  width: clamp(84px, 15%, 186px); aspect-ratio: 9 / 19.5;
-  border: 1px dashed var(--line-2); border-radius: 11px; padding: 8px 7px;
-  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 0 0 7px var(--bg); background:
-    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch-2) 8px 9px), var(--panel);
+  width: clamp(84px, 15%, 186px);
+  border: 1px solid var(--line-2); border-radius: 11px; overflow: hidden;
+  box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
 }
-.herovis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
-                border-bottom: 1px solid var(--line); padding-bottom: 5px; }
-.herovis .frame .tag { color: var(--cyan); }
-.herovis .phone .tag { color: var(--orange); border-bottom-color: var(--line-2); font-size: 8px;
-                       padding-bottom: 4px; letter-spacing: .06em; }
-.herovis p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-3); max-width: 62ch; }
-.herovis .phone p { font-size: 8.5px; line-height: 1.4; }
+.herovis img { display: block; width: 100%; height: auto; }
+.herovis figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
+                      padding: 8px 10px; border-top: 1px solid var(--line); }
+/* The phone is decorative here - the same view is captioned in section 01 - so it
+   carries no caption of its own at any width; a caption inside a 186px column is
+   unreadable and a caption outside it fights the frame's. */
 @media (max-width: 620px) {
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
-  .herovis .phone p { display: none; }
 }
 
 /* --------------------------------------------------- inline visualizations */
@@ -386,6 +385,16 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                        padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
                        line-height: 1.58; color: var(--fg-2); }
 .shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
+
+/* A real capture standing in a `.crops` grid cell, where a `.crop` placeholder
+   used to be. It reuses `.crops` rather than getting a grid of its own so a
+   section can hold one of each while the remaining placeholders are filled.
+   The mobile column is capped rather than filled: a 1206x2622 capture at the
+   0.46fr column's natural width is over 750px tall beside a 470px desktop crop,
+   which pushes the section past two screens for nothing. */
+.crops figure.shot { align-self: start; }
+.crops figure.shot.m { max-width: 240px; justify-self: start; }
+@media (max-width: 460px) { .crops figure.shot.m { max-width: 190px; } }
 .shotpair .claims li::before { content: "▸"; color: var(--green); }
 .shotpair .claims b { color: var(--fg); }
 
