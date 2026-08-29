@@ -183,6 +183,14 @@ export interface SpawnRequestRow {
   status: string
   prompt: string
   backend: string
+  /**
+   * Model the requester asked its new session's CLI to run, in that CLI's own
+   * spelling, or `''` for a request that named none. Shown on the card because
+   * approving is agreeing to it: a model the approval silently dropped would
+   * start an ordinary session under a card that promised otherwise. Older rows
+   * predate the field, hence optional.
+   */
+  model?: string
   name: string
   reason: string
   from_session: string

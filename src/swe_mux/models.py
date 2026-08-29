@@ -325,6 +325,18 @@ class SessionRecord:
     # pseudonymous, linkable SHA-256 hashes OMP records, never raw account ids.
     provider_account_hashes: dict[str, str] = field(default_factory=dict)
     model: str | None = None
+    # The model this session's *launch* asked for, in the harness's own spelling,
+    # or `None` for a launch that named none. Distinct from `model` above, which
+    # is what the harness reports it is actually running: two of the five
+    # harnesses fuzzy-match the launch value and a third does not validate it at
+    # all, so "what was asked for" and "what ran" are separate facts and the
+    # comparison between them (`harness.model_agreement`) is the only thing that
+    # can catch a flag that quietly landed somewhere else.
+    #
+    # A launch-time fact, so unlike `model` it is deliberately **not** cleared
+    # when a conversation is replaced in place (`/clear`, `/new`): the flag on the
+    # command line still applies to whatever conversation the process is on.
+    model_requested: str | None = None
     measurement_source: str | None = None
     parser_status: str = "not_applicable"
     parser_diagnostic: str | None = None
