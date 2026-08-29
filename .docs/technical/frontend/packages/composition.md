@@ -36,6 +36,21 @@ Index: `../packages.md`.
 - The switch, the last-check status, and a "Check now" button are in Settings → Diagnostics → **Software updates** (`update_check_enabled`).
   Endpoint and reasoning: `../../design/interfaces.md`, `../../design/features/remote-access.md`.
 
+## Frontend overlay
+
+`frontendOverlay.ts`
+
+- The browser half of the hash-verified `static/` overlay a daemon may serve in place of its bundled UI (`../../design/features/desktop-shell.md`, `../../design/interfaces.md`).
+  Verification, the compatibility pin and the choice all belong to the daemon and arrive as `serving`; nothing is re-derived here, for the reason `updateCheck.ts` does not re-derive `banner`.
+- **The one thing the browser decides is the distinction that justifies having a UI at all:** an overlay that is installed and *refused* must not read as one that was never installed.
+  From inside a browser those two look identical - both show the bundled frontend - and confusing them is precisely the "a verified-correct fix silently does nothing" failure the overlay exists to end.
+  So `faulted` is separate from "not serving an overlay", `overlayStatusSummary` prints the daemon's own sentence naming both versions rather than a generic line, and Settings renders it as an error rather than as a status.
+- Three states that are *not* faults are kept apart from it and from each other: a deliberate `reverted`, the install-wide `disabled` switch, and an install that is simply waiting for the daemon restart that applies it.
+  The last reads as pending rather than broken, because sending someone to hunt for a fault that does not exist is its own failure.
+- The section is hidden until an overlay exists. An empty panel explaining a mechanism nobody is using is noise on a page that already has a lot of it, and it appears at the moment there is something to revert.
+- Settings → Diagnostics → **Frontend overlay** carries the status, the revert/restore press, the `frontend_overlay_enabled` switch, and a "Reload daemon (keep sessions)" button beside them, because a revert only reaches the screen at the next daemon start.
+  `mux ui-overlay revert` is the path that does not need this UI, and is the one to reach for when the overlay is why the UI will not load.
+
 ## Fleet refresh
 
 `fleetRefresh.ts`, `fleetLayouts.ts`

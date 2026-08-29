@@ -39,6 +39,7 @@ from . import (
     clipboard,
     configurator,
     diagnostics,
+    frontend,
     git,
     grants,
     history,
@@ -72,6 +73,7 @@ from . import (
 ORDER = (
     system,
     update,
+    frontend,
     settings,
     automation,
     attention,

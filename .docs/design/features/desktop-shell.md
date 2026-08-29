@@ -119,6 +119,44 @@ continues to own every terminal.
   bump does. And an archive whose metadata is **missing or unreadable** is refused too -
   "cannot tell whether this reaps your sessions" is not a case to guess at, and it is
   precisely what an archive built before this contract looks like.
+- **The frontend overlay replaces the UI without replacing the application, and the three
+  properties that make that sound are not optional.**
+  `frontend_overlay.py` lets a hash-verified `static/` tree in the data directory be served
+  in place of the bundled one, so a CSS or JS fix reaches a frozen app in seconds rather than
+  through a bundle swap.
+  It is the same pattern Expo/EAS Update and CodePush use for React Native and asar swapping
+  uses for Electron, and it is sound rather than hacky because of exactly three things.
+  **Verification** is a full SHA-256 pass over every listed file plus a closed rule for
+  everything unlisted, recomputed at every daemon start (measured 2026-08-29: 101 files,
+  23.05 MiB, 70-91 ms, against a start measured in tens of seconds).
+  **A compatibility pin with two halves**, both compared for exact equality and both checked
+  before anything is hashed.
+  `requires_backend` is `swe_mux.__version__`, which gives one rule an operator can hold in
+  their head: *an app update always supersedes an overlay.*
+  `requires_api` is a digest over the daemon's whole route table, and it is the half that
+  actually catches the failure, because **`__version__` alone cannot**: this project's frozen
+  app is rebuilt from a checkout that moves per commit while the version string moves per
+  release, so a frontend built from master today and an app built from master last week both
+  say "0.1.2" and disagree about which endpoints exist.
+  The practical rule that follows: **package an overlay from the same checkout the running app
+  was redeployed from.** If the backend has moved since, the overlay is refused with
+  `api_mismatch` and a redeploy is the honest answer, because a backend change is not
+  something an overlay can carry.
+  **A revert** that flips one boolean in one small atomic file, moves and deletes nothing, and
+  is reachable without the UI (`mux ui-overlay revert`) because an overlay's own failure mode
+  is a frontend that will not load.
+  Two consequences worth stating outright.
+  The pin is a claim by the **producer** (`packaging/build_frontend_overlay.py`), and the
+  daemon never mints one for a payload that arrived without a manifest - a pin the consumer
+  invented is not a pin, so an unmanifested tree is refused rather than adopted.
+  And every failure resolves back to the bundled tree with a reason: a bad overlay costs a
+  stale frontend and a `WARNING`, never a daemon that will not start, which matters because
+  the daemon is what serves the endpoint that would fix it.
+  Installing is loopback-only and carries `X-Mux-User-Gesture: frontend-overlay-install`;
+  reverting deliberately is not loopback-only, because it is the safe direction.
+  A URL source additionally **requires** the SHA-256 it must match - there is no manifest
+  here to take one from, and an unverified download reaching the served tree would be an
+  arbitrary-code-execution path into the application's own UI.
 - `<data_dir>/desktop-control.token` is random, user-local control material.
 - The token reaches the child only through `SWE_MUX_DESKTOP_CONTROL_TOKEN`.
 - `/api/desktop/shutdown` is absent as authority for standalone daemons, rejects non-loopback
@@ -526,6 +564,11 @@ person with no shortcut, no tray, and no idea where anything went.
 - Windows installer: `packaging/installer/swe-mux.iss`, `packaging/build_installer.py`
 - Installer tests: `tests/test_windows_installer.py`
 - Frozen-app updater: `src/swe_mux/update_install.py`, `src/swe_mux/routes/update.py`
+- Frontend overlay: `src/swe_mux/frontend_overlay.py`, `src/swe_mux/routes/frontend.py`,
+  `packaging/build_frontend_overlay.py`, `frontend/src/frontendOverlay.ts`
+- Frontend-overlay tests: `tests/test_frontend_overlay.py`,
+  `tests/test_frontend_overlay_endpoints.py`, `tests/test_frontend_overlay_packaging.py`,
+  `tests/test_cli_ui_overlay.py`, `frontend/test/frontendOverlay.test.ts`
 - Bundle self-description and archive rules: `src/swe_mux/bundle_metadata.py`,
   `src/swe_mux/bundle_archive.py`
 - Shared redeploy launch (endpoint and updater): `src/swe_mux/redeploy_launch.py`

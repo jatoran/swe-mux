@@ -243,6 +243,26 @@ Every phase transition is logged with the attempt's `install_id` and persisted a
 **Not:** the swap (`packaging/redeploy_desktop.py`, unchanged except for the flag), the archive's shape rules or extraction (`bundle_archive.py`), what a bundle claims about itself (`bundle_metadata.py`), or the decision that an update exists at all (`update_check.py`).
 It never updates `dist/swe-mux-supervisor/`: that reaps every live session, so a release needing it is refused with the manual flow named.
 
+### `frontend_overlay.py`
+
+The hash-verified `static/` overlay a daemon may serve in place of its bundled tree, so a UI fix reaches a frozen desktop app without a bundle swap (10.9 MiB against ~370 MB).
+Owns the manifest (`overlay.json`: `requires_backend`, a SHA-256 per file, a `tree_digest` over that set), verification, the compatibility pin, the content-addressed tree store under `<data_dir>/frontend-overlay/`, the install paths (local directory, local zip, verified download), and the revert.
+Resolution is called once from `create_app`, which is the seam: `FRONTEND_DIR` is read by four places inside `create_app` and three route modules, and teaching each of them about overlays would be six things to keep in agreement instead of one.
+An explicit `frontend_dir` argument still wins outright.
+
+Three rules the design rests on, each measured or argued rather than assumed.
+**Verification runs at every start** - 101 files, 23.05 MiB, 70-91 ms measured 2026-08-29 - so there is no case for a cheaper stat-and-mtime signature, which this repository has already been burned by twice at 15.625 ms timer granularity.
+**The pin has two halves, both exact equality, both checked before anything is hashed** (0.5 ms on the post-update start that refuses, against ~90 ms for a full pass).
+`requires_backend` gives the rule "an app update always supersedes an overlay"; `requires_api`, a digest over the route table, is what catches a frontend built against endpoints this daemon does not serve - which `__version__` structurally cannot, because the frozen app is rebuilt from a checkout that moves per commit while the version moves per release.
+`route_table_digest` takes `(method, path)` pairs rather than importing `routes`, because `routes/frontend.py` imports this module and a module-level import back would be a cycle; `daemon_api_digest()` is the lazy convenience and `create_app` computes it once per start.
+**Every failure resolves to the bundled tree with a reason** and nothing raises: a bad overlay is a stale frontend and a `WARNING`, never a daemon that will not start.
+
+Two shape decisions worth knowing.
+Trees are content-addressed (`trees/<tree_digest>/`) and an install never overwrites one, because on Windows a directory the daemon is serving cannot be renamed or removed and the obvious `active/`-swapped-in-place design would have had the daemon holding exactly the thing an install must move; pruning is best-effort for the same reason.
+Precompressed `.gz` sidecars are *derived*, not payload: the daemon writes them into whatever tree it serves, so verification accepts one class of unlisted file - a `.gz` whose plain sibling is listed and whose gzip trailer records that sibling's current CRC-32 and length (`build_support.sidecar_is_current`) - and refuses every other unlisted file, which is what keeps the tree closed rather than mostly-specified.
+
+**Not:** `update_install.py`'s release path, which it deliberately does not share (a shared archive abstraction is worth building later from two implementations rather than inventing one across a live seam); minting a compatibility pin for a payload that arrived without a manifest; anything to do with `dist/swe-mux-supervisor/`; or applying an install or a revert to the running process, which binds its static routes at construction and therefore needs a daemon restart.
+
 ### `bundle_metadata.py` / `bundle_archive.py`
 
 What a built bundle says about itself (`bundle.json`: schema, version, `supervisor_protocol`, platform, build stamp) and the rules for reading a release archive.

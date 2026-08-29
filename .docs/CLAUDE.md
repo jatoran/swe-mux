@@ -183,6 +183,27 @@
 - Changing Windows desktop packaging, WebView, tray, login startup, or daemon shutdown:
   `design/features/desktop-shell.md`, `design/architecture.md`, `design/interfaces.md`,
   `design/features/remote-access.md`, `technical/backend/packages.md`
+- Changing which static tree the daemon serves, the frontend overlay, its verification, its
+  compatibility pin, or its revert: `design/features/desktop-shell.md`,
+  `design/interfaces.md`, `technical/backend/packages/daemon-runtime.md`,
+  `technical/backend/packages/routes.md`, `technical/frontend/packages/composition.md`.
+  Three rules the split exists to enforce, and none of them is optional - an overlay without
+  all three is the hacky version of a mainstream pattern rather than the sound one.
+  **`FRONTEND_DIR` is resolved in exactly one place** (`server.create_app`) and read by four
+  sites inside it plus three route modules; a second reader that learned about overlays would
+  be a second decision, and the ones downstream would serve a different tree than the status
+  endpoint reports.
+  **The compatibility pin is the producer's claim, checked for exact equality**, so
+  `packaging/build_frontend_overlay.py` stamps it from the checkout and the daemon refuses a
+  payload that arrived without a manifest rather than inventing one - and the rule that
+  follows, *an app update always supersedes an overlay*, is what makes a stale overlay
+  self-clearing instead of a cleanup step somebody has to remember.
+  **A revert must be reachable without the frontend**, because the failure mode being guarded
+  against is a frontend that will not load; `mux ui-overlay revert` is that path and the
+  endpoint is the convenience.
+  And the thing that will bite: **precompressed `.gz` sidecars are derived, not payload.**
+  The daemon writes them into whatever tree it serves, so a verification rule that treated
+  every unlisted file as a fault would pass an overlay's first start and fail its second.
 - **Adding, removing, or upgrading any dependency** - Python or frontend:
   `packaging/license_audit.py` (the allowlist and the closure walk),
   `THIRD-PARTY-NOTICES.md` and `packaging/third_party_licenses.json` (both generated,

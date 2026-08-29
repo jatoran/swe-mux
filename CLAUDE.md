@@ -19,10 +19,29 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   assuming a frontend change is live, **confirm which build is being served**: compare the
   hashed asset the live daemon returns against the one you just built —
   `curl -s http://127.0.0.1:8765/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.css'` vs the same
-  grep on `src/swe_mux/static/index.html`. If they differ, you are on the frozen app: ship
-  the change with the **Frozen desktop app update** flow below (a plain `npm run build` is not
-  enough). Symptom of this trap: a verified-correct CSS/JS fix that "still doesn't work" for
-  the user, especially on mobile.
+  grep on `src/swe_mux/static/index.html`. If they differ, you are on the frozen app and a
+  plain `npm run build` is not enough. Symptom of this trap: a verified-correct CSS/JS fix
+  that "still doesn't work" for the user, especially on mobile.
+
+  **The fix for that is now the frontend overlay, not a bundle rebuild** (since 2026-08-29,
+  `.docs/design/features/desktop-shell.md`). One command packages the built tree as a
+  hash-verified 10.9 MiB overlay and installs it into the data dir, where the daemon prefers
+  it over its own bundled copy:
+  `uv run python packaging/build_frontend_overlay.py --build --install`, then
+  `mux reload-daemon`. Seconds and one session-preserving restart, against a multi-minute
+  ~370 MB staged swap. `mux ui-overlay status` says which tree is being served and why,
+  `mux ui-overlay revert` puts the bundled one back, and both work without the UI - which is
+  the point, because the failure mode an overlay can cause is a frontend that will not load.
+
+  Three things to know before reaching for it. **Package from the checkout the running app
+  was redeployed from**: the overlay pins both `__version__` and a digest over the daemon's
+  route table, and a backend that has moved since is refused with `api_mismatch` rather than
+  served - correctly, because a backend change is not something an overlay can carry, and
+  `__version__` alone cannot see it (the frozen app is rebuilt per commit, the version moves
+  per release). **Never run `--install` from a worktree**: it writes into the live daemon's
+  data dir, which is the same runtime-collision rule as everything else here. And **the very
+  first hop is still a redeploy**, because a frozen app built before this feature has no
+  overlay support in its bundled backend.
 - **Backend/daemon change**: `curl -X POST http://127.0.0.1:8765/api/daemon/restart`
   (or UI menu → "Reload daemon (keep sessions)", or `mux reload-daemon`). Every session
   survives — but the daemon restarts with your code **only when it runs from source**
@@ -35,8 +54,9 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
 - **Frozen desktop app update** (rebuild `dist/` + relaunch, sessions preserved —
   safe to run from a session inside swe-mux): `uv run python packaging/redeploy_desktop.py`,
   or from the UI: menu → "Rebuild + redeploy app (keep sessions)" (`app.redeploy`, also on
-  mobile; `POST /api/daemon/redeploy`). This is the correct way to push a **frontend-only**
-  change to the frozen app too (it rebuilds the frontend into the bundle). It is a
+  mobile; `POST /api/daemon/redeploy`). It ships a frontend change too, and it is no longer
+  the right tool for one: use the **frontend overlay** above unless the change also touches
+  the backend, or unless the running bundle predates overlay support. It is a
   multi-minute PyInstaller rebuild, **staged**: it builds into `dist/.staging` while the old
   app keeps running, stops it only after a successful build, then swaps — a failed build
   leaves the running app untouched, and a new build that never turns healthy is rolled back

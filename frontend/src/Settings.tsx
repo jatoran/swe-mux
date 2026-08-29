@@ -62,6 +62,10 @@ import {
   type UpdateStatus,
 } from './updateCheck'
 import {
+  fetchOverlayStatus, installedAtLabel, overlayStatusSummary, restoreOverlay,
+  revertOverlay, shouldShowOverlaySection, type OverlayStatus,
+} from './frontendOverlay'
+import {
   customProviderOverride, MODEL_ROUTES, resolveRoute, type ModelRoutingConfig,
 } from './modelRouting'
 
@@ -73,6 +77,7 @@ type Config = {
   session_recovery_max_sessions:number
   log_level:'DEBUG'|'INFO'|'WARNING'|'ERROR'
   update_check_enabled:boolean
+  frontend_overlay_enabled:boolean
   terminal_renderer:'auto'|'dom'|'webgl'
   harness_args:Record<string,string[]>
   harness_enabled:Record<string,boolean>
@@ -407,6 +412,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     try{setUpdateStatus(await requestUpdateCheck())}
     catch(cause){setUpdateError(cause instanceof Error?cause.message:String(cause))}
     finally{setUpdateBusy(false)}
+  }
+  // The frontend overlay. Read passively for the same reason the update check is:
+  // the daemon already decided at start which tree it serves, so opening Settings
+  // costs one small state read and never re-hashes anything.
+  const [overlayStatus,setOverlayStatus]=useState<OverlayStatus|null>(null)
+  const [overlayBusy,setOverlayBusy]=useState(false)
+  const [overlayError,setOverlayError]=useState('')
+  useEffect(()=>{void fetchOverlayStatus().then(setOverlayStatus).catch(()=>{})},[])
+  const overlaySummary=overlayStatusSummary(overlayStatus)
+  const overlayInstalled=installedAtLabel(overlayStatus)
+  const overlayPress=async(action:()=>Promise<OverlayStatus>)=>{
+    if(overlayBusy)return
+    setOverlayBusy(true);setOverlayError('')
+    try{setOverlayStatus(await action())}
+    catch(cause){setOverlayError(cause instanceof Error?cause.message:String(cause))}
+    finally{setOverlayBusy(false)}
   }
   const [prerequisites,setPrerequisites]=useState<Prerequisite[]|null>(null)
   // Placeholder for the assistant's new-project location: the parent directory most
@@ -2225,6 +2246,30 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </div>
           {updateError&&<p aria-live="polite">{updateError}</p>}
           </section>
+
+          {/* Between "is there anything new" and "put a whole new app on this
+              machine", because it is the cheap version of the second: the static
+              tree is a few megabytes of the ~370 MB a bundle swap rewrites.
+              Hidden entirely until an overlay exists - an empty panel explaining a
+              mechanism nobody is using is noise. */}
+          {shouldShowOverlaySection(overlayStatus)&&<section data-section="frontend-overlay"><h3>Frontend overlay</h3>
+          <p>A hash-verified copy of the UI in the data directory, served instead of the one built into this app. It carries a compatibility pin, so an overlay built for another version is refused rather than served, and an app update always supersedes it.</p>
+          <p class={overlayStatus?.serving?.faulted?'settings-inline-error':''} aria-live="polite">{overlaySummary||' '}</p>
+          {overlayInstalled&&<p class="profile-hint">Installed {overlayInstalled}{overlayStatus?.state?.requires_backend?`, pinned to swe-mux ${overlayStatus.state.requires_backend}`:''}.</p>}
+          {overlayStatus?.state?.installed_from&&<p class="profile-hint">From <code>{overlayStatus.state.installed_from}</code>.</p>}
+          <label class="check" data-setting="frontend_overlay_enabled"><span>Allow frontend overlays</span><input type="checkbox" checked={draft.frontend_overlay_enabled} onChange={e=>change('frontend_overlay_enabled',e.currentTarget.checked)}/><small>Off serves the built-in frontend without uninstalling anything.</small></label>
+          <div class="settings-config-actions"><div>
+            <p class="profile-hint">Reverting switches the overlay off and leaves its files in place, so restoring it is the same press in reverse. Either takes effect at the next daemon restart.</p>
+          </div>
+            <div>
+              {overlayStatus?.active
+                ?<button disabled={overlayBusy} onClick={()=>void overlayPress(revertOverlay)}>{overlayBusy?'Working…':'Revert to bundled frontend'}</button>
+                :<button disabled={overlayBusy||!overlayStatus?.can_restore} onClick={()=>void overlayPress(restoreOverlay)}>{overlayBusy?'Working…':'Use the overlay again'}</button>}
+              <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
+            </div>
+          </div>
+          {overlayError&&<p class="settings-inline-error" aria-live="polite">{overlayError}</p>}
+          </section>}
 
           {/* The same three commands the app menu carries, reachable from Settings
               because this is where you already are when a change has not appeared.

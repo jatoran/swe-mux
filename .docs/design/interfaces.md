@@ -280,6 +280,76 @@ an artifact's name whose digest is wrong is deleted rather than trusted.
 <version>` performs one - it sends the same gesture header, because typing the
 command is exactly the deliberate act that header stands for.
 
+## Frontend overlay
+
+```text
+GET  /api/frontend/overlay
+POST /api/frontend/overlay/install   {archive|directory|url, sha256?}
+                                     (X-Mux-User-Gesture: frontend-overlay-install, loopback)
+POST /api/frontend/overlay/revert    (X-Mux-User-Gesture: frontend-overlay-revert)
+POST /api/frontend/overlay/restore   (X-Mux-User-Gesture: frontend-overlay-restore)
+```
+
+A hash-verified `static/` tree in the data directory, served in place of the
+daemon's bundled one, so a UI fix reaches a **frozen desktop app** without a
+bundle swap: 10.9 MiB rather than ~370 MB, and no OS image scan of a tree the
+machine has never seen. `frontend_overlay.py` owns the reasoning;
+`design/features/desktop-shell.md` holds the three properties that make it sound.
+
+`GET` reads the small state file and nothing else. It never re-verifies - that is
+a start-time act - so polling this endpoint costs nothing. It returns
+`{supported, installed, active, backend_version, can_restore, tree_exists,
+override, state{...}, serving{...}}`, where `serving` is *this process's* answer
+(`{serving: overlay|bundled, directory, bundled_directory, reason, message,
+faulted, overlay}`) and is `null` when a caller passed an explicit frontend
+directory override. It is held in memory rather than persisted, because a
+decision that outlived the process that made it would be a false claim about what
+is being served.
+
+`reason` is a closed set with three groups, and collapsing them would lose the
+one distinction the feature exists for. **Nothing is wrong:** `ok`, `no_overlay`.
+**Somebody chose this:** `reverted`, `disabled` (the `frontend_overlay_enabled`
+switch). **An overlay is installed and could not be served** - reported as
+`faulted: true`, because from inside a browser this is indistinguishable from
+never having installed one, which is exactly the "a verified-correct fix silently
+does nothing" failure being retired: `version_mismatch`, `api_mismatch`,
+`hash_mismatch`, `missing_file`, `unexpected_file`, `unreadable_file`,
+`tree_missing`, `manifest_missing`, `manifest_unreadable`,
+`manifest_inconsistent`, `unsupported_schema`, `no_index`.
+
+`api_mismatch` is the one worth explaining, because both sides report the same
+version and disagree anyway. The pin has two halves: `requires_backend` is
+`__version__`, and `requires_api` is a digest over the daemon's whole route table.
+The second exists because the first structurally cannot catch a frontend calling
+an endpoint this daemon does not serve - the frozen app is rebuilt from a checkout
+that moves per commit while the version moves per release. Package an overlay from
+the same checkout the running app was redeployed from; if the backend has moved,
+a redeploy is the honest answer.
+
+`POST .../install` names **exactly one** source. A `directory` or an `archive` is
+a path on the daemon's own host, which is why the route is loopback-only; `sha256`
+is optional there and turns "the file changed between packaging and installing"
+into a refusal. For a `url` it is **required**: there is no manifest here to take a
+hash from, so an unverifiable download is refused (`digest_required`) before a byte
+is fetched. Refusals answer *this* request as `409` rather than being left for a
+poll. Success is `202` carrying `{installed, digest, overlay, events[],
+restart_required: true}` - the static routes bind their directory at app
+construction, so an install takes effect at the next daemon start and says so
+rather than claiming otherwise.
+
+Reverting is one boolean in one atomic file and touches no tree, so it cannot
+half-fail and the overlay's bytes stay on disk for `restore` and for inspection.
+It is deliberately **not** loopback-only: it is the safe direction, back to the
+tree that shipped with this build. `mux ui-overlay status|install|revert|restore`
+is the same set from the CLI and is the one that matters, because an overlay's own
+failure mode is a UI that will not load.
+
+The payload's manifest (`overlay.json` at the root of the tree) is written by
+`packaging/build_frontend_overlay.py` and carries `requires_backend`,
+`requires_api`, a SHA-256 per file, and a `tree_digest` over that set. Both pins
+are required, because an optional pin is one any producer can decline to make.
+The daemon never mints one for a payload that arrived without a manifest.
+
 ## Daemon self-restart
 
 ```text
