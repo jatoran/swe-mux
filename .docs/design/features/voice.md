@@ -267,7 +267,12 @@ install-wide, so the tab edits them directly for the focused session.
   Both speech features ship switched off, so every new user downloaded that and let Windows
   scan it for a capability most never enable.
   It is now acquired on a press: the bundle is **111.2 MiB over 1497 files**, and turning voice
-  on costs one 81.9 MiB download.
+  on costs one download of 44-139 MiB depending on the platform - 81.9 MiB on Windows, 49.6 MiB
+  on macOS, largest on Linux.
+  The range is a property of the pin table (each distribution's smallest and largest wheel across
+  the supported targets) rather than of any host, which is what
+  `tests/test_voice_wheels.py` now asserts against; a floor derived from the Windows figure alone
+  turned the macOS CI leg red.
 
   The mechanism is `SpacyModelStore`'s, widened from one wheel to a closure.
   Pins are **generated from `uv.lock`** rather than maintained, because a hand-written
@@ -321,7 +326,7 @@ install-wide, so the tab edits them directly for the focused session.
   console script does - and `tests/test_voice_wheels.py` asserts that rather than assuming it.
 
   The honest cost, stated because the win is not universal.
-  Unpacked, the closure is ~315 MB against the 277 MB it replaced in the bundle, because wheels
+  Unpacked, the closure is ~315 MB on Windows against the 277 MB it replaced in the bundle, because wheels
   carry test suites and type stubs PyInstaller pruned.
   So a user who never enables voice saves 289 MB of download and disk permanently; a user who
   does download 193 MB instead of 400 MB and stores about 26 MB more.

@@ -16,7 +16,12 @@ from pathlib import Path
 import pytest
 
 from swe_mux import voice_runtime
-from swe_mux.voice_wheels import CLOSURE_DIGEST, VoiceWheel
+from swe_mux.voice_wheels import (
+    CLOSURE_DIGEST,
+    VoiceWheel,
+    total_bytes,
+    wheels_for_this_interpreter,
+)
 
 
 def _wheel(path: Path, members: dict[str, str]) -> None:
@@ -36,7 +41,13 @@ def test_a_clean_data_dir_reports_not_downloaded_and_offers_a_size(
     assert state["supported"] is True
     assert state["source"] is None
     assert state["downloaded_bytes"] == 0
-    assert state["total_bytes"] > 50 * 1024 * 1024
+    # The estimate *is* the pins, which is both the tightest assertion available
+    # and the only one that holds on every runner: the Windows closure is 81.9 MiB
+    # and the macOS one 49.6 MiB, so `> 50 MiB` was a measurement of this host
+    # rather than a property of the store.
+    assert state["total_bytes"] == total_bytes(wheels_for_this_interpreter())
+    assert state["total_bytes"] > 0
+    assert state["distributions"] == len(wheels_for_this_interpreter())
     assert state["closure"] == CLOSURE_DIGEST
     assert not (tmp_path / "voice-runtime").exists()
 

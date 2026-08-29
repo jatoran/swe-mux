@@ -40,13 +40,20 @@ def _absent_runtime() -> dict[str, Any]:
     would answer `ready` from `closure_importable()` and every assertion below
     would pass for the wrong reason.
     """
+    from swe_mux.voice_wheels import total_bytes, wheels_for_this_interpreter
+
+    # Derived, not transcribed. This carried 85_905_087 - the Windows total - which
+    # was inert here but is the same habit that put a Windows-derived floor into two
+    # assertions and turned the macOS leg red. A fixture that states a number no
+    # runner would agree with is a trap waiting for the first assertion about it.
+    selected = wheels_for_this_interpreter()
     return {
         "status": "not_downloaded",
         "source": None,
         "supported": True,
         "closure": "0" * 64,
-        "distributions": 45,
-        "total_bytes": 85_905_087,
+        "distributions": len(selected),
+        "total_bytes": total_bytes(selected),
         "downloaded_bytes": 0,
         "current_file": None,
         "error": None,

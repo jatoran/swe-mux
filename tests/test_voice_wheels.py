@@ -94,17 +94,95 @@ def test_the_pins_come_from_the_index_rather_than_from_this_project() -> None:
         )
 
 
+def _pin_implied_bounds() -> tuple[int, int]:
+    """The smallest and largest total any platform's selection can have.
+
+    Derived from the pin table, which is the only thing in this repository that
+    knows: for each distribution, the smallest and largest wheel it publishes for
+    any supported target. Every real selection picks exactly one wheel per
+    distribution, so every real total lies between those two sums whatever host
+    computes it.
+
+    This replaced `> 50 * 1024 * 1024`, which was a Windows measurement wearing a
+    threshold's clothes. The Windows closure is 81.9 MiB and the macOS one is
+    49.6 MiB, so the floor passed on the host that produced it and failed on the
+    first runner that did not - the same "asked the machine a question instead of
+    the repository" shape as the six failures before it.
+    """
+    per: dict[str, list[int]] = {}
+    for wheel in voice_wheels.WHEELS:
+        per.setdefault(wheel.distribution, []).append(wheel.size)
+    return sum(min(sizes) for sizes in per.values()), sum(
+        max(sizes) for sizes in per.values()
+    )
+
+
 def test_this_interpreter_can_select_one_wheel_for_every_distribution() -> None:
-    """Selection is total on a supported host, and yields one wheel per package.
+    """Selection is total on a supported host, and yields one wheel per distribution.
 
     `wheels_for_this_interpreter` refuses rather than returning a partial set,
     because a closure missing one native package fails at import time - much
     later, in a place that names the wrong thing.
+
+    The size assertions are properties rather than magnitudes: every selected
+    wheel is one the table actually pins, and the total lies inside the range the
+    table implies. Both hold on every runner, and together they catch what a floor
+    was reaching for - a selection that silently collapsed, or one that picked
+    more than one wheel for a distribution.
     """
     selected = voice_wheels.wheels_for_this_interpreter()
     assert {wheel.distribution for wheel in selected} == set(voice_wheels.DISTRIBUTIONS)
     assert len(selected) == len(voice_wheels.DISTRIBUTIONS)
-    assert voice_wheels.total_bytes(selected) > 50 * 1024 * 1024
+    assert set(selected) <= set(voice_wheels.WHEELS), "a selected wheel must be a pinned wheel"
+    assert all(wheel.size > 0 for wheel in selected)
+
+    smallest, largest = _pin_implied_bounds()
+    total = voice_wheels.total_bytes(selected)
+    assert total == sum(wheel.size for wheel in selected)
+    assert smallest <= total <= largest
+
+
+def test_selection_is_deterministic() -> None:
+    """Two calls on one interpreter must choose the same wheels.
+
+    `sys_tags()` is ordered, so this is a property of the implementation rather
+    than a hope - but the store memoizes the answer and the state file records a
+    closure digest against it, so a selection that varied would produce a tree
+    that re-acquires itself.
+    """
+    assert voice_wheels.wheels_for_this_interpreter() == (
+        voice_wheels.wheels_for_this_interpreter()
+    )
+
+
+def test_every_distribution_publishes_a_wheel_for_every_supported_platform() -> None:
+    """The failure that can only appear on a runner, caught from the table instead.
+
+    A distribution with no macOS wheel is a `LookupError` on macOS and nowhere
+    else, and no amount of local testing would show it. Checked per distribution
+    *and* per platform family, which is stronger than the tag-level coverage
+    check: that one passes as long as *some* distribution has a macOS wheel.
+    """
+    from packaging.utils import parse_wheel_filename
+
+    families = {
+        "win_amd64": lambda p: p == "win_amd64",
+        "manylinux x86_64": lambda p: "manylinux" in p and p.endswith("x86_64"),
+        "macosx arm64": lambda p: p.startswith("macosx") and p.endswith(
+            ("arm64", "universal2")
+        ),
+    }
+    covered: dict[str, set[str]] = {name: set() for name in families}
+    for wheel in voice_wheels.WHEELS:
+        _, _, _, tags = parse_wheel_filename(wheel.filename)
+        platforms = {tag.platform for tag in tags}
+        for name, matches in families.items():
+            if "any" in platforms or any(matches(one) for one in platforms):
+                covered[name].add(wheel.distribution)
+
+    expected = set(voice_wheels.DISTRIBUTIONS)
+    for name, seen in covered.items():
+        assert seen == expected, f"{name} has no wheel for: {sorted(expected - seen)}"
 
 
 def test_selection_refuses_rather_than_returning_a_partial_closure() -> None:
