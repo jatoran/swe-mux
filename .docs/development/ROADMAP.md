@@ -6009,6 +6009,145 @@ without touching a single repository, and the ceiling answers the case the defau
 - [ ] A `bare` Project is run for a working session and the receiving agent's behaviour is
   observed, because the argument for the level is a claim about how a message reads.
 
+## Phase 23 - One authority core, three transports: the agent CLI and the gap under it
+
+Recorded 2026-08-29 after evaluation. Partly scheduled: the two distribution-shaped items were
+taken into 0.1.3 because console-script names and installer behaviour are contracts that get
+painful to change once people have installed. The rest is sequenced after that release and is
+gated on the security item, which is the real content of this phase.
+
+### The frame
+
+Three questions arrived tangled together and have different urgency.
+
+- **Naming** - whether `mux`/`muxd` is the right thing for a public, PyPI-distributed project to
+  occupy. Cheap now, expensive later.
+- **Agent transport** - whether agents should reach the daemon through a CLI as well as MCP, and
+  how they learn it exists. Architectural, no deadline.
+- **An authority gap that already exists** - the loopback API authenticates nothing. Pre-existing,
+  independent of the other two, and the gate on the second being safe.
+
+### Findings
+
+**The commands are already on PATH for some users and not others.**
+`pyproject.toml` ships `mux` (`swe_mux.cli:main`), `muxd` (`swe_mux.__main__:main`) and `swe-mux`
+(`swe_mux.desktop:main`, a gui-script), so `uv tool install`, pipx and pip all place the CLI on
+PATH today.
+`packaging/installer/swe-mux.iss` never touches PATH - it installs the bundle and shortcuts only.
+**Two install paths, two capability sets.**
+
+**The name collision is live and in-category.**
+The npm package `mux` is at 0.28.2 and installs a `mux` binary, described "mux - coder
+multiplexer"; its repository `coder/mux` now redirects to `coder/xum`, a ~2k-star desktop app for
+parallel agentic development.
+A comparable project walked away from this four-letter name while continuing to publish under it.
+`tmuxinator` ships no `mux` binary, but `alias mux=tmuxinator` is a common convention, so
+shell-level shadowing is plausible.
+No widely installed `muxd` collision was found.
+The obvious explanation for the rename is the MUX trademark, but that is **inference, not a
+verified fact**, and nothing here should be written as though it were one.
+
+**The "avoid MCP installations" motive is mostly already solved.**
+MCP is auto-registered into every spawned Claude, Codex, opencode and OMP session with a
+per-session bearer token, gated by `config.harness_mcp_enabled`, and the shims cover a user-typed
+`claude`/`codex` in a mux shell.
+`pi` is the only harness excluded, because it has no MCP client.
+So a CLI does not remove an install burden. What it earns is different and still real: `pi` and
+any future MCP-less harness, plain shell panes, Project Actions and task steps, composability with
+`jq` and friends, and tool-schema context cost.
+
+**The authority gap, stated correctly.**
+`mux send` POSTs raw bytes to `/api/sessions/{sid}/input` - the operator's terminal-input path -
+bypassing the prompt queue, head-of-line order, receiver readiness, the arming policy, envelope
+levels, human approval and `revoke_message`. `mux kill` deletes any session, `mux spawn` starts
+one, all unauthenticated on loopback.
+It would be wrong to file this as something a CLI-for-agents introduces: **an agent in a mux pane
+holds a shell, so it can already reach that endpoint with `curl` today.**
+The defect is the unauthenticated endpoint, not the CLI. What a CLI changes is that the capability
+becomes discoverable, one command away, and - if a skill says "use `mux`" - normative.
+
+**What already exists to build on.**
+`session.py` injects `MUX_SESSION_ID`, `MUX_MCP_URL`, `MUX_MCP_TOKEN` and the hook URLs into every
+pane, so the identity half is done.
+`agent_skills.py` understands the `SKILL.md` + frontmatter contract for both vendors, yet swe-mux
+ships no skill of its own.
+`mux-mcp.md` already states the governing principle - "MCP is transport, not authority" - and the
+authority matrix landed with an install default and ceiling over five fields, which is where two
+more belong rather than in a new settings surface.
+
+**What herdr does, since it is the closest working example.**
+An env marker (`HERDR_ENV=1`) plus caller context; a skill file distributed through the host
+harness's own mechanism; **the binary carrying its own instructions** (`herdr --skill` prints a
+copy `include_str!`'d at build time, so guidance cannot drift from the binary); and guardrails in
+the frontmatter whose first instruction is an in-session env check and whose description actively
+suppresses loading.
+The skill refuses to enumerate flags - it points at `--help` and tells the reader to take ids from
+JSON rather than predict them.
+One structural difference that must not be copied: `agent.prompt --wait` is synchronous, while the
+swe-mux queue is asynchronous by design, which is why a reply route belongs in the message text
+here and does not there.
+
+### Taken into 0.1.3
+
+- [ ] **Add `swemux` and `swemuxd` as the primary console scripts, keeping `mux` and `muxd` as
+  working aliases.** Purely additive, so nothing that exists stops working and no document that
+  says `mux` becomes wrong - which is also what makes it safe without resolving the trademark
+  question first.
+- [ ] **The Windows installer puts the CLI on PATH.** Idempotent across upgrades, removing exactly
+  what it added on uninstall and nothing adjacent, per-user unless machine-wide can be argued,
+  respecting the documented PATH-length hazards, and broadcasting the change or saying plainly
+  that a new terminal is needed.
+
+### Sequenced after it, in order
+
+- [ ] **W1 - distinguish operator-originated from session-originated requests, server-side.**
+  The prerequisite for everything below, and it stands on its own merits as a pre-existing gap
+  even if the CLI work never happens. Without it a CLI toggle is decorative, because a capability
+  the daemon honours from anyone cannot be turned off.
+- [ ] **W2 - agent mode in the CLI.** Read `MUX_SESSION_ID`/`MUX_MCP_TOKEN` from the pane
+  environment; when present, authenticate as that session, expose the identity-bound verbs through
+  the same gates the MCP tools use, and refuse the operator verbs. Same authority model, second
+  transport.
+- [ ] **W3 - generate the agent verbs from the MCP tool registry** rather than hand-writing
+  thirty-five subcommands: either codegen or one passthrough (`tools` to list, `tool <name>
+  --json` to call). Adding an MCP tool then costs zero CLI work and the two cannot drift.
+- [ ] **W4 - two independent per-harness toggles in the existing authority matrix**, with install
+  default and ceiling, the same shape as `land_verify_grant`. Four states, all valid: both
+  (default), MCP only (today's behaviour), CLI only (`pi`, or trading tool-schema context for a
+  shell call), and neither - which is currently unreachable and is the one worth designing for
+  deliberately, because an untrusted or contributor branch should be able to hold a pane with no
+  fleet access at all.
+- [ ] **W5 - ship a skill, embedded in the binary**, so `--skill` prints a release-matched copy and
+  guidance cannot drift from the code. The frontmatter description tuned to suppress over-firing,
+  the first instruction an in-session environment check, and the body pointing at `--help` rather
+  than enumerating flags. The skill resolving transport at runtime - prefer MCP tools when visible,
+  otherwise shell out - is what makes W4's four states work with no per-user configuration.
+- [ ] **W7 - measure the resident context cost of the MCP tool schemas** before it is used as an
+  argument. It has been asserted and not measured, and it is the main justification for the
+  CLI-only state, so it should be a number.
+
+### Deliberately not action items
+
+Recorded so they are not re-litigated.
+
+- **Do not build a second surface.** One authority core, three transports - browser, MCP, CLI -
+  all reading through the same services.
+- **Do not copy herdr's synchronous `--wait` model.** The queue here is asynchronous by design.
+- **Do not add a new settings page for W4.** The authority matrix already has the shape.
+- **Do not make a legal determination about the name.** The additive rename is correct under
+  either answer, which is precisely why it was chosen.
+
+### Phase 23 exit criteria
+
+- [ ] A user who installed from the Windows installer and a user who installed from PyPI have the
+  same commands available, and an uninstall leaves PATH as it found it.
+- [ ] No request that carries session identity can reach an operator-only route, and the gap is
+  closed at the route rather than in any one client.
+- [ ] An agent in a pane with no MCP client has the same fleet capability, through the same gates,
+  as one with it.
+- [ ] Adding an MCP tool requires no CLI change, and a test proves the two cannot drift.
+- [ ] All four toggle states are reachable and enforced server-side, including "neither".
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new

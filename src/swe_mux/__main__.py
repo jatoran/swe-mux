@@ -10,6 +10,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from .cli import invoked_as
 from .config import LOOPBACK_HOSTS, Config, load_config
 from .http_support import ACCESS_LOG_FORMAT
 from .lifecycle import heartbeat_pid, ledger, pid_running
@@ -19,9 +20,17 @@ from .server import create_app, wait_runtime_ready
 from .tailscale import enable_mobile_voice_serve, listener_hosts
 from .timer_resolution import raise_timer_resolution
 
+#: The launcher names `[project.scripts]` declares for the daemon. Same rule as
+#: the client's `LAUNCHER_NAMES`, different vocabulary; see `cli.invoked_as`.
+DAEMON_LAUNCHER_NAMES = frozenset({"swemuxd", "muxd"})
+DEFAULT_DAEMON_PROG = "swemuxd"
 
-def parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="muxd", description="swe-mux local daemon")
+
+def parser(prog: str | None = None) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog or invoked_as(names=DAEMON_LAUNCHER_NAMES, default=DEFAULT_DAEMON_PROG),
+        description="swe-mux local daemon",
+    )
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--config", type=Path)

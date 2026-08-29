@@ -66,6 +66,13 @@ def _record_pyinstaller(monkeypatch: Any) -> list[list[str]]:
     monkeypatch.setattr(build_desktop, "verify_build_extras_installed", lambda: None)
     monkeypatch.setattr(build_desktop, "create_tray_image", lambda _size: _Image())
     monkeypatch.setattr(build_desktop, "verify_bundle_contents", lambda _root: None)
+    # Stubbed like its siblings, and it has to be: the real one reads the acquired
+    # distributions' installed metadata, which CI's no-extras legs do not have.
+    # These tests are about the build *command* and the wiring of its gates, not
+    # about what is installed on the machine running them.
+    monkeypatch.setattr(
+        build_desktop, "verify_voice_closure_absent", lambda _root, _closure=None: None
+    )
     monkeypatch.setattr(build_desktop, "verify_bundle_licenses", lambda _root: None)
     monkeypatch.setattr(build_desktop, "describe_bundle", lambda _root: None)
     monkeypatch.setattr(build_desktop.subprocess, "run", _run)
@@ -102,6 +109,28 @@ def test_the_membership_check_runs_on_the_built_tree(monkeypatch: Any, tmp_path:
     _record_pyinstaller(monkeypatch)
     checked: list[Path] = []
     monkeypatch.setattr(build_desktop, "verify_bundle_contents", checked.append)
+
+    build_desktop.build_app_bundle(distpath=tmp_path)
+
+    assert checked == [tmp_path / "swe-mux"]
+
+
+def test_the_voice_closure_check_runs_on_the_built_tree(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The same requirement for the gate added with Workstream D.
+
+    A gate that is defined and not called is decoration, and this one guards a
+    regression - the closure quietly reshipping - that only a size measurement
+    would otherwise reveal.
+    """
+    _record_pyinstaller(monkeypatch)
+    checked: list[Path] = []
+    monkeypatch.setattr(
+        build_desktop,
+        "verify_voice_closure_absent",
+        lambda root, _closure=None: checked.append(root),
+    )
 
     build_desktop.build_app_bundle(distpath=tmp_path)
 
