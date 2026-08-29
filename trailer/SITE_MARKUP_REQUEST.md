@@ -1,6 +1,12 @@
 # Markup the loops need, for whoever owns `site/index.html`
 
-Five loop files now exist under `site/img/` and **nothing references them**.
+**Done as of 2026-08-28: all five loops are on the page, plus the hero.** This file is kept as the
+record of what each asset is and what markup it needs, and its placement notes below are what was
+actually followed. The status line it opened with - five loop files existing under `site/img/` that
+nothing referenced - is what a gate now prevents recurring: `site/tools/check.mjs` walks `img/` and
+fails on any committed asset no page references, which is the reverse of the check it already had.
+That failure happened twice in one day (eight screenshots, then these five), which is what earned
+it a gate rather than another fix.
 `site/` is the Pages deploy root, so they are already served; they are simply not on the page.
 
 This file is a request rather than a patch on purpose: `site/index.html`, `site/tools/`, and
@@ -76,14 +82,26 @@ It should be uploaded as a **GitHub Release asset** and referenced by that URL, 
 `trailer/HERO.md` § "Where it lives" - `.git` is already 119 MB, a committed binary is permanent,
 and the hero is the asset most likely to be re-cut.
 
-When that URL exists, the hero element wants a poster so the section is not blank while 4 MB
-arrives, and should **not** autoplay - a 69-second film is something a visitor chooses:
+**That URL now exists**, and the asset is named `hero.mp4` rather than `swe-mux-hero.mp4`:
+<https://github.com/jatoran/swe-mux/releases/download/v0.1.2/hero.mp4>.
+The earlier `swe-mux-hero.mp4` in this file was never uploaded and 404s; it was copied into
+`site/index.html` before anyone checked, which is the argument for verifying a URL in a handoff
+document rather than pattern-matching it.
+
+The hero element wants a poster so the section is not blank while 4 MB arrives, and should **not**
+autoplay - a 69-second film is something a visitor chooses:
 
 ```html
-<video src="https://github.com/jatoran/swe-mux/releases/download/vX.Y.Z/swe-mux-hero.mp4"
+<video src="https://github.com/jatoran/swe-mux/releases/download/v0.1.2/hero.mp4"
        poster="img/desktop-workspace.webp" width="1920" height="1080"
        controls muted loop playsinline preload="none"></video>
 ```
+
+`preload="none"` is doing a second job beyond weight. `site/README.md` section 6 forbids
+third-party requests of any kind, and this is the site's one exception; with `preload="none"`,
+`controls` rather than `autoplay`, and a poster served from this origin, **loading the page makes
+no request to github.com at all**. Only a visitor who presses play fetches anything, which is the
+same act as following the repository link in the top bar. Do not add `autoplay` here.
 
 The five short loops stay committed rather than joining it, and that asymmetry is deliberate: they
 are referenced inline, and a page that must reach a release asset to render its own section

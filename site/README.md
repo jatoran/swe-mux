@@ -579,23 +579,41 @@ That table's slot list is a copy of `SLOTS` in `tools/placeholders.py`, which is
 filenames and dimensions are maintained; the script is the thing that has to agree with the files.
 The *placement* column belongs here, because `index.html` is what it describes.
 
-### Screenshots are eager, and that is the gate's doing rather than an oversight
+### Screenshots are lazy, and the gate scrolls to meet them
 
-None of the nine carries `loading="lazy"`.
+Every section screenshot carries `loading="lazy"`.
+The hero's phone overlay does not, because it is above the fold and deferring the first thing a
+visitor sees is the one case where lazy loading costs rather than saves.
 
-`check.mjs` asserts that every image on every page resolves, and it does so by loading the page at
-1280x900 and reading `naturalWidth`.
-A lazy image far below the fold never starts loading under that check, so it reports
-`image did not load:` with an empty filename - the filename is empty precisely because
-`currentSrc` was never set.
-Seven of the nine failed that way on the first attempt.
+**This was briefly the other way round, and the reason it was wrong is worth keeping.**
+`check.mjs` asserts that every image on every page resolves, by loading the page at 1280x900 and
+reading `naturalWidth`.
+A lazy image far below the fold never starts loading under that, so it reported
+`image did not load:` with an empty filename - empty precisely because `currentSrc` was never set.
+Seven images failed that way, and the first fix was to strip `loading="lazy"` off the page.
 
-The cost is about 1.3 MB of WebP loaded eagerly on the landing page.
-That is the honest price of a gate that proves every image on the site resolves, and it is worth
-paying: the alternative is either weakening the gate or shipping a page whose screenshots are
-unverified.
-If it ever needs to change, the fix is on the check's side (scroll the page before reading
-`naturalWidth`), not on the markup's.
+That is the instrument changing the artifact to satisfy itself, which is the same mistake as
+weakening an assertion to green a badge, only inverted: the check kept its strictness and the
+shipped page got 844 KB heavier to feed it.
+**The site is the artifact and `tools/` is the instrument, so the instrument moves.**
+
+`check.mjs` now scrolls the whole document and waits for every image to settle before it measures,
+which is what a visitor does.
+That makes the check **stronger** rather than more permissive - it proves lazy images actually load,
+where before it could only forbid them - and it is why the assets line now reports how many were
+lazy.
+
+Two details in it are load-bearing.
+`complete` is the settle signal and never the verdict, because it turns true on error as well as on
+success; `naturalWidth` remains the verdict.
+And the failure message falls back to the `src` attribute when `currentSrc` is empty, because an
+empty filename in a failure report is exactly what made this hard to diagnose the first time.
+
+Verified against a page that fails on purpose rather than inferred from a green run, which is the
+only way to believe a check that was just made more permissive-looking. Three cases, outside this
+repository so no fixture ships: a lazy below-the-fold image reads broken **without** the scroll
+(reproducing the original defect), reads loaded **with** it, and a lazy image whose file genuinely
+does not exist still reads broken with it. The third is the one that matters.
 
 ### The page's own copy
 

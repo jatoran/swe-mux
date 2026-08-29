@@ -125,21 +125,75 @@ for (const page of PAGES) {
 console.log(`  ${PAGES.length * 8} page/viewport/theme combinations checked`)
 
 // ------------------------------------------------------------------ assets
+//
+// This scrolls before it measures, and that is the whole design of it.
+//
+// `loading="lazy"` is correct on a page carrying ~844 KB of screenshots, but a
+// check that reads `naturalWidth` in a 900px-tall viewport sees every image
+// below the fold as broken, because a lazy image that never entered the viewport
+// never loaded. That once got "fixed" by stripping the attribute off the page -
+// the instrument changing the artifact to satisfy itself, which is the same
+// mistake as weakening an assertion to green a badge, only inverted. The site is
+// the artifact; this file is the instrument; the instrument moves.
+//
+// Scrolling the document is what a visitor does, so measuring afterwards makes
+// this check *stronger* rather than more permissive: it now proves lazy images
+// actually load, where before it could only forbid them.
+async function settleImages(p, name) {
+  // Step by most of a viewport so nothing is skipped over, then land at the
+  // bottom - `scrollHeight` grows as content below loads, so it is re-read.
+  await p.evaluate(async () => {
+    const pause = () => new Promise((r) => setTimeout(r, 40))
+    for (let y = 0; y < document.body.scrollHeight; y += Math.floor(innerHeight * 0.8)) {
+      window.scrollTo(0, y)
+      await pause()
+    }
+    window.scrollTo(0, document.body.scrollHeight)
+    await pause()
+  })
+  // `complete` turns true on success *and* on error, so it is the settle signal
+  // and never the verdict. `naturalWidth` below is the verdict.
+  try {
+    await p.waitForFunction(() => [...document.images].every((i) => i.complete), null, {
+      timeout: 15000,
+    })
+  } catch {
+    fail(`${name}: images never finished loading within 15s after scrolling`)
+  }
+  // Let the loops' own metadata requests finish, so closing the page does not
+  // abort one and report it as a broken asset. Bounded and tolerant: five
+  // autoplaying videos can keep a connection warm indefinitely, and that is not
+  // a failure.
+  await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
+}
+
 console.log('assets')
 let imageCount = 0
+let lazyCount = 0
 for (const page of PAGES) {
   const p = await browser.newPage({ viewport: { width: 1280, height: 900 } })
   const badRequests = []
-  p.on('requestfailed', (r) => badRequests.push(r.url()))
+  p.on('requestfailed', (r) => badRequests.push(`${r.url()} (${r.failure()?.errorText ?? '?'})`))
   await p.goto(url(page), { waitUntil: 'networkidle' })
+  await settleImages(p, page.name)
   const imgs = await p.evaluate(() =>
-    [...document.images].map((i) => ({ src: i.currentSrc.split('/').pop(), ok: i.naturalWidth > 0 })))
+    [...document.images].map((i) => ({
+      // Fall back to the attribute: `currentSrc` is empty on an image that never
+      // started loading, and an empty filename in the failure message is exactly
+      // the report that made this hard to diagnose the first time.
+      src: i.currentSrc.split('/').pop() || i.getAttribute('src') || '(no src)',
+      ok: i.naturalWidth > 0,
+      lazy: i.loading === 'lazy',
+    })))
   for (const i of imgs) if (!i.ok) fail(`${page.name}: image did not load: ${i.src}`)
   for (const u of badRequests) fail(`${page.name}: request failed: ${u}`)
   imageCount += imgs.length
+  lazyCount += imgs.filter((i) => i.lazy).length
   await p.close()
 }
-console.log(`  ${imageCount} images across ${PAGES.length} pages, 0 failed requests`)
+console.log(
+  `  ${imageCount} images across ${PAGES.length} pages (${lazyCount} lazy, all loaded after scrolling), 0 failed requests`,
+)
 
 // ------------------------------------------------------- every asset is reachable
 // The failure this exists for is not a broken reference, which the block above
