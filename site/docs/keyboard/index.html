@@ -311,25 +311,15 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
 }
 .herovis img, .herovis video { display: block; width: 100%; height: auto; }
-.herovis figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
-                      padding: 8px 10px; border-top: 1px solid var(--line); }
-/* The phone is decorative here - the same view is captioned in section 01 - so it
-   carries no caption of its own at any width; a caption inside a 186px column is
-   unreadable and a caption outside it fights the frame's. */
 @media (max-width: 620px) {
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
 }
-
-/* --------------------------------------------------- inline visualizations */
-.vis { border: 1px dashed var(--line-2); padding: 9px 11px; margin-top: 14px;
-       display: flex; flex-direction: column; gap: 6px; background:
-       repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2); }
-.vis.wide { aspect-ratio: 21 / 9; }
-.vis.box { aspect-ratio: 4 / 3; }
-.vis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
-            color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
-.vis p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-3); overflow: hidden; }
+/* The two facts that used to be a caption under the hero film. Above 620px the
+   phone overlay hangs up to 46px below `.herovis` and this has to clear it;
+   below 620px the phone is back in flow and the same margin is dead space. */
+.shotnote { margin-top: clamp(56px, 8vw, 80px); max-width: 72ch; }
+@media (max-width: 620px) { .shotnote { margin-top: 22px; } }
 
 /* --------------------------------------------------------------- two halves */
 .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
@@ -354,23 +344,15 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
                         font-size: 15px; line-height: 1.66; }
 .sec > .wrap > .intro b { color: var(--fg); }
 
-/* --------------------------------------------------------- crop placeholders */
+/* ------------------------------------------------------------- shot layouts */
+/* Two shapes, and a section picks the one its captures are: a desktop capture
+   beside its phone counterpart, or one capture across the measure. Nothing here
+   carries text - a caption is an admission that the image and the section it sits
+   in do not belong together, so the claim lives in the section's own prose and the
+   frame holds nothing but the picture. */
 .crops { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.46fr); gap: 10px; align-items: start; }
 .crops.solo { grid-template-columns: minmax(0, 1fr); }
-.crops.trio { grid-template-columns: repeat(auto-fit, minmax(160px, 224px)); justify-content: start; gap: 14px; }
-.crop {
-  border: 1px dashed var(--line-2); background:
-    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
-  padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
-}
-.crop.d { aspect-ratio: 3 / 2; }
-.crop.m { aspect-ratio: 9 / 16; }
-.crop .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
-             color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
-.crop.d .tag { color: var(--cyan); }
-.crop.m .tag { color: var(--orange); }
-.crop p { font-size: 12px; line-height: 1.5; color: var(--fg-3); margin: 0; overflow: hidden; }
-@media (max-width: 460px) { .crops { grid-template-columns: minmax(0, 1fr); } .crop.m { max-width: 190px; } }
+@media (max-width: 460px) { .crops { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------------------------------------------------------- real screenshots */
 figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--panel-2); min-width: 0; }
@@ -378,8 +360,6 @@ figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--pane
    player chrome of its own. One selector rather than two rules, so a video cannot
    drift out of the layout the overflow gate checks. */
 figure.shot img, figure.shot video { display: block; width: 100%; height: auto; }
-figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
-                         padding: 8px 10px; border-top: 1px solid var(--line); }
 .shotpair { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
             gap: clamp(16px, 3vw, 30px); align-items: start; }
 @media (max-width: 700px) { .shotpair { grid-template-columns: minmax(0, 1fr); }
@@ -390,10 +370,7 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                        line-height: 1.58; color: var(--fg-2); }
 .shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
 
-/* A real capture standing in a `.crops` grid cell, where a `.crop` placeholder
-   used to be. It reuses `.crops` rather than getting a grid of its own so a
-   section can hold one of each while the remaining placeholders are filled.
-   The mobile column is capped rather than filled: a 1206x2622 capture at the
+/* The mobile column is capped rather than filled: a 1206x2622 capture at the
    0.46fr column's natural width is over 750px tall beside a 470px desktop crop,
    which pushes the section past two screens for nothing. */
 .crops figure.shot { align-self: start; }

@@ -123,17 +123,34 @@ That is the commodity axis, it is their axis, and they win it: Superset claims 1
 
 ## Settled copy
 
-> **Terminal multiplexer. Agent control plane. Full mobile parity.**
+> FOR THE CODING AGENTS YOU ALREADY RUN
 >
-> *Infrastructure built on what agents do, rather than what they are.*
+> **See what each agent actually did.**
+> **Land finished branches behind checks you approved.**
+>
+> *Evidence taken from the work, not from the agent's account of it.*
 
 ## Why the H1 is shaped that way
 
-It is a spec line, not a promise, and the three sentences are deliberately co-equal.
+**It is two claims and nothing else, and both are ones the category does not already make.**
+Persistence, worktrees, mobile and arbitrary-CLI support are commodity here; a record read from
+the work, and landing behind a command whose bytes you approved, are not.
 
-**Do not join them with "and" or "with."**
-A connective demotes whichever clause it introduces, and mobile is the one that kept getting demoted.
-Periods hold all three at the same weight, and the line break puts mobile parity on its own line so it carries equal visual weight too.
+**The audience clause lives in the kick line, not in the headline.**
+The H1 opened with "For developers running multiple coding agents locally," which the kick line
+one row above already carried, so the longest line on the page spent twelve of its twenty-six
+words saying who it was for twice.
+Both claims survived the cut intact; only the duplication left.
+
+**Three lines rather than two.**
+At 1440 the second claim on one line reaches the measure and pushes the block cursor onto a line
+of its own, where it reads as a stray green mark rather than as a caret ending the sentence.
+
+The earlier spec line, **"Terminal multiplexer. Agent control plane. Full mobile parity."**, is
+recorded here because its rule outlived it: three co-equal sentences joined by periods, never by
+"and" or "with", because a connective demotes whichever clause it introduces and mobile was the
+one that kept getting demoted. It was replaced by a headline that makes a claim rather than
+listing categories, and "terminal multiplexer" moved into the lede's first five words.
 
 ## Why the sub-headline is what it is
 
@@ -162,6 +179,10 @@ If a fact will not fit, it belongs to the section that owns it, not to the hero.
 It is the only place on the page that shows the whole application at once, so it may include chrome.
 Everywhere else the rule against full-window screenshots still holds.
 
+**One note sits under it and it is not a caption** (`.shotnote`).
+It carries the two facts a caption was the wrong place for: that every capture on the page is the real application in a synthetic install, which section 8 requires the page to say once, and that the film is a 4 MB fetch nothing triggers until you press play, which somebody on a metered connection is owed before they press it.
+Its top margin clears the phone overlay, which hangs up to 46px below `.herovis` above 620px and returns to flow below it, so the margin is halved at that breakpoint rather than left as dead space.
+
 ## Rejected, so they are not re-proposed
 
 Sub-headlines:
@@ -186,17 +207,31 @@ Headline directions:
 
 # 3. Page structure
 
-01. The whole workspace, on your phone. *(real screenshot + claims, then mobile crops)*
-02. Know which agent needs you. *(status detection, crops)*
-03. Sessions that outlive the app itself. *(persistence and redeploy, crops)*
-04. The workbench. *(rows, no images)*
-05. Every harness, and every shell. *(rows, no images)*
-06. Notes that are a real editor. *(crops)*
-07. Git that knows which agent did it. *(crops)*
-08. Drive it without touching it. *(voice and push, crops)*
-09. The control plane. *(grouped rows + one crop pair)*
+01. The whole workspace, on your phone. *(the phone loop beside the claims list)*
+02. Every harness, and every shell. *(rows, no images)*
+03. Know which agent needs you. *(status detection; the fleet loop beside the phone nav)*
+04. Sessions that outlive the app itself. *(the restart loop, full width)*
+05. The workbench. *(rows, no images)*
+06. Git that knows which agent did it. *(the map, then the landing loop, each under its own claim)*
+07. Notes that are a real editor. *(desktop and phone pair)*
+08. Drive it without touching it. *(voice and push; prose only)*
+09. The control plane. *(grouped rows, the alerts pair, then the evidence loop)*
 10. Also in the box. *(rows)*
 11. Install. *(the desktop download, then PyPI, then source)*
+
+**Two moves against the order this replaces, both made 2026-08-28.**
+
+**Every harness, and every shell** came up from 05 to 02, because it answers the qualifying
+question. A reader who has just been told this runs the agent CLIs they already have asks whether
+it runs *theirs*, and until that is answered they cannot evaluate anything below it. It is also
+short and image-free, so it sits between two visual sections without slowing the page.
+
+**Git moved above Notes**, 07 to 06. Commit-level provenance and approved landing are ranked
+differentiators (section 1); a good Markdown editor is a nicety. Emphasis follows the ranking.
+
+Mobile stays at 01. Section 4's requirement is that it sit above the workbench and above the
+control plane, and moving the harness section between them would have demoted the strongest
+visual on the page behind a wall of rows.
 
 ## Section rules
 
@@ -214,11 +249,16 @@ Feature cards were sized for a screenshot each and there is no room for one per 
 `.flat` rows carry a label column and a description and hold far more per screen.
 Cards are gone; do not reintroduce them.
 
-**Section 05 leads with the shell, not the harness.**
+**Section 02 leads with the shell, not the harness.**
 swe-mux is a terminal multiplexer before it is anything else: any shell, any TUI, any CLI runs in a real pseudoterminal exactly as it does outside.
 A harness the registry does not know still works perfectly, you just do not get the layer on top.
 Say that first, then describe what normalization adds for the ones it does know.
 Getting this backwards makes the product sound like it only supports a fixed list.
+
+**A feature row earns its place by naming something a competitor does not have, or a boundary a cautious reader needs.**
+Everything else belongs in `/docs/`, which is written and complete.
+Ten rows were cut on that test in the 2026-08-28 trim: `Events`, `Launch profiles`, `Utility drawer`, `Attachments`, `Clipboard history`, `Broadcast and rails`, `Narration`, `History and resume`, `Prompt library`, and section 09's `Git provenance`, which said what section 06 says at length.
+None of them is a false claim and none of them is gone from the product; the landing page is not the feature inventory, and thirty-one rows was reading as one.
 
 ## Removed sections
 
@@ -226,7 +266,7 @@ Getting this backwards makes the product sound like it only supports a fixed lis
 The boundaries they carried (never actuates, per-project opt-in, nothing leaves the machine, fails closed) are now stated inside the control plane intro and the relevant rows, where they land as design facts rather than as a wall of disclaimers.
 
 The spec strip under the hero was also cut.
-Every fact on it is stated somewhere it means more: platforms in the install callout, harnesses in section 05, the privacy claims in sections 01 and 10.
+Every fact on it is stated somewhere it means more: platforms in the install callout, harnesses in section 02, the privacy claims in sections 01 and 10.
 
 ---
 
@@ -517,8 +557,30 @@ Verified by compositing both variants over dark, light, and a hostile mid-grey: 
 - **Real application, never mockups**, and say so on the page.
 - **Scrub before publishing.** Live screenshots carry real project names, file paths, branch names, transcript text, account labels, and quota numbers.
 
-Diagrams carry their own placeholder class (`.vis`) separate from screenshot crops (`.crop`), because they are illustrations to be drawn rather than shots to be taken.
-Two are specified so far: the workbench split tree, and the control plane's escalating-cost stack with a human gate on every arrow leaving it.
+- **No captions.** A caption is an admission that the image and the section it sits in do not belong together. The claim goes in the section's prose, the image goes under the claim it is evidence for, and the frame holds nothing but the picture. `alt` and `aria-label` are accessibility and stay accurate; they are not captions and are not visible copy.
+
+**The dashed placeholders are gone from the landing page** (2026-08-28), and so are the two `.vis`
+diagram frames that stood inside the hero's two halves.
+They were six `.crop`s and two `.vis`es, each drawing a hatched box holding a paragraph that
+described a capture nobody has taken - which is a specification written for whoever takes it, rendered
+as visible text to a stranger, and the first cut in `tools/COPY_CHECKLIST.md`.
+To a visitor they read as an unfinished page beside nine finished screenshots.
+
+What each one asked for is kept here rather than lost, and this is now the only record of it:
+
+| Shot nobody has taken | What it must contain |
+|---|---|
+| Mobile git review | Changed-file rows with added and removed counts, one file expanded to a diff. |
+| Mobile preview tab | A dev-server preview rendering a local site over the tailnet, the terminal tab still in the rail beside it. |
+| Phone reattaching after sleep | Scrollback intact above the current turn. |
+| Mobile review modal | Changed-file rows with counts, one expanded to a diff. |
+| Voice overlay, desktop | Attached to a focused pane: the live transcript draft, the named target session, the wake-word indicator mid-listen. |
+| Voice overlay, mobile | An Android lock-screen notification naming the session and its reason, beside the phone's voice overlay with a draft staged. |
+| Diagram: the split tree | One Project containing a recursive pane layout, each leaf a tab stack of mixed tab kinds, and the same tree flattened into the single mobile rail beside it. |
+| Diagram: the escalating-cost stack | Raw facts at the base (free), detectors above them (free), the budgeted model layer above that (capped), attention routing at the top, and a gate marked "human" on every arrow leaving the stack toward a session. |
+
+A capture from that list goes back on the page the day it exists, as a real `figure.shot`.
+It does not go back as a box describing itself.
 
 ## Current status: ALL NINE SCREENSHOTS ARE REAL, AND ALL NINE ARE ON THE PAGE
 
@@ -557,18 +619,18 @@ It remains the specification for a re-shoot.
 |---|---|---|
 | `img/desktop-workspace.webp` | Hero, the full-width frame | The hero composite: sidebar, a split pane region with a working agent, the utility drawer open. The one shot allowed to include chrome. |
 | `img/mobile-session.webp` | Hero, the phone overlapping its lower right | A live agent mid-turn on a phone: tab rail, status line, context meter, touch key rail. |
-| `img/mobile-nav.webp` | Section 01, the `.shotpair` figure | The navigation overlay: two projects expanded with session rows, status dots, elapsed times, model names. |
-| `img/desktop-notes.webp` | Section 06, desktop | The note editor body only, cropped out of the drawer: rendered headings, nested lists, a checkbox row. |
-| `img/mobile-notes.webp` | Section 06, mobile | The Markdown editor on a phone with rendered structure. |
-| `img/desktop-git.webp` | Section 07, desktop | The Git drawer's map cropped to the rows: branches with ahead/behind counts and the commit provenance column. |
+| `img/mobile-nav.webp` | Section 03, the mobile column | The navigation overlay: two projects expanded with session rows, status dots, elapsed times, model names. |
+| `img/desktop-notes.webp` | Section 07, desktop | The note editor body only, cropped out of the drawer: rendered headings, nested lists, a checkbox row. |
+| `img/mobile-notes.webp` | Section 07, mobile | The Markdown editor on a phone with rendered structure. |
+| `img/desktop-git.webp` | Section 06, full width, under the provenance paragraph | The Git drawer's map cropped to the rows: branches with ahead/behind counts and the commit provenance column. |
 | `img/desktop-alerts.webp` | Section 09, desktop | The ranked inbox cropped to the panel, with the interrupt budget line and at least one suppressed item and its reason. Not an empty inbox. |
 | `img/mobile-alerts.webp` | Section 09, mobile | The attention inbox on a phone with ranked items present and the budget line visible. |
 | `img/desktop-insight.webp` | Section 09, as the **poster** for `loop-evidence.mp4` | The Insight tab's timeline cropped to the records, budget visible, actual records present. |
-| `img/loop-fleet.mp4` | Section 02, desktop | Three agents starting in three worktrees, status marks moving with nobody typing. |
+| `img/loop-fleet.mp4` | Section 03, desktop | Three agents starting in three worktrees, status marks moving with nobody typing. |
 | `img/loop-mobile.mp4` | Section 01, the `.shotpair` figure | The phone: one alert with its reason and the held-back digest, then the session behind it. |
 | `img/loop-evidence.mp4` | Section 09, the solo row under the alerts pair | Activity to Timeline: phase-labelled records, a dead end, a blocked badge, the budget line. |
-| `img/loop-land.mp4` | Section 07, the solo row under the git pair | The landing strip: gate named and approved, then the branch landing. |
-| `img/loop-restart.mp4` | Section 03, desktop | A counter running through a daemon reload, same sequence numbers on both sides. |
+| `img/loop-land.mp4` | Section 06, full width, under the land-queue paragraph | The landing strip: gate named and approved, then the branch landing. |
+| `img/loop-restart.mp4` | Section 04, full width | A counter running through a daemon reload, same sequence numbers on both sides. |
 | the hero film | Hero, the full-width frame, postered by `desktop-workspace.webp` | A GitHub release asset rather than a committed file. See below. |
 
 Each file is used **exactly once**, which is deliberate: the same capture appearing twice on one
@@ -615,28 +677,38 @@ repository so no fixture ships: a lazy below-the-fold image reads broken **witho
 (reproducing the original defect), reads loaded **with** it, and a lazy image whose file genuinely
 does not exist still reads broken with it. The third is the one that matters.
 
-### The page's own copy
+### The page's own copy: there is none
 
-Every caption now reads `Real screenshot.`
-The instruction not to restore that caption applied while the file under it was a placeholder, and
-it no longer does.
-The hero's phone deliberately carries **no** caption: the same view is captioned in section 01, and
-a caption inside a 186px column is unreadable while one outside it fights the frame's.
+**No image on the landing page carries a caption** (2026-08-28).
+Every `figcaption` was removed, and the two rules for `.crop`/`.vis` copy went with the
+placeholders themselves. `figure.shot` is a border around a picture and nothing else.
 
-The dashed `.crop` and `.vis` placeholders that remain are unchanged: they are CSS, they carry no
-image, and each already states what its replacement must contain.
-Six `.crop`s survive, and every one is a shot nobody has taken: mobile git review and a mobile
-preview tab (section 01), the phone reattaching after sleep (03), the review modal on a phone (07),
-and the voice overlay pair (08).
-The two `.vis` diagrams are unchanged too.
+Fourteen captions came off. Ten were narration of what the image already shows, and four carried
+something real, so those four were **rehomed rather than deleted**:
+
+| Caption fact | Where it went |
+|---|---|
+| "Nothing here decides anything - it reconciles, runs the approved bytes, and fast-forwards" | Section 06's second paragraph. It was the only description of the land queue anywhere on the page, and it was in a caption. |
+| "Real screenshot", and that the captures are a synthetic install | The one `.shotnote` under the hero, stated once for the whole page rather than fourteen times. |
+| "It is a 4 MB download from the release page, so nothing is fetched until you ask" | The same note. |
+| "The dead end is the thing an agent's own summary reliably leaves out" | Already in section 09's `Cross-session memory` row, so it was simply dropped. |
+
+Three captions were **stated morals** and are the reason the rule is now absolute: "which is the
+whole point of having them", "which is the whole claim", "the part worth watching". The page states
+the claim; the image is the evidence; a sentence telling the reader what to conclude from the
+evidence is the tell in `tools/COPY_CHECKLIST.md` section 3.
+
+**Anchoring replaces captioning.** Where a section makes two claims, its two captures sit one under
+each claim rather than both at the foot of the section - section 06 is the worked example, with the
+worktree map under provenance and the landing loop under the queue. Both are full width, because
+side by side at 535px the branch rows and the landing strip are decoration rather than evidence.
 
 The redeploy before-and-after pair that used to be listed here is **gone, and was replaced by
 something better**: `loop-restart.mp4` shows the counter running straight through the reload, which
 is the proof a two-frame still could only imply.
 
-The **02 sidebar crop** was also retired: `loop-fleet.mp4` occupies that slot now, and the mobile
-half is `mobile-nav.webp` rather than a placeholder. Nothing on the page reuses a capture, which is
-deliberate - the same shot twice a few hundred pixels apart reads as filler.
+Nothing on the page reuses a capture, which is deliberate - the same shot twice a few hundred pixels
+apart reads as filler.
 
 ### Why the originals were replaced outright rather than scrubbed
 
@@ -662,11 +734,10 @@ Every mark is a stylesheet token rescaled to one computed luminance, because no 
 The script solves for the luminance whose contrast against the two is equal, which lands at 3.88:1 dark and 3.89:1 light: above the 3.0 large-text floor in both themes rather than comfortable in one and unreadable in the other.
 It refuses to write if a mark drops below that floor, so a palette edit cannot quietly make them illegible.
 
-### The page's own copy
-
-The one referenced placeholder is captioned `Placeholder.` on the page, followed by what the real shot will contain.
-Do not restore the `Real screenshot.` caption until the file under it is one.
-The dashed `.crop` and `.vis` placeholders elsewhere on the page are unchanged: they are CSS, they carry no image, and each already states what its replacement must contain.
+**None of them is on the page any more**, and the rules that used to govern their captions are gone
+with them - see "The page's own copy: there is none" above.
+`tools/placeholders.py` is kept for its `SLOTS` table, which is the only record of the dimensions
+the markup declares.
 
 ---
 
@@ -677,7 +748,7 @@ Each of these was wrong on this page at some point.
 - **Four interrupts a day, two an hour.** `attention_daily_interrupt_budget` defaults to 4.
 - **Windows-first, Linux supported, macOS installs but is not required to pass.** Roadmap Phase 10 has every Linux box checked and the macOS box open. The page claimed "Windows only, WSL is not a supported host" long after the WSL bridge shipped.
 - **The install claim stops at the published artifact.** The wheel installs and `mux`/`muxd` run on all three hosts, and CI proves that on all three. Since 2026-08-28 the `live_daemon` tier also starts a real daemon on Linux and Windows and proves it serves a shell session - **from the source checkout**, on an ephemeral port, under a temporary data directory. No CI job starts a daemon from a *published artifact* on any host, so nothing on this page may say a platform is verified working end to end from what a user installs.
-- **Session survival is claimed unconditionally, and the page cannot verify that alone.** The operator decided 2026-08-28 to flip `pty_supervisor_enabled` to `True` rather than qualify the sentence, so section 03 states survival with no switch named and no config key in the copy. The default lives in `src/swe_mux/config.py` and is another branch's change, so `tools/check.mjs` has a `survival claim` section that fails while the page says one thing and the default says another. **If that check is red, do not publish**: it means the copy arrived before the product did, which is the exact defect the 2026-08-28 audit existed to remove. The sentence that must survive any edit is the conceded edge - a supervisor cannot survive its own crash, a force close, or a power loss, and cold session recovery is what covers that.
+- **Session survival is claimed unconditionally, and the page cannot verify that alone.** The operator decided 2026-08-28 to flip `pty_supervisor_enabled` to `True` rather than qualify the sentence, so section 04 states survival with no switch named and no config key in the copy. The default lives in `src/swe_mux/config.py` and is another branch's change, so `tools/check.mjs` has a `survival claim` section that fails while the page says one thing and the default says another. **If that check is red, do not publish**: it means the copy arrived before the product did, which is the exact defect the 2026-08-28 audit existed to remove. The sentence that must survive any edit is the conceded edge - a supervisor cannot survive its own crash, a force close, or a power loss, and cold session recovery is what covers that.
 - **"No server" is false and "no vendor-operated backend or relay" is true.** swe-mux is a local aiohttp daemon; that is the architecture, not a caveat. The distinction is one grep from being checked by a reader.
 - **"Fully local" is not a claim this page may make.** The agent CLIs call cloud providers, and OpenRouter, web push, the Hugging Face model downloads, the update check and Edge TTS all reach the network. Each is off until switched on and the update check is disableable, which is the honest and stronger version.
 - **Alerts are not "only when an agent genuinely needs a human".** They come from five normalized reasons - turn complete, ready, approval or question, failure, confirmed quota reset - with three suppression rules. The detector has explicit `unknown` states and resolves ambiguity to the conservative prior.

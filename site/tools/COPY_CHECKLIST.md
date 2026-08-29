@@ -9,9 +9,10 @@ because it governs them.
 `site/README.md` section 5 states the site's voice rules; this file is the operational version
 of them plus the machine-writing tells that section 5 does not cover.
 
-Scope note: `site/index.html` and `site/content/*.html` hold the rest of the site's words and
-were **not** covered by the 2026-08-28 pass.
-They are what a second pass is for.
+Scope note: `site/index.html` had its own pass on 2026-08-28, which took the landing page from
+3739 rendered words inside `<main>` to 2593, and removed every image caption.
+What that pass learned is section 6.
+`site/content/*.html` is still uncovered and is what a third pass is for.
 
 ---
 
@@ -161,7 +162,45 @@ Examples that stayed long on purpose, and why:
 - Every "no CI job on any host starts a daemon" sentence. That is a limitation stated before
   someone else finds it, which is the thing that buys credibility for the claims around it.
 
-## 6. Before shipping
+## 6. What the landing-page pass added, 2026-08-28
+
+The four cuts in section 1 all applied, but a marketing page has three failure modes the
+reference documentation does not, and each of these was worth more here than any of them.
+
+**A caption is a confession.**
+Fourteen images carried one, and ten were narration of what the picture already showed.
+The rule that replaced them is absolute and is now in `site/README.md` section 8: the claim goes in
+the section's prose, the image goes directly under the claim it is evidence for, and the frame holds
+nothing else.
+`alt` and `aria-label` stay and stay accurate; they are accessibility, not copy.
+Before deleting one, check what it is carrying - four of the fourteen held a fact that existed
+nowhere else on the page, and one of those was the **only** description of the land queue.
+Rehome those; delete the rest.
+
+**A placeholder is copy written for the wrong audience, and it is the worst case of it.**
+Six dashed `.crop` boxes and two `.vis` diagram frames each drew a hatched rectangle holding a
+paragraph describing a capture nobody had taken.
+That paragraph is a brief for whoever takes the shot, rendered as visible text to a stranger, and
+beside nine finished screenshots it reads as an unfinished page.
+The specifications moved into `site/README.md` section 8, where the person who needs them is.
+
+**A feature row is a claim, and the same test applies to it.**
+On a page enumerating thirty-one of them, a row that names nothing a competitor lacks and no
+boundary a cautious reader needs is filler even when every word in it is true.
+Ten were cut on that test.
+The test is not "is this true", it is "does a stranger's decision change if they read it".
+
+Two things that pulled hard in the opposite direction and were right to:
+
+- **A number in the copy that is visible in the screenshot under it.** Section 09's attention row
+  says "four interrupts a day and two an hour" and the capture beneath it reads `3/4 interrupts
+  today · 1/2 this hour`. That is the pairing working without a caption, and it is why the number
+  went back in after a draft had cut it to "a hard daily budget".
+- **Stated limits stay, and length is not the test.** The conceded edge on session survival, the
+  three facts about what a Python install does not give you, and "no CI job anywhere starts the
+  daemon" are all long and all stayed. Section 5's question is the one that decides it.
+
+## 7. Before shipping
 
 ```
 python site/tools/build.py            # regenerate, and commit the HTML with the source
