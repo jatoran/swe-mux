@@ -115,6 +115,75 @@ async def test_two_sections_of_one_panel_no_longer_collide(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_the_matrix_writes_authority_and_clearing_one_restores_inheritance(
+    tmp_path: Path,
+) -> None:
+    """"Follow global" removes the key; it does not write the global's value.
+
+    The distinction is the whole reason the Project cell has three positions.
+    Writing the current global as an explicit value would pin the Project to
+    today's answer, so a later change to the install default would skip exactly
+    the Projects whose operator thought they were inheriting.
+    """
+    project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
+    app = _app(project)
+    app[keys.CONFIG] = Config(agent_authority_default={"land_grant": "granted"})
+    await write_project_config(tmp_path, {"automations": {"raw_store": True}}, "missing")
+
+    lowered = await put_project_automations(  # type: ignore[arg-type]
+        _request(
+            app,
+            {
+                "automations": {"raw_store": True},
+                "authority": {"land_grant": "draft"},
+                "revision": (await read_project_config(tmp_path))["revision"],
+            },
+        )
+    )
+    payload = json.loads(lowered.body)
+    assert payload["authority"]["land_grant"] == "draft"
+    assert payload["authority_effective"]["land_grant"] == "draft"
+
+    restored = await put_project_automations(  # type: ignore[arg-type]
+        _request(
+            app,
+            {
+                "automations": {"raw_store": True},
+                "authority": {"land_grant": None},
+                "revision": (await read_project_config(tmp_path))["revision"],
+            },
+        )
+    )
+    payload = json.loads(restored.body)
+    # Unset on disk, and therefore reached by the install default.
+    assert payload["authority"]["land_grant"] is None
+    assert payload["authority_effective"]["land_grant"] == "granted"
+    assert "land_grant" not in (await read_project_config(tmp_path))["values"]
+
+
+@pytest.mark.asyncio
+async def test_the_matrix_refuses_an_unknown_authority_field_or_level(tmp_path: Path) -> None:
+    project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
+    app = _app(project)
+    await write_project_config(tmp_path, {"automations": {}}, "missing")
+    revision = (await read_project_config(tmp_path))["revision"]
+    with pytest.raises(ValueError, match="unknown authority fields"):
+        await put_project_automations(  # type: ignore[arg-type]
+            _request(
+                app,
+                {"automations": {}, "authority": {"land_grants": "draft"}, "revision": revision},
+            )
+        )
+    with pytest.raises(ValueError, match="invalid authority levels"):
+        await put_project_automations(  # type: ignore[arg-type]
+            _request(
+                app,
+                {"automations": {}, "authority": {"land_grant": "maybe"}, "revision": revision},
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_a_field_that_really_moved_is_still_refused_by_name(tmp_path: Path) -> None:
     project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
     app = _app(project)

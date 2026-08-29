@@ -187,6 +187,7 @@ only route to the owning overlay.
 | Git → Provenance | `provenance_graph` | Project | grant |
 | Git → Map landing strip (install stop) | `land_queue_enabled` | install | grant |
 | Git → Map landing strip (agent authority) | `land_queue`, `land_grant` | Project | grant |
+| Automation workspace (agent authority rows) | the five authority fields, plus `agent_authority_default` and `agent_authority_ceiling` | install + Project | owner — the one surface that may lower one |
 | Git → Map row, landing blocked | the two above | install + Project | opens the strip that holds them |
 | Alerts tab (ranked inbox empty) | `attention_ranking` | Project | grant |
 | Alerts tab (delivery muted) | device alert master | device | compact grant (local write) |

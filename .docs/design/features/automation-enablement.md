@@ -167,6 +167,12 @@ off in either scope, which is what keeps every grant gate additive-only.
 - A Project cell whose row the install ceiling blocks greys with the Global cell beside it
   as the fix; the Project's stored choice is retained, never rewritten by the ceiling.
 - Unimplemented ids render disabled and labelled, never as ready to switch on.
+- The agent authority rows (`frontend/src/AutomationAuthority.tsx`) sit in their own section
+  below the layers, since they hold a level rather than an on/off and the dependency grouping
+  says nothing about them. An authority row whose gating automation is off greys the same way
+  a ceiling-blocked cell does: a level on a capability nobody may use is a control that does
+  nothing. They write through the same per-Project route as the opt-ins, because the file is
+  one revision and a second endpoint would race this one.
 - The file remains the source of truth; the editor is a two-way view over it and the write
   is revision-checked like every other project-config write.
 - The scan row also carries `scan_timeline_auto_enable` and the Project context editor,
@@ -186,26 +192,72 @@ off in either scope, which is what keeps every grant gate additive-only.
 
 ## Agent authority
 
-Four Project fields decide whether an agent still needs a human after the automation above it
-is on. All four shipped enforced and unreachable - a line in a committed `.swe-mux/config.toml`
+Five Project fields decide whether an agent still needs a human after the automation above it
+is on, and how much a message from one says about itself.
+The first four shipped enforced and unreachable - a line in a committed `.swe-mux/config.toml`
 with no control in any overlay, which made the inert default impossible to discover and
 impossible to change from the app; one of them told the agent to go and edit the file by hand
-(`agent_messaging.py`). They live in the Projects registry beside the opt-ins they qualify,
-because only an editor may take a permission away.
+(`agent_messaging.py`).
+They lived in the Projects registry until 2026-08-29 and are now rows on the Automation
+dashboard's policy matrix, beside the opt-ins they qualify and beside the install-wide layers
+below, which exist nowhere else.
+The registry keeps a read-only summary and a link, the same treatment the automation opt-ins
+already had (`automation.md`, `projects.md`).
 
-| Field | Default when unset (2026-08-25) | Lowered form | Gated by |
+| Field | Built-in default when unset | Lowered form | Gated by |
 |---|---|---|---|
-| `session_control_grant` | `granted` — acts directly | `draft`: a human approves each | `session_control` |
-| `spawn_grant` | `granted` — creates sessions directly | `draft` | `session_control` |
-| `land_grant` | `draft` — a human approves each (unchanged) | — (`granted` raises it) | `land_queue` |
-| `interject_grant` | `granted` — may write mid-turn | `off`: waits for the queue | (delivery readiness) |
+| `session_control_grant` | `granted` - acts directly | `draft`: a human approves each | `session_control` |
+| `spawn_grant` | `granted` - creates sessions directly | `draft` | `session_control` |
+| `land_grant` | `draft` - a human approves each | - (`granted` raises it) | `land_queue` |
+| `interject_grant` | `granted` - may write mid-turn | `off`: waits for the queue | (delivery readiness) |
+| `message_envelope` | `compact` | `full` narrows, `bare` widens | (nothing; it shapes rather than permits) |
 
 The three session-scoped authorities default open; landing a trunk still defaults to the
-inert draft. In every case a malformed or unreadable config resolves to the *narrow* value
-(`draft`/`off`), never to the default - corruption must not widen an explicit lowering.
+inert draft.
+`message_envelope` is the odd one and is covered in `agent-messaging.md`.
+
+### Four resolution layers, and which of them may widen
+
+`agent_authority.py` owns the resolution and every service injects it through
+`authority_resolver`, bound to the live `Config` so a setting changed at runtime needs no
+daemon restart.
+
+1. **The Project's own explicit value.** A written value is a decision about that repository
+   and outranks anything on this machine, up to layer 4.
+2. **`Config.agent_authority_default`**, which reaches a field only where the Project left it
+   unset. "What should a Project that has not decided do."
+3. **The built-in default** in the table above, so an install setting neither of the above
+   behaves exactly as it did before any of this existed.
+4. **`Config.agent_authority_ceiling`**, which caps all three and can only narrow. The only
+   layer that reaches a Project holding an explicit value.
+
+Layers 2 and 4 are deliberately two maps rather than one with a precedence rule.
+They answer different questions, and a default alone cannot express "no Project on this
+machine lands without me" - a repository that wrote `granted` outranks it, and the install
+on/off switches can only refuse the capability everywhere, which is blunter.
+The matrix renders them as one control: a dropdown for the default and an **enforce
+everywhere** lock beside it, with a coverage line ("applies to 12 of 15 Projects, 3 set
+their own") so a global edit's reach is visible before the click rather than after.
+
+**Widening never happens implicitly.** Layer 2 reaches only unset fields, so shipping or
+changing a default cannot alter what an existing Project does; layer 4 only subtracts.
+That is the rule `automation_global_allow` already follows and the reason the first-use
+starting sets are written into each Project's own file rather than inherited from a constant.
+
+**The Project cell has three positions, not two.** "Follow global" writes null and the daemon
+*removes* the key. Writing the global's current value instead would pin the Project to today's
+answer, and a later change to the default would then skip exactly the Projects whose operator
+believed they were inheriting. The pre-2026-08-29 dropdown had this bug in a milder form: it
+always wrote an explicit value, so every Project anyone had ever opened in that panel was
+already pinned.
+
+**A malformed or unreadable Project config resolves to `levels[0]` and skips layers 2 and 3
+entirely.** Corruption must not widen an explicit narrowing, and must not inherit a permissive
+install default either. Because the levels are ordered narrowest-first by *agent latitude*,
+one branch gives `draft`/`off` for the actuation fields and `full` for the envelope.
 
 `frontend/test/settingTargets.test.ts` holds every grantable Project field to having a control
-here, so a fifth arriving the same way fails a test.
+on the matrix, so a sixth arriving the same way fails a test.
 
 ## Grants
 
@@ -254,7 +306,9 @@ The disclosures each checkbox owes, and why the exclusions are what they are:
 
 ```text
 GET  /api/projects/{project_id}/automations
-PUT  /api/projects/{project_id}/automations   {automations: {id: bool}, base? | revision?}
+PUT  /api/projects/{project_id}/automations   {automations: {id: bool},
+                                               authority?: {field: level | null},
+                                               base? | revision?}
 GET  /api/automation/projects
 GET  /api/grants
 POST /api/grants   {install?, project_id?, automations?, values?, revision?}
@@ -292,8 +346,12 @@ instead of drawing a second one.
 - Registry + DAG + resolver: `src/swe_mux/automation_registry.py`
 - Per-project config field (parse/serialize/validate, `project_automations`): `src/swe_mux/project_files.py`
 - Gate wiring + toggle routes: `src/swe_mux/server.py`
+- Install default + ceiling, the field registry, and the four-layer resolver:
+  `src/swe_mux/agent_authority.py`; the two `Config` maps and their scrub:
+  `src/swe_mux/config.py`
 - Toggle surface (the matrix): `frontend/src/AutomationMatrix.tsx`; agent-authority
-  table: `frontend/src/ProjectsManager.tsx`
+  rows: `frontend/src/AutomationAuthority.tsx`; the Projects registry's read-only
+  summary and link: `frontend/src/ProjectsManager.tsx`
 
 ## Relates to
 

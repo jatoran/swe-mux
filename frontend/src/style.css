@@ -2165,6 +2165,21 @@ body {
 .automation-matrix-grid .project-automation-group{display:flex;align-items:baseline;gap:8px;margin:0;padding:7px 8px 4px;color:var(--accent);border-top:1px solid var(--line)}
 .automation-matrix-grid .project-automation-group span{color:var(--muted);font-weight:400}
 .automation-matrix-grid .project-automation-deps{margin:2px 0 0;color:var(--muted);font-size:10px}
+/* The authority rows hold a level rather than an on/off, so their two editable
+   cells are dropdowns and need real width where the automation rows need 64px of
+   checkbox. Same grid, different track sizes, and the cells left-align because a
+   centred dropdown reads as a mistake next to a label. */
+.automation-authority-grid{margin-top:10px}
+.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(0,1fr) 190px 190px 74px}
+.automation-authority-row .automation-matrix-cell{flex-direction:column;align-items:stretch;justify-content:flex-start;gap:3px}
+.automation-authority-global .check{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted)}
+.automation-authority-global small{color:var(--muted);font-size:9px;line-height:1.3}
+.automation-authority-overridden{color:var(--warn,var(--accent));font-size:9px}
+@media(max-width:760px){.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(0,1fr) 130px 130px}}
+.project-authority-summary{margin:6px 0 8px;display:grid;gap:3px}
+.project-authority-summary>div{display:flex;justify-content:space-between;gap:10px}
+.project-authority-summary dt{color:var(--muted)}
+.project-authority-summary dd{margin:0}
 .automation-limits-drawer,.automation-rules-drawer{margin-top:10px;border:1px solid var(--line);background:var(--panel)}
 @media(max-width:760px){.automation-matrix-head,.automation-matrix-row{grid-template-columns:minmax(0,1fr) 52px 52px}.automation-matrix-head span:nth-child(4),.automation-matrix-fleet{display:none}.automation-masterbar .automation-project-toolbar{margin-left:0;width:100%}}
 .automation-panel .usage-table{margin-top:10px}.automation-panel .usage-tables .usage-table{margin-top:0}

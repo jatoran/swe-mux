@@ -708,6 +708,23 @@ TOOLS: list[dict[str, Any]] = [
                         "returns the original message instead of a duplicate"
                     ),
                 },
+                "envelope": {
+                    "type": "string",
+                    "enum": ["full", "compact", "bare"],
+                    "description": (
+                        "How much mux says about you on top of your text. "
+                        '"compact" (the usual default) names you, says whether a '
+                        "human reviewed the message, and gives the reply route. "
+                        '"full" adds the whole standing-grant statement - use it '
+                        "when you are asking the other session to do something it "
+                        'might otherwise take as its operator speaking. "bare" '
+                        "sends your text alone, indistinguishable from a person "
+                        "typing, which suits a clean hand-off and is wrong for an "
+                        "instruction. The target Project sets the minimum: you may "
+                        "always disclose more than it asks and never less, and the "
+                        "result reports what was actually used."
+                    ),
+                },
                 "delivery": {
                     "type": "string",
                     "enum": ["when_idle", "now"],
@@ -4914,6 +4931,7 @@ class McpService:
             correlation_id=str(args.get("correlation_id") or "") or None,
             project=project,
             delivery=str(args.get("delivery") or "when_idle"),
+            envelope=str(args.get("envelope") or "") or None,
             dry_run=dry_run,
         )
         return dict(result)
