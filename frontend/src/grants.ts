@@ -172,6 +172,11 @@ export type GrantResult = {
   applied: { install: string[]; automations: string[]; values: string[] }
   spends: boolean
   project?: ProjectAutomationState
+  /** Work the grant *started*, as opposed to permitted. Raising `land_verify_grant`
+   *  clears the verification blocks that ended lands, so those lands are re-queued in
+   *  the same act; every other grant reports an empty list. Absent on an older daemon,
+   *  which reads the same as "nothing was resumed". */
+  resumed_lands?: { id: string; branch: string; kind: string }[]
 }
 
 export const GRANTS_CHANGED = 'mux:grants-changed'
@@ -204,7 +209,7 @@ export async function applyGrants(request: GrantRequest): Promise<GrantResult> {
     throw new Error('Select a Project first — that switch belongs to one Project.')
   }
   if (!Object.keys(install).length && !automations.length && !Object.keys(values).length) {
-    return { applied: { install: [], automations: [], values: [] }, spends: false }
+    return { applied: { install: [], automations: [], values: [] }, spends: false, resumed_lands: [] }
   }
   const result = await api<GrantResult>('POST', '/api/grants', {
     install,

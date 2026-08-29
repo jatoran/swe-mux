@@ -14,8 +14,10 @@ import {
   landingSummary,
   parseLandQueue,
   parseLandVerifyCommand,
+  parseResumedLands,
   parseVerifyProgress,
   recentLandings,
+  resumedLandsNote,
   verifyCommandEditable,
   verifyPlanNote,
   verifyProgressLabel,
@@ -386,6 +388,48 @@ test('a gate that will run on the Project’s standing authority does not open t
   assert.equal(foreign.opensByDefault, true)
   assert.equal(foreign.gate, 'verification not approved')
   assert.equal(foreign.gateTone, 'warn')
+})
+
+test('an approval reports the lands it re-queued, and says nothing when it queued none', () => {
+  // The whole point of the change: the operator is told the wait ended, rather than
+  // discovering a new row in the queue below and inferring it.
+  assert.equal(
+    resumedLandsNote(parseResumedLands({
+      resumed: [{ id: 'lnd_2', branch: 'worktree-alpha', kind: 'land' }],
+    })),
+    'Re-queued the landing of worktree-alpha.',
+  )
+  assert.equal(
+    resumedLandsNote(parseResumedLands({
+      resumed: [{ id: 'lnd_2', branch: 'worktree-alpha', kind: 'verify' }],
+    })),
+    'Re-queued the verification of worktree-alpha.',
+  )
+  assert.equal(
+    resumedLandsNote(parseResumedLands({
+      resumed: [
+        { id: 'lnd_2', branch: 'worktree-alpha', kind: 'land' },
+        { id: 'lnd_3', branch: 'worktree-beta', kind: 'land' },
+      ],
+    })),
+    'Re-queued 2 requests: worktree-alpha, worktree-beta.',
+  )
+  // An older daemon carries no such key, which reads as "nothing was resumed" rather
+  // than as a broken response - and an empty note renders nothing at all.
+  assert.deepEqual(parseResumedLands({}), [])
+  assert.equal(resumedLandsNote(parseResumedLands({})), '')
+  // A row with no branch cannot be named, so it is not counted; claiming "1 request"
+  // and then naming nothing is worse than saying nothing.
+  assert.deepEqual(parseResumedLands({ resumed: [{ id: 'lnd_2' }, 'nonsense'] }), [])
+  // The grants route answers under its own key, because a grant reports what it
+  // permitted as well as what it started.
+  assert.equal(
+    parseResumedLands(
+      { resumed_lands: [{ id: 'lnd_9', branch: 'worktree-x', kind: 'land' }] },
+      'resumed_lands',
+    ).length,
+    1,
+  )
 })
 
 test('a payload that lost the verification authority reads as the restrictive one', () => {

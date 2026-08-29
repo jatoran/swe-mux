@@ -11,6 +11,7 @@ import {
   grantWrittenTo,
   type GrantDescriptor,
   type GrantId,
+  type GrantResult,
 } from './grants'
 import { fetchProjectAutomations, type ProjectAutomationState } from './projectAutomations'
 import { fetchLlmProvider, type LlmReadiness } from './llmProvider'
@@ -56,7 +57,7 @@ export function GrantGate({
   confirmLabel?: string
   /** Called after a successful grant so the host reloads its own state immediately,
    *  rather than a websocket round trip later. */
-  onGranted?: () => void | Promise<void>
+  onGranted?: (result: GrantResult) => void | Promise<void>
   /** Device-scoped grants are a local write only the host knows how to make. */
   applyDevice?: (id: GrantId) => void | Promise<void>
   /** Anything the surface needs to add below the disclosure and above the button. */
@@ -118,8 +119,8 @@ export function GrantGate({
   const grant = async () => {
     setBusy(true); setError('')
     try {
-      await applyGrants({ ids, projectId, applyDevice })
-      await onGranted?.()
+      const result = await applyGrants({ ids, projectId, applyDevice })
+      await onGranted?.(result)
     } catch (cause) {
       // A refusal names its own reason (`grants.py`); anything else is reported as it
       // arrived. Either way the gate stays up, because nothing changed.
@@ -194,7 +195,7 @@ export function GrantButton({ id, projectId, children, onGranted, applyDevice, t
   id: GrantId
   projectId?: string
   children?: ComponentChildren
-  onGranted?: () => void | Promise<void>
+  onGranted?: (result: GrantResult) => void | Promise<void>
   applyDevice?: (id: GrantId) => void | Promise<void>
   title?: string
 }) {
@@ -204,8 +205,8 @@ export function GrantButton({ id, projectId, children, onGranted, applyDevice, t
   const grant = async () => {
     setBusy(true); setError('')
     try {
-      await applyGrants({ ids: [id], projectId, applyDevice })
-      await onGranted?.()
+      const result = await applyGrants({ ids: [id], projectId, applyDevice })
+      await onGranted?.(result)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally { setBusy(false) }
@@ -236,7 +237,7 @@ export function CompactGrantFlag({ id, heading, consequence, projectId, confirmL
   consequence?: string
   projectId?: string
   confirmLabel?: string
-  onGranted?: () => void | Promise<void>
+  onGranted?: (result: GrantResult) => void | Promise<void>
   applyDevice?: (id: GrantId) => void | Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
@@ -245,8 +246,8 @@ export function CompactGrantFlag({ id, heading, consequence, projectId, confirmL
   const grant = async () => {
     setBusy(true); setError('')
     try {
-      await applyGrants({ ids: [id], projectId, applyDevice })
-      await onGranted?.()
+      const result = await applyGrants({ ids: [id], projectId, applyDevice })
+      await onGranted?.(result)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally { setBusy(false) }

@@ -51,8 +51,10 @@ from .land_preconditions import (
     read_repository_facts,
 )
 from .land_store import LandConflict, LandEvent, LandStore
+from .path_identity import same_path
 from .verify_progress import VerifyProgress, sanitize_plan
 from .verify_provenance import (
+    TRUSTED_VERDICTS,
     VerifyProvenance,
     read_verify_provenance,
     verify_bypass_allowed,
@@ -79,6 +81,16 @@ DEFAULT_HOURLY_BUDGET = 12
 _BUDGET_WINDOW_SECONDS = 3600.0
 
 GRANTS = ("off", "draft", "granted")
+
+#: States that count as an answer about a branch, for deciding whether an older refusal
+#: still stands. The same set the strip's own supersession rule uses (`gitLand.ts`), and
+#: it has to be: the daemon and the browser must agree about which refusals are live, or
+#: approving would resume a row the operator can no longer see.
+ANSWERING_STATES = ("landed", "verified", "already_landed", "handed_back", "refused")
+
+#: How far back a resume looks for refusals to revive. The same window `GET /api/land`
+#: hands the browser, so the daemon never resumes something the strip stopped drawing.
+RESUME_SCAN_LIMIT = 200
 
 #: Armed replies one land request may spend. One request has exactly one outcome, so
 #: one bounded answer is the whole of what a `request_land` consented to; a second
@@ -347,11 +359,24 @@ class LandQueueService:
         origin_session_id: str = "",
         origin_run_id: str = "",
         reason: str = "",
+        resumed_from: str = "",
     ) -> dict[str, Any]:
         """Enqueue a land or a verify-only run, or draft it for a human, or refuse it.
 
         An operator request bypasses the grant because the operator *is* the authority
         the grant defers to; it still passes every precondition the pipeline checks.
+
+        `resumed_from` names a request this one replaces, and says one thing: **a human
+        has already authorised this exact land, and the thing it was waiting on has
+        happened.** It is set only by the operator clearing a verification block, so it
+        skips the two checks that exist to decide whether a *new* agent request should
+        start - the per-origin budget (the operator started this one, and charging an
+        agent for the operator's approval would let a blocked branch exhaust an hour's
+        allowance by being approved) and the `draft` grant (a human already decided this
+        request once; drafting it again would ask the same question twice). It skips
+        nothing else: the Project opt-in, an `off` grant, and every repository
+        precondition are re-read, because those are standing permissions and the branch
+        may have moved since the refusal.
 
         **The grant means something narrower for a verify-only request, and the reason
         is what the grant is about.** `off` refuses both, because it is the operator
@@ -381,6 +406,8 @@ class LandQueueService:
                     else "agent-initiated use of the land queue is off for this Project",
                 )
             budget = self._hourly_budget()
+            if resumed_from:
+                budget = 0
             if budget and origin_session_id:
                 used = await self._store.origin_count_since(
                     origin_session_id, self._clock() - _BUDGET_WINDOW_SECONDS
@@ -393,7 +420,7 @@ class LandQueueService:
                         "budget_exhausted",
                         f"this session has made {used} land-queue requests in the last hour",
                     )
-            if grant == "draft" and lands:
+            if grant == "draft" and lands and not resumed_from:
                 return await self._draft(
                     project_id=project_id,
                     project_root=project_root,
@@ -459,6 +486,11 @@ class LandQueueService:
                         "kind": kind,
                         "branch": facts.worktree_branch,
                         "oid": facts.worktree_head,
+                        # The link back to the refusal this replaces. A redo is a new
+                        # id by design - nothing reopens a terminal row, because the
+                        # trail has to go on saying the refusal happened - so without
+                        # this the two rows are unrelated facts about one branch.
+                        **({"resumed_from": resumed_from} if resumed_from else {}),
                     },
                 ),
                 now=self._clock(),
@@ -467,6 +499,115 @@ class LandQueueService:
             raise LandRefusal("already_queued", str(exc)) from exc
         await self._emit("land_changed", row)
         return row
+
+    async def resume_verification_blocked(
+        self,
+        *,
+        project_id: str,
+        project_root: str,
+        worktree_root: str = "",
+        digest: str = "",
+        trusted_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Re-queue the lands a verification block ended, now that it is cleared.
+
+        The operator's complaint this exists for: a land refused for an unapproved
+        gate is **terminal**, so approving the bytes cleared the block and left the
+        request dead, and the branch had to be asked for again by hand - or, where an
+        agent asked, by an agent that had already been told its request was over.
+        Approving is the moment the wait ends; the queue should end with it.
+
+        **A redo is a new row, not a revived one**, which is the shape this design
+        already uses for a bounced request (`land-queue.md`). `refused` stays terminal
+        and the trail goes on saying the refusal happened; the new row names the old
+        one in its opening event. Reopening the row in place would erase an audit entry
+        and put a second writer on a terminal state.
+
+        Two filters decide what is resumed, and both are narrow on purpose:
+
+        - **Only refusals the block actually covered.** `digest` restricts it to the
+          bytes just approved, and `worktree_root` to the checkout that presented them.
+          Approving one worktree's copy says nothing about another's, exactly as the
+          digest-scoped approval store does.
+        - **Only refusals that still stand**, by the same supersession rule the strip
+          draws its blocked-worktree gates from: a branch that has since landed,
+          verified, or been answered any other way is not waiting on this.
+
+        `trusted_only` is the grant path's filter. Raising `land_verify_grant` clears
+        every block whose bytes this machine wrote and none of the others, so resuming
+        a `foreign_author` refusal there would queue a land that is about to refuse for
+        exactly the reason it refused before.
+
+        A refusal raised by the re-request is *not* an error here: a branch that landed
+        some other way, or that another request now claims, is a resume with nothing to
+        do. It is logged and skipped, and the caller is told only what was queued.
+        """
+        # Scoped by **id**, not by root. A row stores the trunk root git resolved
+        # (`facts.trunk_root`), which is not always the string the Project was
+        # registered under - a different case, a symlink, a short path - and an equality
+        # match on it silently resumes nothing. The id is the same string at both ends.
+        rows = await self._store.list_requests(project_id=project_id, limit=RESUME_SCAN_LIMIT)
+        if not rows and project_root:
+            rows = await self._store.list_requests(
+                project_root=project_root, limit=RESUME_SCAN_LIMIT
+            )
+        answered: dict[tuple[str, str], float] = {}
+        for row in rows:
+            if row["state"] not in ANSWERING_STATES:
+                continue
+            key = (row["project_root"], row["branch"])
+            created = float(row["created_at"])
+            if created > answered.get(key, 0.0):
+                answered[key] = created
+        resumed: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            if row["state"] != "refused":
+                continue
+            detail = row.get("detail") or {}
+            if detail.get("code") != "unapproved":
+                continue
+            key = (row["project_root"], row["branch"])
+            if key in seen or answered.get(key, 0.0) > float(row["created_at"]):
+                continue
+            if worktree_root and not same_path(row["worktree_root"], worktree_root):
+                continue
+            # From the refusal's own detail, not the row's `verify_digest`: a refusal
+            # ends the request without recording a run, so that column is empty on
+            # exactly the rows this resumes. The detail is what `_refuse` wrote and is
+            # the same field the strip reads to find the bytes to offer.
+            if digest and str(detail.get("verify_digest") or "") != digest:
+                continue
+            if trusted_only and str(detail.get("verify_provenance") or "") not in TRUSTED_VERDICTS:
+                continue
+            seen.add(key)
+            try:
+                fresh = await self.request(
+                    project_id=row["project_id"] or project_id,
+                    project_root=row["project_root"],
+                    worktree_root=row["worktree_root"],
+                    kind=str(row.get("kind") or "land"),
+                    origin=str(row.get("origin") or "operator"),
+                    origin_session_id=str(row.get("origin_session_id") or ""),
+                    origin_run_id=str(row.get("origin_run_id") or ""),
+                    resumed_from=str(row["id"]),
+                )
+            except LandRefusal as refusal:
+                log.info(
+                    "land_resume_skipped request_id=%s branch=%s code=%s",
+                    row["id"],
+                    row["branch"],
+                    refusal.code,
+                )
+                continue
+            log.info(
+                "land_resumed request_id=%s replaces=%s branch=%s",
+                fresh["id"],
+                row["id"],
+                row["branch"],
+            )
+            resumed.append(fresh)
+        return resumed
 
     async def _draft(
         self,

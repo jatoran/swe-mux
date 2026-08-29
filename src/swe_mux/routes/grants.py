@@ -174,6 +174,7 @@ async def apply_grants(request: web.Request) -> web.Response:
 
     applied_automations = sorted(plan.automations)
     applied_values = sorted(plan.values)
+    resumed_lands: list[dict[str, Any]] = []
     if project is not None and project_config is not None and (plan.automations or plan.values):
         merged = project_values_after(current_values, plan, current_automations)
         try:
@@ -201,6 +202,18 @@ async def apply_grants(request: web.Request) -> web.Response:
         await request.app[keys.EVENTS].emit(
             "project_configuration_changed", project_id=project.id
         )
+        land_queue = request.app.get(keys.LAND_QUEUE)
+        if "land_verify_grant" in plan.values and land_queue is not None:
+            # Raising this clears every verification block whose bytes this machine
+            # wrote, so the lands those blocks refused are waiting on nothing. Same act,
+            # same consequence as approving the bytes one at a time - and a grant that
+            # cleared the block while leaving the queue empty would be the defect the
+            # approve route was just fixed for, reappearing one control over.
+            # `trusted_only`, because the grant does not reach a gate somebody else
+            # wrote: resuming those would queue a land that is about to refuse again.
+            resumed_lands = await land_queue.resume_verification_blocked(
+                project_id=project.id, project_root=project.root, trusted_only=True
+            )
 
     applied_install: list[str] = []
     if plan.install:
@@ -244,6 +257,13 @@ async def apply_grants(request: web.Request) -> web.Response:
         "needs_llm": plan.needs_llm,
         "llm": (await automation._llm_readiness(request)).as_dict(),
         "config": config.public_dict(),
+        # What raising an authority *started*, as opposed to what it permitted. Only
+        # `land_verify_grant` produces any today; an empty list is the ordinary answer
+        # and is not the same as the key being absent.
+        "resumed_lands": [
+            {"id": row["id"], "branch": row["branch"], "kind": row.get("kind") or "land"}
+            for row in resumed_lands
+        ],
     }
     if project is not None:
         result["project"] = {

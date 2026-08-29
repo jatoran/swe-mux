@@ -332,6 +332,14 @@
   standing beside ones a human read; what it owes instead is the trail, which carries the
   verdict and a bounded approved-to-current diff. Every standing readout is therefore drawn
   from `approved || runs_without_approval`, never from `approved` alone.
+  And **clearing a block resumes the lands it ended**: a refusal is terminal, so approving
+  the bytes used to leave the request that caused the block dead and needing to be asked
+  for again. Approving, and raising the authority, both re-queue what they cleared and
+  name it in their response. The resumed request is a **new row** naming the refused one
+  (`resumed_from`) rather than a revived one - the trail has to go on saying the refusal
+  happened, and a terminal row may not gain a second writer - and it skips exactly the two
+  checks that decide whether a *new agent* request should start (the per-origin budget and
+  the `draft` grant), because a resume is neither new nor the agent's.
   *Which* gate runs is decided by a `classify` step, and it stays on the executing side of
   the same line: matching paths against a **closed** documentation allowlist is a total
   function with no model, heuristic, or configuration in it, so it is not a decision -
