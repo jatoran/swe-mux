@@ -8,3 +8,10 @@ stills/
 # `site/img/` is the deliverable; these are the working frames it is made from
 # and they are regenerated on every run.
 site-shots/
+# Raw takes from `capture_loops.py` and `capture_hero.py`, plus the frame dumps
+# used to choose and check their cuts. Tens of megabytes per shoot, and a
+# committed binary is permanent - the deliverables are the sub-megabyte loops
+# under `site/img/` and the hero video, which is hosted as a release asset
+# rather than committed at all (see HERO.md).
+loops/raw/
+out/

@@ -712,6 +712,16 @@ def write_config() -> None:
                 "# The capture install is deliberately quiet: nothing here should reach a",
                 "# network, spend a budget, or ask the operator for anything mid-shoot.",
                 "tailnet_enabled = false",
+                "# The capture install runs its own PTY supervisor, discovered through",
+                "# THIS data dir's supervisor.json and therefore fully separate from the",
+                "# operator's. It exists so the survive-a-daemon-restart loop can be",
+                "# recorded honestly: /api/daemon/restart refuses without one, because a",
+                "# restart would otherwise reap the sessions it claims to preserve.",
+                "pty_supervisor_enabled = true",
+                "# No release banner over a shot or a loop: the capture install is not",
+                "# an install anyone updates, and the banner is the first thing a crop",
+                "# would have to crop around.",
+                "update_check_enabled = false",
                 "attention_daily_interrupt_budget = 4",
                 "# A quota poll would dial a provider with the synthetic credential",
                 "# `seed_accounts` writes and turn the chips into an error state",
@@ -784,6 +794,21 @@ def stop_daemon() -> None:
             time.sleep(1)
         if not port_is_free(PORT):
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+    # The capture install's own supervisor outlives its daemon by design, so it
+    # is stopped here too - by the PID in THIS data dir's discovery file, which
+    # is what scopes the kill to the capture install. The operator's supervisor
+    # discovers through ~/.mux and is untouchable from here.
+    discovery = DATA_DIR / "supervisor.json"
+    if discovery.exists():
+        try:
+            supervisor_pid = int(json.loads(discovery.read_text(encoding="utf-8")).get("pid") or 0)
+        except (OSError, ValueError):
+            supervisor_pid = 0
+        if supervisor_pid:
+            subprocess.run(
+                ["taskkill", "/PID", str(supervisor_pid), "/T", "/F"], capture_output=True
+            )
+            print(f"capture supervisor {supervisor_pid} stopped (with its sessions)")
     STATE_PATH.unlink(missing_ok=True)
     print(f"capture daemon {pid} stopped; port {PORT} free: {port_is_free(PORT)}")
     print(f"operator daemon on {LIVE_PORT} healthy: {live_daemon_ok()}")
@@ -1149,20 +1174,16 @@ def command_agent_run() -> None:
         encoding="utf-8",
         newline="\n",
     )
-    # The one process on this install allowed to see the operator's real home:
-    # the claude CLI authenticates from `~/.claude.json` + `~/.claude/.credentials.json`,
-    # and any refresh it performs writes back to the operator's own files rather
-    # than to a stray copy. `CLAUDE_CONFIG_DIR` is masked with an empty string
-    # (per-session env can override but never unset), which the CLI treats as
-    # unset - so it resolves `<real home>/.claude`, the same directory the
-    # daemon's discovery half was pointed at by `up --claude-config`.
-    session_env = {
-        "USERPROFILE": str(REAL_HOME),
-        "HOME": str(REAL_HOME),
-        "HOMEDRIVE": str(REAL_HOME.drive),
-        "HOMEPATH": str(REAL_HOME)[len(REAL_HOME.drive) :] or "\\",
-        "CLAUDE_CONFIG_DIR": "",
-    }
+    # No per-session environment. The CLI inherits the daemon's
+    # CLAUDE_CONFIG_DIR (the real `~/.claude`) and authenticates from the
+    # account state and credential inside it, while USERPROFILE stays the
+    # synthetic home - so git identity, prompts, and every path in frame remain
+    # invented. This shape requires the operator to have mirrored the account
+    # fields of `~/.claude.json` into `~/.claude/.claude.json` once (the CLI
+    # keeps its state *inside* the config dir when the variable is set); with
+    # that file absent the CLI opens a sign-in screen over a valid credential,
+    # and masking the variable with an empty string instead breaks the CLI's
+    # own resolution and lands on "Not logged in" (both measured 2026-08-28).
     created = api(
         "POST",
         "/api/sessions",
@@ -1170,7 +1191,6 @@ def command_agent_run() -> None:
             "project_id": projects["atlas-api"],
             "backend": "claude",
             "name": AGENT_SESSION_NAME,
-            "env": session_env,
         },
     )
     assert isinstance(created, dict)
@@ -1243,10 +1263,33 @@ def command_agent_run() -> None:
 
 
 # ------------------------------------------------------------------ commands
+def write_home_gitconfig() -> None:
+    """Give the synthetic home a git identity, so daemon-driven git can commit.
+
+    The seeded history sets authors per-invocation, but the land queue's
+    reconcile makes a real merge commit through the daemon's own environment,
+    and a home with no `.gitconfig` fails it with "Committer identity unknown"
+    (measured 2026-08-28). The identity is one of the invented authors, which is
+    also what keeps the operator's own name out of any commit a capture-side
+    surface makes.
+    """
+    home = ROOT / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    author, email = AUTHORS[0]
+    (home / ".gitconfig").write_text(
+        f"[user]\n\tname = {author}\n\temail = {email}\n"
+        "[commit]\n\tgpgsign = false\n"
+        "[core]\n\tautocrlf = false\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def command_up() -> None:
     if STATE_PATH.exists():
         raise SystemExit(f"{STATE_PATH} exists; run `down` first (or delete it if stale)")
     print(f"operator daemon on {LIVE_PORT} healthy before start: {live_daemon_ok()}")
+    write_home_gitconfig()
     build_repos()
     print(f"built {len(PROJECTS)} synthetic repositories under {CODE_ROOT}")
     reset_data_dir()
