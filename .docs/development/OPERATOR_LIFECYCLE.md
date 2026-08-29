@@ -10,6 +10,14 @@ Three facts govern everything here and are stated once rather than repeated.
 The artifacts are `swe_mux-0.1.0-py3-none-any.whl` and `swe_mux-0.1.0.tar.gz`; `https://pypi.org/pypi/swe-mux/json` answers 200.
 The `v0.1.0` GitHub Release carries exactly those two files and no desktop artifact of any kind, which is what the Windows installer below exists to fix from the next release onwards.
 The `uv tool`, `pipx`, and `pip` commands below were **executed** against that published wheel on 2026-08-28 rather than transcribed from `pyproject.toml`: each installed into a throwaway environment, put `mux`, `muxd`, and `swe-mux` on that environment's bin directory, and answered `--help` with exit 0.
+
+**Two launcher names were added after that measurement and are not in it.**
+Since 2026-08-29 `[project.scripts]` also declares `swemux` and `swemuxd`, which are the primary spelling of the same two programs; `mux` and `muxd` remain and are unchanged aliases.
+That was measured the same way, against a wheel built from the change rather than against a published one: installed into a throwaway environment, all five launchers present in `Scripts`, and each of `swemux`, `swemuxd`, `mux`, `muxd` answering `--help` with exit 0 and a usage line naming the command that was typed.
+What is **not** yet measured is a published artifact - the first release carrying these names is the one that ships them, and until it exists the sentence above is the one describing PyPI.
+The reason for the pair is that `mux` is not a name this project can rely on owning: the npm package `mux` installs a `mux` executable of its own from the same category of tool, and the repository behind it has since renamed itself.
+Why they renamed is not something this project knows, and no claim about it is made here.
+On a machine with both installed, PATH order decides which one runs.
 An installed copy reports `0.1.0` and carries `swe_mux/static/index.html` with its 39 hashed JS assets, so it serves the interface without Node ever being present.
 A package install is now the primary path, and the source install is for people changing swe-mux rather than running it.
 
@@ -98,6 +106,16 @@ What it does, stated so an uninstall or a support question has something to chec
 - Writes **two sibling bundles** under that directory - `swe-mux\swe-mux.exe` and `swe-mux-supervisor\swe-mux-supervisor.exe` - which is the layout the daemon resolves the PTY supervisor through. Do not move one without the other.
 - Creates a **Start Menu** entry always, and a **Desktop shortcut** and a **run-at-sign-in** registration only if you tick those boxes. Both are unticked by default.
 - Registers in **Add/Remove Programs** as `swe-mux <version>` with a working uninstaller at `<install dir>\unins000.exe`.
+- Puts **nothing on `PATH`**, and an installer-managed copy therefore has **no `swemux` command at all** - no `swemux`, no `swemuxd`, no `mux`, no `muxd`. This is a real gap between the two install kinds rather than a preference: a PyPI install writes all of them, an installer install writes none.
+
+**Why the installer cannot simply add its directory to `PATH`, measured 2026-08-29.**
+The gap is not the missing `PATH` entry; it is that there is nothing there to point at.
+`packaging/swe_mux.spec` builds exactly one executable, `swe-mux.exe`, and builds it with `console=False` - the windowed launcher, whose whole purpose is to open a native window without a console behind it.
+A GUI-subsystem process has no `stdout` and no `stderr` at all (`desktop.redirect_gui_streams` points both at `<data_dir>\desktop-shell.log` precisely because of this), and `desktop.main` dispatches only `--daemon-child`, `--supervisor-child`, and an allowlisted `-m` pair that does not include `swe_mux.cli`.
+So adding `{app}\swe-mux` to `PATH` today would publish a launcher that opens a window, under a name a user would type expecting a table of sessions.
+Closing this needs a **console executable in the bundle**, which the spec deliberately does not have: its `# No second executable` comment records that nothing from the bundle should run inside a task terminal, because a running copy can lock `dist\swe-mux` against the staged swap a redeploy performs.
+That trade is real and unresolved, and it is the decision this gap is waiting on rather than a step someone forgot.
+Until then, an operator who wants the CLI on a machine with an installer install can install the wheel alongside it (`uv tool install swe-mux`); the two are separate copies and the CLI talks to whichever daemon owns `127.0.0.1:8765`, so this works, at the cost of a second copy of the code.
 
 Silent install, for a scripted or unattended deployment:
 
