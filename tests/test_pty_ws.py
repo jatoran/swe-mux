@@ -767,15 +767,23 @@ async def test_only_latest_gesture_claiming_browser_can_write_input() -> None:
         assert (await next_json(first))["type"] == "input_rejected"
         assert (await next_json(first))["active"] is True
         await first.send_json({"type": "input", "data": "one"})
+        # Waited for rather than assumed. Frames on two different websockets have
+        # no ordering guarantee between them, so under gate load the server could
+        # process `second`'s claim first and reject "one" - which reads as the
+        # *stale* keystroke assertion failing, several lines below, naming neither
+        # socket. Observed on a 16-worker run; the sleep this replaces guarded the
+        # wrong side of the race.
+        await until(lambda: writes == ["one"], what="the first client's input landed")
         # A gesture claim is the user's own hand on a device: it always wins, even
         # against an owner that was typed into a moment ago.
         await second.send_json({"type": "claim_input", "reason": "gesture"})
         assert (await next_json(second))["active"] is True
         await second.send_json({"type": "input", "data": "two"})
+        await until(lambda: writes == ["one", "two"], what="the claiming client's input landed")
         await first.send_json({"type": "input", "data": "stale"})
-        await asyncio.sleep(0.05)
         # The displaced client is told, and its stale keystrokes come back for replay
-        # rather than disappearing.
+        # rather than disappearing. Both frames are on one socket, so `next_json`
+        # blocking for them is the whole wait; no sleep is needed or wanted.
         displaced = [await next_json(first), await next_json(first)]
         assert [frame["type"] for frame in displaced] == ["input_owner", "input_rejected"]
         assert displaced[0]["reason"] == "claimed_elsewhere"

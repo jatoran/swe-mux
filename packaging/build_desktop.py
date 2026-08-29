@@ -183,6 +183,7 @@ def build_app_bundle(distpath: Path | None = None) -> None:
         check=True,
     )
     verify_bundle_contents(output_root / "swe-mux")
+    verify_voice_closure_absent(output_root / "swe-mux")
     verify_bundle_licenses(output_root / "swe-mux")
     describe_bundle(output_root / "swe-mux")
     print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
@@ -211,28 +212,33 @@ def describe_bundle(bundle_root: Path) -> Path:
     )
 
 
-# Extras the bundle is built from. Optional at *install* time - a source run
-# without `voice-local` degrades to the browser speech stack with a typed
-# diagnostic - but mandatory at *build* time, and not only because the frozen app
-# has no browser fallback for TTS. `num2words` reaches the closure through
-# `voice-local` and is LGPL: the relink condition is satisfied by the spec's
-# `collect_all` writing it as readable source under `_internal/num2words/`, and
-# `collect_all` on a package that is not installed collects nothing and does not
-# fail. So a build run in an environment missing the extra produces a bundle that
-# `verify_bundle_licenses` then rejects - after several minutes of PyInstaller.
-# Checking membership up front turns that into an immediate, legible refusal, and
-# `redeploy_desktop`'s preflight runs the same check before it stops anything.
+# Extras the bundle is built from. `voice-local` is still here after the bundle
+# stopped shipping it (ROADMAP Phase 21 Workstream D), and the reason inverted
+# rather than expired - which is worth stating plainly, because "the bundle no
+# longer needs it" is the obvious and wrong conclusion.
+#
+# It used to be required because `num2words` is LGPL and the spec's `collect_all`
+# had to write it as readable source under `_internal/num2words/`; `collect_all`
+# on an absent package collects nothing without failing, so a build from an
+# environment missing the extra produced a bundle `verify_bundle_licenses` then
+# rejected minutes later. That obligation has moved to `voice_runtime`, which
+# proves it on the tree it unpacks.
+#
+# What requires the extra now is the opposite assertion. `verify_bundle_contents`
+# proves the voice closure is **absent** from the bundle, and that proof is
+# vacuous in an environment that never had the closure to exclude: a build
+# without `voice-local` would pass while telling you nothing about whether the
+# spec's excludes work. The extra is what makes the absence evidence rather than
+# an accident, and the failure it guards - a frozen app that silently reacquires
+# 277 MB it was supposed to have shed - is invisible until somebody measures a
+# release.
 REQUIRED_BUILD_EXTRAS = ("desktop", "voice-local")
 
-# Dependency *groups* the bundle is built from, for the same reason and with the
-# same failure mode. `g2p-model` holds `en-core-web-sm`, which is a group member
-# rather than a `voice-local` member only because it cannot be published in
-# `Requires-Dist` at all (see the note on `voice-local` in `pyproject.toml`) - so
-# without naming it here, moving it out of the extra would have quietly removed it
-# from this check, and a bundle whose `collect_all("en_core_web_sm")` collected
-# nothing would ship with a Kokoro engine that cannot pronounce a word. That
-# failure appears only in the frozen app and only on the first spoken sentence,
-# which is exactly the class this whole function exists to turn into a refusal.
+# Dependency *groups* the bundle is built from, for the same inverted reason.
+# `g2p-model` holds `en-core-web-sm`, which the bundle also no longer carries -
+# `voice_models.SpacyModelStore` has acquired it on an explicit press since
+# 2026-08-28, and shipping it as well was 15 MB of duplicate. Required here so
+# that its exclusion, too, is proven against an environment that has it.
 REQUIRED_BUILD_GROUPS = ("g2p-model",)
 
 
@@ -297,17 +303,118 @@ def verify_build_extras_installed() -> None:
             "The desktop bundle is built from every distributed extra and group, "
             "and these are not installed:\n  "
             + "\n  ".join(missing)
-            + f"\nRun `uv sync {flags}` and build again. This is a license "
-            "requirement as well as a functional one: num2words is LGPL and must "
-            "ship as replaceable source under _internal/num2words/, which the "
-            "spec's collect_all cannot do for a package that is absent."
+            + f"\nRun `uv sync {flags}` and build again. The voice extra is "
+            "required in order to prove its own absence: the bundle deliberately "
+            "no longer ships the speech closure, and verify_bundle_contents "
+            "cannot demonstrate that a package was excluded in an environment "
+            "that never had it to exclude. voice_closure_top_levels() also reads "
+            "these distributions' metadata to build the spec's excludes list, so "
+            "a build without them excludes too little and silently reships the "
+            "277 MB this bundle was made to shed."
         )
+
+
+# ---------------------------------------------------------------------------
+# The acquired voice closure, and keeping it out of the bundle
+# ---------------------------------------------------------------------------
+
+
+def _holds_importable_code(dist: Any, name: str) -> bool:
+    """Whether `name`, as installed beside `dist`, is something Python can import.
+
+    Needed because `top_level.txt` is written by whatever built the wheel and is
+    not always true: `tqdm` declares `images`, which is a directory of GIFs its
+    README links to. An `excludes` entry naming it would exclude nothing while
+    reading like a rule, and the next person to see the list would trust it.
+    """
+    try:
+        located = Path(str(dist.locate_file(name)))
+    except Exception:  # noqa: BLE001 - a metadata backend that cannot locate is not a vote
+        return True
+    if located.is_file():
+        return located.suffix in {".py", ".pyd", ".so", ".dylib"}
+    if not located.is_dir():
+        return False
+    return any(
+        child.suffix in {".py", ".pyd", ".so", ".dylib"} for child in located.rglob("*")
+    )
+
+
+def voice_closure_top_levels() -> tuple[str, ...]:
+    """Top-level import names of every distribution acquired at first use.
+
+    Derived from the installed distributions named by
+    `swe_mux.voice_wheels.DISTRIBUTIONS` rather than listed here, for the reason
+    every list in this file is derived: a hand-written copy of a generated table
+    is the copy that drifts, and the drift is silent - PyInstaller would simply
+    collect a package the spec forgot to name and the bundle would grow back.
+
+    This is why `REQUIRED_BUILD_EXTRAS` still demands `voice-local`. Reading the
+    metadata needs the distributions installed; an environment without them
+    returns a short list, excludes too little, and produces a bundle that passes
+    every check while carrying whatever was importable.
+    """
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    from swe_mux.voice_wheels import DISTRIBUTIONS
+
+    names: set[str] = set()
+    missing: list[str] = []
+    for dist_name in DISTRIBUTIONS:
+        try:
+            dist = distribution(dist_name)
+        except PackageNotFoundError:
+            missing.append(dist_name)
+            continue
+        top_level = dist.read_text("top_level.txt")
+        if top_level:
+            names.update(
+                name
+                for name in (line.strip() for line in top_level.splitlines())
+                if name and _holds_importable_code(dist, name)
+            )
+            continue
+        # No `top_level.txt` - modern wheels often omit it. Derive the names from
+        # the recorded file list instead, skipping the metadata directory and the
+        # `.data` payload, neither of which is importable.
+        for recorded in dist.files or []:
+            head = recorded.parts[0]
+            if head.endswith((".dist-info", ".data")) or head in {"..", "bin", "Scripts"}:
+                continue
+            # Only heads that actually contain importable code. `tqdm` records an
+            # `images/` directory of GIFs used by its README, and an `excludes`
+            # entry naming it would read like a rule while excluding nothing -
+            # the kind of line somebody later trusts.
+            if recorded.suffix not in {".py", ".pyd", ".so", ".dylib"}:
+                continue
+            names.add(head[:-3] if head.endswith(".py") else head)
+    if missing:
+        raise SystemExit(
+            "The voice closure cannot be excluded from a bundle built without it: "
+            + ", ".join(missing)
+            + "\nRun `uv sync --extra desktop --extra voice-local --group package`. "
+            "See REQUIRED_BUILD_EXTRAS for why the extra is required in order to "
+            "prove its own absence."
+        )
+    # `numpy.libs` and friends are directories PyInstaller creates, never module
+    # names; excluding a dotted name would be a no-op that reads like a rule.
+    return tuple(sorted(name for name in names if "." not in name and name.isidentifier()))
 
 
 # LGPL packages that must ship as replaceable source rather than frozen into the
 # executable archive, so a recipient can substitute their own build. Kept in
 # sync with `license_audit.ALLOWLIST` by `tests/test_license_audit.py`.
-RELINKABLE_LGPL = ("pystray", "num2words")
+#
+# `num2words` was here until 2026-08-29 and its obligation did not lapse - it left
+# the *distribution*. The bundle no longer contains it; `swe_mux.voice_runtime`
+# fetches its wheel from PyPI on an explicit press, so the bytes travel from the
+# index to the user and what this project ships is a URL and a hash. The relink
+# condition still has to hold for the copy that lands, and
+# `voice_runtime._verify_relinkable` asserts it on the unpacked tree, which is the
+# same assertion in the place the package now is. `verify_voice_closure_absent`
+# is the other half: it fails the build if `num2words` ever ships again without
+# this list being updated to match.
+RELINKABLE_LGPL = ("pystray",)
 
 # Optional integrations whose client code deliberately remains outside the
 # frozen artifact. Edge TTS runs through the shipped Apache bridge under a
@@ -427,7 +534,19 @@ def verify_no_gpl_av(bundle_root: Path) -> None:
 # Every top-level package directory the app bundle is expected to carry under
 # `_internal/`, and nothing else. Measured from a build in the exact closure CI
 # uses (`uv sync --extra desktop --extra voice-local --group package`) on
-# 2026-08-29: 51 packages, 371 MB under `_internal/`.
+# 2026-08-29: 30 packages, 79 MB under `_internal/`, in a 120 MB bundle.
+#
+# It was 51 packages and 371 MB the same day, in a 400 MB bundle. The difference
+# is ROADMAP Phase 21 Workstream D: the on-device speech closure - spacy, thinc,
+# blis, cymem, murmurhash, preshed, srsly, ctranslate2, tokenizers, hf_xet,
+# onnxruntime, numpy, numpy.libs, misaki, num2words, en_core_web_sm, regex,
+# wrapt, yaml, markupsafe and setuptools - is no longer shipped. It is acquired
+# on an explicit press by `swe_mux.voice_runtime`, from pins generated out of
+# `uv.lock`. Reading this diff is the record of exactly what stopped shipping.
+#
+# `setuptools` leaving is worth noting because a previous audit recorded it as an
+# unexplained passenger: it was not one. It was a real edge of the voice closure
+# (spaCy and thinc reach it), and removing the closure removed it.
 #
 # This exists because a bundle's *membership* was previously unchecked, and
 # membership is decided by what happens to be importable in the build venv rather
@@ -445,58 +564,45 @@ def verify_no_gpl_av(bundle_root: Path) -> None:
 # be edited without being read. The package they describe is checked here in its
 # own right.
 #
-# Two passengers are recorded rather than removed, because removing them is a
-# behaviour change this gate should not smuggle in:
-#   - `mypy`, `mypyc`'s `librt`, and `ast_serialize` are 3.8 MB of mypyc-compiled
-#     `.pyd`. They arrive through `pydantic/mypy.py` and `thinc/mypy.py`, which are
-#     static-analysis plugins that nothing imports at runtime. A type checker
-#     inside a shipped desktop app is not useful to anyone.
-#   - `setuptools` is present for the same class of reason.
-# Excluding them is a spec change that has to be proven against a running frozen
-# app, which a worktree cannot do. Listed here so the next person sees them.
+# One passenger is still recorded rather than removed. `mypy`, `mypyc`'s `librt`
+# and `ast_serialize` are 3.8 MB of mypyc-compiled `.pyd` reached through
+# `pydantic/mypy.py` - a static-analysis plugin nothing imports at runtime.
+# (`thinc/mypy.py` was the other door and it has left with the voice closure.)
+# Excluding it is a spec change that has to be proven against a running frozen
+# app, which a worktree cannot do; it is 3% of this bundle rather than 1% of the
+# old one, so it is more worth doing than it was. Listed here so the next person
+# sees it.
+#
+# The stdlib is a deliberate passenger too, and a larger one: `swe_mux.spec` adds
+# every importable standard-library module as a hidden import, because excluding
+# the voice closure makes its import graph invisible to PyInstaller's analysis
+# while the graph itself keeps existing. That reasoning is in the spec, next to
+# the line that does it. It shows up here as extension modules
+# (`_msi.pyd`, `_wmi.pyd`, `winsound.pyd`) rather than as package directories.
 EXPECTED_BUNDLE_PACKAGES = frozenset(
     {
         "PIL",
         "aiohttp",
         "ast_serialize",
-        "blis",
         "certifi",
         "charset_normalizer",
         "clr_loader",
         "cryptography",
-        "ctranslate2",
-        "cymem",
-        "en_core_web_sm",
         "frozenlist",
-        "hf_xet",
         "jsonschema",
         "jsonschema_specifications",
         "librt",
-        "markupsafe",
         "mcp",
-        "misaki",
         "multidict",
-        "murmurhash",
         "mypy",
-        "num2words",
-        "numpy",
-        "numpy.libs",
-        "onnxruntime",
-        "preshed",
         "propcache",
         "psutil",
         "pydantic_core",
         "pystray",
         "pythonnet",
         "pywin32_system32",
-        "regex",
         "rpds",
-        "setuptools",
-        "spacy",
-        "srsly",
         "swe_mux",
-        "thinc",
-        "tokenizers",
         "tree_sitter",
         "tree_sitter_language_pack",
         "tzdata",
@@ -504,8 +610,6 @@ EXPECTED_BUNDLE_PACKAGES = frozenset(
         "webview",
         "win32",
         "winpty",
-        "wrapt",
-        "yaml",
         "yarl",
     }
 )
@@ -523,6 +627,66 @@ def bundle_top_level_packages(bundle_root: Path) -> dict[str, int]:
         for entry in sorted(internal.iterdir())
         if entry.is_dir() and not entry.name.endswith(".dist-info")
     }
+
+
+def verify_stable_abi_forwarder(bundle_root: Path) -> None:
+    """Fail the build when `python3.dll` is absent from a Windows bundle.
+
+    Not hygiene. The acquired voice closure (`swe_mux.voice_runtime`) contains
+    `abi3` wheels - `tokenizers` and `hf_xet` today - whose extension modules link
+    against Windows' stable-ABI forwarder by name. PyInstaller collects that file
+    when an `abi3` extension is *in the analysis*, and the acquired closure is by
+    definition not in it.
+
+    So the file is here for the benefit of code the bundle does not contain, which
+    makes it exactly the kind of dependency that disappears without anyone
+    noticing: nothing in the base app imports it, no test exercises it, and its
+    absence surfaces as `ImportError: DLL load failed while importing tokenizers`
+    at first dictation, in the frozen app, naming neither the file nor the reason.
+    Measured on a frozen probe: with it, the whole closure loads; without it,
+    every non-abi3 package loads and the two abi3 ones do not.
+
+    `cryptography` also ships an `abi3` `.pyd` and would pull the forwarder in
+    today. That is a coincidence of the base closure and not a guarantee, so the
+    spec collects it explicitly and this asserts the result.
+    """
+    if not (bundle_root / "_internal" / "python312.dll").is_file():
+        return  # not a Windows bundle; the forwarder is a Windows concept
+    if (bundle_root / "_internal" / "python3.dll").is_file():
+        return
+    raise SystemExit(
+        "Stable-ABI forwarder missing: _internal/python3.dll is not in the bundle. "
+        "Every abi3 wheel in the acquired voice closure links against it by name, "
+        "and nothing in the bundle's own analysis pulls it in. See the PYTHON3_DLL "
+        "block in packaging/swe_mux.spec."
+    )
+
+
+def verify_voice_closure_absent(bundle_root: Path) -> None:
+    """Fail the build when the acquired speech closure rode along anyway.
+
+    `verify_bundle_contents` already rejects any unexpected top-level package, so
+    this is the same assertion said a second time - deliberately, because the two
+    fail differently. That check says "a package you did not declare is here" and
+    points at the build venv; this one says "the package you deliberately stopped
+    shipping is back", and names the mechanism (`EXCLUDED_VOICE_CLOSURE`) and the
+    consequence (a 400 MB bundle again). The failure being guarded is a silent
+    regrowth that only a size measurement would otherwise reveal.
+    """
+    internal = bundle_root / "_internal"
+    present = sorted(
+        name for name in voice_closure_top_levels() if (internal / name).exists()
+    )
+    if present:
+        raise SystemExit(
+            "Voice closure regression: the bundle carries packages that are "
+            "supposed to be acquired at first use:\n  "
+            + "\n  ".join(present)
+            + "\nThese are ~277 MB of the 400 MB this bundle used to be (ROADMAP "
+            "Phase 21 Workstream D). EXCLUDED_VOICE_CLOSURE in packaging/"
+            "swe_mux.spec is what keeps them out; a package that returns has "
+            "either been added to a `collect_all` loop or reached through a hook."
+        )
 
 
 def verify_bundle_contents(
@@ -543,6 +707,8 @@ def verify_bundle_contents(
     sizes = bundle_top_level_packages(bundle_root)
     total = sum(sizes.values())
     print(f"Bundle: {len(sizes)} top-level packages, {total / 1_000_000:.0f} MB under _internal/")
+
+    verify_stable_abi_forwarder(bundle_root)
 
     unexpected = sorted(
         (size, name) for name, size in sizes.items() if name not in expected

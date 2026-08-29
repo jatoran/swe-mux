@@ -370,6 +370,15 @@ export interface VoiceStatus {
   spend_today:{tokens:number;cost_usd:number;unpriced_calls?:number}; daily_budget:Budget
   cache_bytes:number; cache_limit_bytes:number; clip_count:number; stt_enabled:boolean
   kokoro_model?:KokoroModelStatus; kokoro_voice?:string
+  // The acquired speech closure (ROADMAP Phase 21 Workstream D). Optional
+  // because a daemon older than the field simply omits it, and the panel that
+  // reads it renders nothing rather than an empty state.
+  voice_runtime?:{
+    status:'not_downloaded'|'downloading'|'ready'|'error'
+    source?:'installed'|'downloaded'|null
+    supported:boolean; closure:string; distributions:number
+    total_bytes:number; downloaded_bytes:number; current_file?:string|null; error?:string|null
+  }
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
   stt_language:string;stt_whisper_model:string;stt_routing_model?:string
   stt_models?:WhisperModelStatus[]

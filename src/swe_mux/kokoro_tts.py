@@ -304,7 +304,8 @@ class KokoroEngine:
         except ImportError as exc:  # pragma: no cover - dependency of the package
             raise KokoroError(
                 "onnxruntime is not installed; local speech synthesis needs the "
-                "voice-local extra (`uv sync --extra voice-local`)"
+                "on-device speech libraries - download them in Settings → Voice, "
+                "or install the voice-local extra (`uv sync --extra voice-local`)"
             ) from exc
         if not self.paths.model.exists() or not self.paths.tokenizer.exists():
             raise KokoroError(
@@ -350,7 +351,9 @@ class KokoroEngine:
             except ImportError as exc:
                 raise KokoroError(
                     "the misaki G2P package is not installed; local speech synthesis "
-                    "needs the voice-local extra (`uv sync --extra voice-local`)"
+                    "needs the on-device speech libraries - download them in "
+                    "Settings → Voice, or install the voice-local extra "
+                    "(`uv sync --extra voice-local`)"
                 ) from exc
             # This refusal is load-bearing and is not defensive tidiness. misaki's
             # `G2P.__init__` reads `if not spacy.util.is_package(name):

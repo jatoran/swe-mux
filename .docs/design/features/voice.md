@@ -130,6 +130,9 @@ install-wide, so the tab edits them directly for the focused session.
   below.
   Roughly 400 MB of wheels for a capability the OS voice engine and the browser's own speech
   stack already cover in degraded form, so a plain `uv sync` leaves it out.
+  **The frozen desktop app no longer carries it either, since 2026-08-29**: it is acquired at
+  first use, on an explicit press, exactly the way the two model stores already work.
+  See "The speech libraries are a first-use asset" below for the mechanism and its measurements.
   Every call site imports lazily and answers with a typed diagnostic naming the extra, so an
   absent closure is an unavailable engine and never an import error
   (`kokoro_tts._ensure_loaded`, `kokoro_tts._ensure_g2p`, `voice._transcribe_whisper`,
@@ -142,10 +145,14 @@ install-wide, so the tab edits them directly for the focused session.
   both `voice.py` and the frozen app's runtime hook call before importing `faster_whisper`.
   Dictation is verified working with no PyAV installed at all
   (`.docs/development/ROADMAP.md` Phase 11).
-  It is optional to install and **mandatory to build from**: `num2words` is LGPL, and the
-  frozen bundle's relink obligation is met only by the spec collecting it as replaceable
-  source, so `build_desktop` and the `redeploy_desktop` preflight both refuse a build whose
-  environment lacks the extra (`design/features/desktop-shell.md`).
+  It is optional to install and **still mandatory to build from**, for a reason that inverted
+  when the closure stopped shipping.
+  It used to be required because the bundle had to collect LGPL `num2words` as replaceable
+  source; it is now required because `verify_bundle_contents` proves the closure is *absent*,
+  and that proof is vacuous in an environment that never had it - and because
+  `build_desktop.voice_closure_top_levels()` reads those distributions' metadata to build the
+  spec's excludes list, so a build without them excludes too little and silently reships
+  everything (`design/features/desktop-shell.md`).
   `.worktree-setup` and the Windows CI job sync it, because the real-G2P tests are
   `importorskip`-guarded and a bare sync would turn them into silent skips.
 - Providers: `sapi` (the default offline Windows `System.Speech` engine), `kokoro`
@@ -185,6 +192,76 @@ install-wide, so the tab edits them directly for the focused session.
   A failed refresh retains the prior voices and records the error.
   A selected `ShortName` absent from the newest catalog remains configured and renders as
   missing instead of being replaced.
+- **The speech libraries are a first-use asset, not part of the app** (`voice_runtime.py`,
+  `voice_wheels.py`, `packaging/generate_voice_pins.py`).
+  ROADMAP Phase 21 Workstream D.
+  The desktop bundle was 400.6 MiB over 2937 files, of which 277.1 MiB was the on-device speech
+  closure and nothing else - spaCy, thinc, blis, CTranslate2, onnxruntime, tokenizers, numpy,
+  misaki, num2words and their dependencies.
+  Both speech features ship switched off, so every new user downloaded that and let Windows
+  scan it for a capability most never enable.
+  It is now acquired on a press: the bundle is **111.2 MiB over 1497 files**, and turning voice
+  on costs one 81.9 MiB download.
+
+  The mechanism is `SpacyModelStore`'s, widened from one wheel to a closure.
+  Pins are **generated from `uv.lock`** rather than maintained, because a hand-written
+  description of this repository's resolution drifts the first time anybody runs
+  `uv lock --upgrade`, and the failure that produces is a first-use download of a closure
+  nobody audited.
+  `tests/test_voice_wheels.py` regenerates the table and fails when the committed copy differs.
+  Which distributions are acquired is a set difference over the lockfile's own graph -
+  `closure(root + desktop + voice-local + g2p-model)` minus `closure(root + desktop)` - so it is
+  a graph question rather than a judgement: `numpy`, `jinja2`, `wrapt` and `pyyaml` all look
+  like base infrastructure and all of them are, here, reachable only through spaCy and
+  faster-whisper.
+  Every wheel is verified against its pinned size and SHA-256 while streaming, unpacked into
+  one directory beside the live one and swapped, and put on `sys.path` - never into the
+  interpreter's own `site-packages`.
+  An environment that already has the closure short-circuits before anything is inspected, so a
+  source checkout with the extra is untouched.
+
+  Four things about it are load-bearing and each has its own reason.
+
+  **The bundle must ship the whole standard library and `python3.dll`.**
+  Excluding the closure makes its import graph invisible to PyInstaller's analysis, which is
+  the point, but the graph did not stop existing.
+  Measured on a frozen probe: a bundle carrying only the base app's own stdlib closure failed
+  on `platform`, then `ctypes`, then `json`, then `http.cookies`, one at a time, each revealed
+  only by fixing the one before it.
+  `python3.dll` is the Windows stable-ABI forwarder that every `abi3` wheel in the closure
+  (`tokenizers`, `hf_xet`) links against by name; PyInstaller collects it only when an `abi3`
+  extension is in the analysis, and without it `tokenizers` fails with `DLL load failed`, which
+  names neither the file nor the reason.
+  Both are asserted on the built tree (`build_desktop.verify_stable_abi_forwarder`).
+
+  **The LGPL obligation moved rather than lapsed.**
+  swe-mux no longer distributes `num2words` at all - the wheel goes from PyPI to the user and
+  what this project ships is a URL and a hash - so `verify_bundle_licenses` cannot assert
+  anything about it.
+  `voice_runtime._verify_relinkable` asserts the same property on the tree that is unpacked:
+  the copy that lands is readable `.py` source a recipient can replace.
+  `license_audit.ACQUIRED_AT_FIRST_USE` is what keeps `THIRD-PARTY-NOTICES.md` from telling a
+  reader to look under `_internal/` for a package that is not there.
+
+  **`en_core_web_sm` is deliberately not in this closure.**
+  `SpacyModelStore` has owned it since 2026-08-28 with its own pin, its own panel and its own
+  doctor row; two stores fetching one wheel into two directories would be two answers to "is
+  the G2P model ready", and the wrong one is whichever the reader did not look at.
+
+  **`docopt` is pinned nowhere.**
+  `num2words` declares it and it has published an sdist and never a wheel since 2014, so a
+  wheel-only store cannot acquire it.
+  That is safe only because the importable `num2words` package does not use it - only its
+  console script does - and `tests/test_voice_wheels.py` asserts that rather than assuming it.
+
+  The honest cost, stated because the win is not universal.
+  Unpacked, the closure is ~315 MB against the 277 MB it replaced in the bundle, because wheels
+  carry test suites and type stubs PyInstaller pruned.
+  So a user who never enables voice saves 289 MB of download and disk permanently; a user who
+  does download 193 MB instead of 400 MB and stores about 26 MB more.
+  Everyone downloads less; only the non-voice user - which is every new install, since both
+  switches ship off - saves disk.
+
 - **Kokoro's model is downloaded, never bundled** (`voice_models.py`): a pinned immutable
   Hugging Face revision, per-file SHA-256 verified while streaming, with explicit
   `not_downloaded → downloading → ready → error` state — a partial download can never be
@@ -787,6 +864,9 @@ install-wide, so the tab edits them directly for the focused session.
   sibling of the Kokoro panel.
 - **`stt_enabled` defaults off**, so an untouched install has downloaded nothing at all, and the
   explicit states above are what a user who turns it on meets rather than a surprise fetch.
+  Since 2026-08-29 that default is also what justifies the packaged app not carrying the speech
+  libraries: an untouched install downloading 277 MB it will never load is the same defect as a
+  surprise fetch, read the other way round.
   Enabling microphone input in Settings -> Voice is the opt-in; existing configs keep their
   stored value.
   `tts_enabled` is off by the same rule, so the Kokoro weights are equally unfetched.
@@ -1152,11 +1232,18 @@ and never touches the daemon or an LLM.
 - `GET  /api/voice` — active provider/STT availability, every provider's local cached status
   and capabilities, content/mode defaults, spend, cache stats, and Kokoro model state.
   `stt_available` is false while the configured dictation weights are absent, and
-  `stt_diagnostic` says which of the three absences it is (host requirement, `voice-local`
-  extra, or an undownloaded model) rather than one flag for all three; `stt_models[]` carries
-  the per-model state.
+  `stt_diagnostic` says which of the four absences it is (host requirement, the speech
+  libraries, an unsupported platform, or an undownloaded model) rather than one flag for all
+  four; `stt_models[]` carries the per-model state and `voice_runtime` the library state.
 - `GET  /api/voice/models/whisper` / `POST /api/voice/models/whisper/download` — the STT half
   of the first-use asset contract. The GET is a local probe; the POST is the only download path.
+- `GET  /api/voice/models/runtime` / `POST /api/voice/models/runtime/download` — the speech
+  *libraries*, which the frozen app does not carry.
+  Same shape and same contract as the two weight endpoints, plus `supported`: an interpreter or
+  platform the pinned closure has no wheels for reports `error` with `supported: false`, because
+  there is nothing there to press and drawing it as `not_downloaded` beside a button would be an
+  interface that lies.
+  Progress rides the shared `voice_model_progress` event with `model: "runtime"`.
 - `GET /api/voice/providers/edge` — cached external-integration and catalog status; no process
   or network probe.
 - `POST /api/voice/providers/edge/install` — user-gesture-gated staged managed install or repair;
@@ -1238,6 +1325,11 @@ The Mux assistant's knobs (`assistant_*`) live with it in `assistant.md`.
   the latency report helpers.
 - `src/swe_mux/voice_audio.py` — WAV concatenation for a completed stream, and the audio
   profile check that decides whether its segments can be joined at all.
+- `src/swe_mux/voice_runtime.py` — the acquired speech closure: four-state store, pinned and
+  SHA-256-verified wheel fetch, unpack-and-swap, `sys.path` activation, and the LGPL relink
+  proof that moved here from the bundle.
+- `src/swe_mux/voice_wheels.py` — the pin table, **generated**; never hand-edited.
+  Regenerate with `uv run python packaging/generate_voice_pins.py --write`.
 - `src/swe_mux/kokoro_tts.py` — the direct-onnxruntime Kokoro engine, the espeak-free G2P
   constraint, and the out-of-vocabulary repair ladder.
 - `src/swe_mux/voice_models.py` — both on-demand speech models under one state machine: the

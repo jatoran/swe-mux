@@ -436,6 +436,17 @@ class WhisperModelStore:
             return False
         return True
 
+    def forget_backend(self) -> None:
+        """Re-ask whether ``faster_whisper`` imports.
+
+        The memo above is right for the whole life of a process in every case but
+        one: `voice_runtime.VoiceRuntimeStore` can put the closure on `sys.path`
+        *after* this store has already answered "no". Nothing else re-asks, so
+        without this an install that just acquired the libraries keeps reporting a
+        missing backend until it is restarted.
+        """
+        self._backend = None
+
     def local_path(self, name: str) -> str | None:
         """Where these weights already are on this machine, or None if nowhere.
 
@@ -556,7 +567,9 @@ class WhisperModelStore:
             if not self.backend_installed():
                 raise VoiceModelError(
                     "faster-whisper is not installed; local dictation needs the "
-                    "voice-local extra (`uv sync --extra voice-local`)"
+                    "on-device speech libraries - download them in Settings → "
+                    "Voice, or install the voice-local extra "
+                    "(`uv sync --extra voice-local`)"
                 )
             await asyncio.to_thread(self._fetch, name)
             self.forget(name)

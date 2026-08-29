@@ -200,14 +200,25 @@ type G2pModelInfo = {
 type KokoroModelInfo = {
   status:'not_downloaded'|'downloading'|'ready'|'error'
   total_bytes:number;downloaded_bytes:number;current_file?:string|null
-  error?:string|null;voices:string[];g2p?:G2pModelInfo
+  error?:string|null;voices:string[];g2p?:G2pModelInfo;runtime?:VoiceRuntimeInfo
+}
+// The speech *libraries*, which the desktop bundle stopped carrying on
+// 2026-08-29 (ROADMAP Phase 21 Workstream D). Same four states as every other
+// first-use asset, plus `supported`: a platform the pinned closure has no wheels
+// for is an absence no press can fix, and drawing it as `not_downloaded` beside
+// a button would be an interface that lies.
+type VoiceRuntimeInfo = {
+  status:'not_downloaded'|'downloading'|'ready'|'error'
+  source?:'installed'|'downloaded'|null
+  supported:boolean;closure:string;distributions:number
+  total_bytes:number;downloaded_bytes:number;current_file?:string|null;error?:string|null
 }
 type VoiceStatusInfo = {
   enabled:boolean;engine:string;engine_available:boolean;diagnostic?:string|null;voice:string
   summary_model:string;spend_today:{tokens:number;cost_usd:number;unpriced_calls?:number}
   daily_budget:Budget
   cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
-  kokoro_model?:KokoroModelInfo;kokoro_voice?:string
+  kokoro_model?:KokoroModelInfo;kokoro_voice?:string;voice_runtime?:VoiceRuntimeInfo
   kokoro_spelled_words?:{word:string;count:number;first_seen:number;last_seen:number}[]
   providers?:{sapi?:{available:boolean;diagnostic?:string|null};kokoro?:{available:boolean;diagnostic?:string|null};edge?:EdgeProviderStatus}
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
@@ -1999,6 +2010,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </div>
           </section>
 
+          {/* Above the provider picker on purpose: one download serves both the
+              Kokoro engine and Whisper dictation, so it belongs to neither
+              provider's panel. Nothing is fetched until this button is pressed. */}
+          <section><h3>On-device speech libraries</h3>
+          <p>Kokoro read-aloud and Whisper dictation both run on this machine and need these libraries. The packaged app does not carry them; they are downloaded once, verified against pinned hashes, and never fetched on your behalf.</p>
+          <VoiceRuntimePanel initial={voiceInfo?.voice_runtime||null}/>
+          </section>
+
           {/* Provider-specific panels are mutually exclusive in the DOM, while their
               values remain independent fields in the complete Settings draft. */}
           <section><h3>TTS provider</h3>
@@ -2497,6 +2516,69 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
       })}
     </div>
     {error&&<p class="assistant-error" role="alert">{error}</p>}
+  </div>
+}
+
+/**
+ * The on-device speech libraries, as a first-use asset with an explicit press.
+ *
+ * Drawn above the provider picker rather than inside the Kokoro branch, because
+ * it gates both halves of voice: the same closure carries the Kokoro engine and
+ * the Whisper one. Folding it into the Kokoro panel would hide the reason
+ * dictation does not work from the person configuring dictation.
+ *
+ * `supported: false` renders as a statement with no button. The pinned closure
+ * covers Windows, Linux and macOS on the architectures swe-mux ships for; an
+ * interpreter outside that set has nothing to press, and its remedy is the
+ * install-time extra rather than this panel.
+ */
+function VoiceRuntimePanel({initial}:{initial:VoiceRuntimeInfo|null}){
+  const [runtime,setRuntime]=useState<VoiceRuntimeInfo|null>(initial)
+  const [starting,setStarting]=useState(false)
+  useEffect(()=>{
+    setRuntime(initial)
+    void api<VoiceRuntimeInfo>('GET','/api/voice/models/runtime').then(setRuntime).catch(()=>{})
+  },[initial])
+  useEffect(()=>{
+    const handler=(raw:Event)=>{
+      const detail=(raw as CustomEvent).detail as Partial<VoiceRuntimeInfo>&{model?:string}
+      // Labelled events only. The Kokoro panel treats an unlabelled event as its
+      // own, so this one must never claim one it did not send.
+      if(detail?.model!=='runtime'||!detail.status)return
+      setRuntime(current=>({...(current||{supported:true,closure:'',distributions:0,total_bytes:0,downloaded_bytes:0}),...detail} as VoiceRuntimeInfo))
+    }
+    window.addEventListener('mux:voice-model',handler)
+    return()=>window.removeEventListener('mux:voice-model',handler)
+  },[])
+  useEffect(()=>{
+    if(runtime?.status!=='downloading')return
+    const timer=setInterval(()=>{void api<VoiceRuntimeInfo>('GET','/api/voice/models/runtime').then(setRuntime).catch(()=>{})},2000)
+    return()=>clearInterval(timer)
+  },[runtime?.status])
+  const download=async()=>{
+    setStarting(true)
+    try{const next=await api<VoiceRuntimeInfo&{started:boolean}>('POST','/api/voice/models/runtime/download');setRuntime(next)}
+    catch{/* surfaced by the next status refresh */}
+    finally{setStarting(false)}
+  }
+  if(!runtime)return null
+  const status=runtime.status
+  const total=runtime.total_bytes||0
+  const done=runtime.downloaded_bytes||0
+  const pct=total?Math.min(100,Math.round(done/total*100)):0
+  const megabytes=Math.round(total/1048576)
+  const waiting=runtime.supported&&status!=='ready'&&status!=='downloading'
+  return <div class="kokoro-model-panel">
+    <p aria-live="polite">
+      <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>
+      Speech libraries::{runtime.supported?status:'unsupported'}
+      {status==='ready'&&runtime.source==='installed'&&' · installed in this environment'}
+      {status==='ready'&&runtime.source==='downloaded'&&` · ${runtime.distributions} packages, ${megabytes} MB, hash-verified`}
+      {status==='downloading'&&` · ${pct}% (${Math.round(done/1048576)}/${megabytes} MB)${runtime.current_file?` · ${runtime.current_file}`:''}`}
+      {runtime.supported&&status==='not_downloaded'&&' · read aloud and dictation both need them'}
+      {(!runtime.supported||status==='error')&&runtime.error&&` · ${runtime.error}`}
+    </p>
+    {waiting&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':`Download speech libraries (~${megabytes} MB)`}</button>}
   </div>
 }
 

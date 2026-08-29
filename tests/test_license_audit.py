@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from swe_mux import voice_runtime
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -286,17 +288,51 @@ def test_spec_collects_the_lgpl_packages_as_replaceable_source() -> None:
 
     `collect_all` defaults to `include_py_files=True`, so a name in that loop
     ships as readable source under `_internal/<pkg>/` rather than frozen into
-    the executable archive. Dropping either name would leave
+    the executable archive. Dropping the name would leave
     THIRD-PARTY-NOTICES.md promising a replaceability that no longer holds.
+
+    Only the *shipped* half is checked here. `num2words` left the loop with the
+    rest of the voice closure and its proof left with it.
     """
     spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
     for name in build_desktop.RELINKABLE_LGPL:
         assert f'"{name}",' in spec, f"{name} must stay in the collect_all loop"
 
 
-def test_relinkable_set_matches_the_allowlist() -> None:
-    """The two halves of the gate must agree on which packages they cover."""
-    assert set(build_desktop.RELINKABLE_LGPL) == set(license_audit.ALLOWLIST)
+def test_every_allowlisted_lgpl_package_has_exactly_one_relink_proof() -> None:
+    """Every allowlisted LGPL package is proven replaceable in exactly one place.
+
+    There are two places since 2026-08-29 and the split is the point. A package
+    the bundle *ships* is proven by `build_desktop.RELINKABLE_LGPL`, against the
+    built tree. A package swe-mux does not ship but does pin, download and import
+    - `num2words`, after ROADMAP Phase 21 Workstream D moved the voice closure out
+    of the bundle - is proven by `voice_runtime.RELINKABLE_LGPL`, against the tree
+    that is unpacked.
+
+    The failure this prevents is an allowlist entry whose promise nothing checks:
+    THIRD-PARTY-NOTICES.md would still print the replacement instructions, and
+    nothing would notice they had become false. Overlap is a failure too - two
+    proofs for one package means one of them is describing a copy that is not
+    there.
+    """
+    shipped = set(build_desktop.RELINKABLE_LGPL)
+    acquired = set(voice_runtime.RELINKABLE_LGPL)
+    assert shipped | acquired == set(license_audit.ALLOWLIST)
+    assert not shipped & acquired
+    assert acquired == set(license_audit.ACQUIRED_AT_FIRST_USE)
+
+
+def test_the_acquired_lgpl_package_is_not_in_the_bundle_manifest() -> None:
+    """`num2words` may not reappear in the shipped closure without the audit moving.
+
+    `EXPECTED_BUNDLE_PACKAGES` is the membership gate the build runs. If
+    `num2words` were added back to it, the bundle would ship an LGPL package
+    whose relink proof now runs somewhere the bundle is not, and
+    `verify_bundle_licenses` would not check it - the exact silent gap the two
+    halves of this gate exist to close.
+    """
+    for name in license_audit.ACQUIRED_AT_FIRST_USE:
+        assert name not in build_desktop.EXPECTED_BUNDLE_PACKAGES
 
 
 def test_bundle_verification_rejects_a_forbidden_payload(tmp_path: Path) -> None:
@@ -335,11 +371,29 @@ def test_bundle_verification_rejects_frozen_lgpl(tmp_path: Path) -> None:
     """An LGPL package with no loose source is a broken relink promise."""
     internal = tmp_path / "swe-mux" / "_internal"
     internal.mkdir(parents=True)
-    (internal / "pystray").mkdir()
-    (internal / "pystray" / "__init__.py").write_text("", encoding="utf-8")
-    # num2words absent entirely, as it would be if dropped from collect_all.
-    with pytest.raises(SystemExit, match="num2words"):
+    # pystray absent entirely, as it would be if dropped from collect_all.
+    with pytest.raises(SystemExit, match="pystray"):
         build_desktop.verify_bundle_licenses(tmp_path / "swe-mux")
+
+
+def test_the_acquired_relink_proof_rejects_a_closure_without_readable_source(
+    tmp_path: Path,
+) -> None:
+    """The other half of the same promise, on the tree that is unpacked.
+
+    `verify_bundle_licenses` cannot say anything about `num2words` any more - the
+    bundle does not contain it. This is the assertion that replaced it, and it
+    guards the same failure: a wheel that shipped only compiled artifacts would
+    satisfy every other check here while leaving a recipient unable to substitute
+    their own build.
+    """
+    site = tmp_path / "site"
+    (site / "num2words").mkdir(parents=True)
+    (site / "num2words" / "lang_EN.pyc").write_bytes(b"")
+    with pytest.raises(voice_runtime.VoiceRuntimeError, match="LGPL relink"):
+        voice_runtime._verify_relinkable(site)
+    (site / "num2words" / "__init__.py").write_text("", encoding="utf-8")
+    voice_runtime._verify_relinkable(site)
 
 
 def test_bundle_verification_tolerates_misakis_own_espeak_module(tmp_path: Path) -> None:
@@ -478,11 +532,15 @@ def test_missing_extra_distributions_skips_packages_this_platform_cannot_use(
 def test_building_without_the_extra_is_refused_before_pyinstaller_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The refusal is the whole point: `collect_all` on an absent package is silent.
+    """The refusal is the whole point, and its reason inverted on 2026-08-29.
 
-    Without this the build succeeds, ships no `_internal/num2words/`, and is
-    caught only by `verify_bundle_licenses` several minutes later - or, if that
-    check ever regresses, not at all.
+    It used to guard a bundle that shipped `_internal/num2words/` and would
+    silently ship nothing when `collect_all` found no package. It now guards the
+    opposite: `voice_closure_top_levels()` reads the installed distributions'
+    metadata to build the spec's excludes, so a build without the extra excludes
+    too little and reships the closure - and `verify_bundle_contents` would pass,
+    because in an environment that never had the closure there is nothing to
+    exclude and nothing to notice.
     """
     (tmp_path / "pyproject.toml").write_text(
         "[project.optional-dependencies]\n"
@@ -496,24 +554,29 @@ def test_building_without_the_extra_is_refused_before_pyinstaller_runs(
     message = str(raised.value)
     assert "definitely-not-installed-xyz" in message
     assert "--extra voice-local" in message
-    assert "num2words" in message  # says why it is a license failure, not a bug
+    # Says why the extra is required by a build that no longer ships it.
+    assert "prove its own absence" in message
 
 
-def test_the_spec_collects_the_voice_closure_the_extra_provides() -> None:
-    """Every voice package the frozen app resolves by name, not by import.
+def test_the_spec_excludes_the_voice_closure_rather_than_collecting_it() -> None:
+    """The inverse of what this test asserted until 2026-08-29, and deliberately.
 
-    spaCy loads its language modules from a registry, `en_core_web_sm` is a data
-    package, misaki ships its lexicon as data, and num2words is the LGPL one.
-    PyInstaller's source graph follows none of those.
+    `spacy`, `en_core_web_sm`, `misaki` and `num2words` were in the `collect_all`
+    loop because PyInstaller's source graph follows none of the ways they are
+    reached - a registry, a data package, a lexicon, a module-scope import. They
+    are now excluded for the same reason, inverted: a graph that cannot see an
+    import also cannot be trusted to leave the package out, and `collect_all` for
+    `PIL` or a contributed hook could drag one back in.
 
-    `en_core_web_sm` reaches the build through the `g2p-model` dependency group
-    rather than through the extra (it is unpublishable, so it cannot be a
-    `Requires-Dist` at all), and that is exactly why it has to stay in this list:
-    the bundle is the one install shape that does not download it at first use.
+    Read as a pair with `verify_voice_closure_absent`, which asserts the result on
+    the built tree. This asserts the mechanism is still wired; that asserts it
+    worked.
     """
     spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
+    assert "EXCLUDED_VOICE_CLOSURE = list(voice_closure_top_levels())" in spec
+    assert "*EXCLUDED_VOICE_CLOSURE" in spec
     for name in ("spacy", "en_core_web_sm", "misaki", "num2words"):
-        assert f'"{name}",' in spec, f"{name} must stay in the collect_all loop"
+        assert f'    "{name}",\n' not in spec, f"{name} is back in the collect_all loop"
 
 
 # ----------------------------------------------------------------- the project's own terms

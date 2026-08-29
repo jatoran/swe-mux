@@ -866,12 +866,20 @@ def _optional_asset_rows_local(config: Config | None) -> list[dict[str, Any]]:
     voice: dict[str, Any] = {}
     if config is not None:
         from .voice_models import KokoroModelStore, SpacyModelStore, WhisperModelStore
+        from .voice_runtime import VoiceRuntimeStore
 
         voice = {
             "tts_enabled": config.tts_enabled,
             "tts_engine": config.tts_engine,
             "stt_enabled": config.stt_enabled,
             "stt_engine": config.stt_engine,
+            # Read without activating. This report runs on installs that are
+            # broken, and `activate()` mutates `sys.path`; a diagnostic that
+            # changes the interpreter it is diagnosing is not a diagnostic. The
+            # daemon's own report reads the same store after `VoiceService`
+            # activated it at start, so `source` differs between the two by
+            # design and each is right about its own process.
+            "runtime": VoiceRuntimeStore(config.data_dir).status(),
             # Same nesting the daemon report uses (`VoiceService.kokoro_model_status`),
             # because `optional_asset_rows` reads the G2P state out of the Kokoro
             # entry and the two reports must not describe it differently.

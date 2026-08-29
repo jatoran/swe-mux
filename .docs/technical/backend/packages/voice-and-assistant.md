@@ -108,7 +108,49 @@ The rule all three stores enforce: **a download happens only from an explicit ac
 
 The fourth first-use asset, the browser-side Silero VAD, is deliberately not here and does not download: its WASM runtime and ONNX model are emitted into the frontend bundle by Vite and served same-origin by this daemon.
 
-**Not:** bundling models, loading them (`kokoro_tts.py`), any unpinned Kokoro revision, or downloading anything a human did not ask for.
+**Not:** bundling models, loading them (`kokoro_tts.py`), any unpinned Kokoro revision, downloading anything a human did not ask for, or acquiring the libraries those models load into (`voice_runtime.py`).
+
+## `voice_runtime.py`
+
+The speech **libraries**, as a first-use asset, under the same four-state vocabulary as the three model stores.
+ROADMAP Phase 21 Workstream D.
+The desktop bundle carried 277.1 MiB of spaCy, thinc, blis, CTranslate2, onnxruntime, tokenizers, numpy, misaki and num2words for two features that both ship switched off, and now carries none of it.
+
+`VoiceRuntimeStore` fetches the pinned wheels for **this interpreter**, verifies each against its size and SHA-256 while streaming, unpacks them into `<data_dir>/voice-runtime/site` beside the live tree and swaps, then puts that directory on `sys.path`.
+The mechanism is `SpacyModelStore`'s, widened from one wheel to a closure, and it borrows that store's two hard-won properties verbatim.
+`activate()` short-circuits when the environment already resolves the closure, so a source checkout with `--extra voice-local` is untouched and cannot be perturbed.
+`_source()` is derived from whether the entry is on `sys.path` rather than remembered, because a flag set at one moment reports the wrong one.
+
+Three refusals distinguish it from an installer, and it must never become one.
+It **resolves nothing**: the pin table is a fixed list `uv` produced, with no solver, no index query and no "latest" anything.
+A closure that can change without a commit is a closure nobody audited.
+It **verifies before it promotes**: the tree is built in `site.staging` and swapped, and a wheel that fails its hash is deleted rather than retried into service.
+And it **refuses a partial closure**: `wheels_for_this_interpreter` raises naming the distributions it could not cover.
+A closure missing one native package fails at import time, much later, with an error naming the wrong thing.
+
+`_verify_relinkable` is where the LGPL obligation lives now.
+swe-mux does not distribute `num2words` any more: the wheel goes from PyPI to the user, and what this project ships is a URL and a hash.
+`build_desktop.verify_bundle_licenses` therefore cannot assert anything about it.
+This asserts the same property on the tree that lands, readable `.py` source a recipient can replace, which is what `THIRD-PARTY-NOTICES.md` promises.
+
+`_extract_wheel` promotes a wheel's `.data/purelib` and `.data/platlib` into the site root and drops `scripts`, `headers` and `data`.
+Only the first two belong on `sys.path`, and `scripts` would leave console-script launchers pointing at an interpreter that need not exist.
+The merge is per-file rather than per-directory, because `Path.replace` fails on an existing directory and two wheels legitimately contribute to one namespace (`google/protobuf`).
+
+**Not:** dependency resolution, installing into any environment's `site-packages`, acquiring the model *weights* (`voice_models.py`), or fetching anything without an explicit press.
+
+## `voice_wheels.py`
+
+**Generated. Never hand-edited.**
+`uv run python packaging/generate_voice_pins.py --write` produces it from `uv.lock`; `tests/test_voice_wheels.py` regenerates it and fails on any difference.
+
+It holds every wheel the lockfile records for every distribution reachable *only* through the voice extras.
+That is a set difference over the lockfile's own graph, so which packages are acquired is a graph question rather than a judgement.
+`wheels_for_this_interpreter` picks one wheel per distribution using `packaging.tags.sys_tags()`, the same ordering pip and uv use.
+The interesting cases are exactly the ones a hand-rolled `(platform, machine, version)` key gets wrong: `cp39-abi3` wheels that load on 3.12, `py2.py3-none-any`, macOS deployment targets.
+`CLOSURE_DIGEST` moves only when the pins move, which is what lets a state file say which closure it built without re-hashing 315 MB.
+
+**Not:** a place to add a package by hand, a resolver, or a description of anything but this repository's own resolution.
 
 ## `assistant.py`
 

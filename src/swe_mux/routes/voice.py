@@ -126,6 +126,41 @@ async def kokoro_model_status(request: web.Request) -> web.Response:
     return json_response(voice.kokoro_model_status())
 
 
+async def voice_runtime_status(request: web.Request) -> web.Response:
+    """The four-state report for the on-device speech libraries.
+
+    A read only, and a cheap one: it answers from `find_spec` plus a state file
+    and never reaches the network, which is what separates it from the download.
+    """
+    voice: VoiceService = request.app[keys.VOICE]
+    return json_response(voice.voice_runtime.status())
+
+
+async def voice_runtime_download(request: web.Request) -> web.Response:
+    """Acquire the pinned speech closure (idempotent while one is running).
+
+    The explicit act that replaced 277 MB of the desktop bundle (ROADMAP Phase 21
+    Workstream D). Progress reaches every client over the event stream under the
+    same `voice_model_progress` event the weight downloads use, labelled
+    `model="runtime"`, because a download that outlives the request may have been
+    started from another device.
+    """
+    voice: VoiceService = request.app[keys.VOICE]
+    events: EventBus = request.app[keys.EVENTS]
+
+    async def progress(status: dict[str, Any]) -> None:
+        await events.emit("voice_model_progress", source="daemon", model="runtime", **status)
+        if status.get("status") == "ready":
+            # `WhisperModelStore` memoizes whether `faster_whisper` imports, and
+            # it answered "no" before this download existed. Without this the
+            # dictation panel keeps reporting a missing backend until a restart,
+            # on an install that just acquired one.
+            voice.whisper_models.forget_backend()
+
+    started = voice.voice_runtime.start_download(progress)
+    return json_response({"started": started, **voice.voice_runtime.status()}, 202)
+
+
 async def whisper_model_status(request: web.Request) -> web.Response:
     """The four-state report for the configured dictation and routing models.
 
@@ -668,6 +703,8 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/voice/providers/edge/preview", edge_voice_preview),
     web.get("/api/voice/models/kokoro", kokoro_model_status),
     web.post("/api/voice/models/kokoro/download", kokoro_model_download),
+    web.get("/api/voice/models/runtime", voice_runtime_status),
+    web.post("/api/voice/models/runtime/download", voice_runtime_download),
     web.get("/api/voice/models/whisper", whisper_model_status),
     web.post("/api/voice/models/whisper/download", whisper_model_download),
     web.get("/api/voice/models/kokoro/preview", kokoro_voice_preview),

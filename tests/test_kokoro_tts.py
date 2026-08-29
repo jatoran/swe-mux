@@ -442,7 +442,12 @@ def test_voice_installs_the_stub_before_importing_faster_whisper() -> None:
 def test_spec_excludes_av_and_installs_the_stub() -> None:
     """The bundle gate's static half; build_desktop.verify_no_gpl_av is the dynamic half."""
     spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
-    assert 'excludes=["av", "edge_tts"]' in spec
+    # Matched by membership rather than by the whole literal: the clause also
+    # carries `tkinter` and the splatted acquired voice closure since 2026-08-29,
+    # and an exact-string assertion here would fail on every unrelated addition
+    # while proving nothing more.
+    clause = spec.split("excludes=[")[1].split("]")[0]
+    assert '"av"' in clause and '"edge_tts"' in clause
     assert "rthook_av_stub.py" in spec
 
 

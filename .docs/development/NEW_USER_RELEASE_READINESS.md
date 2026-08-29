@@ -138,13 +138,15 @@ One "unavailable" is what made a fresh install fail oddly - an operator who had 
 |---|---|---|---|
 | Preview capture (Playwright package) | `extra_missing` | `uv sync --extra preview-capture && uv run playwright install chromium`, or "no command helps" on the packaged app | `POST /previews/{id}/capture`, `optional_asset:preview_capture` in `mux doctor` |
 | Preview capture (Chromium binary) | `browser_missing` | `uv run playwright install chromium` - and *only* that half | same |
-| Whisper dictation weights | `not_downloaded` / `downloading` / `error`, plus `backend_installed: false` for a missing `voice-local` extra | Settings -> Voice -> Download (or `uv sync --extra voice-local` for the extra) | `GET /api/voice`, `GET /api/voice/models/whisper`, `optional_asset:voice_whisper:<model>` |
+| On-device speech libraries | `not_downloaded` / `downloading` / `error`, plus `unsupported` for a platform the pinned closure has no wheels for | Settings -> Voice -> Download speech libraries (or the `voice-local` extra, which is the only remedy when `unsupported`) | `GET /api/voice`, `GET /api/voice/models/runtime`, `optional_asset:voice_runtime` |
+| Whisper dictation weights | `not_downloaded` / `downloading` / `error`, plus `backend_installed: false` when the speech libraries are absent | Settings -> Voice -> Download (or `uv sync --extra voice-local` for the extra) | `GET /api/voice`, `GET /api/voice/models/whisper`, `optional_asset:voice_whisper:<model>` |
 | Kokoro read-aloud weights | `not_downloaded` / `downloading` / `error` | Settings -> Voice -> Download Kokoro voices | `GET /api/voice`, `optional_asset:voice_kokoro` |
 | Silero VAD runtime + model | **none** - it ships in the frontend bundle | n/a | n/a |
 
 Four things that were already true before W9 and needed confirming rather than fixing:
 
 - `tts_enabled` and `stt_enabled` both default `False`, so an untouched install downloads nothing at all. `tests/test_first_use_assets.py` pins that so it cannot be flipped quietly.
+  Since 2026-08-29 that default carries more weight than it did: it is also the argument for the desktop bundle not *containing* the speech libraries, because an untouched install downloading 277 MB it will never load is the same defect as a surprise fetch, read the other way round.
 - `tts_edge_voice` already defaults to the neutral `en-US-JennyNeural`, not the Australian voice this document's earlier draft recorded.
 - `stt_language` and `stt_whisper_model` are already drawn in Settings -> Voice as explicit first-use choices with copy saying so. They are English-first (`en-US`, `turbo` for dictation, `small.en` for routing) and stated rather than hidden; W9 did not change them, because changing a default is not the same as reporting one.
 - The Silero VAD assets do **not** download. Vite emits the ~11 MB WASM runtime and ~2.3 MB ONNX model into the frontend bundle and this daemon serves them same-origin; the "lazy" load on first Talk is a lazy import. Both this document and the Settings copy previously said otherwise, and both are corrected.
@@ -154,6 +156,36 @@ What W9 actually added: the three-state preview-capture report with a per-half r
 Still open and deliberately not code: preview capture does not work in the frozen desktop app at all, because `preview-capture` is outside `DISTRIBUTED_EXTRAS` (`packaging/license_audit.py`).
 Bundling a ~150 MB Chromium for an optional feature and auto-running `playwright install` on first press were both rejected - the second is the exact silent-fetch failure this section exists to remove.
 The packaged app now says so instead of failing quietly.
+
+**The mechanism that would close it now exists**, and is recorded here rather than built, because it is a product decision rather than an engineering one.
+`swe_mux.voice_runtime` acquires a pinned, hash-verified wheel closure on an explicit press and puts it on `sys.path`, and Playwright is exactly the shape it handles (2026-08-29, ROADMAP Phase 21 Workstream D).
+What it does *not* handle is the second half: `playwright install chromium` downloads a browser through Playwright's own installer, which is a separate mechanism with a separate cache and a separate trust story, and it is ~150 MB against the wheel's ~40.
+So the honest version of "apply the same treatment to Playwright" is two presses with two stated sizes, not one - and it is worth having only if somebody wants preview capture in the packaged app, which nobody has asked for.
+What Phase 21 did close is the other direction: Playwright can no longer ride into the bundle behind the lazy `import playwright` in `preview_capture.py`, because `verify_bundle_contents` asserts the bundle's package set in both directions.
+
+## The first-use download question
+
+Recorded 2026-08-29, with the options and a recommendation, because the desktop app now acquires the on-device speech closure at first use and a question that size should not be answered by accident.
+
+**The question:** an install that has never enabled voice has no speech engine on disk.
+Should it fetch one for the user, and if so, when?
+
+Three options were considered.
+
+- **Explicit press only** - what is implemented.
+  Nothing is fetched until somebody presses Download in Settings -> Voice, the size is stated before the press, and every surface that needs the closure says which kind of absent it is and what the press would do.
+  Costs the user one press and about ten seconds the first time they turn on read aloud or dictation.
+- **Fetch during first-run setup**, alongside the other onboarding steps.
+  Removes the later press, and re-introduces exactly what W9 removed: a fresh install that downloads a few hundred megabytes of machinery for a feature that ships switched off and that most users never enable.
+  This is the version of the defect that motivated the whole first-use asset contract, moved from first Talk to first launch.
+- **Fetch on the first press of the feature itself** - the first Talk, or the first read-aloud.
+  Removes the press but restores the silent fetch inside a code path the user thinks is doing something else, which is the specific failure `WhisperModelStore` exists to stop.
+
+**Recommendation and what is implemented: explicit press only.**
+The rule this section already states settles it - "an absent capability must say which kind of absent it is, and nothing is fetched without an explicit act" - and the speech libraries are simply a fourth asset under that rule rather than a new kind of thing.
+The one thing worth revisiting is the *number* of presses: acquiring the libraries, the Kokoro weights and the spaCy model are three separate acts today, and a user turning on read aloud needs all three.
+Collapsing them into one press with one combined size is a UI decision that changes nothing about the mechanism, and it is the obvious follow-up if the three-step sequence reads as friction in practice.
+It was not done here because the three stores fail independently, and a merged progress bar would have to lie about which one failed - the same reasoning that keeps the Kokoro weights and the spaCy model on two lines behind their one shared press.
 
 ## Onboarding prerequisites
 

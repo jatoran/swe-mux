@@ -170,13 +170,35 @@ continues to own every terminal.
 - Build dependencies: `uv sync --extra desktop --extra voice-local --group package`.
   `--group package` is what brings the `g2p-model` group with it, and the build refuses without it
   (`build_desktop.REQUIRED_BUILD_GROUPS`).
-- `voice-local` is optional at install time and mandatory at build time.
-  It carries the on-device speech closure, and with it the LGPL `num2words`, whose
-  relink condition is met only by the spec collecting it as readable source under
-  `_internal/num2words/`.
-  `collect_all` on an absent package collects nothing and does not fail, so
-  `build_desktop.verify_build_extras_installed` refuses the build up front and
-  `redeploy_desktop`'s preflight runs the same check before it stops the app.
+- `voice-local` is optional at install time and mandatory at build time, and since 2026-08-29
+  the reason is the inverse of what it was.
+  **The bundle no longer ships the on-device speech closure at all** (ROADMAP Phase 21
+  Workstream D): 277.1 MiB of spaCy, thinc, blis, CTranslate2, onnxruntime, tokenizers, numpy,
+  misaki and num2words left, taking the bundle from 400.6 MiB over 2937 files to 111.2 MiB over
+  1497, and `swe_mux.voice_runtime` acquires it on an explicit press instead
+  (`design/features/voice.md`).
+  The extra is required now because **`verify_bundle_contents` proves an absence, and an absence
+  is vacuous in an environment that never had the thing**: a build without the extra would pass
+  while telling you nothing about whether the excludes work.
+  `build_desktop.voice_closure_top_levels()` also reads those distributions' installed metadata
+  to *build* the spec's excludes list, so a build without them excludes too little and silently
+  reships everything.
+  `build_desktop.verify_build_extras_installed` refuses up front and `redeploy_desktop`'s
+  preflight runs the same check before it stops the app.
+- **Two things the base bundle carries for code it does not contain**, both asserted rather than
+  assumed, and both invisible until first voice use if they go missing.
+  `python3.dll` is Windows' stable-ABI forwarder: every `abi3` wheel in the acquired closure
+  links against it by name, and PyInstaller collects it only when an `abi3` extension is in the
+  analysis - which the acquired closure by definition is not.
+  Measured on a frozen probe, its absence fails `tokenizers` with `DLL load failed`, naming
+  neither the file nor the reason; `build_desktop.verify_stable_abi_forwarder` asserts it.
+  The **whole standard library** is a hidden import for the same class of reason: excluding the
+  closure hides its import graph from the analysis without making the graph go away, and the
+  same probe failed on `platform`, then `ctypes`, then `json`, then `http.cookies` - one at a
+  time, each revealed only by fixing the one before it.
+  `tkinter` is the one deliberate exception, excluded outright because it drags 4.5 MB of
+  Tcl/Tk data through `PIL.ImageTk` and the stdlib's own `turtle`, and no speech library
+  reaches it.
 - `packaging/build_desktop.py` builds the frontend in `.runtime/`, publishes hashed assets before
   `index.html`, generates the ICO, and runs PyInstaller. It never empties the live static tree;
   locked content-addressed stale assets may remain harmlessly until a later build.
@@ -249,7 +271,7 @@ continues to own every terminal.
 - **UPX is pinned off in `swe_mux.spec`, and the pin is the point.**
   It was `upx=True` while UPX has never been installed on any machine that builds this, so it
   was a no-op that only meant something on the day somebody installed the tool - at which point
-  it would add a compression pass over a ~400 MB closure to every build *and* give every shipped
+  it would add a compression pass over the whole closure to every build *and* give every shipped
   binary a packer signature, which is one of the best-known antivirus heuristics. Antivirus
   scanning is already the dominant cost of a swe-mux update, so the upside was a smaller download
   and the downside was more of the exact thing that makes updates slow.
@@ -303,15 +325,23 @@ continues to own every terminal.
   Python override.
   The managed environment is staged and bridge-verified before activation, so a failed install
   does not replace a working one and still does not make the client part of `dist/swe-mux`.
-- **`pystray` and `num2words` are in the spec's `collect_all` loop for a licensing
-  reason, not a packaging one.** Both are LGPL. `collect_all` defaults to
-  `include_py_files=True`, so each lands as plain source under `_internal/<pkg>/`
-  instead of being frozen into the executable's archive, which is what lets a recipient
-  substitute their own build and satisfies the LGPL relink condition that
-  `THIRD-PARTY-NOTICES.md` promises. Removing either name is a build failure rather than
-  a silent compliance regression. `num2words` is not optional: `misaki.en` imports it at
-  module scope for the Kokoro G2P. The metadata half of the same gate lives in
+- **`pystray` is in the spec's `collect_all` loop for a licensing reason, not a packaging
+  one.** It is LGPL. `collect_all` defaults to `include_py_files=True`, so it lands as plain
+  source under `_internal/pystray/` instead of being frozen into the executable's archive,
+  which is what lets a recipient substitute their own build and satisfies the LGPL relink
+  condition that `THIRD-PARTY-NOTICES.md` promises. Removing the name is a build failure rather
+  than a silent compliance regression. The metadata half of the same gate lives in
   `packaging/license_audit.py` and runs in the verification gate.
+- **`num2words` carried the same obligation until 2026-08-29 and its obligation moved rather
+  than lapsed.** It is LGPL and `misaki.en` imports it at module scope, but the bundle does not
+  contain it any more: `swe_mux.voice_runtime` downloads its wheel from PyPI on an explicit
+  press, so the bytes travel from the index to the user and what this project distributes is a
+  URL and a hash. `verify_bundle_licenses` therefore cannot assert anything about it, and
+  `voice_runtime._verify_relinkable` asserts the same property on the tree that is unpacked -
+  that the copy which lands is readable `.py` source. `license_audit.ACQUIRED_AT_FIRST_USE` is
+  what stops the generated notices telling a reader to look under `_internal/` for a package
+  that is not there, and `build_desktop.verify_voice_closure_absent` fails the build if it ever
+  ships again without this reasoning being revisited.
 - `packaging/swe_mux_supervisor.spec` emits the dedicated PTY supervisor bundle
   `dist/swe-mux-supervisor/` — a separate artifact precisely so rebuilding `dist/swe-mux`
   never collides with a running supervisor's file image (Windows locks running

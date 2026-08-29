@@ -165,6 +165,85 @@ def test_nothing_the_spec_excludes_is_expected_in_the_bundle() -> None:
     clause = re.search(r"excludes=\[([^\]]*)\]", spec)
     assert clause, "the excludes clause did not parse; this guard would assert nothing"
     excluded = {token.strip().strip('"') for token in clause.group(1).split(",")}
-    excluded = {name for name in excluded if name}
+    # `*EXCLUDED_VOICE_CLOSURE` is a splat rather than a literal; the names it
+    # contributes are checked by the test below, which resolves it for real.
+    excluded = {name for name in excluded if name and not name.startswith("*")}
     assert excluded, "the excludes clause parsed as empty; this guard would assert nothing"
     assert not (excluded & set(build_desktop.EXPECTED_BUNDLE_PACKAGES))
+
+
+def test_the_acquired_voice_closure_is_excluded_and_not_expected() -> None:
+    """The two gates that keep 277 MB out of the bundle must not contradict.
+
+    `EXCLUDED_VOICE_CLOSURE` in the spec and `EXPECTED_BUNDLE_PACKAGES` here are
+    derived from different sources - installed distribution metadata and a
+    measured build - so nothing structural stops them disagreeing. A name in both
+    would mean the spec excludes a package the manifest requires, and every build
+    would fail on the missing-package half with a message about `collect_all`.
+    """
+    closure = set(build_desktop.voice_closure_top_levels())
+    assert "spacy" in closure and "num2words" in closure and "onnxruntime" in closure
+    assert not (closure & set(build_desktop.EXPECTED_BUNDLE_PACKAGES))
+
+
+def test_the_voice_closure_gate_names_the_packages_that_returned(tmp_path: Path) -> None:
+    """A second, more specific failure than "unexpected package", on purpose.
+
+    `verify_bundle_contents` would already reject `spacy` as undeclared and point
+    at the build venv. This one names the mechanism that was supposed to keep it
+    out and the size that is at stake, because "an undeclared package appeared" and
+    "the thing you deliberately stopped shipping is back" lead to different fixes.
+    """
+    bundle = _bundle(tmp_path, {"swe_mux": 10, "spacy": 40})
+    with pytest.raises(SystemExit, match="Voice closure regression"):
+        build_desktop.verify_voice_closure_absent(bundle)
+    clean = _bundle(tmp_path / "clean", {"swe_mux": 10})
+    build_desktop.verify_voice_closure_absent(clean)
+
+
+def test_the_stable_abi_forwarder_is_required_in_a_windows_bundle(tmp_path: Path) -> None:
+    """`python3.dll` is present for code the bundle does not contain.
+
+    Every abi3 wheel in the acquired closure links against it by name, and nothing
+    in the bundle's own analysis pulls it in - so it is exactly the kind of file
+    that disappears silently. Measured on a frozen probe: without it, `tokenizers`
+    fails with "DLL load failed", which names neither the file nor the reason.
+    """
+    internal = tmp_path / "swe-mux" / "_internal"
+    internal.mkdir(parents=True)
+    (internal / "python312.dll").write_bytes(b"")
+    with pytest.raises(SystemExit, match="python3.dll"):
+        build_desktop.verify_stable_abi_forwarder(tmp_path / "swe-mux")
+    (internal / "python3.dll").write_bytes(b"")
+    build_desktop.verify_stable_abi_forwarder(tmp_path / "swe-mux")
+
+
+def test_a_non_windows_bundle_is_not_asked_for_a_windows_forwarder(tmp_path: Path) -> None:
+    """The forwarder is a Windows concept; a POSIX bundle must not fail on it."""
+    internal = tmp_path / "swe-mux" / "_internal"
+    internal.mkdir(parents=True)
+    build_desktop.verify_stable_abi_forwarder(tmp_path / "swe-mux")
+
+
+def test_the_spec_collects_the_forwarder_explicitly() -> None:
+    """Asserting the mechanism as well as the result.
+
+    `cryptography` ships an abi3 `.pyd` and would pull `python3.dll` in today, so
+    a bundle check alone would keep passing if the explicit collection were
+    deleted - right up until the day the base closure changed.
+    """
+    spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
+    assert "PYTHON3_DLL" in spec
+    assert 'binaries += [(str(PYTHON3_DLL), ".")]' in spec
+
+
+def test_the_spec_ships_the_whole_standard_library() -> None:
+    """The sidecar's import graph is invisible to PyInstaller; the stdlib is not ours to guess.
+
+    Measured while proving the sidecar loads at all: a frozen probe carrying only
+    its own stdlib closure failed on `platform`, then `ctypes`, then `json`, then
+    `http.cookies` - one at a time, each revealed only by fixing the one before.
+    """
+    spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
+    assert "sys.stdlib_module_names" in spec
+    assert "hiddenimports=hiddenimports + STDLIB_HIDDENIMPORTS" in spec
