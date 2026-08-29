@@ -261,10 +261,13 @@ Three rules the design rests on, each measured or argued rather than assumed.
 **Every failure resolves to the bundled tree with a reason** and nothing raises: a bad overlay is a stale frontend and a `WARNING`, never a daemon that will not start.
 
 Two shape decisions worth knowing.
-Trees are content-addressed (`trees/<tree_digest>/`) and an install never overwrites one, because on Windows a directory the daemon is serving cannot be renamed or removed and the obvious `active/`-swapped-in-place design would have had the daemon holding exactly the thing an install must move; pruning is best-effort for the same reason.
-Precompressed `.gz` sidecars are *derived*, not payload: the daemon writes them into whatever tree it serves, so verification accepts one class of unlisted file - a `.gz` whose plain sibling is listed and whose gzip trailer records that sibling's current CRC-32 and length (`build_support.sidecar_is_current`) - and refuses every other unlisted file, which is what keeps the tree closed rather than mostly-specified.
+Trees are content-addressed (`trees/<tree_digest>/`) and an install never overwrites one.
+On Windows a directory the daemon is serving cannot be renamed or removed, so the obvious `active/`-swapped-in-place design would have had the daemon holding exactly the thing an install must move; pruning is best-effort for the same reason.
+Precompressed `.gz` sidecars are *derived*, not payload, because the daemon writes them into whatever tree it serves.
+So verification accepts one class of unlisted file - a `.gz` whose plain sibling is listed and whose gzip trailer records that sibling's current CRC-32 and length (`build_support.sidecar_is_current`) - and refuses every other one, which is what keeps the tree closed rather than mostly-specified.
 
-**Not:** `update_install.py`'s release path, which it deliberately does not share (a shared archive abstraction is worth building later from two implementations rather than inventing one across a live seam); minting a compatibility pin for a payload that arrived without a manifest; anything to do with `dist/swe-mux-supervisor/`; or applying an install or a revert to the running process, which binds its static routes at construction and therefore needs a daemon restart.
+**Not:** `update_install.py`'s release path, which it deliberately does not share - a shared archive abstraction is worth building later from two implementations rather than invented across a live seam.
+Nor minting a compatibility pin for a payload that arrived without a manifest, anything to do with `dist/swe-mux-supervisor/`, or applying an install or a revert to the running process, which binds its static routes at construction and therefore needs a daemon restart.
 
 ### `bundle_metadata.py` / `bundle_archive.py`
 

@@ -91,6 +91,7 @@ closed rather than merely mostly-specified.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -139,10 +140,6 @@ CHUNK_BYTES = 1024 * 1024
 #: the size past which the payload is not a frontend, and it bounds what an
 #: unfriendly archive or host can make the daemon write.
 MAX_OVERLAY_BYTES = 512 * 1024 * 1024
-
-#: How many tree generations are kept. Two, so the previous build is still on
-#: disk when an overlay turns out to be wrong and nothing accumulates.
-KEEP_TREES = 2
 
 #: A frontend overlay is single-digit megabytes, so it gets a much tighter budget
 #: than a bundle download. Bounded per chunk as well, because a total budget
@@ -1123,6 +1120,10 @@ class OverlayStore:
         as they arrive, the file lands under a `.part` name, and only a matching
         digest promotes it - so a partial or tampered download is never a file the
         install can see.
+
+        The install half runs in a thread. It extracts and hashes tens of
+        megabytes, and this daemon's own rule is that nothing on a request path
+        blocks the event loop the health endpoint answers on.
         """
         expected = (sha256 or "").strip().lower()
         if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
@@ -1133,7 +1134,7 @@ class OverlayStore:
                 "unverifiable download is refused rather than installed.",
             )
         archive = await self._download_archive(url, expected)
-        return self.install_from_archive(archive, sha256=expected)
+        return await asyncio.to_thread(self.install_from_archive, archive, sha256=expected)
 
     async def _download_archive(self, url: str, expected: str) -> Path:
         downloader = self._download if self._download is not None else _http_download
@@ -1141,7 +1142,9 @@ class OverlayStore:
         final = self.downloads_dir / f"{expected}{ARCHIVE_SUFFIX}"
         # A verified archive under its own digest is reused: the name *is* the
         # verification, so there is nothing to re-check and nothing to re-fetch.
-        if final.is_file() and file_digest(final) == expected:
+        # Hashed in a thread for the reason the install below is: it is tens of
+        # megabytes on a request path.
+        if final.is_file() and await asyncio.to_thread(file_digest, final) == expected:
             return final
         with suppress(OSError):
             final.unlink(missing_ok=True)

@@ -613,6 +613,44 @@ async def test_a_download_installs_only_when_its_digest_matches(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_a_download_install_does_not_block_the_event_loop(tmp_path: Path) -> None:
+    # Extraction and hashing are tens of megabytes of synchronous work on a
+    # request path, and this daemon's own rule is that nothing there blocks the
+    # loop the health endpoint answers on. Asserted by watching the loop keep
+    # ticking rather than by reading the source, so the property survives a
+    # refactor that moves the work.
+    import asyncio as _asyncio
+
+    source = install_tree(make_tree(tmp_path / "built"))
+    archive = pack_overlay(source, tmp_path / "out" / "ui.zip")
+    body = archive.read_bytes()
+    store = OverlayStore(
+        tmp_path / "data",
+        backend_version=BACKEND,
+        api_digest=API,
+        download=_downloader(body),
+    )
+
+    ticks = 0
+
+    async def tick() -> None:
+        nonlocal ticks
+        # unsupervised-loop-ok: bounded by the install it runs beside
+        while True:
+            await _asyncio.sleep(0)
+            ticks += 1
+
+    ticker = _asyncio.create_task(tick())
+    try:
+        await store.install_from_url("https://example.invalid/ui.zip", sha256=file_digest(archive))
+    finally:
+        ticker.cancel()
+        await _asyncio.gather(ticker, return_exceptions=True)
+    assert ticks > 0
+    assert store.state.active
+
+
+@pytest.mark.asyncio
 async def test_a_download_that_does_not_match_its_digest_installs_nothing(
     tmp_path: Path,
 ) -> None:
