@@ -178,6 +178,14 @@ development host. Recorded so the next person does not rediscover them:
   present, two are genuinely about installed packages and now `skipif` with the reason on them -
   and one was not an environment problem at all but a real defect the no-extras leg was the only
   thing able to see.
+  A second round of the same rule, on macOS: two assertions carried `> 50 * 1024 * 1024`, a floor
+  derived from the Windows voice closure (81.9 MiB) that the macOS one (49.6 MiB) sits just under.
+  **A magnitude is a measurement of a host; assert the property instead.** The store's estimate is
+  now asserted *equal* to the pinned wheels' total, and the selection's total is bounded by the
+  range the pin table implies (each distribution's smallest and largest wheel, 44-139 MiB) - both
+  true on every runner and both tighter than the number they replaced. A third, inert copy of the
+  same constant was sitting in a fixture and is now derived too, because two of them appearing
+  together was a habit rather than a slip.
 
 The rule those add up to: **when CI fails and the local gate passes, the environment is the
 hypothesis, and evidence beats a patch.** Instrument the failure and let one CI run answer it,

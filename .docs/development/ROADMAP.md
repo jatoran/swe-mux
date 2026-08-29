@@ -5711,9 +5711,12 @@ and the one B's reuse cannot help because there is no previous bundle - and on d
 | bundle | 400.6 MiB, 2937 files | 111.2 MiB, 1497 files |
 | `_internal/` | 376.7 MiB, 51 packages | 79 MB, 30 packages |
 | `swe-mux.exe` (PYZ) | 23.9 MiB | 13.6 MiB |
-| acquired on a press | - | 81.9 MiB over 45 wheels |
+| acquired on a press | - | 81.9 MiB over 45 wheels (Windows; 49.6 on macOS) |
 
-**The honest cost, because the win is not universal.** Unpacked, the closure is ~315 MB against
+**The honest cost, because the win is not universal.** Every figure in this section is the
+Windows one unless it says otherwise - which is worth stating because two of them were written
+into test assertions as thresholds and turned the macOS CI leg red. Unpacked, the closure is
+~315 MB against
 the 277 MB it replaced, because wheels carry test suites and type stubs PyInstaller pruned. A
 user who never enables voice saves 289 MB of download and disk permanently. A user who does
 downloads 193 MB instead of 400 MB and stores about 26 MB more. Everyone downloads less; only
