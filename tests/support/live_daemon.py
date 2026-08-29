@@ -60,6 +60,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux.config import Config, LaunchProfile, default_shell_executable
 from swe_mux.server import create_app, wait_runtime_ready
 from swe_mux.startup_phases import UNNAMED_PHASE
+from tests.support.client_sessions import no_leaked_client_sessions
 
 # A registered Project that has granted agents direct interrupt/end and spawn, so
 # the wire tests exercise the acting path rather than only the inert draft.
@@ -420,17 +421,24 @@ async def isolated_daemon(
     }
     settings.update(config_overrides)
     config = Config(**settings)
-    server = TestServer(create_app(config), host="127.0.0.1", port=port)
-    client = TestClient(server)
-    await client.start_server()
-    # The daemon binds its listeners before it builds its runtime, so a started
-    # server is a *reachable* daemon and not yet a usable one. Every route but
-    # health and the static document answers 503 until this returns.
-    await wait_runtime_ready(client.app)
-    try:
-        yield IsolatedDaemon(client, root, port, data_dir)
-    finally:
-        await client.close()
+    # Wrapped around the whole daemon rather than asserted afterwards, because a
+    # `ClientSession` the daemon opens and never closes is invisible until a
+    # finalizer prints it against some later test. `provider_accounts` opens one
+    # during startup reconcile on any host with a live provider login, and for a
+    # week the daemon's teardown never closed it; this is what would have said so
+    # the same afternoon. See `tests/support/client_sessions.py`.
+    with no_leaked_client_sessions("the in-process daemon"):
+        server = TestServer(create_app(config), host="127.0.0.1", port=port)
+        client = TestClient(server)
+        await client.start_server()
+        # The daemon binds its listeners before it builds its runtime, so a started
+        # server is a *reachable* daemon and not yet a usable one. Every route but
+        # health and the static document answers 503 until this returns.
+        await wait_runtime_ready(client.app)
+        try:
+            yield IsolatedDaemon(client, root, port, data_dir)
+        finally:
+            await client.close()
 
 
 # ---------------------------------------------------------------- subprocess shape

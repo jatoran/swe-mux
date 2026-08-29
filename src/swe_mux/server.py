@@ -2166,8 +2166,9 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
             task.cancel()
     if one_shot_tasks:
         await asyncio.gather(*one_shot_tasks, return_exceptions=True)
-    for holder in ("automation_tasks", "action_timeout_tasks", "graveyard_tasks"):
-        pending = tuple(app.get(holder) or ())
+    for holder in (keys.AUTOMATION_TASKS, keys.ACTION_TIMEOUT_TASKS, keys.GRAVEYARD_TASKS):
+        held: set[asyncio.Task[Any]] = app.get(holder) or set()
+        pending = tuple(held)
         for task in pending:
             task.cancel()
         if pending:
@@ -2185,19 +2186,24 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     # socket and an open `.part` file, and a task still running when the loop
     # closes is the failure mode that reddens whichever test happens to be
     # running when the collector gets to it.
-    await _stop_handle(app.get(keys.UPDATE_INSTALL), "update_install")
+    await _stop_handle(app, keys.UPDATE_INSTALL)
     # Stopped in the order they were started, each skipped when the build never
     # got far enough to construct it. `history_backfills`/`history_scan` lead
     # because they own cancellable scans over the stores closed further down.
+    #
+    # Declared once for every loop below: each tuple holds `AppKey`s of a
+    # different service type, and `AppKey` is invariant, so without this mypy
+    # narrows the loop variable to the first tuple's union and rejects the rest.
+    key: web.AppKey[Any]
     for key in (
-        "history_backfills",
-        "history_scan",
-        "hooks",
-        "automation",
-        "scan_timeline",
-        "deterministic_consumers",
+        keys.HISTORY_BACKFILLS,
+        keys.HISTORY_SCAN,
+        keys.HOOKS,
+        keys.AUTOMATION,
+        keys.SCAN_TIMELINE,
+        keys.DETERMINISTIC_CONSUMERS,
     ):
-        await _stop_handle(app.get(key), key)
+        await _stop_handle(app, key)
     # The fan-out estimate is built from weeks of interaction samples; persisting
     # them is what keeps a daemon restart from resetting the estimate to unknown.
     attention_ranking = app.get(keys.ATTENTION_RANKING)
@@ -2207,29 +2213,30 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         except Exception:  # noqa: BLE001 - one store must not strand the rest
             log.exception("could not persist attention telemetry at shutdown")
     for key in (
-        "attention_ranking",
-        "auto_delivery",
-        "readiness_watch",
-        "schedules",
-        "land_queue",
+        keys.ATTENTION_RANKING,
+        keys.AUTO_DELIVERY,
+        keys.READINESS_WATCH,
+        keys.SCHEDULES,
+        keys.LAND_QUEUE,
         # Before `prompt_queue`, and that position is load-bearing rather than
         # alphabetical: stopping the watch service flushes every open watch as a
         # durable notice, which is what keeps a routine daemon restart from
         # silently un-arming an orchestrator's watches.
-        "session_watch",
-        "prompt_queue",
-        "assistant",
-        "voice",
-        "project_watcher",
-        "usage",
-        "provider_accounts",
-        "fleet",
-        "process_inspector",
-        "ghost_windows",
-        "git_monitor",
-        "git_provenance",
+        keys.SESSION_WATCH,
+        keys.PROMPT_QUEUE,
+        keys.ASSISTANT,
+        keys.VOICE,
+        keys.PROJECT_WATCHER,
+        keys.USAGE,
+        # Closes the `aiohttp.ClientSession` the provider-accounts reconcile opens.
+        keys.PROVIDER_ACCOUNTS,
+        keys.FLEET,
+        keys.PROCESS_INSPECTOR,
+        keys.GHOST_WINDOWS,
+        keys.GIT_MONITOR,
+        keys.GIT_PROVENANCE,
     ):
-        await _stop_handle(app.get(key), key)
+        await _stop_handle(app, key)
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
     # (today's behavior, and always the case without a supervisor); "detach"
     # leaves supervisor-owned sessions running so the next daemon reattaches.
@@ -2256,51 +2263,71 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     # a `quit` closes every session's row on the way out, and a `detach` leaves
     # the surviving sessions' rows open on purpose — they are still running, and
     # the next daemon reaches them through the supervisor rather than through here.
-    for key in ("status_timeline", "session_recovery", "telemetry", "tier0", "clipboard"):
-        await _stop_handle(app.get(key), key)
     for key in (
-        "history",
-        "automation_store",
-        "prompt_queue_store",
-        "schedule_store",
-        "land_store",
-        "voice_store",
-        "assistant_store",
-        "telemetry",
-        "status_timeline",
-        "session_recovery",
-        "tier0",
-        "clipboard",
-        "reaper",
+        keys.STATUS_TIMELINE,
+        keys.SESSION_RECOVERY,
+        keys.TELEMETRY,
+        keys.TIER0,
+        keys.CLIPBOARD,
     ):
-        _close_handle(app.get(key), key)
+        await _stop_handle(app, key)
+    for key in (
+        keys.HISTORY,
+        keys.AUTOMATION_STORE,
+        keys.PROMPT_QUEUE_STORE,
+        keys.SCHEDULE_STORE,
+        keys.LAND_STORE,
+        keys.VOICE_STORE,
+        keys.ASSISTANT_STORE,
+        keys.TELEMETRY,
+        keys.STATUS_TIMELINE,
+        keys.SESSION_RECOVERY,
+        keys.TIER0,
+        keys.CLIPBOARD,
+        keys.REAPER,
+    ):
+        _close_handle(app, key)
     await background.stop(LIFECYCLE_HEARTBEAT_LOOP)
     # Last so an exception anywhere above still reads as an unclean exit.
     await asyncio.to_thread(daemon_clean_exit, config.data_dir, intent)
 
 
-async def _stop_handle(handle: Any, name: str) -> None:
-    """`await handle.stop()`, tolerating both absence and failure.
+async def _stop_handle(app: web.Application, key: web.AppKey[Any]) -> None:
+    """`await app[key].stop()`, tolerating both absence and failure.
 
     One service raising on the way down used to abandon every service after it,
     which is how a shutdown leaves a WAL file open and the next start finds work
     to recover that never needed doing.
+
+    **The key is looked up here rather than passed in resolved, and it is typed as
+    an `AppKey` rather than a name.** `publish` writes every handle under the
+    `AppKey` objects in `app_keys`, and an `AppKey` is hashed by identity - so
+    `app.get("provider_accounts")` is not the same lookup as
+    `app.get(keys.PROVIDER_ACCOUNTS)`, it is a miss. This teardown was written
+    against string names and kept them through the move to `AppKey`, which turned
+    every one of its teardown lines into a silent no-op: for a week no store was closed and no
+    service was stopped at shutdown, and the only visible trace was one unclosed
+    `aiohttp.ClientSession` printed by a finalizer. Taking the app and the key
+    makes that mistake a mypy error instead of a shutdown that quietly does
+    nothing, and `test_shutdown_teardown.py` asserts the handles resolve.
     """
+    handle = app.get(key)
     if handle is None:
         return
     try:
         await handle.stop()
     except Exception:  # noqa: BLE001 - shutdown continues past one bad citizen
-        log.exception("could not stop %s at shutdown", name)
+        log.exception("could not stop %s at shutdown", key)
 
 
-def _close_handle(handle: Any, name: str) -> None:
+def _close_handle(app: web.Application, key: web.AppKey[Any]) -> None:
+    handle = app.get(key)
     if handle is None:
         return
     try:
         handle.close()
     except Exception:  # noqa: BLE001 - same rule as `_stop_handle`
-        log.exception("could not close %s at shutdown", name)
+        log.exception("could not close %s at shutdown", key)
 
 
 async def _loop_lag_loop(monitor: LoopLagMonitor) -> None:
