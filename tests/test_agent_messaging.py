@@ -975,6 +975,54 @@ async def test_request_spawn_writes_an_inert_draft_and_starts_nothing(
 
 
 @pytest.mark.asyncio
+async def test_a_drafted_spawn_carries_the_model_onto_the_card(
+    harness: Harness,
+) -> None:
+    """The human approves what the card says, so the card has to say the model.
+
+    Both halves matter: the row carries it for the approval to spawn with, and the
+    body carries it for the person to read. A request drafted "on opus" that
+    approves into an ordinary session is a promise broken silently.
+    """
+    result = await harness.messaging.request_spawn(
+        harness.manager.sessions["s1"],
+        prompt="run the long migration",
+        backend="claude",
+        model="Opus 5",
+    )
+    assert result["status"] == "drafted"
+    inbox = await read_observations(harness.root, project=harness.identity)
+    item = inbox["observations"][0]
+    # Canonicalized when it was asked for, not when it is approved.
+    assert item["request"]["model"] == "claude-opus-5"
+    assert "on claude-opus-5" in item["body"]
+    fleet = await harness.messaging.mailbox(author="non_human")
+    assert fleet["spawn_requests"][0]["model"] == "claude-opus-5"
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_harness_cannot_take_is_refused_at_request_time(
+    harness: Harness,
+) -> None:
+    """Refusing at approval time refuses in front of the wrong person.
+
+    The agent that named the model is the one that can pick another, and by the
+    time a human opens the queue it has moved on. Nothing is written.
+    """
+    with pytest.raises(QueueError) as caught:
+        await harness.messaging.request_spawn(
+            harness.manager.sessions["s1"],
+            prompt="run it",
+            backend="codex",
+            model="opus",
+        )
+    assert caught.value.code == "invalid_model"
+    assert "does not recognize" in str(caught.value)
+    inbox = await read_observations(harness.root, project=harness.identity)
+    assert inbox["observations"] == []
+
+
+@pytest.mark.asyncio
 async def test_request_spawn_can_be_disabled(tmp_path: Path) -> None:
     harness = Harness(tmp_path, live_session("s1"), request_spawn_enabled=False)
     try:

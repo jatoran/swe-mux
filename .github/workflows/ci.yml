@@ -109,7 +109,7 @@ jobs:
       - name: pytest (incl. ConPTY integration + harness adapter matrix)
         run: >-
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
-          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag"
 
       # The one live tier that needs no provider, no credential and no quota, so
       # it is the only one a public runner can run. It starts a real daemon - in
@@ -297,7 +297,7 @@ jobs:
       - name: pytest
         run: >-
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
-          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon"
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag"
 
       # Ubuntu only, and held off macOS deliberately rather than by oversight.
       # The macOS leg is still `continue-on-error` (see the header), and a new
