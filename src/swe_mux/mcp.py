@@ -5397,7 +5397,7 @@ class McpService:
                 {
                     "protocolVersion": version,
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "mux", "version": "0.1.2"},
+                    "serverInfo": {"name": "mux", "version": "0.1.3"},
                         "instructions": (
                             "Visibility into your swe-mux fleet: sibling sessions, "
                             "their live status and run briefs, pageable transcripts, "

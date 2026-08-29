@@ -15,6 +15,79 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-29
+
+### Added
+
+- **swe-mux now installs as `swemux` and `swemuxd`.**
+  The old `mux` and `muxd` are unchanged aliases of the same two programs, so nothing you have
+  already written needs updating.
+  The new names exist because `mux` is shared with an unrelated tool, and on a machine carrying
+  both, whichever installed last is the one your shell finds.
+  This applies to installs from PyPI; the Windows installer ships no command-line program yet,
+  and an operator who wants one alongside it can `uv tool install swe-mux`.
+- **A frontend fix can now reach an installed app without replacing it.**
+  `mux ui-overlay` packages the built frontend as a hash-verified overlay the daemon
+  prefers over its bundled copy, at about 11 MiB against the ~370 MiB a full application
+  update rewrites.
+  The overlay is pinned twice - to the release and to a hash of the daemon's own route
+  table - and an overlay that does not match the running backend is refused rather than
+  served, because a frontend that disagrees with its daemon about which endpoints exist
+  fails arbitrarily rather than legibly.
+  Reverting to the bundled copy is one action.
+- **Signing in to a provider account now starts from the account switcher.**
+  It could previously switch between saved accounts but not add one, so an install with
+  nothing saved showed "No saved accounts" beside a `manage...` button - the one screen a
+  new install always reaches, and the one with no way forward on it.
+  A sign-in also outlives the request that began it.
+- **An agent can name the model for a session it asks to spawn.**
+  Three of the five harnesses had declared model selection unmeasured; running their CLIs
+  found all three accept a model flag, so this was being refused on a majority of harnesses
+  because nobody had read `--help`.
+  What the session actually started with is checked afterwards rather than assumed.
+- **Agent authority can be set once for every Project.**
+  Fifteen Projects previously meant fifteen editors to say one thing, with no way at all to
+  say it about a Project whose own file already held a value.
+  An install-wide default now reaches unset fields and an install-wide ceiling caps every
+  Project, and may only narrow.
+- **Agent instruction files can be linked into a session's context and unlinked again.**
+
+### Changed
+
+- **The desktop application is about 111 MiB instead of about 400 MiB.**
+  The on-device speech closure - spaCy, CTranslate2, onnxruntime, misaki and their
+  dependencies, roughly 277 MiB - is no longer shipped.
+  Both speech features are off by default, so every install was previously downloading it,
+  and letting the operating system scan it, for a capability it had not been asked to
+  provide.
+  It is now acquired on an explicit press, from pinned URLs verified against pinned
+  SHA-256s, in one action that reports each part separately.
+  A user who never enables voice saves about 289 MiB of download and disk; a user who does
+  downloads about 193 MiB rather than 400 MiB.
+- **An update now writes only the files that changed.**
+  Measured across two real consecutive builds, 97.9% of files and 92.3% of bytes were
+  already present and are reused in place rather than rewritten - which matters twice,
+  because a file that is not rewritten also keeps the verdict the operating system's
+  scanner already gave it.
+  A whole-archive checksum is still verified before anything is staged, and an update that
+  cannot reuse enough falls back to replacing the application outright.
+- **A Project can trust its own agents' edits to the verification gate.**
+  A branch that edited `.worktree-verify` refused its own land every time, and approving it
+  was a per-digest act a human had to perform first - a routine edit here, so it stalled
+  work on a review nobody was really performing.
+  A gate edited by any other author still refuses and presents its bytes.
+
+### Fixed
+
+- **A land stopped by a verification block now restarts when the block is cleared.**
+  A refusal was terminal, so approving the gate's bytes fixed the *next* land and left the
+  one that caused the block dead, to be asked for again by hand - or by an agent that had
+  already been told its request was over.
+- **An operator's own Land now shows the explanation the queue wrote for it.**
+  The queue composed a bounded message naming what stopped it, in which checkout, against
+  which trunk, and what to do next, and then dropped it whenever the requester was a person
+  rather than an agent.
+
 ## [0.1.2] - 2026-08-28
 
 0.1.1 published to PyPI but produced no desktop artifact and no GitHub Release, so an
@@ -280,7 +353,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.3
 [0.1.2]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.2
 [0.1.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.1
 [0.1.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.0
