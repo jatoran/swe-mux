@@ -41,6 +41,7 @@ from swe_mux.bundle_archive import (
     read_archive_metadata,
     validate_members,
 )
+from swe_mux.bundle_manifest import DELTA_NO_MANIFEST
 from swe_mux.bundle_metadata import (
     BUNDLE_METADATA_MALFORMED,
     BUNDLE_METADATA_MISSING,
@@ -77,6 +78,8 @@ from swe_mux.update_install import (
     UpdateRefused,
     detect_install_kind,
     release_archive_name,
+    release_file_manifest_name,
+    release_installer_name,
     release_platform_tag,
     running_supervisor_protocol,
 )
@@ -185,7 +188,7 @@ def make_archive(
 ) -> Path:
     """A real release archive, produced by the real packaging writer."""
     bundle = make_bundle(tmp_path / "build" / "swe-mux", version=version, protocol=protocol)
-    return package_desktop_release.build_archive(bundle, tmp_path / "out")
+    return package_desktop_release.build_archive(bundle, tmp_path / "out")[0]
 
 
 def write_plain_archive(path: Path, members: dict[str, bytes]) -> Path:
@@ -857,12 +860,55 @@ class FakeOutcome:
         self.records.append((kind, code))
 
 
+def isolate_script(module: Any, tmp_path: Path, monkeypatch: Any) -> Path:
+    """Point the script's two real paths at `tmp_path`, and say why.
+
+    `STAGING_ROOT` has always had to move. `APP_DIST` joined it when staging
+    became a delta: the script now reads the installed bundle to reuse from it,
+    and a suite that left it pointing at `dist/swe-mux` would hash whatever
+    happens to be built on the machine running the tests - hundreds of megabytes
+    of somebody's real app, on a different volume from `tmp_path`, so every
+    hard link would fail over to a copy. Returns the staging root.
+    """
+    staging = tmp_path / "staging"
+    monkeypatch.setattr(module, "STAGING_ROOT", staging)
+    monkeypatch.setattr(module, "APP_DIST", tmp_path / "no-installed-bundle")
+    monkeypatch.setattr(module, "log", lambda _message: None)
+    return staging
+
+
+def test_the_script_stages_a_delta_against_the_installed_bundle(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # The other half of the updater's win, in the process that actually performs
+    # it. The daemon's preview is advisory; this is the code that decides what
+    # gets written, and it decides from the manifest *inside* the archive - the
+    # copy the whole-archive digest it just checked already covers.
+    module = redeploy_module()
+    staging = isolate_script(module, tmp_path, monkeypatch)
+    installed = make_bundle(tmp_path / "installed", version=CURRENT)
+    (installed / "_internal" / "heavy.bin").write_bytes(b"H" * 200_000)
+    monkeypatch.setattr(module, "APP_DIST", installed)
+    bundle = make_bundle(tmp_path / "build" / "swe-mux", version=NEXT)
+    (bundle / "_internal" / "heavy.bin").write_bytes(b"H" * 200_000)
+    archive, _ = package_desktop_release.build_archive(bundle, tmp_path / "out")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    assert module.stage_from_archive(SimpleArgs(archive, digest), outcome := FakeOutcome()) == 0
+    assert outcome.records == []
+    staged = staging / "swe-mux"
+    assert (staged / "swe-mux.exe").is_file()
+    # The 200 KB standing in for the machine-learning closure was not rewritten;
+    # it is the same filesystem object, which is what keeps its scan verdict.
+    assert (staged / "_internal" / "heavy.bin").read_bytes() == b"H" * 200_000
+    assert (staged / "_internal" / "heavy.bin").samefile(installed / "_internal" / "heavy.bin")
+
+
 def test_the_script_refuses_an_archive_whose_hash_it_was_given_and_does_not_match(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     module = redeploy_module()
-    monkeypatch.setattr(module, "STAGING_ROOT", tmp_path / "staging")
-    monkeypatch.setattr(module, "log", lambda _message: None)
+    isolate_script(module, tmp_path, monkeypatch)
     archive = make_archive(tmp_path)
     args = SimpleArgs(from_archive=archive, archive_sha256="0" * 64)
     outcome = FakeOutcome()
@@ -876,9 +922,7 @@ def test_the_script_extracts_a_verified_archive_into_the_staging_tree(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     module = redeploy_module()
-    staging = tmp_path / "staging"
-    monkeypatch.setattr(module, "STAGING_ROOT", staging)
-    monkeypatch.setattr(module, "log", lambda _message: None)
+    staging = isolate_script(module, tmp_path, monkeypatch)
     archive = make_archive(tmp_path)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     outcome = FakeOutcome()
@@ -893,8 +937,7 @@ def test_the_script_refuses_an_archive_that_is_not_there(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     module = redeploy_module()
-    monkeypatch.setattr(module, "STAGING_ROOT", tmp_path / "staging")
-    monkeypatch.setattr(module, "log", lambda _message: None)
+    isolate_script(module, tmp_path, monkeypatch)
     outcome = FakeOutcome()
     assert module.stage_from_archive(SimpleArgs(tmp_path / "nope.zip", ""), outcome) == 2
     assert outcome.records == [("refused", 2)]
@@ -1010,3 +1053,153 @@ async def test_a_daemon_without_an_installer_answers_quietly() -> None:
         assert (await written.json())["swappable"] is False
     finally:
         await client.close()
+
+
+# --- the delta preview --------------------------------------------------------
+#
+# What the install says about itself *before* it commits to several hundred
+# megabytes. Every test here is also a test that the preview cannot break an
+# install: it is advisory, the swap recomputes the same plan authoritatively from
+# the copy inside the archive, and every failure mode below still hands off.
+
+
+class FakeDownloads:
+    """A downloader that answers per URL, so a release can publish two files."""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self.payloads = payloads
+        self.calls: list[str] = []
+
+    async def __call__(
+        self,
+        url: str,
+        *,
+        write: Callable[[bytes], None],
+        max_bytes: int,
+        headers: Mapping[str, str] | None = None,
+    ) -> DownloadOutcome:
+        self.calls.append(url)
+        payload = self.payloads.get(url)
+        if payload is None:
+            return DownloadOutcome(status=404, declared_bytes=None, received_bytes=0)
+        write(payload)
+        return DownloadOutcome(
+            status=200, declared_bytes=len(payload), received_bytes=len(payload)
+        )
+
+
+#: The stand-in for the ~370 MB of machine-learning dependencies that dominate a
+#: real bundle and move on nobody's release schedule. It has to be bulky, because
+#: the fallback is decided on the *share of bytes* already present and a bundle
+#: made only of small files is one where a delta genuinely is not worth doing.
+HEAVY = {"_internal/heavy.bin": b"H" * 200_000}
+
+
+def make_release(
+    tmp_path: Path, *, version: str = NEXT, extra: dict[str, bytes] | None = None
+) -> tuple[Path, Path]:
+    """A real archive and its real sidecar manifest, from the real writer."""
+    bundle = make_bundle(tmp_path / "build" / "swe-mux", version=version)
+    for name, payload in (extra or {}).items():
+        (bundle / name).write_bytes(payload)
+    return package_desktop_release.build_archive(bundle, tmp_path / "out")
+
+
+async def test_the_install_reports_how_much_of_the_release_is_already_here(
+    tmp_path: Path,
+) -> None:
+    archive, sidecar = make_release(tmp_path, extra=HEAVY)
+    # An installed bundle identical to the release except for its executable:
+    # the shape of every ordinary update, where the interpreter and the
+    # dependencies are already on the machine and only our own code moved.
+    installed = make_bundle(tmp_path / "dist" / "swe-mux", version=CURRENT)
+    for name, payload in HEAVY.items():
+        (installed / name).write_bytes(payload)
+    (installed / "swe-mux.exe").write_bytes(b"MZ an older executable")
+    fetch = FakeFetch(
+        {MANIFEST_URL: manifest(artifacts=[artifact_entry(archive), artifact_entry(sidecar)])}
+    )
+    download = FakeDownloads(
+        {
+            artifact_entry(archive)["url"]: archive.read_bytes(),
+            artifact_entry(sidecar)["url"]: sidecar.read_bytes(),
+        }
+    )
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir))
+
+    snapshot = await run_install(installer)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    delta = snapshot["delta"]
+    assert delta["eligible"] is True
+    # `base_library.zip` and `heavy.bin` are unchanged; `swe-mux.exe` and
+    # `bundle.json` both moved, so two files are written and two are kept.
+    assert delta["reuse_files"] == 2
+    assert delta["write_files"] == 2
+    assert delta["reuse_bytes"] > 0
+    # ...and it is durable, because the daemon does not survive the swap.
+    stored = json.loads(
+        (Path(installer._config.data_dir) / "update-install.json").read_text("utf-8")
+    )
+    assert stored["delta"]["eligible"] is True
+
+
+async def test_a_release_that_publishes_no_file_manifest_still_installs(
+    tmp_path: Path,
+) -> None:
+    # Every release published before the manifest existed is this case, and it
+    # has to install exactly the way it always did rather than being refused for
+    # missing a file it never promised.
+    archive, _ = make_release(tmp_path)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    installer = build(tmp_path, fetch=fetch, download=FakeDownload(archive.read_bytes()))
+    write_supervisor(Path(installer._config.data_dir))
+
+    snapshot = await run_install(installer)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert snapshot["delta"]["reason"] == DELTA_NO_MANIFEST
+    assert snapshot["delta"]["eligible"] is False
+
+
+async def test_a_sidecar_manifest_that_fails_its_hash_is_not_used_and_stops_nothing(
+    tmp_path: Path,
+) -> None:
+    # The preview is advisory, so a bad sidecar must neither be believed nor
+    # allowed to refuse an install whose *archive* verifies. It is the archive's
+    # own copy that the swap acts on, and that one is covered by the whole-archive
+    # digest this install already checked.
+    archive, sidecar = make_release(tmp_path)
+    make_bundle(tmp_path / "dist" / "swe-mux", version=CURRENT)
+    entries = [artifact_entry(archive), artifact_entry(sidecar, sha256="f" * 64)]
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=entries)})
+    download = FakeDownloads(
+        {entries[0]["url"]: archive.read_bytes(), entries[1]["url"]: sidecar.read_bytes()}
+    )
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir))
+
+    snapshot = await run_install(installer)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert snapshot["delta"]["eligible"] is False
+    assert snapshot["delta"]["reason"] == DELTA_NO_MANIFEST
+
+
+async def test_the_sidecar_manifest_name_cannot_collide_with_the_archives(
+    tmp_path: Path,
+) -> None:
+    # The updater looks its own artifact up by *exact* name, so a third name on
+    # the same contract has to be unmistakably not the other two under any
+    # version string.
+    version = "1.2.3"
+    names = {
+        release_archive_name(version, "windows-x64"),
+        release_file_manifest_name(version, "windows-x64"),
+        release_installer_name(version, "windows-x64"),
+    }
+    assert len(names) == 3
+    archive, sidecar = make_release(tmp_path)
+    assert sidecar.name == release_file_manifest_name(NEXT, release_platform_tag())
+    assert sidecar.name != archive.name

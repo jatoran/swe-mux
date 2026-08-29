@@ -245,6 +245,16 @@ jobs:
       # The artifact the in-app updater consumes. Its name is
       # `update_install.release_archive_name`, derived rather than spelled out,
       # so this step cannot publish something no installed copy will look for.
+      #
+      # It writes **two** files, and the second is why an update stopped being a
+      # multi-minute rewrite of 420 MB: `swe-mux-<version>-<platform>.files.json`
+      # is the per-file hash manifest (`swe_mux/bundle_manifest.py`), published
+      # so the updater can hard-link every file the machine already has instead
+      # of writing it again and paying for it to be scanned. This workflow needs
+      # no step for it - `github-release` uploads `dist/*` and `update-manifest`
+      # enumerates that same directory, so the sidecar gets a `version.json`
+      # entry with a real SHA-256 by construction, which is precisely the
+      # property the comment on those jobs claims and this is its first test.
       - name: Package the portable archive
         run: uv run python packaging/package_desktop_release.py --bundle dist/swe-mux --out dist/release
 

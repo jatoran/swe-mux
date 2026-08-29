@@ -5489,17 +5489,117 @@ audit's actual complaint: not that the flag was wrong, but that nothing said why
 ### Workstream B - delta updates
 
 The largest user-facing win, and the one that makes "just cut a release" a viable answer at all.
+Done 2026-08-29.
 
-- [ ] Publish a per-file hash manifest alongside the release archive.
-- [ ] The updater writes only the files that differ, falling back to a full replacement when the
-  Python version or the dependency set moves.
-- [ ] Keep the whole-archive SHA-256 verification exactly as it is; this adds no new trust
-  boundary, and `bundle_archive.py` already reads archives while `--from-archive` already stages
-  them.
+- [x] Publish a per-file hash manifest alongside the release archive
+  (`swe_mux/bundle_manifest.py`; `packaging/package_desktop_release.py` writes it twice from one
+  set of bytes - as the archive's first member and as a sidecar artifact - and `release.yml`
+  publishes the sidecar with no step of its own, because `github-release` uploads `dist/*` and
+  `update-manifest` enumerates that same directory).
+- [x] The updater writes only the files that differ (`swe_mux/bundle_stage.py`), ~~falling back
+  to a full replacement when the Python version or the dependency set moves~~ - **the trigger is
+  a measurement instead, and the substitution is the interesting result.** See below.
+- [x] Keep the whole-archive SHA-256 verification exactly as it is. Untouched: the manifest the
+  swap acts on is a member of the archive that digest covers, and the sidecar the daemon plans
+  against carries its own `version.json` entry. One more hash-verified document under an existing
+  root, and no new boundary.
 
 The second-order effect is the one that matters most: unchanged files are not rewritten, so they
 keep their existing scan verdict, and the cold-scan cost that forced the 600s health budget
 mostly disappears along with the bytes.
+
+#### What the delta saves, measured against this project's own bundles
+
+`dist/swe-mux` built 2026-08-29 planned against `dist/swe-mux.prev` built 2026-08-27 - two real
+consecutive builds, over an interval that included a frontend rebuild *and* the eviction of the
+101 MB `playwright/driver` passenger Workstream A found. Run through the shipped code rather than
+a throwaway script, which is how the `python3.dll` defect below was found.
+
+| | files | bytes |
+|---|---|---|
+| bundle | 2937 | 420.0 MB |
+| identical, hard-linked | 2874 (97.9%) | 387.7 MB (92.3%) |
+| written | 63 | 32.4 MB |
+
+25.1 MB of those 32.4 is `swe-mux.exe` itself, and most of the rest is `static/assets`. Hashing
+the installed bundle to decide this costs 1.4s warm and about 20s cold, against the minutes it
+removes. The manifest is 576 KB for 2937 entries.
+
+#### The mechanism is the link, not the diff
+
+Bytes transferred and files touched are different quantities and only the second one collects the
+scan win, so the reuse path is `os.link` with `shutil.copy2` as a counted fallback. A hard link is
+the *same filesystem object* the scanner already has a verdict for; a copy is a new object with
+none, and would satisfy every content assertion while saving nothing that matters. Two properties
+make it safe structurally rather than luckily: `dist/.staging` and `dist/swe-mux` are siblings and
+therefore always on one volume, and the swap only ever renames whole bundle directories and
+deletes retired ones, so two trees sharing a file cannot diverge and retiring `dist/swe-mux.prev`
+merely drops one link.
+
+#### The named fallback triggers were refuted by the same measurement
+
+The item above asked for a full replacement "when the Python version or the dependency set
+moves", reasoning that a dependency bump invalidates most of `_internal/` and a delta would be
+worse than useless. The measured pair **removed an entire 101 MB top-level package and still
+shared 92.3% of its bytes**: adding, removing or upgrading one package invalidates that package's
+files and nothing else, so "the dependency set moved" does not predict what a delta saves.
+
+More importantly neither trigger can affect *correctness*. A file whose SHA-256 equals the
+target's SHA-256 is the target's file, whatever moved to produce it - so the hash comparison
+subsumes both named triggers and no structural gate is needed to keep a delta honest, only to
+keep it worthwhile. The decision is therefore `DELTA_REUSE_FLOOR`, the share of bytes already
+present; a Python bump or a wholesale dependency change drives the measured share under it by
+itself, which is the same answer the named triggers would have given, reached from evidence
+rather than from a proxy. Both structural facts are still computed and reported as observations,
+because they are the first thing a human asks when a delta did not happen.
+
+#### Two things found by running the code rather than reading it
+
+- **`python3.dll` sorts before `python312.dll`.** PyInstaller collects Windows' stable-ABI
+  forwarder beside the real runtime library, so the first loose match reported every bundle ever
+  built as `python3` - a value that cannot distinguish 3.12 from 3.13. It read like an answer, and
+  a useless observation is worse than an absent one. The pattern now requires the minor version's
+  digits (`tests/test_bundle_manifest.py`).
+- **`dist/swe-mux` is a real path a test can reach.** `stage_from_archive` now reads the installed
+  bundle, so the redeploy-script tests had to be pinned away from it: left alone they would hash
+  whatever bundle happens to be built on the machine running the suite, on a different volume from
+  `tmp_path`, and every hard link would silently fall back to copying hundreds of megabytes.
+
+#### Deliberately not done: the transfer half
+
+The full archive is still downloaded, and the exit criterion's "transfers ... only the files that
+changed" is **not** met. Two ways to meet it were considered and both were left for a later
+change, because the brief's own ordering is right - the write-and-scan cost is the larger one and
+the only one a user experiences as minutes:
+
+- **HTTP `Range` into the published zip**, using the sidecar manifest to pick members. No CI
+  change at all and a full transfer win, but it means an install that never verifies a whole
+  archive, an assumption about how a CDN behaves, ~200 lines of zip central-directory parsing over
+  HTTP, and nothing equivalent for the `.tar.gz` platforms because a gzip stream cannot be seeked
+  into usefully.
+- **A supplementary "changed files" archive** published per release, built in CI by diffing the
+  new bundle's manifest against the previous release's sidecar. It needs no range requests, works
+  for both container formats, and degrades correctly for a user several versions behind - but it
+  makes a release job depend on fetching the previous release, which is a new way for a release to
+  fail and one nothing in this session could rehearse.
+
+Neither is blocked by anything here; both consume the manifest this workstream publishes.
+
+#### Owed: one live rehearsal
+
+Nothing in this workstream has performed a real swap. That needs the operator's own frozen app and
+is deliberately out of scope for a worktree, which isolates the working tree and not the runtime.
+What it should measure, in one run:
+
+1. That a delta-staged `dist/swe-mux` **launches and reaches healthy** - the assertion no unit
+   test can make, and the only one that proves a hard-linked PyInstaller tree loads.
+2. **Time to runtime-ready** against the 225s already measured for an already-scanned build. The
+   claim under test is that most of a cold bundle's scan cost disappears with the rewrite, and
+   that is the number that would justify revisiting `APP_HEALTH_TIMEOUT_SECONDS`.
+3. That `dist/swe-mux.prev` is still a **working rollback** after the swap, with its files now
+   sharing inodes with the live bundle - relaunch it and reach healthy.
+4. `redeploy.log`'s delta line against the numbers above, on a real release rather than on two
+   local builds.
 
 ### Workstream C - frontend overlay
 
@@ -5637,6 +5737,9 @@ workflow rather than a trust boundary. Both cmux and orca have one.
 - [ ] A release that does not move the dependency set transfers and rewrites only the files that
   changed, and the health budget is revisited against a measurement rather than left at the
   cold-scan worst case.
+  **Half met 2026-08-29.** It *rewrites* only what changed - 63 files and 32.4 MB of 2937 and
+  420 MB, measured. It still transfers the whole archive, and the health budget still has no
+  post-delta measurement behind it because that needs a live swap (Workstream B, "Owed").
 - [x] A frontend-only fix reaches the frozen app without a bundle swap, and the `CLAUDE.md`
   warning about the frozen static tree is ~~retired rather than reworded~~ **narrowed to its
   true half**. The first clause is done (Workstream C: 10.85 MiB and ~2 s against ~370 MB and
