@@ -72,5 +72,5 @@ uv run mux --help >/dev/null && echo "mux --help ok"
 
 echo "=== pytest ==="
 uv run pytest tests -q -p no:cacheprovider \
-  -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon" \
+  -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag" \
   2>&1 | tail -12

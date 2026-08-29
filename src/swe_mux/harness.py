@@ -180,6 +180,77 @@ class MemoryInventory:
     detail: str
 
 
+# How a CLI's own "what models do I have" output is shaped. Declared rather than
+# sniffed, because a parser that guesses returns *fewer* models on a layout it
+# does not recognize, and a short list reads exactly like a small account.
+#
+# `qualified_lines`  one `provider/model` per line, nothing else (opencode).
+# `selector_json`    a JSON document whose `models[]` entries carry the exact
+#                    string the CLI's own model flag takes, in `selector` (omp).
+# `provider_columns` a whitespace-aligned table with a `provider`/`model` header
+#                    row; the id is the two columns joined by `/` (pi).
+ModelCatalogFormat = Literal["qualified_lines", "selector_json", "provider_columns"]
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCatalog:
+    """How to ask one CLI which models it actually has.
+
+    Advisory by construction. A catalogue answers "what is authenticated here
+    right now", which no static declaration can, and it is the right thing to put
+    in front of an agent that has to *choose* a model rather than confirm one.
+    What it must never become is the gate: a catalogue lags every vendor release,
+    so refusing a model for being absent from one would refuse models that work -
+    the precise failure `ModelSelection` is built to avoid.
+    """
+
+    #: Appended to the CLI's own executable, so the command is the harness's.
+    argv: tuple[str, ...]
+    format: ModelCatalogFormat
+
+    def __post_init__(self) -> None:
+        if not self.argv:
+            raise ValueError("a model catalog must declare the argv that lists models")
+
+
+# How a CLI spells the models it accepts. The three are not styles; they are
+# three different questions a name has to answer, and getting the question wrong
+# either refuses a model that works or forwards one that cannot.
+#
+# `namespaced`   the CLI has its own short aliases and its own id namespace
+#                (`claude --model opus`, `codex --model gpt-5.6-terra`). A name
+#                belonging to another vendor is recognizably wrong.
+# `qualified`    the CLI addresses models as `provider/model` and nothing else
+#                (`opencode -m anthropic/claude-sonnet-4-5`). A bare name is
+#                refused here, because the CLI refuses it too - measured
+#                2026-08-29, unhelpfully: `opencode run --model <bogus>` exits 1
+#                with an opaque `UnknownError` that never names the model.
+# `pattern`      the CLI fuzzy-matches whatever it is given against its own
+#                catalogue (`omp --model opus`, `pi --model gpt-5.4`), accepting
+#                bare names, `provider/id`, and - for pi - a `:<thinking>` suffix.
+#                There is no vocabulary to check against, so the gate is the shape
+#                of the token alone, and *what it actually resolved to* is a
+#                question only the running session can answer (`agreement`).
+ModelVocabulary = Literal["namespaced", "qualified", "pattern"]
+# What a session's observed model says about the one its launch asked for.
+#
+# `agreed`       the requested name appears in what the harness reports it ran.
+# `divergent`    it does not. On a `pattern` harness that is a fuzzy match that
+#                landed somewhere else; on any harness it is the launch flag not
+#                having taken.
+# `pending`      the session has not reported a model yet. Every harness reports
+#                one only once a turn has produced usage, so this is the ordinary
+#                state of a session that has not answered yet - never a fault.
+# `unverifiable` the request named a *mode* rather than a model (`opusplan`), so
+#                no observed id can confirm or refute it. Distinguished from
+#                `divergent` deliberately: claiming a divergence that cannot be
+#                proven is worse than admitting the question does not apply.
+ModelAgreement = Literal["agreed", "divergent", "pending", "unverifiable"]
+# A `provider/model` pair: exactly one slash, both halves non-empty. Anchored, so
+# a bare name cannot pass for one.
+_QUALIFIED_MODEL = re.compile(r"[a-z0-9][a-z0-9._\-\[\]:]*/[a-z0-9][a-z0-9._\-\[\]:]*")
+
+
 @dataclass(frozen=True, slots=True)
 class ModelSelection:
     """How a launch tells one CLI which model to run.
@@ -191,12 +262,19 @@ class ModelSelection:
     model could not be chosen. ``None`` on :class:`HarnessDescriptor` is that
     sentence - a declared absence mux refuses on, not a silent default.
 
-    Recognition is by **namespace plus alias**, never by an enumerated catalogue
-    of released models. A catalogue lags every vendor release and would refuse a
-    model that works, which is the failure `claude_models.py` already had to
-    grow a family fallback to escape. A namespace check still catches the failure
+    Recognition is by **vocabulary**, never by an enumerated catalogue of
+    released models. A catalogue lags every vendor release and would refuse a
+    model that works, which is the failure `claude_models.py` already had to grow
+    a family fallback to escape. A vocabulary check still catches the failure
     that matters here: a name meant for another harness - or for none - reaching
     a CLI that will die on it.
+
+    What a vocabulary check cannot catch is a CLI that accepts anything and finds
+    out later. Codex is that CLI (measured 2026-08-29: `codex exec --model
+    <bogus>` warns "Model metadata not found. Defaulting to fallback metadata",
+    sends the request anyway, and dies on the provider's 400), which is why the
+    catalogue (`model_catalog.py`) and the observed-model check (:meth:`agreement`)
+    exist beside this one rather than instead of it.
     """
 
     # Tokens that introduce the value, canonical first. Every entry is recognized
@@ -210,19 +288,34 @@ class ModelSelection:
     # Namespaces a full model id belongs to, canonical first. The first entry is
     # also what a family alias carrying a version suffix resolves into, so the
     # spoken "opus 5" becomes this harness's own spelling rather than being
-    # refused for not looking like an id.
+    # refused for not looking like an id. Required for `namespaced`, and empty for
+    # the other two, which have no namespace to check against.
     id_prefixes: tuple[str, ...]
+    vocabulary: ModelVocabulary = "namespaced"
     # Value-token prefixes that set the model through the CLI's *generic* config
     # flag (Codex's `-c model=…`). Stripped together with the flag introducing
     # them, so "the request's model replaces the profile's" is true rather than
     # nearly true.
     config_prefixes: tuple[str, ...] = ()
+    # Aliases naming a *mode* rather than a model, so no observed id can ever
+    # confirm one. Kept apart from `aliases` because the difference is invisible
+    # from outside: `opus` is checkable against what ran and `opusplan` is not,
+    # and treating the second as the first reports a divergence against a session
+    # that is doing exactly what it was asked to.
+    unverifiable_aliases: frozenset[str] = frozenset()
+    # How this CLI can be asked which models it actually has, or `None` when it
+    # offers no such command. Discovery, never authority - see `model_catalog.py`.
+    catalog: ModelCatalog | None = None
 
     def __post_init__(self) -> None:
         if not self.argv:
             raise ValueError("a model selection must declare the argv introducing it")
-        if not self.id_prefixes:
-            raise ValueError("a model selection must declare its model id namespace")
+        if self.vocabulary == "namespaced" and not self.id_prefixes:
+            raise ValueError("a namespaced model selection must declare its id namespace")
+        if self.vocabulary != "namespaced" and self.id_prefixes:
+            raise ValueError(f"a {self.vocabulary} model selection has no id namespace")
+        if not self.unverifiable_aliases <= self.aliases:
+            raise ValueError("every unverifiable alias must also be an alias")
 
     def resolve(self, name: str) -> str | None:
         """The value the CLI is given for `name`, or ``None`` when unrecognized."""
@@ -230,6 +323,15 @@ class ModelSelection:
         if not model:
             return None
         if model in self.aliases:
+            return model
+        if self.vocabulary == "qualified":
+            return model if _QUALIFIED_MODEL.fullmatch(model) else None
+        if self.vocabulary == "pattern":
+            # Anything shaped like a model name is a pattern this CLI will try to
+            # match, so there is nothing left here to refuse that
+            # `normalize_model_name` has not refused already. Being honest about
+            # that is the point: a namespace invented for a fuzzy matcher would
+            # refuse working models while promising a check it cannot perform.
             return model
         if any(model.startswith(prefix) for prefix in self.id_prefixes):
             return model
@@ -243,16 +345,60 @@ class ModelSelection:
 
     def describe(self) -> str:
         """The accepted vocabulary, for a refusal the operator can act on."""
+        if self.vocabulary == "qualified":
+            return "a provider-qualified id such as anthropic/claude-sonnet-4-5"
+        if self.vocabulary == "pattern":
+            return (
+                "a model name or pattern it fuzzy-matches, such as opus, gpt-5.4, "
+                "or openai/gpt-5.4"
+            )
         namespaces = ", ".join(self.id_prefixes)
         ids = f"a full model id beginning {namespaces}"
         if self.aliases:
             return f"{', '.join(sorted(self.aliases))}, or {ids}"
         return ids
 
+    def agreement(self, requested: str, provider: str, observed: str) -> ModelAgreement:
+        """Whether `observed` is what a launch asking for `requested` should get.
+
+        Containment rather than equality, because every accepted spelling is
+        *shorter* than what a harness reports running: an alias (`opus` ->
+        `claude-opus-5`), a fuzzy pattern (`gpt-5.4` -> `openai/gpt-5.4`), and a
+        qualified id whose provider the harness reports in its own field rather
+        than inside the model string. Equality would call all three a divergence.
+
+        The direction of the remaining error is deliberate. A false `agreed` costs
+        one unnoticed model; a false `divergent` costs trust in every reading, and
+        this check is worth nothing if it is not believed.
+        """
+        wanted = normalize_model_name(requested)
+        if not wanted:
+            return "unverifiable"
+        if wanted in self.unverifiable_aliases:
+            return "unverifiable"
+        # pi carries the thinking level in the same token (`gpt-5.4:high`). It is a
+        # setting rather than part of the id, and no harness reports it back.
+        wanted = wanted.split(":", 1)[0]
+        seen = str(observed or "").strip().lower()
+        if not seen:
+            return "pending"
+        qualified = f"{str(provider or '').strip().lower()}/{seen}"
+        return "agreed" if wanted in seen or wanted in qualified else "divergent"
+
 
 # A model name after normalization: lowercase, no whitespace, and never opening
 # with `-`, so a value that would read as another argument can never become one.
-_MODEL_NAME = re.compile(r"[a-z0-9][a-z0-9._\-\[\]]{0,79}")
+#
+# `/`, `:` and `~` are inside the class because three of the five harnesses
+# cannot spell a model without them: `anthropic/claude-sonnet-4-5` is opencode's
+# only accepted form, pi appends `:<thinking>`, and omp's own listing routes
+# through a second slash and a tilde (`openrouter/~anthropic/claude-opus-latest`).
+# None of them weakens the guarantee that matters - the charset still excludes
+# whitespace and the anchor still excludes a leading `-`, so this value cannot
+# become a second flag, and it never reaches a shell for `~` to mean anything to.
+# Shape rules that depend on where a `/` falls belong to the vocabulary
+# (`_QUALIFIED_MODEL`), not here.
+_MODEL_NAME = re.compile(r"[a-z0-9][a-z0-9._\-\[\]:/~]{0,79}")
 
 
 def normalize_model_name(value: str) -> str:
@@ -925,10 +1071,20 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # Claude Code takes `--model` and accepts its own family aliases directly,
         # which is what makes "open an opus session" answerable without the
         # operator knowing an id. `opusplan` is the CLI's own mixed mode.
+        #
+        # It is also the strictest of the five: measured 2026-08-29, `claude -p
+        # --model <bogus>` exits 1 before any request with
+        # `[claude-code:unrecognized_model]`. No catalogue command - the CLI has
+        # no subcommand that lists models, and the aliases cover what an operator
+        # would ask for.
         model_selection=ModelSelection(
             argv=("--model",),
             aliases=frozenset({"opus", "sonnet", "haiku", "opusplan", "default"}),
             id_prefixes=("claude-",),
+            # `opusplan` runs opus to plan and sonnet to execute, and `default`
+            # is whatever the account resolves to; both report an ordinary model
+            # id, so neither can be confirmed from what ran.
+            unverifiable_aliases=frozenset({"opusplan", "default"}),
         ),
         branch_strategy="transcript_fork",
         instruction_file_name="CLAUDE.md",
@@ -1031,6 +1187,14 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # a profile used; no aliases, because Codex names models by their provider
         # slug and has no short forms of its own - which is also what makes a
         # Claude alias reaching a Codex pane a refusal rather than a dead session.
+        #
+        # This namespace is the *only* gate Codex has, and the reason the check
+        # after the fact exists. Measured 2026-08-29: `codex exec --model <bogus>`
+        # does not refuse. It prints "Model metadata for `<bogus>` not found.
+        # Defaulting to fallback metadata", starts a session, sends the turn, and
+        # dies on the provider's 400 - so a Codex pane launched on a model that
+        # does not exist comes up healthy and fails on its first turn, where no
+        # spawn-time probe can see it.
         model_selection=ModelSelection(
             argv=("--model", "-m"),
             aliases=frozenset(),
@@ -1133,12 +1297,26 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # when its own path is not already present, and a second extension of the
         # user's own is a legitimate thing to want.
         reserved_launch_args=("--resume",),
-        # Unmeasured. oh-my-pi is configured through its own provider/model settings
-        # and mux has captured no launch-time model argument for it, so a spawn
-        # asking for one is refused with the launch profile named as the way to set
-        # it. Declaring a guessed flag here would trade that refusal for a pane that
-        # dies at startup, which is the whole reason this axis is declared.
-        model_selection=None,
+        # Measured 2026-08-29 against omp v17.2.10: `--model=<value>` documents
+        # itself as a fuzzy match ("opus", "gpt-5.2", or "openai/gpt-5.2"), so
+        # there is no namespace to check and `pattern` says so rather than
+        # inventing one. A name it cannot match is refused before any request
+        # (`Model "<bogus>" not found`, exit 1).
+        #
+        # `--smol`/`--slow`/`--plan` set the models for omp's other roles and are
+        # deliberately not declared: they are not the session's model, and
+        # stripping them when a request names one would silently unset a launch
+        # profile's careful role assignment.
+        model_selection=ModelSelection(
+            argv=("--model",),
+            aliases=frozenset(),
+            id_prefixes=(),
+            vocabulary="pattern",
+            # `--json` rather than the default table: the human output is
+            # box-drawn and grouped by provider header, and `selector` is the
+            # exact string `--model` takes.
+            catalog=ModelCatalog(argv=("models", "--json"), format="selector_json"),
+        ),
         # No strategy: `--resume` reopens the same session file, so forking a live
         # OMP conversation would put two writers on one file.
         branch_strategy=None,
@@ -1235,10 +1413,25 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # is pi's interactive picker, so a profile carrying it opens every pane on a
         # menu waiting for a keystroke rather than on a conversation.
         reserved_launch_args=("--session", "--resume"),
-        # Unmeasured, as oh-my-pi: no launch-time model argument has been captured
-        # for pi, so a spawn asking for one is refused rather than started with a
-        # flag that may not exist.
-        model_selection=None,
+        # Measured 2026-08-29: `--model <pattern>` takes a "Model pattern or ID
+        # (supports "provider/id" and optional ":<thinking>")", so it is the same
+        # fuzzy vocabulary as omp's. An unmatched name is refused before any
+        # request (`Model "<bogus>" not found. Use --list-models…`, exit 1).
+        #
+        # `--provider` is deliberately not declared. pi accepts the provider
+        # inside the model token, so one field carries the whole answer, and
+        # stripping a profile's `--provider` on behalf of a request that names
+        # only a model would change more than the request asked for.
+        model_selection=ModelSelection(
+            argv=("--model",),
+            aliases=frozenset(),
+            id_prefixes=(),
+            vocabulary="pattern",
+            # A whitespace-aligned table under a `provider  model  context …`
+            # header. There is no JSON form: `--mode json` is the *session's*
+            # output mode and does not reach this listing (measured).
+            catalog=ModelCatalog(argv=("--list-models",), format="provider_columns"),
+        ),
         # `--session` appends to the same file wherever pi stands, so a fork would
         # put two writers on one conversation.
         branch_strategy=None,
@@ -1349,10 +1542,22 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         spawn_id_argv=(),
         resume_argv=("--session",),
         reserved_launch_args=("--session",),
-        # Unmeasured. opencode addresses models as `provider/model`, a spelling no
-        # namespace declared here would recognize, so the axis stays undeclared
-        # until a real launch is measured against it.
-        model_selection=None,
+        # Measured 2026-08-29: `-m, --model` is a top-level flag (so it applies to
+        # the interactive launch mux performs, not only to `opencode run`) and
+        # documents its format as `provider/model`. `qualified` refuses a bare
+        # name for that reason, and refusing it here is worth doing because the
+        # CLI's own refusal is useless: `opencode run --model <bogus>` exits 1
+        # with an `UnknownError`/"Unexpected server error" that never names the
+        # model, so a pane that died this way explains nothing.
+        model_selection=ModelSelection(
+            argv=("--model", "-m"),
+            aliases=frozenset(),
+            id_prefixes=(),
+            vocabulary="qualified",
+            # Already one `provider/model` per line, and drawn from the same
+            # cached models.dev data the adapter reads for context windows.
+            catalog=ModelCatalog(argv=("models",), format="qualified_lines"),
+        ),
         # `--session` reopens the same row, so a fork would put two writers on one
         # conversation.
         branch_strategy=None,
@@ -1672,6 +1877,32 @@ def model_refusal(name: object, model: str) -> str | None:
             f"{selection.describe()}"
         )
     return None
+
+
+def model_catalog(name: object) -> ModelCatalog | None:
+    """How to ask `name`'s CLI which models it has, or `None` when it cannot be."""
+    selection = model_selection(name)
+    return selection.catalog if selection is not None else None
+
+
+def model_agreement(
+    name: object, requested: str, provider: str | None, observed: str | None
+) -> ModelAgreement:
+    """Whether the model `name`'s session reports running is the one it was given.
+
+    The layer no launch-time check can replace. Two of the five harnesses
+    fuzzy-match, so a request can land on a *different* real model with nothing
+    said; a third (Codex) does not validate at launch at all. In every one of
+    those cases the only thing that settles it is what the harness itself reports
+    once a turn has produced usage.
+
+    `pending` for a session that has not reported yet, and for a harness with no
+    declared selection - not `divergent`. Silence is not disagreement.
+    """
+    selection = model_selection(name)
+    if selection is None or not str(requested or "").strip():
+        return "pending"
+    return selection.agreement(requested, provider or "", observed or "")
 
 
 def strip_model_args(name: object, args: Sequence[str]) -> list[str]:

@@ -2065,6 +2065,12 @@ class Session:
         self.startup_measurement_task: asyncio.Task[Any] | None = None
         self.registration_task: asyncio.Task[Any] | None = None
         self.attachments_seen = 0
+        # The observed model this session has already been reported as diverging
+        # from its launch flag on. A guard rather than a fact: the divergence
+        # itself is derived on every read (`harness.model_agreement`), and this
+        # only stops one wrong model from writing a log line per observation
+        # update for the life of the pane.
+        self.model_divergence_noted = ""
         # Exactly one browser connection may write terminal-generated responses
         # and user keystrokes. Without this, two attached xterms both answer
         # device-status queries and the duplicate response appears at the prompt.
@@ -2954,6 +2960,7 @@ class SessionManager:
         worktree_project_root: Path | None = None,
         initial_output: bytes | None = None,
         start_cwd: str | None = None,
+        model_requested: str | None = None,
     ) -> Session:
         startup_started_at = startup_started_at or time.perf_counter()
         startup_timing_ms = dict(startup_timing_ms or {})
@@ -3035,6 +3042,11 @@ class SessionManager:
             startup_timing_ms=startup_timing_ms,
             completion_mode=completion_mode,
         )
+        # Retained beside the argv it was composed into, because the argv is not a
+        # readable answer: `--model` and `-c model=…` are two spellings, a resume
+        # replays whatever the original launch built, and nothing downstream
+        # should have to re-parse a command line to learn what was asked for.
+        record.model_requested = model_requested or None
         record.spawn_backend = backend
         record.spawn_native_session_id = native_id
         record.spawn_agent_run_id = adopt_run_id
