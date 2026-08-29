@@ -6093,10 +6093,21 @@ here and does not there.
   working aliases.** Purely additive, so nothing that exists stops working and no document that
   says `mux` becomes wrong - which is also what makes it safe without resolving the trademark
   question first.
-- [ ] **The Windows installer puts the CLI on PATH.** Idempotent across upgrades, removing exactly
-  what it added on uninstall and nothing adjacent, per-user unless machine-wide can be argued,
-  respecting the documented PATH-length hazards, and broadcasting the change or saying plainly
-  that a new terminal is needed.
+- [x] ~~**The Windows installer puts the CLI on PATH.**~~ **Attempted, refuted, and the refutation
+  is the finding.** There is no CLI in the frozen bundle to put on PATH. `packaging/swe_mux.spec`
+  builds exactly one executable, `swe-mux.exe`, with `console=False` - a GUI-subsystem process has
+  no stdout or stderr at all, which is why `desktop.redirect_gui_streams` exists - and
+  `desktop.main` dispatches only `--daemon-child`, `--supervisor-child` and an allowlisted `-m`
+  pair that excludes `swe_mux.cli`. Adding `{app}` to PATH would publish a window-opener under a
+  name someone types expecting a session table, which is worse than the asymmetry it set out to
+  fix. The spec's `# No second executable` comment also records a real hazard: a bundle process
+  sitting in a task terminal can lock the tree against the redeploy's staged swap.
+  **The gap is real and the remedy is a third bundle from its own spec**, the pattern
+  `swe-mux-supervisor` already proves, which keeps the lock hazard off the app bundle;
+  `swe_mux.cli` imports only the standard library plus `harness`, so it should be small. That
+  needs a real build and a swap rehearsal, so it is post-release work rather than a release item.
+  Until then an installer user's answer is `uv tool install swe-mux` alongside the installer copy,
+  and `OPERATOR_LIFECYCLE.md` states the gap with its measurement.
 
 ### Sequenced after it, in order
 
