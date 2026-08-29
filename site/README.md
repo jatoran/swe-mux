@@ -519,11 +519,29 @@ Verified by compositing both variants over dark, light, and a hostile mid-grey: 
 Diagrams carry their own placeholder class (`.vis`) separate from screenshot crops (`.crop`), because they are illustrations to be drawn rather than shots to be taken.
 Two are specified so far: the workbench split tree, and the control plane's escalating-cost stack with a human gate on every arrow leaving it.
 
-## Current status: EVERY SCREENSHOT IN `img/` IS A PLACEHOLDER
+## Current status: EIGHT OF NINE SCREENSHOTS ARE REAL, TAKEN IN A SYNTHETIC INSTALL
 
-**There is no real screenshot anywhere in this directory, and none may be committed until it has been taken in an environment with no personal or third-party data in it.**
-All nine files below are generated panels, not captures.
-They must each be replaced with a real, scrubbed shot before launch.
+**No capture of the operator's own machine may ever be committed here.**
+That rule is unchanged and is the whole reason this section exists.
+What changed on 2026-08-28 is that there is now a rig which satisfies it:
+`trailer/capture_env.py` stands up a second daemon on its own port under its own data
+directory, with invented Projects, invented commit authors, and a fixture provider account,
+and `trailer/capture_site_shots.py` drives the shots against it.
+Method and traps: `trailer/SITE_SHOTS.md`.
+
+The guard is the part to keep.
+`capture_site_shots.scan_for_leaks` reads each rendered page and **refuses to write the file**
+when it contains the host's home directory, account name, or configured git identity, and it
+derives that list at run time rather than carrying a copy.
+So the failure recorded below cannot recur quietly; it fails the capture instead.
+
+`img/desktop-insight.webp` is **still a placeholder**, and it is the only one.
+Activity's Timeline segment is gated on a session having a harness transcript and every
+session in the capture environment is a shell, so it renders its empty state.
+Filling it needs an authenticated agent CLI, which is the one thing the synthetic environment
+exists to exclude; `trailer/SITE_SHOTS.md` records the way through.
+
+The table below is what each slot must show, and it remains the specification for a re-shoot.
 
 | File | Label it draws | What the real capture must contain |
 |---|---|---|
@@ -539,9 +557,9 @@ They must each be replaced with a real, scrubbed shot before launch.
 
 That table is a copy of `SLOTS` in `tools/placeholders.py`, which is where it is maintained; the script is the thing that has to agree with the files.
 
-### Why they are placeholders rather than scrubbed captures
+### Why the originals were replaced outright rather than scrubbed
 
-The captures that occupied these nine filenames were screenshots of a live machine.
+The captures that first occupied these nine filenames were screenshots of a live machine.
 Between them they showed the operator's full project sidebar (ten unrelated private project names), the operator's own name against two provider accounts with their spend percentages, absolute local paths, competitor checkout directories (`.tmp-herdr/`, `.tmp-omp/`) in the file tree, and several screens of real transcript prose.
 `site/` is the GitHub Pages deploy root, so every file in it is served whether or not a page references it; eight of the nine were not referenced and would have been published anyway.
 
