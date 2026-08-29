@@ -47,7 +47,7 @@ They sit one directory down for the same reason `wordmark-source.png` does: `sit
 python site/tools/build.py     # regenerate the sub-pages
 node site/tools/check.mjs      # every page: overflow at 4 widths x 2 themes, assets,
                                # internal links, the docs browser, install tabs,
-                               # theme toggle
+                               # the download section in both states, theme toggle
 python site/tools/contrast.py  # every text token against both backgrounds
 python site/tools/check_changelog.py  # every released version has a dated entry
 grep -rn data-todo site/       # unfilled placeholder URLs
@@ -196,7 +196,7 @@ Headline directions:
 08. Drive it without touching it. *(voice and push, crops)*
 09. The control plane. *(grouped rows + one crop pair)*
 10. Also in the box. *(rows)*
-11. Install.
+11. Install. *(the desktop download, then PyPI, then source)*
 
 ## Section rules
 
@@ -448,6 +448,40 @@ This is the rule the callout broke: it shipped `irm https://get.swe-mux.dev/inst
 Both tabs are gone, replaced by commands that resolve against PyPI.
 `check.mjs` now parses every URL out of every method's command and fails on any host outside a small allowlist, so a resurrected one-liner cannot reach the live site the way that one did.
 
+## Desktop download
+
+Section 11's first block, `#download`, and the only part of the site whose content comes from outside the checkout.
+
+**It is drawn from `version.json` and there is no second list of artifacts anywhere.**
+That file is the update manifest: `release.yml` generates it from a release's **own** assets, attaches it to the Release, and `pages.yml` downloads it back into the deploy root on every deploy.
+So the section lights up by itself on the first release that carries a desktop artifact, and nobody has to remember to edit a page at release time.
+A hand-maintained download list beside a generated manifest is a second manifest, and the copy is the one that goes stale the day a release is cut in a hurry.
+
+**The empty state is markup and the populated state is script**, which is the way round that matters.
+What ships today is the empty state, so it is what a reader with JavaScript off gets, what a fresh clone gets, and what every deploy before the first desktop release gets.
+It says the build is not published yet and points at the Python install that works, and it draws **no control at all**: not a `#` link, not a greyed-out button.
+A disabled button reads as broken rather than as honest, and a dead link is the failure this whole section is one careless edit away from.
+
+**Artifact names are a contract, matched rather than guessed.**
+`release_installer_name` and `release_archive_name` in `src/swe_mux/update_install.py` build both as `swe-mux-<version>-<platform>-<arch>`, plus `-setup.exe` for the Windows installer and `.zip` or `.tar.gz` for the portable bundle.
+The in-app updater already looks its own artifact up by exact name, so those shapes are the reason this can share a manifest with the wheel, the sdist and `version.json` itself and offer none of them.
+A visitor handed a `.whl` because the section matched on "the first artifact" would have been handed a file they cannot run.
+
+**Three states, and the third is why the schema is checked.**
+An installer in the manifest is the primary Windows path; archives with no installer are offered as the portable build; neither is the empty state.
+A `schema` this page has never seen is answered with "cannot tell" and a link to the Releases page, the same way `update_check.py` answers it, because rendering an unrecognized manifest as "not published yet" would be a confident false answer about a release that may carry everything.
+
+**Say what SmartScreen will do, once, next to the file.**
+The installer is unsigned until a certificate is bought (`.docs/development/RELEASE_MANUAL_TASKS.md` § 1), and an unsigned Windows installer is the single largest source of "is this malware" reports at launch.
+Two calm sentences: what the notice says, which control gets past it, and that the SHA-256 above is there to check the file with.
+Nothing here tells anybody to turn a security feature off, and nothing apologises for the state of the world.
+When a certificate is bought, that paragraph is what changes, and `check.mjs`'s two assertions on it are what stop it being dropped while the build is still unsigned.
+
+**`check.mjs` drives both states and each of its assertions has been seen to fail.**
+The empty state is read off the page as loaded, because `file://` cannot fetch a sibling file; the populated one is driven through `window.__swemuxDownload`, the renderer the page exposes for exactly that.
+Five mutations were applied in turn and the gate caught all of them: an empty state carrying a live control and losing its "not published yet", a dropped SmartScreen paragraph and a dropped digest, an artifact-name pattern that matches nothing the release publishes, a schema gate that waves an unknown manifest through, and a filter loose enough to offer the wheel.
+The overflow pass uses a prerelease version string and opens the digest disclosure, because a 64-character hash and a long artifact name are the two longest unbroken runs on the site and the empty state contains neither.
+
 ## Wordmark and favicon
 
 `img/logo.png` and `img/logo-light.png`, both 640px wide with transparent grounds, regenerated from `tools/wordmark-source.png` by `tools/logo.py`.
@@ -605,6 +639,11 @@ Its bar and footer are hand-written copies of what `shell()` emits, which is a r
 **Never commit `site/version.json`.**
 `release.yml` writes it at release time and `pages.yml` restores it from the latest Release on every deploy.
 A committed copy would be destroyed by the next ordinary site deploy, and the comments in both workflows say why.
+
+It has a second reader now: the landing page's `#download` section is drawn from it (section 7).
+That changes nothing about the rule and does change what a local checkout looks like.
+The file is absent here by design, so the landing page opened from disk shows the empty download state, which is correct rather than broken.
+If you drop a copy in to see the populated layout, take it back out before committing, and check `git status` rather than trusting that you did.
 
 ## The URL contract
 
@@ -824,6 +863,13 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
   The two `get.swe-mux.dev` one-liners are gone; section 7 records what replaced them, what was executed to verify it, and the `check.mjs` assertion that keeps a dead host from coming back.
   The clone URL no longer says `REPLACE`: it resolves to `github.com/jatoran/swe-mux`, in the hero command and in the footer, alongside the license links added in Phase 10.5.
   If the project is ever published under an organisation rather than that account, both places and the footer's two license links change together.
+- **Publish a desktop artifact, and the download section fills itself in.**
+  `packaging/build_installer.py` and the `build-desktop` job in `.github/workflows/release.yml` exist, but that job runs only on a `v*` tag or a manual dispatch, so it has never run: `v0.1.0` carries the wheel, the sdist and `version.json` and nothing else.
+  Section 7 has the mechanism.
+  Nothing on the site needs editing when that changes, and the thing to check afterwards is the state that ships in between, not the one that arrives with the release.
+- **Buy a code-signing certificate, or keep the SmartScreen paragraph.**
+  `.docs/development/RELEASE_MANUAL_TASKS.md` § 1 holds the decision and its options.
+  Until it is made the download section says the build is unsigned and what Windows will do about it, and `check.mjs` asserts both halves so neither can be quietly tidied away while it is still true.
 - **Re-shoot every screenshot.** All nine files in `img/` are generated placeholders and none of them is a capture; section 8 has the table of what each replacement must contain.
   Shoot them on an install with no personal or third-party data on screen: no unrelated project names, no account or operator name, no spend or quota percentages, no absolute local paths, no competitor checkouts in the file tree, no real transcript prose.
   Delete `tools/placeholders.py` and its row in section 8 once the last slot holds a real shot.
