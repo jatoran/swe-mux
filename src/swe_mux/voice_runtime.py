@@ -83,8 +83,11 @@ log = logging.getLogger(__name__)
 STATES = ("not_downloaded", "downloading", "ready", "error")
 
 DOWNLOAD_CHUNK = 1 << 16
-#: Generous, and it needs to be: this is ~82 MiB over a link that may be slow,
-#: where `voice_models.DOWNLOAD_TIMEOUT_SECONDS` covers a single file.
+#: Generous, and it needs to be: this covers the whole closure over a link that
+#: may be slow, where `voice_models.DOWNLOAD_TIMEOUT_SECONDS` covers a single
+#: file. The closure is 44-139 MiB depending on the platform (Windows 81.9,
+#: macOS 49.6, Linux the largest), so the budget is written for the worst of them
+#: rather than for the host this was measured on.
 DOWNLOAD_TIMEOUT_SECONDS = 3600.0
 
 # The modules each capability must be able to find, **per capability**, because
@@ -406,8 +409,9 @@ class VoiceRuntimeStore:
             self._progress["current_file"] = "unpacking"
             await report_progress(self, progress)
             await asyncio.to_thread(self._unpack, wheels, cache)
-            # The cache is 82 MiB of wheels whose contents are now on disk twice.
-            # Dropped once the tree is verified rather than kept for a re-unpack:
+            # The cache is the whole closure again - tens of megabytes of wheels
+            # whose contents are now on disk twice. Dropped once the tree is
+            # verified rather than kept for a re-unpack:
             # re-acquiring is a press, and a user who never enables voice again
             # should not be paying rent on a second copy.
             shutil.rmtree(cache, ignore_errors=True)
@@ -443,7 +447,7 @@ class VoiceRuntimeStore:
             log.warning("voice runtime download failed: %s", message)
         except Exception as exc:  # noqa: BLE001 - a defect here must not read as a transfer failure
             # The clause above names the four things that go wrong when fetching
-            # 82 MiB over a network onto a disk. Anything else reaching here is a
+            # the closure over a network onto a disk. Anything else reaching here is a
             # defect in this process, and until 2026-08-29 it escaped the task
             # entirely - leaving `status()` to infer from a `downloading` state
             # file and a finished task that the transfer had been *interrupted*.
@@ -513,8 +517,9 @@ class VoiceRuntimeStore:
     def _unpack(self, wheels: tuple[VoiceWheel, ...], cache: Path) -> None:
         """Build the tree beside the live one and swap, so a failure keeps the old.
 
-        Runs on a thread: this is ~350 MB of extraction and it must not sit on the
-        event loop while the daemon is serving terminals.
+        Runs on a thread: this is hundreds of megabytes of extraction (~315 MB on
+        Windows, less elsewhere) and it must not sit on the event loop while the
+        daemon is serving terminals.
         """
         staging = self.root / "site.staging"
         shutil.rmtree(staging, ignore_errors=True)
@@ -618,7 +623,8 @@ def _file_verified(path: Path, size: int, sha256: str) -> bool:
     """Whether a cached wheel is byte-for-byte the pinned one.
 
     Exists so an interrupted acquisition resumes at wheel granularity instead of
-    re-downloading 82 MiB, and so a resumed one is verified rather than assumed.
+    re-downloading the whole closure, and so a resumed one is verified rather than
+    assumed.
     """
     try:
         if path.stat().st_size != size:
