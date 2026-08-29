@@ -46,7 +46,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from .harness import agent_harnesses
@@ -551,9 +551,20 @@ def invoked_as(
     default would print `usage: swemux.exe`. `python -m swe_mux.cli` gives an
     `argv[0]` that is a path to a module file, and an empty or directory-like
     `argv[0]` (an embedder, a test) gives nothing usable - both take the default.
+
+    The split is `PureWindowsPath` rather than `Path` **on every platform**, and
+    that is deliberate rather than a Windows leftover. `Path` takes the running
+    host's flavour, so a POSIX interpreter reading a Windows `argv[0]` treats the
+    backslashes as ordinary characters, finds no separator, and falls back - which
+    is what reddened ubuntu and macOS while Windows passed. `PureWindowsPath`
+    accepts forward and backward slashes both, so one call is correct for either
+    shape, whoever is running it. The cost is a POSIX filename that genuinely contains a backslash,
+    which resolves to no known launcher and takes the same safe fallback as any
+    other unrecognized name; this is display text with a default, so that is a
+    non-event rather than a trade.
     """
     raw = sys.argv[0] if argv0 is None else argv0
-    stem = Path(raw).stem if raw else ""
+    stem = PureWindowsPath(raw).stem if raw else ""
     return stem if stem and stem in names else default
 
 
