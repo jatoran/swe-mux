@@ -296,6 +296,15 @@ async def decide_observation_request(request: web.Request) -> web.Response:
         ),
         "seed_text": prompt,
     }
+    # The requester's model, if it asked for one. Approving a card that says "on
+    # opus" has to start an opus session: a field the approval drops is worse than
+    # one it never accepted, because the human has already agreed to it. It was
+    # validated against this backend when the request was drafted, and is
+    # validated again by the spawn contract below - a Project whose default
+    # harness changed in between refuses here rather than spawning something else.
+    model = str(body.get("model") or spawn_request.get("model") or "")
+    if model:
+        spawn_body["model"] = model
     name = str(body.get("name") or spawn_request.get("name") or "")
     if name:
         spawn_body["name"] = name

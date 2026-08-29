@@ -11,7 +11,8 @@ There is no `observations.open` command, Project-menu entry, or mounted Observat
 
 ## Current data model
 
-- A typed spawn item has `kind: "spawn_request"`, a stable id, creation time, calling-session provenance, requested prompt/backend/name/cwd, and `pending | approved | dismissed` status.
+- A typed spawn item has `kind: "spawn_request"`, a stable id, creation time, calling-session provenance, requested prompt/backend/model/name/cwd, and `pending | approved | dismissed` status.
+  The stored fields are a **closed allowlist** (`_REQUEST_STRING_FIELDS`), which is the reason `model` had to be added to it explicitly: a field the writer sets but the filter does not know survives being written and then vanishes on the way back out, so the card would show no model and the approval would spawn an ordinary session with nothing anywhere reporting the difference.
 - A drafted control item has `kind: "control_request"` (Phase 7.6), a stable id, creation time, the `action` (`interrupt` | `end_session`), the target session id and name, an optional reason, calling-session provenance, and the same `pending | approved | dismissed` status. It is inert - it started nothing.
 - The file is bounded to 500 items and each legacy summary body is bounded to 2,000 characters.
 - Missing and malformed files remain distinct.

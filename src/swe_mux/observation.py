@@ -19,6 +19,7 @@ from .harness import (
     Backend,
     descriptor,
     is_agent_harness,
+    model_agreement,
     native_id_matches,
     reports_lifecycle_hooks,
 )
@@ -266,9 +267,44 @@ _ASYNC_AGENT_ID = re.compile(r"agentId:\s*([A-Za-z0-9_-]+)")
 _TASK_NOTIFICATION_AGENT = re.compile(r"<summary>\s*Agent\b")
 
 
+def _note_model_divergence(session: Session) -> None:
+    """Log, once, when a session is not running the model its launch asked for.
+
+    The read surfaces already answer this on demand (`model_status` on
+    `get_session`), and this is deliberately not a second copy of that judgement:
+    it is the operator's channel for the case where nobody thought to look. A
+    session spawned on `opus` that has quietly been answering on something else
+    costs money and quality with nothing on screen to say so.
+
+    Once per observed model rather than once per session: a mid-conversation model
+    switch is a new fact and worth a new line, while an observation update every
+    few seconds is not.
+    """
+    record = session.record
+    requested = record.model_requested or ""
+    observed = record.model or ""
+    if not requested or not observed or session.model_divergence_noted == observed:
+        return
+    if model_agreement(record.backend, requested, record.provider, observed) != "divergent":
+        return
+    session.model_divergence_noted = observed
+    log.warning(
+        "session_model_divergent session_id=%s backend=%s requested=%s observed=%s provider=%s",
+        record.id,
+        record.backend,
+        requested,
+        observed,
+        record.provider or "",
+    )
+
+
 def _publish_update(session: Session) -> None:
     if getattr(session, "observation_replay", False):
         return
+    # Here rather than at each of the five sites that assign `record.model`: this
+    # is the one funnel every one of them passes through on its way out, so a new
+    # measurement source cannot arrive without the check coming with it.
+    _note_model_divergence(session)
     publish = getattr(session, "publish_update", None)
     if callable(publish):
         publish()

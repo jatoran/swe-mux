@@ -322,6 +322,7 @@ markers = [
   "live_mcp: drives an isolated daemon on an ephemeral port and a real agent's session through the /mcp wire",
   "live_edge_tts: sends a fixed non-sensitive sentence to the unofficial Microsoft Edge TTS service",
   "live_daemon: starts a real daemon on an ephemeral port and drives a shell session end to end",
+  "live_model_flag: runs each installed agent CLI to re-verify its declared model flag and listing",
   "conpty: real Windows ConPTY integration test; spawns a live shell (Windows-only)",
 ]
 

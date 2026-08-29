@@ -5051,6 +5051,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .observation-request.done{opacity:.6}
 .observation-request-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:9px}
 .observation-request-tag{padding:1px 6px;border:1px solid color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber)}
+.observation-request-model{color:var(--text)}
 .observation-request-status{margin-left:auto}
 .observation-request-reason{margin:0;color:var(--muted)}
 .observation-request-prompt{margin:0;max-height:150px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.4}

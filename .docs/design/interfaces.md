@@ -900,6 +900,7 @@ A client reading an unrecognised `kind` treats it as `"message"`, which is the s
 had before the field existed.
 `/queue/mailbox` is an application-wide view over the same message rows, partitioned by authorship rather than inbox/outbox direction and optionally filtered by Project or target session before its result limit (`features/agent-messaging.md`).
 Its view also carries a `spawn_requests` list and, since Phase 7.6, a `control_requests` list of drafted interrupt/end approvals awaiting a human, each sorted newest-first and bounded.
+A spawn row carries `model` (`''` when the request named none), because approving is agreeing to it.
 It backs the **fleet queue** surface; the route keeps its original name because renaming a daemon path for a UI rename would be a breaking change bought with nothing.
 
 ## Clipboard history
@@ -1164,6 +1165,10 @@ The request's model **replaces** any the global harness arguments or the launch 
 rather than joining it, because two `--model` flags on one command line is a per-CLI coin
 toss (`features/launch-profiles.md`).
 The refusal is a 400, not a session that starts and dies with the flag echoed back at it.
+The resolved value is retained on the session record as `model_requested` and published in
+its snapshot, which is what `model_status` on the MCP session reads (`features/mux-mcp.md`)
+- the argv is not a readable answer to "what did this launch ask for", and re-parsing one to
+recover a field is a derivation that goes wrong quietly.
 
 `stage_text` is the stage-without-send counterpart, mutually exclusive with `seed_text`.
 The daemon spawns the session, waits up to 15 s for it to read `idle` (a fresh Claude
@@ -2432,8 +2437,10 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
-The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, `watch_session`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
+The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, `list_models`, `watch_session`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
 The write tools are `notify`, `revoke_message`, `request_spawn`, `run_action`, and the two Phase 7.6 session-control tools `interrupt` and `end_session`.
+`request_spawn` takes an optional `model` in the target harness's own spelling; `list_models` answers what that harness has on this machine by running its own listing command, and reports having no such command apart from having no models (`features/backends.md`).
+A session that was launched on a model carries `model_requested` and `model_status` (`agreed` | `divergent` | `pending` | `unverifiable`) on `get_session` and `list_sessions`; both keys are absent for a session that named none, so a caller that never asked is never handed a verdict.
 `notify(dry_run=true)` runs every bound and returns the same verdict - including `target_delivery` and `would_arm` - having staged nothing and spent no budget, so an unreachable peer is chosen rather than discovered after the item is armed.
 `revoke_message` cancels one still-undelivered message as `revoked`, refusing with `unknown_message` when the caller is not its attributed sender and `not_revocable` once it has left the queue.
 Each takes a `project` argument selecting the scope it answers within: omitted (or `self`) is the caller's own Project, `fleet` is every Project, and a Project name or id is that one.
