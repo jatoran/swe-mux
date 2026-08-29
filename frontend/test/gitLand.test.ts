@@ -3,12 +3,14 @@ import test from 'node:test'
 import {
   formatDuration,
   isActiveLand,
+  blockedVerifyWorktrees,
   landAttentionRow,
   landGateNote,
   landHistoryOrder,
   landKindNote,
   landedAtByBranch,
   landQueueOrder,
+  landRequestMessage,
   landStateLabel,
   landStateTone,
   landingSummary,
@@ -388,6 +390,66 @@ test('a gate that will run on the Project’s standing authority does not open t
   assert.equal(foreign.opensByDefault, true)
   assert.equal(foreign.gate, 'verification not approved')
   assert.equal(foreign.gateTone, 'warn')
+})
+
+test('a refusal the trunk has since absorbed stops speaking for its branch', () => {
+  // Until this, a refusal was answered only by a *later request for the same branch*,
+  // so a branch landed by hand - which is exactly what a fast-forward refusal tells its
+  // author to do - left the strip reporting a block over work already on the trunk.
+  const standing = parseLandQueue({
+    requests: [{
+      id: 'lnd_1', branch: 'worktree-alpha', state: 'refused', created_at: 10,
+      worktree_root: 'D:/w/alpha', reason: 'the fast-forward was refused',
+    }],
+  }).requests
+  assert.equal(landAttentionRow(standing)?.id, 'lnd_1')
+
+  const absorbed = parseLandQueue({
+    requests: [{
+      id: 'lnd_1', branch: 'worktree-alpha', state: 'refused', created_at: 10,
+      worktree_root: 'D:/w/alpha', reason: 'the fast-forward was refused',
+      absorbed_by_trunk: true,
+    }],
+  }).requests
+  assert.equal(landAttentionRow(absorbed), null)
+  // And it stops offering an approval that would clear a block over work already landed.
+  assert.deepEqual(blockedVerifyWorktrees(parseLandQueue({
+    requests: [{
+      id: 'lnd_2', branch: 'worktree-alpha', state: 'refused', created_at: 10,
+      worktree_root: 'D:/w/alpha', detail: { code: 'unapproved' }, absorbed_by_trunk: true,
+    }],
+  }).requests, 'D:/repo'), [])
+  // Absent reads as "not absorbed", which leaves the refusal standing - the direction
+  // that costs a second look rather than hiding a live block.
+  assert.equal(parseLandQueue({ requests: [{ id: 'a', state: 'refused' }] })
+    .requests[0].absorbedByTrunk, false)
+})
+
+test('the message a row carries is the daemon’s own, read back off its trail', () => {
+  // Never composed in the browser: the queue already writes one bounded, template-only
+  // explanation per outcome, and a second author of the same message is exactly what
+  // these templates exist to prevent.
+  assert.equal(
+    landRequestMessage({ events: [
+      { step: 'request', outcome: 'queued', detail: {} },
+      { step: 'request', outcome: 'refused', detail: { body: 'The land was refused: x.' } },
+    ] }),
+    'The land was refused: x.',
+  )
+  // The newest wins, so a retried request reads as its latest outcome.
+  assert.equal(
+    landRequestMessage({ events: [
+      { detail: { body: 'older' } },
+      { detail: { body: 'newer' } },
+    ] }),
+    'newer',
+  )
+  // A trail written by a build that did not record the body answers '' rather than
+  // inventing one, which is what lets the row say so instead of showing a blank box.
+  assert.equal(landRequestMessage({ events: [{ detail: { armed: true } }] }), '')
+  assert.equal(landRequestMessage({ events: [{ detail: { body: '   ' } }] }), '')
+  assert.equal(landRequestMessage({}), '')
+  assert.equal(landRequestMessage(null), '')
 })
 
 test('an approval reports the lands it re-queued, and says nothing when it queued none', () => {

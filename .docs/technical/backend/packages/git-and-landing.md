@@ -121,6 +121,8 @@ It owns whether an unapproved gate may run anyway (`_verify_grant` + `_verify_pr
 A resume is a **new request** naming the refused one (`request(resumed_from=...)`), because `refused` is terminal and the trail must go on saying the refusal happened.
 `resumed_from` skips exactly two checks - the per-origin budget and the `draft` grant - because both decide whether a *new agent* request should start and a resume is neither new nor the agent's; every standing permission and precondition is re-read.
 Rows are found by **Project id**: a row stores the trunk root git resolved, which is not always the string the Project was registered under.
+And `_mark_absorbed`, which answers - per reading, never written back - whether the trunk already contains the tip a standing refusal asked to land, so a branch landed outside the queue stops leaving a live-looking block behind.
+Both terminal events record the `body` they composed, because an operator's request has no origin session and `_solicited_reply` drops the message for one.
 
 **Not:** the precondition reads (`land_preconditions.py`), the allowlist itself (`land_classify.py`), durability and serialization (`land_store.py`), the gate's approval store (`worktree_verify.py`), where the gate's bytes came from (`verify_provenance.py`), how progress is parsed (`verify_progress.py`), delivery (an injected `PromptQueueService.enqueue`), or HTTP.
 

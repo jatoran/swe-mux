@@ -92,6 +92,12 @@ ANSWERING_STATES = ("landed", "verified", "already_landed", "handed_back", "refu
 #: hands the browser, so the daemon never resumes something the strip stopped drawing.
 RESUME_SCAN_LIMIT = 200
 
+#: How many distinct branch tips one queue reading asks git about. A standing refusal
+#: nothing else has answered is rare - none or one on an ordinary Project - and this
+#: reading happens on the Git tab's poll, so the bound is what keeps a pathological
+#: history from turning a list into a git storm.
+MAX_ABSORBED_PROBES = 8
+
 #: Armed replies one land request may spend. One request has exactly one outcome, so
 #: one bounded answer is the whole of what a `request_land` consented to; a second
 #: message to the same session would be an unsolicited write wearing this authority.
@@ -1361,9 +1367,8 @@ class LandQueueService:
         daemon-authored answer to a request this very session made.
         """
         payload = dict(detail or {})
-        message_id, armed, arming_reason = await self._solicited_reply(
-            row, self._refused_body(row, reason=reason, detail=payload)
-        )
+        body = self._refused_body(row, reason=reason, detail=payload)
+        message_id, armed, arming_reason = await self._solicited_reply(row, body)
         updated = await self._store.transition(
             row["id"],
             expect=("queued", "waiting", "reconciling", "verifying", "landing"),
@@ -1381,6 +1386,13 @@ class LandQueueService:
                     "message_id": message_id,
                     "armed": armed,
                     "arming_reason": arming_reason,
+                    # The text itself, not just a pointer to it. An operator's own Land
+                    # has no origin session, so `_solicited_reply` composes this and
+                    # drops it on the floor - the one request whose author is standing
+                    # in front of the queue was the only one that never got the
+                    # explanation. Recording it also makes the trail say what was
+                    # *said*, where before it said only that something was.
+                    "body": body,
                 },
             ),
             now=self._clock(),
@@ -1429,6 +1441,10 @@ class LandQueueService:
                     # it read exactly like one that arrived (`land-queue.md`).
                     "armed": armed,
                     "arming_reason": arming_reason,
+                    # The same rule the refusal event carries: the trail records what
+                    # was said, so the message is readable from the row whether or not
+                    # it ever reached a session.
+                    "body": body,
                 },
             ),
             now=self._clock(),
@@ -1691,6 +1707,19 @@ class LandQueueService:
                 ]
             )
         else:
+            # The two object ids the reader needs and would otherwise reconstruct by
+            # hand. A fast-forward refusal means the trunk moved past the base this
+            # request was enqueued on, and "Diverging branches can't be fast-forwarded"
+            # says none of that; with these it reads as "you were at X, trunk is at Y,
+            # merge the trunk and ask again" - which is the whole of the handoff.
+            requested = str(row.get("requested_oid") or "")
+            trunk_before = str(detail.get("trunk_before") or "")
+            if requested or trunk_before:
+                if requested:
+                    lines.append(f"Your branch when this was requested: `{requested[:12]}`")
+                if trunk_before:
+                    lines.append(f"The trunk when it ran: `{trunk_before[:12]}`")
+                lines.append("")
             lines.append(
                 f"Nothing was committed, merged, or left behind. Address the cause above "
                 f"and request the {what} again."
@@ -1736,6 +1765,77 @@ class LandQueueService:
         return "\n".join(lines)
 
     # -- collaborators --------------------------------------------------------
+
+    async def _mark_absorbed(
+        self, requests: list[dict[str, Any]], project_root: str | None
+    ) -> None:
+        """Say which unanswered refusals the trunk has since absorbed anyway.
+
+        A refusal stops speaking for its branch once a *later request for that branch*
+        got an answer, and until now that was the only thing that could answer one. So a
+        branch landed **outside** the queue - by hand, which is what a fast-forward
+        refusal tells its author to go and do - left its refusal standing forever, and
+        every reader after that saw a live block over work that was already on the
+        trunk. Observed 2026-08-29 on `worktree-spawn-model-selection`, whose refusal
+        went on describing a divergence the operator had resolved by hand days earlier.
+
+        The missing answer is one git question - *does the trunk contain the tip this
+        request asked to land* - and it is asked here rather than written to the row.
+        **Nothing is stored.** `refused` is terminal and the trail is an audit that must
+        go on saying the refusal happened; what was ever wrong is which row *speaks* for
+        the queue, so the fix belongs to the reading, exactly as the supersession rule
+        it extends does. A `closed` column would be a second writer's opinion about a
+        terminal row.
+
+        It is asked of `requested_oid`, the tip the request carried, rather than of the
+        branch as it stands: a branch that has since gained commits needs a new request
+        anyway, and "the trunk contains what this asked for" is the precise thing that
+        makes *this* refusal spent.
+
+        Bounded to `MAX_ABSORBED_PROBES` distinct tips, newest first, over rows nothing
+        else has answered - in practice none or one - so the Git tab's poll does not pay
+        for a git call per row.
+        """
+        for row in requests:
+            row["absorbed_by_trunk"] = False
+        if not project_root:
+            return
+        answered: dict[tuple[str, str], float] = {}
+        for row in requests:
+            if row["state"] in ANSWERING_STATES:
+                key = (row["project_root"], row["branch"])
+                answered[key] = max(answered.get(key, 0.0), float(row["created_at"]))
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in requests:
+            if row["state"] not in ("refused", "handed_back"):
+                continue
+            key = (row["project_root"], row["branch"])
+            if answered.get(key, 0.0) > float(row["created_at"]):
+                continue
+            oid = str(row.get("requested_oid") or "")
+            if not oid or oid in seen:
+                continue
+            seen.add(oid)
+            candidates.append(row)
+            if len(candidates) >= MAX_ABSORBED_PROBES:
+                break
+        if not candidates:
+            return
+        trunk_head = await self._head(project_root)
+        if not trunk_head:
+            return
+        from .git_monitor import read_is_ancestor
+
+        for row in candidates:
+            oid = str(row["requested_oid"])
+            # `None` is "the question could not be asked", which is not "no" - it leaves
+            # the refusal standing, which is the direction that costs a reader a second
+            # look rather than a hidden block.
+            if await read_is_ancestor(project_root, oid, trunk_head) is True:
+                for sibling in requests:
+                    if str(sibling.get("requested_oid") or "") == oid:
+                        sibling["absorbed_by_trunk"] = True
 
     async def _head(self, cwd: str) -> str:
         from .git_monitor import read_git
@@ -1887,6 +1987,7 @@ class LandQueueService:
         # operator is the authority the grant defers to - but the *sweep* stops dead on
         # the install switch, so a queue with that off accepts requests and then never
         # advances one. Reporting it is what lets the panel say so instead of spinning.
+        await self._mark_absorbed(requests, project_root)
         installed = self._installed_enabled()
         project_enabled = False
         grant = "draft"

@@ -10,6 +10,7 @@ import {
   type LandQueue,
   type LandRequest,
 } from './gitLand'
+import { LandMessage } from './LandMessage'
 import { landErrorText } from './landState'
 import { normalizePath, shortSha } from './gitWorktrees'
 import type { Project } from './types'
@@ -124,6 +125,18 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
         {last.paths.slice(0, 12).map(path => <li key={path}><code>{path}</code></li>)}
         {last.paths.length > 12 && <li><small>and {last.paths.length - 12} more</small></li>}
       </ul>}
+      {/* Answered by the trunk rather than by the queue. A fast-forward refusal tells its
+          author to merge and land by hand, and doing so left this row saying a block
+          still stood over work the trunk already had. */}
+      {last.absorbedByTrunk && <p class="git-land-absorbed">
+        The trunk already contains what this asked to land.
+      </p>}
+      {/* The reason line is one sentence; this is the whole message the daemon wrote for
+          whoever has to act on it. A manual Land has no agent session to send it to, so
+          without this the requester standing right here was the only one who never got
+          the explanation. */}
+      {(last.state === 'refused' || last.state === 'handed_back')
+        && <LandMessage requestId={last.id} />}
     </div>}
   </section>
 }

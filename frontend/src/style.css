@@ -5269,6 +5269,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    change it reports is that the operator is told the wait ended instead of discovering
    a new row in the queue below. */
 .git-land-resumed{margin:0;color:var(--green);font-size:10px;overflow-wrap:anywhere}
+/* Answered by the trunk rather than by the queue: the branch landed some other way, so
+   the row keeps its record and stops reading as something still waiting on someone. */
+.git-land-absorbed{margin:0;color:var(--muted);font-size:10px;overflow-wrap:anywhere}
+/* The daemon's own message about how a request ended, read back off the trail. Collapsed
+   by default because the one-line reason above it is what a glance needs; the body is
+   what somebody hands to an agent. */
+.git-land-message{margin:0;font-size:10px}
+.git-land-message>summary{cursor:pointer;color:var(--muted)}
+.git-land-message>div{display:flex;gap:6px;align-items:center;margin:4px 0}
 /* The setup prompt for another repository. Collapsed by default and taller than the
    approval `pre` when open, because this one is read rather than glanced at: it is an
    instruction being handed to an agent that will write somebody's gate. */
