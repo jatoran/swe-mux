@@ -42,7 +42,7 @@ Each is checkable from the repository, which is the only reason any of them is h
 
 1. **One normalized view across agent CLIs.** One status vocabulary, one transcript reader, one history search, one account switcher, over Claude Code, Codex, opencode and the rest of the registry.
 2. **Deterministic evidence rather than agent self-report.** Tier 0 facts hashed on the exact bytes written, commit provenance split into committer and contributor, model-free detectors, and a durable status ledger you can read hours later.
-3. **Safe serialized landing.** Reconcile, run the verification command whose exact bytes a human approved, fast-forward only, one branch at a time. An agent cannot approve the gate its own land runs.
+3. **Safe serialized landing.** Reconcile, run the repository's verification command, fast-forward only, one branch at a time. An agent can propose that command but never authorise it: approving bytes is a human act, and a Project that lets its own agents' edits run still refuses a gate any other author put on the branch.
 4. **Full phone access over your own tailnet.** An installable PWA with no relay and no swe-mux login: terminals, git review, approvals, and local speech-to-text.
 5. **Durable terminals when supervision is enabled.** A separate supervisor process can own the pseudoterminals so sessions outlive a daemon restart and a full app redeploy. It ships **off**; see the honest phrasing below.
 
@@ -137,7 +137,8 @@ Never write "fully local" unqualified.
 
 > Nothing in the control plane runs on a Project that did not opt in.
 > Automations are per-Project opt-in and every one of them ships off, with a single exception (`session_control`, a permission gate that reads nothing, runs nothing, and spends nothing).
-> The land queue needs four separate things before an agent can trigger one: the install-wide switch, the Project's opt-in, a `land_grant` raised from its default of `draft`, and a verification command whose exact bytes a human approved.
+> The land queue needs four separate things before an agent can trigger one: the install-wide switch, the Project's opt-in, a `land_grant` raised from its default of `draft`, and a verification command.
+> A command a human has not approved runs only when this machine authored it and the Project's `land_verify_grant` is left at its default; one another author put on the branch presents its bytes for approval before anything runs it.
 > The model-backed capabilities - the scan timeline, the attention observers, the assistant - and read-aloud all ship off.
 
 A draft that describes the control plane as running is describing a configured install, not a fresh one.

@@ -85,7 +85,13 @@ function AgentAuthority({ busy, onError, store }: {
       field: 'land_grant', setting: 'land_grant',
       label: 'Land a branch onto the trunk',
       draft: 'A human approves each one', granted: 'Starts the pipeline directly',
-      note: 'Needs the Land queue opt-in above. Either way the pipeline is fast-forward-only and runs only the verification command you approved.',
+      note: 'Needs the Land queue opt-in above. Either way the pipeline is fast-forward-only.',
+    },
+    {
+      field: 'land_verify_grant', setting: 'land_verify_grant',
+      label: 'Change the verification command',
+      draft: 'You approve the bytes each time', granted: 'Edits made here just run',
+      note: 'Granted by default. Granted still only covers bytes written on this machine — an uncommitted edit, the trunk’s own copy, or a branch commit by your git identity. A gate edited by anyone else presents for approval whatever this says, which is what keeps landing a contributor’s branch from running their script.',
     },
     {
       field: 'interject_grant', setting: 'interject_grant',

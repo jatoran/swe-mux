@@ -132,6 +132,11 @@ export type LandQueue = {
    *  without it; the operator is the authority the opt-in defers to. */
   projectEnabled: boolean
   agentGrant: LandGrant
+  /** Whether an agent's own edit to the gate may run without a human reading its bytes.
+   *  `granted` by default. Its own field rather than a level of `agentGrant` because the
+   *  two answer different questions: who may *start* a land, and what the daemon may
+   *  *execute* while running one. */
+  verifyGrant: LandGrant
 }
 
 /** What a byte-identical run last did, when one has passed. Never a prediction of a
@@ -161,6 +166,24 @@ export type LandVerifyCommand = {
   scriptName: string
   scriptPresent: boolean
   plan: LandVerifyPlan | null
+  /** This Project's standing authority over gate edits, echoed so the strip can tell
+   *  "nobody approved this" apart from "nobody needs to". */
+  verifyGrant: LandGrant
+  /** Where these bytes came from, read only when they are unapproved. `null` when the
+   *  question was not asked, which is not the same as an unknown answer. */
+  provenance: LandVerifyProvenance | null
+  /** Whether the gate would run as things stand. `approved || runsWithoutApproval` is
+   *  the question the strip actually has, and neither half answers it alone. */
+  runsWithoutApproval: boolean
+}
+
+/** Where the bytes that would run came from. `trusted` is this verdict's own answer and
+ *  is not permission by itself — the Project's `verifyGrant` decides separately. */
+export type LandVerifyProvenance = {
+  verdict: string
+  trusted: boolean
+  reason: string
+  authors: string[]
 }
 
 function text(value: unknown): string {
@@ -283,6 +306,10 @@ export function parseLandQueue(raw: unknown): LandQueue {
     // would draw a gate over a queue that is running fine. Absent defaults to on, the
     // way the daemon's own field does.
     installedEnabled: true, projectEnabled: false, agentGrant: 'draft',
+    // The restrictive value, unlike `installedEnabled` above. An unparseable payload
+    // must not draw "agents may change what verification runs" over a Project that says
+    // otherwise: the mistake this one makes has to be the one that overstates the gate.
+    verifyGrant: 'draft',
   }
   if (!raw || typeof raw !== 'object') return empty
   const body = raw as Record<string, unknown>
@@ -295,6 +322,7 @@ export function parseLandQueue(raw: unknown): LandQueue {
     installedEnabled: body.installed_enabled !== false,
     projectEnabled: body.project_enabled === true,
     agentGrant: body.agent_grant === 'granted' ? 'granted' : 'draft',
+    verifyGrant: body.verify_grant === 'granted' ? 'granted' : 'draft',
   }
 }
 
@@ -318,6 +346,7 @@ export function parseLandVerifyCommand(raw: unknown): LandVerifyCommand {
     approved: false, previouslyApproved: false, approvedSource: '', currentSource: '',
     configCommand: '', configRevision: 'missing', configStatus: 'missing', configPath: '',
     scriptName: '.worktree-verify', scriptPresent: false, plan: null,
+    verifyGrant: 'draft', provenance: null, runsWithoutApproval: false,
   }
   if (!raw || typeof raw !== 'object') return empty
   const body = raw as Record<string, unknown>
@@ -339,6 +368,26 @@ export function parseLandVerifyCommand(raw: unknown): LandVerifyCommand {
     scriptName: text(body.script_name) || '.worktree-verify',
     scriptPresent: body.script_present === true,
     plan: parseVerifyPlan(body.plan),
+    verifyGrant: body.verify_grant === 'granted' ? 'granted' : 'draft',
+    provenance: parseVerifyProvenance(body.provenance),
+    runsWithoutApproval: body.runs_without_approval === true,
+  }
+}
+
+function parseVerifyProvenance(raw: unknown): LandVerifyProvenance | null {
+  if (!raw || typeof raw !== 'object') return null
+  const body = raw as Record<string, unknown>
+  const verdict = text(body.verdict)
+  if (!verdict) return null
+  return {
+    verdict,
+    // Only an explicit `true`. A payload that lost the field must read as untrusted,
+    // which is the same direction the daemon's own fail-closed reads take.
+    trusted: body.trusted === true,
+    reason: text(body.reason),
+    authors: Array.isArray(body.authors)
+      ? body.authors.filter((item): item is string => typeof item === 'string')
+      : [],
   }
 }
 
@@ -698,7 +747,14 @@ export function landingSummary(
   // which is a resting state rather than a stuck one, and is what keeps the strip folded
   // there (see `opensByDefault`). Unapproved bytes mean somebody wrote a gate and the queue
   // is waiting on a human to read it, which is the case this default exists for.
-  const gateAwaitingApproval = gate !== null && gate.configured && !gate.approved
+  // ...and only when nothing else will let it run. A Project that lets its agents change
+  // the gate turns an unapproved-but-locally-authored script into an ordinary state
+  // nobody has to act on, and unfolding the strip over it would report an emergency the
+  // operator already answered by granting the authority. `runsWithoutApproval` is the
+  // daemon's own verdict over these exact bytes rather than the switch alone, so a
+  // contributor's edit still opens the strip in a Project that grants it.
+  const gateAwaitingApproval =
+    gate !== null && gate.configured && !gate.approved && !gate.runsWithoutApproval
   const blockedWorktrees = blockedVerifyWorktrees(queue?.requests || [], projectRoot)
     .slice(0, MAX_BLOCKED_GATES)
   const opensByDefault = installStopped || gateAwaitingApproval || blockedWorktrees.length > 0
@@ -713,11 +769,15 @@ export function landingSummary(
   const baseGateText = gate === null ? 'verification unread'
     : !gate.configured ? 'no verification command'
       : gate.approved ? `verification approved · ${gate.display}`
-        : 'verification not approved'
+        // Named for the authority that will actually run it rather than for the approval
+        // it does not have. "not approved" over a gate that is about to run is the same
+        // class of lie as "approved" over one that is not.
+        : gate.runsWithoutApproval ? `verification authorised · ${gate.display}`
+          : 'verification not approved'
   const gateText = blockedNote ? `${baseGateText} · ${blockedNote}` : baseGateText
   const gateTone: 'ok' | 'warn' | 'idle' = gate === null ? 'idle'
     : blockedWorktrees.length ? 'warn'
-      : gate.configured && gate.approved ? 'ok' : 'warn'
+      : gate.configured && (gate.approved || gate.runsWithoutApproval) ? 'ok' : 'warn'
 
   const active = landQueueOrder(queue?.requests || [])
   const running = active.find(request => landStateTone(request.state) === 'busy') || null

@@ -125,6 +125,7 @@ def build_service(
     busy: tuple[str, ...] = (),
     config: Any = None,
     grant: str = "granted",
+    verify_grant: str = "draft",
     automations: set[str] | None = None,
     session_runs: dict[str, str] | None = None,
     facts: list[dict[str, Any]] | None = None,
@@ -159,6 +160,10 @@ def build_service(
         config=config or FakeConfig(),
         automation_gate=automation_gate,
         grant_field=lambda _root: grant,
+        # `draft` by default so every pre-existing test keeps asserting Phase 14's
+        # approve-every-digest behaviour; the tests that mean the new authority ask
+        # for it by name.
+        verify_grant_field=lambda _root: verify_grant,
         project_values=project_values,
         comparison_ref=lambda _root: _resolved("main"),
         busy_sessions=busy_sessions,
@@ -356,6 +361,128 @@ async def test_editing_the_verification_script_un_approves_it(
     )
     assert result.status == "unapproved"
     assert "changed since it was approved" in (result.error or "")
+
+
+async def test_a_granted_project_runs_a_gate_its_own_agents_edited(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The whole point of `land_verify_grant`: a branch that edits the gate still lands.
+
+    Nothing here is approved. The bytes were written in this checkout by this
+    repository's own identity, and that plus the Project's standing authority is what
+    lets them run - which is the case that used to stall every parallel wave that
+    touched the script.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk, verify_grant="granted")
+    try:
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        assert info.approved is False
+        row = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+
+        events = await store.events(row["id"])
+        bypassed = [item for item in events if item["outcome"] == "approval_bypassed"]
+        assert len(bypassed) == 1
+        assert bypassed[0]["detail"]["verdict"] == "local_author"
+        # The trail's half of the trade: what ran is readable afterwards, because it
+        # was never read before.
+        assert "edited gate" in bypassed[0]["detail"]["diff"]
+        # And the run says which authority carried it, rather than leaving a reader to
+        # reconstruct that from a grant that may since have moved.
+        verify = [
+            item
+            for item in events
+            if item["step"] == "verify" and item["outcome"] == "passed"
+        ]
+        assert verify[0]["detail"]["approval"] == "bypassed"
+        # Nothing durable was granted. Lowering the authority takes the permission away
+        # completely rather than leaving an auto-approved digest standing.
+        assert approvals.ever_approved(str(trunk)) is False
+    finally:
+        store.close()
+
+
+async def test_the_same_branch_is_refused_when_the_project_approves_each_digest(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The switch is load-bearing, not decoration."""
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, _ = build_service(tmp_path, trunk, queue=queue, verify_grant="draft")
+    try:
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin_session_id="sess_1",
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+        refused = [
+            item
+            for item in await store.events(row["id"])
+            if item["outcome"] == "refused"
+        ]
+        assert refused[0]["detail"]["code"] == "unapproved"
+        assert "approves the gate's bytes individually" in queue.messages[0]["body"]
+    finally:
+        store.close()
+
+
+async def test_a_gate_someone_else_wrote_is_refused_even_where_agents_may_edit_it(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The reason the grant alone is not the whole authority.
+
+    A branch can arrive from a contributor now, and its `.worktree-verify` is branch
+    content the daemon would otherwise execute unattended. The Project says agents may
+    change the gate; the provenance says these bytes are not its agents'.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    script = worktree / ".worktree-verify"
+    script.write_text(
+        "#!/usr/bin/env bash\necho 'theirs'\nexit 0\n", encoding="utf-8", newline="\n"
+    )
+    script.chmod(0o755)
+    git(worktree, "add", ".worktree-verify")
+    git(
+        worktree,
+        "-c",
+        "user.email=stranger@example.invalid",
+        "-c",
+        "user.name=Stranger",
+        "commit",
+        "-m",
+        "helpful change",
+    )
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, _ = build_service(tmp_path, trunk, queue=queue, verify_grant="granted")
+    try:
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin_session_id="sess_1",
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+        events = await store.events(row["id"])
+        assert not [item for item in events if item["outcome"] == "approval_bypassed"]
+        refused = [item for item in events if item["outcome"] == "refused"]
+        assert refused[0]["detail"]["verify_provenance"] == "foreign_author"
+        # A refusal inside a Project that grants the authority is unreadable without
+        # saying which of the two decided it.
+        body = queue.messages[0]["body"]
+        assert "does let agents change the gate" in body
+        assert "stranger@example.invalid" in body
+    finally:
+        store.close()
 
 
 async def test_a_config_command_and_a_script_are_separate_authorities(

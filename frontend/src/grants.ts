@@ -83,6 +83,7 @@ export const GRANTS = {
   // a permission away.
   'project.scanTimelineAutoArm': { scope: 'project', kind: 'value', value: true },
   'project.landGrant': { scope: 'project', kind: 'value', value: 'granted' },
+  'project.landVerifyGrant': { scope: 'project', kind: 'value', value: 'granted' },
   'project.sessionControlGrant': { scope: 'project', kind: 'value', value: 'granted' },
   'project.spawnGrant': { scope: 'project', kind: 'value', value: 'granted' },
   'project.interjectGrant': { scope: 'project', kind: 'value', value: 'granted' },

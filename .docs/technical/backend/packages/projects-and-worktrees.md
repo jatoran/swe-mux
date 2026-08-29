@@ -155,7 +155,24 @@ One slot was wrong for the thing being approved: the gate is fingerprinted from 
 Only the newest approval retains its bytes, because the snapshot answers "what changed since you approved" and the file is read on every gate resolution.
 A single-slot trust file written by an older daemon reads as a one-element set and is **never rewritten on read**; the next approval carries that grant forward.
 
-**Not:** execution mechanics (`worktree_exec.py`), when a gate runs (`land_queue.py`), how progress is read (`verify_progress.py`), or HTTP.
+A run may also be authorised without an approval, and this module owns the *shape* of that rather than the policy: `run_worktree_verify(bypass_approval=...)` is a parameter the caller must pass explicitly, the store is never written on that path, and the result records which authority carried it (`approval: "approved" | "bypassed"`).
+Keeping the policy out is deliberate - this module owns what "approved" means and must not also own what widens it, and a caller that has to pass the flag cannot acquire it by inheriting a default.
+`approval_diff` renders the bounded approved-to-current diff a bypassed run owes its audit trail.
+
+**Not:** execution mechanics (`worktree_exec.py`), when a gate runs or whether a bypass is permitted (`land_queue.py`), where the bytes came from (`verify_provenance.py`), how progress is read (`verify_progress.py`), or HTTP.
+
+### `verify_provenance.py`
+
+Where the bytes a verification gate would run came from, so the land queue can decide whether the Project's standing authority covers them.
+
+Five verdicts, three of them trusted: `project_config` and `uncommitted` (this machine wrote them) and `local_author` (every author who put these bytes here is the repository's configured `user.email` - the commits in `trunk..HEAD` that touched the script, or whoever last touched it in history where the branch did not), against `foreign_author` and `unknown`.
+It fails closed at every step - a git failure answers `unknown`, which is untrusted - because it runs to *widen* authority, and "I could not tell" must never read as "it is fine".
+There is deliberately **no** "the trunk already carries it" verdict: a Project can be a clone of somebody else's repository, where trusting the trunk's own gate by position would execute a stranger's script unattended on the first land.
+The identity is read from the **Project root**, not the checkout under examination, so a worktree cannot nominate its own judge; a repository with no `user.email` trusts no author, which presents every branch edit for approval rather than being an error.
+
+The git reader is injected and every call goes through the shared read-only `--no-optional-locks` seam: a provenance check that took `index.lock` would contend with the agents it is asking about.
+
+**Not:** the Project's authority level (`project_files.project_land_verify_grant`), combining the two (`verify_bypass_allowed`, called from `land_queue.py` and `routes/land.py`), or running anything.
 
 ### `verify_progress.py`
 

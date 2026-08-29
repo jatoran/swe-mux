@@ -198,14 +198,23 @@ because only an editor may take a permission away.
 | `session_control_grant` | `granted` — acts directly | `draft`: a human approves each | `session_control` |
 | `spawn_grant` | `granted` — creates sessions directly | `draft` | `session_control` |
 | `land_grant` | `draft` — a human approves each (unchanged) | — (`granted` raises it) | `land_queue` |
+| `land_verify_grant` | `granted` — gate edits made on this machine run | `draft`: every digest is approved by hand | `land_queue` |
 | `interject_grant` | `granted` — may write mid-turn | `off`: waits for the queue | (delivery readiness) |
 
-The three session-scoped authorities default open; landing a trunk still defaults to the
-inert draft. In every case a malformed or unreadable config resolves to the *narrow* value
-(`draft`/`off`), never to the default - corruption must not widen an explicit lowering.
+The three session-scoped authorities default open; *starting* a land still defaults to the
+inert draft, while what a land is allowed to *execute* defaults open. In every case a
+malformed or unreadable config resolves to the *narrow* value (`draft`/`off`), never to the
+default - corruption must not widen an explicit lowering.
+
+`land_verify_grant` is its own field rather than a level of `land_grant` for a reason that is
+the whole of why it is safe: `land_grant` says who may **start** a land, and this says what the
+daemon may **execute** while running one. Folding them together would have handed the second
+authority to every Project that had already granted the first, silently, on upgrade. Granted, it
+still only covers bytes this machine authored - a gate edited by anyone else presents for
+approval whatever it says (`land-queue.md` § Provenance is the second authority).
 
 `frontend/test/settingTargets.test.ts` holds every grantable Project field to having a control
-here, so a fifth arriving the same way fails a test.
+here, so a sixth arriving the same way fails a test.
 
 ## Grants
 

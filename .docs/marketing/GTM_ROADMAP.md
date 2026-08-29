@@ -49,7 +49,7 @@ Say "installable PWA over your own tailnet with no relay", not "the only one wit
 
 1. **One normalized view across agent CLIs.** One status vocabulary, one transcript reader, one history search, one account switcher, over every harness in the registry.
 2. **Deterministic evidence rather than agent self-report.** Facts hashed on the exact bytes written, commit provenance split into committer and contributor, model-free detectors, and a status ledger readable hours later.
-3. **Safe serialized landing.** Reconcile, run the human-approved verification command, fast-forward only, one branch at a time. An agent cannot approve the gate its own land runs.
+3. **Safe serialized landing.** Reconcile, run the repository's verification command, fast-forward only, one branch at a time. An agent cannot authorise the gate its own land runs.
 4. **Full phone access over your own tailnet.** Terminals, git review, approvals, and local speech-to-text, with no relay and no swe-mux login.
 5. **Durable terminals when supervision is enabled.** A separate supervisor process can own the pseudoterminals so sessions outlive a daemon restart and a full redeploy. It ships off; see § The claim audit.
 
@@ -115,7 +115,7 @@ Recorded so the next audit does not re-derive it.
 ### The rest of the control plane, stated the way the supervisor now is
 
 Automations are per-Project opt-in and ship off.
-The land queue needs the install-wide switch, the Project opt-in, a `land_grant` raised from its default of `draft`, and an approved verification command.
+The land queue needs the install-wide switch, the Project opt-in, a `land_grant` raised from its default of `draft`, and a verification command - approved by a human, or written on this machine in a Project that left `land_verify_grant` at its default.
 The scan timeline, the attention observers, the assistant, and read-aloud all ship off.
 
 Copy implying any of them is on is wrong, and correcting it costs the drafts a real amount of impact.
@@ -152,7 +152,7 @@ The four differences to lead with, because each is checkable in the repository r
 
 1. **Deterministic evidence.** Facts hashed on the exact bytes an agent wrote, commands with their exit class, test output parsed down to the failing set. What the agent did, not what it said it did.
 2. **Commit-level provenance.** Which session and conversation produced a commit, split into committer and contributor, from deterministic capture rather than from the agent's account of its own work.
-3. **Approved landing.** Reconcile, run the verification command whose exact bytes a human approved, fast-forward-only onto trunk, one branch at a time. Fast-forward-only is what makes it safe for a machine: Git refuses it on divergence and refuses to overwrite local changes, so the trunk step cannot lose work by construction. An agent cannot approve the gate its own land runs.
+3. **Approved landing.** Reconcile, run the repository's verification command, fast-forward-only onto trunk, one branch at a time. Fast-forward-only is what makes it safe for a machine: Git refuses it on divergence and refuses to overwrite local changes, so the trunk step cannot lose work by construction. An agent cannot authorise the gate its own land runs: approving bytes is a human act, and the one authority that runs an unapproved gate is the operator's standing decision about their own machine's edits, which never covers a gate another author put on the branch.
 4. **Controlled interruption.** Findings merge into incidents and route by what they cost you to resolve, under a hard daily interrupt budget with an hourly burst limit, and a held-back item stays counted and visible with the reason it was suppressed.
 
 The session-preserving split is a fifth and is **demoted rather than dropped**, for two reasons: it is off by default, and the persistent-runtime story is the one a neighbour most credibly claims.

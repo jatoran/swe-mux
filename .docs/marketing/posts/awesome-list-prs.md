@@ -22,7 +22,7 @@ Nearly every neighbour swe-mux is compared against is already on it - herdr, cla
 
 Entry:
 
-> - [swe-mux](https://github.com/jatoran/swe-mux) - Browser and phone control plane that records what each agent did from the bytes it wrote rather than from its own report, and attributes every commit to the session and conversation that produced it. Adds one status vocabulary across harnesses, a prompt queue, and a land queue that reconciles each finished worktree branch, runs a human-approved verification command, and fast-forwards trunk one branch at a time. An optional supervisor process can own the pseudoterminals so sessions outlive a daemon restart. Windows-first; Claude Code, Codex, opencode, OMP, Pi.
+> - [swe-mux](https://github.com/jatoran/swe-mux) - Browser and phone control plane that records what each agent did from the bytes it wrote rather than from its own report, and attributes every commit to the session and conversation that produced it. Adds one status vocabulary across harnesses, a prompt queue, and a land queue that reconciles each finished worktree branch, runs the repository's own verification command, and fast-forwards trunk one branch at a time. An optional supervisor process can own the pseudoterminals so sessions outlive a daemon restart. Windows-first; Claude Code, Codex, opencode, OMP, Pi.
 
 ---
 
@@ -40,7 +40,7 @@ By far the largest audience of people who run the primary harness.
 
 Entry text for the form:
 
-> Local daemon and web UI that runs many Claude Code sessions as one fleet and records what each one did deterministically: every file write hashed on the bytes actually written, every command with its exit class, and every commit attributed to the session and conversation that produced it, split into committer and contributor. Status per session is read from Claude Code's hooks, the transcript, the PTY, and the CLI's own state into one vocabulary, with every transition kept in a durable ledger, so alerts come from normalized lifecycle events rather than from terminal activity. Agents work in parallel git worktrees and a land queue reconciles each finished branch, runs a verification command whose exact bytes a human approved, and fast-forwards trunk one branch at a time; an agent cannot approve the gate its own land runs. An optional supervisor process can own the pseudoterminals so sessions outlive a daemon restart. Runs on the user's own machine with no vendor backend, an installable phone client over Tailscale, and speech-to-text decoded on the host.
+> Local daemon and web UI that runs many Claude Code sessions as one fleet and records what each one did deterministically: every file write hashed on the bytes actually written, every command with its exit class, and every commit attributed to the session and conversation that produced it, split into committer and contributor. Status per session is read from Claude Code's hooks, the transcript, the PTY, and the CLI's own state into one vocabulary, with every transition kept in a durable ledger, so alerts come from normalized lifecycle events rather than from terminal activity. Agents work in parallel git worktrees and a land queue reconciles each finished branch, runs the repository's own verification command, and fast-forwards trunk one branch at a time; an agent cannot authorise the gate its own land runs. An optional supervisor process can own the pseudoterminals so sessions outlive a daemon restart. Runs on the user's own machine with no vendor backend, an installable phone client over Tailscale, and speech-to-text decoded on the host.
 
 Trim to the list's prevailing length at submission time if entries have got shorter.
 
@@ -76,7 +76,7 @@ Submit, expect nothing, and do not build any part of the plan on it.
 
 Description field:
 
-> swe-mux is a self-hosted control plane for coding-agent CLIs rather than an agent itself. It records what each agent did from the bytes it wrote rather than from its own report, attributes commits to the session and conversation that produced them, and lands finished worktree branches behind a human-approved verification command, fast-forward-only, one at a time. It also adds one cross-vendor status vocabulary and prompt queues with gated delivery, and an optional supervisor process can own the pseudoterminals so sessions outlive a daemon restart. Runs Claude Code, Codex, opencode and other CLIs unchanged on the user's own machine, with a phone client and speech-to-text decoded on the host.
+> swe-mux is a self-hosted control plane for coding-agent CLIs rather than an agent itself. It records what each agent did from the bytes it wrote rather than from its own report, attributes commits to the session and conversation that produced them, and lands finished worktree branches behind the repository's own verification command, fast-forward-only, one at a time. It also adds one cross-vendor status vocabulary and prompt queues with gated delivery, and an optional supervisor process can own the pseudoterminals so sessions outlive a daemon restart. Runs Claude Code, Codex, opencode and other CLIs unchanged on the user's own machine, with a phone client and speech-to-text decoded on the host.
 
 ---
 

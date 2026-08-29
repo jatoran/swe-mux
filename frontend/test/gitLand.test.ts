@@ -361,6 +361,52 @@ test('a repository with no verification command keeps the strip folded', () => {
   assert.equal(written.opensByDefault, true)
 })
 
+test('a gate that will run on the Project’s standing authority does not open the strip', () => {
+  // 2026-08-29. `approved` stopped being the whole question: a Project may let its own
+  // agents change the gate, and unfolding the strip over bytes that are about to run
+  // reports an emergency the operator already answered by granting the authority.
+  const authorised = landingSummary(queueOf({ requests: [] }), gateOf({
+    approved: false, runs_without_approval: true, verify_grant: 'granted',
+    provenance: { verdict: 'local_author', trusted: true, reason: 'written here' },
+  }))
+  assert.equal(authorised.opensByDefault, false)
+  // Named for the authority that will run it rather than for the approval it lacks:
+  // "not approved" over a gate that is about to run is the same class of lie as
+  // "approved" over one that is not.
+  assert.equal(authorised.gate, 'verification authorised · .worktree-verify')
+  assert.equal(authorised.gateTone, 'ok')
+
+  // And the case the grant deliberately does not cover still opens it. The switch alone
+  // must never be what decides this, or landing a contributor's branch would run their
+  // script unattended.
+  const foreign = landingSummary(queueOf({ requests: [] }), gateOf({
+    approved: false, runs_without_approval: false, verify_grant: 'granted',
+    provenance: { verdict: 'foreign_author', trusted: false, reason: 'written elsewhere' },
+  }))
+  assert.equal(foreign.opensByDefault, true)
+  assert.equal(foreign.gate, 'verification not approved')
+  assert.equal(foreign.gateTone, 'warn')
+})
+
+test('a payload that lost the verification authority reads as the restrictive one', () => {
+  // Unlike `installed_enabled`, whose absent default is on. The mistake this field is
+  // allowed to make is the one that overstates the gate, never the one that draws
+  // "agents may change what verification runs" over a Project that says otherwise.
+  assert.equal(parseLandQueue({}).verifyGrant, 'draft')
+  assert.equal(parseLandQueue({ verify_grant: 'nonsense' }).verifyGrant, 'draft')
+  assert.equal(parseLandQueue({ verify_grant: 'granted' }).verifyGrant, 'granted')
+  assert.equal(parseLandVerifyCommand({}).runsWithoutApproval, false)
+  assert.equal(parseLandVerifyCommand({}).provenance, null)
+  // A provenance whose `trusted` flag did not survive the wire is untrusted, matching
+  // the daemon's own fail-closed reads.
+  assert.equal(
+    parseLandVerifyCommand({ provenance: { verdict: 'local_author' } })?.provenance?.trusted,
+    false,
+  )
+  // No verdict is not an unknown verdict: the question was not asked.
+  assert.equal(parseLandVerifyCommand({ provenance: { trusted: true } }).provenance, null)
+})
+
 test('an unread gate does not open the strip either', () => {
   // `null` is "the daemon has not answered yet". Opening on it would flash the strip open
   // on every mount, which is a worse lie than saying nothing.

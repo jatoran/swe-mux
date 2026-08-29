@@ -52,11 +52,20 @@ from .land_preconditions import (
 )
 from .land_store import LandConflict, LandEvent, LandStore
 from .verify_progress import VerifyProgress, sanitize_plan
+from .verify_provenance import (
+    VerifyProvenance,
+    read_verify_provenance,
+    verify_bypass_allowed,
+)
 from .worktree_verify import (
     MAX_HANDBACK_OUTPUT_BYTES,
     VerifyApprovalStore,
+    approval_diff,
     describe_verify_command,
     run_worktree_verify,
+)
+from .worktree_verify import (
+    SCRIPT_NAME as VERIFY_SCRIPT_NAME,
 )
 
 log = logging.getLogger(__name__)
@@ -176,6 +185,7 @@ class LandQueueService:
         events: Any = None,
         automation_gate: Callable[[str], Awaitable[frozenset[str]]] | None = None,
         grant_field: Callable[[str], str] | None = None,
+        verify_grant_field: Callable[[str], str] | None = None,
         project_values: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
         comparison_ref: Callable[[str], Awaitable[str | None]] | None = None,
         busy_sessions: Callable[[str], Awaitable[tuple[str, ...]]] | None = None,
@@ -191,6 +201,7 @@ class LandQueueService:
         self._events = events
         self._automation_gate = automation_gate
         self._grant_field = grant_field
+        self._verify_grant_field = verify_grant_field
         self._project_values = project_values
         self._comparison_ref = comparison_ref
         self._busy_sessions = busy_sessions
@@ -263,6 +274,45 @@ class LandQueueService:
         except Exception:  # noqa: BLE001 - an unreadable grant is the inert one
             return "draft"
         return value if value in GRANTS else "draft"
+
+    def _verify_grant(self, project_root: str) -> str:
+        """Whether this Project lets its agents' own gate edits run unapproved.
+
+        `draft` when nothing is wired, which is Phase 14's behaviour: a service built
+        without this collaborator has no way to read the Project's authority, and
+        assuming the permissive answer would grant it by omission.
+        """
+        if self._verify_grant_field is None:
+            return "draft"
+        try:
+            value = self._verify_grant_field(project_root)
+        except Exception:  # noqa: BLE001 - an unreadable grant is the inert one
+            return "draft"
+        return value if value in GRANTS else "draft"
+
+    async def _verify_provenance(self, row: dict[str, Any], info: Any) -> VerifyProvenance:
+        """Where the bytes about to run came from, asked read-only of git."""
+        from .git_monitor import read_git
+
+        try:
+            return await read_verify_provenance(
+                git=read_git,
+                worktree_root=row["worktree_root"],
+                project_root=row["project_root"],
+                source=str(info.source or ""),
+                script_name=VERIFY_SCRIPT_NAME,
+                trunk_ref=str(row.get("trunk_ref") or ""),
+            )
+        except Exception:  # noqa: BLE001 - a provenance read that fails grants nothing
+            log.warning(
+                "land_verify_provenance_failed request_id=%s worktree=%s",
+                row["id"],
+                row["worktree_root"],
+                exc_info=True,
+            )
+            return VerifyProvenance(
+                "unknown", False, "the provenance of the verification command could not be read"
+            )
 
     def _hourly_budget(self) -> int:
         return max(0, int(getattr(self._config, "land_hourly_budget", DEFAULT_HOURLY_BUDGET)))
@@ -871,6 +921,37 @@ class LandQueueService:
         memo = await self._standing_memo(row["project_root"], tree, digest)
         if memo is not None:
             return await self._reuse_verification(row, head, tree, memo)
+        # Whether these bytes may run without a human having read this exact digest.
+        # Asked once, here, rather than inside the attempt loop: it is a question about
+        # the bytes and the Project, and neither moves between a first attempt and a
+        # retry. Asked *after* the memo, so a reuse that runs nothing never records a
+        # bypass it did not exercise; and skipped entirely for an already-approved gate,
+        # so the ordinary case costs no git.
+        provenance: VerifyProvenance | None = None
+        bypass = False
+        if info.configured and not info.approved:
+            provenance = await self._verify_provenance(row, info)
+            bypass = verify_bypass_allowed(self._verify_grant(row["project_root"]), provenance)
+            if bypass:
+                # The trail's half of the trade. A bypassed run replaces "a human reads
+                # this before it runs" with "a human can read what ran afterwards", and
+                # that is only true if the diff is written down at the moment it is
+                # still resolvable - the file moves on with the branch.
+                await self._store.record_event(
+                    request_id=request_id,
+                    project_id=row["project_id"],
+                    step="verify",
+                    outcome="approval_bypassed",
+                    reason=provenance.reason,
+                    detail={
+                        "digest": digest,
+                        "source": info.source or "",
+                        "previously_approved": info.previously_approved,
+                        "diff": approval_diff(info),
+                        **provenance.public_dict(),
+                    },
+                    now=self._clock(),
+                )
         try:
             current = await self._store.transition(
                 request_id,
@@ -904,6 +985,7 @@ class LandQueueService:
                     project_root=row["project_root"],
                     request_id=request_id,
                     progress=tracker,
+                    bypass_approval=bypass,
                 )
             finally:
                 self._verify_live.pop(request_id, None)
@@ -991,6 +1073,18 @@ class LandQueueService:
                         "verify_digest": final.digest or "",
                         "verify_source": final.source or "",
                         "worktree_root": row["worktree_root"],
+                        # Why the standing authority did not cover these bytes. Without
+                        # it an `unapproved` refusal in a Project that grants agents the
+                        # gate reads as a contradiction, and the reader's next move is
+                        # to doubt the switch rather than to look at who wrote the
+                        # script - which is the one fact that decided it.
+                        "verify_provenance": (
+                            provenance.verdict if provenance is not None else ""
+                        ),
+                        "verify_provenance_reason": (
+                            provenance.reason if provenance is not None else ""
+                        ),
+                        "verify_grant": self._verify_grant(row["project_root"]),
                     },
                 )
                 return None
@@ -1422,6 +1516,33 @@ class LandQueueService:
                         else "This Project has no verification command, so there is "
                         "nothing the queue is allowed to run."
                     ),
+                ]
+            )
+            # A Project may let an agent's *own* edits to the gate run unapproved, so an
+            # `unapproved` refusal here means that standing authority did not reach these
+            # particular bytes. Saying which of the two it was is the difference between
+            # a reader checking a switch and a reader checking an author.
+            if code == "unapproved":
+                reason = str(detail.get("verify_provenance_reason") or "")
+                grant = str(detail.get("verify_grant") or "")
+                if grant != "granted":
+                    lines.extend(
+                        [
+                            "",
+                            "This Project approves the gate's bytes individually "
+                            "(`land_verify_grant` is `draft`).",
+                        ]
+                    )
+                elif reason:
+                    lines.extend(
+                        [
+                            "",
+                            "This Project does let agents change the gate, but that "
+                            f"authority did not cover these bytes: {reason}.",
+                        ]
+                    )
+            lines.extend(
+                [
                     "",
                     "Approving is a human act against the exact bytes, in the Git tab's "
                     "Landing strip. You cannot approve it yourself, and neither can the "
@@ -1628,6 +1749,7 @@ class LandQueueService:
         installed = self._installed_enabled()
         project_enabled = False
         grant = "draft"
+        verify_grant = "draft"
         if project_root:
             if self._automation_gate is None:
                 project_enabled = True
@@ -1637,6 +1759,7 @@ class LandQueueService:
                 except Exception:  # noqa: BLE001 - a gate that cannot answer reads as off
                     project_enabled = False
             grant = self._grant(project_root)
+            verify_grant = self._verify_grant(project_root)
         return {
             "requests": requests,
             "hourly_budget": self._hourly_budget(),
@@ -1645,6 +1768,7 @@ class LandQueueService:
             "installed_enabled": installed,
             "project_enabled": project_enabled,
             "agent_grant": grant,
+            "verify_grant": verify_grant,
         }
 
     def verify_command(

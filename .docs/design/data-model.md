@@ -544,6 +544,15 @@
   directly (`granted`, the default) or writes the Phase 5 inert draft (`draft`); authority is
   by target Project, so an agent spawns into any Project that has not lowered it. The install
   caps the granted path with `agent_spawn_hourly_budget` (default 10).
+  Two land-queue authority fields sit beside them (`features/land-queue.md`): `land_grant`
+  (`"draft"` | `"granted"`, default `"draft"`, read by `project_land_grant()`) decides whether an
+  agent's `request_land` **starts** the pipeline or drafts a request, and `land_verify_grant`
+  (same values, default `"granted"`, read by `project_land_verify_grant()`) decides what that
+  pipeline may **execute**: granted, an unapproved verification command whose bytes this machine
+  authored runs, while a command any other author put on the branch still presents for approval.
+  Two fields rather than two levels of one, so a Project that had already granted the first did
+  not acquire the second silently on upgrade. Both resolve to the narrow `draft` on a malformed
+  config.
   Two further fields govern control-plane approvals (`features/approvals.md`): `approval_allow`,
   the `Tool` / `Tool(pattern)` rules a session's `allowlisted` mode resolves against, and
   `approval_ceiling` (`"wait"` | `"allowlisted"` | `"allow_all"`) capping the strongest mode any

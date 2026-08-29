@@ -65,6 +65,24 @@ PROJECT_CONFIG_FIELDS = {
     # `session_control_grant` for the same reason it is its own automation: that one
     # acts on a session, this one moves a repository's trunk.
     "land_grant",
+    # 2026-08-29: whether an agent's own edit to this Project's verification command
+    # may run without a human re-reading its bytes. "granted" (the default when unset)
+    # lets the land queue run a gate whose bytes `verify_provenance` traced to this
+    # machine - an uncommitted local edit, the trunk's own copy, or a branch commit
+    # authored by this repository's configured identity. "draft" restores the
+    # approve-every-digest behaviour that shipped with Phase 14.
+    #
+    # Its own field rather than a level of `land_grant` for a reason that is the whole
+    # point: `land_grant` says who may *start* a land, and this says what the daemon may
+    # *execute* while running one. Folding them together would hand the second authority
+    # to every Project that had already granted the first, silently, on upgrade.
+    #
+    # Granted by default because the operator's own agents already run arbitrary
+    # commands in the checkout, so approving their gate edits bought little and stalled
+    # every parallel wave that touched the script. What it did buy is kept by the
+    # provenance half rather than by the prompt: bytes some other author put on the
+    # branch - the case a public repository made real - still present for approval.
+    "land_verify_grant",
     # Whether an agent in another session may have a message delivered into a
     # *running* turn here (`mux.notify(delivery="now")`). "granted" (the default
     # when unset, flipped 2026-08-25) allows a mid-turn write, still only when
@@ -920,6 +938,32 @@ def project_land_grant(root: str | Path) -> str:
     return "draft"
 
 
+def project_land_verify_grant(root: str | Path) -> str:
+    """Whether agents' own edits to this Project's verification gate may run unapproved.
+
+    "granted" (the default when the field is unset) lets the land queue execute a gate
+    whose bytes this machine authored; "draft" requires a human approval of the exact
+    digest, which is what Phase 14 shipped.
+
+    A malformed or unreadable config falls back to the **restrictive** "draft" rather
+    than to the default, for the same reason `project_interject_grant` fails closed:
+    corruption must never widen an authority, and this one ends in the daemon executing
+    a script. Read per call rather than cached because it is a standing permission a
+    person edits by hand, and a stale "granted" is the direction that costs something.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            grant = values.get("land_verify_grant")
+            if grant in SESSION_CONTROL_GRANTS:
+                return str(grant)
+            return "granted"
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        return "draft"
+    return "granted"
+
+
 def project_interject_grant(root: str | Path) -> str:
     """Whether agents may have messages delivered mid-turn to this Project.
 
@@ -1476,6 +1520,8 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError("spawn_grant must be draft or granted")
     if parsed.get("land_grant") not in {None, *SESSION_CONTROL_GRANTS}:
         raise ValueError("land_grant must be draft or granted")
+    if parsed.get("land_verify_grant") not in {None, *SESSION_CONTROL_GRANTS}:
+        raise ValueError("land_verify_grant must be draft or granted")
     if parsed.get("interject_grant") not in {None, *INTERJECT_GRANTS}:
         raise ValueError("interject_grant must be off or granted")
     if parsed.get("approval_ceiling") not in {None, *APPROVAL_CEILINGS}:
@@ -1552,6 +1598,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "session_control_grant",
         "spawn_grant",
         "land_grant",
+        "land_verify_grant",
         "interject_grant",
         "approval_ceiling",
     ):

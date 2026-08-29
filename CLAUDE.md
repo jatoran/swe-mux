@@ -246,10 +246,20 @@ time. It applies the docs-only half of the triage rule above by itself: after re
 classifies the incoming paths against a closed allowlist (`*.md` anywhere, plus documentation
 assets under `.docs/`/`docs/`) and skips the gate when every one of them matches, recording the
 class and its reason in the request's event trail and on the row. Anything else - a source file,
-a rename, a submodule, an unreadable diff - runs the full gate exactly as before. It never resolves a conflict and never runs a gate whose exact bytes a human has not
-approved; a conflict or a failed gate comes back to the requesting session as a queue message.
-It is off by default per Project, and the manual two commands remain the fallback and the
-thing to reach for when the queue is not enabled.
+a rename, a submodule, an unreadable diff - runs the full gate exactly as before. It never
+resolves a conflict; a conflict or a failed gate comes back to the requesting session as a queue
+message. It is off by default per Project, and the manual two commands remain the fallback and
+the thing to reach for when the queue is not enabled.
+
+**Since 2026-08-29 a gate edit made here no longer blocks the queue.** `land_verify_grant` is
+`granted` by default, so the queue runs an unapproved `.worktree-verify` whose bytes this machine
+authored - an uncommitted edit, the trunk's own copy, or a branch commit by this repository's
+configured `user.email` - and records the approved-to-current diff on the request's event trail
+instead of asking first. A gate edited by **any other author** still refuses and presents its
+bytes, which is the whole point: the script is branch content, this repository is public, and
+landing a contributor's branch must never execute their script unattended. Lowering
+`land_verify_grant` to `draft` in the Project's Agent authority table restores approving every
+digest by hand.
 
 ## Verification
 

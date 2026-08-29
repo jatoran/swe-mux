@@ -34,7 +34,7 @@ A local daemon that owns your agent sessions, and a web UI that is the control p
 This is the part I would rather you read here than discover.
 
 - **Every automation is per-Project opt-in and ships off**, with one exception: a permission gate that reads nothing, runs nothing, and spends nothing.
-- **The land queue needs four things** before an agent can trigger one: the install-wide switch, the Project's opt-in, an authority level raised from its default of "a human approves the request", and an approved verification command. Running it yourself needs the last of those.
+- **The land queue needs four things** before an agent can trigger one: the install-wide switch, the Project's opt-in, an authority level raised from its default of "a human approves the request", and a verification command. Running it yourself needs the last of those.
 - **The model-backed pieces ship off**: the behaviour timeline, the attention observers, the assistant. So does read aloud.
 
 That is a safety posture I would defend, and it means a fresh install is quieter than the feature list. Turning things on is a few minutes; being surprised by what was already running would be worse.

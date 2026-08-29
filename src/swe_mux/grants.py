@@ -65,6 +65,12 @@ GRANTABLE_INSTALL_KEYS: frozenset[str] = frozenset(
 GRANTABLE_PROJECT_VALUES: Mapping[str, tuple[Any, ...]] = {
     "scan_timeline_auto_enable": (True,),
     "land_grant": ("granted",),
+    # Already the default, so this grant almost never has work to do. It is here for the
+    # one case where it does: a Project explicitly lowered to "draft" refuses a land on
+    # bytes it will not run, and the refusal's own block is where someone is standing
+    # when they decide to stop being asked. Raising it from there is the same act as
+    # approving, made once instead of every time.
+    "land_verify_grant": ("granted",),
     "session_control_grant": ("granted",),
     "spawn_grant": ("granted",),
     "interject_grant": ("granted",),
