@@ -164,6 +164,20 @@ development host. Recorded so the next person does not rediscover them:
   process's cwd; on the runner that reading was simply false, and the supervisor was correct
   all along. The fix was a better oracle - what a child actually inherits - not a weaker
   assertion.
+- **The two CI closures differ on purpose, and a test that reads installed metadata can only
+  run in one of them.** `verify` syncs `--extra voice-local`; the `platform` legs sync nothing,
+  which is what proves `pip install swe-mux` still yields an importable package now the voice
+  closure sits behind an extra. Six tests went red there in one go because they called
+  `build_desktop.voice_closure_top_levels()` or imported `num2words` - both of which ask the
+  *machine* a question, not the repository. Adding the extra to that job would have greened them
+  by deleting the coverage the job exists for.
+  The rule that fell out, and it is worth applying before writing the test rather than after:
+  **an assertion about an artifact must not be derived from the environment checking it.** Two of
+  the six became injectable (the gate takes the closure as a parameter, so the refusal's wording
+  is tested everywhere), two were rewritten against a generated data table that is always
+  present, two are genuinely about installed packages and now `skipif` with the reason on them -
+  and one was not an environment problem at all but a real defect the no-extras leg was the only
+  thing able to see.
 
 The rule those add up to: **when CI fails and the local gate passes, the environment is the
 hypothesis, and evidence beats a patch.** Instrument the failure and let one CI run answer it,

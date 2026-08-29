@@ -3619,8 +3619,14 @@ class VoiceService:
 
         Asked once, at the boundary, where the answer is a typed refusal with the
         code the browser needs to draw the button.
+
+        Scoped to `capability`, not to the whole closure. Read-aloud needs the
+        Kokoro engine and its phonemizer; dictation needs faster-whisper and its
+        runtime; neither needs the other's. Asking about the union refused a
+        capability whose own modules were present, which CI found on the legs
+        that deliberately sync no extras.
         """
-        if self.voice_runtime.ready():
+        if self.voice_runtime.ready(capability):
             return
         raise VoiceError(
             self._runtime_diagnostic(capability),
@@ -3645,12 +3651,22 @@ class VoiceService:
         dictation = self.config.stt_whisper_model
         routing = self.decode_model(COMMAND_PROFILE)
         models = self.whisper_models.statuses(dictation, routing)
-        if not self.voice_runtime.ready() or not self.whisper_models.backend_installed():
-            # Asked in that order deliberately. `backend_installed()` memoizes an
-            # import attempt, so on an install that has just acquired the closure
-            # it can still answer `False` from before the `sys.path` entry
-            # existed; the store's own state is the fact, and the memo is a cache
-            # of a question asked at the wrong moment.
+        if not self.whisper_models.backend_installed():
+            # The import is the gate and the store is the *explanation*, which is
+            # the opposite of what this said between 2026-08-29 and the CI run
+            # that caught it. Consulting the store first made "can dictation run"
+            # depend on read-aloud's phonemizer being present, so a no-extras
+            # environment with faster-whisper installed by hand - and every
+            # Ubuntu and macOS CI leg, which sync no extras at all - was told
+            # dictation was unavailable while it worked.
+            #
+            # The staleness that motivated asking the store is real and is fixed
+            # where it belongs: `backend_installed()` memoizes an import attempt
+            # made before the closure was on `sys.path`, and the runtime store's
+            # progress callback clears that memo when it lands
+            # (`routes/voice._runtime_progress`). A stale cache is a reason to
+            # invalidate the cache, not to add a stricter precondition in front
+            # of it.
             return False, self._runtime_diagnostic("dictation"), models
         dictation_state = self.whisper_models.status(dictation)
         if dictation_state["status"] != "ready":
