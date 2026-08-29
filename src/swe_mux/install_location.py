@@ -55,11 +55,23 @@ from .host_platform import IS_WINDOWS
 #: Every launcher `pyproject.toml` declares, with the kind of launcher it builds.
 #: ``gui`` is the console-less (``pythonw``-style) launcher: it has no stdout or
 #: stderr at all, which is why `desktop.main` writes its own log instead.
+#: `swemux`/`swemuxd` are the primary spelling and `mux`/`muxd` the kept aliases,
+#: in that order, because this tuple is also the order `--where` prints them and
+#: the first line a confused user reads should be the documented name.
 SHIPPED_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("swemux", "console"),
+    ("swemuxd", "console"),
     ("mux", "console"),
     ("muxd", "console"),
     ("swe-mux", "gui"),
 )
+
+#: The client and daemon launchers in preference order, for the places that need
+#: to name *one* of them. Resolved against the install rather than hardcoded: a
+#: copy installed before the `swemux` pair existed still has the aliases, and
+#: printing a command that is not on that machine is the failure this avoids.
+CLIENT_COMMANDS: tuple[str, ...] = ("swemux", "mux")
+DAEMON_COMMANDS: tuple[str, ...] = ("swemuxd", "muxd")
 
 INSTALL_FROZEN = "frozen"
 INSTALL_UV_TOOL = "uv-tool"
@@ -529,7 +541,11 @@ def render_where(location: InstallLocation, *, version: str | None) -> str:
     # these are absolute paths on a machine whose install is already confusing,
     # and a comment pushed past a 120-character path is a comment nobody reads.
     # Written this way they are also copy-pasteable as-is.
-    lines += ["", "Run it without PATH:", "  # the daemon, identical to muxd"]
+    daemon_name = next(
+        (name for name in DAEMON_COMMANDS if location.executable(name) is not None),
+        DAEMON_COMMANDS[-1],
+    )
+    lines += ["", "Run it without PATH:", f"  # the daemon, identical to {daemon_name}"]
     lines.append(f"  {location.module_fallback}")
     desktop = location.executable("swe-mux")
     if desktop is not None:
@@ -537,9 +553,12 @@ def render_where(location: InstallLocation, *, version: str | None) -> str:
             "  # the desktop app (tray + native window)",
             f"  {_quote(str(desktop), windows=location.windows)}",
         ]
-    mux = location.executable("mux")
-    if mux is not None:
-        quoted = _quote(str(mux), windows=location.windows)
+    client = next(
+        (found for found in map(location.executable, CLIENT_COMMANDS) if found is not None),
+        None,
+    )
+    if client is not None:
+        quoted = _quote(str(client), windows=location.windows)
         lines += ["  # full diagnostics for this machine", f"  {quoted} doctor"]
         if location.windows:
             lines += [
@@ -551,6 +570,8 @@ def render_where(location: InstallLocation, *, version: str | None) -> str:
 
 
 __all__ = [
+    "CLIENT_COMMANDS",
+    "DAEMON_COMMANDS",
     "INSTALL_FROZEN",
     "INSTALL_PIPX",
     "INSTALL_SYSTEM",
