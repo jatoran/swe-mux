@@ -2199,6 +2199,14 @@ which is what keeps an agent from approving the command its own land runs.
 digest_mismatch` means the bytes moved between the prompt and the click and returns the new
 digest, and `409 not_configured` means the repository declares no gate.
 
+It also **re-queues the lands the block ended**, and answers with `resumed`:
+`[{id, branch, kind}]`, empty when it restarted nothing. A refusal is terminal, so the
+resumed rows are new requests naming the refused ones in their opening event
+(`resumed_from`); nothing reopens a terminal row. Only refusals over the approved digest,
+on the given worktree, that no later request has already answered. `POST /grants` carries
+the same list as `resumed_lands` when it raised `land_verify_grant`, filtered there to
+refusals whose provenance the grant actually reaches. See `features/land-queue.md`.
+
 `POST /previews` takes one of two bodies. The default registers a literal-loopback endpoint
 owned by a session. `kind: "static"` registers a document in a Project checkout instead:
 `path` is checkout-relative and must be an `.html`, `.htm`, or `.xhtml` file that exists;

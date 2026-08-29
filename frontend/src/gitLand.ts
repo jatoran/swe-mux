@@ -177,6 +177,42 @@ export type LandVerifyCommand = {
   runsWithoutApproval: boolean
 }
 
+/** A land the approval just put back in the queue. A redo is a new id by design, so this
+ *  names the *new* row rather than the refused one it replaces. */
+export type ResumedLand = { id: string; branch: string; kind: string }
+
+/**
+ * The lands an approval or a grant re-queued.
+ *
+ * Read from the response of the act that caused them rather than by diffing the queue:
+ * the surface has to be able to *say* what it started, and "a row appeared in a list
+ * below" is not the same as being told. An older daemon carries no such key, which
+ * reads as an empty list — the correct answer for a build that did not resume anything.
+ */
+export function parseResumedLands(raw: unknown, key = 'resumed'): ResumedLand[] {
+  if (!raw || typeof raw !== 'object') return []
+  const rows = (raw as Record<string, unknown>)[key]
+  if (!Array.isArray(rows)) return []
+  return rows.flatMap(item => {
+    if (!item || typeof item !== 'object') return []
+    const row = item as Record<string, unknown>
+    const id = text(row.id)
+    const branch = text(row.branch)
+    if (!id || !branch) return []
+    return [{ id, branch, kind: text(row.kind) || 'land' }]
+  })
+}
+
+/** One sentence naming what an approval restarted, or `''` when it restarted nothing. */
+export function resumedLandsNote(rows: ResumedLand[]): string {
+  if (!rows.length) return ''
+  const named = rows.map(row => row.branch).join(', ')
+  const what = rows.every(row => row.kind === 'verify') ? 'verification' : 'landing'
+  return rows.length === 1
+    ? `Re-queued the ${what} of ${named}.`
+    : `Re-queued ${rows.length} requests: ${named}.`
+}
+
 /** Where the bytes that would run came from. `trusted` is this verdict's own answer and
  *  is not permission by itself — the Project's `verifyGrant` decides separately. */
 export type LandVerifyProvenance = {

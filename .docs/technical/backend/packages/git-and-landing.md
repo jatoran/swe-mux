@@ -117,7 +117,12 @@ The request is the consent, so the narrowing of the Phase 5 floor is exactly as 
 A **refusal** answers its author through the same `_solicited_reply` under the same bounds (`_refused_body`), and carries a machine-readable `code` plus the resolved worktree root in its detail - a reason string cannot be matched on, and the landing strip has to know which checkout's bytes to offer for approval.
 `origin_windows` is the other half - the open-request evidence `auto_delivery.py` reads so an origin's grant does not lapse while the pipeline is still computing the answer.
 
-**Not:** the precondition reads (`land_preconditions.py`), the allowlist itself (`land_classify.py`), durability and serialization (`land_store.py`), the gate's authority (`worktree_verify.py`), how progress is parsed (`verify_progress.py`), delivery (an injected `PromptQueueService.enqueue`), or HTTP.
+It owns whether an unapproved gate may run anyway (`_verify_grant` + `_verify_provenance` + `verify_bypass_allowed`), which is the one place the Project's authority and the bytes' provenance are combined; and `resume_verification_blocked`, which re-queues the lands a verification block ended once the block is cleared.
+A resume is a **new request** naming the refused one (`request(resumed_from=...)`), because `refused` is terminal and the trail must go on saying the refusal happened.
+`resumed_from` skips exactly two checks - the per-origin budget and the `draft` grant - because both decide whether a *new agent* request should start and a resume is neither new nor the agent's; every standing permission and precondition is re-read.
+Rows are found by **Project id**: a row stores the trunk root git resolved, which is not always the string the Project was registered under.
+
+**Not:** the precondition reads (`land_preconditions.py`), the allowlist itself (`land_classify.py`), durability and serialization (`land_store.py`), the gate's approval store (`worktree_verify.py`), where the gate's bytes came from (`verify_provenance.py`), how progress is parsed (`verify_progress.py`), delivery (an injected `PromptQueueService.enqueue`), or HTTP.
 
 ### `land_classify.py`
 

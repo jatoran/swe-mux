@@ -310,6 +310,31 @@ The block offers the grant only where raising it would actually clear that block
 The daemon answers this on the same two routes: `GET /api/land/verify-command` (and the write route's echo) carry `verify_grant`, `provenance`, and `runs_without_approval`.
 The provenance read is skipped entirely for an approved gate, so the ordinary reading of the endpoint spends no git.
 
+### Clearing a block resumes what it ended
+
+A refusal is **terminal**, so until 2026-08-29 approving the bytes fixed the *next* land and left the one that caused the block dead: the branch had to be asked for again by hand, or by an agent that had already been told its request was over.
+Approving is the moment the wait ends, so the queue ends with it.
+
+`POST /api/land/verify-command/approve` and a grant that raises `land_verify_grant` both re-queue the lands their block refused, and both name what they started in their response (`resumed`, `resumed_lands`) rather than leaving a new row to be noticed in the queue.
+
+**A redo is a new row, never a revived one**, which is the shape a bounced request already uses here.
+`refused` stays terminal and the trail goes on saying the refusal happened; the new row names the old one in its opening event (`resumed_from`).
+Reopening a terminal row in place would erase an audit entry and put a second writer on a state nothing else may move.
+
+What is resumed is narrow at both ends, and each filter is the same rule some existing surface already applies:
+
+- **Only refusals the block covered.** The approve route passes the worktree and the digest, so approving one checkout's copy resumes only what those bytes stopped - the same thing the digest-scoped approval store says about approving.
+- **Only refusals that still stand**, by the supersession rule the strip's blocked-worktree gates are drawn from: a branch since landed, verified, or otherwise answered is not waiting on this.
+- **Only bytes the grant reaches**, on the grant path. Raising `land_verify_grant` clears blocks whose provenance is trusted and no others, so a `foreign_author` refusal is left alone rather than re-queued into the refusal it just had.
+
+The rows are found by **Project id**, never by matching the trunk root as a string: a row stores the root git resolved, which is not always the string the Project was registered under, and an equality match on it silently resumes nothing.
+
+A resume carries the original request's kind, origin, and session, so an agent's verdict still reaches the session that asked - and it skips exactly two checks, both of which exist to decide whether a *new* agent request should start.
+The per-origin budget, because the operator's approval started this one and charging the agent for it would let a blocked branch burn an hour's allowance by being approved.
+And the `draft` grant, because a human already decided this request once and drafting it again would ask them the same question.
+It skips nothing else: the Project opt-in, an `off` grant, and every repository precondition are re-read, since those are standing permissions and the branch may have moved.
+A refusal raised by the re-request - a branch that landed some other way, one another request now claims - is a resume with nothing to do, and is logged and skipped rather than reported as an error.
+
 **Editing never approves, and the two are separate acts against separate routes.**
 An edit cannot produce an approved command even by accident: the approval is a digest over the bytes, so moving the bytes invalidates it without the write saying anything about approval at all.
 That is what keeps "an agent cannot approve the command its own land runs" true regardless of who reaches the editor - writing a verification script is a proposal, and a human turns it into an authority.

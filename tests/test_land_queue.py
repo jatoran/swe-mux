@@ -129,6 +129,7 @@ def build_service(
     automations: set[str] | None = None,
     session_runs: dict[str, str] | None = None,
     facts: list[dict[str, Any]] | None = None,
+    drafts: list[dict[str, Any]] | None = None,
 ) -> tuple[LandQueueService, LandStore, VerifyApprovalStore]:
     store = LandStore(tmp_path / "land.sqlite3")
     approvals = VerifyApprovalStore(tmp_path / "data")
@@ -154,6 +155,12 @@ def build_service(
             facts.append(fact)
         return "fact_1"
 
+    async def draft_request(**drafted: Any) -> dict[str, Any]:
+        """Stands in for the Fleet Queue's inert `land_request` observation."""
+        if drafts is not None:
+            drafts.append(drafted)
+        return {"id": f"obs_{len(drafts or [])}", "state": "draft_requested"}
+
     service = LandQueueService(
         store=store,
         approvals=approvals,
@@ -170,6 +177,7 @@ def build_service(
         session_run=lambda session_id: runs.get(session_id, ""),
         queue_message=queue,
         record_fact=record_fact,
+        draft_request=draft_request if drafts is not None else None,
     )
     return service, store, approvals
 
@@ -481,6 +489,210 @@ async def test_a_gate_someone_else_wrote_is_refused_even_where_agents_may_edit_i
         body = queue.messages[0]["body"]
         assert "does let agents change the gate" in body
         assert "stranger@example.invalid" in body
+    finally:
+        store.close()
+
+
+async def test_approving_the_bytes_re_queues_the_land_the_block_ended(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The operator's complaint: clearing the block left the request dead.
+
+    A refusal is terminal, so approving the gate used to fix the *next* land and leave
+    this one needing to be asked for again by hand.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk, verify_grant="draft")
+    try:
+        first = await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        assert info.digest is not None
+        approvals.approve(str(trunk), info.digest, snapshot=info.current_source)
+        resumed = await service.resume_verification_blocked(
+            project_id="p",
+            project_root=first["project_root"],
+            worktree_root=str(worktree),
+            digest=info.digest,
+        )
+        assert len(resumed) == 1
+        # A redo is a new id: the refusal stays terminal so the trail goes on saying it
+        # happened, and the new row names the old one rather than reopening it.
+        assert resumed[0]["id"] != first["id"]
+        assert resumed[0]["state"] == "queued"
+        opening = [
+            item for item in await store.events(resumed[0]["id"]) if item["step"] == "request"
+        ]
+        assert opening[0]["detail"]["resumed_from"] == first["id"]
+        assert (await store.get(first["id"]) or {})["state"] == "refused"
+
+        assert (await service.tick())[0]["state"] == "landed"
+    finally:
+        store.close()
+
+
+async def test_a_resume_only_revives_what_the_approval_actually_covered(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Approving one worktree's copy says nothing about another's, exactly as the
+    digest-scoped store says. A resume that ignored the digest would queue a land whose
+    own bytes are still unapproved."""
+    alpha = add_worktree(trunk, "alpha")
+    beta = add_worktree(trunk, "beta")
+    write_verify(alpha, noise="alpha gate")
+    write_verify(beta, noise="beta gate")
+    commit(alpha, "alpha.txt", "alpha\n", "alpha work")
+    commit(beta, "beta.txt", "beta\n", "beta work")
+    service, store, approvals = build_service(tmp_path, trunk, verify_grant="draft")
+    try:
+        for worktree in (alpha, beta):
+            await service.request(
+                project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+            )
+        # Two refusals, one per sweep: the queue runs one request per trunk at a time.
+        assert (await service.tick())[0]["state"] == "refused"
+        assert (await service.tick())[0]["state"] == "refused"
+
+        info = describe_verify_command(alpha, {}, approvals, project_root=str(trunk))
+        assert info.digest is not None
+        approvals.approve(str(trunk), info.digest, snapshot=info.current_source)
+        resumed = await service.resume_verification_blocked(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(alpha),
+            digest=info.digest,
+        )
+        assert [row["branch"] for row in resumed] == ["worktree-alpha"]
+    finally:
+        store.close()
+
+
+async def test_a_refusal_a_later_request_already_answered_is_not_resumed(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The same supersession rule the strip draws its blocked gates from.
+
+    A branch that has since been answered is not waiting on this approval, and reviving
+    it would queue a land nobody asked for.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, approvals = build_service(tmp_path, trunk, verify_grant="draft")
+    try:
+        await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        assert info.digest is not None
+        approvals.approve(str(trunk), info.digest, snapshot=info.current_source)
+        # A later request for the same branch that got its own answer.
+        await service.request(
+            project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+
+        assert await service.resume_verification_blocked(
+            project_id="p", project_root=str(trunk), digest=info.digest
+        ) == []
+    finally:
+        store.close()
+
+
+async def test_a_resume_spends_no_budget_and_asks_no_second_approval(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The operator's approval started this one.
+
+    Charging the agent for it would let a blocked branch burn an hour's allowance by
+    being approved, and re-drafting it would ask a human the question they answered
+    when the request was made. Both checks decide whether a *new* agent request should
+    start; a resume is neither new nor the agent's.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+
+    class OneRequest(FakeConfig):
+        land_hourly_budget = 1
+
+    drafts: list[dict[str, Any]] = []
+    service, store, approvals = build_service(
+        tmp_path, trunk, config=OneRequest(), verify_grant="draft", drafts=drafts
+    )
+    try:
+        first = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+        # The one request this session was allowed has been spent.
+        with pytest.raises(LandRefusal, match="budget_exhausted|requests in the last hour"):
+            await service.request(
+                project_id="p",
+                project_root=str(trunk),
+                worktree_root=str(worktree),
+                origin="agent",
+                origin_session_id="sess_1",
+            )
+
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        assert info.digest is not None
+        approvals.approve(str(trunk), info.digest, snapshot=info.current_source)
+        resumed = await service.resume_verification_blocked(
+            project_id="p", project_root=first["project_root"], digest=info.digest
+        )
+        assert len(resumed) == 1
+        assert resumed[0]["state"] == "queued"
+        # It keeps the agent's identity, so the verdict still reaches the session that
+        # asked - it simply is not charged to it.
+        assert resumed[0]["origin"] == "agent"
+        assert resumed[0]["origin_session_id"] == "sess_1"
+    finally:
+        store.close()
+
+
+async def test_a_resume_enqueues_where_a_fresh_agent_request_would_draft(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Lowering `land_grant` to `draft` between the refusal and the approval must not
+    turn the resume into a second approval request: a human already decided this one."""
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    drafts: list[dict[str, Any]] = []
+    service, store, _ = build_service(tmp_path, trunk, grant="draft", drafts=drafts)
+    try:
+        drafted = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+        )
+        assert drafted["state"] == "draft_requested"
+        assert len(drafts) == 1
+
+        resumed = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            resumed_from="lnd_earlier",
+        )
+        assert resumed["state"] == "queued"
+        assert len(drafts) == 1
     finally:
         store.close()
 

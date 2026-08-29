@@ -13,6 +13,8 @@ import {
   landStateTone,
   landingSummary,
   parseLandVerifyCommand,
+  parseResumedLands,
+  resumedLandsNote,
   verifyCommandEditable,
   verifyPlanNote,
   verifyProgressLabel,
@@ -78,6 +80,10 @@ function ago(seconds: number): string {
 
 export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: Props) {
   const [localError, setLocalError] = useState('')
+  // What clearing a block *started*. Held at strip level rather than inside the block
+  // that caused it, because approving a worktree's bytes makes that block disappear -
+  // a note rendered inside it would be unmounted in the same tick that earned it.
+  const [resumedNote, setResumedNote] = useState('')
   const [busy, setBusy] = useState(false)
 
   // Resolved against the Project root: this is the Project's declared gate, and this is
@@ -120,6 +126,7 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
     </button>
 
     {shown && <p class="git-state error" role="alert">{shown}</p>}
+    {resumedNote && <p class="git-land-resumed" role="status">{resumedNote}</p>}
 
     {/* Outside the disclosure on purpose. A gate is what a surface renders *instead of*
         working, so hiding it behind a collapsed summary would be the same defect as
@@ -147,7 +154,7 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
       {project && summary.blockedWorktrees.map(item => <BlockedWorktreeGate
         key={item.worktreeRoot} project={project} worktreeRoot={item.worktreeRoot}
         branch={item.branch} busy={busy} setBusy={setBusy} onError={setLocalError}
-        onApproved={onChanged} />)}
+        onResumed={setResumedNote} onApproved={onChanged} />)}
 
       {/* Who besides you may start one. Project-wide, and therefore here rather than on
           a row: a control that answers "for every branch in this repository" would be a
@@ -193,7 +200,11 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
             bytes for you to read.</>
           : <>Every change to the verification command presents its bytes for approval,
             whoever wrote it.{' '}
-            <GrantButton id="project.landVerifyGrant" projectId={project.id} onGranted={onChanged}
+            <GrantButton id="project.landVerifyGrant" projectId={project.id}
+              onGranted={async result => {
+                setResumedNote(resumedLandsNote(result.resumed_lands || []))
+                await onChanged()
+              }}
               title="Lets this Project's own agents change the verification command without a fresh approval · writes to this Project’s .swe-mux/config.toml"
             >Stop asking for edits made here</GrantButton></>}</p>}
       </details>}
@@ -323,6 +334,7 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
   const [draft, setDraft] = useState('')
   const [showing, setShowing] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [resumed, setResumed] = useState('')
 
   // The draft follows the daemon's answer until the operator opens the editor; after
   // that it is theirs, and a poll that overwrote it mid-sentence would be the note
@@ -365,6 +377,11 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
         project_id: project.id, worktree_root: project.root, digest: gate.digest,
       })
       onGate(parseLandVerifyCommand(raw)); setShowing(false); onError('')
+      // What approving *started*, said here rather than left to be noticed in the queue
+      // below. Approving used to leave the refused request dead, so being told the wait
+      // ended is the whole point of the change.
+      setResumed(resumedLandsNote(parseResumedLands(raw)))
+      await onRefresh()
     } catch (cause) { onError(landErrorText(cause)); await onRefresh() }
     finally { setBusy(false) }
   }
@@ -446,6 +463,8 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
       </button>}
     </div>}
 
+    {resumed && <p class="git-land-resumed">{resumed}</p>}
+
     {/* A statement about a run that already happened, kept apart from anything a
         running gate reports so it cannot be read as a prediction of one. */}
     {gate?.plan && <p class="git-land-plan">{verifyPlanNote(gate.plan)}
@@ -510,13 +529,17 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
  * the primary's, so the two took turns blocking each other and neither could be
  * cleared - which is the loop this control would otherwise have automated.
  */
-function BlockedWorktreeGate({ project, worktreeRoot, branch, busy, setBusy, onError, onApproved }: {
+function BlockedWorktreeGate({
+  project, worktreeRoot, branch, busy, setBusy, onError, onResumed, onApproved,
+}: {
   project: Project
   worktreeRoot: string
   branch: string
   busy: boolean
   setBusy: (value: boolean) => void
   onError: (value: string) => void
+  /** What approving restarted. Reported upward because clearing the block unmounts this. */
+  onResumed: (value: string) => void
   onApproved: () => void | Promise<void>
 }) {
   const { gate, refresh } = useVerifyCommand(project.id, worktreeRoot, true)
@@ -532,10 +555,11 @@ function BlockedWorktreeGate({ project, worktreeRoot, branch, busy, setBusy, onE
     if (!gate?.digest) return
     setBusy(true)
     try {
-      await api('POST', '/api/land/verify-command/approve', {
+      const raw = await api<unknown>('POST', '/api/land/verify-command/approve', {
         project_id: project.id, worktree_root: worktreeRoot, digest: gate.digest,
       })
-      onError(''); await refresh(); await onApproved()
+      onError(''); onResumed(resumedLandsNote(parseResumedLands(raw)))
+      await refresh(); await onApproved()
     } catch (cause) { onError(landErrorText(cause)); await refresh() }
     finally { setBusy(false) }
   }
@@ -587,7 +611,15 @@ function BlockedWorktreeGate({ project, worktreeRoot, branch, busy, setBusy, onE
         deliberately absent — a control that cannot clear the block is worse than none. */}
     {gate?.configured && gate.verifyGrant !== 'granted' && gate.provenance?.trusted
       && <p class="git-land-authority-row">These bytes were written on this machine.{' '}
-        <GrantButton id="project.landVerifyGrant" projectId={project.id} onGranted={onApproved}
+        <GrantButton id="project.landVerifyGrant" projectId={project.id}
+          onGranted={async result => {
+            // Raising the authority clears this block, so the land it ended is waiting
+            // on nothing - the daemon re-queues it in the same act and names what it
+            // started. Reporting it upward for the same reason approving does: this
+            // block is about to unmount.
+            onResumed(resumedLandsNote(result.resumed_lands || []))
+            await onApproved()
+          }}
           title="Lets this Project's own agents change the verification command without a fresh approval · writes to this Project’s .swe-mux/config.toml"
         >Stop asking for edits made here</GrantButton>{' '}
         (a gate edited by anyone else still presents for approval).</p>}

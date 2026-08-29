@@ -261,6 +261,12 @@ landing a contributor's branch must never execute their script unattended. Lower
 `land_verify_grant` to `draft` in the Project's Agent authority table restores approving every
 digest by hand.
 
+**And clearing a block now re-queues what it stopped.** A refusal is terminal, so approving the
+bytes used to fix the *next* land and leave the one that caused the block dead; approving, and
+raising the authority, both start the refused lands again and say which ones in their response.
+The resumed request is a new row naming the old one (`resumed_from`) - nothing reopens a
+terminal row, because the trail has to go on saying the refusal happened.
+
 ## Verification
 
 Backend: `uv run pytest tests -q -n auto --dist loadgroup --durations=25 -m "not live_agent

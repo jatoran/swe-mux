@@ -189,6 +189,10 @@ only route to the owning overlay.
 | Git → Map landing strip (agent authority) | `land_queue`, `land_grant`, `land_verify_grant` | Project | grant |
 | Git → Map landing strip (verification settings) | `land_verify_grant` | Project | link, because the act there is lowering it |
 | Git → Map landing strip (blocked worktree gate) | `land_verify_grant` | Project | grant, offered only where raising it clears that block |
+
+A grant is normally the end of the act: something that was inert can now run.
+`land_verify_grant` is the one that also **restarts work already refused** - raising it re-queues the lands its blocks ended - so `POST /api/grants` answers with `resumed_lands` and the surface that granted says what it started (`land-queue.md`).
+That is not a fourth rule but the first one applied honestly: a grant that cleared a block and left the queue empty would be the enabled-and-does-nothing state this design exists to prevent.
 | Git → Map row, landing blocked | the two above | install + Project | opens the strip that holds them |
 | Alerts tab (ranked inbox empty) | `attention_ranking` | Project | grant |
 | Alerts tab (delivery muted) | device alert master | device | compact grant (local write) |

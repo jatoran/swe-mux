@@ -277,11 +277,17 @@ async def write_land_verify_command(request: web.Request) -> web.Response:
 
 
 async def approve_land_verify_command(request: web.Request) -> web.Response:
-    """Approve the exact bytes that will run as the gate.
+    """Approve the exact bytes that will run as the gate, and resume what it blocked.
 
     The digest must be the one the caller was shown. A stale digest means the file
     moved between the prompt and the click, and approving it would grant authority
     to bytes nobody read.
+
+    Approving is also the moment a wait ends, so it re-queues the lands this block
+    refused. Without that, clearing the block left the request dead and the branch had
+    to be asked for again by hand - or by an agent that had already been told its
+    request was over. The resumed rows are named in the response so the surface that
+    approved can say what it started rather than leaving it to be noticed in the queue.
     """
     body = await request.json()
     project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id") or ""))
@@ -316,7 +322,22 @@ async def approve_land_verify_command(request: web.Request) -> web.Response:
     await request.app[keys.EVENTS].emit(
         "land_verify_approved", source="user", project_id=project.id
     )
-    return json_response({**refreshed.public_dict(), "project_id": project.id})
+    resumed = await request.app[keys.LAND_QUEUE].resume_verification_blocked(
+        project_id=project.id,
+        project_root=project.root,
+        worktree_root=worktree_root,
+        digest=info.digest,
+    )
+    return json_response(
+        {
+            **refreshed.public_dict(),
+            "project_id": project.id,
+            "resumed": [
+                {"id": row["id"], "branch": row["branch"], "kind": row.get("kind") or "land"}
+                for row in resumed
+            ],
+        }
+    )
 
 
 ROUTES: tuple[web.RouteDef, ...] = (

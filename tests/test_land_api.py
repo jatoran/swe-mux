@@ -285,6 +285,47 @@ async def test_a_queued_request_can_be_cancelled(tmp_path: Path, trunk: Path) ->
 # -- the verification command's approval -------------------------------------
 
 
+async def test_approving_answers_with_what_it_re_queued(tmp_path: Path, trunk: Path) -> None:
+    """Approving is the moment the wait ends, so the route says what it restarted.
+
+    The surface that approved has to be able to *state* it. "A row appeared in the list
+    below" is not the same as being told, and being told is the whole point: before
+    this, clearing the block left the refused request dead and the branch had to be
+    asked for again by hand.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    app, store = build(tmp_path, trunk)
+    client = await client_for(app)
+    try:
+        service = app[keys.LAND_QUEUE]
+        row = await service.request(
+            project_id="proj-1", project_root=str(trunk), worktree_root=str(worktree)
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+
+        gate = await (
+            await client.get(
+                f"/api/land/verify-command?project_id=proj-1&worktree_root={worktree}"
+            )
+        ).json()
+        approved = await client.post(
+            "/api/land/verify-command/approve",
+            json={
+                "project_id": "proj-1",
+                "worktree_root": str(worktree),
+                "digest": gate["digest"],
+            },
+        )
+        assert approved.status == 200, await approved.text()
+        body = await approved.json()
+        assert [item["branch"] for item in body["resumed"]] == ["worktree-alpha"]
+        assert body["resumed"][0]["id"] != row["id"]
+    finally:
+        await client.close()
+        store.close()
+
+
 async def test_the_gate_reports_whether_it_would_run_not_only_whether_it_is_approved(
     tmp_path: Path, trunk: Path
 ) -> None:
