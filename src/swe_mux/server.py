@@ -900,9 +900,18 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
                 len(connected_client.initial_sessions),
             )
         except Exception:
+            # The one place the default-on supervisor is allowed to fail, and it
+            # must fail *here* rather than anywhere upstream: a daemon that will
+            # not start is far worse than an unsupervised one, so every reason a
+            # supervisor cannot be reached or spawned - no dedicated bundle
+            # beside a frozen app, a loopback port that cannot be taken, a child
+            # that dies before it writes its discovery file - degrades to
+            # in-process spawning and says so once, loudly, with the traceback.
             log.exception(
                 "PTY supervisor unavailable; sessions will run in-process and "
-                "will not survive a daemon restart"
+                "will not survive a daemon restart. This is a degraded start: "
+                "the supervisor is on by default. See supervisor-console.log in "
+                "the data directory, and `mux doctor`"
             )
     timeline.mark("adapters-and-shims")
     mcp_url = f"http://127.0.0.1:{config.port}/mcp"

@@ -677,9 +677,31 @@ class Config:
     # further is a client concern, reconnect latency is everyone's.
     attach_replay_bytes: int = 512 * 1024
     # Session-preserving reload: spawn PTYs in the out-of-process supervisor so
-    # live sessions survive a daemon restart. Off by default while the split
-    # proves itself; in-process spawning remains the automatic fallback.
-    pty_supervisor_enabled: bool = False
+    # live sessions survive a daemon restart.
+    #
+    # **On by default since 2026-08-28.** It shipped off "while the split proves
+    # itself", and the consequence of leaving it there was that a fresh install
+    # got no supervisor at all while every description of the product - the
+    # README, the site, the tray's own "Restart daemon (keep sessions)" - claimed
+    # sessions outlive a restart. The only two ways out were to weaken the claim
+    # or to make it true. This is the second.
+    #
+    # What carries the residual risk is the fallback, and it is the reason this
+    # flip is safe rather than brave: `server.py` wraps
+    # `SupervisorClient.connect_or_spawn` in a bare `except Exception` and starts
+    # the daemon unsupervised when anything at all goes wrong - no supervisor
+    # bundle beside a frozen app, no `config_path`, a port the loopback socket
+    # cannot take, a child that dies before it writes its discovery file. So the
+    # worst case of this default is the behaviour that used to be the *only*
+    # behaviour, plus one logged exception, and a daemon that will not start is
+    # not among the outcomes. `tests/test_live_daemon.py` holds that fallback and
+    # the supervised path to the same standard on every CI runner.
+    #
+    # A **source** install (pip/uv tool/pipx) needs no bundle: `supervisor_command`
+    # launches `python -m swe_mux.supervisor`, which is the same wheel the daemon
+    # was imported from. Only a *frozen* app resolves a dedicated bundle, and only
+    # a frozen app can be missing one.
+    pty_supervisor_enabled: bool = True
     # Cold session recovery: keep a durable registry of live sessions so ones
     # whose daemon *and* PTY owner both died come back as visible-but-dead rows
     # rather than vanishing. On by default - the supervisor covers a daemon

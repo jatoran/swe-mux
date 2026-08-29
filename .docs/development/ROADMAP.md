@@ -132,7 +132,8 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   strand, the auto-delivery grant lapses, the retired conversation keeps its own history row
   and messages, Branch follows the live conversation, and `agent_run_seq` keeps a rolled run
   from being repaired away by adoption. `design/features/backends.md`.
-- Session-preserving daemon reload (`pty_supervisor_enabled`, default off): an out-of-process
+- Session-preserving daemon reload (`pty_supervisor_enabled`, on by default since
+  2026-08-28): an out-of-process
   PTY supervisor owns ConPTYs/scrollback/reaper Job so a daemon restart leaves agents running
   and the next daemon reattaches; intent-signaled shutdown (desktop Quit/Restart, terminal
   detach + `muxd --shutdown`) keeps explicit quit reaping cleanly. Reload triggers everywhere:

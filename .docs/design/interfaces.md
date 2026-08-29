@@ -67,10 +67,13 @@ way and the phase breakdown of the finished start stays readable without opening
 
 Ready, it remains ordinary local/tailnet diagnostics; it also reports `supervisor: bool`
 (whether the daemon is attached to the PTY supervisor), `supervisor_state`
-(`connected | lost | absent`), and `supervisor_unadopted`. `lost` is deliberately distinct
-from `absent`: the supervisor process is alive and still holds live sessions, this daemon
-just cannot reach them — reporting that as "no supervisor" hides sessions that are running
-and unkillable from here. `supervisor_unadopted` counts supervised sessions this daemon
+(`connected | lost | absent`), `supervisor_pid`, and `supervisor_unadopted`. `lost` is
+deliberately distinct from `absent`: the supervisor process is alive and still holds live
+sessions, this daemon just cannot reach them — reporting that as "no supervisor" hides
+sessions that are running and unkillable from here. `supervisor_pid` names which process
+that is, as the daemon knows it rather than as the supervisor's own discovery file claims,
+and is `null` whenever no supervisor was reached; `lost` is the state it exists for, because
+"alive and unreachable" is only actionable if you can say which process it is about. `supervisor_unadopted` counts supervised sessions this daemon
 could not rebuild (snapshot drift, a crash inside the spawn-meta window); they keep running
 with no UI handle, so the count must be visible rather than only a log line.
 It also reports `session_recovery: bool`, `cold_sessions`, and `inactive_sessions`.
@@ -386,8 +389,8 @@ sockets the shutdown is about to close.
 
 ## PTY supervisor IPC (local only)
 
-With `pty_supervisor_enabled`, the daemon talks to the standalone PTY supervisor over a
-loopback TCP socket discovered through `<data_dir>/supervisor.json` (pid, port, random token,
+With `pty_supervisor_enabled` (the default), the daemon talks to the standalone PTY
+supervisor over a loopback TCP socket discovered through `<data_dir>/supervisor.json` (pid, port, random token,
 protocol version). Frames are length-prefixed JSON headers with optional binary payloads;
 `hello` performs a constant-time token check plus a protocol-version handshake and announces
 existing sessions; it is payload-free by enforcement, is read under a small header cap, and has

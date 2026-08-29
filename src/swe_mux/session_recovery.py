@@ -4,10 +4,15 @@ The PTY supervisor already keeps live sessions running across a daemon restart
 (`SESSION_PRESERVING_RELOAD.md`). What it cannot do is survive its *own* death:
 its kill-on-close Job takes every process tree with it, and the authoritative
 scrollback plus the mirrored per-session metadata are both process memory. So a
-supervisor crash, a force close, a power loss, or simply running with
+supervisor crash, a force close, a power loss, a daemon that started unsupervised
+because no supervisor could be spawned, or the rare install that turned
 `pty_supervisor_enabled` off leaves the next daemon with no idea those sessions
 ever existed - the sidebar comes up empty and the persisted pane layout is
 pruned against the (empty) live set.
+
+(The flag is on by default since 2026-08-28. That moves "no supervisor" from a
+configuration most installs were in to a degraded start a few will hit, and it
+narrows nothing here: every other entry in that list was always the case.)
 
 This module is the fallback behind that. Two layers, deliberately independent:
 

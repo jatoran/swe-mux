@@ -700,7 +700,12 @@ class DesktopRuntime:
         ]
         if self.config.pty_supervisor_enabled:
             # Only meaningful with the PTY supervisor: without it a daemon
-            # restart kills every session, so the item would be a footgun.
+            # restart kills every session, so the item would be a footgun. The
+            # setting is on by default, so this is now shown almost always -
+            # and it is the *setting*, not evidence a supervisor attached. A
+            # daemon whose supervisor failed to spawn shows the item and
+            # `/api/daemon/restart` refuses it with 409, which is the honest
+            # order: the route knows the runtime state and the tray does not.
             menu_items.append(
                 pystray.MenuItem("Restart daemon (keep sessions)", self.restart_daemon)
             )
