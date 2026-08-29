@@ -295,30 +295,29 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 
 
 /* ------------------------------------------------------------- hero visual */
+/* Two real captures rather than the dashed frames that stood here: the desktop
+   workspace at full width, with the phone overlapping its lower right. Both are
+   solid-bordered, because a dashed frame around a real screenshot reads as "not
+   done yet" and this is the first thing anyone sees. */
 .herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
 .herovis .frame {
-  border: 1px dashed var(--line-2); aspect-ratio: 16 / 9; padding: 11px 13px;
-  display: flex; flex-direction: column; gap: 7px; background:
-    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+  border: 1px solid var(--line-2); background: var(--panel-2); overflow: hidden;
 }
 .herovis .phone {
   position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
-  width: clamp(84px, 15%, 186px); aspect-ratio: 9 / 19.5;
-  border: 1px dashed var(--line-2); border-radius: 11px; padding: 8px 7px;
-  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 0 0 7px var(--bg); background:
-    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch-2) 8px 9px), var(--panel);
+  width: clamp(84px, 15%, 186px);
+  border: 1px solid var(--line-2); border-radius: 11px; overflow: hidden;
+  box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
 }
-.herovis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
-                border-bottom: 1px solid var(--line); padding-bottom: 5px; }
-.herovis .frame .tag { color: var(--cyan); }
-.herovis .phone .tag { color: var(--orange); border-bottom-color: var(--line-2); font-size: 8px;
-                       padding-bottom: 4px; letter-spacing: .06em; }
-.herovis p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-3); max-width: 62ch; }
-.herovis .phone p { font-size: 8.5px; line-height: 1.4; }
+.herovis img { display: block; width: 100%; height: auto; }
+.herovis figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
+                      padding: 8px 10px; border-top: 1px solid var(--line); }
+/* The phone is decorative here - the same view is captioned in section 01 - so it
+   carries no caption of its own at any width; a caption inside a 186px column is
+   unreadable and a caption outside it fights the frame's. */
 @media (max-width: 620px) {
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
-  .herovis .phone p { display: none; }
 }
 
 /* --------------------------------------------------- inline visualizations */
@@ -386,6 +385,16 @@ figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
                        padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
                        line-height: 1.58; color: var(--fg-2); }
 .shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
+
+/* A real capture standing in a `.crops` grid cell, where a `.crop` placeholder
+   used to be. It reuses `.crops` rather than getting a grid of its own so a
+   section can hold one of each while the remaining placeholders are filled.
+   The mobile column is capped rather than filled: a 1206x2622 capture at the
+   0.46fr column's natural width is over 750px tall beside a 470px desktop crop,
+   which pushes the section past two screens for nothing. */
+.crops figure.shot { align-self: start; }
+.crops figure.shot.m { max-width: 240px; justify-self: start; }
+@media (max-width: 460px) { .crops figure.shot.m { max-width: 190px; } }
 .shotpair .claims li::before { content: "▸"; color: var(--green); }
 .shotpair .claims b { color: var(--fg); }
 
@@ -894,10 +903,36 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     </div>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.1...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.2...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
       <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.1.2">0.1.2</a></h2>
+        <span class="when">2026-08-28</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.1.2">release notes</a>
+      </div>
+      <p class="prose">0.1.1 published to PyPI but produced no desktop artifact and no GitHub Release, so an installed copy was still told 0.1.0 was the newest version. This release carries everything 0.1.1 did, and the artifacts it could not build.</p>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">2 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 4 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span>The <b>Windows installer</b> and the portable desktop archive, which 0.1.1 intended to publish and did not. See the 0.1.1 notes below for what they are.</span></li>
+          <li><span>The website's download section, filled from the release manifest rather than by hand, so it names the artifacts a release actually carries.</span></li>
+        </ul>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b>The Windows installer did not build.</b> Inno Setup resolves a relative source path against the installer script's own directory rather than against the working directory it is compiled from, so the build looked for the application bundle inside <code>packaging/installer/</code> and found nothing. Every earlier step of the release had succeeded, which is why 0.1.1 reached PyPI without it.</span></li>
+          <li><span>The site now ships real screenshots, taken in a synthetic installation with invented projects and no personal data, rather than generated placeholders.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

@@ -17,7 +17,9 @@ These are cheap to make and several tasks are stalled behind them.
 - [ ] **History: rewrite or fresh start.** Task 3 covers the rewrite. Recommendation is rewrite, for the reasons recorded there.
 - [ ] **Windows code signing.** Azure Trusted Signing (~$10/month, the cheap modern path), an OV certificate (~$100-400/year, reputation accrues with downloads), or ship unsigned and document the SmartScreen warning on the download page.
       Unsigned PyInstaller executables are the single largest source of "is this malware" reports at launch.
-      This can be deferred past the source release but not past the first desktop binary.
+      **The third option is what happened, by default rather than by decision.** v0.1.2 published an unsigned installer and a portable archive on 2026-08-28; the download page and `README.md` both say it is unsigned and what Windows will do about it, and `check.mjs` asserts both halves so neither can be quietly tidied away while it is still true.
+      That is a defensible state for an invited beta and a poor one for a public launch, so it is now recorded as a **launch gate** rather than an open option: [`../marketing/LAUNCH_CHECKLIST.md`](../marketing/LAUNCH_CHECKLIST.md) § 6 blocks the main public beat on it, and states that firing that beat unsigned has to be a decision somebody makes rather than a thing that happens.
+      Deciding it needs a purchase, which is why it is here.
 
 ## 2. The leaked Tailscale certificate: already rotated, no action needed
 
@@ -110,13 +112,14 @@ Agent W2 writes the deploy workflow; the account-side setup is yours.
 - [ ] Add `swemux.dev` as the custom domain.
 - [ ] DNS at the registrar: apex `A` records to GitHub's four Pages addresses, plus a `www` `CNAME` to `<owner>.github.io`.
 - [ ] Wait for the certificate, then enable **Enforce HTTPS**.
-- [ ] Fill the three `data-todo` placeholders in `site/index.html` (docs, blog, repository URLs) once the owner is known. Verify with `grep -rn data-todo site/`.
+- [x] Fill the three `data-todo` placeholders in `site/index.html` (docs, blog, repository URLs). All three are filled; `TODO_VALUES` in `site/tools/build.py` and `check.mjs` is now empty and the guard stays. Verify with `grep -rn data-todo site/`, which should find only the guards themselves.
 - [ ] Re-run the site's own gates after editing: `node site/tools/check.mjs` and `python site/tools/contrast.py`.
 
 ## 6. PyPI
 
-**Done 2026-08-28: `swe-mux` 0.1.0 is published.**
-`https://pypi.org/pypi/swe-mux/json` answers 200 and lists `swe_mux-0.1.0-py3-none-any.whl` and `swe_mux-0.1.0.tar.gz`.
+**Done 2026-08-28: `swe-mux` is published, and is at 0.1.2.**
+`https://pypi.org/pypi/swe-mux/json` answers 200.
+0.1.1 repaired the `voice-local` extra, which was uninstallable from an index for the whole life of 0.1.0; 0.1.2 shipped the Windows installer and portable archive that 0.1.1's build failed to produce.
 
 - [x] Register the `swe-mux` name on PyPI. Do this early; names are first-come.
 - [x] Configure **Trusted Publishing** (PyPI, Publishing, add a GitHub publisher naming the owner, repo, and the release workflow filename W2 creates). No long-lived API token is stored anywhere.
@@ -135,12 +138,14 @@ The leak this section was written about is closed.
 - [x] **Stand up the capture environment.** `trailer/capture_env.py` builds it: five invented Projects with their own git repositories, invented commit authors, seven sessions, a seeded note, five attention items, and a fixture provider account with invented quota. It runs a second daemon on 8799 under `D:/swemux-capture`, and it prints the operator daemon's health before and after so a collision cannot pass unnoticed. Method and traps: `trailer/SITE_SHOTS.md`.
 - [x] **Audit all eleven files in `site/img/`.** Both logos are wordmarks and carry nothing. The nine screenshot slots were placeholders drawn by `site/tools/placeholders.py` at the time of the audit, so none of them was leaking - the leak had already been closed by pulling the originals, which remain in that file's git history and are dealt with by task 3.
 - [x] **Recapture.** Eight of the nine are now real shots of the synthetic install, at the dimensions the page declares. `capture_site_shots.scan_for_leaks` reads each rendered page and refuses to write the file if it contains the host's home directory, account name, or configured git identity; the list is derived at run time rather than written down.
-- [ ] **`desktop-insight.webp` is still a placeholder**, and it is the only one. Activity's Timeline segment is gated on the session having a harness transcript and every session in the capture environment is a shell; its sibling Findings segment renders the detector opt-in screen for the same reason. Both need a real agent CLI, which needs a provider credential - the thing the environment exists to exclude. `trailer/SITE_SHOTS.md` records the way through (real `CLAUDE_CONFIG_DIR`, synthetic `USERPROFILE`, one bounded agent run) and why it is an operator's call: it spends the subscription and writes into the real agent config.
+- [ ] **`desktop-insight.webp` is the last placeholder**, and it is the only one. Activity's Timeline segment is gated on the session having a harness transcript and every session in the capture environment is a shell; its sibling Findings segment renders the detector opt-in screen for the same reason. Both need a real agent CLI, which needs a provider credential - the thing the environment exists to exclude. `trailer/SITE_SHOTS.md` records the way through (real `CLAUDE_CONFIG_DIR`, synthetic `USERPROFILE`, one bounded agent run) and why it is an operator's call: it spends the subscription and writes into the real agent config.
+      **`site/index.html` now references all nine slots including this one**, captioned as a real screenshot, because the wiring is correct whichever file is underneath and the placeholder carries the same declared dimensions. That makes this the one remaining way the site can state something untrue, so it is a publish blocker rather than a nice-to-have. Cheap check: the generated placeholders are around 19 KB and every real capture in `img/` is over 45 KB.
 - [ ] Record the launch assets from that environment: one 60 to 90 second hero video, plus feature GIFs for the orchestrator fan-out, the land queue landing branches serially, phone and voice control, the status board, and a session-preserving redeploy. The environment now makes these possible without a VM; `trailer/capture_live_ui.py`'s scene functions port onto it by changing its `URL` and its session names.
 - [ ] Drop them into the `TODO(release)` markers the agents left in `README.md` and `.docs/marketing/`.
 - [x] **Keep the capture scripts and scene notes beside the assets.** `trailer/capture_env.py`, `trailer/capture_site_shots.py`, and `trailer/SITE_SHOTS.md`.
+- [x] **Put them on the page.** Taking the shots and referencing them are two acts, and for a day only one of the nine was referenced while eight sat in the deploy root unused. `site/index.html` now uses each of the nine exactly once (WP-ALIGN), and `site/README.md` § 8 carries the placement table.
 
-Two things `site/README.md` § 8 now states that are no longer true, and are the site's own to correct rather than this document's: "EVERY SCREENSHOT IN `img/` IS A PLACEHOLDER", and the instruction not to restore the `Real screenshot.` caption under `mobile-session.webp`.
+`site/README.md` § 8 has been corrected and no longer states the two things this paragraph used to flag ("EVERY SCREENSHOT IN `img/` IS A PLACEHOLDER", and the instruction not to restore the `Real screenshot.` caption). It now records the placement, the eager-loading requirement the site gate imposes, and the `desktop-insight.webp` publish blocker above.
 
 ## 8. Clean-machine validation
 
@@ -292,7 +297,7 @@ Recorded so they are decisions rather than oversights.
   The rest of Phase 16 - the help surface, the tour's stale prose, and the two handed-off usability findings - closed on the same day (WP-P16), so all four exit criteria are now met.
   Read those criteria before repeating a blocker claim: a release document that overstates open work is read by the person deciding whether to announce, and costs them the same day a document that overstates completion would.
   One residue is recorded there rather than here: three daemon-side error strings still name a nonexistent "Settings → Assistant" tab (`assistant.py` twice, `routes/assistant.py` once). It is one string each and it reaches an operator only through the assistant's own error path.
-- **`site/index.html` is 883 lines of hand-authored markup** with its own check tooling. It is in good shape; it needs the placeholder URLs and the screenshot recapture, not a rewrite.
+- **`site/index.html` is around 1470 lines of hand-authored markup** with its own check tooling. It is in good shape. The placeholder URLs are filled (`TODO_VALUES` and `PENDING_PAGES` are both empty and the guards stay), and the nine real screenshots are wired in. What it still wants is the hero video, the feature GIFs, the nine remaining `.crop` shots, and the two `.vis` diagrams - not a rewrite.
 
 ## Agent work packages
 
