@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test'
+import { harnessReady } from './harnessReady'
 
 test('DECRQM startup queries neither crash the parser nor stop rendering', async ({ page }) => {
   // oh-my-pi probes five DEC private modes at startup — the only integrated
@@ -12,6 +13,7 @@ test('DECRQM startup queries neither crash the parser nor stop rendering', async
   page.on('pageerror', error => pageErrors.push(error.stack ?? error.message))
 
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runDecrqmProbe')
   const result = await page.evaluate(() => window.runDecrqmProbe())
 
   expect(result.writeCompleted, 'write callbacks must survive the DECRQM barrage').toBe(true)

@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test'
+import { harnessReady } from './harnessReady'
 
 type Harness = { __landed: string[]; __finishRemoval: () => void; __refuse: (path: string) => void }
 
@@ -48,6 +49,7 @@ test('a removing worktree stays dimmed until the inventory drops it', async ({ p
 test('a refused removal un-dims that row alone and states why', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 })
   await page.goto('/git-map-select-harness.html')
+  await harnessReady(page, '__refuse')
   await page.evaluate(path => (globalThis as unknown as Harness).__refuse(path), CLEAN)
   await page.getByRole('button', { name: 'Select', exact: true }).click()
   await page.getByRole('button', { name: 'All removable' }).click()
