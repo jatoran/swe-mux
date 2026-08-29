@@ -71,7 +71,8 @@ test('the Automation workspace owns global and per-Project automation controls',
 })
 
 test('Project targets name a marked control or a real automation id', () => {
-  const manager = source('AutomationMatrix.tsx') + source('ProjectsManager.tsx')
+  const manager =
+    source('AutomationMatrix.tsx') + source('ProjectsManager.tsx') + source('AutomationAuthority.tsx')
   // The opt-in rows are marked from the registry entry itself, so every implemented
   // automation is addressable without a per-automation attribute in the source.
   assert.ok(manager.includes('data-setting={automationSetting(item.id)}'))
@@ -87,29 +88,37 @@ test('Project targets name a marked control or a real automation id', () => {
       )
       continue
     }
-    // The authority fields render from one table rather than as four hand-written rows,
-    // so their mark is `data-setting={row.setting}` — the same shape the automation rows
-    // already use. Both halves are asserted: the attribute exists, and this field is one
-    // of the values it is fed.
+    // The authority fields render from one table rather than as hand-written rows, so
+    // their mark is dynamic — `data-setting={row.setting}` in the Projects registry's
+    // summary, `data-setting={spec.field}` on the policy matrix's editor, the same shape
+    // the automation rows already use. Both halves are asserted: the attribute exists,
+    // and this field is one of the values it is fed. The second half is why
+    // `AutomationAuthority` writes its `setting:` keys out as literals instead of
+    // deriving them from the payload it renders.
     if (manager.includes(`data-setting="${target.setting}"`)) continue
+    const marked = manager.includes('data-setting={row.setting}')
+      || manager.includes('data-setting={row.field}')
+      || manager.includes('data-setting={spec.field}')
     assert.ok(
-      manager.includes('data-setting={row.setting}')
-        && manager.includes(`setting: '${target.setting}'`),
+      marked && manager.includes(`setting: '${target.setting}'`),
       `${id} points at a Project control that is not marked: ${target.setting}`,
     )
   }
 })
 
 // Every authority field the daemon parses is a decision someone has to be able to make.
-// All four of these shipped enforced and unreachable: a line in a committed TOML file
-// with no control in any overlay, which made the inert default impossible to discover
-// and impossible to change from the app. A fifth arriving the same way fails here.
-test('every grantable Project authority field has an owner in the Projects registry', () => {
-  // Two owners split by what the field governs: the four authority fields stay
-  // in the Projects registry (AgentAuthority), while `scan_timeline_auto_enable`
-  // rides the scan row in the Automation policy matrix beside the permission it
-  // qualifies.
-  const manager = source('ProjectsManager.tsx') + source('AutomationMatrix.tsx')
+// All four of the originals shipped enforced and unreachable: a line in a committed TOML
+// file with no control in any overlay, which made the inert default impossible to discover
+// and impossible to change from the app. One arriving the same way fails here.
+test('every grantable Project authority field has an owner in the policy matrix', () => {
+  // One owner as of 2026-08-29: the Automation policy matrix, which holds the
+  // authority rows (AutomationAuthority), the `scan_timeline_auto_enable` row
+  // beside the permission it qualifies, and the install-wide default and ceiling
+  // that only exist there. The Projects registry is included because it still
+  // renders the read-only summary that makes the fields discoverable from where
+  // a Project is configured, and either surface naming a field satisfies this.
+  const manager =
+    source('ProjectsManager.tsx') + source('AutomationMatrix.tsx') + source('AutomationAuthority.tsx')
   const grantsModule = readFileSync(join(root, '..', 'src', 'swe_mux', 'grants.py'), 'utf8')
   // Split on the declaration, not the bare name: the module's own docstring names it too.
   const table = grantsModule.split('GRANTABLE_PROJECT_VALUES: Mapping')[1].split('\n}')[0]

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, providerQuotaWindows, quotaGridSegments, quotaSummary, shownUsageBand, usageBand } from '../src/providerAccountDisplay.ts'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, loginCommand, loginOf, loginRunning, providerQuotaWindows, quotaGridSegments, quotaSummary, shownUsageBand, signInTitle, usageBand } from '../src/providerAccountDisplay.ts'
 
 test('quota windows come from the selected account of each provider, never another slot',()=>{
   const accounts=[
@@ -96,6 +96,45 @@ test('quota summaries include compact 5-hour and weekly reset countdowns',()=>{
   assert.equal(formatResetRemaining(now+4*3600+3*60,now),'4h3m')
   assert.equal(formatResetRemaining(now+3*86400+3600,now),'3d1h')
   assert.equal(quotaSummary(account,now),'5% 4h3m - 63% 3d1h · 30% Fable')
+})
+
+test('only a running sign-in tightens the poll; a finished one is a result to read',()=>{
+  const running={provider:'claude',state:'running',started_at:1} as const
+  const failed={provider:'codex',state:'failed',started_at:1,error:'codex login timed out'} as const
+  assert.equal(loginRunning({claude:running,codex:null}),true)
+  // A `succeeded`/`failed` entry is an outcome sitting on screen, not something to keep
+  // asking the daemon about - polling it at 3s would be a tighter cadence for less reason.
+  assert.equal(loginRunning({claude:null,codex:failed}),false)
+  assert.equal(loginRunning({}),false)
+  assert.equal(loginRunning(undefined),false)
+  assert.equal(loginRunning(null),false)
+})
+
+test('a provider with no sign-in reported reads as none rather than undefined',()=>{
+  const running={provider:'claude',state:'running',started_at:1} as const
+  assert.equal(loginOf({claude:running,codex:null},'claude'),running)
+  assert.equal(loginOf({claude:running,codex:null},'codex'),null)
+  // The map is absent entirely against a daemon older than this field.
+  assert.equal(loginOf(undefined,'claude'),null)
+  assert.equal(loginOf({},'pi'),null)
+})
+
+test('the sign-in tooltip names the command the daemon reported, never one compiled in here',()=>{
+  // The daemon builds these from the *configured* executable, so an install that pointed
+  // `harness_exe` elsewhere is described accurately rather than by the shipped default.
+  const commands={claude:'D:\\tools\\claude.cmd auth login --claudeai',codex:'codex login'}
+  assert.equal(loginCommand(commands,'claude'),'D:\\tools\\claude.cmd auth login --claudeai')
+  assert.equal(
+    signInTitle(commands,'codex'),
+    'Runs codex login on the daemon host and saves the account it produces.',
+  )
+  // A daemon older than this field reports none. The control still says what it does; it
+  // just does not name a command it cannot vouch for.
+  assert.equal(loginCommand(undefined,'claude'),'')
+  assert.equal(
+    signInTitle(undefined,'claude'),
+    "Runs claude's login on the daemon host and saves the account it produces.",
+  )
 })
 
 test('account popovers escape a narrow sidebar and remain inside the viewport',()=>{

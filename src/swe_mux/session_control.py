@@ -17,6 +17,7 @@ erase itself: the tool returns before teardown and the record survives.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -31,11 +32,26 @@ from .project_scope import (
     split_qualified_target,
 )
 from .prompt_queue import QueueError
+from .spawn_contract import field_refusal, requested_spawn_model
+
+log = logging.getLogger(__name__)
 
 #: The end reason persisted for any agent-initiated end reached through this
 #: surface - graceful or hard fallback - so a post-mortem can tell it apart from
 #: an operator `killed` and a CLI `exited`.
 AGENT_END_REASON = "agent_ended"
+
+#: How long an agent-created pane must stay alive before it counts as up. The same
+#: 2.5s the resume flow settled on, and for the same reason: the failures this
+#: catches print one line and exit inside a second and a half. Measured 2026-08-29
+#: against a launch flag a CLI rejects - `claude`, `pi`, `omp` and `opencode` all
+#: exit 1 on an unusable `--model` before sending anything, so this window is what
+#: turns four of the five into a sentence instead of a grey pane.
+#:
+#: Codex is the fifth and does not: it starts, warns, and dies on the provider's
+#: 400 at the first turn. No spawn window can catch that, which is what the
+#: observed-model check (`harness.model_agreement`) is for.
+AGENT_SPAWN_SETTLE_SECONDS = 2.5
 
 #: The window the per-origin budget and the reciprocal-cycle guard look back over.
 _BUDGET_WINDOW_SECONDS = 3600.0
@@ -68,6 +84,7 @@ class SessionControlService:
         is_daemon_owner: Callable[[Any], bool],
         spawn_grant_field: Callable[[str], str] | None = None,
         spawn_op: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
+        settle_op: Callable[[Any], Awaitable[str | None]] | None = None,
         draft_spawn: Any = None,
         append_observation: Any = None,
         read_observations: Any = None,
@@ -88,6 +105,10 @@ class SessionControlService:
         # directly on the granted path.
         self._spawn_grant_field = spawn_grant_field
         self._spawn_op = spawn_op
+        # Proof that the pane the agent asked for is still up a moment later, and
+        # the harness's own dying words when it is not. `None` leaves the spawn
+        # unverified, which is what every caller got before this existed.
+        self._settle_op = settle_op
         self._draft_spawn = draft_spawn
         self._append_observation = append_observation
         self._read_observations = read_observations
@@ -146,6 +167,7 @@ class SessionControlService:
         reason: str = "",
         correlation_id: str | None = None,
         project: str = "",
+        model: str = "",
     ) -> dict[str, Any]:
         """Create a session, or draft the request, per the target Project's grant.
 
@@ -193,12 +215,12 @@ class SessionControlService:
         if grant != "granted":
             result = await self._draft_spawn_request(
                 caller, prompt=text, backend=backend, name=name, reason=reason,
-                project=project,
+                project=project, model=model,
             )
         else:
             result = await self._spawn_now(
                 caller, target_project, prompt=text, backend=backend, name=name,
-                reason=reason,
+                reason=reason, model=model,
             )
         if correlation:
             result = {**result, "correlation_id": correlation}
@@ -225,6 +247,7 @@ class SessionControlService:
         backend: str,
         name: str,
         reason: str,
+        model: str = "",
     ) -> dict[str, Any]:
         if self._spawn_op is None:
             raise QueueError(
@@ -232,17 +255,32 @@ class SessionControlService:
                 "this daemon cannot spawn a session directly",
                 status=503,
             )
-        self._enforce_spawn_budget(caller)
         resolved_backend = backend or str(getattr(caller.record, "backend", "") or "")
+        # Before the budget: a request refused for naming an unusable model has
+        # not spawned anything, and charging it would let a typo spend an hour's
+        # allowance.
+        try:
+            resolved_model = await requested_spawn_model(resolved_backend, model)
+        except ValueError as exc:
+            raise QueueError(
+                "invalid_model", field_refusal(exc, "model"), status=400
+            ) from exc
+        self._enforce_spawn_budget(caller)
         body: dict[str, Any] = {
             "project_id": str(target_project.id),
             "backend": resolved_backend,
             "seed_text": prompt,
         }
+        if resolved_model:
+            body["model"] = resolved_model
         label = str(name or "").strip()[:80]
         if label:
             body["name"] = label
         session = await self._spawn_op(body)
+        # Recorded before the pane is proven, because the budget counts *attempts*.
+        # A spawn that starts a process and dies has spent the same real resources
+        # as one that lives, and a request that fails identically every time is
+        # exactly what an hourly ceiling is for.
         self._recent.append(
             _ControlAction(
                 origin_session=str(caller.record.id),
@@ -251,6 +289,31 @@ class SessionControlService:
                 at=self._clock(),
             )
         )
+        failure = await self._settle_spawn(session)
+        if failure is not None:
+            await self.events.emit(
+                "agent_session_control",
+                session_id=str(caller.record.id),
+                source="agent",
+                action="spawn",
+                outcome="spawn_failed",
+                target_session_id=str(session.record.id),
+                target_name=str(session.record.name),
+                origin_run_id=str(getattr(caller.record, "agent_run_id", "") or ""),
+                project_id=str(target_project.id),
+                reason=str(reason or "")[:500],
+            )
+            raise QueueError(
+                "spawn_failed",
+                # The harness's own words, not mux's guess at them. Four of the
+                # five CLIs refuse an unusable model this way and name it; a
+                # caller that is an agent can act on that and retry with another,
+                # which is the whole reason the pane is not left to die
+                # unannounced.
+                f"the {resolved_backend} pane exited during startup and was "
+                f"discarded: {failure}",
+                status=502,
+            )
         await self.events.emit(
             "agent_session_control",
             session_id=str(caller.record.id),
@@ -273,12 +336,46 @@ class SessionControlService:
             "project_id": str(target_project.id),
             "project_name": str(target_project.name),
             "cross_project": cross_project,
+            **({"model_requested": resolved_model} if resolved_model else {}),
             "note": (
-                "A live session was created and seeded with your prompt. Watch it "
-                "with get_session / read_transcript, and end it with end_session "
-                "when its work is done."
+                "A live session was created and seeded with your prompt, and its "
+                "pane was still up a moment later. Watch it with get_session / "
+                "read_transcript, and end it with end_session when its work is "
+                "done."
+                + (
+                    " The model it is actually running is not confirmed until its "
+                    "first turn produces usage: read model_status back from "
+                    "get_session, where `pending` means not yet answered and "
+                    "`divergent` means the flag did not take."
+                    if resolved_model
+                    else ""
+                )
             ),
         }
+
+    async def _settle_spawn(self, session: Any) -> str | None:
+        """How the new pane died inside its settle window, or `None` if it is up.
+
+        Only on this path, and deliberately not on the HTTP spawn a person makes.
+        An operator watching a pane appear sees it die; an agent gets a session id
+        and a success, plans around it, and finds out much later - or never. The
+        window is a fixed cost on every agent-initiated spawn and it is the right
+        trade at this one call site.
+
+        A probe that raises must not fail a spawn that worked: this proves a pane
+        is dead, and it can only ever say "no evidence" when it cannot run.
+        """
+        if self._settle_op is None:
+            return None
+        try:
+            return await self._settle_op(session)
+        except Exception:  # noqa: BLE001 - a failed proof is not a failed spawn
+            log.warning(
+                "spawn_settle_probe_failed session_id=%s",
+                getattr(getattr(session, "record", None), "id", "?"),
+                exc_info=True,
+            )
+            return None
 
     async def _resolve_spawn_grant(self, root: str) -> str:
         """off / draft / granted for spawning into a Project root.

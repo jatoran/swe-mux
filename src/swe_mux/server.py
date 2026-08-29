@@ -30,6 +30,7 @@ from . import (
     routes,
 )
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
+from .agent_authority import authority_resolver
 from .agent_context import AgentContextService
 from .agent_messaging import AgentMessagingService
 from .assistant import (
@@ -125,12 +126,7 @@ from .project_files import (
     ProjectResourceExists,
     append_observation,
     project_automations,
-    project_interject_grant,
-    project_land_grant,
-    project_land_verify_grant,
     project_note_summaries,
-    project_session_control_grant,
-    project_spawn_grant,
     read_note,
     read_observations,
     read_project_config,
@@ -174,11 +170,12 @@ from .session import (
 from .session_attachments import (
     MAX_ATTACHMENT_BYTES,
 )
-from .session_control import SessionControlService
+from .session_control import AGENT_SPAWN_SETTLE_SECONDS, SessionControlService
 from .session_media import cleanup_expired_preview_shots, cleanup_expired_session_media
 from .session_recovery import SessionRecoveryStore
 from .session_watch import SessionWatchService
 from .settings_store import SettingsStore
+from .spawn_probe import discard_pane, settle_pane
 from .sqlite_store import begin_shutdown_drain, prepare_database
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
@@ -1128,7 +1125,8 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         auto_delivery,
         append_observation=append_observation,
         read_observations=read_observations,
-        interject_grant_field=project_interject_grant,
+        interject_grant_field=authority_resolver(config, "interject_grant"),
+        envelope_field=authority_resolver(config, "message_envelope"),
     )
     prompt_library = PromptLibrary(config.data_dir)
     settings_store = SettingsStore(config.data_dir)
@@ -1226,6 +1224,21 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # resolve a Project's opt-in closure the same way the in-loop consumers do.
     publish(app, {keys.AUTOMATION_GATE: _enabled_automations})
 
+    async def _settled_spawn_failure(manager: Any, session: Any) -> str | None:
+        """Wait out an agent-created pane's settle window; discard one that died.
+
+        The two halves belong together: a pane that failed to take its launch is
+        not a degraded success, so it is taken back out of the world rather than
+        handed to the caller as a session id it will keep asking about. The words
+        returned are the harness's own (`spawn_probe.pane_text`), which is what
+        makes this work for a refusal no version of mux has seen.
+        """
+        failure = await settle_pane(session, AGENT_SPAWN_SETTLE_SECONDS)
+        if failure is None:
+            return None
+        await discard_pane(manager, session)
+        return failure.describe()
+
     # Phase 7.6 session control. Every bound lives here in the daemon operation;
     # the MCP tools are thin callers. The interrupt and graceful-end operations
     # are the shared daemon ops the browser and CLI would call too, bound to this
@@ -1237,17 +1250,20 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         events=events,
         readiness_evaluate=prompt_queue.readiness.evaluate,
         automation_gate=_enabled_automations,
-        grant_field=project_session_control_grant,
+        grant_field=authority_resolver(config, "session_control_grant"),
         interrupt_op=lambda session: terminal_routes._interrupt_session_pty(app, session),
         graceful_end_op=lambda session, reason: terminal_routes._end_session_gracefully(
             app, session, reason
         ),
         is_daemon_owner=terminal_routes._session_owns_daemon,
-        spawn_grant_field=project_spawn_grant,
+        spawn_grant_field=authority_resolver(config, "spawn_grant"),
         # The granted spawn goes through the identical spawn path the browser and
         # the Fleet Queue approval use, so an agent-created session is spawned no
         # differently from any other.
         spawn_op=lambda body: session_routes._spawn_from_body(app, body),
+        # ...and the proof that it came up, which only this path takes: an
+        # operator watching a pane appear sees it die, an agent does not.
+        settle_op=lambda session: _settled_spawn_failure(sessions, session),
         draft_spawn=agent_messaging.request_spawn,
         append_observation=append_observation,
         read_observations=read_observations,
@@ -1406,8 +1422,8 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         config=config,
         events=events,
         automation_gate=_enabled_automations,
-        grant_field=project_land_grant,
-        verify_grant_field=project_land_verify_grant,
+        grant_field=authority_resolver(config, "land_grant"),
+        verify_grant_field=authority_resolver(config, "land_verify_grant"),
         project_values=_land_project_values,
         comparison_ref=_land_compare_ref,
         busy_sessions=_land_busy_sessions,

@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'preact/hooks'
 import { api } from './api'
+import { AutomationAuthority } from './AutomationAuthority'
+import type { AuthorityFieldSpec } from './AutomationAuthority'
 import { Dropdown } from './Dropdown'
 import { SettingLink } from './SettingLink'
 import { automationSetting } from './settingTargets'
@@ -32,12 +34,20 @@ export type MatrixProject={
   unverified?:string[];globally_disabled?:string[]
   llm?:{ready:boolean;reason:string}|null
   scan_timeline_auto_enable:boolean
+  // What this Project's own file says (null = unset, which is what lets the
+  // Project cell offer "Follow global" as a real third position) and what the
+  // daemon resolves after the install default and ceiling are layered on.
+  authority:Record<string,string|null>
+  authority_effective:Record<string,string>
 }
 export type MatrixData={
   automations:AutomationRegistryEntry[]
   projects:MatrixProject[]
   global_allow:Record<string,boolean>
   install_switches:{automation_enabled:boolean;scan_timeline_enabled:boolean;scheduled_runs_enabled:boolean;land_queue_enabled:boolean}
+  authority_fields:AuthorityFieldSpec[]
+  authority_default:Record<string,string>
+  authority_ceiling:Record<string,string|null>
 }
 
 const PRESETS_SEEN_KEY='mux.automationPresetsSeen'
@@ -111,6 +121,25 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       await api('PUT',`/api/projects/${project.project_id}/automations`,{
         automations,
         scan_timeline_auto_enable:project.scan_timeline_auto_enable,
+        revision:project.revision,
+      })
+      forgetProjectAutomations(project.project_id)
+      await onChanged()
+    }catch(cause){onError(cause instanceof Error?cause.message:String(cause))}
+    finally{setSaving(false)}
+  }
+  // Authority rides the same per-Project write as the opt-ins, because the
+  // Project's file is one revision and a second endpoint would race this one.
+  // The opt-in table goes along unchanged: the daemon replaces it wholesale,
+  // so sending the current one is how "change only the authority" is spelled.
+  const writeAuthority=async(authority:Record<string,string|null>)=>{
+    if(!project)return
+    setSaving(true)
+    try{
+      await api('PUT',`/api/projects/${project.project_id}/automations`,{
+        automations:project.requested,
+        scan_timeline_auto_enable:project.scan_timeline_auto_enable,
+        authority,
         revision:project.revision,
       })
       forgetProjectAutomations(project.project_id)
@@ -319,6 +348,10 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
         </div>}
       </div>:null)}
     </div>
+    <AutomationAuthority fields={data.authority_fields||[]} defaults={data.authority_default||{}}
+      ceiling={data.authority_ceiling||{}} projects={data.projects} projectId={project?.project_id||''}
+      busy={saving} onPatchConfig={changes=>void patchConfig(changes)}
+      onWriteProject={authority=>void writeAuthority(authority)}/>
     {/* Project-wide, scan-scoped, and meaningless without the permission above
         it - so it renders here beside the switch rather than in the
         session-scoped Timeline tab or the general Projects registry. */}

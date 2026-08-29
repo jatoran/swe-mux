@@ -36,11 +36,12 @@ its own is the default and nothing widens implicitly.
   policy of its own. `request_spawn` is the exception that proves the rule: one request starts
   one session in one Project, so it accepts a Project name and refuses `"fleet"` with
   `invalid_project`.
-- **A cross-Project message says so, and a same-Project one does not.** The envelope gains a
-  `from_project` header only when the message crossed a boundary. The receiver cannot infer
-  where a peer is working, and that changes how much the message is worth — but a header on
-  every message is one readers learn to skip. The same rule governs a cross-Project spawn
-  request, whose Fleet Queue body names the Project it came from.
+- **A cross-Project message says so, and a same-Project one does not.** The envelope names the
+  sender's Project only when the message crossed a boundary, at every level that has an
+  envelope at all. The receiver cannot infer where a peer is working, and that changes how much
+  the message is worth - but a clause on every message is one readers learn to skip. The same
+  rule governs a cross-Project spawn request, whose Fleet Queue body names the Project it came
+  from.
 - **One name may match twice once a call reaches past one Project.** Two Projects may each
   hold a session called `backend`. Resolution refuses with `ambiguous_target` and the candidate
   session ids rather than answering "not found", which is unactionable when the session does
@@ -122,8 +123,10 @@ its own is the default and nothing widens implicitly.
   `auto_delivery.py` must never disagree about which mode the install is in, or a working
   exchange's grant would lapse at the configured 40 while staging allowed 1 000.
 
-- **The envelope states its authority, because a receiver cannot infer it.** A peer's note and
-  an instruction a human approved arrive through the same pipe. The `authority` header says
+- **The envelope states its authority, because a receiver cannot infer it** - unless the target
+  Project chose `bare`, which is the one level that gives this up and the reason it is opt-in.
+  A peer's note and
+  an instruction a human approved arrive through the same pipe. The authority clause says
   which this is: a message auto-delivered under the target's standing grant declares that no
   human reviewed it, while a message that waited as a draft declares that a person armed it and
   released it. The auto-delivered form informs rather than forbids — a conflict with the
@@ -155,8 +158,10 @@ its own is the default and nothing widens implicitly.
   message.
 - **The envelope says a message arrived mid-turn, because the receiver cannot tell.** The CLI
   buffers the paste and hands it over at the turn boundary, so it reads exactly like something
-  typed between turns. The `delivery:` header names it and says what the claim is: the sender
-  asked for it to arrive sooner, which is a claim about urgency and not about authority.
+  typed between turns. The envelope names it and says what the claim is: the sender asked for
+  it to arrive sooner, which is a claim about urgency and not about authority. That clause is
+  carried at `compact` as well as `full`, because a message that interrupted a turn is the one
+  a receiver is most likely to over-weight.
 - **A reply refreshes the replying session's own auto-delivery budget.** Writing a reply is
   direct evidence that the session consumed what was delivered to it and is still working the
   exchange - the opposite of the unattended run the consecutive-send cap exists to stop - so
@@ -224,10 +229,32 @@ its own is the default and nothing widens implicitly.
   it, which also keeps it underivable from anything the caller supplies.
 - **Retry-safe correlation.** An optional `correlation_id` is unique per sender; a retry
   returns the original message instead of a duplicate in the target's queue.
-- **The receiver sees provenance in the prompt.** The stored queue body begins with a bounded `[mux notification]` envelope naming message id, correlation id, sender session, sender run, sender name, sender backend, optional reason, and a `reply_with` line carrying the exact target to answer and how many messages the exchange has left.
-  The daemon generates message and correlation ids before enqueue, so the visible values match the durable row and the result returned to the sender.
-  The `reply_with` line is not decoration: the envelope is the only surface the receiver sees, and without it an agent learns whether it may answer from a refusal, which is how a reply gets abandoned as impossible.
-  The original caller body follows the envelope unchanged.
+- **The receiver sees provenance in the prompt, at the level the target Project asks for.**
+  The stored queue body begins with a bounded envelope, and the original caller body follows it unchanged.
+  How much that envelope says is the target Project's `message_envelope` (`automation-enablement.md`), resolved through the same four install layers as the actuation grants.
+  The reply affordance is not decoration at any level that has one: `notify` is fire-and-forget into a queue, so nothing carries an answer back on its own, and without the line an agent learns whether it may answer from a refusal - which is how a reply gets abandoned as impossible.
+  This is the structural difference from a synchronous orchestrator like herdr, whose `agent.prompt --wait` blocks on the target settling and therefore needs no reply route in the text at all.
+
+  | Level | What it carries |
+  |---|---|
+  | `full` | The `[mux notification]` block: sender session, name, backend, cross-Project clause, reason, the whole standing-grant statement, the mid-turn paragraph, and `reply_with`. |
+  | `compact` (default) | Two `[mux]` lines: sender name and session, cross-Project clause when there is one, whether a human reviewed it, the conflict instruction, the mid-turn clause when it applies, and the reply route. |
+  | `bare` | The body alone, textually indistinguishable from the operator typing. |
+
+  Three things were dropped from `full` outright on 2026-08-29, at every level, because no receiver had a tool to spend them on: `message_id` and `correlation_id` are the *sender's* bookkeeping for `message_status` and `revoke`, and `notify` already returns both to it; `from_run` is a handle no receiver-facing tool takes.
+  Measured on the worst case - cross-Project, armed, mid-turn, over a 67-character body - the envelope went from 958 characters to 819 at `full`, 428 at `compact`, and 0 at `bare`.
+
+  **The conflict instruction stays at `compact`.** A first draft of the level cut it for length and a test caught it, which is the argument for keeping it: the sentence is not provenance decoration, it is the only thing telling a receiver what to do when a peer contradicts its operator, and the conservative reading a model reaches without it - refuse, and stall - is the failure the line exists to prevent.
+  The mid-turn urgency/authority clause stays for the same reason: a message that interrupted a turn is the one a receiver is most likely to over-weight.
+
+  **`bare` is a real cost, opt-in per Project, and permitted on the mid-turn path.**
+  With it, an armed peer message is indistinguishable from the operator speaking, which is exactly the confusion the authority line was written to close.
+  It is allowed with `delivery="now"` deliberately rather than by oversight: reaching that combination takes four standing decisions, three of them written down in advance by a human (`agent_interject_enabled`, the Project's `interject_grant`, the Project's `message_envelope`) plus the readiness tracker agreeing at delivery.
+  Attribution is not lost from the *system* at any level - the queue row, its `origin` payload, `queue_deliveries`, and Fleet Queue all still name the sender - only from the receiving model's prompt.
+
+- **A sender may disclose more than the Project asks and never less.** `notify(envelope=...)` is clamped by the target Project's resolved level, using the same ordering the ceiling uses rather than a second comparison path.
+  The effective level comes back in the result, so a caller that asked for `bare` into a `full` Project learns its message announced itself anyway.
+  An unknown value is refused rather than clamped: a typo is not a request for less disclosure and must not silently become one.
 - **One audit trail.** An MCP-originated message is an ordinary queue item: same states,
   same head-of-line rule, same `queue_deliveries` rows, distinguishable only by
   `sender_kind` and its provenance. Events (`queue_message_received`) carry ids and counts,
@@ -235,9 +262,14 @@ its own is the default and nothing widens implicitly.
 - **Spawn under a `draft` grant is drafted, never granted** (CP §7.2/§16). `request_spawn`
   against a Project whose `spawn_grant` is `draft` appends a typed
   `spawn_request` item to `<project>/.swe-mux/observations.json` with the proposed prompt,
-  backend, cwd, and calling-session provenance, and emits `spawn_request_drafted`.
+  backend, model, cwd, and calling-session provenance, and emits `spawn_request_drafted`.
   Approving it (`POST …/observations/{id}/decide`) spawns through the ordinary spawn path
-  with the prompt as `seed_text`; dismissing marks it decided. A request can only be decided
+  with the prompt as `seed_text` and the model as `model`; dismissing marks it decided.
+  A requested model is validated when the *request* is written rather than when it is
+  approved, and it travels onto the card and into the approval's spawn: refusing at approval
+  time refuses in front of the wrong person, since the agent that named the model is the one
+  that can pick another and by then it has moved on - and a model the approval silently
+  dropped would be worse still, because the human has already agreed to it. A request can only be decided
   once. Since 2026-08-25 the *default* grant is `granted` - the call creates the session
   directly, inside the per-origin hourly budget - so the draft path is what a Project
   lowered to `draft` (or with the `session_control` automation switched off) gets. The

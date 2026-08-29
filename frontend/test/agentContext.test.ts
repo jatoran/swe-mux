@@ -5,6 +5,7 @@ import {
   AGENT_CONTEXT_DISCLOSURE_DEFAULTS,
   agentContextSourceMenuEnabled,
   backupAction,
+  canonicalLinkLabel,
   comparisonLabel,
   memoryFileCount,
   statusLabel,
@@ -26,6 +27,7 @@ test('instruction sync accepts descriptor-supplied whole-file directions', () =>
 test('inventory states have compact human labels', () => {
   assert.equal(comparisonLabel('in_sync'), 'In sync')
   assert.equal(comparisonLabel('different'), 'Different')
+  assert.equal(comparisonLabel('linked'), 'Linked')
   assert.equal(comparisonLabel('missing'), 'One or both missing')
   assert.equal(statusLabel('too_large'), 'too large')
   assert.equal(statusLabel('unsupported'), 'unsupported')
@@ -35,6 +37,21 @@ test('restore copy distinguishes a prior file from undoing a newly created one',
   const base = { id: 'backup', created_at: 1, revision: 'missing', size: 0 } as const
   assert.equal(backupAction({ ...base, target: 'AGENTS.md', existed: false }), 'Remove created AGENTS.md')
   assert.equal(backupAction({ ...base, target: 'CLAUDE.md', existed: true }), 'Restore CLAUDE.md')
+})
+
+test('canonical link labels preserve the user-selected direction', () => {
+  const claudeCanonical: AgentContextSyncOption = {
+    direction: 'instruction:claude->instruction:codex',
+    source_id: 'instruction:claude',
+    source: 'CLAUDE.md',
+    target_id: 'instruction:codex',
+    target: 'AGENTS.md',
+  }
+  assert.equal(canonicalLinkLabel(claudeCanonical), 'Use CLAUDE.md as canonical')
+  assert.equal(backupAction({
+    id: 'backup', target: 'AGENTS.md', created_at: 1, existed: true, revision: 'link', size: 0,
+    entry_kind: 'symlink', link_target: 'CLAUDE.md',
+  }), 'Restore link for AGENTS.md')
 })
 
 test('memory count uses the complete provider inventory count', () => {

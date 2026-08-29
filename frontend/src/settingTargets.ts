@@ -225,27 +225,41 @@ export const SETTING_TARGETS = {
   },
   // The authority fields. Each is an opt-in's second half: the automation decides
   // whether an agent may ask, and these decide whether a human still approves each
-  // time. They had no control anywhere until now - only a line in a committed TOML
-  // file - which made "draft" unreachable to change and invisible to discover.
+  // time. They had no control anywhere until 2026-08-25 - only a line in a committed
+  // TOML file - which made "draft" unreachable to change and invisible to discover.
+  //
+  // They point at the Automation workspace rather than the Projects registry as of
+  // 2026-08-29: that is where the install-wide default and ceiling live, and a target
+  // aimed at a surface that can only show one of the three layers would reveal a
+  // control that cannot answer the question the reader arrived with. The registry
+  // keeps a summary and a link, the same treatment the automation opt-ins already get.
+  'project.authority': {
+    surface: 'automation', setting: 'agent_authority',
+    label: 'Agent authority', where: 'Automation → Policy',
+  },
   'project.landGrant': {
-    surface: 'project', setting: 'land_grant',
-    label: 'Agent-initiated landing', where: 'Project settings',
+    surface: 'automation', setting: 'land_grant',
+    label: 'Agent-initiated landing', where: 'Automation → Policy',
   },
   'project.landVerifyGrant': {
     surface: 'project', setting: 'land_verify_grant',
     label: 'Agent edits to the verification command', where: 'Project settings',
   },
   'project.sessionControlGrant': {
-    surface: 'project', setting: 'session_control_grant',
-    label: 'Agent interrupt and end', where: 'Project settings',
+    surface: 'automation', setting: 'session_control_grant',
+    label: 'Agent interrupt and end', where: 'Automation → Policy',
   },
   'project.spawnGrant': {
-    surface: 'project', setting: 'spawn_grant',
-    label: 'Agent-initiated spawn', where: 'Project settings',
+    surface: 'automation', setting: 'spawn_grant',
+    label: 'Agent-initiated spawn', where: 'Automation → Policy',
   },
   'project.interjectGrant': {
-    surface: 'project', setting: 'interject_grant',
-    label: 'Mid-turn agent messages', where: 'Project settings',
+    surface: 'automation', setting: 'interject_grant',
+    label: 'Mid-turn agent messages', where: 'Automation → Policy',
+  },
+  'project.messageEnvelope': {
+    surface: 'automation', setting: 'message_envelope',
+    label: 'Metadata on agent messages', where: 'Automation → Policy',
   },
   'project.settings': {
     surface: 'project',

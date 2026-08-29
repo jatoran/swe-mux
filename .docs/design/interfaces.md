@@ -761,16 +761,19 @@ GET  /projects/{project_id}/agent-context/sources/{source_id}
 POST /projects/{project_id}/agent-context/sources/{source_id}/reveal
 POST /projects/{project_id}/agent-context/sync/preview   {direction}
 POST /projects/{project_id}/agent-context/sync           {direction, source_revision, target_revision}
+POST /projects/{project_id}/agent-context/link/preview   {direction}
+POST /projects/{project_id}/agent-context/link           {direction, source_revision, target_revision}
+POST /projects/{project_id}/agent-context/unlink         {source_id, target_revision}
 POST /projects/{project_id}/agent-context/restore        {backup_id, target_revision}
 ```
 
-`direction` is a descriptor-declared synchronization pair such as `claude_to_agents | agents_to_claude`.
-Inventory returns every harness-declared Project-root instruction item, their normalized `in_sync | different | missing` comparisons,
+`direction` is a descriptor-declared source-to-target pair shared by copy and link operations.
+Inventory returns every harness-declared Project-root instruction item, their normalized `linked | in_sync | different | missing` comparisons,
 descriptor-declared global instruction sources, provider rows with complete `item_count`, and the newest valid
 restore-point manifests. Source/provider status is typed:
 `available | missing | disabled | unsupported | unreadable | too_large`. Claude learned memory
-items and root instructions carry opaque source ids; `revealable` marks an existing regular
-non-symlink file. No route accepts a path.
+items and root instructions carry opaque source ids.
+`revealable` marks an existing regular file or a safe managed Project-root instruction link, and no route accepts a path.
 
 Inventory is memoized per Project on a stat signature - path, `st_mtime_ns`, and size - over exactly the
 files it reads, plus the Claude memory directory and `~/.claude/settings.json`; an absent file is part of
@@ -778,26 +781,33 @@ the signature, so one appearing invalidates rather than reading as unchanged. `r
 memo outright and is what the tab's rescan control sends, because a stat signature cannot see a same-size
 rewrite landing in the same nanosecond and "rescan" has to mean rescan.
 
-Source reads return `{source, text}` and are UTF-8, regular-file, non-symlink, and 512 KiB
-bounded. Instruction sources carry `scope: project | global`; resolved global host paths never
+Source reads return `{source, text}`, are UTF-8, and are 512 KiB bounded.
+Global instruction and memory symlinks are always refused.
+A Project-root instruction link is followed only when it is relative, names exactly another descriptor-declared root instruction file, and resolves directly to an existing regular file.
+Instruction sources carry `scope: project | global`; resolved global host paths never
 cross the API. Inventory caps Claude memory rows at 128 direct Markdown children while
 `item_count` reports the complete count. Codex returns an explicit provider status and no files
 until its CLI publishes a stable project-memory file inventory; the daemon does not expose
 private database rows.
 
-Reveal re-resolves the opaque source ID, refuses missing, symlink, and non-file targets, and
-passes the resolved file to the same OS launcher as the Project file browser. Windows Explorer
-selects the file; other platforms retain the shared launcher's native behavior.
+Reveal re-resolves the opaque source ID, refuses missing and non-file targets, and applies the same managed-link allowlist as reads.
+Managed links reveal the canonical file through the same OS launcher as the Project file browser.
+Windows Explorer selects the file, and other platforms retain the shared launcher's native behavior.
 
-Preview remains Project-root-only. It returns a bounded unified diff plus SHA-256
-`source.revision` and `target.revision`
-(`missing` when absent). Commit is a complete destination overwrite and succeeds only while both
-revisions still match; otherwise `409 {code:"revision_conflict"}`. It preserves an existing
-destination's CRLF/LF convention and mode, uses same-directory atomic replace, and creates a
-data-dir restore point first. Restore is guarded by the destination revision too and backs up the
-state it replaces. A restore point recording an originally missing destination removes the file
-created by sync. Successful writes emit `agent_context_changed`; see
-`features/agent-context.md`.
+Copy and link previews remain Project-root-only.
+Each returns a bounded unified diff plus `source.revision` and `target.revision`, with `missing` as the absent-target sentinel.
+Commit succeeds only while both revisions still match, otherwise it returns `409 {code:"revision_conflict"}`.
+Copy completely overwrites the destination, preserves its CRLF/LF convention and mode, and refuses a source or destination symlink.
+Link keeps the selected source as the canonical regular file and atomically replaces the destination with a relative symlink to its descriptor filename.
+The link endpoint does not elevate privileges.
+On Windows, an unavailable symlink capability returns a normal validation error with a Developer Mode or privilege hint and leaves both instruction files unchanged.
+Unlink requires the current link revision and atomically materializes the canonical content into the linked filename.
+Link reversal requires unlinking first.
+Every copy, link, unlink, and restore creates a typed data-dir restore point for the prior missing, regular-file, or managed-link entry.
+Restore is guarded by the destination revision and creates its own undo restore point.
+A restore point can remove a later-created path, restore exact bytes and mode, or recreate a revalidated managed link.
+Successful writes emit `agent_context_changed` with operation `sync | link | unlink | restore`.
+See `features/agent-context.md` for portability and editor-save caveats.
 
 ## Prompt templates
 
@@ -900,6 +910,7 @@ A client reading an unrecognised `kind` treats it as `"message"`, which is the s
 had before the field existed.
 `/queue/mailbox` is an application-wide view over the same message rows, partitioned by authorship rather than inbox/outbox direction and optionally filtered by Project or target session before its result limit (`features/agent-messaging.md`).
 Its view also carries a `spawn_requests` list and, since Phase 7.6, a `control_requests` list of drafted interrupt/end approvals awaiting a human, each sorted newest-first and bounded.
+A spawn row carries `model` (`''` when the request named none), because approving is agreeing to it.
 It backs the **fleet queue** surface; the route keeps its original name because renaming a daemon path for a UI rename would be a breaking change bought with nothing.
 
 ## Clipboard history
@@ -1164,6 +1175,10 @@ The request's model **replaces** any the global harness arguments or the launch 
 rather than joining it, because two `--model` flags on one command line is a per-CLI coin
 toss (`features/launch-profiles.md`).
 The refusal is a 400, not a session that starts and dies with the flag echoed back at it.
+The resolved value is retained on the session record as `model_requested` and published in
+its snapshot, which is what `model_status` on the MCP session reads (`features/mux-mcp.md`)
+- the argv is not a readable answer to "what did this launch ask for", and re-parsing one to
+recover a field is a derivation that goes wrong quietly.
 
 `stage_text` is the stage-without-send counterpart, mutually exclusive with `seed_text`.
 The daemon spawns the session, waits up to 15 s for it to read `idle` (a fresh Claude
@@ -2407,9 +2422,10 @@ GET    /provider-accounts/audit[?limit=]
 POST   /provider-accounts/refresh
 POST   /provider-accounts/verify
 POST   /provider-accounts/{provider}/capture
-POST   /provider-accounts/{provider}/login
+POST   /provider-accounts/{provider}/login {label?, replace_id?}
+POST   /provider-accounts/{provider}/login/dismiss
 PATCH  /provider-accounts/{provider}/{account_id}
-POST   /provider-accounts/{provider}/{account_id}/select {force?: bool}
+POST   /provider-accounts/{provider}/{account_id}/select
 POST   /provider-accounts/{provider}/{account_id}/adopt
 POST   /provider-accounts/{provider}/{account_id}/purge-telemetry {since?: epoch}
 DELETE /provider-accounts/{provider}/{account_id}
@@ -2433,6 +2449,16 @@ from the system auth file rather than restored from registry memory. Explicit se
 only the provider's system auth file; polling covers saved active and inactive accounts.
 Quota fields are derived from the newest durable sample.
 
+Every provider-accounts route answers with the same whole payload the browser replaces its
+state with, durable quota readings and unreviewed reset alert included; a mutation that
+answered with the bare manager snapshot dropped both until the next poll. `login[provider]`
+reports a sign-in the daemon is running (`running`), the account a finished one saved
+(`succeeded`), or why it did not finish (`failed`), so the outcome does not belong to the
+request that started it. `POST .../{provider}/login` returns as soon as the provider CLI is
+running and is a 409 while another sign-in for that provider is live;
+`POST .../{provider}/login/dismiss` cancels a running one, reaping the CLI, or clears a
+finished one.
+
 Account identity carries its provenance. `identity_source` is `token` when the owner was
 resolved by asking the provider with that credential, and `cli`/`file` for weaker readings that
 describe machine state rather than the token. Only a `token` identity or an exact digest match
@@ -2440,9 +2466,10 @@ lets reconciliation move credentials into a saved account; a weaker match is rep
 `current.match_hint` and applied only through `…/adopt`. `POST /provider-accounts/verify`
 re-derives every saved account's owner. Saved accounts resolving to one provider account carry
 `conflict`, and every non-primary duplicate stops being polled and reports quota status
-`conflict`. Selecting a different account while live sessions of that provider are running
-returns HTTP 409 with `conflict: true` until the caller passes `force`; those sessions hold the
-outgoing token and rotate it back into the shared credential file. `GET
+`conflict`. Selection is never refused and never confirmed, including while live sessions of
+that provider are running: those processes re-read the shared credential file when its mtime
+changes, and a selection guard defends the switch against a token rotation that was already in
+flight from the outgoing login. `GET
 /provider-accounts/audit` returns the append-only record of credential-affecting decisions
 (action, matched-by, truncated digests) and never credential contents. Quota samples carry
 `provider_account_uuid`, the verified account a sample describes independent of the slot it was
@@ -2461,8 +2488,10 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
-The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, `watch_session`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
+The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, `list_models`, `watch_session`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
 The write tools are `notify`, `revoke_message`, `request_spawn`, `run_action`, and the two Phase 7.6 session-control tools `interrupt` and `end_session`.
+`request_spawn` takes an optional `model` in the target harness's own spelling; `list_models` answers what that harness has on this machine by running its own listing command, and reports having no such command apart from having no models (`features/backends.md`).
+A session that was launched on a model carries `model_requested` and `model_status` (`agreed` | `divergent` | `pending` | `unverifiable`) on `get_session` and `list_sessions`; both keys are absent for a session that named none, so a caller that never asked is never handed a verdict.
 `notify(dry_run=true)` runs every bound and returns the same verdict - including `target_delivery` and `would_arm` - having staged nothing and spent no budget, so an unreachable peer is chosen rather than discovered after the item is armed.
 `revoke_message` cancels one still-undelivered message as `revoked`, refusing with `unknown_message` when the caller is not its attributed sender and `not_revocable` once it has left the queue.
 Each takes a `project` argument selecting the scope it answers within: omitted (or `self`) is the caller's own Project, `fleet` is every Project, and a Project name or id is that one.

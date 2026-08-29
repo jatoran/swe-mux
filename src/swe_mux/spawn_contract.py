@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,8 @@ from .harness import (
     resolve_launch_model,
     strip_model_args,
 )
+
+log = logging.getLogger(__name__)
 
 # A spawn may direct a session at a subdirectory of its project (a task that runs
 # in ./frontend), never outside it, and may carry a bounded environment.
@@ -294,6 +297,70 @@ def resolve_spawn_model(backend: str, model: str) -> str:
     if not resolved:
         raise ValueError({"model": f"could not resolve the model {text!r}"})
     return resolved
+
+
+def field_refusal(exc: ValueError, field: str) -> str:
+    """The sentence a field-keyed contract `ValueError` carries for `field`.
+
+    Every refusal here is raised as `{"field": "why"}` so the HTTP layer can render
+    it as a 400 against the right input. A caller that is an agent rather than a
+    form wants the sentence, not the mapping, and this is the one place that knows
+    how to get one out of the other.
+    """
+    detail = exc.args[0] if exc.args else str(exc)
+    if isinstance(detail, dict):
+        return str(detail.get(field, detail))
+    return str(detail)
+
+
+async def requested_spawn_model(backend: str, model: str) -> str:
+    """`model` resolved for `backend`, `""` when none was asked for, or raise.
+
+    The entry point for callers that are not a person: an agent naming a model has
+    no card to read a refusal off and no pane to watch die, so the refusal has to
+    carry what would have worked. Where the harness can list its own models
+    (`model_catalog.py`) the message names the closest ones it actually has, which
+    turns "that name is wrong" into a next call rather than a guess.
+
+    The catalogue is consulted **only to explain a refusal**, never to produce
+    one. A model absent from a CLI's list still spawns, because every such list
+    lags the vendor that fills it.
+    """
+    text = str(model or "").strip()
+    if not text:
+        return ""
+    if not str(backend or "").strip():
+        raise ValueError(
+            {
+                "model": (
+                    "name the harness as well (backend): whether a model can be "
+                    "chosen, and which names are accepted, is a property of the CLI"
+                )
+            }
+        )
+    try:
+        return resolve_spawn_model(backend, text)
+    except ValueError as exc:
+        message = field_refusal(exc, "model")
+        raise ValueError({"model": await _with_suggestions(backend, text, message)}) from exc
+
+
+async def _with_suggestions(backend: str, model: str, message: str) -> str:
+    """`message` plus the catalogue entries a refused `model` was reaching for."""
+    # Imported here rather than at module scope: this module is the spawn
+    # vocabulary and is imported on every spawn, while the catalogue runs
+    # subprocesses and is wanted only when something has already gone wrong.
+    from .model_catalog import catalog_for, suggest
+
+    try:
+        result = await catalog_for(backend)
+    except Exception:  # noqa: BLE001 - a better error message may never become the error
+        log.warning("spawn_model_suggestions_unavailable backend=%s", backend)
+        return message
+    hits = suggest(backend, model, result.models)
+    if not hits:
+        return message
+    return f"{message}. This machine has: {', '.join(hits)}"
 
 
 def apply_spawn_model(backend: str, args: Sequence[str], resolved_model: str) -> list[str]:

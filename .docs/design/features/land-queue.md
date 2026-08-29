@@ -416,7 +416,7 @@ A control that answers "for every branch in this repository" copied into each ex
 The **install stop**'s gate is rendered outside the strip's disclosure so a collapsed strip cannot hide it: a gate is what a surface renders *instead of* working, and hiding one behind a summary is the same defect as rendering the surface empty.
 The **Project opt-in** and **`land_grant`** decide what happens to an *agent's* `request_land` and never touch the operator's own button, so they sit inside the disclosure as one statement.
 **`land_verify_grant`** sits there too, as its own sentence rather than a clause on that one, because it is the only one of them that also changes what the *operator's* own Land button executes.
-All three grant in place through the ordinary additive path; the Projects registry's **Agent authority** table is where any of them is lowered again.
+They grant in place through the ordinary additive path; the Automation dashboard's **Agent authority** rows are where any of them is lowered again, and where an install-wide default or ceiling over either land field is set (`automation-enablement.md`).
 
 A Map row that cannot land because of one of them names it and **sends the reader to the control** rather than drawing a second copy: one press opens the strip.
 Naming a switch still obliges offering it, and pointing one section up on the same pane is offering it - the rule was written against a walk to an overlay, not against a scroll.

@@ -93,8 +93,10 @@ Skipping the panel sets only that flag and writes no `harness_enabled` entries, 
 | Which argv carries a conversation id? | `conversation_id_argv(name)`, `native_id_from_args(name, args)` | Recovering a pane's conversation from its recorded command line |
 | What resumes this conversation elsewhere? | `resume_command(name, id)`; published `cli_name` + `resume_argv` | The Copy-resume affordance |
 | How is a conversation forked? | `branch_strategy(name)` | Branch dispatch and its refusal; the browser's branch gate reads the published `branch` capability |
-| Can a launch choose the model, and which names? | `model_selection(name)`, `resolve_launch_model(name, model)`, `model_refusal(name, model)` | The spawn contract's model field, the assistant's `spawn_session` card refusal |
+| Can a launch choose the model, and which names? | `model_selection(name)`, `resolve_launch_model(name, model)`, `model_refusal(name, model)` | The spawn contract's model field, the assistant's `spawn_session` card refusal, `request_spawn`'s |
 | What argv sets the model, and what did an earlier slot set? | `model_launch_args(name, model)`, `strip_model_args(name, args)` | `_spawn_from_body` composing a request-level model over the profile's (`launch-profiles.md`) |
+| Is this session running the model it was launched on? | `model_agreement(name, requested, provider, observed)` | `model_status` on `get_session`/`list_sessions`, and the `session_model_divergent` log line |
+| Can this CLI list the models it has? | `model_catalog(name)` | The `list_models` MCP tool, and the "this machine has:" line on a refused model |
 | Can a branch be cut at a chosen message? | `branches_from_message(name)` (frontend `branchesFromMessage(name)`, published `branch_from_message`) | Whether the rail's Branch opens a point picker or forks on the click |
 | What does a user type to invoke a skill? | published `skill_invocation_prefix` | Skill inventories and the command rail's injected payload |
 | What key discards its whole composer? | published `composer_clear_keys` (frontend `composerClearKeys(name)`) | Whether the daemon's unsent-input estimate treats a write as a clear. No rail button sends it any more (`features/ui.md`): on Claude the sequence is a double Esc, which interrupts a running turn |
@@ -160,11 +162,30 @@ The descriptor is the source of truth for all generic surfaces.
   An entry ending in `=` or `.` matches by prefix, which names a value-carrying config override without reserving the flag that introduces it.
 - Every harness declares `model_selection`: how a launch tells its CLI which model to run, or `None`.
   `None` is a permitted answer and is what makes "this harness cannot be launched on a model" a sentence the operator hears before anything spawns; what is not permitted is leaving it unanswered, because the resulting guess is handed to a CLI that exits during startup and the operator gets a pane that appears and dies.
-  Only `claude` and `codex` declare one today; `omp`, `pi`, and `opencode` declare `None` as unmeasured, and their refusal names a launch profile as the way to set a model anyway.
-  A declaration carries the argv introducing the value (canonical first, every spelling recognized), the short aliases the CLI accepts *as* a model, the namespaces a full model id belongs to, and any generic-config value prefix (`codex -c model=…`).
-  Recognition is by **namespace plus alias, never an enumerated catalogue of released models**: a catalogue lags every vendor release and would refuse a model that works, which is the failure `claude_models.py` had to grow a family fallback to escape.
-  A namespace check still catches what matters here - a name meant for another harness, or for none, reaching a CLI that will die on it - which is why Codex declares no aliases: it genuinely has none, so `codex --model opus` is recognizable as wrong.
+  **All five agent harnesses declare one as of 2026-08-29.**
+  `omp`, `pi`, and `opencode` had been carrying `None` as *unmeasured* since the axis was added, and measuring them found all three take a model flag - so the product had been refusing a supported thing on three of five harnesses because nobody had run `--help`.
+  A declaration carries the argv introducing the value (canonical first, every spelling recognized), the vocabulary that argv accepts, any generic-config value prefix (`codex -c model=…`), and, where the CLI has one, the command that lists its models (`model_catalog.py`).
+  Recognition is by **vocabulary, never an enumerated catalogue of released models**: a catalogue lags every vendor release and would refuse a model that works, which is the failure `claude_models.py` had to grow a family fallback to escape.
   The declared flag must **not** also be reserved argv, and `test_a_model_flag_is_not_reserved_argv` holds the two apart: a profile pinning `--model` is supported, and a request-level model replaces it instead (`launch-profiles.md`).
+- **The vocabulary is per harness because the CLIs genuinely ask different questions**, and a shared rule would be wrong in one direction or the other for someone.
+  A namespace check invented for a fuzzy matcher refuses models that work; a fuzzy pass applied to a CLI with a real namespace forwards a name that dies at startup.
+  - `namespaced` (`claude`, `codex`) - the CLI's own short aliases plus its own id namespace, so a name belonging to another vendor is recognizably wrong.
+    Codex declares no aliases because it genuinely has none, which is what makes `codex --model opus` refusable.
+  - `qualified` (`opencode`) - `provider/model` and nothing else.
+    Refusing a bare name here is worth doing because the CLI's own refusal is useless: measured 2026-08-29, `opencode run --model <bogus>` exits 1 with an opaque `UnknownError` that never names the model, so a pane that died this way explains nothing.
+  - `pattern` (`omp`, `pi`) - the CLI fuzzy-matches whatever it is given against its own catalogue, accepting bare names, `provider/id`, and (pi) a `:<thinking>` suffix.
+    There is no vocabulary to check, so the gate is the shape of the token alone, and saying so is the point: an invented namespace would refuse working models while promising a check it cannot perform.
+- **What a launch-time check cannot do is the reason two more layers exist**, and the measurements are what size them.
+  Run against all five CLIs on 2026-08-29 with a model no vendor ships (`tests/test_live_model_flag.py` re-asks them):
+  four exit nonzero before sending anything, so the pane dies at startup and the spawn probe can report the CLI's own words.
+  **Codex does not.** It prints "Model metadata for `<bogus>` not found. Defaulting to fallback metadata", starts a session, sends the turn, and dies on the provider's 400 - so a Codex pane launched on a model that does not exist comes up healthy and fails on its first turn, where no spawn-time probe can see it.
+  And the two fuzzy matchers can resolve a request to a *different real model* with nothing said at all.
+  Hence `model_agreement(name, requested, provider, observed)`: a containment check of what the launch asked for against what the harness reports running, reported as `agreed` / `divergent` / `pending` (nothing reported yet - the ordinary state of a new pane) / `unverifiable` (the request named a *mode* such as `opusplan`, which no observed id can confirm).
+  Containment rather than equality because every accepted spelling is shorter than the reported id; and the remaining error is deliberately pointed at `agreed`, because a false `divergent` costs trust in every reading and the check is worth nothing unread.
+- **A harness may also declare how to list its own models** (`ModelSelection.catalog`), which is the only way to answer "what is this machine authenticated for".
+  `omp models --json`, `pi --list-models`, and `opencode models` do; `claude` and `codex` publish no such command and report *that*, because "nothing to ask" and "asked and got nothing" would otherwise read identically.
+  It is discovery and never authority: a model absent from a listing still spawns.
+  Its consumers are the `list_models` MCP tool (`mux-mcp.md`) and the "did you mean" line on a refusal.
 - Every harness declares `transcript_dialect`: the reader that parses its records, or `None` when it writes none.
   Reuse an existing dialect whenever the records are the same shape; a new dialect obliges a new reader branch and a sample record in the registry test.
 - An npm-distributed harness needs no launch special-casing on Windows: `resolve_npm_shim_pty_command` reads the `.cmd` shim and resolves it to the package's own executable or to Node plus its entrypoint, because ConPTY cannot execute a batch shim.

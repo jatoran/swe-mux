@@ -205,9 +205,11 @@ User-authored setup commands from the daemon config: the catalog, id selection i
 
 ### `agent_context.py`
 
-Descriptor-driven read-only Project and global instruction and provider-memory inventory, fixed-path opaque source reads and reveal resolution, complete memory counts, normalized Project-root comparisons, preview and revision-guarded whole-file synchronization across declared instruction files, atomic replace and data-dir restore points, and the shared source operations used by MCP.
+Descriptor-driven Project and global instruction and provider-memory inventory, fixed-path opaque source reads and reveal resolution, complete memory counts, and normalized Project-root comparisons.
+It owns previewed and revision-guarded whole-file copy, relative managed-link creation, unlink-by-materialization, typed data-dir restore points, atomic replacement, and the shared read-only source operations used by MCP.
+Managed links are restricted to direct relative references between descriptor-declared root instruction filenames and never extend the writable allowlist.
 
-**Not:** arbitrary browser-supplied paths, global-instruction or learned-memory writes, automatic sync, or private provider store formats.
+**Not:** arbitrary browser-supplied paths, global-instruction or learned-memory writes, automatic synchronization or canonical selection, privilege elevation, or private provider store formats.
 
 ### `project_context.py`
 

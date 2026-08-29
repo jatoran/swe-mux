@@ -78,6 +78,7 @@ def _build(
     daemon_owner_ids: frozenset[str] = frozenset(),
     append_observation: Any = None,
     spawn_op: Any = None,
+    settle_op: Any = None,
     draft_spawn: Any = None,
     projects: Any = None,
 ) -> SessionControlService:
@@ -109,6 +110,7 @@ def _build(
         is_daemon_owner=is_daemon_owner,
         spawn_grant_field=spawn_grant_field,
         spawn_op=spawn_op,
+        settle_op=settle_op,
         draft_spawn=draft_spawn,
         append_observation=append_observation,
         clock=clock or _Clock(),
@@ -517,6 +519,157 @@ async def test_spawn_refused_when_install_disabled() -> None:
     with pytest.raises(QueueError) as excinfo:
         await service.spawn(caller, prompt="x")
     assert excinfo.value.code == "request_spawn_disabled"
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_model_reaches_the_spawn_body_and_the_result() -> None:
+    """An agent may choose the model, and is told which one it asked for.
+
+    The failure this replaces is silent: `model` arrived on the MCP call, was
+    dropped between the tool and the spawn body, and an ordinary session started
+    with nothing in the answer to say the request had been ignored.
+    """
+    caller = _caller()
+    bodies: list[dict[str, Any]] = []
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        bodies.append(body)
+        return live_session("new-1", project_id="p1", backend="claude")
+
+    service = _build(caller, spawn_grant="granted", spawn_op=spawn_op)
+    result = await service.spawn(
+        caller, prompt="do the thing", backend="claude", model="Opus 5"
+    )
+    # Canonicalized on the way through, so the body carries the CLI's spelling
+    # rather than the spoken one.
+    assert bodies[0]["model"] == "claude-opus-5"
+    assert result["model_requested"] == "claude-opus-5"
+    assert "model_status" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_harness_cannot_take_is_refused_before_the_budget() -> None:
+    """A typo must not spend an hour's spawn allowance, and must not spawn.
+
+    Ordering matters here rather than being incidental: the budget exists to cap
+    real spawns, and charging a request that never reached a process would let
+    one bad name lock a session out of the feature for an hour.
+    """
+    caller = _caller()
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        raise AssertionError("an unusable model must not reach a spawn")
+
+    service = _build(
+        caller, spawn_grant="granted", spawn_op=spawn_op,
+        config=_config(agent_spawn_hourly_budget=1),
+    )
+    with pytest.raises(QueueError) as excinfo:
+        await service.spawn(caller, prompt="x", backend="codex", model="opus")
+    assert excinfo.value.code == "invalid_model"
+    assert "does not recognize" in str(excinfo.value)
+    # The allowance is intact: a real spawn still goes through afterwards.
+    assert service._enforce_spawn_budget(caller) is None
+
+
+@pytest.mark.asyncio
+async def test_a_pane_that_dies_at_startup_is_reported_rather_than_returned() -> None:
+    """The caller has no eyes on the pane, so "spawned" has to mean "still up".
+
+    Four of the five CLIs refuse an unusable launch flag by exiting a second in,
+    *after* the spawn call has already returned a session. Handing that back as a
+    success is what leaves an agent watching a dead session id.
+    """
+    caller = _caller()
+    events = EventsStub()
+    discarded: list[str] = []
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("doomed", project_id="p1", backend="claude")
+
+    async def settle_op(session: Any) -> str | None:
+        discarded.append(str(session.record.id))
+        return "exited (exit code 1): unrecognized_model"
+
+    service = _build(
+        caller, spawn_grant="granted", spawn_op=spawn_op, settle_op=settle_op,
+        events=events,
+    )
+    with pytest.raises(QueueError) as excinfo:
+        await service.spawn(caller, prompt="x", backend="claude", model="claude-nope")
+    assert excinfo.value.code == "spawn_failed"
+    # The harness's own words, so a caller can act on a refusal mux has never seen.
+    assert "unrecognized_model" in str(excinfo.value)
+    assert discarded == ["doomed"]
+    assert dict(events.emitted[-1][1])["outcome"] == "spawn_failed"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_spawn_still_costs_its_attempt() -> None:
+    """The budget counts attempts, because a failing spawn spends the same host.
+
+    A request that fails identically every time is exactly what an hourly ceiling
+    is for; refunding it would make a broken launch flag an unbounded retry loop.
+    """
+    caller = _caller()
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("doomed", project_id="p1", backend="claude")
+
+    async def settle_op(_session: Any) -> str | None:
+        return "exited (exit code 1)"
+
+    service = _build(
+        caller, spawn_grant="granted", spawn_op=spawn_op, settle_op=settle_op,
+        config=_config(agent_spawn_hourly_budget=1),
+    )
+    with pytest.raises(QueueError) as first:
+        await service.spawn(caller, prompt="x")
+    assert first.value.code == "spawn_failed"
+    with pytest.raises(QueueError) as second:
+        await service.spawn(caller, prompt="x")
+    assert second.value.code == "origin_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_cannot_run_does_not_fail_a_working_spawn() -> None:
+    """This proves a pane is dead; it can never prove one is alive.
+
+    A settle probe that raises has learned nothing, and turning "no evidence" into
+    a refusal would make a diagnostic able to break the thing it watches.
+    """
+    caller = _caller()
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("new-1", project_id="p1", backend="claude")
+
+    async def settle_op(_session: Any) -> str | None:
+        raise RuntimeError("scrollback unreadable")
+
+    service = _build(
+        caller, spawn_grant="granted", spawn_op=spawn_op, settle_op=settle_op
+    )
+    result = await service.spawn(caller, prompt="x")
+    assert result["status"] == "spawned"
+
+
+@pytest.mark.asyncio
+async def test_a_drafted_spawn_carries_its_model_to_the_approval() -> None:
+    """A model the approval drops is worse than one it never took.
+
+    The human approves a card that says "on opus"; if the field stops there, an
+    ordinary session starts and nobody is in a position to notice.
+    """
+    caller = _caller()
+    drafts: list[dict[str, Any]] = []
+
+    async def draft(_caller: Any, **kwargs: Any) -> dict[str, Any]:
+        drafts.append(kwargs)
+        return {"status": "drafted", "request_id": "r1"}
+
+    service = _build(caller, spawn_grant="draft", draft_spawn=draft)
+    await service.spawn(caller, prompt="later", backend="claude", model="opus")
+    assert drafts[0]["model"] == "opus"
 
 
 @pytest.mark.asyncio

@@ -173,11 +173,20 @@ async def test_a_notify_arrives_armed_unless_the_receiver_opted_out(
     assert message["chain_depth"] == 1
     assert message["constraints"]["expires_at"] > time.time()
     assert result["correlation_id"] == message["correlation_id"]
-    assert f'message_id: {result["message_id"]}' in message["body"]
-    assert f'correlation_id: {result["correlation_id"]}' in message["body"]
-    assert "from_session: s1" in message["body"]
-    assert "from_run: run-s1" in message["body"]
-    assert "from_name: claude-s1" in message["body"]
+    # The default envelope is `compact`, which names the sender and the reply
+    # route and nothing else. The sender's own bookkeeping is deliberately gone:
+    # `message_id` and `correlation_id` are what the *sender* spends on
+    # `message_status` and `revoke`, and `notify` already returned both to it,
+    # so carrying them into the receiver's prompt was 90 characters no receiver
+    # had a tool to spend. Same for `from_run`, which no receiver-facing tool
+    # takes as a handle.
+    assert "[mux] from claude-s1 (s1)" in message["body"]
+    assert f'message_id: {result["message_id"]}' not in message["body"]
+    assert f'correlation_id: {result["correlation_id"]}' not in message["body"]
+    assert "from_run: run-s1" not in message["body"]
+    # Attribution is not lost with them: it stays on the queue row, which is
+    # what the human surfaces and the audit trail read.
+    assert message["origin"]["from_run_id"] == "run-s1"
     assert message["body"].endswith("\n\nI finished the migration")
     assert message["payload"] == {"kind": "agent_notify", "version": 2}
 
@@ -299,9 +308,12 @@ async def test_a_message_that_crosses_a_project_says_so_in_its_envelope(
         crossed_message = await harness.store.message(crossed["message_id"])
         local_message = await harness.store.message(local["message_id"])
         assert crossed_message is not None and local_message is not None
-        assert "from_project: Pixel Lab" not in crossed_message["body"]
-        assert "from_project: Horizon of Steel" in crossed_message["body"]
-        assert "from_project:" not in local_message["body"]
+        # Named at the compact default too: where a peer is working changes how
+        # much its message is worth, and a same-Project message stays silent so
+        # the clause keeps meaning something when it does appear.
+        assert "in Project Pixel Lab" not in crossed_message["body"]
+        assert "in Project Horizon of Steel" in crossed_message["body"]
+        assert "in Project" not in local_message["body"]
         assert crossed_message["origin"]["cross_project"] is True
         assert local_message["origin"]["cross_project"] is False
     finally:
@@ -530,7 +542,7 @@ async def test_the_envelope_states_whether_a_human_released_the_message(
         )
         drafted = await harness.store.message(held["message_id"])
         assert drafted is not None
-        assert "a person saw this message" in str(drafted["body"])
+        assert "held until a human armed it" in str(drafted["body"])
 
         await harness.auto.enable_session("s2")
         await harness.auto.set_accept_agent_messages("s2", True)
@@ -597,7 +609,7 @@ async def test_a_reply_to_the_sender_is_allowed_and_threaded(tmp_path: Path) -> 
         assert reply["thread_id"] == first["thread_id"]
         # The receiver is told the reply channel exists, in the one surface they see.
         body = (await harness.store.messages_for_target("s2"))["messages"][0]["body"]
-        assert 'reply_with: notify(target="s1")' in body
+        assert '[mux] reply: notify(target="s1")' in body
         # And the exchange can continue back the other way.
         await harness.store.finalize_delivery(
             "delivery-2", reply["message_id"], outcome="sent", message_state="sent"
@@ -972,6 +984,54 @@ async def test_request_spawn_writes_an_inert_draft_and_starts_nothing(
     fleet = await harness.messaging.mailbox(author="non_human")
     assert [item["id"] for item in fleet["spawn_requests"]] == [result["request_id"]]
     assert fleet["spawn_requests"][0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_a_drafted_spawn_carries_the_model_onto_the_card(
+    harness: Harness,
+) -> None:
+    """The human approves what the card says, so the card has to say the model.
+
+    Both halves matter: the row carries it for the approval to spawn with, and the
+    body carries it for the person to read. A request drafted "on opus" that
+    approves into an ordinary session is a promise broken silently.
+    """
+    result = await harness.messaging.request_spawn(
+        harness.manager.sessions["s1"],
+        prompt="run the long migration",
+        backend="claude",
+        model="Opus 5",
+    )
+    assert result["status"] == "drafted"
+    inbox = await read_observations(harness.root, project=harness.identity)
+    item = inbox["observations"][0]
+    # Canonicalized when it was asked for, not when it is approved.
+    assert item["request"]["model"] == "claude-opus-5"
+    assert "on claude-opus-5" in item["body"]
+    fleet = await harness.messaging.mailbox(author="non_human")
+    assert fleet["spawn_requests"][0]["model"] == "claude-opus-5"
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_harness_cannot_take_is_refused_at_request_time(
+    harness: Harness,
+) -> None:
+    """Refusing at approval time refuses in front of the wrong person.
+
+    The agent that named the model is the one that can pick another, and by the
+    time a human opens the queue it has moved on. Nothing is written.
+    """
+    with pytest.raises(QueueError) as caught:
+        await harness.messaging.request_spawn(
+            harness.manager.sessions["s1"],
+            prompt="run it",
+            backend="codex",
+            model="opus",
+        )
+    assert caught.value.code == "invalid_model"
+    assert "does not recognize" in str(caught.value)
+    inbox = await read_observations(harness.root, project=harness.identity)
+    assert inbox["observations"] == []
 
 
 @pytest.mark.asyncio

@@ -31,102 +31,66 @@ import { byProjectName, projectDropdownOptions } from './projectOptions'
 // device > repo > global, so a value is only ever written to one of them.
 type Layer = 'device' | 'repo'
 
+/** Field id to the sentence a person reads, for the summary below. */
+const AUTHORITY_SUMMARY: { field: string; label: string; levels: Record<string, string> }[] = [
+  { field: 'session_control_grant', label: 'Interrupt and end sessions', levels: { draft: 'a human approves each', granted: 'acts directly' } },
+  { field: 'spawn_grant', label: 'Start new sessions here', levels: { draft: 'a human approves each', granted: 'creates them directly' } },
+  { field: 'land_grant', label: 'Land a branch onto the trunk', levels: { draft: 'a human approves each', granted: 'starts the pipeline' } },
+  { field: 'land_verify_grant', label: 'Change the verification command', levels: { draft: 'you approve the bytes each time', granted: 'edits made here just run' } },
+  { field: 'interject_grant', label: 'Write into a running turn', levels: { off: 'never', granted: 'may interject' } },
+  { field: 'message_envelope', label: 'Metadata on agent messages', levels: { full: 'full trust statement', compact: 'sender and reply route', bare: 'none' } },
+]
+
 /**
- * What an agent may do here without asking, and what it must draft for a human first.
+ * What an agent may do here without asking - shown, not edited.
  *
- * These four fields decide the *authority* behind four capabilities whose on/off is an
- * automation above. Every one of them shipped with no control in any overlay: they were
- * lines in a committed `.swe-mux/config.toml` and nothing else, which made the inert
- * default both impossible to discover and unreachable to change - one of them told the
- * agent to go and edit the file by hand (`agent_messaging.py`).
+ * These fields decide the *authority* behind capabilities whose on/off is an automation.
+ * Every one of them shipped with no control in any overlay: they were lines in a committed
+ * `.swe-mux/config.toml` and nothing else, which made the inert default both impossible to
+ * discover and unreachable to change - one of them told the agent to go and edit the file by
+ * hand (`agent_messaging.py`). This panel was the fix, and owned them until 2026-08-29.
  *
- * They live here, beside the opt-ins they qualify, because this is the Project's editor
- * and only an editor may take a permission away. A gate elsewhere may raise one; nothing
- * but this can lower it.
+ * They now live on the Automation dashboard's policy matrix, beside the opt-ins they
+ * qualify and beside the install-wide default and ceiling that only exist there. That
+ * follows the rule the automation opt-ins already moved under: policy is the control map,
+ * the matrix is the one editor, and this registry links to it rather than rendering a
+ * second editor over the same file. What stays here is the summary, because this is where
+ * somebody configuring a Project looks first and a permission with no trace on that screen
+ * is a permission nobody finds.
+ *
+ * The values shown are this repository's own, before the install layers. "Follows global"
+ * is a real state rather than a missing one: an unset field is what the install default is
+ * allowed to reach, and collapsing it into a level here is exactly the confusion the third
+ * dropdown position on the matrix exists to prevent.
  */
-function AgentAuthority({ busy, onError, store }: {
-  busy: boolean
-  onError: (message: string) => void
-  /** The panel's one copy of `.swe-mux/config.toml`, which these four rows write to. */
+function AgentAuthoritySummary({ projectId, store }: {
+  projectId: string
+  /** The panel's one copy of `.swe-mux/config.toml`. Read only, here. */
   store: ProjectConfigStore
 }) {
-  const [saving, setSaving] = useState(false)
   const config = store.config
-
-  const write = async (field: string, value: string) => {
-    if (!config) return
-    setSaving(true)
-    try {
-      // Written straight through rather than into the panel's Save draft: an authority
-      // change is a decision of its own, and staging it behind a button that also
-      // renames the Project would leave the other rows describing a state the daemon
-      // does not have yet. One named field, so it can neither collide with nor revert
-      // the automation opt-ins and repo options that share this file.
-      await store.commit({ [field]: value })
-    } catch (cause) {
-      onError(cause instanceof Error ? cause.message : String(cause))
-    } finally { setSaving(false) }
-  }
-
-  const rows: { field: string; setting: string; label: string; draft: string; granted: string; note: string }[] = [
-    {
-      field: 'session_control_grant', setting: 'session_control_grant',
-      label: 'Interrupt and end sessions',
-      draft: 'A human approves each one', granted: 'Acts directly',
-      note: 'Needs the Agent session control opt-in above. Granted by default; draft writes an inert request into the Fleet Queue.',
-    },
-    {
-      field: 'spawn_grant', setting: 'spawn_grant',
-      label: 'Start new sessions here',
-      draft: 'A human approves each one', granted: 'Creates them directly',
-      note: 'Also gated by Agent session control. Granted by default, and still bounds an agent to a per-origin budget.',
-    },
-    {
-      field: 'land_grant', setting: 'land_grant',
-      label: 'Land a branch onto the trunk',
-      draft: 'A human approves each one', granted: 'Starts the pipeline directly',
-      note: 'Needs the Land queue opt-in above. Either way the pipeline is fast-forward-only.',
-    },
-    {
-      field: 'land_verify_grant', setting: 'land_verify_grant',
-      label: 'Change the verification command',
-      draft: 'You approve the bytes each time', granted: 'Edits made here just run',
-      note: 'Granted by default. Granted still only covers bytes written on this machine — an uncommitted edit, the trunk’s own copy, or a branch commit by your git identity. A gate edited by anyone else presents for approval whatever this says, which is what keeps landing a contributor’s branch from running their script.',
-    },
-    {
-      field: 'interject_grant', setting: 'interject_grant',
-      label: 'Write into a running turn',
-      draft: 'Never (waits for the queue)', granted: 'May interject',
-      note: 'On by default. Granted still requires the receiving session to be interruptible and not opted out for its run.',
-    },
-  ]
-  const inertFor = (field: string) => field === 'interject_grant' ? 'off' : 'draft'
-  // What an unset field means. Landing a branch still defaults to the inert
-  // draft; the three session-scoped authorities default to granted (2026-08-25),
-  // so this editor is the surface that *lowers* them.
-  const defaultFor = (field: string) => field === 'land_grant' ? 'draft' : 'granted'
-  const value = (field: string) => String(config?.values[field] || defaultFor(field))
-
-  return <div class="project-automations project-authority">
+  return <section class="project-setting project-authority">
     <h4 data-setting="agent_authority">Agent authority<em class="project-setting-chip">repo</em></h4>
-    <p>The opt-ins above decide whether an agent may <em>ask</em>. These decide whether you
-    still approve each time. Interrupt/end, spawn, and mid-turn writes start granted and are
-    lowered here; landing starts at the inert draft. A row is meaningless until its
-    automation is on.</p>
+    <p>Whether an agent still needs a human once the automation above is on. Edited on the
+    policy matrix, where the install-wide default and the per-Project override sit side by
+    side. A field this repository has not set follows the install default.</p>
     {!config && <p>Loading…</p>}
-    {config && <ul class="project-automation-list">
-      {rows.map(row => <li key={row.field} data-setting={row.setting}>
-        <label class="check">
-          <span class="project-setting-name">{row.label}</span>
-          <Dropdown disabled={busy || saving || config.status !== 'ready'}
-            value={value(row.field)}
-            onChange={next => void write(row.field, next)}
-            options={[{ value: inertFor(row.field), label: row.draft }, { value: 'granted', label: row.granted }]}/>
-        </label>
-        <p class="project-automation-deps">{row.note}</p>
-      </li>)}
-    </ul>}
-  </div>
+    {config?.status === 'malformed' && <p class="project-folder-missing">
+      This Project’s <code>.swe-mux/config.toml</code> cannot be parsed, so every field below
+      resolves to its most restrictive value and inherits nothing. Fix the file to restore them.
+    </p>}
+    {config && <dl class="project-authority-summary">
+      {AUTHORITY_SUMMARY.map(row => {
+        const own = config.values[row.field]
+        const level = typeof own === 'string' ? own : ''
+        return <div key={row.field} data-setting={row.field}>
+          <dt>{row.label}</dt>
+          <dd>{level ? (row.levels[level] || level) : 'follows global'}</dd>
+        </div>
+      })}
+    </dl>}
+    <SettingLink target="project.authority" projectId={projectId}>Edit agent authority</SettingLink>
+  </section>
 }
 
 export type ProjectPatch =
@@ -428,7 +392,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
                 <p>Control-plane opt-ins are edited with the global graph and policy in the Automation workspace.</p>
                 <SettingLink target="project.automations" projectId={selected.id}>Open this Project's automation policy</SettingLink>
               </section>
-              <AgentAuthority busy={busy} onError={setError} store={configStore} />
+              <AgentAuthoritySummary projectId={selected.id} store={configStore} />
             </div>
           </div>
           {confirmRemove&&<section class="project-removal-summary" aria-label="Remove Project confirmation">
