@@ -141,6 +141,81 @@ for (const page of PAGES) {
 }
 console.log(`  ${imageCount} images across ${PAGES.length} pages, 0 failed requests`)
 
+// ------------------------------------------------------- every asset is reachable
+// The failure this exists for is not a broken reference, which the block above
+// already catches. It is the opposite and it is quieter: an asset committed,
+// deployed, and pointed at by nothing. `site/` is the Pages deploy root, so an
+// unreferenced file is served and simply never seen, and the only thing that
+// notices is a person eventually asking why the page shows one screenshot when
+// the repository holds fourteen. That went unnoticed for days.
+//
+// So the direction is reversed here: walk `img/` and require each asset to be
+// referenced, rather than walking the markup and requiring each reference to
+// resolve. Both are needed and neither implies the other.
+//
+// Posters count as references, which is why the whole document's HTML is
+// searched rather than just `src` attributes: `desktop-insight.webp` is reached
+// only as the poster of the loop that replaced it, and that is a real use.
+console.log('asset reachability')
+{
+  const markup = PAGES.map((p) => readFileSync(p.file, 'utf8')).join('\n')
+  const assets = readdirSync(join(site, 'img'))
+    .filter((name) => /\.(webp|png|mp4)$/.test(name))
+    .filter((name) => !/^logo/.test(name)) // chrome, referenced from the shell rather than a page
+  const unreferenced = assets.filter((name) => !markup.includes(`img/${name}`))
+  if (unreferenced.length) {
+    fail(`assets committed under img/ that no page references: ${unreferenced.join(', ')}`)
+  }
+  // The hero film is a release asset rather than a committed file, so the check
+  // above cannot see it. It is the single most expensive thing to have produced
+  // and lost track of, so it is named explicitly: a page that stops pointing at
+  // it fails here rather than silently dropping the one video anybody watches.
+  if (!markup.includes('releases/download/') || !markup.includes('hero.mp4')) {
+    fail('no page references the hero video release asset')
+  }
+  console.log(`  ${assets.length} committed assets referenced, plus the hero release asset`)
+}
+
+// --------------------------------------------- the survival claim matches the default
+// Section 03 states, without qualification, that sessions outlive a daemon
+// restart and a full rebuild. That is only true when the PTY supervisor owns the
+// pseudoterminals, so this page is making a claim about a value in
+// `src/swe_mux/config.py` and has no other way to know if it changes.
+//
+// The copy and the default are being changed by two agents on two branches, and
+// the ordering constraint - the copy must not land ahead of the default - is
+// exactly the kind of thing that survives as long as the person holding it
+// remembers. So it is asserted instead, in the same spirit as the `-m` marker
+// expression the root CLAUDE.md keeps agreeing across three files.
+//
+// Read as text rather than imported because this is Node reading Python; the
+// point is to notice a flip, not to parse a language. If the field stops being a
+// plain literal this fails loudly rather than silently passing, which is correct:
+// a claim this page cannot verify is a claim it should not make.
+console.log('survival claim')
+{
+  const configPath = join(site, '..', 'src', 'swe_mux', 'config.py')
+  const landing = readFileSync(join(site, 'index.html'), 'utf8')
+  const claimsUnconditionally = /Sessions that outlive the app itself/.test(landing)
+  if (!existsSync(configPath)) {
+    fail('survival claim: src/swe_mux/config.py is missing, so the claim cannot be checked')
+  } else {
+    const config = readFileSync(configPath, 'utf8')
+    const match = config.match(/^\s*pty_supervisor_enabled:\s*bool\s*=\s*(True|False)\s*$/m)
+    if (!match) {
+      fail('survival claim: pty_supervisor_enabled is no longer a plain bool literal in config.py, so this check can no longer read it')
+    } else if (claimsUnconditionally && match[1] !== 'True') {
+      fail(
+        'survival claim: index.html says sessions outlive the app with no qualification, but ' +
+        'pty_supervisor_enabled defaults to False. Either the default flip has not landed yet ' +
+        '(do not ship this copy ahead of it) or it was reverted (restore the qualified copy).',
+      )
+    } else {
+      console.log(`  unconditional=${claimsUnconditionally}, pty_supervisor_enabled=${match[1]}`)
+    }
+  }
+}
+
 // ------------------------------------------------------------------- links
 // Relative links are checked against the filesystem rather than by visiting them:
 // under `file://` a directory link renders a listing instead of its index, so a

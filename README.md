@@ -22,17 +22,9 @@ It runs on your own machine: no vendor-operated backend, no relay, no account, a
 - **A prompt queue that waits for a real gate.** Stage ordered messages against a mid-turn conversation. The queue is durable, head-of-line, bound to the conversation, and automatic delivery is off by default. ([prompt queue](.docs/design/features/prompt-queue.md), [auto-delivery](.docs/design/features/auto-delivery.md))
 - **The whole workspace on a phone.** An installable PWA over your own Tailscale tailnet, with no relay and no swe-mux login. Terminals, git review, the editor, previews, on-device voice, and optional web push. ([remote access](.docs/design/features/remote-access.md), [voice](.docs/design/features/voice.md))
 - **Any CLI, and any shell.** Anything that runs in a terminal runs here unchanged, including one swe-mux has never heard of; the harnesses in its registry get normalized input, status, transcripts, history, and accounts. Native transcripts are never moved or rewritten. ([backends](.docs/design/features/backends.md))
-- **Terminals that outlive the daemon, when you turn supervision on.** A supervisor process separate from the daemon and the UI can hold every pseudoterminal, so a daemon restart or a full app rebuild leaves the agents working and reconnecting replays only the bytes you missed. **This ships off**; see [Session survival is a mode](#session-survival-is-a-mode) below. ([sessions](.docs/design/features/sessions.md), [recovery](.docs/design/features/session-recovery.md))
+- **Sessions that outlive the app.** A supervisor process separate from the daemon and the UI holds every pseudoterminal, so a daemon restart or a full app rebuild leaves the agents working, and reconnecting replays only the bytes you missed. New builds of swe-mux ship from an agent session running inside swe-mux. Behind it, cold session recovery covers what a supervisor cannot - its own crash, a force close, a power loss - by bringing those sessions back as readable, resumable rows carrying their last scrollback. ([sessions](.docs/design/features/sessions.md), [recovery](.docs/design/features/session-recovery.md))
 
-### Session survival is a mode
-
-`pty_supervisor_enabled` defaults to `false`.
-Turning it on is an edit to `config.toml` in the data directory plus a daemon restart; there is deliberately no switch for it in Settings, because flipping it while sessions are live reaps or strands their pseudoterminals.
-
-With it off, the daemon owns the pseudoterminals and restarting the daemon ends them.
-Cold session recovery, which **is** on by default, is what stands behind that: those sessions come back as readable, resumable rows carrying their last scrollback rather than disappearing, and the durable registry plus terminal checkpoints also cover the cases the supervisor cannot - its own crash, a force close, a power loss.
-
-### Almost everything else is off until you ask for it
+### Almost everything in the control plane is off until you ask for it
 
 This is the shape of the whole product and it is worth knowing before you install it rather than after.
 

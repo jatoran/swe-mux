@@ -326,6 +326,7 @@ Toggling updates the `color-scheme` meta too, so form controls and scrollbars fo
 - **Grid seams instead of gaps.** Panel grids use a 1px background line showing through, which reads as a TUI panel grid.
 - **Structure over decoration.** Numbered section rules, `[01]` style indices, `▸` and `[x]` markers, a static block cursor after the headline. It used to blink, which put the only moving thing on the page directly beside the headline and pulled the eye off the words it was there to end; steady, it still reads as a terminal caret, and the `prefers-reduced-motion` override it needed is gone with it. The wordmark, the inline GitHub mark, the menu button's bars, and the footer's X mark are the only imagery in the chrome; there are no decorative icons.
 - **Self-contained.** One HTML file, inline CSS, inline JS, no external fonts, no CDN, no analytics, no third-party requests of any kind.
+  **One deliberate exception, added 2026-08-28: the hero film.** It is a 4.4 MB MP4 served from a GitHub release asset rather than committed, because `.git` is already large and the hero is the asset most likely to be re-cut. The exception is bounded so the rule still holds for anyone who does not press play: `preload="none"` and `controls` rather than `autoplay`, and a `poster` served from this origin, so **loading the page makes no request to github.com** and the hero section renders complete without one. A visitor who presses play has chosen to fetch from GitHub, which is the same act as following the repository link in the top bar. Nothing else on the site may take this exemption: the five short loops are committed and inline precisely because a page that must reach a release asset to draw its own section is broken for as long as that fetch is failing.
 - **The page must never scroll horizontally.** `tools/check.mjs` asserts `scrollWidth === clientWidth` at 360, 390, 768, and 1440, in both themes. Grid tracks need `minmax(min(Npx, 100%), 1fr)`, and any flex item that should shrink needs `min-width: 0`, because `overflow-x: auto` alone will not do it.
 
 ---
@@ -535,20 +536,19 @@ when it contains the host's home directory, account name, or configured git iden
 derives that list at run time rather than carrying a copy.
 So the failure recorded below cannot recur quietly; it fails the capture instead.
 
-`img/desktop-insight.webp` was the last placeholder, and it is the one to check before believing
-this heading.
+`img/desktop-insight.webp` was the last placeholder and is now a real capture (2026-08-28, 137 KB
+against the placeholder's 19 KB).
 Activity's Timeline segment is gated on a session having a harness transcript and every session in
-the capture environment is a shell, so it rendered its empty state; filling it needs an
-authenticated agent CLI, which is the one thing the synthetic environment exists to exclude, and
-`trailer/SITE_SHOTS.md` records the way through and why it is an operator's call.
+the capture environment is a shell, so it rendered its empty state; filling it took one bounded run
+of a real agent CLI, which `trailer/SITE_SHOTS.md` describes and which is an operator's act because
+it spends the subscription.
 
-**The page wires all nine slots, and that file's real capture arrives on a separate branch.**
-The wiring is correct either way - the placeholder carries the same declared dimensions, so layout
-and `check.mjs` are unaffected - but a placeholder under a caption reading `Real screenshot.` is
-exactly the kind of quiet falsehood the rest of this document exists to prevent.
-**Before publishing, confirm `img/desktop-insight.webp` is a capture rather than a placeholder.**
-The cheap test is its size: the generated placeholders are around 19 KB, and every real capture in
-`img/` is over 45 KB.
+It survives on the page as the **poster** for `loop-evidence.mp4` rather than as a still of its
+own, which is a better use of it: the loop shows the same timeline filling in, and the still is what
+a visitor sees until it plays.
+That is why the reachability check in `tools/check.mjs` searches the whole markup rather than only
+`src` attributes - a poster is a real reference and a check that missed it would report this file as
+unused.
 
 The table below is where each slot is used and what it shows.
 It remains the specification for a re-shoot.
@@ -563,7 +563,13 @@ It remains the specification for a re-shoot.
 | `img/desktop-git.webp` | Section 07, desktop | The Git drawer's map cropped to the rows: branches with ahead/behind counts and the commit provenance column. |
 | `img/desktop-alerts.webp` | Section 09, desktop | The ranked inbox cropped to the panel, with the interrupt budget line and at least one suppressed item and its reason. Not an empty inbox. |
 | `img/mobile-alerts.webp` | Section 09, mobile | The attention inbox on a phone with ranked items present and the budget line visible. |
-| `img/desktop-insight.webp` | Section 09, the solo row under the alerts pair | The Insight tab's timeline cropped to the records, budget visible, actual records present. |
+| `img/desktop-insight.webp` | Section 09, as the **poster** for `loop-evidence.mp4` | The Insight tab's timeline cropped to the records, budget visible, actual records present. |
+| `img/loop-fleet.mp4` | Section 02, desktop | Three agents starting in three worktrees, status marks moving with nobody typing. |
+| `img/loop-mobile.mp4` | Section 01, the `.shotpair` figure | The phone: one alert with its reason and the held-back digest, then the session behind it. |
+| `img/loop-evidence.mp4` | Section 09, the solo row under the alerts pair | Activity to Timeline: phase-labelled records, a dead end, a blocked badge, the budget line. |
+| `img/loop-land.mp4` | Section 07, the solo row under the git pair | The landing strip: gate named and approved, then the branch landing. |
+| `img/loop-restart.mp4` | Section 03, desktop | A counter running through a daemon reload, same sequence numbers on both sides. |
+| the hero film | Hero, the full-width frame, postered by `desktop-workspace.webp` | A GitHub release asset rather than a committed file. See below. |
 
 Each file is used **exactly once**, which is deliberate: the same capture appearing twice on one
 page a few hundred pixels apart reads as filler, and the assignment above is the one that lets all
@@ -601,18 +607,18 @@ a caption inside a 186px column is unreadable while one outside it fights the fr
 
 The dashed `.crop` and `.vis` placeholders that remain are unchanged: they are CSS, they carry no
 image, and each already states what its replacement must contain.
-Nine `.crop`s survive, and every one is a shot nobody has taken: mobile git review and a mobile
-preview tab (section 01), the desktop sidebar column alone (02), the redeploy before-and-after pair
-(03), the review modal on a phone (07), and the voice overlay pair (08).
+Six `.crop`s survive, and every one is a shot nobody has taken: mobile git review and a mobile
+preview tab (section 01), the phone reattaching after sleep (03), the review modal on a phone (07),
+and the voice overlay pair (08).
 The two `.vis` diagrams are unchanged too.
 
-Two of those are worth their own note.
-The **redeploy pair in section 03** is the hardest shot on this list and the only one whose caption
-has to name a configuration: it proves a session surviving a rebuild, which requires
-`pty_supervisor_enabled` to be on, and a shot of that presented without the caveat would contradict
-the section above it.
-The **02 sidebar crop** deliberately does not reuse `mobile-nav.webp` for its mobile half; it points
-at section 01's copy instead, because the same capture twice on one page is filler.
+The redeploy before-and-after pair that used to be listed here is **gone, and was replaced by
+something better**: `loop-restart.mp4` shows the counter running straight through the reload, which
+is the proof a two-frame still could only imply.
+
+The **02 sidebar crop** was also retired: `loop-fleet.mp4` occupies that slot now, and the mobile
+half is `mobile-nav.webp` rather than a placeholder. Nothing on the page reuses a capture, which is
+deliberate - the same shot twice a few hundred pixels apart reads as filler.
 
 ### Why the originals were replaced outright rather than scrubbed
 
@@ -653,7 +659,7 @@ Each of these was wrong on this page at some point.
 - **Four interrupts a day, two an hour.** `attention_daily_interrupt_budget` defaults to 4.
 - **Windows-first, Linux supported, macOS installs but is not required to pass.** Roadmap Phase 10 has every Linux box checked and the macOS box open. The page claimed "Windows only, WSL is not a supported host" long after the WSL bridge shipped.
 - **The install claim stops at the published artifact.** The wheel installs and `mux`/`muxd` run on all three hosts, and CI proves that on all three. Since 2026-08-28 the `live_daemon` tier also starts a real daemon on Linux and Windows and proves it serves a shell session - **from the source checkout**, on an ephemeral port, under a temporary data directory. No CI job starts a daemon from a *published artifact* on any host, so nothing on this page may say a platform is verified working end to end from what a user installs.
-- **Session survival is a mode, not the default.** `pty_supervisor_enabled` defaults to `False` (`src/swe_mux/config.py`), and there is no Settings control for it because flipping it while sessions are live reaps or strands their PTYs. Any copy about sessions outliving a restart names the switch. What is on by default is cold session recovery, which brings those sessions back as readable, resumable rows. This was the sharpest overstatement the 2026-08-28 claim audit found.
+- **Session survival is claimed unconditionally, and the page cannot verify that alone.** The operator decided 2026-08-28 to flip `pty_supervisor_enabled` to `True` rather than qualify the sentence, so section 03 states survival with no switch named and no config key in the copy. The default lives in `src/swe_mux/config.py` and is another branch's change, so `tools/check.mjs` has a `survival claim` section that fails while the page says one thing and the default says another. **If that check is red, do not publish**: it means the copy arrived before the product did, which is the exact defect the 2026-08-28 audit existed to remove. The sentence that must survive any edit is the conceded edge - a supervisor cannot survive its own crash, a force close, or a power loss, and cold session recovery is what covers that.
 - **"No server" is false and "no vendor-operated backend or relay" is true.** swe-mux is a local aiohttp daemon; that is the architecture, not a caveat. The distinction is one grep from being checked by a reader.
 - **"Fully local" is not a claim this page may make.** The agent CLIs call cloud providers, and OpenRouter, web push, the Hugging Face model downloads, the update check and Edge TTS all reach the network. Each is off until switched on and the update check is disableable, which is the honest and stronger version.
 - **Alerts are not "only when an agent genuinely needs a human".** They come from five normalized reasons - turn complete, ready, approval or question, failure, confirmed quota reset - with three suppression rules. The detector has explicit `unknown` states and resolves ambiguity to the conservative prior.
