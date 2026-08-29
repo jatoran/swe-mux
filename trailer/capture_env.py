@@ -79,6 +79,18 @@ PORT = int(os.environ.get("MUX_CAPTURE_PORT") or 8799)
 BASE = f"http://127.0.0.1:{PORT}"
 LIVE_PORT = 8765
 
+# The operator's real agent config directory, resolved from the environment this
+# script itself was started in - before child_env() repoints the home. It is used
+# only when `up --claude-config` asked for it, and it is the single deliberate
+# exception to "nothing here is derived from this machine": the desktop-insight
+# slot needs one real agent run behind it (`SITE_SHOTS.md` has the argument), a
+# real agent CLI needs a real credential, and the operator approved spending a
+# little quota for it. Everything the CLI then *sees* - project, home, git
+# identity, account chips - stays synthetic.
+REAL_HOME = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
+REAL_CLAUDE_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or str(REAL_HOME / ".claude")
+_claude_config_enabled = False
+
 # ------------------------------------------------------------------- the cast
 # A small coherent fleet that reads like a working developer's, invented whole.
 # Names, branches, commit subjects, authors, and note prose are all fiction; none
@@ -492,6 +504,19 @@ def child_env() -> dict[str, str]:
     env["HOME"] = str(home)
     env["HOMEDRIVE"] = str(home.drive)
     env["HOMEPATH"] = str(home)[len(home.drive) :] or "\\"
+    if _claude_config_enabled:
+        # Added back *after* the strip, so it is the one CLAUDE_* variable the
+        # daemon carries, and it exists for the daemon's *discovery* half only:
+        # `harness._claude_data_home` reads the daemon's own environment to find
+        # transcripts under `<dir>/projects`. The agent CLI itself must NOT see
+        # this value - with CLAUDE_CONFIG_DIR set, the CLI keeps its account
+        # state in `<dir>/.claude.json`, which is not where the operator's real
+        # state lives (`~/.claude.json`), so it would open a sign-in screen over
+        # a valid credential (measured 2026-08-28). `command_agent_run` masks it
+        # per-session with an empty string, which the CLI treats as unset.
+        # `ProviderAccountService` reads `Path.home()` instead, so the account
+        # chips stay the seeded fixture either way.
+        env["CLAUDE_CONFIG_DIR"] = REAL_CLAUDE_CONFIG_DIR
     return env
 
 
@@ -1051,6 +1076,172 @@ def seed_store(fleet: dict[str, object]) -> None:
         db.close()
 
 
+# --------------------------------------------------------------- the agent run
+# One bounded, read-only run in the synthetic atlas-api checkout. Its only job is
+# to leave a real harness transcript behind, which is what the Activity tab's
+# Timeline segment is gated on (`hasHarnessTranscript`); the timeline *content*
+# the shot shows is the seeded SCANS, re-keyed onto this run by `agent-run`.
+AGENT_SESSION_NAME = "Ingest receipt contract"
+AGENT_PROMPT = (
+    "Read README.md, src/ingest.py, and src/limits.py, then answer in two or "
+    "three sentences: what does this service do, and what is still undecided "
+    "about its rate limiting? Do not modify or create any file."
+)
+
+
+def wait_for_session(sid: str, states: set[str], timeout: float) -> dict:
+    deadline = time.time() + timeout
+    record: dict = {}
+    while time.time() < deadline:
+        fetched = api("GET", f"/api/sessions/{sid}")
+        assert isinstance(fetched, dict)
+        record = fetched
+        if record.get("state") in states:
+            return record
+        time.sleep(2)
+    raise SystemExit(
+        f"session {sid} did not reach {sorted(states)} within {timeout:.0f}s "
+        f"(state={record.get('state')!r})"
+    )
+
+
+def command_agent_run() -> None:
+    """Produce the one real agent run the desktop-insight shot needs.
+
+    Requires a daemon started with `up --claude-config`. Spawns a claude session
+    into atlas-api, sends one anodyne read-only prompt through the app's own
+    input path, waits the turn out, and then re-keys the seeded scan-timeline
+    rows onto the run so the Timeline segment has records to draw. Refuses to
+    run twice: a second agent run doubles the spend for a shot that needs one.
+    """
+    import sqlite3
+
+    if not STATE_PATH.exists():
+        raise SystemExit("no capture daemon is recorded; run `up --claude-config` first")
+    state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    if not state.get("claude_config"):
+        raise SystemExit(
+            "the capture daemon was started without --claude-config, so the claude CLI "
+            "cannot authenticate. Run `down`, then `up --claude-config`."
+        )
+    if state.get("agent_session"):
+        print(f"agent session already recorded: {state['agent_session']}")
+        return
+    projects = state["fleet"]["projects"]
+    # The Timeline segment renders records only when the whole enablement chain
+    # is green (`ScanTimelineTab` gates on `global_enabled && project_enabled`):
+    # the install switch, a *configured* model provider (presence is what
+    # `llm_readiness` checks for OpenRouter - the placeholder authenticates
+    # against nothing and any scan it lets through fails with 401 at zero cost),
+    # and the Project's own opt-in closure. The project config must carry
+    # `version = 1` and the dependency closure explicitly, because
+    # `parse_project_config` rejects a file without the version and the
+    # resolver treats an absent dependency as off rather than implying it.
+    api("PATCH", "/api/config", {"scan_timeline_enabled": True})
+    api(
+        "POST",
+        "/api/automation/provider/key",
+        {"operation": "set", "key": "capture-placeholder-not-a-key", "test": False},
+    )
+    (CODE_ROOT / "atlas-api" / ".swe-mux").mkdir(parents=True, exist_ok=True)
+    (CODE_ROOT / "atlas-api" / ".swe-mux" / "config.toml").write_text(
+        "version = 1\n\n[automations]\nraw_store = true\ntier0 = true\nscan_timeline = true\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    # The one process on this install allowed to see the operator's real home:
+    # the claude CLI authenticates from `~/.claude.json` + `~/.claude/.credentials.json`,
+    # and any refresh it performs writes back to the operator's own files rather
+    # than to a stray copy. `CLAUDE_CONFIG_DIR` is masked with an empty string
+    # (per-session env can override but never unset), which the CLI treats as
+    # unset - so it resolves `<real home>/.claude`, the same directory the
+    # daemon's discovery half was pointed at by `up --claude-config`.
+    session_env = {
+        "USERPROFILE": str(REAL_HOME),
+        "HOME": str(REAL_HOME),
+        "HOMEDRIVE": str(REAL_HOME.drive),
+        "HOMEPATH": str(REAL_HOME)[len(REAL_HOME.drive) :] or "\\",
+        "CLAUDE_CONFIG_DIR": "",
+    }
+    created = api(
+        "POST",
+        "/api/sessions",
+        {
+            "project_id": projects["atlas-api"],
+            "backend": "claude",
+            "name": AGENT_SESSION_NAME,
+            "env": session_env,
+        },
+    )
+    assert isinstance(created, dict)
+    sid = str(created["id"])
+    api("PATCH", f"/api/sessions/{sid}", {"name": AGENT_SESSION_NAME})
+    print(f"claude session {sid} spawned; waiting for the CLI to come up")
+    wait_for_session(sid, {"idle", "awaiting", "running"}, 120)
+    time.sleep(6)
+    # A first run in this directory opens the CLI's trust dialog, and its
+    # *default* answer is "No, exit" - a bare Enter here confirmed the exit and
+    # crashed the session (measured 2026-08-28). Arrow-down selects "Yes, I
+    # trust this folder"; at an already-trusted prompt the same keys are a no-op
+    # in an empty composer.
+    api("POST", f"/api/sessions/{sid}/input", {"data": "\x1b[B"})
+    time.sleep(1)
+    api("POST", f"/api/sessions/{sid}/input", {"data": "\r"})
+    time.sleep(4)
+    api("POST", f"/api/sessions/{sid}/input", {"data": AGENT_PROMPT})
+    time.sleep(2)
+    api("POST", f"/api/sessions/{sid}/input", {"data": "\r"})
+    print("prompt sent; waiting for the turn to end")
+    deadline = time.time() + 420
+    record: dict = {}
+    while time.time() < deadline:
+        fetched = api("GET", f"/api/sessions/{sid}")
+        assert isinstance(fetched, dict)
+        record = fetched
+        if record.get("last_turn_ms") is not None and record.get("state") in {
+            "idle",
+            "awaiting",
+        }:
+            break
+        time.sleep(3)
+    else:
+        raise SystemExit(
+            f"the agent turn did not complete within 420s (state={record.get('state')!r}); "
+            "look at the pane before retrying - the run may be waiting on a dialog"
+        )
+    run_id = str(record.get("agent_run_id") or "")
+    if not run_id:
+        raise SystemExit("the turn ended but no agent_run_id was bound; nothing was re-keyed")
+    print(f"turn ended in {record.get('last_turn_ms')}ms; re-keying seeded scans onto {run_id}")
+    db = sqlite3.connect(str(DB_PATH))
+    try:
+        db.execute(
+            "UPDATE scan_timeline_runs SET agent_run_id=?, session_id=? "
+            "WHERE agent_run_id='capture-run-atlas-api'",
+            (run_id, sid),
+        )
+        db.execute(
+            "UPDATE scan_timeline_records SET agent_run_id=?, session_id=? "
+            "WHERE agent_run_id='capture-run-atlas-api'",
+            (run_id, sid),
+        )
+        db.commit()
+    finally:
+        db.close()
+    # Any scan attempt made before the Project's opt-in landed left a terminal
+    # skip reason in service memory, and the panel renders it in red over the
+    # records. A scan attempt clears it on entry (`_scan` calls `_clear_skip`
+    # first) and then fails harmlessly on the placeholder key, so one manual
+    # scan is the reset. The 500 it answers with is expected.
+    try:
+        api("POST", f"/api/sessions/{sid}/scan-timeline/scan")
+    except SystemExit:
+        pass
+    state["agent_session"] = {"id": sid, "run_id": run_id, "name": AGENT_SESSION_NAME}
+    STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8", newline="\n")
+    print("agent run recorded; shoot with: capture_site_shots.py desktop-insight.webp")
+
+
 # ------------------------------------------------------------------ commands
 def command_up() -> None:
     if STATE_PATH.exists():
@@ -1066,7 +1257,15 @@ def command_up() -> None:
     fleet = seed_fleet()
     seed_store(fleet)
     STATE_PATH.write_text(
-        json.dumps({"pid": pid, "port": PORT, "fleet": fleet}, indent=2),
+        json.dumps(
+            {
+                "pid": pid,
+                "port": PORT,
+                "fleet": fleet,
+                "claude_config": _claude_config_enabled,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
         newline="\n",
     )
@@ -1085,10 +1284,26 @@ def command_status() -> None:
 
 
 def main() -> None:
+    global _claude_config_enabled
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("up", "down", "status"))
+    parser.add_argument("command", choices=("up", "down", "status", "agent-run"))
+    parser.add_argument(
+        "--claude-config",
+        action="store_true",
+        help=(
+            "Let the capture daemon read the operator's real CLAUDE_CONFIG_DIR so one "
+            "agent run can authenticate (needed by `agent-run`). Spends real quota; "
+            "everything the CLI sees stays synthetic."
+        ),
+    )
     args = parser.parse_args()
-    {"up": command_up, "down": stop_daemon, "status": command_status}[args.command]()
+    _claude_config_enabled = bool(args.claude_config)
+    {
+        "up": command_up,
+        "down": stop_daemon,
+        "status": command_status,
+        "agent-run": command_agent_run,
+    }[args.command]()
 
 
 if __name__ == "__main__":
