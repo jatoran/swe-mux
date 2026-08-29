@@ -5173,6 +5173,144 @@ Stack detection may inform the prompt; it may not substitute for writing and pro
 - [ ] Every item in the field report is either in the shipped prompt text or recorded here as
   rejected with its reason, and the setup half is checked against the same list.
 
+## Phase 20 - Localization: reaching non-English users without translating the product twice
+
+Recorded 2026-08-29 after evaluation; not scheduled.
+Prompted by herdr shipping a Simplified Chinese surface, and by the question of whether
+swe-mux could do the same without a rewrite.
+The finding that decides the shape of this phase is that the two halves of "localization" have
+wildly different costs here, and the cheap half is the one that actually reaches the users.
+
+### What the comparable project actually ships, measured
+
+herdr has **no application i18n at all**: its `Cargo.toml` names no i18n crate, and every
+`i18n`/`locale` hit in its tree is inside vendored libghostty rather than in herdr's own code.
+Its Chinese surface is two artifacts:
+
+- `README.zh-CN.md`, with a language-switcher line at the top of each README.
+- An Astro Starlight docs site configured `locales: { root: 'en', ja: 'ja', 'zh-cn': 'zh-CN' }`,
+  with per-page translated sidebar labels.
+
+The translations are **LLM-generated from the English source** - stated plainly in their own
+`.github/ISSUE_TEMPLATE/translation.yml`, which routes corrections to a `translation` label
+rather than pretending the output is authoritative.
+It is gated rather than aspirational: `justfile` plus `scripts/docs_translation_parity.py`
+fails the release when a `docs/next` page has no translation, or when a translation has no
+English source.
+
+So the comparable project localized the **funnel, not the product**.
+That is the move this phase adopts, and the reason it is one phase rather than a program.
+
+### The three surfaces, and what each would cost
+
+| Surface | Scope | Cost shape |
+|---|---|---|
+| Funnel: `site/`, `README.md`, `.docs/` | 136 markdown files under `.docs/`, the static `site/` content tree, one README | Mechanical, LLM-translatable, CI-gatable |
+| Application UI: `frontend/` | 83k LOC, **~1,940 unique candidate strings** measured over `.tsx` alone with a deliberately conservative extractor | Hand work, not a codemod |
+| Backend user-facing text | 156k LOC: error bodies, `mux doctor`, the CLI, push/notification text, assistant system prompts | Smaller than the UI, still not small |
+
+The UI figure is a floor, not an estimate.
+It counts JSX text nodes and four attribute names in `.tsx` files only, so it excludes template
+literals, the label tables in `.ts` modules, `helpContent.generated.ts`, settings copy, and the
+voice command reference; the real number is plausibly two to three times it.
+The extraction is also not uniformly mechanical: there is no i18n framework, `<html lang="en">`
+is fixed in `frontend/index.html`, and a substantial amount of copy sits inside very dense
+single-line JSX (`AutomationDashboard.tsx:203` carries roughly a dozen strings on one physical
+line), where a regex-driven pass would produce a diff nobody can review.
+
+### Why status detection is not at risk, which is the non-obvious part
+
+The PTY screen classifier matches English literals - `esc to interrupt`, `do you want to`,
+`? for shortcuts`, `enter to confirm`, `allow codex to` - across roughly twenty-five rules in one
+table (`src/swe_mux/session.py`, the `ScreenRule` block).
+The instinct is that translating swe-mux would break them.
+It would not, because **those literals match the agent CLI's own chrome, not the user's
+language**.
+Claude Code, Codex, and opencode ship English-only TUIs, so a Chinese-speaking operator still
+sees `esc to interrupt` on screen while reading a Chinese swe-mux around it.
+
+Detection therefore has exactly one exposure, and it is not ours to trigger: a **harness**
+deciding to localize its own TUI.
+If that happens the rules are already centralized and data-shaped, so the response is
+per-harness alternates in the same table rather than a redesign - and Phase 12's registry is
+where a localized descriptor would hang.
+Terminal rendering is likewise already correct: `Unicode11Addon` is loaded in
+`TerminalPane.tsx`, so CJK double-width cells measure and render properly today.
+
+### What is genuinely English-coupled
+
+Recorded so that a later phase does not rediscover it, and so that Tier 1 is not mistaken for
+a claim that the product is language-neutral:
+
+- **Voice command recognition is English-only by construction.** `voiceIntents.ts` normalizes
+  utterances with a `[^a-z0-9{}]` strip, so a Chinese, Japanese, or Korean utterance normalizes
+  to the empty string rather than to a wrong match. Wake words are English literals in
+  `config.py` (`DEFAULT_VOICE_WAKE_WORDS`).
+- **Kokoro TTS is English-only**: its G2P path needs the spaCy English model, and says so when
+  the model is absent. Edge TTS is the multilingual escape hatch already in the tree.
+- **STT is already fine.** `stt_language` is a config field and is passed through to the model.
+- **The assistant prompt hardcodes** `conversational English` (`voice.py`).
+- **LLM-derived text is English by prompt**: session titles, scan timeline summaries, and
+  automation observer output would stay English for a Chinese operator even behind a fully
+  translated UI, which is a worse experience than an honest English UI.
+- **No RTL support exists** anywhere in the stylesheet or layout code.
+
+### Candidate work, in the order it would be sequenced
+
+Tier 1 is the committed shape if this phase is scheduled.
+Tier 2 is deliberately held, with one exception whose whole purpose is to stop the problem
+growing while it is held.
+
+- [ ] Locale subtrees for the funnel: `site/` gains per-locale content roots and a language
+  switcher, `README.<locale>.md` sits beside the English README, and `.docs/` translations live
+  under a locale path rather than interleaved.
+- [ ] Translations are LLM-generated from the English source and labelled as such on the page,
+  the way herdr's issue template does it. A machine translation presented as authoritative is
+  the failure mode; a machine translation that says so and has a correction path is not.
+- [ ] A parity gate in `.github/workflows/ci.yml`: a translated page with no English source, or
+  an English page with no translation for an enabled locale, fails the run. This is the piece
+  that makes translations survive contact with an active repository, and it is the reason
+  herdr's has not rotted.
+- [ ] A translation issue template routing corrections to a `translation` label, explicitly
+  distinguished from bug reports.
+- [ ] **Stop the bleeding in the UI without translating it**: a `t()` shim plus a string catalog,
+  and a lint rule that fails on new user-facing literals in `.tsx`. New code adopts it from day
+  one; existing strings migrate opportunistically when a file is touched for other reasons. The
+  point is that the ~1,940 stops growing, so that if Tier 2 is ever scheduled it is an
+  incremental extraction rather than a big-bang refactor against a larger number.
+- [ ] `<html lang>` becomes a served value rather than a hardcoded `en`, since the funnel work
+  needs it anyway and it is a one-line change that a later phase would otherwise have to find.
+
+### Deliberately not in scope
+
+- **Translating the application UI.** Held until there is measured demand from actual non-English
+  users rather than inferred demand from a competitor's README. The asymmetry is the argument:
+  developers who run English-only agent CLIs all day read English UIs routinely, while a landing
+  page in a language they do not read is where they bounce. Tier 1 buys most of the reach for a
+  fraction of the work, and it is reversible in a way a half-migrated 1,940-string catalog is not.
+- **Translating the backend's user-facing text.** Same reasoning, and it is strictly downstream of
+  the UI decision.
+- **Localizing voice.** It is not a translation problem: the recognizer, the wake-word pass, and
+  the Kokoro G2P are each English-shaped independently, and one of them is a vendored model. A
+  non-English voice surface is its own phase with its own product decision, not a line item here.
+- **RTL layout.** Recorded above as absent; it earns work when a right-to-left locale is actually
+  requested, not preemptively.
+- **Weakening the screen classifier to be language-agnostic.** There is nothing to fix: the rules
+  read harness chrome, and a rule that no longer distinguishes its state has been deleted rather
+  than generalized.
+
+### Phase 20 exit criteria
+
+- [ ] A non-English visitor can read the landing page, the docs, and the README in at least one
+  additional locale, and the page tells them the translation is machine-generated and where to
+  report it.
+- [ ] CI fails on translation parity drift in either direction, so a new English page cannot ship
+  without its translation and a stale translation cannot outlive its source.
+- [ ] No new user-facing string literal can enter `frontend/src` outside the catalog, and the
+  catalog's current coverage is reported rather than assumed.
+- [ ] Status detection, delivery readiness, and the golden corpus are untouched by this phase, and
+  the reason they are untouched is written down where the next person will look for it.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
