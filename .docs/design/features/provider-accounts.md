@@ -94,6 +94,31 @@ the last good reading and changes no state.
 
 - Sign in + save runs the provider's ordinary host login command, then captures the
   resulting system auth file. Save current login captures without launching login.
+  Neither takes a label: a new slot is named from the identity the capture just verified
+  (email, then organization, then `<Provider> account`), and renaming is an in-place edit on
+  the saved row.
+- **A sign-in is daemon state, not request state.** `POST .../{provider}/login` starts the
+  provider CLI as a supervised background task and returns immediately; the run is reported
+  as `login[provider]` on every accounts snapshot as `running`, `succeeded` with the account
+  it saved, or `failed` with the reason. The run holds the daemon for up to
+  `LOGIN_TIMEOUT_SECONDS` while a human finishes an OAuth flow in a browser on the daemon
+  host, and while that was one blocked HTTP request the caller owned the only copy of the
+  outcome: closing the panel, reloading, or asking from a second device lost it. Clients poll
+  it faster while one is `running`.
+  - One sign-in per provider at a time. A second start is a 409 while the first runs; the
+    other provider is unaffected.
+  - A `replace_id` is validated before anything is spawned, so a bad target is a rejected
+    request rather than a browser to finish first.
+  - `POST .../{provider}/login/dismiss` cancels a running sign-in - which reaps the CLI, and
+    is what frees the provider before the timeout - or clears a finished one. It is three
+    path segments precisely so the two-segment account routes cannot read `login` as an
+    account id.
+  - A `succeeded` run stops being reported after `LOGIN_SUCCESS_LINGER_SECONDS`, because the
+    saved account is the durable confirmation. A `failed` run holds the only copy of the
+    reason and persists until it is dismissed or another sign-in replaces it.
+  - The task supervisor's ordinary response to a failing coroutine is to restart it, which
+    for this one would reopen a login the operator just cancelled. `_run_login` therefore
+    records every outcome and returns normally instead of raising.
 - **Every failure on that path is durable, and none of it is the payload.** A provider CLI
   that could not be started, timed out, or exited nonzero used to exist only in the HTTP
   response body of whoever happened to ask; `daemon.log` held nothing about any of it, which
@@ -206,6 +231,21 @@ the last good reading and changes no state.
   active notifications, retains them in the evidence log, and rejects manual-usage
   classification for Claude rows.
 - `POST .../select` takes no body; there is no force flag and no confirmation step.
+- The account popover is a way in, not only a way to switch between what already exists.
+  Each provider section carries a sign-in control on its heading line, and with nothing saved
+  the empty state is itself that control rather than a sentence reporting emptiness - the one
+  screen a new install always lands on had no path forward on it, only a `manage…` button
+  into Settings. A running sign-in draws in the popover and in Settings alike, because the
+  state is the daemon's rather than either component's.
+- The popover does not close on an outside click while a request it started is still out: a
+  switch or a dismissal that lands on an unmounted popover takes its error with it.
+- The settings panel states policy once and only where it acts. The switching and
+  credential-provenance rules fold into one disclosure; `LIVE SYSTEM AUTH` renders only for
+  `external`, `signed_out`, and `unreadable`, which are the states that need explaining and
+  the ones carrying the relink action - while the live login is a saved account it restated
+  the row already marked active. Identity provenance is one two-state badge with the sentence
+  in its tooltip, and `verify identities` is a single install-wide control rather than a copy
+  per provider heading sharing one busy key.
 - The expanded sidebar's status block uses one two-row metric grid per provider.
   The first row shows the provider icon, 5-hour reset countdown, weekly reset countdown, and optional Fable heading.
   The second row shows the selected account label's first four characters followed by the corresponding usage percentages.
@@ -231,6 +271,7 @@ POST   /api/provider-accounts/refresh
 POST   /api/provider-accounts/verify
 POST   /api/provider-accounts/{provider}/capture
 POST   /api/provider-accounts/{provider}/login
+POST   /api/provider-accounts/{provider}/login/dismiss
 PATCH  /api/provider-accounts/{provider}/{account-id}
 POST   /api/provider-accounts/{provider}/{account-id}/select
 POST   /api/provider-accounts/{provider}/{account-id}/adopt
