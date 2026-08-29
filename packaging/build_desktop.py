@@ -5,7 +5,7 @@ import hashlib
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +139,35 @@ def build_app_bundle(distpath: Path | None = None) -> None:
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (256, 256)],
     )
     output_root = distpath or (ROOT / "dist")
+    # `--clean` is unconditional, and since 2026-08-29 that is a measured decision
+    # rather than an unexplained default. ROADMAP Phase 21 named it the prime
+    # suspect for local rebuild time; it is not, and the numbers are in that
+    # section. Three findings, in the order they have to be understood:
+    #
+    # 1. It costs nothing here because the two things it discards are both
+    #    already worthless. PyInstaller's user-level bincache exists to hold
+    #    UPX-compressed and stripped binaries, and this spec sets `upx=False` and
+    #    `strip=False`, so the cache is a pass-through. And the workpath's
+    #    analysis cache never validated anyway - see (2).
+    # 2. It never validated because `Analysis(excludes=[...])` is a *list*, and
+    #    `PyInstaller.depend.analysis.initialize_modgraph` does
+    #    `excludes += ("__main__",)`, which extends that list in place. The saved
+    #    guts therefore carry an entry the next run's input does not, PyInstaller
+    #    logs "Building because excludes changed", and it re-derives the whole
+    #    module graph every time. Passing a tuple fixes it and was measured
+    #    fixing it: a no-op rebuild fell from 64s to 12s.
+    # 3. That fix is still not worth taking, which is the part worth writing
+    #    down. `Analysis`'s guts include an mtime check over the analysed `pure`
+    #    and `datas` TOCs, so *any* changed Python source or rebuilt frontend
+    #    asset forces a full re-analysis - and every real redeploy has one.
+    #    Measured with a source edit before each build, the arms are
+    #    indistinguishable (clean 52.5s/58.0s against reuse 55.6s/60.1s). A
+    #    12-second rebuild only exists when nothing changed, which is not a
+    #    redeploy. Trading an mtime-staleness risk on the most dangerous
+    #    operation in the project for a win of zero is the wrong side of the
+    #    trade, so the hygienic option stays.
+    #
+    # Re-measure before reversing this; do not reason about it from the source.
     subprocess.run(
         [
             sys.executable,
@@ -153,6 +182,7 @@ def build_app_bundle(distpath: Path | None = None) -> None:
         cwd=ROOT,
         check=True,
     )
+    verify_bundle_contents(output_root / "swe-mux")
     verify_bundle_licenses(output_root / "swe-mux")
     describe_bundle(output_root / "swe-mux")
     print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
@@ -391,6 +421,161 @@ def verify_no_gpl_av(bundle_root: Path) -> None:
             "GPL closure regression: PyAV was collected into the bundle "
             f"({', '.join(str(item) for item in offenders[:3])}). The swe_mux.spec "
             "excludes=['av'] plus rthook_av_stub.py must keep it out."
+        )
+
+
+# Every top-level package directory the app bundle is expected to carry under
+# `_internal/`, and nothing else. Measured from a build in the exact closure CI
+# uses (`uv sync --extra desktop --extra voice-local --group package`) on
+# 2026-08-29: 51 packages, 371 MB under `_internal/`.
+#
+# This exists because a bundle's *membership* was previously unchecked, and
+# membership is decided by what happens to be importable in the build venv rather
+# than by anything this repository declares. `dist/swe-mux` as built 2026-08-27
+# carried 101 MB of `playwright/driver` - collected through the lazy `import
+# playwright` in `preview_capture.py` - while `license_audit.py` states plainly
+# that `preview-capture` does not ship. Nothing caught it: `verify_bundle_licenses`
+# reads the tree for copyleft payloads and Playwright is Apache-2.0, so it passed.
+# A hundred megabytes of files a user's machine has never seen is also the exact
+# thing that makes an update multi-minute (ROADMAP Phase 21), so this is a size
+# gate as much as a hygiene one.
+#
+# `*.dist-info` directories are deliberately not listed: their names carry version
+# numbers, so a manifest containing them would churn on every dependency bump and
+# be edited without being read. The package they describe is checked here in its
+# own right.
+#
+# Two passengers are recorded rather than removed, because removing them is a
+# behaviour change this gate should not smuggle in:
+#   - `mypy`, `mypyc`'s `librt`, and `ast_serialize` are 3.8 MB of mypyc-compiled
+#     `.pyd`. They arrive through `pydantic/mypy.py` and `thinc/mypy.py`, which are
+#     static-analysis plugins that nothing imports at runtime. A type checker
+#     inside a shipped desktop app is not useful to anyone.
+#   - `setuptools` is present for the same class of reason.
+# Excluding them is a spec change that has to be proven against a running frozen
+# app, which a worktree cannot do. Listed here so the next person sees them.
+EXPECTED_BUNDLE_PACKAGES = frozenset(
+    {
+        "PIL",
+        "aiohttp",
+        "ast_serialize",
+        "blis",
+        "certifi",
+        "charset_normalizer",
+        "clr_loader",
+        "cryptography",
+        "ctranslate2",
+        "cymem",
+        "en_core_web_sm",
+        "frozenlist",
+        "hf_xet",
+        "jsonschema",
+        "jsonschema_specifications",
+        "librt",
+        "markupsafe",
+        "mcp",
+        "misaki",
+        "multidict",
+        "murmurhash",
+        "mypy",
+        "num2words",
+        "numpy",
+        "numpy.libs",
+        "onnxruntime",
+        "preshed",
+        "propcache",
+        "psutil",
+        "pydantic_core",
+        "pystray",
+        "pythonnet",
+        "pywin32_system32",
+        "regex",
+        "rpds",
+        "setuptools",
+        "spacy",
+        "srsly",
+        "swe_mux",
+        "thinc",
+        "tokenizers",
+        "tree_sitter",
+        "tree_sitter_language_pack",
+        "tzdata",
+        "watchfiles",
+        "webview",
+        "win32",
+        "winpty",
+        "wrapt",
+        "yaml",
+        "yarl",
+    }
+)
+
+
+def bundle_top_level_packages(bundle_root: Path) -> dict[str, int]:
+    """Top-level package directories under `_internal/`, mapped to size in bytes.
+
+    Directories only, and `*.dist-info` skipped: those are the units a stray
+    dependency arrives as, and the ones whose names do not carry a version.
+    """
+    internal = bundle_root / "_internal"
+    return {
+        entry.name: sum(item.stat().st_size for item in entry.rglob("*") if item.is_file())
+        for entry in sorted(internal.iterdir())
+        if entry.is_dir() and not entry.name.endswith(".dist-info")
+    }
+
+
+def verify_bundle_contents(
+    bundle_root: Path,
+    expected: Collection[str] = EXPECTED_BUNDLE_PACKAGES,
+) -> None:
+    """Fail the build when the bundle's package set is not the expected one.
+
+    Both directions are errors, and for different reasons. An **extra** package
+    means the build venv leaked something the distributed closure does not
+    declare, which costs download size, scan time on every user's machine, and
+    possibly a license obligation nobody audited. A **missing** package means a
+    `collect_all` entry stopped collecting - the failure mode that shows up only
+    in the frozen app and only on one feature (no IANA database, no G2P model, no
+    tree-sitter grammars), which is why several of them are collected explicitly
+    in the first place.
+    """
+    sizes = bundle_top_level_packages(bundle_root)
+    total = sum(sizes.values())
+    print(f"Bundle: {len(sizes)} top-level packages, {total / 1_000_000:.0f} MB under _internal/")
+
+    unexpected = sorted(
+        (size, name) for name, size in sizes.items() if name not in expected
+    )
+    if unexpected:
+        listing = "\n  ".join(
+            f"{name} ({size / 1_000_000:.1f} MB)" for size, name in reversed(unexpected)
+        )
+        raise SystemExit(
+            "Bundle membership regression: the build collected a top-level package "
+            "the shipped closure does not declare:\n  "
+            + listing
+            + "\nA package reaches the bundle because PyInstaller found it in the "
+            "*build venv*, not because this repository ships it - which is how 101 MB "
+            "of Playwright once rode along behind a lazy import. Build from the "
+            "declared closure (`uv sync --extra desktop --extra voice-local --group "
+            "package`); or add it to `excludes` in packaging/swe_mux.spec if it must "
+            "not ship; or, if it genuinely ships now, add the name to "
+            "EXPECTED_BUNDLE_PACKAGES here with a line saying why. If you are "
+            "building on a platform this manifest was never measured on, record that "
+            "platform's set rather than widening this one."
+        )
+
+    missing = sorted(name for name in expected if name not in sizes)
+    if missing:
+        raise SystemExit(
+            "Bundle membership regression: an expected top-level package is absent:\n  "
+            + "\n  ".join(missing)
+            + "\nMost of these fail only in the frozen app and only on one feature, "
+            "which is why they are collected explicitly. Check that "
+            "packaging/swe_mux.spec still names it in the collect_all loop and that "
+            "the build environment still has it; drop it from "
+            "EXPECTED_BUNDLE_PACKAGES only when it deliberately no longer ships."
         )
 
 

@@ -190,8 +190,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The one cache in this workflow, and it is here because this is the one
+      # job whose install is enormous: the desktop build closure is spacy,
+      # ctranslate2, onnxruntime, tokenizers and the tree-sitter grammar pack -
+      # roughly 400 MB of wheels fetched from PyPI on every release. Keyed on
+      # `uv.lock` by the action's default glob, so a dependency change misses and
+      # refills rather than serving a stale wheel.
+      #
+      # PyInstaller's own workpath is deliberately NOT cached, which the Phase 21
+      # audit item asked for and the measurement does not support. `build_desktop`
+      # passes `--clean`, which deletes the workpath and the bincache before
+      # analysing anything, so a restored cache would be downloaded and instantly
+      # thrown away. Dropping `--clean` to make it count was measured and rejected
+      # - PyInstaller re-analyses whenever a source file is newer than the last
+      # build, which is every real build, so the two arms came out
+      # indistinguishable. The full numbers are in the comment on
+      # `build_desktop.build_app_bundle`. Caching it here would trade a tagged
+      # release artifact derived from an analysis this runner did not perform for
+      # a saving of roughly zero.
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - name: Set up Python
         run: uv python install 3.12

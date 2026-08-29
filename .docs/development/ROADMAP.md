@@ -5370,6 +5370,8 @@ Every release currently rewrites all of it.
   build, so a local redeploy re-derives the whole import graph over a ~400 MB closure every time.
   Correct hygiene for a release build; the worst case paid repeatedly for the redeploy loop.
   This is the prime suspect for local rebuild time and has not yet been measured.
+  **Measured 2026-08-29 and refuted** - it costs nothing, for two reasons neither of which is
+  visible from the source. See Workstream A below; the flag stays.
 - **`upx=True` is set in both specs while UPX is not installed**, so it is silently a no-op. That
   is a trap in two directions: installing UPX would slow builds substantially, and UPX-packed
   binaries are a well-known antivirus heuristic trigger, which is the opposite of what the scan
@@ -5381,6 +5383,9 @@ Every release currently rewrites all of it.
   the lazy `import playwright` in `preview_capture.py` because the package happened to be in the
   build venv. `verify_bundle_licenses` cannot catch this - Playwright is Apache-2.0 and passes -
   and nothing checks bundle membership or size.
+  **As of 2026-08-29 something does** (`verify_bundle_contents`), and by then that particular
+  101 MB had already been evicted by an ordinary redeploy while nothing stopped it returning.
+  A smaller passenger is still aboard; see Workstream A below.
 - **The runtime-download mechanism this phase needs already exists.** `voice_models.py` has
   `KokoroModelStore` (size-and-SHA-256-verified fetch on an explicit press, pinned revision,
   resumable state) and `G2P_WHEEL_URL` already fetches a **wheel** at runtime rather than only
@@ -5390,16 +5395,96 @@ Every release currently rewrites all of it.
 ### Workstream A - the build loop
 
 Cheap, low risk, and the operator's daily cost rather than the user's.
+Done 2026-08-29.
+Two of the five items were **refuted by their own measurement and deliberately not implemented**,
+which is recorded below in more detail than the items that shipped, because a negative result
+that is not written down gets re-proposed.
 
-- [ ] Measure `--clean` on and off using `build_desktop.py --app-distpath` into a throwaway
+- [x] Measure `--clean` on and off using `build_desktop.py --app-distpath` into a throwaway
   directory, which touches nothing live and cannot disturb a running app.
-- [ ] Gate `--clean` to release builds if the measurement supports it, letting redeploys reuse
-  PyInstaller's cache.
-- [ ] Pin `upx=False` in both specs with the reasoning, rather than leaving a setting that only
-  does harm the day someone installs the tool.
-- [ ] Assert the built bundle's top-level package set against an expected manifest, so a stray
-  dependency in the build venv fails the build instead of silently adding a hundred megabytes.
-- [ ] Cache PyInstaller's workpath and the uv cache in CI.
+- [x] ~~Gate `--clean` to release builds~~ - **measured, refuted, not done.**
+- [x] Pin `upx=False` in `swe_mux.spec` with the reasoning.
+  **Not** in `swe_mux_supervisor.spec`, and not even a comment there, for the reason below.
+- [x] Assert the built bundle's top-level package set against an expected manifest
+  (`build_desktop.verify_bundle_contents`, `tests/test_bundle_contents.py`).
+- [x] Cache the uv cache in CI.
+  **Not** PyInstaller's workpath - it follows from the `--clean` result that caching it would
+  achieve nothing.
+
+#### What `--clean` actually costs, measured
+
+Seventeen real builds of `packaging/swe_mux.spec` into a throwaway distpath, on the primary
+16-core host, with the operator's daemon, frozen app and live sessions running throughout.
+That load is a real confound and is visible in the data: across four consecutive builds in the
+last arm the times drifted 52.5s → 60.1s, which is a **larger** effect than any difference
+between the arms, and is itself the strongest evidence that the difference between the arms is
+not there.
+Frontend rebuilds were excluded (`--skip-frontend`); these numbers are PyInstaller only.
+
+| Arm | Runs | Times (s) | Mean |
+|---|---|---|---|
+| `--clean`, nothing changed between builds | 3 | 65.8, 63.4, 64.4 | 64.5 |
+| cache reuse, nothing changed between builds | 3 | 62.3, 64.6, 54.2 | 60.4 |
+| `--clean`, one source line edited before each build | 2 | 52.5, 58.0 | 55.2 |
+| cache reuse, one source line edited before each build | 2 | 55.6, 60.1 | 57.8 |
+
+Three findings, and the second is the interesting one.
+
+**`--clean` discards two caches and both are already worthless here.**
+The user-level bincache (`%LOCALAPPDATA%\pyinstaller`) exists to hold UPX-compressed and
+stripped binaries; this spec sets `upx=False` and `strip=False`, so it is a pass-through.
+The workpath's analysis cache never validated - see next.
+
+**A spec that passes a non-empty `excludes` *list* can never validate its analysis cache, and
+this one did not.**
+Every cache-reuse run logged `Building because excludes changed` and re-derived the whole module
+graph, which is why the first two rows of that table are the same measurement twice.
+The mechanism is a PyInstaller implementation detail worth writing down:
+`PyInstaller.depend.analysis.initialize_modgraph` does `excludes += ("__main__",)`, which on a
+list is an in-place extend of `Analysis.excludes`, so `_save_guts` writes a value carrying
+`"__main__"` and the next build compares it against the spec's own list and finds them different.
+Passing a **tuple** makes `+=` rebind instead of mutate, the guts round-trip through
+`pprint`/`eval` unchanged, and the cache works: measured, a no-op rebuild fell from 64s to 12s -
+a 5.4x difference, and the largest single number in this whole workstream.
+
+**And that fix is still not worth taking, which is why the tuple is not in the tree.**
+`Analysis`'s guts include an mtime check over the analysed `pure` and `datas` TOCs, so any
+changed Python source or rebuilt frontend asset forces a full re-analysis - and *every* real
+redeploy has one, whether it is a backend edit or a `vite build` rewriting hashed assets.
+The 12-second rebuild exists only when nothing changed at all, which is not a redeploy.
+The last two rows are that case, and the arms are indistinguishable inside the run-to-run drift.
+So the trade on offer was: accept an mtime-staleness risk on the most dangerous operation in the
+project - the one whose documented failure mode is "a verified-correct fix silently does
+nothing" - in exchange for a saving of approximately zero.
+`--clean` stays, and now carries its numbers in a comment on `build_app_bundle`, which was the
+audit's actual complaint: not that the flag was wrong, but that nothing said why it was there.
+`tests/test_desktop_build_cache.py` fails if that reasoning is removed.
+
+#### Three corrections to the audit above, found by building rather than reading
+
+- **The Playwright residue is gone, and the class it belongs to is not.**
+  A bundle built 2026-08-29 from the exact CI closure and the operator's current `dist/swe-mux`
+  agree exactly: 76 top-level directories, 371 MB under `_internal/`, no `playwright` in either.
+  It was evicted by an ordinary redeploy at some point after 2026-08-27.
+  Nothing prevented it from coming back, which is what `verify_bundle_contents` now does.
+- **The bundle does still carry a passenger, just a smaller one.**
+  `mypy`, `mypyc`'s `librt`, and `ast_serialize` are 3.8 MB of compiled `.pyd` reached through
+  `pydantic/mypy.py` and `thinc/mypy.py` - static-analysis plugins nothing imports at runtime -
+  and `setuptools` is there for the same class of reason.
+  They are recorded in `EXPECTED_BUNDLE_PACKAGES` rather than excluded, because excluding them is
+  a behaviour change that has to be proven against a running frozen app and a membership gate
+  should not smuggle one in.
+  Worth doing on its own, next to Workstream D.
+- **`upx=False` could not be pinned in both specs, and the reason generalises.**
+  `packaging/swe_mux_supervisor.spec` is a member of `build_desktop.SUPERVISOR_SOURCES`, whose
+  SHA-256 is taken over file *bytes* - so adding a **comment** there invalidates the supervisor
+  bundle exactly as changing the value would.
+  `supervisor_bundle_current()` would then report the running bundle stale forever, `mux doctor`
+  would advise a rebuild, and that rebuild reaps every live session.
+  Paying that for a flag that does nothing today is the wrong trade; pin it in the same commit as
+  the next deliberate supervisor rebuild, when the reap is being paid for anyway.
+  The general rule: **the supervisor's hash gate makes its files expensive to comment on**, so
+  anything to be said about them has to be said somewhere else - here, and in the app spec.
 
 ### Workstream B - delta updates
 

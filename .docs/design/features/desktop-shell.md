@@ -184,6 +184,43 @@ continues to own every terminal.
   check reads the built tree rather than package metadata because declared metadata is
   exactly what hid the original defect - PyAV declares BSD-3-Clause and links GPL
   x264/x265, sherpa-onnx declares Apache-2.0 and statically links espeak-ng.
+- **The bundle's *membership* is proven at build time too, and separately from its licensing.**
+  `build_app_bundle` calls `verify_bundle_contents` before `verify_bundle_licenses`.
+  It compares the top-level package directories under `_internal/` against
+  `build_desktop.EXPECTED_BUNDLE_PACKAGES` - 51 packages, 371 MB, measured 2026-08-29 from a
+  build in exactly the closure CI uses - and fails on a difference in either direction.
+  The reason it is a separate check is that the two ask different questions and the license
+  gate provably cannot answer this one: `dist/swe-mux` as built 2026-08-27 carried 101 MB of
+  `playwright/driver`, collected because PyInstaller followed the lazy `import playwright` in
+  `preview_capture.py` and the package happened to be in that build venv, while
+  `license_audit.py` states plainly that `preview-capture` does not ship.
+  Playwright is Apache-2.0, so `verify_bundle_licenses` passed it.
+  A hundred megabytes of files a user's machine has never seen is also the dominant cost of an
+  update, so this is a size gate as much as a hygiene one (`../../development/ROADMAP.md`
+  Phase 21).
+  The **missing** direction matters for the opposite reason: a `collect_all` entry that stops
+  collecting is invisible until the frozen app runs one feature, which is exactly why those
+  entries are explicit in the first place.
+  `*.dist-info` directories are excluded from the comparison because their names carry version
+  numbers and a manifest containing them would be edited without ever being read.
+  Two passengers are recorded in that manifest rather than removed: `mypy` with `mypyc`'s
+  `librt` and `ast_serialize` (3.8 MB of compiled `.pyd`, arriving through the
+  `pydantic.mypy` and `thinc.mypy` static-analysis plugins that nothing imports at runtime),
+  and `setuptools`. Excluding them is a behaviour change that has to be proven against a
+  running frozen app, which this gate should not smuggle in.
+- **UPX is pinned off in `swe_mux.spec`, and the pin is the point.**
+  It was `upx=True` while UPX has never been installed on any machine that builds this, so it
+  was a no-op that only meant something on the day somebody installed the tool - at which point
+  it would add a compression pass over a ~400 MB closure to every build *and* give every shipped
+  binary a packer signature, which is one of the best-known antivirus heuristics. Antivirus
+  scanning is already the dominant cost of a swe-mux update, so the upside was a smaller download
+  and the downside was more of the exact thing that makes updates slow.
+  `packaging/swe_mux_supervisor.spec` still says `upx=True` and is **deliberately not edited,
+  including its comment**: that file is a member of `build_desktop.SUPERVISOR_SOURCES`, whose
+  SHA-256 is taken over file *bytes*, so a pure comment invalidates the supervisor bundle exactly
+  as a value change would - `supervisor_bundle_current()` would report the running bundle stale
+  forever, `mux doctor` would advise a rebuild, and that rebuild reaps every live session. Pin it
+  in the same commit as the next deliberate supervisor rebuild, when the reap is paid for anyway.
 - **PyAV is out of the dependency closure entirely, not just out of the bundle**
   (2026-08-27). `faster-whisper` hard-requires `av>=11` and nothing in swe-mux reaches it:
   the only import is `faster_whisper/audio.py`'s module-level `import av` for

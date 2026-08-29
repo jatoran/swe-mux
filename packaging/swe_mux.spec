@@ -86,6 +86,13 @@ analysis = Analysis(
     # real package is excluded below; see rthook_av_stub.py for why the real
     # one may never ship (GPL FFmpeg linkage inside the wheel).
     runtime_hooks=[str(ROOT / "rthook_av_stub.py")],
+    # A *list* here means PyInstaller's analysis cache can never validate, because
+    # `initialize_modgraph` extends the list in place and the saved guts then
+    # never match the next run's input. That is a known state rather than an
+    # oversight: `build_desktop.build_app_bundle` passes `--clean` on every build,
+    # which discards the workpath anyway, and the comment there carries the
+    # measurement for why reusing it buys nothing.
+    #
     # Edge TTS is an external integration even when the build environment has
     # the source-install convenience extra. Its Apache bridge is package data;
     # the LGPL client stays in the user's separate Python environment.
@@ -94,6 +101,29 @@ analysis = Analysis(
     optimize=0,
 )
 pyz = PYZ(analysis.pure)
+
+# UPX is off, deliberately, and this is the reasoning rather than a preference.
+# It is not installed on any machine that builds this today, so `upx=True` was
+# silently a no-op and the setting only ever meant something on the day somebody
+# installed the tool. On that day it would do two harmful things at once: add a
+# compression pass over a ~400 MB closure to every build, and hand every shipped
+# binary a packer signature. UPX packing is one of the best-known antivirus
+# heuristics, and the dominant cost of a swe-mux update is already Windows
+# scanning a tree of files it has never seen (ROADMAP Phase 21) - so the upside
+# is a smaller download and the downside is more of the exact thing that makes
+# updates slow, plus a higher chance of being quarantined outright. Pinned False
+# so the answer does not change by accident when a toolchain gains a package.
+#
+# `swe_mux_supervisor.spec` still says `upx=True` and is deliberately left alone,
+# including the comment that would have explained why. That file is a member of
+# `build_desktop.SUPERVISOR_SOURCES`, whose SHA-256 gates the supervisor bundle,
+# and the hash is taken over the file's *bytes* - so a pure comment invalidates
+# it exactly as a value change would. `supervisor_bundle_current()` would then
+# report the running bundle stale forever, `mux doctor` would advise a rebuild,
+# and performing that rebuild reaps every live session. Paying that to pin a flag
+# that does nothing is the wrong trade; pin it in the same commit as the next
+# deliberate supervisor rebuild, when the reap is being paid for anyway.
+UPX = False
 
 executable = EXE(
     pyz,
@@ -104,7 +134,7 @@ executable = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=UPX,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -122,7 +152,7 @@ bundle = COLLECT(
     analysis.binaries,
     analysis.datas,
     strip=False,
-    upx=True,
+    upx=UPX,
     upx_exclude=[],
     name="swe-mux",
 )
