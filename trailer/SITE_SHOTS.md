@@ -158,4 +158,10 @@ Each of these cost a round trip and is written down so the next person does not 
 
 `capture_live_ui.py` and `render_feature_cut.py` in this folder record the **live** daemon on 8765 and are for the feature trailer; their footage is explicitly not cleared for publication (see `README.md`). The two scripts here are the opposite: they never touch 8765, and everything they record is intended to be published.
 
-The hero video and feature GIFs that `.docs/development/RELEASE_MANUAL_TASKS.md` § 7 also asks for are not built yet. This environment is what they should be recorded in - `capture_live_ui.py`'s scene functions port onto it by changing its `URL` and its session names.
+The hero video and the short looping demos that `.docs/development/RELEASE_MANUAL_TASKS.md` § 7 also asks for are built, in this same environment, and they have their own brief: [`HERO.md`](HERO.md).
+Everything on this page applies to them unchanged - the synthetic install, the leak scan, the by-eye review - with one addition that only moving pictures need.
+
+**A still can be looked at once; a loop has to be checked frame by frame, and one crop there is a redaction rather than a composition.**
+The beats that film real claude sessions carry the CLI's statusline, which renders the operator's actual 5-hour and weekly subscription spend as digits *inside a terminal cell grid* - the one place `scan_for_leaks` cannot reach, because it reads the DOM.
+`encode_loops.py` crops that band off, and `--frames` on both encoders dumps the *encoded* file for the review, because reviewing the raw take proves nothing about what shipped.
+The loops are cut from the hero's own takes rather than shot separately, so a UI change cannot leave the page and the film disagreeing about what the product looks like.
