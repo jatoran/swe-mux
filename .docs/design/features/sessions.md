@@ -310,8 +310,8 @@ and reattachable browser viewports.
   ignored due to FORCE_COLOR`. All of this is scoped to agents on purpose: a plain shell keeps
   honouring pipe semantics (no forced flag leaks ANSI into `cmd > file`) and an inherited
   `NO_COLOR` (no-color.org).
-- Session-preserving reload (`pty_supervisor_enabled`): PTYs spawn inside the standalone PTY
-  supervisor through a `RemotePtyHost` with the same host contract (spawn/write/resize/
+- Session-preserving reload (`pty_supervisor_enabled`, on by default since 2026-08-28): PTYs
+  spawn inside the standalone PTY supervisor through a `RemotePtyHost` with the same host contract (spawn/write/resize/
   isalive/exit_status/release/stop). The supervisor keeps the authoritative scrollback and the
   per-session/global reaper Jobs; the daemon mirrors scrollback from the subscription stream
   (attach replay, nested-agent detection, and the PTY-idle watchdog all read the mirror). Each
@@ -333,8 +333,8 @@ and reattachable browser viewports.
 - **The supervisor is the primary recovery path, not the only one.** It cannot survive its own
   death: its kill-on-close Job takes every process tree with it, and both the authoritative
   scrollback and the mirrored metadata are process memory. A supervisor crash, a force close, a
-  power loss, or `pty_supervisor_enabled` off therefore leave the next daemon with no idea those
-  sessions existed. A durable registry behind the mirror brings them back as **cold sessions** -
+  power loss, a start where no supervisor could be spawned, or `pty_supervisor_enabled` turned
+  off therefore leave the next daemon with no idea those sessions existed. A durable registry behind the mirror brings them back as **cold sessions** -
   visible, dead, and resumable - and the same layer is what lets an ended pane stay readable at all.
   Contract, format, and bounds: `features/session-recovery.md`.
 - A spawn mirrors the session's initial metadata with the spawn RPC itself, not only through

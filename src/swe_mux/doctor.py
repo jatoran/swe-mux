@@ -170,9 +170,12 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
                 status="warn",
                 severity="critical",
                 detail="No PTY supervisor attached; sessions will not survive a "
-                "daemon restart or app rebuild.",
-                remedy="Enable the session-preserving supervisor so reloads keep "
-                "sessions alive.",
+                "daemon restart or app rebuild. The supervisor is on by "
+                "default, so this daemon most likely failed to start one.",
+                remedy="Read supervisor-console.log in the data directory for why "
+                "the spawn failed, then restart the daemon. If pty_supervisor_enabled "
+                "was deliberately turned off, turn it back on to keep sessions alive "
+                "across reloads.",
             )
         )
     unadopted = int(health.get("supervisor_unadopted", 0) or 0)

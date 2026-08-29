@@ -403,6 +403,15 @@ async def isolated_daemon(
         "host": "127.0.0.1",
         "tailnet_enabled": False,
         "reconcile_external_history": False,
+        # Pinned off, and now *against* the shipped default rather than with it.
+        # Two reasons, neither of which is "the supervisor is risky". A `Config`
+        # built in code has no `config_path`, which is what a supervisor is
+        # keyed on, so this shape could not start one if it tried
+        # (`SupervisorClient.connect_or_spawn` refuses); and the agent-bearing
+        # live tiers share this harness, where a second process that outlives
+        # the test is exactly what the isolation rules forbid. The supervised
+        # path is exercised by `daemon_process`, which has a real config file
+        # and a real entry point - see `test_live_daemon.py`.
         "pty_supervisor_enabled": False,
         "session_control_enabled": True,
         # Without this every shell spawn is refused before it reaches a
@@ -567,39 +576,224 @@ class DaemonProcess:
             await asyncio.gather(*self.drains)
         return int(returncode)
 
-    async def request_shutdown(self) -> int:
-        """Ask the daemon to stop through the one route that has that authority."""
+    async def request_shutdown(self, mode: str = "quit") -> int:
+        """Ask the daemon to stop through the one route that has that authority.
+
+        `mode` is the shutdown *intent*: "quit" reaps everything the supervisor
+        holds and stops it too, "restart" detaches and leaves supervised sessions
+        running for the next daemon. The two are the whole difference between
+        "swe-mux is closed" and "swe-mux is reloading", and nothing else in the
+        suite exercises the second over a real process.
+        """
         async with self.session.post(
             f"{self.base_url}/api/desktop/shutdown",
-            json={"mode": "quit"},
+            json={"mode": mode},
             headers={"Authorization": f"Bearer {self.control_token}"},
         ) as response:
             await response.read()
             return response.status
 
+    # ---- HTTP, for the session half of the supervised smoke ------------------
+    #
+    # The in-process harness reaches into the app object for these; a subprocess
+    # daemon has no app object, so everything goes through the routes a browser
+    # uses. That is a feature here: it is the same wire a real client is on.
 
-def _daemon_config_toml(port: int) -> str:
+    async def _json(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> tuple[int, Any]:
+        async with self.session.request(
+            method, f"{self.base_url}{path}", json=body
+        ) as response:
+            text = await response.text()
+            if not text:
+                return response.status, None
+            return response.status, json.loads(text)
+
+    async def register_project(self, root: Path, name: str = "live") -> str:
+        status, payload = await self._json(
+            "POST", "/api/projects", {"name": name, "root": str(root), "create_missing": False}
+        )
+        assert status in (200, 201), f"{status}: {payload}\n{self.diagnostics()}"
+        return str(payload["id"])
+
+    async def spawn_shell(self, project_id: str, root: Path, name: str = "live") -> str:
+        status, payload = await self._json(
+            "POST",
+            "/api/sessions",
+            {"project_id": project_id, "backend": "shell", "cwd": str(root), "name": name},
+        )
+        assert status == 201, f"{status}: {payload}\n{self.diagnostics()}"
+        return str(payload["id"])
+
+    async def session_ids(self) -> list[str]:
+        status, payload = await self._json("GET", "/api/sessions")
+        assert status == 200, f"{status}: {payload}\n{self.diagnostics()}"
+        return [str(row["id"]) for row in payload]
+
+    @asynccontextmanager
+    async def attach_pty(
+        self, sid: str, *, cols: int = 120, rows: int = 30
+    ) -> AsyncIterator[PtyAttachment]:
+        """Attach to a session's terminal over the real websocket route.
+
+        The close comes *before* the reader is cancelled, which is the opposite
+        of the in-process shape and is deliberate: this websocket is a real
+        connection on a real `TCPConnector`, and `close()` waits for the peer's
+        close frame - which only the reader can consume. Cancel first and the
+        close times out, leaving the connection in the connector for a finalizer
+        to complain about against some other test.
+        """
+        ws = await self.session.ws_connect(f"{self.base_url}/pty/{sid}")
+        attachment = PtyAttachment(ws)
+        reader = asyncio.create_task(attachment.read_forever(), name=f"pty-reader-{sid}")
+        try:
+            await ws.send_json({"type": "claim_input"})
+            await ws.send_json({"type": "attach_ready", "cols": cols, "rows": rows})
+            yield attachment
+        finally:
+            with contextlib.suppress(Exception):
+                await ws.close()
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+
+
+def _daemon_config_toml(port: int, *, supervisor: bool | None) -> str:
     """The smallest config that keeps this daemon off every shared resource.
 
     `tailnet_enabled` and `wsl_bridge_enabled` off so it binds exactly one
-    loopback listener; `pty_supervisor_enabled` off so it starts no second
-    process that would outlive the test; `reconcile_external_history` off so it
-    does not walk the operator's transcripts. `data_dir` is not a key - it is the
-    config file's own parent, which is what `--config` therefore selects.
+    loopback listener; `reconcile_external_history` off so it does not walk the
+    operator's transcripts. `data_dir` is not a key - it is the config file's own
+    parent, which is what `--config` therefore selects.
+
+    `pty_supervisor_enabled` is **not written at all** when `supervisor` is None,
+    and that omission is the point. It used to be pinned `false` here, which was
+    correct while the shipped default was off and became a lie the day it moved:
+    a tier whose whole subject is "does the real entry point work on this host"
+    was silently exercising a configuration no install has. A test that wants the
+    unsupervised fallback asks for it explicitly.
     """
-    return (
-        f"port = {port}\n"
-        'host = "127.0.0.1"\n'
-        "tailnet_enabled = false\n"
-        "wsl_bridge_enabled = false\n"
-        "pty_supervisor_enabled = false\n"
-        "reconcile_external_history = false\n"
+    lines = [
+        f"port = {port}",
+        'host = "127.0.0.1"',
+        "tailnet_enabled = false",
+        "wsl_bridge_enabled = false",
+        "reconcile_external_history = false",
+    ]
+    if supervisor is not None:
+        lines.append(f"pty_supervisor_enabled = {str(supervisor).lower()}")
+    return "\n".join(lines) + "\n"
+
+
+@dataclass(frozen=True)
+class DaemonSpec:
+    """Everything two successive daemons must agree on to be the same install.
+
+    A supervisor is keyed on its config **path** (its single-instance mutex, its
+    discovery record, and the identity check that guards terminating it), and it
+    hands its sessions back through the data directory beside that file. So a
+    successor daemon is not "another daemon" - it is one launched from this exact
+    spec, on the port the config names, which is free again because its
+    predecessor exited.
+    """
+
+    data_dir: Path
+    config_path: Path
+    port: int
+    home: Path
+
+
+def daemon_spec(tmp_path: Path, *, supervisor: bool | None = None) -> DaemonSpec:
+    """Prepare an isolated data directory and config file for `daemon_process`.
+
+    `supervisor=None` writes no `pty_supervisor_enabled` key, so the daemon runs
+    the shipped default; `True`/`False` pin it.
+    """
+    data_dir = tmp_path / "muxd-data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    port = free_port()
+    config_path = data_dir / "config.toml"
+    config_path.write_text(
+        _daemon_config_toml(port, supervisor=supervisor), encoding="utf-8", newline="\n"
     )
+    # A separate process resolves `Path.home()` for itself, and several subsystems
+    # read a real user profile through it. Re-homing makes "never touches the
+    # operator's files" a property of the harness rather than of the code under
+    # test - and it has to be part of the spec rather than of one launch, because
+    # a successor that re-homed somewhere else would not be the same install.
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    return DaemonSpec(data_dir, config_path, port, home)
+
+
+def supervisor_discovery(data_dir: Path) -> dict[str, Any] | None:
+    """The supervisor's own record of itself, or None when it wrote none."""
+    path = data_dir / "supervisor.json"
+    try:
+        return dict(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+async def reap_any_supervisor(data_dir: Path) -> bool:
+    """Stop the supervisor keyed on `data_dir`, reaping every session it holds.
+
+    This is `muxd --shutdown` for one test: the same `kill_server` the CLI calls,
+    which reaps through the protocol when it can and falls back to an
+    identity-checked terminate when it cannot. The identity check is what makes
+    this safe to call from a test at all - it refuses any pid whose command line
+    does not name *this* config path, so it can never reach the operator's own
+    supervisor on `~/.mux`.
+    """
+    from swe_mux.supervisor_client import kill_server
+
+    config = Config(data_dir=data_dir, config_path=data_dir / "config.toml")
+    return await kill_server(config)
+
+
+@asynccontextmanager
+async def supervisor_reaped(data_dir: Path) -> AsyncIterator[None]:
+    """Guarantee no supervisor keyed on `data_dir` outlives this block.
+
+    A supervisor is *designed* to outlive the daemon that spawned it, so the
+    usual "reap every subprocess in the test that started it" rule cannot be
+    discharged by the daemon's own context manager - a test that deliberately
+    hands sessions to a successor needs the supervisor alive in between. This
+    wraps every such test instead, so the guarantee holds on the failure path
+    too, which is the path that would otherwise leave a supervisor and a shell
+    running on a CI runner for `LINGER_IDLE_EXIT_SECONDS`.
+    """
+    try:
+        yield
+    finally:
+        await reap_any_supervisor(data_dir)
+
+
+async def _port_is_free(port: int, *, seconds: float = 30.0) -> None:
+    """Wait until nothing answers on `port`, so a successor can bind it.
+
+    The predecessor's listener is closed before its teardown finishes, but the
+    two are not the same instant, and a successor that loses that race exits
+    during bind rather than reporting anything a reader can act on.
+    """
+    deadline = asyncio.get_running_loop().time() + seconds
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", port), timeout=1.0
+            )
+        except (OSError, TimeoutError):
+            return
+        writer.close()
+        with contextlib.suppress(OSError, ConnectionError):
+            await writer.wait_closed()
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"port {port} never stopped answering within {seconds:.0f}s")
 
 
 @asynccontextmanager
 async def daemon_process(
-    tmp_path: Path, *, env_overrides: Mapping[str, str] | None = None
+    where: Path | DaemonSpec, *, env_overrides: Mapping[str, str] | None = None
 ) -> AsyncIterator[DaemonProcess]:
     """Run the real `muxd` entry point as a subprocess, and reap it here.
 
@@ -616,17 +810,11 @@ async def daemon_process(
         "the `muxd` console script is not installed for this interpreter; "
         "run `uv sync` in this checkout"
     )
-    port = free_port()
-    data_dir = tmp_path / "muxd-data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    config_path = data_dir / "config.toml"
-    config_path.write_text(_daemon_config_toml(port), encoding="utf-8", newline="\n")
-    # A separate process resolves `Path.home()` for itself, and several subsystems
-    # read a real user profile through it. Re-homing costs nothing here (this
-    # daemon spawns no session) and makes "never touches the operator's files" a
-    # property of the harness rather than of the code under test.
-    home = tmp_path / "home"
-    home.mkdir(parents=True, exist_ok=True)
+    spec = daemon_spec(where) if isinstance(where, Path) else where
+    data_dir, config_path, port, home = spec.data_dir, spec.config_path, spec.port, spec.home
+    # A successor launched from a spec its predecessor already used binds the
+    # port that predecessor just released.
+    await _port_is_free(port)
     control_token = "live-daemon-control-token"
     env = {
         **os.environ,

@@ -136,6 +136,17 @@ async def health(request: web.Request) -> web.Response:
             "ui_build_id": read_ui_build_id(request.app[keys.FRONTEND_DIR]),
             "supervisor": connected,
             "supervisor_state": "connected" if connected else ("lost" if lost else "absent"),
+            # Which process holds this daemon's sessions, as the *daemon* knows
+            # it rather than as the supervisor claims in its discovery file.
+            # `lost` is the state this exists for: "the supervisor is alive and
+            # unreachable" is only actionable if you can say which process that
+            # is. Absent whenever no supervisor was reached, so `None` and a pid
+            # are the same distinction `supervisor_state` already draws.
+            "supervisor_pid": (
+                int(supervisor.supervisor_pid)
+                if supervisor is not None and (connected or lost)
+                else None
+            ),
             # Supervised sessions this daemon could not rebuild (snapshot drift,
             # a crash inside the spawn-meta window). They keep running under the
             # supervisor with no UI handle, so the count must be visible.
@@ -325,10 +336,17 @@ async def daemon_restart(request: web.Request) -> web.Response:
         return json_response(
             {
                 "error": "supervisor_not_attached",
+                # The supervisor is on by default, so this is a *failure* report
+                # for almost everybody who reads it, not a setup instruction. It
+                # used to read "enable pty_supervisor_enabled", which sent a
+                # reader to turn on a setting that was already on and told them
+                # nothing about why their daemon has no supervisor.
                 "message": (
                     "the PTY supervisor is not attached, so a daemon restart would "
-                    "kill every session; enable pty_supervisor_enabled or pass "
-                    "force=true"
+                    "kill every session. It is on by default, so this daemon "
+                    "either failed to start one (see supervisor-console.log in the "
+                    "data directory, and `mux doctor`) or has pty_supervisor_enabled "
+                    "turned off. Pass force=true to restart anyway and accept the reap"
                 ),
             },
             409,
@@ -592,7 +610,10 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
                 "error": "supervisor_not_attached",
                 "message": (
                     "the PTY supervisor is not attached, so a redeploy would kill "
-                    "every session; enable pty_supervisor_enabled or pass force=true"
+                    "every session. It is on by default, so this daemon either "
+                    "failed to start one (see supervisor-console.log in the data "
+                    "directory, and `mux doctor`) or has pty_supervisor_enabled "
+                    "turned off. Pass force=true to redeploy anyway and accept the reap"
                 ),
             },
             409,

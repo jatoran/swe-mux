@@ -36,7 +36,9 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "kill-server: reap every session owned by the PTY supervisor and stop "
-            "it, then exit (with pty_supervisor_enabled, Ctrl-C only detaches)"
+            "it, then exit. This is the only way to stop everything: the "
+            "supervisor is on by default, so Ctrl-C merely detaches and leaves "
+            "live sessions running for the next daemon"
         ),
     )
     parser.add_argument(

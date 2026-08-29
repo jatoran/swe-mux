@@ -9,7 +9,10 @@ vanishing.
 The PTY supervisor already keeps live sessions running across a daemon restart
 (`features/sessions.md`, "Session-preserving reload").
 This is the fallback behind it, for the cases the supervisor cannot cover: its own death, a force
-close, a power loss, or a daemon running with `pty_supervisor_enabled` off.
+close, a power loss, a daemon that started unsupervised because no supervisor could be spawned,
+or the rare install that turned `pty_supervisor_enabled` off.
+That flag is on by default since 2026-08-28, which changes how often the last two cases arise
+and changes nothing else here.
 
 The same durable registry also owns **inactive sessions** created by an explicit Stand down.
 Inactive sessions are intentional retained state, not crash recovery.
