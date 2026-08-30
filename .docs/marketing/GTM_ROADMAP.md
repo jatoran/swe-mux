@@ -452,7 +452,7 @@ That is a design decision the plan does not get to quietly recover, so the measu
 Two mechanisms, both of which the participant chooses to send:
 
 - **Structured check-ins.** Cohort A gets one, at the end of the session. Cohort B gets three: day 3, day 10, and one week after the end. Each is a fixed short list of questions so the answers are comparable across people, and each is a message the participant writes and sends, not a payload anything collects. The question sets are in [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md).
-- **A locally generated adoption summary the participant chooses to share.** Everything cohort B's numbers need is already on the participant's own disk: `mux doctor --export` carries the diagnostics bundle, and the durable status ledger, the land-queue event trail, and the usage history are all local SQLite. A summary the operator can read is a summary the participant can generate, read, and decide to send, which is exactly the posture the bug form already takes with the diagnostics export. **This is a proposal, not a feature**: no such summary command exists, and § Open decisions records it as a decision rather than as a plan. Until it does, cohort B is measured entirely by the structured check-ins.
+- **A locally generated adoption summary the participant chooses to share.** Everything cohort B's numbers need is already on the participant's own disk: `swemux doctor --export` carries the diagnostics bundle, and the durable status ledger, the land-queue event trail, and the usage history are all local SQLite. A summary the operator can read is a summary the participant can generate, read, and decide to send, which is exactly the posture the bug form already takes with the diagnostics export. **This is a proposal, not a feature**: no such summary command exists, and § Open decisions records it as a decision rather than as a plan. Until it does, cohort B is measured entirely by the structured check-ins.
 
 Asks, scripts, question sets, and both trackers are in [`OUTREACH_TRACKER.md`](OUTREACH_TRACKER.md).
 No real people are named there; the categories are described by role.
@@ -472,7 +472,7 @@ The risk the original hesitation named is real and unchanged: it is a runtime-ar
 
 1. **Clean-machine testing** (step 2), with the supervisor on, on a machine with no checkout. Its spawn path, its discovery file, and its socket have only ever run here.
 2. **Failure testing.** What a user sees when the supervisor cannot start, when it dies while the daemon lives, and when a daemon finds a supervisor from an older build. The daemon already falls back to in-process spawning and logs it; the question is whether a person can tell, not whether the code copes.
-3. **A redeploy and update story.** A supervisor in the path means a release that bumps `PROTOCOL_VERSION` ends every live session, and `mux update --install` already refuses such a release for exactly that reason. Defaulting the supervisor on makes that refusal something every user meets rather than something the operator meets.
+3. **A redeploy and update story.** A supervisor in the path means a release that bumps `PROTOCOL_VERSION` ends every live session, and `swemux update --install` already refuses such a release for exactly that reason. Defaulting the supervisor on makes that refusal something every user meets rather than something the operator meets.
 4. **A resolution for the `live_daemon` orphan assertion, decided before the flip rather than after CI goes red.**
    `tests/test_live_daemon.py::test_the_muxd_entry_point_starts_serves_and_stops_without_orphans` collects every descendant of the daemon while it is up and then asserts none of them survives shutdown.
    A supervisor is by design a descendant that survives, so with the default on that test fails on Ubuntu and Windows CI - correctly reporting a behaviour change rather than a bug.
@@ -506,7 +506,7 @@ Naming it here is worth more than guessing at it, and no draft may describe it u
 **The finding that raised it:** the beta needs numbers and the project has no telemetry, by design.
 
 **The proposal.** A command that reads what is already on the user's own disk and writes a short summary they can read and choose to send: days used, sessions run, branches landed, capabilities enabled.
-The precedent is `mux doctor --export`, which the bug form already asks for on exactly these terms.
+The precedent is `swemux doctor --export`, which the bug form already asks for on exactly these terms.
 
 **Why it is recorded rather than built.** It is small, but it is a new surface that reports on a person's usage, and the whole posture of this project is that such a thing is something a person hands over rather than something that is collected. Getting that boundary right is the work, not the SQL.
 Until it exists, the beta is measured by structured check-ins alone, which is slower and is honest.
@@ -565,8 +565,8 @@ Everything here must exist **before step 3**, not before step 6, because the bet
 
 The project already ships the two things that make a bug report actionable, and neither is discoverable without being asked for:
 
-- `mux doctor` output - the read-only health report covering daemon, supervisor, frontend build, detected agent CLIs, tailnet listener, and background loops.
-- `mux doctor --export` - the full diagnostics bundle (config, remote, firewall, logs) as JSON.
+- `swemux doctor` output - the read-only health report covering daemon, supervisor, frontend build, detected agent CLIs, tailnet listener, and background loops.
+- `swemux doctor --export` - the full diagnostics bundle (config, remote, firewall, logs) as JSON.
 
 Both commands verified against `src/swe_mux/cli.py` on 2026-08-28.
 Ask for the first as a required field and the second as optional, and say in the form that the export contains paths and configuration so the reporter should read it before pasting.

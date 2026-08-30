@@ -24,7 +24,7 @@ disrupt real agent sessions. `muxd` has no `--data-dir`, but `resolve_data_dir`
 falls back to the config file's parent, so `--config <root>/config.toml` puts the
 whole install under `<root>`. `--local-only` clears `tailnet_enabled`, which is
 what keeps this daemon from reaching for the operator's Tailscale Serve route on
-443. `down` terminates only the PID `up` recorded, and never `muxd --shutdown`,
+443. `down` terminates only the PID `up` recorded, and never `swemuxd --shutdown`,
 which would reap every live session on the host.
 
 **The child environment is scrubbed.** This script is itself usually run from
@@ -776,7 +776,7 @@ def start_daemon() -> int:
 def stop_daemon() -> None:
     """Terminate only the PID `up` recorded.
 
-    Never `muxd --shutdown` and never a name-matched taskkill: both would reach
+    Never `swemuxd --shutdown` and never a name-matched taskkill: both would reach
     the operator's daemon and reap every live session on the host.
     """
     if not STATE_PATH.exists():

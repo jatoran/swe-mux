@@ -982,11 +982,11 @@ pip install swe-mux</pre></div>
       <div class="docsec" id="start-it">
         <div class="head"><span class="n">#</span><h2>Start it</h2><span class="fill"></span></div>
         <p class="prose"><code>mux start</code> returns once the daemon is answering and leaves it running: closing the terminal does not stop it. It is idempotent, so a daemon that is already serving is reported and left alone, and nothing else in the CLI starts one implicitly.</p>
-        <div class="code"><pre>mux start                     # the daemon, in the background
+        <div class="code"><pre>swemux start                     # the daemon, in the background
 # then open http://127.0.0.1:8765
 
-muxd                          # the same daemon, in the foreground
-muxd --shutdown               # stops it, the supervisor, and every session
+swemuxd                          # the same daemon, in the foreground
+swemuxd --shutdown               # stops it, the supervisor, and every session
 
 swe-mux                       # Windows: the same thing in a window, with a tray icon</pre></div>
         <p class="proof"><b>It worked when</b> <code>mux doctor</code> exits 0. It is read-only and reports on the daemon, the supervisor, the frontend build, the agent CLIs it can detect, the tailnet listener, and the background loops. It is the command that tells installed from working.</p>

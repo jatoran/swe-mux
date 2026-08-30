@@ -205,7 +205,7 @@
   `design/features/desktop-shell.md`, `design/architecture.md`, `design/interfaces.md`,
   `design/features/remote-access.md`, `technical/backend/packages.md`
 - Changing how swe-mux is *started* without a terminal - the first-run shortcut offer
-  (`first_run.py`), the detached `mux start` (`daemon_start.py`), the shortcut slots
+  (`first_run.py`), the detached `swemux start` (`daemon_start.py`), the shortcut slots
   (`shortcuts.py`, `routes/desktop_integration.py`), or which of the two run-at-login
   mechanisms is written or read: `design/features/desktop-shell.md`, `design/interfaces.md`
   (CLI and the desktop-integration endpoints), `development/OPERATOR_LIFECYCLE.md`,
@@ -216,6 +216,19 @@
   (`development/ROADMAP.md` § Phase 24, "Superseded the same day"). And **run-at-login has
   two mechanisms** - an `HKCU\...\Run` value and a `shell:startup` link - so anything that
   reports the setting reads both, and anything that turns it off clears both.
+- Adding, renaming or removing a launcher (`[project.scripts]`, `[project.gui-scripts]`):
+  `pyproject.toml`, `src/swe_mux/install_location.py` (`SHIPPED_COMMANDS`, `CLIENT_COMMANDS`,
+  `DAEMON_COMMANDS`), `cli.LAUNCHER_NAMES`, `__main__.DAEMON_LAUNCHER_NAMES`,
+  `packaging/swe_mux_cli.spec` + `build_desktop.CLI_EXES`, `packaging/installer/swe-mux.iss`,
+  and then every document that names one.
+  **The commands are `swemux`, `swemuxd` and `swe-mux`, one per program, and there are no
+  aliases on purpose.** `mux`/`muxd` existed from 2026-08-29 to 2026-08-30; `pyproject.toml`
+  carries the argument and `development/ROADMAP.md` § "Taken into 0.1.3" carries the
+  correction, which is worth reading before adding a short name back - "purely additive" is
+  a claim about the code and not about the name.
+  `tests/test_launcher_names.py` fails on any code span that names a launcher this project
+  does not ship, over every markdown and source file including `site/tools/docs_content.py`,
+  whose string literals are published code blocks and are scanned specially.
 - Changing which static tree the daemon serves, the frontend overlay, its verification, its
   compatibility pin, or its revert: `design/features/desktop-shell.md`,
   `design/interfaces.md`, `technical/backend/packages/daemon-runtime.md`,
@@ -232,7 +245,7 @@
   follows, *an app update always supersedes an overlay*, is what makes a stale overlay
   self-clearing instead of a cleanup step somebody has to remember.
   **A revert must be reachable without the frontend**, because the failure mode being guarded
-  against is a frontend that will not load; `mux ui-overlay revert` is that path and the
+  against is a frontend that will not load; `swemux ui-overlay revert` is that path and the
   endpoint is the convenience.
   And the thing that will bite: **precompressed `.gz` sidecars are derived, not payload.**
   The daemon writes them into whatever tree it serves, so a verification rule that treated
@@ -728,7 +741,7 @@
   one string used verbatim everywhere.
 - Changing what an **installed** copy looks like from the operator's side - an install, upgrade,
   or uninstall path; what an uninstall leaves behind; where the data directory or any file under
-  it lives; what `mux doctor` answers in either mode, including its exit codes; a recovery
+  it lives; what `swemux doctor` answers in either mode, including its exit codes; a recovery
   procedure for a daemon that will not start, sessions that look lost, or a missing frontend
   bundle; or what is worth backing up: `development/OPERATOR_LIFECYCLE.md`, plus the source of
   the fact you changed - `src/swe_mux/config.py` (`default_data_dir`, the data-dir children),

@@ -571,7 +571,7 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   The scan can be wrong in one direction — a browsers root this host uses that it does not know
   about — so a launch that fails with Playwright's own missing-executable error is promoted to
   the same `browser_missing` state rather than surfacing as an unactionable capture failure.
-- The state is also a row in the consolidated `mux doctor` report
+- The state is also a row in the consolidated `swemux doctor` report
   (`optional_asset:preview_capture`, plus a `capabilities.optional_assets` entry), at severity
   `optional` so an uninstalled optional feature never fails the report. That is the *proactive*
   surface; pressing Capture is still what probes, because a probe on every preview list would

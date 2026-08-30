@@ -526,6 +526,6 @@ type DrawerProjectPresentation = {
 - [x] The source-run reload branch was not selected because the update was not applied to the running app.
 - [x] The frozen-app redeploy branch was not selected because the update was not applied to the running app.
 - [x] Never start another daemon, run a frozen app, or trigger redeploy from a worktree.
-- [x] Never use `muxd --shutdown`, kill `swe-mux-supervisor.exe`, or terminate swe-mux processes to apply this update.
+- [x] Never use `swemuxd --shutdown`, kill `swe-mux-supervisor.exe`, or terminate swe-mux processes to apply this update.
 - [x] Live terminal sessions remained untouched because no reload or redeploy flow was selected.
 - [x] Mark every completed checkbox in this document and archive it only after the implementation, tests, documentation, manual acceptance, and delivery checks are all complete.

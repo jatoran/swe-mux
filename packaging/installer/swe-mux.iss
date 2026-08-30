@@ -36,7 +36,7 @@
 ;
 ;   {app}\swe-mux\swe-mux.exe
 ;   {app}\swe-mux-supervisor\swe-mux-supervisor.exe
-;   {app}\swe-mux-cli\swemux.exe   (and mux.exe)
+;   {app}\swe-mux-cli\swemux.exe
 ;
 ; Flattening them into {app} would resolve the supervisor one directory too high,
 ; and the daemon would silently fall back to `--supervisor-child` - which shares
@@ -185,17 +185,24 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "startupicon"; Description: "Start swe-mux when I &sign in (runs hidden in the system tray)"; GroupDescription: "Startup:"; Flags: unchecked
-; Ticked by default, unlike the two above, and the difference is deliberate.
-; Those create artifacts the user did not ask for - an icon on their desktop, a
-; process at every sign-in - so the polite default is off. This one only makes an
+Name: "startupicon"; Description: "Start swe-mux when I &sign in (runs hidden in the system tray)"; GroupDescription: "Startup:"
+; Ticked by default, and so is `startupicon` above since 2026-08-30. The one that
+; stays off is `desktopicon`, and the difference is now about what the product is
+; rather than about politeness. swe-mux exists to keep agents working while
+; nobody is watching, and a multiplexer that has to be launched before it can
+; observe anything is answering the wrong question at sign-in; it starts hidden
+; in the tray, costs one process, and the tray menu turns it off in one click. A
+; desktop icon is the other case - a permanent artifact in somebody's own space,
+; wanted or not - and an unrequested one teaches people to decline every checkbox
+; an installer shows them, including the two that matter.
+; This one only makes an
 ; already-installed command answer to its own name, which is what "installed"
 ; means for every other way of getting swe-mux: `pip`, `pipx` and `uv tool` all
-; put `swemux` and `mux` on PATH, and the whole point of this entry is that an
+; put `swemux` on PATH, and the whole point of this entry is that an
 ; installer user ends up with the same commands (ROADMAP Phase 23 exit criteria).
 ; It is a task rather than an unconditional write so that a user who curates
 ; their PATH by hand can say no.
-Name: "addtopath"; Description: "Add the &swemux and mux commands to my PATH (open a new terminal afterwards)"; GroupDescription: "Command line:"
+Name: "addtopath"; Description: "Add the &swemux command to my PATH (open a new terminal afterwards)"; GroupDescription: "Command line:"
 
 [Files]
 ; All three bundles, each into its own sibling directory. `recursesubdirs` +

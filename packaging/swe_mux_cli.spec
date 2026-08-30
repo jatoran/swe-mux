@@ -29,16 +29,22 @@
 # hash gating a rebuild, because nothing here is ever running when the tree is
 # replaced and a stale copy is a wrong answer rather than a reaped session.
 #
-# **Two executables, one payload.** `pyproject.toml` declares `swemux` and `mux`
-# over the same `swe_mux.cli:main`, and an installer user must end up with the
-# same commands a `pip install` user has. Both EXEs are built from one Analysis
-# and collected into one directory, so the second costs one bootloader rather
-# than a second copy of the tree; `cli.invoked_as` reads `argv[0]` and prints
-# whichever name was typed.
+# **One executable, and it was two until 2026-08-30.** `pyproject.toml` declared
+# `swemux` and `mux` over the same `swe_mux.cli:main`, so this spec built both
+# from one Analysis - the second cost one bootloader rather than a second copy of
+# the tree. `mux` was removed (`pyproject.toml` carries why: shipping a launcher
+# under a contested name is what creates the collision), so there is one
+# `launcher()` call left. The helper stays a function rather than being inlined,
+# because what it exists for is building *n* console EXEs over one payload and
+# that is a property of the bundle rather than of the count.
 #
-# **The directory that goes on PATH holds nothing but those two executables.**
+# `swemuxd` is deliberately not here. This bundle carries no daemon at all - the
+# excludes below are what keep it small - and a launcher that imports
+# `swe_mux.server` would undo that.
+#
+# **The directory that goes on PATH holds nothing but that executable.**
 # PyInstaller 6 puts every collected binary under `_internal/`, so the PATH entry
-# exposes `swemux.exe`, `mux.exe` and one subdirectory name. That is load-bearing
+# exposes `swemux.exe` and one subdirectory name. That is load-bearing
 # rather than incidental: a `PATH` entry is also a DLL search path for every
 # process on the machine, and a directory full of `python312.dll`, `libcrypto`
 # and `libssl` would shadow those names for unrelated programs. Do not flatten
@@ -191,7 +197,6 @@ def launcher(name: str):
 
 bundle = COLLECT(
     launcher("swemux"),
-    launcher("mux"),
     analysis.binaries,
     analysis.datas,
     strip=False,

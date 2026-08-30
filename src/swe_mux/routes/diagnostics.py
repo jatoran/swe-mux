@@ -638,7 +638,7 @@ async def diagnostics_export(request: web.Request) -> web.Response:
 
 
 async def get_doctor_report(request: web.Request) -> web.Response:
-    """Consolidated read-only diagnostics: `mux doctor` without --export.
+    """Consolidated read-only diagnostics: `swemux doctor` without --export.
 
     One structured report over the diagnostics the daemon already serves plus the
     observation-freshness check that nothing else exposes. Assembly is pure and

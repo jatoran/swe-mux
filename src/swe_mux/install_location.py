@@ -11,8 +11,8 @@ command they could run to find out anything at all.
 
 This module is the single answer to "where am I, and can I be reached". Four
 surfaces read it - the first-run hint ``muxd`` prints, ``python -m swe_mux
---where``, the ``install`` rows in the local ``mux doctor`` report, and
-``mux install-shortcut``'s target resolution - so all four agree by construction
+--where``, the ``install`` rows in the local ``swemux doctor`` report, and
+``swemux install-shortcut``'s target resolution - so all four agree by construction
 rather than by four separate guesses at the same filesystem.
 
 Three rules it keeps.
@@ -65,23 +65,25 @@ from .host_platform import IS_WINDOWS
 #: Every launcher `pyproject.toml` declares, with the kind of launcher it builds.
 #: ``gui`` is the console-less (``pythonw``-style) launcher: it has no stdout or
 #: stderr at all, which is why `desktop.main` writes its own log instead.
-#: `swemux`/`swemuxd` are the primary spelling and `mux`/`muxd` the kept aliases,
-#: in that order, because this tuple is also the order `--where` prints them and
-#: the first line a confused user reads should be the documented name.
+#: Three launchers over three programs, which is the floor: a CLI, a daemon, and
+#: a console-less shell that must be its own `[project.gui-scripts]` entry.
+#: `mux`/`muxd` were declared here as aliases for one day (2026-08-29 to
+#: 2026-08-30) and were removed rather than kept - `pyproject.toml` carries why,
+#: and the short version is that shipping a launcher under a contested name is
+#: what creates the collision it was meant to survive.
 SHIPPED_COMMANDS: tuple[tuple[str, str], ...] = (
     ("swemux", "console"),
     ("swemuxd", "console"),
-    ("mux", "console"),
-    ("muxd", "console"),
     ("swe-mux", "gui"),
 )
 
 #: The client and daemon launchers in preference order, for the places that need
-#: to name *one* of them. Resolved against the install rather than hardcoded: a
-#: copy installed before the `swemux` pair existed still has the aliases, and
-#: printing a command that is not on that machine is the failure this avoids.
-CLIENT_COMMANDS: tuple[str, ...] = ("swemux", "mux")
-DAEMON_COMMANDS: tuple[str, ...] = ("swemuxd", "muxd")
+#: to name *one* of them. Still tuples, and still resolved against the install
+#: rather than hardcoded, though each currently holds one name: the machinery
+#: exists because printing a command that is not on *this* machine is the failure
+#: it avoids, and that is a property of the lookup rather than of the count.
+CLIENT_COMMANDS: tuple[str, ...] = ("swemux",)
+DAEMON_COMMANDS: tuple[str, ...] = ("swemuxd",)
 
 #: The bundle directories a frozen install lays out as siblings under one parent,
 #: in the order a launcher is looked for. `dist/` has exactly this shape and the

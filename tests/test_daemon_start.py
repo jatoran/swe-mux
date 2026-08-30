@@ -1,4 +1,4 @@
-"""`mux start`: a detached daemon, and "started" meaning "answered"."""
+"""`swemux start`: a detached daemon, and "started" meaning "answered"."""
 
 from __future__ import annotations
 
@@ -191,6 +191,88 @@ def test_health_treats_an_unreachable_or_junk_daemon_as_absent() -> None:
     user a browser tab full of somebody else's application.
     """
     assert daemon_start.health("http://127.0.0.1:1", timeout=0.05) is None
+
+
+def test_a_browser_opens_only_when_a_terminal_is_watching() -> None:
+    """The gate is "is a person looking at this process", not "is this first run".
+
+    Every way swe-mux starts a daemon without a person in front of it is non-TTY
+    - the tray's child writes to a log file and shows its own window, `swemux
+    start`'s detached child writes to `daemon-start.log`, a restart successor is
+    nobody's foreground, and a login task has no console. One rule covers all
+    four, and none of them has to know this exists.
+    """
+    assert daemon_start.should_open_browser(
+        requested=True, stdout_isatty=True, environ={}
+    )
+    assert not daemon_start.should_open_browser(
+        requested=True, stdout_isatty=False, environ={}
+    )
+    assert not daemon_start.should_open_browser(
+        requested=False, stdout_isatty=True, environ={}
+    )
+
+
+def test_the_environment_override_works_where_a_flag_cannot_reach() -> None:
+    """A service wrapper or somebody else's script gets a way to say no.
+
+    Whitespace counts as unset so an empty variable exported by a shell profile
+    does not silently disable a feature the user never turned off.
+    """
+    assert not daemon_start.should_open_browser(
+        requested=True, stdout_isatty=True, environ={daemon_start.NO_BROWSER_ENV: "1"}
+    )
+    assert daemon_start.should_open_browser(
+        requested=True, stdout_isatty=True, environ={daemon_start.NO_BROWSER_ENV: "  "}
+    )
+
+
+def test_opening_a_browser_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A machine with no browser must still get a daemon.
+
+    `webbrowser.open` raises on some headless configurations rather than
+    returning False, and this runs on the daemon's own startup path.
+    """
+    import webbrowser
+
+    def _explode(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("no browser here")
+
+    monkeypatch.setattr(webbrowser, "open", _explode)
+    assert daemon_start.open_browser("http://127.0.0.1:8765") is False
+
+
+def test_the_banner_answers_what_a_new_user_cannot_look_up() -> None:
+    """The only moment swe-mux gets, so it carries the non-obvious facts.
+
+    Nothing runs after `uv tool install` prints its executable list, so this is
+    where "where is the UI" and "how do I stop it" have to be answered. The stop
+    line matters most: Ctrl-C detaches and leaves supervised sessions running,
+    which is the opposite of what the key normally means.
+    """
+    banner = daemon_start.startup_banner(
+        "http://127.0.0.1:8765", windows=True, opened_browser=False
+    )
+    assert "http://127.0.0.1:8765" in banner
+    assert "swemuxd --shutdown" in banner
+    assert "Ctrl-C only detaches" in banner
+    assert "swemux doctor" in banner
+    # The desktop shell exists only on Windows, so naming it elsewhere would be
+    # advice about a command that install cannot have written.
+    assert "with a tray icon" in banner
+    assert "with a tray icon" not in daemon_start.startup_banner(
+        "http://127.0.0.1:8765", windows=False, opened_browser=False
+    )
+
+
+def test_the_banner_says_when_it_opened_a_browser() -> None:
+    """A window appearing unexplained reads as something else having happened."""
+    assert "opening it in your browser" in daemon_start.startup_banner(
+        "http://127.0.0.1:8765", windows=True, opened_browser=True
+    )
+    assert "opening it in your browser" not in daemon_start.startup_banner(
+        "http://127.0.0.1:8765", windows=True, opened_browser=False
+    )
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-"""The degraded `mux doctor` report that runs when no daemon answers.
+"""The degraded `swemux doctor` report that runs when no daemon answers.
 
 Nothing here starts, reaches, or needs a daemon - which is the point: the report
 under test exists for the machine where one will not start, so a test that needed
@@ -716,7 +716,7 @@ def _fake_install(
     if files is None:
         files = {
             str(_INSTALL_SCRIPTS / f"{name}{_INSTALL_EXE}")
-            for name in ("mux", "muxd", "swe-mux")
+            for name in ("swemux", "swemuxd", "swe-mux")
         }
     files = files | {str(_INSTALL_ROOT / "uv-receipt.toml")}
     normalized = {_install_key(entry) for entry in files}
@@ -839,7 +839,7 @@ def test_the_json_report_carries_the_install_facts_the_prose_states(
     install = report["capabilities"]["install"]
     assert install["kind"] == "uv-tool"
     assert install["on_path"] is False
-    assert install["unreachable"] == ["mux", "muxd", "swe-mux"]
+    assert install["unreachable"] == ["swemux", "swemuxd", "swe-mux"]
     assert install["module_fallback"].endswith("-m swe_mux")
 
 

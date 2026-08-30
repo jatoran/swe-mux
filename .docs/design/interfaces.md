@@ -303,7 +303,7 @@ find. A verified archive is kept (two at a time, under `<data_dir>/updates/`) an
 reused rather than re-fetched, which is the only resume worth having; a file under
 an artifact's name whose digest is wrong is deleted rather than trusted.
 
-`mux update` reports both halves from the CLI, and `mux update --install
+`swemux update` reports both halves from the CLI, and `mux update --install
 <version>` performs one - it sends the same gesture header, because typing the
 command is exactly the deliberate act that header stands for.
 
@@ -367,7 +367,7 @@ rather than claiming otherwise.
 Reverting is one boolean in one atomic file and touches no tree, so it cannot
 half-fail and the overlay's bytes stay on disk for `restore` and for inspection.
 It is deliberately **not** loopback-only: it is the safe direction, back to the
-tree that shipped with this build. `mux ui-overlay status|install|revert|restore`
+tree that shipped with this build. `swemux ui-overlay status|install|revert|restore`
 is the same set from the CLI and is the one that matters, because an overlay's own
 failure mode is a UI that will not load.
 
@@ -497,7 +497,7 @@ set_graceful_exit / subscribe / unsubscribe / set_meta / stop / release / remove
 job_pids / ping / reap_all_and_exit`. This
 surface is process-local plumbing, not a public API: it is bound to 127.0.0.1, authenticated
 by a token readable only from the local data directory, and versioned so a mismatched daemon
-refuses to attach (falling back to in-process PTYs). `muxd --shutdown` is the explicit
+refuses to attach (falling back to in-process PTYs). `swemuxd --shutdown` is the explicit
 kill-server command: it reaps all supervised sessions and stops the supervisor.
 
 `spawn` is idempotent on the session id: a request for an id that is already reserved or live
@@ -2117,24 +2117,24 @@ window without disrupting live sessions.
 `status_health`, `status_timeline_sink`, and `logs` with bounded tails of `daemon.log` and
 `redeploy.log`.
 It never includes terminal bytes or message content; the two logs are command-free by design.
-`mux doctor --export` prints the same bundle from the CLI.
+`swemux doctor --export` prints the same bundle from the CLI.
 
 `diagnostics/prerequisites` reports the presence of Git, Node, npm, and Tailscale, each with `id`, `label`, `purpose`, `present`, `path`, `download_url`, and `install_command`.
 It backs the onboarding checklist so a feature that needs an absent tool reads as unconfigured rather than broken.
 Both forms are excluded from the counters so observing a window does not change it.
 
-`diagnostics/doctor` is the consolidated read-only report behind `mux doctor` (no `--export`).
+`diagnostics/doctor` is the consolidated read-only report behind `swemux doctor` (no `--export`).
 It is aggregation, not new capability: the handler gathers the payloads the diagnostics above already produce (health, remote status, firewall, prerequisites, status-health, background loops, the harness registry) plus the one class of fault nothing else exposes, the **observation-freshness** check, and the assembly is a pure function in `doctor.py`.
 The response carries `version`, `generated_at`, `ok` (false when any check failed), a `summary` count of `ok`/`warn`/`fail`/`unavailable`, a machine-readable `capabilities` block (versions, platform, per-harness detection, remote and firewall availability, and `optional_assets[]`), a flat `checks[]` list, and `observation_freshness[]`.
 `optional_assets[]` is the first-use inventory a clean machine has none of: preview capture and each on-demand speech model, as `{id, label, state, remedy}` with `optional_asset:<id>` checks beside it.
 Each keeps its **own** `state` string rather than a boolean, because "the extra was never installed", "the extra is here but the browser binary is not", and "the model has never been downloaded" are different facts with different commands, and a consumer that only sees `false` cannot tell an operator which to run (`development/NEW_USER_RELEASE_READINESS.md` owns the inventory).
-Severity is `optional` throughout, including `error`: none of these is a fault, and a clean install must not exit-code `mux doctor` non-zero for having downloaded nothing.
+Severity is `optional` throughout, including `error`: none of these is a fault, and a clean install must not exit-code `swemux doctor` non-zero for having downloaded nothing.
 A voice row whose feature is switched off says so ("nothing has fetched it") rather than reporting an absence as a missing capability.
 Each check is `{id, category, title, status, severity, detail, remedy}`; `status` is `ok`/`warn`/`fail`/`unavailable` and `severity` separates a `critical` fault (a lost supervisor, a dead background loop, a stale observation that blocks delivery, a needs-repair firewall rule) from an `optional` unavailable feature (a harness not installed, Tailscale logged out) and pure `info`.
 Every failed check carries a concrete `remedy`.
 Each `observation_freshness[]` row is one agent session whose observation the daemon can no longer trust - `{id, name, backend, reason, since, seconds_stale, diagnostic, delivery_blocking}` - drawn from the same `observation_stale_since`/`observation_stale_reason` fields the per-session state-log exposes (`features/status-detection.md`).
 Like `export`, the report is built from already-sanitized sources and content-free rows, so it never includes a secret, terminal bytes, prompt or message content, or a credential.
-This endpoint is what `mux doctor` reads when a daemon answers, and it is unchanged by the CLI's daemon-less fallback: `unchecked` never appears here and the payload carries no `mode` field (see "`mux doctor` without a running daemon" under CLI).
+This endpoint is what `swemux doctor` reads when a daemon answers, and it is unchanged by the CLI's daemon-less fallback: `unchecked` never appears here and the payload carries no `mode` field (see "`swemux doctor` without a running daemon" under CLI).
 
 ## Configurator agent
 
@@ -2895,28 +2895,30 @@ counters are under `attention_ranking` and `attention_narration` in
 ## CLI
 
 ```text
-mux ls [--project ID] [--state STATE] [--backend BACKEND]
-mux projects
-mux profiles
-mux harnesses
-mux spawn --project ID [--backend BACKEND] [--name NAME] [--profile ID] [--exe PATH] [--arg VALUE]
-mux resume HISTORY_ID --project ID
-mux send SESSION TEXT | mux send --all-broadcast TEXT
-mux kill SESSION
-mux history
-mux history-duplicates [report|repair]
-mux accounts [list|verify|audit] [--limit N]
-mux start [--timeout SECONDS] [--config PATH]
-mux reload-daemon [--force]
-mux doctor [--export]
-mux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
-mux install-skill [--project DIR | --global] [--harness NAME]... [--remove] [--yes]
-mux --skill           # print the embedded agent skill and exit
+swemux ls [--project ID] [--state STATE] [--backend BACKEND]
+swemux projects
+swemux profiles
+swemux harnesses
+swemux spawn --project ID [--backend BACKEND] [--name NAME] [--profile ID] [--exe PATH] [--arg VALUE]
+swemux resume HISTORY_ID --project ID
+swemux send SESSION TEXT | swemux send --all-broadcast TEXT
+swemux kill SESSION
+swemux history
+swemux history-duplicates [report|repair]
+swemux accounts [list|verify|audit] [--limit N]
+swemux start [--timeout SECONDS] [--config PATH] [--no-browser]
+swemux reload-daemon [--force]
+swemux doctor [--export]
+swemux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
+swemux install-skill [--project DIR | --global] [--harness NAME]... [--remove] [--yes]
+swemux --skill           # print the embedded agent skill and exit
 
-muxd --where          # also: python -m swe_mux --where
+swemuxd [--no-browser]   # the daemon in the foreground
+swemuxd --shutdown       # stop the daemon, the supervisor and every session
+swemuxd --where          # also: python -m swe_mux --where
 ```
 
-`mux` is the scriptable control surface; the browser and mobile clients remain the interactive
+`swemux` is the scriptable control surface; the browser and mobile clients remain the interactive
 interface and MCP serves structured reads to agents, so the CLI carries only the operations with
 no substitute.
 Every subcommand accepts `--json` (raw daemon payload) and `--url` (daemon base URL); without
@@ -2925,7 +2927,7 @@ Every subcommand accepts `--json` (raw daemon payload) and `--url` (daemon base 
 `SESSION` is a stable session id, an exact session name, or a unique id prefix.
 An ambiguous name or prefix lists the candidates and exits `5`; no match exits `6`.
 
-Backend and harness choices come from the harness registry, not a hardcoded list; `mux harnesses`
+Backend and harness choices come from the harness registry, not a hardcoded list; `swemux harnesses`
 prints the registry with per-harness detection (installed, resolved path, CLI version, and whether
 that version is newer than the tested bound).
 
@@ -2936,30 +2938,30 @@ Exit codes: `0` success, `2` usage, `3` daemon unreachable, `4` daemon HTTP erro
 name, `6` not found, `1` a `doctor` report with a failing check or a local command that could not
 do what was asked.
 
-`mux doctor` prints the consolidated diagnostics report from `GET /api/diagnostics/doctor` (see
-Delivery diagnostics); `mux doctor --export` prints the full `GET /api/diagnostics/export` bundle
+`swemux doctor` prints the consolidated diagnostics report from `GET /api/diagnostics/doctor` (see
+Delivery diagnostics); `swemux doctor --export` prints the full `GET /api/diagnostics/export` bundle
 as JSON.
 
-`mux start`, `mux install-shortcut` and `mux install-skill` reach no daemon at all, and that is
-the point rather than an optimisation: `mux start` exists precisely because there is no daemon
+`swemux start`, `swemux install-shortcut` and `swemux install-skill` reach no daemon at all, and that is
+the point rather than an optimisation: `swemux start` exists precisely because there is no daemon
 yet, the person who needs `install-shortcut` is the one whose install produced no way to start
 one, and `install-skill` writes plain files into directories this machine already owns.
 
-**`mux start`** spawns a detached daemon and returns once it answers `/api/health`, so the
+**`swemux start`** spawns a detached daemon and returns once it answers `/api/health`, so the
 browser UI is reachable with no terminal held open for it (`daemon_start.py`). Detachment is
 `setsid` on POSIX and `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows, plus
-`CREATE_BREAKAWAY_FROM_JOB` through `popen_outside_job` - the last because a `mux start` typed
+`CREATE_BREAKAWAY_FROM_JOB` through `popen_outside_job` - the last because a `swemux start` typed
 inside a swe-mux session would otherwise land the daemon in that session's kill-on-close Job.
 Four outcomes: `already-running` (idempotent, and the port is the interlock, so this is safe in a
 login script or typed twice), `started`, `starting` (alive but slow - exit 0, because a cold page
 cache is not a failure), and `failed` (the child exited; exit 1 immediately rather than after the
 timeout). It is the only thing in this CLI that starts a daemon, and it does so only when typed:
-`mux ls` against a stopped daemon still reports a stopped daemon rather than quietly starting one.
+`swemux ls` against a stopped daemon still reports a stopped daemon rather than quietly starting one.
 On Windows the desktop app already covers this - `swe-mux` opens no console and spawns its own
-daemon - so `mux start` is for the browser-only case, for Linux and macOS where there is no
+daemon - so `swemux start` is for the browser-only case, for Linux and macOS where there is no
 desktop app at all, and for iterating from a checkout.
 
-`mux --skill` prints the swe-mux agent skill embedded in this release, and `mux install-skill`
+`swemux --skill` prints the swe-mux agent skill embedded in this release, and `swemux install-skill`
 writes it into the skill roots agent CLIs read (`design/features/agent-skill-delivery.md` holds
 the root table and the rules).
 Project scope is the default; `--global` prints the exact per-user paths first and writes only
@@ -3003,7 +3005,7 @@ It prints the version, the install method, the package and environment directori
 directory, `PATH` status, every shipped command with its own status, the `PATH` fix, and the
 commands that work without any `PATH` at all.
 
-**`mux install-shortcut`** creates what a wheel structurally cannot: `pip` and `uv` write launchers
+**`swemux install-shortcut`** creates what a wheel structurally cannot: `pip` and `uv` write launchers
 and have no hook that runs afterwards, so nothing reaches the Start Menu.
 It writes `swe-mux.lnk` to the Start Menu's `Programs` and to the Desktop by default, adds a
 `shell:startup` entry under `--startup` (with `--hidden`, so a login opens the tray rather than
@@ -3037,9 +3039,9 @@ already embedded it.
 An icon that cannot be written is not a failure: the link inherits its target's icon and the report
 says so.
 
-### `mux doctor` without a running daemon
+### `swemux doctor` without a running daemon
 
-`mux doctor` is the one command that answers when the daemon does not.
+`swemux doctor` is the one command that answers when the daemon does not.
 When `GET /api/diagnostics/doctor` cannot be reached it prints the **local** report
 (`src/swe_mux/doctor_local.py`) instead of a bare connection error, because the daemon failing to
 start is the single most likely new-user failure and was precisely the case the command could not
@@ -3048,7 +3050,7 @@ A daemon that *answers* is unaffected: the remote report, its payload, and its r
 exactly what they were.
 An HTTP error is not a fallback trigger - a daemon answered, so it is a daemon fault rather than an
 install fault - and `--export` has no local form at all, since every section of that bundle is
-daemon state; it still exits `3`, naming `mux doctor` as the command that does answer.
+daemon state; it still exits `3`, naming `swemux doctor` as the command that does answer.
 
 The local report runs the checks that are answerable from the machine alone: where this copy is
 installed and whether its commands are on `PATH`, the Python floor, the package's own import graph,
@@ -3105,5 +3107,5 @@ separately, and the renderer marks them `[????]` rather than reusing `[n/a ]`.
 Exit codes compose the two meanings that already existed rather than adding a scheme.
 A failing local check is still `1`, because a named broken check is the more actionable fact; a
 local report with nothing failing is `3`, which is exactly what `3` already meant.
-A degraded report therefore never exits `0`, and a script gating on `mux doctor` keeps working
+A degraded report therefore never exits `0`, and a script gating on `swemux doctor` keeps working
 unchanged.

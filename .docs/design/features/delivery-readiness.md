@@ -224,7 +224,7 @@ typing — still blocks.
 **Closed 2026-07-28 (with Phase 4.5).** `POST /sessions/{id}/input` and broadcast fan-out
 previously wrote to the PTY without advancing `input_revision` / `last_input_event_ts`,
 without emitting `terminal_input`, and without an ended-session guard, so REST-delivered
-text — `mux send`, note send-to-agent, the prompt library's delivery path — was invisible
+text — `swemux send`, note send-to-agent, the prompt library's delivery path — was invisible
 to these counters and every readiness report emitted `partial_input_absent` /
 `operator_quiet` as satisfied for text sitting undelivered in a composer. All operator
 input paths now share one accounting helper (`_record_operator_input` in `server.py`): the

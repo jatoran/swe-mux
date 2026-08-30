@@ -359,7 +359,7 @@ args = ["--distribution", "Ubuntu"]
 - [x] Validate executable/profile/cwd before replacing a pane; failures leave the current
   pane intact and show an actionable inline error.
 - [x] Add API `profile_id` selection, profile listing/capabilities, and CLI
-  `mux profiles` / `mux spawn --profile <id>`.
+  `swemux profiles` / `swemux spawn --profile <id>`.
 - [x] Contract-test direct `backend=claude|codex` API/CLI spawn, shell-first UI promotion,
   and adapter-native history resume as distinct supported paths.
 
@@ -728,10 +728,10 @@ audit infrastructure, or public-ingress machinery.
 - [x] Malicious project config, clipboard uploads, and preview destinations cannot cause
   command execution, cross-session access, filesystem escape, or arbitrary network
   proxying. Focused boundary tests cover each case.
-- [x] Settings and the current lightweight `mux doctor` report local/tailnet listener
+- [x] Settings and the current lightweight `swemux doctor` report local/tailnet listener
   health, direct URL, optional Serve availability, grant guidance, Funnel/public-exposure
   warnings, and actionable network errors without modifying tailnet policy. Phase 8
-  expands `mux doctor` beyond this remote-status scope.
+  expands `swemux doctor` beyond this remote-status scope.
 
 ## Phase 5.5 — Project scopes, space anchors, and artifact ownership
 
@@ -1461,7 +1461,7 @@ integration or release work begins.
 
 ### Consolidated diagnostics
 
-- [ ] Expand the current remote-status-only `mux doctor` into a read-only diagnostic:
+- [ ] Expand the current remote-status-only `swemux doctor` into a read-only diagnostic:
   daemon/frontend version, ConPTY and Job Object health, shell/profile executables,
   Claude/Codex promotion capabilities, writable global/project paths, project config,
   scope/artifact and legacy-migration conflicts, unified ccusage availability/version, process
@@ -1496,7 +1496,7 @@ integration or release work begins.
 
 - [ ] `mux` can inspect and automate the important daemon operations with stable human and
   JSON output while the browser remains the primary interactive interface.
-- [ ] `mux doctor` identifies actionable local configuration, integration, ownership, and
+- [ ] `swemux doctor` identifies actionable local configuration, integration, ownership, and
   tailnet/automation/provider problems without mutating state or exposing secrets.
 - [ ] Windows desktop/mobile core workflows and forced-cleanup scenarios pass the focused
   automated matrix; unresolved product friction is captured as explicit follow-up work.
@@ -1556,18 +1556,18 @@ ownership, browser replay, or the rule that a daemon restart ends live sessions.
 - [ ] Document browser access through OpenSSH local forwarding, including WebSocket
   behavior, key authentication, daemon service lifetime, and how it differs from the
   supported direct Tailscale listener.
-- [ ] Add `mux attach SESSION` as a native-terminal client over the existing PTY contract:
+- [ ] Add `swemux attach SESSION` as a native-terminal client over the existing PTY contract:
   raw input/output, resize, input ownership, exit status, reconnect, and a
   detach chord that never kills the daemon-owned session.
 - [ ] Make browser and native attachments use the same explicit input-owner handoff.
   Read-only observers never duplicate terminal input or xterm device responses.
-- [ ] Add SSH-driven `mux attach` integration tests for disconnect/reconnect, Unicode,
+- [ ] Add SSH-driven `swemux attach` integration tests for disconnect/reconnect, Unicode,
   resize, Ctrl+C, bracketed paste, input-owner handoff, and daemon/session termination.
   Browser and native attachments must not duplicate input or device responses.
 
 ### Phase 10 exit criteria
 
-- [ ] An SSH disconnect leaves the mux session live, and a later `mux attach` restores an
+- [ ] An SSH disconnect leaves the mux session live, and a later `swemux attach` restores an
   interactive terminal without changing browser attach/replay semantics.
 - [ ] Forwarding and attach documentation clearly distinguish daemon-owned session
   lifetime, SSH transport authentication, Tailscale browser access, and detach versus kill.

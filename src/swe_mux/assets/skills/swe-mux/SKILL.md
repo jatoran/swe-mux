@@ -35,7 +35,7 @@ delivered later under the receiving session's own rules, not when your call retu
 
 ## Without MCP: the CLI is read-only for you
 
-Some harnesses cannot attach MCP tools. The `swemux` CLI (alias `mux`) then offers
+Some harnesses cannot attach MCP tools. The `swemux` CLI then offers
 read-only visibility - list sessions, history, projects, a diagnostics report. Run
 `swemux --help` for the current commands rather than relying on any list written here, and
 pass `--json` when output will be parsed; the exit codes are part of the contract, so

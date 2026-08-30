@@ -63,7 +63,7 @@ Least specific first:
 
 1. `harness_args[backend]` - the global default for the harness.
 2. The launch profile's `args`.
-3. Whatever the launch itself asked for (`POST /api/sessions {argv}`, `mux spawn --arg`, a seed prompt).
+3. Whatever the launch itself asked for (`POST /api/sessions {argv}`, `swemux spawn --arg`, a seed prompt).
 
 Every adapter already concatenated `default_args` before `opts.args`, so the profile prepends into the second slot and no adapter changed.
 
@@ -166,8 +166,8 @@ An agent profile named there would make every plain `New terminal` unspawnable.
 - `GET /api/profiles` - every configured and detected profile; each carries `backend`.
 - `POST /api/sessions {project_id, backend, profile_id, argv, model, ...}` - `profile_id` is accepted for any backend; `model` only for an agent one, and only for a harness declaring `model_selection`.
 - `PATCH /api/projects/{id} {default_profile_id, default_agent_profiles}`
-- `mux profiles`
-- `mux spawn --project ID [--backend NAME] [--profile ID] [--arg VALUE]`
+- `swemux profiles`
+- `swemux spawn --project ID [--backend NAME] [--profile ID] [--arg VALUE]`
 
 ## Key files
 

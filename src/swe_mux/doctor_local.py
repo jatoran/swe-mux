@@ -1,4 +1,4 @@
-"""The degraded `mux doctor` report that runs when no daemon answers.
+"""The degraded `swemux doctor` report that runs when no daemon answers.
 
 `doctor.build_doctor_report` assembles the full report out of payloads the daemon
 produced, so it presupposes exactly the thing a broken install does not have. That

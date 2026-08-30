@@ -320,7 +320,7 @@ The onboarding presence check for Git, Node, npm, and Tailscale, each with what 
 
 ### `doctor.py`
 
-The pure assembly behind `mux doctor` and `GET /api/diagnostics/doctor`.
+The pure assembly behind `swemux doctor` and `GET /api/diagnostics/doctor`.
 `build_doctor_report` turns already-fetched diagnostic payloads into a flat `checks[]` list with per-check status, severity, and remedy plus a machine-readable capability block.
 `observation_freshness` projects the fleet's stale, relocated, and sibling-blocked agent sessions from the status fields the state-log exposes.
 
@@ -328,7 +328,7 @@ The pure assembly behind `mux doctor` and `GET /api/diagnostics/doctor`.
 
 ### `doctor_local.py`
 
-The degraded `mux doctor` report, run by the CLI when no daemon answers.
+The degraded `swemux doctor` report, run by the CLI when no daemon answers.
 It covers the install-integrity faults that stop a daemon starting: where the copy is installed and whether its commands are on `PATH`, the Python floor, `swe_mux.server`'s import graph, the config file, the frontend bundle in the installed package, the data directory, `mux.db`, the configured port, the host PTY backend, the frozen supervisor bundle, and each optional extra.
 The two install rows come first, because they are the only faults whose symptom is nothing at all and every later check presupposes the reader found a way to run something.
 Prerequisite, harness, and first-use-asset rows are produced by `doctor.py`'s own builders over the same detection functions, so there is one implementation of them rather than two that can disagree.
@@ -372,7 +372,7 @@ Nor reporting an install that shipped no commands as reachable: `all()` over an 
 
 ### `shortcuts.py`
 
-Windows Start Menu, Desktop, and `shell:startup` shell links for the desktop app, created and removed by `mux install-shortcut` - the thing a wheel structurally cannot do, since `pip` and `uv` have no post-install hook.
+Windows Start Menu, Desktop, and `shell:startup` shell links for the desktop app, created and removed by `swemux install-shortcut` - the thing a wheel structurally cannot do, since `pip` and `uv` have no post-install hook.
 Known-folder destinations through `SHGetKnownFolderPath`, because a redirected Desktop makes `%USERPROFILE%\Desktop` the wrong directory and a link written there is invisible.
 `.lnk` authoring goes through PowerShell's `WScript.Shell`, so no dependency is added to reach the COM object.
 The plan and the script builder are pure with an injectable runner, and the write is idempotent, reporting `created`/`updated`/`unchanged`/`removed`/`absent`/`failed` per slot with its absolute path, also appended to the lifecycle ledger.

@@ -44,7 +44,7 @@ Three things the ask must contain:
 Every participant runs the same steps, so "where people abandon" is a distribution rather than an anecdote.
 
 1. Install, by the route assigned to them (see the tracker's Path column).
-2. Run `mux doctor`.
+2. Run `swemux doctor`.
 3. Start the daemon and open the UI.
 4. Register a Project pointing at any existing folder.
 5. Open a terminal in it.
@@ -191,7 +191,7 @@ Question 3 of the last set is the most valuable question in this whole document,
 **Telemetry is deliberately absent and stays absent.**
 The check-ins above are the primary instrument and are sufficient on their own; everything below is an improvement to their accuracy, not a substitute for them.
 
-Everything cohort B's numbers need is already on the participant's own disk: the durable status ledger, the land-queue event trail, and the usage history are all local SQLite, and `mux doctor --export` already exists as a bundle a person generates, reads, and chooses to attach to an issue.
+Everything cohort B's numbers need is already on the participant's own disk: the durable status ledger, the land-queue event trail, and the usage history are all local SQLite, and `swemux doctor --export` already exists as a bundle a person generates, reads, and chooses to attach to an issue.
 A short adoption summary drawn from those - days used, sessions run, branches landed, capabilities enabled - would replace "how many separate days have you used it now?" with a number the participant can read before deciding to send it.
 
 **No such command exists.**

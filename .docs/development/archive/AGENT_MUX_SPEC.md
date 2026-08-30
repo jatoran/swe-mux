@@ -204,9 +204,9 @@ WS     /pty/{id}                      bytes + control frames (resize, state)
 WS     /events                        live event stream (UI + external consumers)
 ```
 
-`mux` CLI wraps it: `mux ls`, `mux spawn --backend claude --cwd . --name x`,
-`mux send <name> "text"`, `mux kill <name>`, `mux history`, `mux resume <id>`,
-`mux spaces`. Names resolve to ids server-side.
+`mux` CLI wraps it: `swemux ls`, `swemux spawn --backend claude --cwd . --name x`,
+`swemux send <name> "text"`, `swemux kill <name>`, `swemux history`, `swemux resume <id>`,
+`swemux spaces`. Names resolve to ids server-side.
 
 ## 9. History index & resume
 
@@ -273,7 +273,7 @@ channel abstraction is where telegram/ntfy attach later.
   (Ctrl+W/T/N) are documented as unbindable.
 - **Broadcast input**: toggleable mode; keystrokes to the focused pane mirror to
   every session in the broadcast set (visible warning banner while active).
-  Also `mux send --all-broadcast`.
+  Also `swemux send --all-broadcast`.
 
 ### Responsiveness (remote/Tailscale use)
 Layout functional down to tablet/phone widths: sidebar collapses to a drawer,

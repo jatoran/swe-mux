@@ -12,7 +12,7 @@ Implementation map: `supervisor.py` (supervisor process), `supervisor_client.py`
 (daemon-side client + `RemotePtyHost`), `scrollback.py` (shared ring buffer),
 `session.py` (remote spawn/fallback, adoption, intent-aware shutdown), `server.py`
 (wiring + shutdown-intent endpoint), `desktop.py` (tray Restart daemon, `--supervisor-child`),
-`__main__.py` (`muxd --shutdown`), tests in `tests/test_pty_supervisor.py`.
+`__main__.py` (`swemuxd --shutdown`), tests in `tests/test_pty_supervisor.py`.
 Promoted into `ROADMAP.md` under "Implemented baseline".
 
 Routing note (per `.docs/CLAUDE.md`): implementing this touches process/session lifecycle,
@@ -203,7 +203,7 @@ The **only** divergence is where the "quit vs restart" intent comes from:
   as now); add a **Restart daemon** item that preserves agents. Desktop UX otherwise unchanged.
 - **Terminal has one ambiguous gesture (Ctrl-C).** Pick a convention. Recommended: the tmux
   model — **Ctrl-C detaches** (daemon exits, supervisor + agents survive, re-running `muxd`
-  reattaches), and reaping is an **explicit command** (`mux kill-server` / `muxd --shutdown`).
+  reattaches), and reaping is an **explicit command** (`swemux kill-server` / `swemuxd --shutdown`).
   This fits dev iteration ("restart to get my changes") exactly. Alternative — keep
   "Ctrl-C = everything dies" and add a second gesture (Ctrl-Break / a flag) for
   preserve-restart — is clunkier; prefer the tmux model.
@@ -262,7 +262,7 @@ implementation + tests + docs must agree.
   supervisor outlives its daemon and is adopted - by the same child - by a successor.
 - [x] **7.6 Wire intent-signaled shutdown.** Desktop: Quit = mode `quit` → sessions stopped +
   `reap_all_and_exit`; new tray "Restart daemon (keep sessions)" = mode `restart` → detach.
-  Terminal: Ctrl-C detaches; explicit `muxd --shutdown` is kill-server (also the
+  Terminal: Ctrl-C detaches; explicit `swemuxd --shutdown` is kill-server (also the
   "force quit everything" action). Single-instance re-discovery on next launch; linger
   timeout implemented as supervisor self-exit after 15 idle minutes with no clients **and**
   no live sessions (never while agents are alive).
@@ -305,7 +305,7 @@ user/agent-facing triggers:
   findings until a redeploy). Refused with 409 when no supervisor is attached unless
   `force=true`. Triggers:
   UI app menu / sidebar menu / command palette ("Reload daemon (keep sessions)",
-  `daemon.reload`) with a blocking overlay + auto page reload; `mux reload-daemon [--force]`;
+  `daemon.reload`) with a blocking overlay + auto page reload; `swemux reload-daemon [--force]`;
   plain HTTP for agents (`curl -X POST http://127.0.0.1:<port>/api/daemon/restart`). "Reload
   UI" (`ui.reload`) is the frontend half: rebuild assets (`npm run build`), reload the page.
   **Caveat:** `npm run build` writes to `src/swe_mux/static`, which is **gitignored build
@@ -354,7 +354,7 @@ user/agent-facing triggers:
   `swe-mux.prev` (the bad bundle is kept at `dist/swe-mux.failed`), so a remote/phone client
   is never stranded without a daemon. Safe to run from an agent session inside swe-mux: the
   agent's PTY lives in the supervisor and survives the whole cycle. Refreshing the supervisor
-  bundle itself still requires `muxd --shutdown` first (§8), and the redeploy script keeps
+  bundle itself still requires `swemuxd --shutdown` first (§8), and the redeploy script keeps
   the old bundle with a warning when supervisor sources changed while sessions are live.
 - **Redeploy from the UI** (`POST /api/daemon/redeploy`, menu/palette "Rebuild + redeploy app
   (keep sessions)", `app.redeploy` — works from desktop and mobile): the daemon validates it
@@ -391,7 +391,7 @@ it cleared only on a fresh Explorer/tray launch. Fixes:
   (`ensure_daemon`), the redeploy endpoint's script spawn, and the redeploy script's app
   relaunch. **Note:** breakaway against a Job created *before* this change is denied (it
   lacks BREAKAWAY_OK), so the fix fully lands only after the supervisor bundle is rebuilt and
-  restarted (`muxd --shutdown` + reap, per §8).
+  restarted (`swemuxd --shutdown` + reap, per §8).
 - The daemon, tray, and supervisor each check `win_jobobj.process_in_job()` at startup and
   log/ledger a loud warning when inside a Job — the poisoned-launch breadcrumb.
 - Death forensics, since an external TerminateProcess is invisible in-process:

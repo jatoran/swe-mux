@@ -499,7 +499,7 @@ Recorded so this report does not duplicate or contradict work already moving.
 | Note-insert placement | An in-flight session owns it. |
 | A global TTS master switch | Already scheduled in `ROADMAP.md` Phase 15. Finding 10 only asks that the Voice-tab split be sequenced before it. |
 | Remote and phone-connection onboarding | Shipped per `NEW_USER_RELEASE_READINESS.md` and verified against the code. |
-| First-use download gates, neutral defaults, prerequisite checklist, diagnostics export, `mux doctor` | Shipped per `NEW_USER_RELEASE_READINESS.md` and `ROADMAP.md` Phase 7. |
+| First-use download gates, neutral defaults, prerequisite checklist, diagnostics export, `swemux doctor` | Shipped per `NEW_USER_RELEASE_READINESS.md` and `ROADMAP.md` Phase 7. |
 | Reducing the feature surface | Not the finding. The surface is appropriate for a high-engagement professional tool. The problem is the first-use path across it, not its size. |
 
 ## Sources

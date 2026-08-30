@@ -582,7 +582,7 @@ type GitPatchSnapshot = {
 - [x] For source mode, build the frontend with `cd frontend && npm run build`, restart the daemon with the session-preserving route for backend changes, and reload the UI.
 - [x] Compare the live `assets/index-*.css` hash with `src/swe_mux/static/index.html` to verify which frontend is served.
 - [x] If the live app is frozen, use `uv run python packaging/redeploy_desktop.py` or the UI's `Rebuild + redeploy app (keep sessions)` action.
-- [x] Never run `muxd --shutdown`, kill `swe-mux-supervisor.exe`, or use image-wide task killing during the update.
+- [x] Never run `swemuxd --shutdown`, kill `swe-mux-supervisor.exe`, or use image-wide task killing during the update.
 - [x] Confirm all live terminal and agent sessions survive the applied update.
 
 ## Final completion gate

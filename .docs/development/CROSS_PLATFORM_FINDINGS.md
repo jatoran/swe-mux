@@ -232,7 +232,7 @@ Current gaps:
 - Project license, package classifiers, project URLs, changelog, release policy, security contact, and support policy are incomplete.
 - PyInstaller builds local unsigned architecture-specific folders; there is no code-signing or published update channel.
 - WebView2 Runtime, provider CLIs, PATH/PATHEXT/COMSPEC, port availability, writable data paths, Tailscale, browser capability, and shell profiles are not covered by one startup preflight.
-- `mux doctor` currently reports remote-access status rather than the consolidated platform/profile/ownership diagnostic described in Roadmap Phase 7.
+- `swemux doctor` currently reports remote-access status rather than the consolidated platform/profile/ownership diagnostic described in Roadmap Phase 7.
 - Rotating daemon/access/crash/lifecycle logs exist, but there is no one-click sanitized install-wide support bundle for startup and compatibility failures.
 - Some features download assets silently on first use, so a clean install does not match its documented capabilities until the network round trip completes. STT is enabled by default and the first Talk pulls the Whisper model and the Silero VAD runtime; preview capture assumes a local Chromium. These downloads are platform-neutral and should be gated or documented rather than silent (`NEW_USER_RELEASE_READINESS.md`).
 

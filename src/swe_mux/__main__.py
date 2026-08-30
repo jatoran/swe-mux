@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -12,6 +13,7 @@ from aiohttp import web
 
 from .cli import invoked_as
 from .config import LOOPBACK_HOSTS, Config, load_config
+from .host_platform import IS_WINDOWS
 from .http_support import ACCESS_LOG_FORMAT
 from .lifecycle import heartbeat_pid, ledger, pid_running
 from .logsetup import enable_crash_tracebacks, setup_daemon_logging
@@ -22,7 +24,7 @@ from .timer_resolution import raise_timer_resolution
 
 #: The launcher names `[project.scripts]` declares for the daemon. Same rule as
 #: the client's `LAUNCHER_NAMES`, different vocabulary; see `cli.invoked_as`.
-DAEMON_LAUNCHER_NAMES = frozenset({"swemuxd", "muxd"})
+DAEMON_LAUNCHER_NAMES = frozenset({"swemuxd"})
 DEFAULT_DAEMON_PROG = "swemuxd"
 
 
@@ -48,6 +50,17 @@ def parser(prog: str | None = None) -> argparse.ArgumentParser:
             "it, then exit. This is the only way to stop everything: the "
             "supervisor is on by default, so Ctrl-C merely detaches and leaves "
             "live sessions running for the next daemon"
+        ),
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help=(
+            "do not open the UI in a browser on start. Only ever opened when a "
+            "terminal is watching this process, so the tray's daemon, a detached "
+            "`swemux start` child and a login task are already unaffected; this "
+            "is for an interactive start that should stay in the terminal. "
+            "SWE_MUX_NO_BROWSER does the same for a caller that cannot pass a flag."
         ),
     )
     parser.add_argument(
@@ -111,6 +124,7 @@ async def serve(
     *,
     desktop_control_token: str | None = None,
     relaunch_command: list[str] | None = None,
+    browser: bool = False,
 ) -> None:
     hosts = await listener_hosts(
         config.host, config.tailnet_enabled, config.wsl_bridge_enabled
@@ -160,12 +174,45 @@ async def serve(
                 continue
             sites.append(site)
             rendered_host = f"[{host}]" if ":" in host else host
-            print(f"======== Running on http://{rendered_host}:{config.port} ========", flush=True)
+            log.info("listening on http://%s:%s", rendered_host, config.port)
+        _announce(config, browser=browser)
         if config.tailnet_enabled:
             asyncio.create_task(_auto_enable_mobile_voice(app, config.port))
         await shutdown_event.wait()
     finally:
         await runner.cleanup()
+
+
+def _announce(config: Config, *, browser: bool) -> None:
+    """Print the banner, and open the UI when somebody is watching this process.
+
+    Replaces the bare `======== Running on ... ========` line that aiohttp's own
+    output shape had been standing in for. That line went to stdout on every
+    start including the ones with no stdout, so it is now a log record and the
+    banner is the thing a person reads (`daemon_start.startup_banner`).
+
+    A GUI launcher gives this process `sys.stdout is None`, so `isatty` is asked
+    of the stream only when there is one - and `None` is correctly not a
+    terminal, which is the same answer the tray's own daemon child needs.
+    """
+    from .daemon_start import open_browser, should_open_browser, startup_banner
+
+    url = f"http://127.0.0.1:{config.port}"
+    stream = sys.stdout
+    interactive = bool(stream is not None and getattr(stream, "isatty", lambda: False)())
+    opened = (
+        open_browser(url)
+        if should_open_browser(
+            requested=browser, stdout_isatty=interactive, environ=os.environ
+        )
+        else False
+    )
+    if interactive:
+        print(
+            startup_banner(url, windows=IS_WINDOWS, opened_browser=opened),
+            flush=True,
+        )
+    logging.getLogger(__name__).info("swe-mux is serving %s", url)
 
 
 async def _auto_enable_mobile_voice(app: web.Application, port: int) -> None:
@@ -403,6 +450,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                 config,
                 desktop_control_token=token,
                 relaunch_command=relaunch_command_for(config, args),
+                # A relaunch successor is nobody's foreground even when it
+                # inherits one, and it is replacing a daemon whose UI is already
+                # open somewhere. Asked here rather than inside `_announce`,
+                # which should stay a question about *this* process only.
+                browser=not args.no_browser and not args.relaunch_wait,
             )
         )
     except KeyboardInterrupt:

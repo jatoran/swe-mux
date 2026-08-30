@@ -119,7 +119,7 @@ export function branchPointsEmptyMessage(reason: BranchPointsReason, backend: st
   if (reason === 'no_transcript') return 'This agent has not written its first message yet.'
   if (reason === 'unreadable') return 'The conversation could not be read just now. Try again.'
   if (reason === 'dialect_unsupported') {
-    return `mux cannot yet fork a ${backend} conversation at a chosen point.`
+    return `swemux cannot yet fork a ${backend} conversation at a chosen point.`
   }
   if (reason === 'strategy_has_no_points') {
     return `${backend} branches from where the conversation stands now, not from a chosen point.`

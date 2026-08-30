@@ -67,7 +67,7 @@ def _key(entry: str) -> str:
 
 def _install(*, reachable: bool) -> object:
     present = {str(_ROOT / "uv-receipt.toml")} | {
-        str(_SCRIPTS / f"{name}{_EXE}") for name in ("mux", "muxd", "swe-mux")
+        str(_SCRIPTS / f"{name}{_EXE}") for name in ("swemux", "swemuxd", "swe-mux")
     }
     normalized = {_key(entry) for entry in present}
     return install_location.detect_install_location(
@@ -113,7 +113,7 @@ def test_where_is_answered_before_the_config_is_even_looked_at(
 
 
 def test_where_is_declared_on_the_daemon_parser_so_it_is_discoverable() -> None:
-    """`muxd --help` has to name it, or the escape hatch is a secret."""
+    """`swemuxd --help` has to name it, or the escape hatch is a secret."""
     text = daemon_main.parser().format_help()
     assert "--where" in text
     assert "on PATH" in text
@@ -181,7 +181,7 @@ def test_the_hint_also_reaches_the_log_and_the_ledger(
     capsys.readouterr()
     record = next(row for row in caplog.records if "not reachable from PATH" in row.getMessage())
     assert record.install_kind == "uv-tool"  # type: ignore[attr-defined]
-    assert record.unreachable == "mux,muxd,swe-mux"  # type: ignore[attr-defined]
+    assert record.unreachable == "swemux,swemuxd,swe-mux"  # type: ignore[attr-defined]
     assert "not on PATH" in (tmp_path / "lifecycle.log").read_text(encoding="utf-8")
 
 

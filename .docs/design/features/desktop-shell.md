@@ -78,14 +78,14 @@ continues to own every terminal.
 - Start with Windows writes the exact current executable/config command to the current-user Run
   key. No machine-wide installation or elevation is required.
   **It reads two mechanisms and writes one**, since 2026-08-30. `shortcuts.py` puts a `.lnk` in
-  `shell:startup` for `mux install-shortcut --startup`, for Settings, and for the first-run
+  `shell:startup` for `swemux install-shortcut --startup`, for Settings, and for the first-run
   offer, and Windows honours that exactly as it honours the Run value - so a menu item that
   consulted only the registry showed "off" beside a swe-mux that demonstrably did start at
   sign-in, and ticking it on left two entries racing to launch one single-instance app.
   `startup_enabled` is now true if *either* is present and turning it off clears both;
   turning it on still writes the Run value, because that is the one this menu owns.
 - **The first successful start of a wheel install offers its own shortcuts** (`first_run.py`).
-  A wheel cannot create one and no hook runs after `pip`/`uv`, so `mux install-shortcut` is a
+  A wheel cannot create one and no hook runs after `pip`/`uv`, so `swemux install-shortcut` is a
   command nobody knows to run; the first launch is the only moment the person is present and the
   app has visibly worked. One modal yes/no, off the window thread, writing Start Menu +
   run-at-login (never a desktop icon - that is a preference, and an unrequested one teaches
@@ -138,7 +138,7 @@ It is a real surface - anything that can reach the port can drive the page - so 
   does from source, carries nothing that identifies the machine, and is off entirely under
   `update_check_enabled`. It **detects and presents**; it downloads nothing, verifies no
   hash, and touches no bundle.
-  The **updater** (`update_install.py`, `POST /api/update/install`, `mux update --install`)
+  The **updater** (`update_install.py`, `POST /api/update/install`, `swemux update --install`)
   is the deliberate half and is a separate act in every sense: it runs only on an explicit
   press carrying `X-Mux-User-Gesture: update-install`, and only when that press *names the
   version it means*, so a manifest that moved between the banner and the button is refused
@@ -190,7 +190,7 @@ It is a real surface - anything that can reach the port can drive the page - so 
   `api_mismatch` and a redeploy is the honest answer, because a backend change is not
   something an overlay can carry.
   **A revert** that flips one boolean in one small atomic file, moves and deletes nothing, and
-  is reachable without the UI (`mux ui-overlay revert`) because an overlay's own failure mode
+  is reachable without the UI (`swemux ui-overlay revert`) because an overlay's own failure mode
   is a frontend that will not load.
   Two consequences worth stating outright.
   The pin is a claim by the **producer** (`packaging/build_frontend_overlay.py`), and the
@@ -348,7 +348,7 @@ It is a real surface - anything that can reach the port can drive the page - so 
   including its comment**: that file is a member of `build_desktop.SUPERVISOR_SOURCES`, whose
   SHA-256 is taken over file *bytes*, so a pure comment invalidates the supervisor bundle exactly
   as a value change would - `supervisor_bundle_current()` would report the running bundle stale
-  forever, `mux doctor` would advise a rebuild, and that rebuild reaps every live session. Pin it
+  forever, `swemux doctor` would advise a rebuild, and that rebuild reaps every live session. Pin it
   in the same commit as the next deliberate supervisor rebuild, when the reap is paid for anyway.
 - **PyAV is out of the dependency closure entirely, not just out of the bundle**
   (2026-08-27). `faster-whisper` hard-requires `av>=11` and nothing in swe-mux reaches it:
