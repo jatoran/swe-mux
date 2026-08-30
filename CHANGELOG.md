@@ -15,6 +15,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-30
+
 ### Added
 
 - **The Windows installer now installs `swemux` and `mux`, and puts them on your PATH.**
@@ -416,7 +418,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.4
 [0.1.3]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.3
 [0.1.2]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.2
 [0.1.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.1
