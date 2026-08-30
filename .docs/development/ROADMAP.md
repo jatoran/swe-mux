@@ -6135,8 +6135,19 @@ here and does not there.
   The PATH edit is proven by running it, not by reading the `.iss`: `ci.yml`'s
   `installer-cycle` job compiles the installer and drives install → PATH → upgrade →
   uninstall, diffing `HKCU\Environment\Path` and its registry value kind at each step against
-  a seeded REG_EXPAND_SZ value holding `%USERPROFILE%\bin`. Inno Setup is not installed on the
-  development host, so that cycle has never run locally and CI is where it is first executed.
+  a seeded REG_EXPAND_SZ value holding `%USERPROFILE%\bin`.
+
+  **The cycle has now been run for real** (2026-08-30, Inno 6.7.3 on the development host, into
+  a throwaway install directory): every assertion passed, and `HKCU\Environment\Path` came back
+  byte-identical - same 1337 characters, same 23 entries, same `REG_SZ` kind. It turned up two
+  hazards that no CI runner can ever see, because both need a machine that already has
+  something on it, and both are now guarded in the script rather than in a comment. The
+  `AppId` is fixed and no command-line switch overrides it, so running setup against an
+  existing install is an *upgrade of that install* and the uninstall afterwards deregisters
+  it; and `[Icons]` writes `{group}\swe-mux` with no task gating it, so a default-group run
+  overwrites a real Start Menu shortcut and the uninstall deletes it. The script now refuses
+  on a registered `AppId` and passes `/GROUP=`. It also writes the original PATH to a file
+  before seeding, because a `finally` does not run when a process is killed.
 
   **The `CHANGELOG.md` entry this owed is now written**, under `## [Unreleased]`, as one
   `Added` and one `Fixed`. It was parked here rather than written because the landing gate
