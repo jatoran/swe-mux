@@ -62,9 +62,11 @@ Each harness entry also carries a static `tested_cli_version` (the last version 
 `version_is_untested` compares the parsed leading numeric components and fails closed, so an unparseable version reports untested false rather than a false "newer than tested".
 A CLI newer than its bound degrades gracefully (the model catalog falls unknown ids back to their family context window, `claude_models.py`); the signal only surfaces that the pairing is untested.
 
-Two per-harness instrumentation toggles, both stored like `harness_enabled` (a dict where an absent key means on) and both restart-scoped because adapters are built once at daemon start:
+Three per-harness delivery toggles, all restart-scoped because adapters are built once at daemon start.
+The first two are stored like `harness_enabled` (a dict where an absent key means on); the third inverts the default:
 - `config.harness_mcp_enabled` gates the mux MCP registration. Off, `build_agent_adapter` receives an empty `mcp_url` for that harness, so no MCP server is registered; the harness's status, history, and queue are unaffected. The `mcp` capability (true for every family except pi, which has no MCP client) tells the frontend whether to offer the toggle.
 - `config.harness_instrument_enabled` gates the lifecycle hooks. Off, `build_agent_adapter` passes `instrument=False`, and each adapter family skips its hook wiring (Claude omits `--settings`, Codex is built with `notify=False`, and the omp/opencode/pi extension is not injected). This drops the harness to unobserved: no status detection, history capture, or prompt queue for its sessions, which the UI names before applying.
+- `config.harness_skill_enabled` gates automatic delivery of the swe-mux agent skill, and an absent key means OFF - deliberately opposite the other two, because the non-Claude route writes into the user's checkout at spawn. The Claude family gets a data-dir plugin named per session (`--plugin-dir`); every other family calls `deliver_project_skill`, which writes the shared `.agents/skills/swe-mux/` root. The descriptor declares both halves: `skill_install_roots` (the minimal covering set of roots that harness's CLI verifiably reads) and the published `skill_delivery` capability (`session` or `project`), which is what lets the browser state the asymmetry instead of drawing two equal options. `design/features/agent-skill-delivery.md` owns the full design.
 
 Enablement is a launcher filter with three states.
 `config.harness_enabled` holds only explicit user choices; an absent key follows detection.

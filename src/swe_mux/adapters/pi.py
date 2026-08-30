@@ -10,7 +10,7 @@ from typing import Any
 
 from ..harness import descriptor
 from ..shim_paths import which_real
-from .base import BackendAdapter, SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec, deliver_project_skill
 from .omp import session_header
 
 _SESSION_ID_FROM_NAME = re.compile(r"_(?P<id>[^_]+)\.jsonl$")
@@ -79,10 +79,15 @@ class PiAdapter(BackendAdapter):
         data_home: Path | None = None,
         command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
         instrument: bool = True,
+        skill: bool = False,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
+        # Spawn-time write of the shared project skill root; off by default
+        # because it writes into the user's checkout (see `deliver_project_skill`).
+        # pi is the harness the skill route exists for - it has no MCP client.
+        self.skill = skill
         # "Launch clean": the pi extension is the lifecycle hook, so dropping it
         # runs this harness unobserved (pi has no MCP client either way).
         self.instrument = instrument
@@ -111,6 +116,7 @@ class PiAdapter(BackendAdapter):
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
         del sid
+        deliver_project_skill(self.skill, opts)
         executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
             executable,
@@ -121,6 +127,7 @@ class PiAdapter(BackendAdapter):
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
         # pi resumes by id or path through `--session`; `--resume` is its
         # interactive picker and would sit waiting for a keystroke.
+        deliver_project_skill(self.skill, opts)
         executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
             executable,

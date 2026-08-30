@@ -37,11 +37,15 @@ Two rules keep the writes honest:
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from .harness import agent_harnesses, descriptor
+
+logger = logging.getLogger(__name__)
 
 #: Claude keys a skill by its directory name and Codex by the frontmatter name,
 #: so the directory and the frontmatter `name:` must be the same string for the
@@ -186,6 +190,88 @@ def install(targets: list[SkillTarget], text: str) -> list[SkillWrite]:
                 SkillWrite(str(path), "refused", target.readers, reason=str(exc), error=True)
             )
     return report
+
+
+def materialize_project_skill(project: Path) -> SkillWrite:
+    """The automatic, spawn-time delivery for the non-Claude harnesses.
+
+    Writes exactly one root - the shared `.agents/skills/` - because every
+    registered non-Claude harness declares `project-agents`
+    (`test_skill_install.py` guards that), and Claude's automatic delivery is
+    the data-dir plugin, never a tree write. Gated per harness by
+    `config.harness_skill_enabled`, which defaults OFF: this is the one place
+    swe-mux writes into a user's checkout at spawn, and that is opt-in.
+
+    Idempotent and quiet when nothing changed; a filesystem refusal is logged
+    and reported, never raised, because a skill that could not be written must
+    not stop a session from spawning.
+    """
+    for target in project_targets(project):
+        if target.root.parent.name != ".agents":
+            continue
+        write = install([target], skill_text())[0]
+        if write.action == "wrote":
+            logger.info(
+                "agent skill written for spawn",
+                extra={"path": write.path, "readers": ",".join(write.readers)},
+            )
+        elif write.error:
+            logger.warning(
+                "agent skill write refused", extra={"path": write.path, "reason": write.reason}
+            )
+        return write
+    raise AssertionError("no registered harness declares the shared project-agents root")
+
+
+#: The manifest `--plugin-dir` loads. Version is deliberately absent: the skill
+#: body is release-matched by construction (it ships inside the package), and a
+#: stamped version would rewrite the file on every release for no reader.
+_PLUGIN_MANIFEST: dict[str, object] = {
+    "name": SKILL_DIR_NAME,
+    "description": "How agents inside swe-mux see and coordinate with their fleet.",
+    "author": {"name": "swe-mux", "url": "https://github.com/jatoran/swe-mux"},
+}
+
+
+def materialize_claude_plugin(base: Path) -> Path | None:
+    """Build the data-dir plugin Claude loads per session via `--plugin-dir`.
+
+    The plugin carries the skill and NOTHING else - no hooks, no commands, no
+    agents - deliberately: swe-mux already delivers hooks by its own route
+    (`--settings`), and a second delivery mechanism for the same thing is two
+    paths that can disagree. `claude plugin validate` accepts this layout
+    (verified against Claude Code 2.1.220-era CLI on 2026-08-30).
+
+    Write-if-changed for the usual mtime reason, and shaped like
+    `_write_mcp_config`: one static tree in the data dir, per-adapter rather
+    than per-session, because the content depends only on the release.
+
+    Returns None when the tree could not be written, so the caller drops the
+    `--plugin-dir` flag instead of pointing the CLI at a broken directory - a
+    session without the skill beats a session that fails to start.
+    """
+    manifest = base / ".claude-plugin" / "plugin.json"
+    skill = base / "skills" / SKILL_DIR_NAME / "SKILL.md"
+    manifest_text = json.dumps(_PLUGIN_MANIFEST, indent=2) + "\n"
+    changed = False
+    for path, text in ((manifest, manifest_text), (skill, skill_text())):
+        try:
+            if path.is_file() and path.read_text(encoding="utf-8") == text:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            staged = path.with_name(path.name + ".tmp")
+            staged.write_text(text, encoding="utf-8", newline="\n")
+            staged.replace(path)
+            changed = True
+        except OSError as exc:
+            logger.warning(
+                "claude skill plugin write refused",
+                extra={"path": str(path), "reason": str(exc)},
+            )
+            return None
+    if changed:
+        logger.info("claude skill plugin materialized", extra={"path": str(base)})
+    return base
 
 
 def written_by_us(path: Path) -> bool:

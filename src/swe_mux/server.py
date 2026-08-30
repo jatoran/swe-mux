@@ -1011,6 +1011,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             # are restart-scoped because adapters are built once here.
             mcp_url=mcp_url if config.harness_mcp_enabled.get(name, True) else "",
             instrument=config.harness_instrument_enabled.get(name, True),
+            # Skill delivery defaults OFF - the opposite of the MCP map - because
+            # its non-Claude half writes into the user's checkout at spawn.
+            skill=config.harness_skill_enabled.get(name, False),
             approval_hook_timeout=config.approval_hook_timeout_seconds,
             # A harness that declares `requires_direct_entrypoint` has an argument a
             # `.cmd` shim cannot carry, so its JS entrypoint is launched directly.

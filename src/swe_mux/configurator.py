@@ -397,6 +397,7 @@ def harness_catalog(
                 "provider_accounts": capabilities.get("provider_accounts"),
                 "mcp_capable": capabilities.get("mcp"),
                 "mcp_enabled": config.harness_mcp_enabled.get(name, True),
+                "skill_enabled": config.harness_skill_enabled.get(name, False),
             }
         )
     return rows

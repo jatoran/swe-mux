@@ -82,6 +82,7 @@ type Config = {
   harness_args:Record<string,string[]>
   harness_enabled:Record<string,boolean>
   harness_mcp_enabled:Record<string,boolean>
+  harness_skill_enabled:Record<string,boolean>
   harness_instrument_enabled:Record<string,boolean>
   git_poll_seconds:number;worktree_root:string;git_swe_mux_prompt_enabled:boolean
   git_swe_mux_prompt_decisions:Record<string,'keep_visible'|'ignore_all'>
@@ -1239,6 +1240,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(on) delete next[name]; else next[name]=false
     change(fieldKey,next)
   }
+  // The skill map has the opposite default (absent key = OFF), because its
+  // non-Claude half writes into the user's checkout at spawn - a write nobody
+  // asked for must not be a default. The stored map stays minimal the same way:
+  // only explicit ON entries are kept.
+  const harnessSkillOn = (name:string):boolean => draft!.harness_skill_enabled?.[name] ?? false
+  const setHarnessSkill = (name:string, on:boolean):void => {
+    const next={...(draft!.harness_skill_enabled||{})}
+    if(on) next[name]=true; else delete next[name]
+    change('harness_skill_enabled',next)
+  }
   const startHistoryScan = async ():Promise<void> => {
     try { setScanJob((await api<{job:HistoryScanJob}>('POST','/api/history/scan')).job) }
     catch(cause){ setStatus(`Scan could not start: ${cause instanceof Error?cause.message:String(cause)}`) }
@@ -1691,12 +1702,40 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             {harness.cli_version&&<p class={harness.version_untested?'settings-inline-error':'profile-hint'}>CLI version {harness.cli_version}{harness.version_untested?` · newer than the version mux was tested against (${harness.tested_cli_version}). Features degrade gracefully, but this pairing is untested.`:''}</p>}
             <label>Executable<input value={draft.harness_exe[harness.name]||''} placeholder={harness.name} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label>
             <label>Default args<input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder="--model claude-opus-4-8" onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label>
-            {harnessDescriptor(harness.name)?.capabilities.mcp!==false&&<label class="check"><span>mux MCP server <em>· fleet visibility and messaging for this agent</em></span><input type="checkbox" checked={harnessDictOn('harness_mcp_enabled',harness.name)} onChange={e=>setHarnessDict('harness_mcp_enabled',harness.name,e.currentTarget.checked)} /></label>}
+            {(()=>{
+              // Phrased as capability, not transport: the question is whether
+              // agents in this harness's sessions may see the fleet, and how
+              // they learn they can. MCP and the skill file are deliberately
+              // not symmetric options - MCP registers automatically with zero
+              // setup, while the skill is delivered per the route this CLI
+              // supports - so the control names the difference instead of
+              // drawing two equal radio buttons.
+              const mcpCapable=harnessDescriptor(harness.name)?.capabilities.mcp!==false
+              const skillDelivery=harnessDescriptor(harness.name)?.capabilities.skill_delivery??'project'
+              const mcpOn=mcpCapable&&harnessDictOn('harness_mcp_enabled',harness.name)
+              const skillOn=harnessSkillOn(harness.name)
+              const value=mcpOn&&skillOn?'both':mcpOn?'mcp':skillOn?'skill':'off'
+              const apply=(next:string):void=>{
+                if(mcpCapable) setHarnessDict('harness_mcp_enabled',harness.name,next==='mcp'||next==='both')
+                setHarnessSkill(harness.name,next==='skill'||next==='both')
+              }
+              const skillLabel=skillDelivery==='session'?'Skill file (attached per session)':'Skill file (written into each Project)'
+              const options=mcpCapable
+                ?[{value:'mcp',label:'MCP tools (registered automatically)'},{value:'skill',label:skillLabel},{value:'both',label:'MCP tools + skill file'},{value:'off',label:'Neither'}]
+                :[{value:'off',label:'Off'},{value:'skill',label:skillLabel}]
+              return <Fragment>
+                <label data-setting="harness_skill_enabled">Fleet access<Dropdown value={value} onChange={apply} options={options}/></label>
+                <p class="profile-hint">Whether agents in {harness.display_name} sessions can see and message the fleet, and how they learn they can.{mcpCapable?' MCP needs no setup and is the usual answer.':` ${harness.display_name} has no MCP client; the skill file is how its agents learn the swe-mux surface.`}</p>
+                {skillOn&&(skillDelivery==='session'
+                  ?<p class="profile-hint">Delivered as a session-scoped plugin from the mux data directory; nothing is written into your Projects.</p>
+                  :<p class="profile-hint">Writes <code>.agents/skills/swe-mux/</code> into a Project when a {harness.display_name} session starts there, because this CLI reads skills only from those directories. Turning this off stops the writes and leaves existing files; <code>swemux install-skill --remove</code> takes them back.</p>)}
+              </Fragment>
+            })()}
             {harnessDescriptor(harness.name)?.capabilities.lifecycle_hooks&&<Fragment>
               <label class="check"><span>Instrument with mux hooks <em>· off launches clean and unobserved</em></span><input type="checkbox" checked={harnessDictOn('harness_instrument_enabled',harness.name)} onChange={e=>setHarnessDict('harness_instrument_enabled',harness.name,e.currentTarget.checked)} /></label>
               {!harnessDictOn('harness_instrument_enabled',harness.name)&&<p class="settings-inline-error">Clean launch drops {harness.display_name} to unobserved: no status detection, history capture, or prompt queue for its sessions.</p>}
             </Fragment>}
-            {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false)&&<p class="profile-hint">Instrumentation changes take effect on the next daemon restart (live sessions are preserved).</p>}
+            {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false||harnessSkillOn(harness.name))&&<p class="profile-hint">Instrumentation and fleet-access changes take effect on the next daemon restart (live sessions are preserved).</p>}
             {appliesWidthEnvelope(harness.name)&&<Fragment>
               <label data-setting="claude_max_columns">Width limit<Dropdown value={String(draft.claude_max_columns)} onChange={value=>change('claude_max_columns',Number(value) as ClaudeMaxColumns)} options={CLAUDE_MAX_COLUMN_STEPS.map(step=>({value:String(step),label:claudeMaxColumnsLabel(step)}))}/></label>
               <p class="profile-hint">Past this many columns a pane adds margin instead of resizing, because {harness.display_name}'s renderer can corrupt cells on large width changes. Raise it for wide diffs, or choose No limit; compact panes are never limited.</p>

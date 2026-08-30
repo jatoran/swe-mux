@@ -40,6 +40,24 @@ class SpawnOptions:
     hook_spool: str | None = None
 
 
+def deliver_project_skill(enabled: bool, opts: SpawnOptions) -> None:
+    """Spawn-time skill delivery for harnesses that read the shared project root.
+
+    One call site per non-Claude adapter's spawn/resume path rather than a hook
+    in `session.py`, because whether a harness gets a tree write is a fact about
+    that harness's CLI (it accepts no per-session skills flag) and the adapter
+    is where such facts live - Claude's adapter delivers via `--plugin-dir`
+    instead and never calls this. Cheap when nothing changed (one read), and a
+    refusal is logged inside the materializer, never raised: a skill that could
+    not be written must not stop a session from spawning.
+    """
+    if not enabled:
+        return
+    from ..skill_install import materialize_project_skill
+
+    materialize_project_skill(opts.cwd)
+
+
 class BackendAdapter(Protocol):
     name: str
     # True when the CLI itself reports conversation replacement over the daemon's

@@ -202,6 +202,7 @@ RESTART_FIELDS = {
     # does not reach already-built adapters.
     "harness_mcp_enabled",
     "harness_instrument_enabled",
+    "harness_skill_enabled",
 }
 BUILTIN_THEME_PAIRS = {
     "dark": ("#090a0c", "#d9dde2"),
@@ -654,6 +655,17 @@ class Config:
     # built once at daemon start, so a change takes effect on the next daemon
     # restart (sessions survive it).
     harness_mcp_enabled: dict[str, bool] = field(default_factory=dict)
+    # Per-harness "deliver the swe-mux agent skill automatically" choice; absent
+    # key means OFF - the opposite default from the MCP map, deliberately. For
+    # Claude the delivery is a data-dir plugin named on the spawn argv
+    # (`--plugin-dir`), which writes nothing into anyone's checkout; for every
+    # other harness it is a spawn-time write of `.agents/skills/swe-mux/` into
+    # the session's project tree, because none of those CLIs accepts a skills
+    # directory by flag, env var, or config key - and a write into a user's
+    # repository is opt-in, never a default. Turning it off stops the writes and
+    # leaves existing files; `swemux install-skill --remove` takes them back.
+    # Restart-scoped like the MCP toggle, and for the same reason.
+    harness_skill_enabled: dict[str, bool] = field(default_factory=dict)
     # Per-harness "instrument / launch clean" choice; absent key means instrument.
     # Turning it off launches that harness WITHOUT mux's lifecycle hooks, which
     # drops it to unobserved: no status detection, no history capture, no prompt
@@ -1995,7 +2007,12 @@ def _validate(config: Config) -> None:
         for name, executable in config.harness_exe.items()
     ):
         errors["harness_exe"] = "must map harness names to non-empty executable strings"
-    for bool_map in ("harness_enabled", "harness_mcp_enabled", "harness_instrument_enabled"):
+    for bool_map in (
+        "harness_enabled",
+        "harness_mcp_enabled",
+        "harness_instrument_enabled",
+        "harness_skill_enabled",
+    ):
         value = getattr(config, bool_map)
         if not isinstance(value, dict) or any(
             not isinstance(name, str) or not isinstance(flag, bool) for name, flag in value.items()
@@ -2007,6 +2024,7 @@ def _validate(config: Config) -> None:
         "harness_enabled",
         "harness_mcp_enabled",
         "harness_instrument_enabled",
+        "harness_skill_enabled",
     ):
         value = getattr(config, field_name)
         if isinstance(value, dict):

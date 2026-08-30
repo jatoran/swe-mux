@@ -60,6 +60,43 @@ the only route to them - which is why every write is an explicit command.
 Claude alone has a per-session route (`--plugin-dir`), which is what the Project-scoped
 automatic delivery uses instead of any tree write.
 
+## Automatic delivery, gated per harness
+
+`config.harness_skill_enabled` (a per-harness map beside `harness_mcp_enabled`, restart-scoped
+for the same reason) turns on automatic delivery, and its absent-key default is OFF -
+deliberately opposite the MCP map, because half of this feature writes into checkouts.
+The route is a fact about each CLI, published as the `skill_delivery` capability so the
+browser states the difference rather than drawing symmetric options:
+
+- **Claude (`session`):** the adapter materializes a plugin under
+  `<data_dir>/agent-skill/claude-plugin/` (`.claude-plugin/plugin.json` + the skill, nothing
+  else - swe-mux already delivers hooks via `--settings`, and a second hook path could
+  disagree with the first) and names it on the spawn argv with `--plugin-dir`.
+  Nothing is ever written into a checkout; `--plugin-dir` is additive per the CLI's own help
+  (it loads a plugin for the session; installed plugins keep loading, and `--bare` lists it
+  among the things one explicitly re-provides).
+  `claude plugin validate` accepts the generated layout (verified 2026-08-30); the structural
+  tests in `tests/test_skill_install.py` pin the same facts offline because CI has no Claude
+  CLI.
+- **codex, pi, omp, opencode (`project`):** `deliver_project_skill` writes
+  `.agents/skills/swe-mux/SKILL.md` into the session's cwd at spawn and resume,
+  write-if-changed. This is the one place swe-mux writes into a user's checkout at spawn,
+  and it exists only because it is the only route: none of those CLIs accepts a skills
+  directory by flag, env var, or config key (measured 2026-08-30 - `codex plugin add` is
+  marketplace-only, and redirecting `CODEX_HOME`/`PI_CODING_AGENT_DIR` would move auth
+  wholesale).
+  A write refusal is logged and never raised: a skill that could not be written must not
+  stop a session from spawning.
+  Turning the toggle off stops the writes and leaves existing files - the daemon never
+  deletes from a checkout - and the Settings copy names `swemux install-skill --remove` as
+  the way back.
+
+The Settings → Harnesses control phrases this as capability, not transport: "Fleet access"
+per harness, whose options are MCP tools (registered automatically), the skill file (with
+its route named), both, or neither.
+Both is reachable but never the default for an MCP-capable harness, because it is strictly
+more setup for no gain; pi, with no MCP client, is the case the skill route exists for.
+
 ## The boundary: global writes are disclosed, never silent
 
 `~/.claude/skills/` affects every agent that user ever runs, including outside swe-mux.

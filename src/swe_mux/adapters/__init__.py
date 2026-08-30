@@ -29,6 +29,7 @@ def build_agent_adapter(
     command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
     instrument: bool = True,
     approval_hook_timeout: float = 5.0,
+    skill: bool = False,
 ) -> BackendAdapter:
     """Construct an adapter from one descriptor and runtime configuration.
 
@@ -37,7 +38,10 @@ def build_agent_adapter(
     "launch clean" toggle), which drops the harness to unobserved.
     ``approval_hook_timeout`` bounds how long the CLI waits for mux to answer a
     permission request; it only reaches a harness that declares
-    ``hook_approval_decisions``.
+    ``hook_approval_decisions``. ``skill`` turns on automatic delivery of the
+    swe-mux agent skill (`config.harness_skill_enabled`; off by default): a
+    data-dir plugin on the spawn argv for the Claude family, a spawn-time write
+    of the shared project skill root for every other family.
     """
     if harness.adapter_family == "claude":
         return ClaudeAdapter(
@@ -51,6 +55,7 @@ def build_agent_adapter(
             data_home_resolver=harness.data_home,
             instrument=instrument,
             approval_hook_timeout=approval_hook_timeout,
+            skill=skill,
         )
     if harness.adapter_family == "codex":
         return CodexAdapter(
@@ -62,6 +67,7 @@ def build_agent_adapter(
             name=harness.name,
             data_home_resolver=harness.data_home,
             rollout_file_prefix=harness.rollout_file_prefix or "rollout-",
+            skill=skill,
         )
     if harness.adapter_family == "omp":
         return OmpAdapter(
@@ -71,6 +77,7 @@ def build_agent_adapter(
             data_dir=data_dir,
             mcp_url=mcp_url,
             instrument=instrument,
+            skill=skill,
         )
     if harness.adapter_family == "pi":
         # No `mcp_url`: pi 0.74.2 has no MCP client at all (its bundled docs
@@ -83,6 +90,7 @@ def build_agent_adapter(
             data_home=harness.data_home(),
             command_resolver=command_resolver,
             instrument=instrument,
+            skill=skill,
         )
     if harness.adapter_family == "opencode":
         return OpenCodeAdapter(
@@ -93,6 +101,7 @@ def build_agent_adapter(
             mcp_url=mcp_url,
             command_resolver=command_resolver,
             instrument=instrument,
+            skill=skill,
         )
     assert_never(harness.adapter_family)
 
