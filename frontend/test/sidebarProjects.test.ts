@@ -3,7 +3,7 @@ import test from 'node:test'
 import type { Session } from '../src/types.ts'
 import {
   canHideProject, describeOpenWork, loadCollapsedProjects, projectInitials, projectOpenWork,
-  serializeCollapsedProjects, toggleCollapsed,
+  serializeCollapsedProjects, sidebarProjectsView, toggleCollapsed,
 } from '../src/sidebarProjects.ts'
 
 const session = (id: string, project_id: string, state: Session['state'], extra: Partial<Session> = {}) =>
@@ -63,4 +63,37 @@ test('describeOpenWork pluralises and joins present kinds only', () => {
   assert.equal(describeOpenWork(projectOpenWork([session('live', 'p1', 'running')], 'p1', ['pv1'])), '1 live session · 1 preview')
   assert.equal(describeOpenWork(projectOpenWork([session('a', 'p1', 'running'), session('b', 'p1', 'idle')], 'p1', [])), '2 live sessions')
   assert.equal(describeOpenWork(projectOpenWork([], 'p1', [])), '')
+})
+
+test('an unloaded Project list is "loading", never "you have no Projects"', () => {
+  // The defect this closes: `projects` starts `[]`, so before the first read
+  // landed the sidebar told an operator with a full workspace to create their
+  // first Project - on every load and every browser refresh.
+  assert.equal(sidebarProjectsView({ loaded: false, registered: 0, visible: 0 }), 'loading')
+  // Still loading even if a stale count is lying around, because `loaded` is the
+  // only thing that answers "has the daemon told us yet".
+  assert.equal(sidebarProjectsView({ loaded: false, registered: 9, visible: 9 }), 'loading')
+})
+
+test('a loaded Project list distinguishes none-registered from none-shown', () => {
+  assert.equal(sidebarProjectsView({ loaded: true, registered: 0, visible: 0 }), 'none-registered')
+  // Registered but all hidden is a different sentence and a different fix.
+  assert.equal(sidebarProjectsView({ loaded: true, registered: 4, visible: 0 }), 'none-shown')
+  assert.equal(sidebarProjectsView({ loaded: true, registered: 4, visible: 2 }), 'list')
+})
+
+test('exactly one Project-list surface is drawn for any state', () => {
+  const states = [
+    { loaded: false, registered: 0, visible: 0 },
+    { loaded: false, registered: 3, visible: 1 },
+    { loaded: true, registered: 0, visible: 0 },
+    { loaded: true, registered: 3, visible: 0 },
+    { loaded: true, registered: 3, visible: 3 },
+  ]
+  // The property the function exists for: one decision, so "two surfaces at
+  // once" and "no surface at all" are both unrepresentable.
+  for (const state of states) {
+    const view = sidebarProjectsView(state)
+    assert.ok(['loading', 'none-registered', 'none-shown', 'list'].includes(view), JSON.stringify(state))
+  }
 })

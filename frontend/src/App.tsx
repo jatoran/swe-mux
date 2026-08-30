@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket, type ApiError } from './api'
 import {
@@ -164,7 +164,10 @@ import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { ApprovalMode, DeliveryReadiness, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
-import { Settings } from './Settings'
+// Type-only: the component itself is a separate chunk, fetched below. Settings
+// is 3,000 lines of form that the workspace cannot draw until it has parsed,
+// and almost nobody opens it in the first seconds of a session.
+import type { Settings as SettingsPanel } from './Settings'
 import { HarnessSetup } from './HarnessSetup'
 import { VoiceSetup } from './VoiceSetup'
 import { QuestLog } from './QuestLog'
@@ -224,7 +227,8 @@ import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from 
 import { relativeStackTab } from './workspaceTabs'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
-  projectInitials, projectOpenWork, serializeCollapsedProjects, setAllCollapsed, toggleCollapsed,
+  projectInitials, projectOpenWork, serializeCollapsedProjects, setAllCollapsed,
+  sidebarProjectsView, toggleCollapsed,
 } from './sidebarProjects'
 import {
   NO_SEARCH_CURSOR, SIDEBAR_SEARCH_DEBOUNCE_MS, SIDEBAR_SEARCH_IDLE_TICK_MS,
@@ -438,6 +442,13 @@ function historyName(entry:HistoryEntry):string {
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  // False until the first projects read settles. `projects` starts `[]`, which is
+  // indistinguishable from "loaded, and this install genuinely has none" - and
+  // the sidebar drew the second meaning for the first second of every load,
+  // telling an operator with fourteen Projects to "Create your first Project".
+  // The same rule the Agent Environment catalog carries: an empty list must say
+  // which kind of empty it is.
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false)
   // Bumped whenever a fleet refresh installs a harness registry: the accessors that
   // read it (`allBackendNames`, `harnessDisplayName`) are module functions over a
   // global, so this counter is what tells memoized work that their answers changed.
@@ -714,6 +725,32 @@ export function App() {
   // the first paint - so the tour waits for it rather than painting a card that a dialog
   // is about to cover. See the sequencing note at the tutorial's render site.
   const [firstRunResolved, setFirstRunResolved] = useState(false)
+  // The Settings panel, as a chunk rather than as part of the workspace bundle.
+  //
+  // Splitting it alone would trade a faster first paint for a slower first
+  // *open*, which is a bad trade for a control people press deliberately. So it
+  // is also prefetched once the workspace is up and the browser is idle: by the
+  // time anyone reaches for Settings the chunk is almost always already there,
+  // and the `settingsOpen` effect below is the backstop for when it is not.
+  const [SettingsView, setSettingsView] = useState<typeof SettingsPanel | null>(null)
+  const settingsChunk = useRef<Promise<void> | null>(null)
+  const loadSettingsChunk = useCallback(() => {
+    settingsChunk.current ??= import('./Settings')
+      .then(module => { setSettingsView(() => module.Settings) })
+      // Cleared so a failed fetch (an offline moment, a redeployed bundle) is
+      // retried on the next press rather than wedging the panel shut forever.
+      .catch(() => { settingsChunk.current = null })
+    return settingsChunk.current
+  }, [])
+  useEffect(() => {
+    if (!workspaceLoaded || SettingsView) return
+    const idle = window.requestIdleCallback
+    // Safari has no `requestIdleCallback`; a timeout is the same intent, just
+    // without the browser's own notion of "idle".
+    if (!idle) { const timer = window.setTimeout(() => void loadSettingsChunk(), 1500); return () => window.clearTimeout(timer) }
+    const handle = idle(() => void loadSettingsChunk(), { timeout: 4000 })
+    return () => window.cancelIdleCallback?.(handle)
+  }, [workspaceLoaded, SettingsView, loadSettingsChunk])
   const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
   // user left off" - Settings remembers its own last tab, so an unqualified open must
@@ -1698,6 +1735,7 @@ export function App() {
     }
     if (nextProjects) {
       setProjects(nextProjects)
+      setWorkspaceLoaded(true)
       layoutWriter.adoptRevisions(nextProjects)
     }
     if (nextPreviews) setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
@@ -2481,6 +2519,9 @@ export function App() {
   const activeProject = projects.find(project => project.id === projectId)
   const orderedProjects = [...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
   const visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)
+  // One decision, in one place, so "not loaded yet" can never be drawn as
+  // "you have no Projects" again (`sidebarProjects.sidebarProjectsView`).
+  const projectsView = sidebarProjectsView({loaded:workspaceLoaded,registered:projects.length,visible:visibleProjects.length})
   const orderedGroups=[...projectGroups].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
   const recentProjectRanks=projectRecency(projects)
   const ungroupedProjects=sortProjects(
@@ -7486,7 +7527,19 @@ export function App() {
           {sidebarFilter&&!sidebarFilter.order.length
             ?<p class="sidebar-search-empty">No Project or session matches "{sidebarSearchQuery.trim()}"</p>
             :<>
-          {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
+          {/* Three states, not two. An empty list before the first read has
+              settled is "not loaded yet" and must not be drawn as "you have no
+              Projects" - that CTA told every operator with a populated sidebar
+              to create their first Project for the first second of every load,
+              which is the same empty-vs-unknown conflation the Agent Environment
+              catalog is written to avoid. The skeleton is deliberately the shape
+              of a Project row so the sidebar does not reflow when the real ones
+              arrive. */}
+          {projectsView==='loading'&&<div class="sidebar-skeleton" role="status" aria-label="Loading Projects" aria-live="polite">
+            {[0,1,2].map(row=><div key={row} class="sidebar-skeleton-row" />)}
+          </div>}
+          {projectsView==='none-shown'&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>No Projects shown</strong><small>Open Projects to show or add an active Project.</small></button>}
+          {projectsView==='none-registered'&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>Create your first Project</strong><small>Open Projects to add a canonical folder.</small></button>}
           {/* One flat sequence of Group sections and runs of root Projects, in the order
               the active sort put them. Under Manual that is every root Project and then
               every Group, which is one run and the two-tier tree; under any other mode the
@@ -8268,7 +8321,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so
         "exactly one of them, ever" is a property of the function rather than of two

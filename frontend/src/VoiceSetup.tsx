@@ -9,7 +9,7 @@ import {
   type KokoroModelInfo,
   type VoiceRuntimeInfo,
   type WhisperModelInfo,
-} from './Settings'
+} from './voiceModelPanels'
 import { playClip, unlockPlayback } from './voice.ts'
 
 /**

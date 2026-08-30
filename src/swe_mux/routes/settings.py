@@ -42,22 +42,65 @@ async def get_config(request: web.Request) -> web.Response:
     return response
 
 
-async def settings_bundle(request: web.Request) -> web.Response:
-    """Everything the Settings panel needs on open, in one round trip.
+# The parts the Settings panel blocks its first paint on, and the parts it does
+# not. The split is by *what the paint needs*, not by where the data comes from,
+# and that distinction is the whole point: the original bundle grouped nine GETs
+# by origin, which is the right instinct applied to the wrong axis.
+#
+# Measured 2026-08-30 against the development host's daemon: the bundle answered
+# in 107ms with 518 KiB, of which `usage` was 319.8 KiB (62%) and `provider`
+# 177.3 KiB (34%). The config the panel actually renders from is 12.7 KiB. So
+# the panel blocked on 40x the data it needed, for two tabs the operator usually
+# has not opened.
+PAINT_PARTS = ("keybindings", "profiles", "projects", "automation", "project_config")
+# Fetched by the tab that needs them, on the same endpoint.
+DEFERRED_PARTS = ("usage", "provider")
+BUNDLE_PARTS = PAINT_PARTS + DEFERRED_PARTS
 
-    The panel used to fan out nine GETs; each answered in well under 50ms, but
-    on a high-RTT client (phone over Tailscale) connection setup and RTT per
-    request dominated the perceived open delay. `config` is the one part the
-    panel cannot render without, so its failure fails the request; every other
-    part degrades to null with the reason under `errors`, and the client
-    decides which missing parts it can tolerate.
+
+async def settings_bundle(request: web.Request) -> web.Response:
+    """What the Settings panel asked for, in one round trip.
+
+    The panel used to fan out nine GETs; each answered in well under 50ms, but on
+    a high-RTT client (phone over Tailscale) connection setup and RTT per request
+    dominated the perceived open delay, so they were folded into one. That fold
+    was by origin rather than by need, and it made the panel's first paint wait
+    on half a megabyte of tab content - see `PAINT_PARTS`.
+
+    So the caller names what it wants. No `parts` query is the paint set, which
+    is what opening the panel asks for; `?parts=usage,provider` is what the Usage
+    and Accounts tabs ask for when they are opened. `config` is always included
+    because it is the one part the panel cannot render without, and its failure
+    fails the request; every other part degrades to null with the reason under
+    `errors`, and the client decides which missing parts it can tolerate.
+
+    An unknown part is refused rather than ignored. Silently dropping one would
+    hand the client a payload missing a key it asked for, which reads exactly
+    like a part that failed - and those need different handling.
     """
     config: Config = request.app[keys.CONFIG]
     cwd = request.query.get("cwd")
+    requested = request.query.get("parts")
+    if requested is None:
+        wanted = set(PAINT_PARTS)
+    else:
+        wanted = {name.strip() for name in requested.split(",") if name.strip()}
+        unknown = sorted(wanted - set(BUNDLE_PARTS))
+        if unknown:
+            return json_response(
+                {
+                    "error": f"unknown settings bundle part(s): {', '.join(unknown)}",
+                    "code": "unknown_bundle_part",
+                    "known": list(BUNDLE_PARTS),
+                },
+                400,
+            )
     parts: dict[str, Any] = {}
     errors: dict[str, str] = {}
 
     async def part(key: str, factory: Callable[[], Awaitable[Any]]) -> None:
+        if key not in wanted:
+            return
         try:
             parts[key] = await factory()
         except Exception as exc:  # noqa: BLE001 — each part degrades independently

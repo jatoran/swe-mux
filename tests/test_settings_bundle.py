@@ -62,7 +62,13 @@ class UsageStub:
         }
 
 
-def _request(tmp_path: Path, *, usage_fails: bool = False, cwd: str | None = None) -> Any:
+def _request(
+    tmp_path: Path,
+    *,
+    usage_fails: bool = False,
+    cwd: str | None = None,
+    parts: str | None = None,
+) -> Any:
     app = {
         keys.CONFIG: Config(data_dir=tmp_path),
         keys.AUTOMATION: AutomationStub(),
@@ -74,11 +80,25 @@ def _request(tmp_path: Path, *, usage_fails: bool = False, cwd: str | None = Non
         keys.LLM_CAPABILITIES: CapabilityStore(),
         keys.USAGE: UsageStub(fail=usage_fails),
     }
-    query = {"cwd": cwd} if cwd else {}
+    query: dict[str, str] = {}
+    if cwd:
+        query["cwd"] = cwd
+    if parts is not None:
+        query["parts"] = parts
     return SimpleNamespace(app=app, query=query)
 
 
-async def test_bundle_returns_every_settings_part_in_one_response(tmp_path: Path) -> None:
+async def test_the_default_bundle_is_what_first_paint_needs_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    """The split that matters, asserted as a set rather than as sizes.
+
+    The panel blocks its first paint on this response. Measured 2026-08-30 before
+    the split, it was 518 KiB, of which `usage` was 319.8 KiB and `provider`
+    177.3 KiB - two tabs the operator usually has not opened - against 12.7 KiB
+    of config the panel actually renders from. Both are now fetched by the tab
+    that reads them.
+    """
     response = await settings_bundle(cast(Any, _request(tmp_path)))
 
     assert response.status == 200
@@ -93,25 +113,50 @@ async def test_bundle_returns_every_settings_part_in_one_response(tmp_path: Path
         "profiles",
         "projects",
         "automation",
-        "provider",
-        "usage",
         "project_config",
         "errors",
     }
+    assert "usage" not in payload
+    assert "provider" not in payload
     assert payload["errors"] == {}
     assert payload["config"]["scrollback_bytes"] == 5 * 1024 * 1024
     assert payload["keybindings"]["bindings"]
     assert isinstance(payload["profiles"]["detected"], list)
     assert payload["projects"] == []
     assert payload["automation"]["repository_rules"] == []
-    assert payload["provider"]["secret"]["configured"] is False
-    assert payload["usage"]["enabled"] is False
     # No cwd supplied, so the per-project part is intentionally absent.
     assert payload["project_config"] is None
 
 
+async def test_a_tab_asks_for_its_own_part_and_gets_only_that(tmp_path: Path) -> None:
+    """`config` always rides along, because nothing renders without it."""
+    response = await settings_bundle(cast(Any, _request(tmp_path, parts="usage")))
+    payload = json.loads(response.text or "")
+    assert set(payload) == {"config", "usage", "errors"}
+    assert payload["usage"]["enabled"] is False
+
+    response = await settings_bundle(cast(Any, _request(tmp_path, parts="provider")))
+    payload = json.loads(response.text or "")
+    assert set(payload) == {"config", "provider", "errors"}
+    assert payload["provider"]["secret"]["configured"] is False
+
+
+async def test_an_unknown_part_is_refused_rather_than_dropped(tmp_path: Path) -> None:
+    """Silently dropping it would hand the client a payload missing a key it
+    asked for, which reads exactly like a part that failed - and those need
+    different handling."""
+    response = await settings_bundle(cast(Any, _request(tmp_path, parts="usage,telemetry")))
+
+    assert response.status == 400
+    payload = json.loads(response.text or "")
+    assert payload["code"] == "unknown_bundle_part"
+    assert "telemetry" in payload["error"]
+    assert "usage" in payload["known"]
+
+
 async def test_bundle_degrades_a_failed_part_to_null_instead_of_failing(tmp_path: Path) -> None:
-    response = await settings_bundle(cast(Any, _request(tmp_path, usage_fails=True)))
+    request = _request(tmp_path, usage_fails=True, parts="usage,keybindings")
+    response = await settings_bundle(cast(Any, request))
 
     assert response.status == 200
     payload = json.loads(response.text or "")
