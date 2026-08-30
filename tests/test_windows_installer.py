@@ -64,6 +64,23 @@ def script_text() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+def section(name: str) -> str:
+    """The body of one `.iss` section, addressed by its own header *line*.
+
+    `text.split("[Registry]")` is what these tests used to do, and it broke the
+    moment the script's prologue explained one: the comment "the `[Registry]`
+    entry adds `preservestringtype`" appears above the section it describes, so
+    the split returned a slice of prose and the assertion that followed failed as
+    a bare `StopIteration` two lines later rather than as "the section is not
+    there". Anchoring on the line is what makes the script free to document
+    itself.
+    """
+    header = "\n" + name + "\n"
+    parts = script_text().split(header, 1)
+    assert len(parts) == 2, f"{name} is not a section header line in {SCRIPT}"
+    return parts[1].split("\n[", 1)[0]
+
+
 @pytest.fixture(autouse=True)
 def _icon_that_exists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point `build_installer.ICON` at a file, because the real one is build output.
@@ -242,12 +259,209 @@ def test_uninstall_removes_only_a_login_value_that_names_this_install() -> None:
     # install, and a second install must not have its login entry stripped by
     # this one's uninstaller. Read from the directive rather than the whole file,
     # because the comment beside it names the flag it is refusing.
-    registry = text.split("[Registry]", 1)[1].split("\n[", 1)[0]
-    directive = next(line for line in registry.splitlines() if line.startswith("Root:"))
-    assert "uninsdeletevalue" not in directive
+    registry = section("[Registry]")
+    directives = [line for line in registry.splitlines() if line.startswith("Root:")]
+    assert directives, "the [Registry] section has no directives"
+    for directive in directives:
+        assert "uninsdeletevalue" not in directive
     assert "procedure CurUninstallStepChanged" in text
     assert "if Pos(Lowercase(Root), Lowercase(Existing)) > 0 then" in text
     assert "RegDeleteValue(HKCU," in text
+
+
+# --- the console client and PATH ----------------------------------------------
+
+
+def test_the_installer_carries_the_console_client_as_a_third_sibling_bundle() -> None:
+    """`swe-mux.exe` cannot be the command someone types, so a third bundle ships.
+
+    A GUI-subsystem executable has no stdout and no stderr at all, and
+    `desktop.main` dispatches only `--daemon-child`, `--supervisor-child` and two
+    allowlisted `-m` modules - so putting `{app}\\swe-mux` on PATH would publish a
+    window opener under a name someone types expecting a session table.
+    """
+    files = section("[Files]")
+    assert 'Source: "{#AppSource}\\swe-mux-cli\\*"; DestDir: "{app}\\swe-mux-cli"' in files
+    # Its own directory, not the app bundle's: a `swemux` sitting in a task
+    # terminal would otherwise hold `{app}\swe-mux` open against the
+    # [InstallDelete] an upgrade runs and against the updater's staged swap.
+    assert 'DestDir: "{app}\\swe-mux"' in files
+    assert build_installer.CLI_BUNDLE == "swe-mux-cli"
+
+
+def test_the_client_bundle_is_installed_even_when_the_path_task_is_declined() -> None:
+    """Presence and reachability are different things, and the task governs one.
+
+    A user who unticks the PATH task still has the commands and can run them by
+    full path; `swemux doctor` says where they are. Gating the [Files] entry on
+    the task would make declining a PATH edit uninstall the client.
+    """
+    entry = next(
+        line
+        for line in section("[Files]").splitlines()
+        if "swe-mux-cli" in line and line.startswith("Source:")
+    )
+    assert "Tasks:" not in entry
+
+
+def test_the_path_edit_is_offered_as_a_task_and_says_a_new_terminal_is_needed() -> None:
+    """Opt-out, not imposed - and honest about the one thing it cannot fix.
+
+    `ChangesEnvironment=yes` broadcasts WM_SETTINGCHANGE, which reaches Explorer
+    and everything started from it afterwards and cannot reach a console that is
+    already open. No mechanism can, so the text says so.
+    """
+    text = script_text()
+    task = next(line for line in text.splitlines() if line.startswith('Name: "addtopath"'))
+    # Ticked by default, unlike the two shortcut tasks: every other way of
+    # installing swe-mux puts these commands on PATH, and this is what makes the
+    # installer match (ROADMAP Phase 23 exit criteria).
+    assert "Flags: unchecked" not in task
+    assert "new terminal" in task
+    assert "ChangesEnvironment=yes" in text
+
+
+def test_the_path_entry_writes_one_directory_into_the_user_environment() -> None:
+    """Per-user, so it needs no elevation - which is what the rest of the installer is."""
+    entry = next(
+        line
+        for line in section("[Registry]").splitlines()
+        if line.startswith("Root:") and 'Subkey: "Environment"' in line
+    )
+    assert "Root: HKCU;" in entry
+    assert 'ValueName: "Path"' in entry
+    assert "Tasks: addtopath" in entry
+    # The type is preserved, so a PATH holding `%USERPROFILE%\bin` stays
+    # REG_EXPAND_SZ and keeps expanding; `expandsz` applies only when the value
+    # has to be created.
+    assert "Flags: preservestringtype" in entry
+    assert "ValueType: expandsz" in entry
+
+
+def test_the_path_entry_is_idempotent_by_a_check_rather_than_by_hope() -> None:
+    """Repeated installs and every upgrade must add nothing and grow nothing.
+
+    Inno skips a [Registry] entry entirely when its Check returns False, so the
+    refusal is the whole mechanism. The containment test is delimited on both
+    ends, so a neighbouring `...\\swe-mux-cli-old` is not mistaken for a match.
+    """
+    text = script_text()
+    entry = next(
+        line
+        for line in section("[Registry]").splitlines()
+        if line.startswith("Root:") and 'Subkey: "Environment"' in line
+    )
+    assert "Check: NeedsCliOnPath" in entry
+    assert "function NeedsCliOnPath(): Boolean;" in text
+    assert "Result := not PathContainsDir(CurrentUserPath(), CliDir());" in text
+    assert "Pos(';' + Lowercase(Dir) + ';', ';' + Lowercase(Paths) + ';') > 0" in text
+
+
+def test_the_path_write_refuses_rather_than_truncating() -> None:
+    """A PATH cut to fit is other tools failing to resolve, with nothing saying so.
+
+    Returning the existing value makes the [Registry] write a no-op, which is the
+    safe outcome. It is always logged and only shown as a dialog when a person is
+    there, because `/VERYSILENT` is a supported way to install this and a MsgBox
+    in that mode is an unattended install that waits forever for a click.
+    """
+    text = script_text()
+    assert "MaxPathLength = 32767;" in text
+    assert "if Length(Candidate) > MaxPathLength then begin" in text
+    assert "if not WizardSilent then" in text
+    assert "Log(Complaint);" in text
+
+
+def test_uninstall_takes_back_its_own_path_entry_and_nothing_adjacent() -> None:
+    """Scoped by exact directory, like the login value, and for the same reason.
+
+    A second swe-mux install, or an entry a user added by hand, is not this
+    uninstaller's to delete. `uninsdeletevalue` on `Path` would delete the user's
+    entire PATH, which is why the removal is code rather than a flag.
+    """
+    text = script_text()
+    assert "procedure RemoveCliDirFromPath;" in text
+    # Rebuilt entry by entry, comparing each against our directory alone.
+    assert "if Lowercase(Entry) <> Dir then begin" in text
+    # `First` rather than `Rebuilt = ''`, so a leading or trailing empty entry -
+    # which PATH reads as the current directory - stays exactly where it was.
+    assert "First := True;" in text
+    assert "RegWriteStringValue(HKCU, EnvironmentKey, PathValueName, Rebuilt);" in text
+
+
+def test_the_uninstaller_removes_the_path_entry_before_anything_else() -> None:
+    """Unconditional and scoped, so an install whose task was never ticked is a no-op.
+
+    Reading the value and finding nothing to remove is the correct answer there;
+    gating on whether the task had been selected would need state the uninstaller
+    does not have.
+    """
+    body = script_text().split("procedure CurUninstallStepChanged", 1)[1]
+    assert body.index("RemoveCliDirFromPath;") < body.index("RegQueryStringValue(HKCU,")
+
+
+def test_the_path_value_is_read_unexpanded_and_written_back_type_preserving() -> None:
+    """Both halves verified against Inno's own source, not assumed.
+
+    `RegQueryStringValue` accepts REG_SZ and REG_EXPAND_SZ and returns the raw
+    data for both (`Shared.CommonFunc.pas`: a `RegQueryValueEx` with no expansion
+    step), and `RegWriteStringValue` queries the existing type and writes
+    REG_EXPAND_SZ when it finds one (`Setup.ScriptFunc.pas`). If either were
+    otherwise, a user with `%USERPROFILE%\\bin` on PATH would have it flattened to
+    this machine's answer by an uninstall - so the reasoning is recorded where the
+    next reader will look for it.
+    """
+    text = script_text()
+    assert "RegQueryStringValue(HKCU, EnvironmentKey, PathValueName, Result)" in text
+    assert "returns REG_EXPAND_SZ data **unexpanded**" in text
+    assert "Setup.ScriptFunc.pas" in text
+
+
+def test_the_path_cycle_is_wired_into_ci_and_refuses_to_run_unasked() -> None:
+    """The one thing in this file that is evidence rather than a text assertion.
+
+    Everything else here reads the `.iss` as source, because the suite cannot run
+    ISCC - so a `[Registry]` line naming the right key can still duplicate an
+    entry on upgrade or flatten a `%USERPROFILE%` on uninstall and nothing here
+    would know. `ci.yml`'s `installer-cycle` job is where that is actually
+    exercised, and a job nobody runs is not a verified cycle: this fails if the
+    wiring is dropped.
+
+    The refusal is asserted for the opposite reason. The script rewrites the
+    current user's `PATH`, so it must be impossible to run by accident - on a
+    developer machine or from a worktree - and the guard is the only thing
+    standing between "somebody ran the CI script locally" and a PATH they have to
+    reconstruct by hand.
+    """
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+    assert "installer-cycle:" in workflow
+    assert "packaging/installer/verify_path_cycle.ps1" in workflow
+    assert "build_desktop.py --cli-only" in workflow
+    assert "build_installer.py --dist dist" in workflow
+    assert "SWE_MUX_INSTALLER_CYCLE" in workflow
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "packaging"
+        / "installer"
+        / "verify_path_cycle.ps1"
+    ).read_text(encoding="utf-8")
+    assert "if ($env:SWE_MUX_INSTALLER_CYCLE -ne '1') {" in script
+    # Restored in a `finally`, so an interrupted run does not leave the seeded
+    # test value behind on whatever machine it was interrupted on.
+    assert "finally {" in script and "Set-UserPath $originalValue $originalKind" in script
+
+
+def test_a_missing_client_bundle_is_refused_before_the_compiler_runs(
+    tmp_path: Path,
+) -> None:
+    """Packaging without it produces an installer that puts nothing on PATH."""
+    make_bundle(tmp_path / "dist" / "swe-mux")
+    (tmp_path / "dist" / "swe-mux-supervisor").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="swe-mux-cli"):
+        build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
 
 
 # --- per-user, upgradeable, uninstallable -------------------------------------
@@ -270,9 +484,10 @@ def test_an_upgrade_replaces_the_bundles_rather_than_merging_into_them() -> None
     assert "AppId={{#AppGuid}" in text
     # A PyInstaller onedir tree is not additive: a dropped dependency's stale
     # `.pyd` would still be importable if the new files were copied over the old.
-    install_delete = text.split("[InstallDelete]", 1)[1].split("[", 1)[0]
+    install_delete = section("[InstallDelete]")
     assert 'Type: filesandordirs; Name: "{app}\\swe-mux"' in install_delete
     assert 'Type: filesandordirs; Name: "{app}\\swe-mux-supervisor"' in install_delete
+    assert 'Type: filesandordirs; Name: "{app}\\swe-mux-cli"' in install_delete
     # A running app locks its own exe; Restart Manager is what closes it first.
     assert "CloseApplications=yes" in text
 
@@ -287,9 +502,10 @@ def test_the_ready_page_says_what_an_upgrade_costs_before_it_starts() -> None:
 
 
 def test_uninstall_leaves_no_bundle_and_no_empty_install_directory() -> None:
-    uninstall = script_text().split("[UninstallDelete]", 1)[1].split("[Code]", 1)[0]
+    uninstall = section("[UninstallDelete]")
     assert 'Name: "{app}\\swe-mux"' in uninstall
     assert 'Name: "{app}\\swe-mux-supervisor"' in uninstall
+    assert 'Name: "{app}\\swe-mux-cli"' in uninstall
     assert 'Type: dirifempty; Name: "{app}"' in uninstall
 
 
@@ -299,7 +515,7 @@ def test_no_pascal_brace_comment_survives_in_the_code_section() -> None:
     # prose compiles as code. ISCC reports it as "'BEGIN' expected" on the line
     # *after* the comment, which is nowhere near the mistake; this fails on the
     # comment itself. (Measured: it cost one compile round-trip to find.)
-    code = script_text().split("[Code]", 1)[1]
+    code = script_text().split("\n[Code]\n", 1)[1]
     offenders = [
         line
         for line in code.splitlines()
@@ -337,6 +553,7 @@ def test_an_unset_sign_tool_adds_nothing_to_the_compiler_command(
 
     make_bundle(tmp_path / "dist" / "swe-mux")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir(parents=True)
+    (tmp_path / "dist" / "swe-mux-cli").mkdir(parents=True)
     (tmp_path / "out").mkdir()
     monkeypatch.setattr(build_installer, "find_iscc", lambda: Path("iscc"))
     monkeypatch.setattr(build_installer.subprocess, "run", capture)
@@ -363,6 +580,7 @@ def test_a_configured_sign_tool_registers_and_switches_the_block_on(
 
     make_bundle(tmp_path / "dist" / "swe-mux")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir(parents=True)
+    (tmp_path / "dist" / "swe-mux-cli").mkdir(parents=True)
     (tmp_path / "out").mkdir()
     monkeypatch.setattr(build_installer, "find_iscc", lambda: Path("iscc"))
     monkeypatch.setattr(build_installer.subprocess, "run", capture)
@@ -407,6 +625,7 @@ def test_every_path_define_reaches_the_compiler_absolute(
 
     make_bundle(tmp_path / "dist" / "swe-mux")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir(parents=True)
+    (tmp_path / "dist" / "swe-mux-cli").mkdir(parents=True)
     (tmp_path / "out").mkdir()
     monkeypatch.setattr(build_installer, "find_iscc", lambda: Path("iscc"))
     monkeypatch.setattr(build_installer.subprocess, "run", capture)
@@ -452,6 +671,7 @@ def test_a_missing_icon_is_named_rather_than_left_to_iscc(
     # number, which names neither the file nor the command that makes it.
     make_bundle(tmp_path / "dist" / "swe-mux")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir()
+    (tmp_path / "dist" / "swe-mux-cli").mkdir()
     monkeypatch.setattr(build_installer, "ICON", tmp_path / "absent.ico")
     with pytest.raises(SystemExit, match="build_desktop.py"):
         build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
@@ -462,6 +682,7 @@ def test_a_bundle_that_describes_nothing_cannot_be_packaged(tmp_path: Path) -> N
     app.mkdir(parents=True)
     (app / "swe-mux.exe").write_bytes(b"MZ")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir()
+    (tmp_path / "dist" / "swe-mux-cli").mkdir()
     with pytest.raises(SystemExit, match="bundle.json"):
         build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
 
@@ -479,6 +700,7 @@ def test_a_bundle_built_for_another_host_is_refused(
     monkeypatch.setattr(build_installer, "release_platform_tag", lambda: "macos-arm64")
     make_bundle(tmp_path / "dist" / "swe-mux", platform=WINDOWS)
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir()
+    (tmp_path / "dist" / "swe-mux-cli").mkdir()
     with pytest.raises(SystemExit, match="build the installer on the host that built it"):
         build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
 
@@ -495,6 +717,7 @@ def test_a_host_with_no_installer_of_its_own_is_told_so(
     monkeypatch.setattr(build_installer, "release_platform_tag", lambda: "linux-x64")
     make_bundle(tmp_path / "dist" / "swe-mux", platform="linux-x64")
     (tmp_path / "dist" / "swe-mux-supervisor").mkdir()
+    (tmp_path / "dist" / "swe-mux-cli").mkdir()
     with pytest.raises(SystemExit, match="there is no installer for linux-x64"):
         build_installer.build_installer(tmp_path / "dist", tmp_path / "out")
 

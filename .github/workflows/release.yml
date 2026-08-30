@@ -234,11 +234,13 @@ jobs:
       - name: Install the build closure
         run: uv sync --extra desktop --extra voice-local --group package
 
-      # Builds the frontend into the package, runs PyInstaller for both
-      # `dist/swe-mux` and `dist/swe-mux-supervisor`, verifies the bundle's
-      # license posture, and writes `bundle.json`. Nothing here passes
-      # `--skip-supervisor`: the installer carries both bundles, and a runner has
-      # no live supervisor whose exe could be locked against the rebuild.
+      # Builds the frontend into the package, runs PyInstaller for all three of
+      # `dist/swe-mux`, `dist/swe-mux-supervisor` and `dist/swe-mux-cli`, verifies
+      # the app bundle's license posture and the client's membership, smokes the
+      # client's launchers, and writes `bundle.json`. Nothing here passes
+      # `--skip-supervisor` or `--skip-cli`: the installer carries all three, and a
+      # runner has no live supervisor whose exe could be locked against the
+      # rebuild and no `swemux` sitting in a terminal holding the client's.
       - name: Build the desktop bundles
         run: uv run python packaging/build_desktop.py
 

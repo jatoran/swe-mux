@@ -155,8 +155,13 @@ Its contract:
   top-level `swe-mux/` directory carrying the `bundle.json` the updater reads). An artifact
   named anything else is invisible to every installed copy, which reports "no desktop bundle
   for this platform" rather than installing the wrong thing.
-  Today `release.yml` publishes only the wheel and sdist; the desktop job is the open half
-  (`.docs/development/ROADMAP.md` Phase 11).
+  `release.yml`'s `build-desktop` job produces it, alongside the per-file hash manifest the
+  updater plans a delta against and the Windows installer
+  (`update_install.release_installer_name`). It builds **three** bundles for that: the app,
+  the PTY supervisor, and - since 0.1.4 - `dist/swe-mux-cli`, the console client the installer
+  puts on `PATH`. Only the archive and the installer are published; the client bundle ships
+  inside the installer and is not a release artifact of its own, so nothing new has to be
+  looked up by name (`.docs/design/features/desktop-shell.md`).
 - **A release that changes `supervisor.PROTOCOL_VERSION` must say so in its release notes**,
   because the updater refuses to install it: swapping the app bundle alone would leave a
   daemon that cannot talk to the running supervisor, and refreshing the supervisor reaps
@@ -242,8 +247,17 @@ script's own directory, so `[Files]` searched `packaging/installer/dist/` for a 
 repository root. `cwd=ROOT` on the subprocess looks like it should prevent that and does not.
 The `.iss` header had documented `AppSource` as absolute all along.
 `tests/test_windows_installer.py` now fails when any `/D` path define is relative. Note what the
-suite still cannot do: it reads the `.iss` as source text and never compiles it, so a real ISCC
-compile happens for the first time in CI on a tag.
+suite still cannot do: it reads the `.iss` as source text and never compiles it.
+
+**That gap is now half closed, and it is worth knowing which half.** `ci.yml`'s
+`installer-cycle` job compiles the installer on every push - real ISCC, real client bundle,
+stubs for the app and supervisor bundles it asks nothing about - and then runs the whole
+install → upgrade → uninstall cycle against `HKCU\Environment\Path`
+(`packaging/installer/verify_path_cycle.ps1`). So a compile error, a duplicated PATH entry on
+upgrade, or a `%USERPROFILE%` flattened by an uninstall all fail before a tag. What still
+happens for the first time on a tag is the compile over the **real** 120 MB app bundle: a
+`[Files]` path that only exists in a real build, or an `lzma2/max` pass over several hundred
+megabytes, is not exercised by the cycle job.
 
 **A push-triggered Pages deploy can publish content older than itself.**
 `pages.yml` stages its bytes at checkout and deploys them after the `pages` concurrency queue

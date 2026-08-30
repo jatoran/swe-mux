@@ -538,9 +538,53 @@ person with no shortcut, no tray, and no idea where anything went.
   `supervisor_client.dedicated_supervisor_exe()` resolves the supervisor as
   `<exe>\..\..\swe-mux-supervisor\swe-mux-supervisor.exe`, so the installer reproduces
   `dist/`'s shape exactly: `{app}\swe-mux\swe-mux.exe` beside
-  `{app}\swe-mux-supervisor\swe-mux-supervisor.exe`. Flattening them into `{app}` resolves
+  `{app}\swe-mux-supervisor\swe-mux-supervisor.exe` and `{app}\swe-mux-cli\swemux.exe`.
+  Flattening them into `{app}` resolves
   one directory too high and the daemon falls back to `--supervisor-child`, silently
   re-creating the file-lock collision the separate bundle exists to prevent.
+  `install_location.FROZEN_SIBLING_BUNDLES` reads the same layout from the other end, so a
+  launcher in any of the three describes the whole install rather than its own directory.
+- **The command-line client is a third bundle, and it is what goes on `PATH`** (ROADMAP Phase
+  23). `packaging/swe_mux_cli.spec` builds `dist/swe-mux-cli` carrying `swemux.exe` and
+  `mux.exe` - `console=True`, from one Analysis, two `EXE()` entries into one `COLLECT`.
+  Three decisions, each one a refutation of the obvious version:
+  - **`{app}` itself could not be put on `PATH`.** `swe-mux.exe` is a GUI-subsystem process
+    with no stdout and no stderr at all (which is why `desktop.redirect_gui_streams` exists),
+    and `desktop.main` dispatches only `--daemon-child`, `--supervisor-child` and two
+    allowlisted `-m` modules. That would publish a window opener under a name someone types
+    expecting a session table.
+  - **The client could not live in the app bundle.** A `swemux` sitting in a task terminal is
+    exactly where a CLI on `PATH` is used, and it would hold `{app}\swe-mux` open against the
+    `[InstallDelete]` an upgrade runs and against the updater's staged swap - the hazard
+    `swe_mux.spec`'s `# No second executable` comment records. Its own directory means the
+    only tree a running client can lock is its own.
+  - **The daemon is excluded from it by name, and the number is why.** The first build was
+    **143 MiB**, carrying `ctranslate2`, `hf_xet`, `mypy`, `regex`, `setuptools`, `watchfiles`,
+    `yaml` and `cryptography`, because `cli install-shortcut` imports `swe_mux.shortcuts`,
+    which reaches `swe_mux.desktop` for `create_tray_image`, which imports `swe_mux.__main__`,
+    which imports `swe_mux.server`. Excluding `swe_mux.desktop`, `swe_mux.__main__` and
+    `swe_mux.server` makes it **28 MiB**: two 3.5 MB executables plus `psutil` and `win32`
+    (0.3 MB under `_internal/`). Cutting the chain is sound rather than a size trick -
+    `shortcuts.ensure_icon` returns before that import for a frozen target and its import is
+    already inside an `except Exception`. `build_desktop.verify_cli_bundle_contents` asserts
+    the membership and `smoke_cli_bundle` runs the built launchers, so a reachable import the
+    excludes turned into a `ModuleNotFoundError` fails the build.
+
+  The daemon entry (`swemuxd`/`muxd`) is deliberately **not** in it, and 143 MiB is the
+  measurement of that too: `swe_mux.__main__` imports `swe_mux.server`, so a daemon launcher
+  is the whole application a second time, beside an app bundle that already contains it and
+  already runs it as `--daemon-child`. A `swemuxd` in a terminal would also be a long-lived
+  process holding a tree the updater renames. `swemux` covers what a terminal actually needs -
+  `ls`, `spawn`, `send`, `kill`, `reload-daemon`, `doctor`, `update`, `ui-overlay`, `resume`.
+- **`swemux doctor` from the client answers about the client.** Three checks ask "can the
+  daemon start here", and on a correct installer install they reported `install.imports`,
+  `install.frontend` and `install.pty` as **critical failures**, each with a remedy telling the
+  user to reinstall a package that was not broken. `InstallLocation.client_bundle` - decided by
+  which executable is running, since the two bundles share a package, a version and a parent -
+  turns those three into `unavailable` rows naming the app bundle beside it. `install.path`
+  branches too: the frozen answer is "no scripts directory needs to be on PATH", which is right
+  for the tray-launched app and would tell somebody whose `swemux` is not found that nothing is
+  wrong.
 - **An upgrade deletes the old bundles before writing the new ones** (`[InstallDelete]`), and
   keeps one `AppId`. A PyInstaller onedir tree is not additive: a dependency dropped between
   releases leaves an importable stale `.pyd` behind, and copying over the top produces a tree
@@ -563,6 +607,52 @@ person with no shortcut, no tray, and no idea where anything went.
 - **The uninstaller removes that value only when it names `{app}`**, rather than using
   `uninsdeletevalue`: the tray can turn the toggle on after install, and one install's
   uninstaller must not strip another's login entry.
+- **The `PATH` edit is one directory in `HKCU\Environment\Path`, and it is opt-out.**
+  `addtopath` is a `[Tasks]` entry, ticked by default unlike the two shortcut tasks: those
+  create artifacts the user did not ask for, while this only makes an already-installed
+  command answer to its own name - which is what `pip`, `pipx` and `uv tool` all do already,
+  and closing that asymmetry is the Phase 23 exit criterion. Per-user, so it needs no
+  elevation, matching the rest of the install. Four properties, each one a way this goes wrong
+  and each guarded:
+  - **Idempotent by refusal.** `Check: NeedsCliOnPath` returns False when the exact directory
+    is present, and Inno skips a `[Registry]` entry whose Check is False - so repeated
+    installs and every upgrade add nothing and the value cannot grow by one directory per
+    release. The containment test is delimited at both ends, so a neighbouring
+    `...\swe-mux-cli-old` is not read as a match.
+  - **The existing value survives byte for byte, type included.** Verified against Inno's
+    source rather than assumed: `RegQueryStringValue` returns REG_EXPAND_SZ data
+    **unexpanded** (`Shared.CommonFunc.pas` - a `RegQueryValueEx` with no expansion step) and
+    `RegWriteStringValue` queries the existing type and writes REG_EXPAND_SZ when it finds one
+    (`Setup.ScriptFunc.pas`); the `[Registry]` entry carries `preservestringtype` for the same
+    reason. Writing a REG_EXPAND_SZ `PATH` back as REG_SZ is the failure nobody notices - every
+    `%VAR%` entry in it becomes literal text and those directories silently stop resolving for
+    every program on the machine.
+  - **Refused rather than truncated.** A composed value over 32767 characters is not written;
+    it is logged, and shown as a dialog only when `WizardSilent()` is false, because
+    `/VERYSILENT` is a supported install and a MsgBox there hangs forever.
+  - **Uninstall removes exactly its own entry.** `RemoveCliDirFromPath` rebuilds the value
+    entry by entry, dropping only the one equal to this `{app}`'s client directory, so a second
+    swe-mux install and a hand-added neighbour both survive - and `First` rather than an
+    empty-accumulator test keeps a leading or trailing empty entry (which `PATH` reads as the
+    current directory) exactly where it was. `uninsdeletevalue` on `Path` would delete the
+    user's entire `PATH`, which is why this is code and not a flag. The known gap is
+    deliberate: an upgrade that *moves* the install directory orphans the old entry rather
+    than hunting it down, because a greedy removal that eats an adjacent entry is worse than
+    a stale one.
+  - **`ChangesEnvironment=yes`** makes Setup broadcast `WM_SETTINGCHANGE` after install and
+    uninstall, so Explorer and everything launched from it afterwards see the change. A
+    console that is *already* open never will - no mechanism can do that - so the task
+    description and the Ready page say so in words.
+- **The `PATH` cycle is exercised in CI, not asserted about.** `tests/test_windows_installer.py`
+  reads the `.iss` as text because the suite cannot run ISCC, and a `[Registry]` line naming
+  the right key can still duplicate on upgrade or flatten a `%USERPROFILE%` on uninstall.
+  `ci.yml`'s `installer-cycle` job builds the real client bundle, stubs the other two,
+  compiles the installer, and runs `packaging/installer/verify_path_cycle.ps1`: it seeds a
+  REG_EXPAND_SZ `PATH` holding `%USERPROFILE%\bin` and a deliberate `...\swe-mux-cli-old`
+  prefix collision, then diffs the value after install, after installing over the top, and
+  after uninstall, restoring the original in a `finally`. The script refuses to start without
+  `SWE_MUX_INSTALLER_CYCLE=1`, because it rewrites the current user's `PATH` and is meant for
+  a runner that is thrown away.
 - **`packaging/swe-mux.ico` is gitignored build output**, rendered by `build_desktop` from
   `desktop.create_tray_image` on every build. A fresh clone has none, so `build_installer.py`
   refuses with the command that makes it rather than letting ISCC report a bare "The system
@@ -585,8 +675,18 @@ person with no shortcut, no tray, and no idea where anything went.
   copy has neither of, so `UpdateInstaller._preflight` refuses with `no_swap_tool` before
   anything is downloaded. Upgrading such an install means running the new installer, which is
   what the Add/Remove Programs entry and the same-`AppId` in-place upgrade are for.
-- `release.yml`'s `build-desktop` job builds both artifacts on `windows-latest` and uploads
-  them as the `desktop` artifact; `github-release` and `update-manifest` download it into the
+- **The portable archive carries the app bundle only, so a source-mode in-app update leaves
+  the client behind** - exactly as it already leaves `dist/swe-mux-supervisor` behind, and for
+  the same reason: `ARCHIVE_ROOT` is one `swe-mux/` directory and the staged swap replaces one
+  directory. Staleness is fatal for the supervisor (a protocol mismatch) and is gated for it;
+  for the client it is not, because the client is an HTTP client against the daemon's own
+  routes. It is refreshed the way it is installed: by running the newer installer, or with
+  `packaging/build_desktop.py --cli-only` in a checkout. A staged redeploy passes `--skip-cli`
+  deliberately - `dist/swe-mux-cli` has no staging path, so building it would write into
+  `dist/` during the one operation whose design is to touch nothing there until the swap.
+- `release.yml`'s `build-desktop` job builds all three bundles on `windows-latest` and uploads
+  the portable archive and the installer as the `desktop` artifact; `github-release` and
+  `update-manifest` download it into the
   same `dist/` the wheel lands in, so the manifest step's directory enumeration picks both up
   with real hashes and no name list to keep in step. Inno Setup ships on the runner image
   (its own image test asserts `Get-Command iscc` resolves); the workflow installs it only if
@@ -655,8 +755,14 @@ person with no shortcut, no tray, and no idea where anything went.
 - Bundle entries/spec: `packaging/desktop_entry.py`, `packaging/swe_mux.spec`
 - Reproducible build: `packaging/build_desktop.py`
 - Release archive writer (the artifact-name contract): `packaging/package_desktop_release.py`
+- Console client bundle: `packaging/swe_mux_cli.spec`, `packaging/cli_entry.py`
+- Client install shape (sibling bundles, `client_bundle`): `src/swe_mux/install_location.py`,
+  `src/swe_mux/doctor_local.py`
 - Windows installer: `packaging/installer/swe-mux.iss`, `packaging/build_installer.py`
+- Installer PATH cycle (CI, real install/upgrade/uninstall):
+  `packaging/installer/verify_path_cycle.ps1`, `.github/workflows/ci.yml`
 - Installer tests: `tests/test_windows_installer.py`
+- Client bundle tests: `tests/test_bundle_contents.py`
 - Frozen-app updater: `src/swe_mux/update_install.py`, `src/swe_mux/routes/update.py`
 - Frontend overlay: `src/swe_mux/frontend_overlay.py`, `src/swe_mux/routes/frontend.py`,
   `packaging/build_frontend_overlay.py`, `frontend/src/frontendOverlay.ts`
