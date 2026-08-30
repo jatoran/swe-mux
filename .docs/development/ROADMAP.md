@@ -6118,7 +6118,8 @@ here and does not there.
   - **143 MiB, then 28 MiB.** The first build carried the entire application, because
     `cli install-shortcut` imports `swe_mux.shortcuts`, which reaches `swe_mux.desktop` for
     `create_tray_image`, which imports `swe_mux.__main__`, which imports `swe_mux.server`.
-    Excluding those three by name leaves two 3.5 MB executables plus `psutil` and `win32`.
+    Excluding those three by name leaves two 3.5 MB executables plus `psutil`, which is the
+    only third-party package in it.
     That number is also the answer to whether the bundle carries the daemon entry: it does
     not, because `swemuxd` **is** that 143 MiB, beside an app bundle that already contains the
     daemon and already runs it as `--daemon-child`.

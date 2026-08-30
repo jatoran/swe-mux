@@ -89,6 +89,26 @@ PROJECT = ROOT.parent
 # verify_cli_bundle_contents` asserts the resulting membership and
 # `smoke_cli_bundle` runs the built executable, so a reachable import that this
 # list turned into a runtime `ModuleNotFoundError` fails the build.
+#
+# `win32evtlogutil` and `win32evtlog` are the whole of pywin32's presence here,
+# and they arrive from the **standard library** rather than from anything this
+# project wrote: `logging.handlers` defines `NTEventLogHandler`, whose
+# `__init__` imports the pair, and PyInstaller follows an import inside a
+# function body like any other. The client never writes to the NT event log.
+#
+# Cutting it is safe by construction, not by inspection of what happens to work:
+# the import sits inside `try: ... except ImportError:` in CPython's own
+# `logging/handlers.py`, so `import logging.handlers` needs nothing from pywin32
+# and even *constructing* the handler without it prints a notice and continues.
+# `swe_mux.supervisor` imports `logging.handlers` and is reachable from
+# `swemux doctor`, so this is a live path rather than a theoretical one.
+#
+# The measurement that forced it: this host collected `win32` and the runner
+# collected `win32` **and** `pywin32_system32`, because whether PyInstaller sees
+# pywin32's DLL directory as a separate top-level entry depends on the install
+# layout. Declaring both names would have encoded one runner's shape - the same
+# mistake as a size floor measured on one host. Excluding the import removes the
+# variance instead of describing it, and takes 3 MiB with it.
 EXCLUDES = [
     "PIL",
     "_tkinter",
@@ -109,6 +129,8 @@ EXCLUDES = [
     "tree_sitter",
     "tree_sitter_language_pack",
     "webview",
+    "win32evtlog",
+    "win32evtlogutil",
     "winpty",
 ]
 
