@@ -199,6 +199,20 @@ It is a real surface - anything that can reach the port can drive the page - so 
 ## Packaging
 
 - Runtime extra: `uv sync --extra desktop`.
+  Since ROADMAP Phase 24 (2026-08-30) an install that skipped it is not stuck with a
+  reinstall: Settings → General → **Desktop integration** acquires the shell closure over the
+  same pinned-hash path as the speech libraries (`swe_mux.desktop_runtime`, ~2.4 MB on
+  Windows - seven pure-Python distributions once the set difference excludes everything
+  base-reachable), and wires `swemux install-shortcut`'s machinery behind Install/Remove
+  buttons (`routes/desktop_integration.py`).
+  Three rules it carries: Windows only **by absence** (off Windows the endpoint answers
+  unsupported and nothing renders, before importability is even consulted); the tray needs a
+  process (re)start and every surface says so, because `desktop.main` starts it in its own
+  process - which now calls `desktop_runtime.activate_for_desktop` before importing
+  `pystray`/`webview`, so an acquired closure works on the next launch; and the closure's one
+  no-wheel dependency (`proxy-tools`, sdist only, imported unconditionally by pywebview) is
+  pinned as an sdist and **extracted, never built** - nothing from the archive is executed,
+  and an sdist that would need building is refused (`wheel_closure._extract_sdist`).
 - Build dependencies: `uv sync --extra desktop --extra voice-local --group package`.
   `--group package` is what brings the `g2p-model` group with it, and the build refuses without it
   (`build_desktop.REQUIRED_BUILD_GROUPS`).

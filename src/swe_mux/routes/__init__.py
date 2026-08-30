@@ -38,6 +38,7 @@ from . import (
     branch,
     clipboard,
     configurator,
+    desktop_integration,
     diagnostics,
     frontend,
     git,
@@ -104,6 +105,7 @@ ORDER = (
     agent_ingress,
     git,
     land,
+    desktop_integration,
     pty,
 )
 

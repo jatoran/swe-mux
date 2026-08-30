@@ -687,12 +687,21 @@ class DesktopRuntime:
         ledger(self.config.data_dir, f"webview remote debugging on 127.0.0.1:{port}")
 
     def run(self) -> None:
+        # An install that skipped the `desktop` extra may have acquired the
+        # shell closure through Settings -> Desktop integration (ROADMAP Phase
+        # 24); putting it on sys.path must happen before the imports below, and
+        # is inert everywhere else.
+        from .desktop_runtime import activate_for_desktop
+
+        activate_for_desktop(self.config.data_dir)
         try:
             import pystray
             import webview
         except ImportError as exc:
             raise RuntimeError(
-                "Desktop dependencies are missing. Install with: uv sync --extra desktop"
+                "Desktop dependencies are missing. Install with: uv sync --extra "
+                "desktop, or acquire them from Settings → General → Desktop "
+                "integration in the browser UI."
             ) from exc
 
         # A daemon that has not answered yet still gets a tray and a window: the

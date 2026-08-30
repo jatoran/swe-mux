@@ -248,6 +248,9 @@
   **And `uv run python packaging/generate_voice_pins.py --write`** if the change touches the
   `voice-local` extra, the `g2p-model` group, or anything they resolve, because the desktop app
   downloads that closure at first use and the pin table is what says which bytes are acceptable.
+  **And `uv run python packaging/generate_desktop_pins.py --write`** if the change touches the
+  `desktop` extra or anything it resolves, for the same reason
+  (`tests/test_desktop_wheels.py` is the parity gate).
   Both extras, because the closure walk is defined over `DISTRIBUTED_EXTRAS` and
   `--write` reads licenses out of what is actually installed. `voice-local` is
   optional to install and mandatory to build from, and the reason inverted on 2026-08-29:
