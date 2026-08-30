@@ -1,9 +1,10 @@
-"""Compile the Windows installer from two already-built desktop bundles.
+"""Compile the Windows installer from three already-built desktop bundles.
 
-`build_desktop.py` produces `dist/swe-mux` and `dist/swe-mux-supervisor`;
+`build_desktop.py` produces `dist/swe-mux`, `dist/swe-mux-supervisor` and
+`dist/swe-mux-cli`;
 `package_desktop_release.py` turns the first into the portable archive the in-app
 updater consumes. This is the third artifact and the only one a person without
-Python can use: a single `.exe` that installs both bundles, registers in
+Python can use: a single `.exe` that installs all three bundles, registers in
 Add/Remove Programs, and can be upgraded over.
 
     uv run python packaging/build_installer.py
@@ -59,11 +60,16 @@ from swe_mux.update_install import release_installer_name, release_platform_tag 
 INSTALLER_SCRIPT = ROOT / "packaging" / "installer" / "swe-mux.iss"
 ICON = ROOT / "packaging" / "swe-mux.ico"
 
-#: The two bundle directories the installer packs, relative to `--dist`. Named
+#: The three bundle directories the installer packs, relative to `--dist`. Named
 #: rather than globbed: a `dist/` that happens to hold `swe-mux.prev` from a
 #: rolled-back redeploy would otherwise be packaged into the release.
 APP_BUNDLE = "swe-mux"
 SUPERVISOR_BUNDLE = "swe-mux-supervisor"
+#: The console client (ROADMAP Phase 23), and the only bundle whose directory the
+#: installer puts on the user's ``PATH``. It is third rather than folded into the
+#: app bundle because a `swemux` running in a terminal would otherwise hold
+#: `{app}\swe-mux` open against the upgrade that is deleting it.
+CLI_BUNDLE = "swe-mux-cli"
 
 #: The environment variable that turns signing on. Absent means unsigned, which
 #: is a supported build rather than a degraded one.
@@ -120,12 +126,11 @@ def file_version(version: str) -> str:
 def build_installer(dist: Path, out: Path) -> Path:
     """Compile the installer for the bundles under `dist`, returning its path."""
     app = dist / APP_BUNDLE
-    supervisor = dist / SUPERVISOR_BUNDLE
-    for bundle in (app, supervisor):
+    for bundle in (app, dist / SUPERVISOR_BUNDLE, dist / CLI_BUNDLE):
         if not bundle.is_dir():
             raise SystemExit(
-                f"{bundle} does not exist. The installer carries both bundles, so "
-                "build them first with `python packaging/build_desktop.py`."
+                f"{bundle} does not exist. The installer carries all three bundles, "
+                "so build them first with `python packaging/build_desktop.py`."
             )
     if not ICON.is_file():
         # `packaging/swe-mux.ico` is gitignored build output, not a checked-in

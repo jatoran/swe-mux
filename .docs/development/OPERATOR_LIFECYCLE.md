@@ -103,28 +103,41 @@ Once it is there, run it and take the defaults; nothing about it needs a command
 What it does, stated so an uninstall or a support question has something to check against:
 
 - Installs **per-user with no elevation prompt**, into `%LOCALAPPDATA%\Programs\swe-mux` by default. There is no per-machine mode and no `/ALLUSERS`; see the note below for why that is deliberate.
-- Writes **two sibling bundles** under that directory - `swe-mux\swe-mux.exe` and `swe-mux-supervisor\swe-mux-supervisor.exe` - which is the layout the daemon resolves the PTY supervisor through. Do not move one without the other.
+- Writes **three sibling bundles** under that directory - `swe-mux\swe-mux.exe`, `swe-mux-supervisor\swe-mux-supervisor.exe`, and `swe-mux-cli\swemux.exe` - which is the layout the daemon resolves the PTY supervisor through, and the layout each launcher reads to describe the whole install rather than its own directory. Do not move one without the others.
 - Creates a **Start Menu** entry always, and a **Desktop shortcut** and a **run-at-sign-in** registration only if you tick those boxes. Both are unticked by default.
 - Registers in **Add/Remove Programs** as `swe-mux <version>` with a working uninstaller at `<install dir>\unins000.exe`.
-- Puts **nothing on `PATH`**, and an installer-managed copy therefore has **no `swemux` command at all** - no `swemux`, no `swemuxd`, no `mux`, no `muxd`. This is a real gap between the two install kinds rather than a preference: a PyPI install writes all of them, an installer install writes none.
+- Adds **one directory to your user `PATH`** - `<install dir>\swe-mux-cli`, which holds `swemux.exe` and `mux.exe`. This is the `addtopath` task, ticked by default and unticked if you would rather your `PATH` were not touched; the commands are installed either way and can be run by full path. Open a **new** terminal afterwards: Setup broadcasts the environment change, which reaches Explorer and anything started from it, and cannot reach a console window that is already open.
+- **Does not install `swemuxd`/`muxd`.** The daemon is the app: the frozen `swe-mux.exe` runs it as a child, and a separate daemon launcher would be a second copy of the whole application (measured 2026-08-29: 143 MiB against the client's 28, because `swe_mux.__main__` imports `swe_mux.server`). To start a daemon from a terminal, install the wheel alongside - or just launch the app, which starts one.
 
-**Why the installer cannot simply add its directory to `PATH`, measured 2026-08-29.**
-The gap is not the missing `PATH` entry; it is that there is nothing there to point at.
-`packaging/swe_mux.spec` builds exactly one executable, `swe-mux.exe`, and builds it with `console=False` - the windowed launcher, whose whole purpose is to open a native window without a console behind it.
+**Why it is a third bundle rather than `{app}` on `PATH`, measured 2026-08-29.**
+The first attempt at this was refused, and the refusal is worth keeping, because the obvious version would have been worse than the gap it closed.
+`packaging/swe_mux.spec` builds exactly one executable, `swe-mux.exe`, with `console=False` - the windowed launcher, whose whole purpose is to open a native window with no console behind it.
 A GUI-subsystem process has no `stdout` and no `stderr` at all (`desktop.redirect_gui_streams` points both at `<data_dir>\desktop-shell.log` precisely because of this), and `desktop.main` dispatches only `--daemon-child`, `--supervisor-child`, and an allowlisted `-m` pair that does not include `swe_mux.cli`.
-So adding `{app}\swe-mux` to `PATH` today would publish a launcher that opens a window, under a name a user would type expecting a table of sessions.
-Closing this needs a **console executable in the bundle**, which the spec deliberately does not have: its `# No second executable` comment records that nothing from the bundle should run inside a task terminal, because a running copy can lock `dist\swe-mux` against the staged swap a redeploy performs.
-That trade is real and unresolved, and it is the decision this gap is waiting on rather than a step someone forgot.
-Until then, an operator who wants the CLI on a machine with an installer install can install the wheel alongside it (`uv tool install swe-mux`); the two are separate copies and the CLI talks to whichever daemon owns `127.0.0.1:8765`, so this works, at the cost of a second copy of the code.
+So adding `{app}\swe-mux` to `PATH` would have published a launcher that opens a window, under a name a user would type expecting a table of sessions.
+Adding a console executable *to that bundle* was the other obvious move and is also wrong: the spec's `# No second executable` comment records that nothing from it should run inside a task terminal, because a running copy locks `dist\swe-mux` against the staged swap a redeploy performs - and a CLI on `PATH` lives in exactly such a terminal.
+`swe-mux-cli` is the resolution: its own spec, its own directory, so the only tree a running client can lock is its own.
+
+**What an uninstall does to `PATH`.**
+It removes the one entry it added and nothing else, rebuilding the value entry by entry rather than cutting a substring, and preserving the registry value's type - so a `PATH` holding `%USERPROFILE%\bin` comes back with the variable intact rather than flattened to this machine's answer.
+An entry pointing at a *different* swe-mux install, or one you added by hand, is not this uninstaller's to remove and is left alone.
+The one case it does not handle is an upgrade that moves the install directory: the old entry is orphaned rather than hunted down, which is deliberate, because a removal greedy enough to find it is greedy enough to eat a neighbour.
+
+**The whole cycle is exercised in CI rather than argued about here.**
+`ci.yml`'s `installer-cycle` job compiles the installer and runs install → `PATH` → upgrade → uninstall against a seeded `HKCU\Environment\Path`, diffing the value and its registry kind at each step (`packaging/installer/verify_path_cycle.ps1`).
+Inno Setup is not installed on the development host, so that is where it first runs.
 
 Silent install, for a scripted or unattended deployment:
 
 ```
 swe-mux-0.1.0-windows-x64-setup.exe /VERYSILENT /NORESTART
-swe-mux-0.1.0-windows-x64-setup.exe /VERYSILENT /NORESTART /DIR="D:\apps\swe-mux" /TASKS=desktopicon,startupicon
+swe-mux-0.1.0-windows-x64-setup.exe /VERYSILENT /NORESTART /DIR="D:\apps\swe-mux" /MERGETASKS=desktopicon,startupicon
+swe-mux-0.1.0-windows-x64-setup.exe /VERYSILENT /NORESTART /TASKS=""
 ```
 
-Those are Inno Setup's standard switches; `/TASKS` names the optional extras and omitting it takes none of them.
+Those are Inno Setup's standard switches, and the difference between the last two matters now that one task is ticked by default.
+Omitting both flags takes the defaults, which is `addtopath` and neither shortcut task.
+`/MERGETASKS` **adds** to that default, so the second line above gets the `PATH` entry as well as the two shortcuts.
+`/TASKS` **replaces** it, so `/TASKS=desktopicon` would silently leave `PATH` alone, and `/TASKS=""` is how you install with no optional tasks at all.
 
 **It is unsigned today, and Windows will say so.** SmartScreen shows "Windows protected your PC" on first run; "More info" then "Run anyway" proceeds. A code-signing certificate has not been bought (`RELEASE_MANUAL_TASKS.md` § 1), and the build is structured so that turning signing on is one environment variable rather than a change to the installer - but until that happens, this warning is expected rather than a sign of a bad download. Check the SHA-256 against `https://swemux.dev/version.json` if you want to verify the file itself.
 
