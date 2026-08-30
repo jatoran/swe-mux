@@ -4,6 +4,7 @@ import { DRAWER_TABS, type DrawerTabId } from '../src/drawerTabs.ts'
 import {
   DEFAULT_HIDDEN_DRAWER_TABS,
   canHideDrawerTab,
+  defaultHiddenDrawerTabs,
   drawerTabStructurallyAvailable,
   drawerTabVisible,
   parseHiddenDrawerTabs,
@@ -24,6 +25,25 @@ test('the shipped default hides Processes and nothing else', () => {
   assert.equal(DEFAULT_HIDDEN_DRAWER_TABS.includes('notifications'), false)
   // Every shipped default must name a registered tab, or it silently hides nothing.
   for (const id of DEFAULT_HIDDEN_DRAWER_TABS) assert.ok(every.includes(id), id)
+})
+
+test('the terminal tier default puts away the agent machinery and keeps the rest', () => {
+  const hidden = defaultHiddenDrawerTabs('terminal')
+  const visible = every.filter(id => !hidden.includes(id))
+  // A pure-terminal install should not draw eleven tabs; what remains is what a
+  // terminal-first user still owns.
+  assert.deepEqual(visible, ['actions', 'files', 'notes', 'git', 'notifications'])
+  // The badge rule holds for every tier: the one "something needs you" surface stays.
+  assert.equal(hidden.includes('notifications'), false)
+  // A default may never hide everything - the restore control lives on the tab strip.
+  assert.ok(hidden.length < every.length)
+  for (const id of hidden) assert.ok(every.includes(id), id)
+})
+
+test('every other tier keeps the shipped default', () => {
+  for (const tier of ['', 'deterministic', 'automations'] as const) {
+    assert.deepEqual(defaultHiddenDrawerTabs(tier), [...DEFAULT_HIDDEN_DRAWER_TABS], tier)
+  }
 })
 
 test('structural absence is a property of the session, not a preference', () => {

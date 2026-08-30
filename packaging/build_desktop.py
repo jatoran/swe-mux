@@ -863,7 +863,15 @@ def build_supervisor_bundle(*, force: bool = False) -> bool:
 # Windows-measured, like `EXPECTED_BUNDLE_PACKAGES`, and the same rule applies: a
 # platform this was never measured on records its own set rather than widening
 # this one. Only Windows has an installer, so only Windows builds this today.
-EXPECTED_CLI_BUNDLE_PACKAGES = frozenset({"psutil"})
+#
+# `swe_mux` is here for its DATA, not its code: the embedded agent skill travels
+# as `assets/skills/` package data (`swemux --skill`), and a datas entry makes
+# PyInstaller materialise `_internal/swe_mux/` to hold it - the modules
+# themselves stay frozen in the executable's archive. Admitting the name alone
+# would blunt this gate (a future import chain dragging real daemon modules into
+# that directory would only show as size), so `verify_cli_bundle_contents`
+# additionally asserts the directory holds nothing but that skills subtree.
+EXPECTED_CLI_BUNDLE_PACKAGES = frozenset({"psutil", "swe_mux"})
 
 
 def verify_cli_bundle_contents(
@@ -909,9 +917,29 @@ def verify_cli_bundle_contents(
             "absent:\n  "
             + "\n  ".join(missing)
             + "\n`psutil` backs `swe_mux.lifecycle`'s ledger, which every command "
-            "writes to, and `win32` is pulled in by the standard library's "
-            "`logging.handlers`. Either one going absent is an ImportError at "
-            "first use, in the frozen client, not at build time."
+            "writes to, and `swe_mux` holds the embedded agent skill "
+            "(`assets/skills/`, printed by `swemux --skill`). Either going absent "
+            "is a failure at first use, in the frozen client, not at build time."
+        )
+    # `swe_mux` is admitted for its package data alone, so admitting the *name*
+    # must not blunt the gate: anything under `_internal/swe_mux/` other than
+    # the embedded skill subtree means the client's modules stopped being frozen
+    # into the archive - or a daemon module arrived as data - and both are the
+    # class of regression this function exists to catch by name, not by size.
+    package_dir = bundle_root / "_internal" / "swe_mux"
+    stray = sorted(
+        str(item.relative_to(package_dir))
+        for item in (package_dir.rglob("*") if package_dir.is_dir() else ())
+        if item.is_file() and item.relative_to(package_dir).parts[:2] != ("assets", "skills")
+    )
+    if stray:
+        raise SystemExit(
+            "CLI bundle membership regression: _internal/swe_mux/ holds more than "
+            "the embedded skill data:\n  "
+            + "\n  ".join(stray)
+            + "\nOnly `assets/skills/` may live there (packaging/swe_mux_cli.spec "
+            "datas). Anything else is code or data arriving outside the frozen "
+            "archive; find the entry that put it there rather than widening this."
         )
 
 
