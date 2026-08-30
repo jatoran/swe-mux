@@ -2908,6 +2908,7 @@ swemux history-duplicates [report|repair]
 swemux accounts [list|verify|audit] [--limit N]
 swemux start [--timeout SECONDS] [--config PATH] [--no-browser]
 swemux reload-daemon [--force]
+swemux compact-db [--now] [--cancel] [--no-trigram-rebuild] [--no-vacuum] [--no-backup]
 swemux doctor [--export]
 swemux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
 swemux install-skill [--project DIR | --global] [--harness NAME]... [--remove] [--yes]
@@ -2960,6 +2961,33 @@ timeout). It is the only thing in this CLI that starts a daemon, and it does so 
 On Windows the desktop app already covers this - `swe-mux` opens no console and spawns its own
 daemon - so `swemux start` is for the browser-only case, for Linux and macOS where there is no
 desktop app at all, and for iterating from a checkout.
+
+`swemux compact-db` also writes rather than posts, for a different reason. It reclaims space in
+`mux.db` - dropping the history trigram index, which `history.py` rebuilds, and running the
+`VACUUM` that returns the freed pages to the filesystem at a 16 KiB page size - and both need
+exclusive ownership of the file, which no running daemon can give. So the command records a
+request under `<data_dir>/db-maintenance.json` and the **next daemon start** performs it, in a
+`database-maintenance` phase before anything opens the database; `--now` triggers the ordinary
+session-preserving restart to bring that start forward, and `--cancel` withdraws a pending
+request. Live sessions are held by the PTY supervisor and survive it. The UI does not, for as long
+as it takes, and it is reported by `/api/health` as the phase in flight like any other. A copy is
+taken first unless `--no-backup`, and the command refuses when the disk cannot hold the copy plus
+the rewrite.
+
+Measured 2026-08-30 against a copy of a real 3.36 GB `mux.db`:
+
+| operations | maintenance window | file after |
+| --- | --- | --- |
+| `--no-trigram-rebuild` (vacuum only) | 24.5s | 3.19 GB |
+| both | 21.9s | 2.23 GB, settling at **2.69 GB** |
+
+The settling is the trigram index coming back: dropping it is what lets the vacuum compact the
+file without it, and `history.py`'s existing search-maintenance path rebuilds it afterwards in
+about 20s of background work. Substring search over history is incomplete until that finishes,
+which the search surfaces report rather than showing as an empty result (`ready=0`). Most of the
+reclaim is that index being rebuilt dense rather than the vacuum itself - it had grown
+incrementally over months.
+There is deliberately no endpoint and no MCP tool for this (`technical/backend/sqlite.md`).
 
 `swemux --skill` prints the swe-mux agent skill embedded in this release, and `swemux install-skill`
 writes it into the skill roots agent CLIs read (`design/features/agent-skill-delivery.md` holds

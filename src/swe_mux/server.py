@@ -9,8 +9,10 @@ instances will fight over the same mux.db.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import mimetypes
+import os
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -55,6 +57,10 @@ from .build_support import precompress_static
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
 from .config import Config
+from .db_maintenance import clear_request as clear_maintenance_request
+from .db_maintenance import describe as describe_maintenance
+from .db_maintenance import read_request as read_maintenance_request
+from .db_maintenance import run_maintenance
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore
 from .errors import NotFound
@@ -95,7 +101,9 @@ from .lifecycle import (
     daemon_clean_exit,
     daemon_started,
     heartbeat,
+    heartbeat_pid,
     ledger,
+    pid_running,
 )
 from .llm_endpoint import LLM_PROVIDERS, CapabilityStore, LlmReadiness
 from .llm_endpoint import capabilities_of_record as llm_capabilities_of_record
@@ -190,6 +198,7 @@ from .sqlite_store import (
     record_database_problem,
     record_database_verified,
     run_full_verification,
+    verification_record_path,
 )
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
@@ -223,6 +232,13 @@ Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 LOOP_LAG_LOOP = "loop-lag"
 LIFECYCLE_HEARTBEAT_LOOP = "lifecycle-heartbeat"
 DATABASE_INTEGRITY_LOOP = "database-integrity-check"
+# How long the database-maintenance phase waits for a predecessor to release
+# `mux.db`. Far longer than the ordinary startup gate's 20s, because this only
+# runs when an operator asked for a compaction and is already expecting the
+# daemon to be unavailable - and because on the development host the
+# predecessor exceeded that 20s gate on every measured restart.
+MAINTENANCE_PREDECESSOR_WAIT_SECONDS = 180.0
+MAINTENANCE_WAIT_REPORT_SECONDS = 15.0
 MEDIA_CLEANUP_LOOP = "media-cleanup"
 RETENTION_LOOP = "store-retention"
 # Startup past this is logged as a warning. A daemon reattaching a large fleet
@@ -729,12 +745,21 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     that existed before this change and must not become one.
     """
     config: Config = app[keys.CONFIG]
+    # Read *before* `daemon_started`, which stamps our own pid over it. The
+    # database-maintenance phase needs to know whether the predecessor is still
+    # holding `mux.db`, and by the time that phase runs the heartbeat names this
+    # process - so a probe taken there reads self and proceeds into a locked
+    # file, which is exactly what happened twice against the real database.
+    predecessor_pid = heartbeat_pid(config.data_dir)
+    if predecessor_pid == os.getpid():
+        predecessor_pid = -1
     # Death forensics first: report a predecessor that vanished without a clean
     # shutdown while this daemon is still barely started, then keep our own
     # heartbeat fresh so the next daemon can do the same for us. The verdict
     # also decides how hard the database-integrity phase must look: an
     # unplanned death forces the full probe.
     predecessor_died_uncleanly = daemon_started(config.data_dir, log)
+    app[keys.PREDECESSOR_PID] = predecessor_pid
     timeline = StartupTimeline(log, ledger=lambda message: ledger(config.data_dir, message))
     app[keys.STARTUP] = timeline
     watchdog = asyncio.create_task(timeline.watchdog(), name="startup-watchdog")
@@ -826,6 +851,147 @@ async def _restore_durable_sessions(
         await recovery.sweep_orphan_directories(await recovery.known_ids())
     except Exception:
         log.exception("could not sweep orphan recovery directories")
+
+
+async def _wait_for_exclusive_database(
+    config: Config, predecessor_pid: int, operations: tuple[str, ...]
+) -> bool:
+    """Wait for the predecessor to release `mux.db`. True when it is ours.
+
+    Separate from the ordinary startup gate on purpose, and much more patient
+    than it. `wait_for_predecessor_exit` bounds its wait at 20s because a wedged
+    predecessor must never stop a restart; that is the right trade for every
+    start except this one, where an operator has explicitly asked for work that
+    cannot run without exclusive ownership and is already expecting the daemon
+    to be unavailable. Measured on the development host: the predecessor exceeded
+    the 20s gate on both real `compact-db` runs, so without this the feature
+    simply never fires.
+
+    Reports while it waits, because this is the startup path and a silent minute
+    here is the failure mode the whole timeline exists to prevent.
+    """
+    if predecessor_pid <= 0 or not pid_running(predecessor_pid):
+        return True
+    log.warning(
+        "database maintenance (%s) is pending and the previous daemon (pid %d) still "
+        "holds %s; waiting up to %.0fs for it to exit",
+        ", ".join(operations),
+        predecessor_pid,
+        config.database_path,
+        MAINTENANCE_PREDECESSOR_WAIT_SECONDS,
+    )
+    deadline = time.monotonic() + MAINTENANCE_PREDECESSOR_WAIT_SECONDS
+    reported = time.monotonic()
+    while time.monotonic() < deadline:
+        if not pid_running(predecessor_pid):
+            log.warning(
+                "previous daemon pid %d has exited; this start owns the database",
+                predecessor_pid,
+            )
+            return True
+        if time.monotonic() - reported >= MAINTENANCE_WAIT_REPORT_SECONDS:
+            reported = time.monotonic()
+            log.warning(
+                "still waiting for previous daemon pid %d to exit (%.0fs left)",
+                predecessor_pid,
+                deadline - time.monotonic(),
+            )
+        await asyncio.sleep(0.25)
+    log.warning(
+        "previous daemon pid %d did not exit within %.0fs, so this start cannot own %s. "
+        "The maintenance request is kept and the next start will try again; if this "
+        "repeats, stop swe-mux fully once and start it again.",
+        predecessor_pid,
+        MAINTENANCE_PREDECESSOR_WAIT_SECONDS,
+        config.database_path,
+    )
+    return False
+
+
+async def _run_pending_maintenance(config: Config, predecessor_pid: int = -1) -> None:
+    """Honour a `swemux compact-db` request, if one is pending.
+
+    Returns immediately when there is none, which is every ordinary start - the
+    phase costs a single failed file read.
+
+    **This start is not guaranteed to own the database, and the first version of
+    this assumed it did.** `wait_for_predecessor_exit` waits for the predecessor
+    process, but the wait is bounded at 20s and a timeout is deliberately a
+    warning rather than a refusal - a wedged predecessor must not stop a
+    restart. Against the real `mux.db` the gate gave up, this ran 74ms later,
+    and `VACUUM` failed with `database is locked` because it must be the only
+    connection. So exclusivity is *checked* here, and a lock is retryable rather
+    than terminal.
+
+    Which failures keep the request is the whole correctness question:
+
+    - **The window was not available** (the predecessor is still alive, or the
+      file is locked): the request survives, because it will succeed on a later
+      start and consuming it silently drops what the operator asked for.
+    - **The operation does not work** (an unknown operation, an unreadable
+      database, no disk): the request is consumed, because it will fail the same
+      way every time and a standing request would make every start slow.
+
+    Never raises. A daemon that will not start because a compaction failed is
+    strictly worse than one that starts on an uncompacted database and says so.
+    """
+    request = read_maintenance_request(config.data_dir)
+    if request is None:
+        return
+    # The predecessor must be gone before this can work, and on this machine it
+    # routinely is not: `wait_for_predecessor_exit` gives up at 20s and starts
+    # anyway (correctly - a wedged predecessor must not block a restart), and
+    # both real `compact-db` runs then found the file locked.
+    #
+    # So wait again, here, for much longer. That is affordable exactly because a
+    # compaction is pending: an operator asked for this and is already expecting
+    # the daemon to be unavailable, whereas an ordinary start is right to refuse
+    # to wait. A predecessor that never exits keeps the request rather than
+    # failing it.
+    if not await _wait_for_exclusive_database(config, predecessor_pid, request.operations):
+        return
+    log.warning(
+        "database maintenance requested (%s); the daemon will not serve until it "
+        "finishes. Live sessions are held by the PTY supervisor and are unaffected.",
+        ", ".join(request.operations),
+    )
+    control = VerificationControl()
+    try:
+        result = await asyncio.to_thread(
+            run_maintenance, config.database_path, request, control
+        )
+    except asyncio.CancelledError:
+        control.cancel()
+        # Kept, not consumed: being asked to stop is not the operation failing,
+        # and the operator still wants it done.
+        log.warning("database maintenance cancelled; the request is kept for the next start")
+        raise
+    except Exception:  # noqa: BLE001 - a failed compaction must not stop the daemon
+        log.exception("database maintenance raised; continuing without it")
+        clear_maintenance_request(config.data_dir)
+        return
+    if result.retryable:
+        log.warning(
+            "%s. The request is kept and the next start will try again.",
+            describe_maintenance(result),
+        )
+        if result.backup_path is not None:
+            log.warning("a pre-compaction copy was left at %s", result.backup_path)
+        return
+    clear_maintenance_request(config.data_dir)
+    log.log(logging.ERROR if result.error else logging.WARNING, "%s", describe_maintenance(result))
+    if result.backup_path is not None:
+        log.warning(
+            "the pre-compaction copy is at %s; delete it once you are satisfied "
+            "(it is the size of the database)",
+            result.backup_path,
+        )
+    if result.error is None and result.performed:
+        # The file was rewritten, so any recorded verdict describes bytes that no
+        # longer exist. Forcing a fresh check is cheap now that it runs behind
+        # the ready daemon, and it is the honest state.
+        with contextlib.suppress(OSError):
+            verification_record_path(config.database_path).unlink()
 
 
 async def _database_integrity_loop(path: Path, delay_seconds: float, reason: str) -> None:
@@ -966,6 +1132,20 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # `synchronous=FULL` a process or OS crash cannot corrupt the file, so the
     # 77.7s that signal cost on the 2026-08-30 post-reboot start was spent
     # answering a question the storage layer had already answered.
+    # Before the integrity probe and before any store opens the file, because
+    # this is the one moment the daemon owns it exclusively: the predecessor
+    # process has exited (`__main__.wait_for_predecessor_exit`) and no store has
+    # connected yet. `VACUUM` and a cross-file table move both need that, and no
+    # running daemon can ever provide it.
+    #
+    # This deliberately puts minutes of work on the startup path, against the
+    # rule the rest of this function now follows. The exception is narrow and
+    # explicit: an operator typed `swemux compact-db`, it happens once, the phase
+    # reports itself while it runs, and the alternative is stopping swe-mux,
+    # which reaps every live session. Nothing schedules it and no route triggers
+    # it.
+    timeline.mark("database-maintenance")
+    await _run_pending_maintenance(config, app.get(keys.PREDECESSOR_PID, -1))
     timeline.mark("database-integrity")
     preparation = await asyncio.to_thread(
         prepare_database,

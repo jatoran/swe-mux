@@ -155,6 +155,79 @@ its port.
   corruption detection without a code review seeing it. `tests/test_startup_gate.py` pins all of
   it, including a real corrupted interior page carried through the whole three-step remediation
   (start passes → background check records → next start quarantines).
+- **Maintenance that needs exclusive ownership runs in the startup window** (`db_maintenance.py`,
+  2026-08-30). `VACUUM` is the only way to return freed pages to the filesystem and SQLite has no
+  online form of it; a cross-file table move has the same requirement. No running daemon can give
+  that, and stopping swe-mux to get it reaps every live session.
+  The window that does exist is the *successor's own start*: `__main__.wait_for_predecessor_exit`
+  waits for the predecessor process rather than just its port - and the PTY supervisor has the
+  sessions throughout, so nothing the operator is running dies for it.
+  **That wait is bounded and is not a guarantee, which the feature shipped assuming it was.** The
+  timeout is 20s and expiring it is deliberately a warning rather than a refusal, because a wedged
+  predecessor must not stop a restart; the warning even says "its last writes may be lost to a
+  database lock". The first real `compact-db` run hit exactly that - the gate gave up on pid 49276,
+  the maintenance phase ran 74ms later, and `VACUUM` failed `database is locked` because it must be
+  the only connection.
+  So exclusivity is **checked and waited for, never assumed**: `_run_pending_maintenance` probes
+  the heartbeat pid first and skips (keeping the request) while a predecessor is alive, and the
+  operation itself connects with a 30s busy timeout for the race between the probe and the vacuum.
+  So maintenance is a durable **request** rather than a command. `swemux compact-db` writes
+  `<data_dir>/db-maintenance.json` and optionally triggers the ordinary session-preserving
+  restart; the successor honours it in the `database-maintenance` phase, before the integrity
+  probe and before any store opens the file.
+  Four rules, and each of them is a way this could have gone wrong:
+  **It is not reachable over HTTP or MCP.** The request is written locally by the CLI rather than
+  posted, which also keeps a minutes-long rewrite of the operator's database off a surface an
+  agent or a stray fetch can reach.
+  **An unreadable request is not a request.** This fails towards doing nothing, which is the
+  *opposite* of the verification record's rule two bullets up - and deliberately: an unreadable
+  integrity record means re-check, because checking is cheap and safe, while acting on an
+  unparseable maintenance request means rewriting a database on the strength of a file this
+  process could not read. An unknown operation refuses the whole pass rather than being skipped,
+  because a silently-dropped operation reports success for work that never happened.
+  **Which failures consume the request is the correctness question, and the first version got it
+  wrong.** A failure means one of two different things and they need opposite handling. *The window
+  was not available* - a live predecessor, a locked file, a cancelled start - keeps the request,
+  because it will succeed on a later start and consuming it silently drops what the operator asked
+  for (which is what happened on the first real run: the compaction never happened and the request
+  was gone). *The operation does not work* - an unknown operation, an unreadable database, no disk -
+  consumes it, because it will fail the same way every time and a standing request would make every
+  start slow. `is_lock_error` is the classifier and is narrow on purpose, the same way
+  `is_locked_error` is: `OperationalError` is also how SQLite reports a missing table.
+  Either way a failed pass never stops the daemon starting, because a daemon that will not come up
+  because a compaction failed is strictly worse than one that starts uncompacted and says so.
+  **The backup is a copy, not a rename**, and it is refused when the disk cannot hold it plus the
+  rewrite. A rename would leave the daemon with no database at all if the process died between it
+  and the rewrite.
+  This is a deliberate exception to "nothing that is not needed to serve the first request runs on
+  the startup path" (`development/PERFORMANCE_RUNBOOK.md`), and the exception is kept narrow by
+  those rules: an operator asked for it, it happens once, and the phase reports itself while it
+  runs.
+  Measured 2026-08-30 against a copy of the real 3.36 GB `mux.db`: both operations in **21.9s**,
+  down to **2.23 GB** and settling at **2.69 GB** once the trigram index rebuilds, against
+  **3.19 GB** for a `VACUUM` alone. The file's `quick_check` fell from 12.38s to 2.01s with it.
+  **Most of the reclaim is the trigram index being rebuilt dense, not the vacuum.** That index had
+  grown incrementally over months and came back 58 MB smaller from one clean pass; dropping it
+  first is also what lets the vacuum compact the rest of the file without it in the way.
+  It was very nearly a much bigger win and is not, and the reason is recorded beside the schema in
+  `history.py` because the size number alone made the wrong answer look obvious: **`detail=none`
+  breaks this index.** FTS5 refuses a phrase query without position data, a trigram substring match
+  *is* a phrase query over trigrams, and `message_rows` issues `MATCH` and ranks with `bm25()` -
+  so `detail=none` and `detail=column` both turn every substring search into an error rather than
+  a smaller index (measured, SQLite 3.47.1). `LIKE` survives and is still trigram-accelerated, so
+  the saving is reachable by moving the substring path off `MATCH`/`bm25` and onto `LIKE` with a
+  different ordering - a search-behaviour change, which is why it was not done here.
+  **`PRAGMA page_size` is silently ignored on a WAL database**, and this is the trap the feature
+  shipped with for one commit. SQLite accepts the statement, reports no error, and changes
+  nothing, so the obvious implementation - set the pragma, `VACUUM` - left the 4 KiB file at
+  4 KiB. It passed its unit test because the fixture was in the default rollback mode rather than
+  in WAL, which is the shape of test that proves nothing about production; the fixture now carries
+  the journal mode and the case is parameterised over both. `_vacuum` leaves WAL, sets the size,
+  vacuums, and restores *the mode the caller had* on every path - restoring unconditionally to WAL
+  would be the function changing something it was not asked to change, and leaving `mux.db` in
+  rollback mode would silently cost every store WAL's concurrency. It returns the page size it
+  achieved rather than the one it asked for, because the first version could not tell the
+  difference.
 - Writes name their columns. A positional `INSERT ... VALUES(?,…)` breaks the moment a column
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.

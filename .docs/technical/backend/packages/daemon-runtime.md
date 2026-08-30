@@ -26,6 +26,16 @@ Phase transitions also go to `lifecycle.log`, so a long start reads as progress 
 
 **Not:** any decision. It measures; what a phase does and whether it may be deferred belongs to `server.py`.
 
+### `db_maintenance.py`
+
+The durable maintenance request, and the operations that need exclusive ownership of `mux.db`: the trigram index drop and the `VACUUM` that rewrites the file at a 16 KiB page size.
+A request is written by `swemux compact-db` and honoured by the next daemon start's `database-maintenance` phase, because the successor's startup is the only window where the file is held by exactly one process and the PTY supervisor is still holding the sessions.
+The pre-compaction copy is a real copy rather than a rename, and it is refused when the disk cannot hold it.
+
+**Not:** anything reachable over HTTP or MCP.
+A compaction is minutes of unavailability and a rewrite of the operator's data; it is a thing a person types.
+**Not:** the trigram schema either - it drops the index and `history.py` recreates it, so the definition stays in one place.
+
 ### `background_tasks.py`
 
 Supervision and health for the daemon's long-lived loops: the per-iteration fault guard, restart with capped backoff, and the per-loop health snapshot.
