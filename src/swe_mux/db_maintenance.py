@@ -62,6 +62,32 @@ VACUUM_PAGE_SIZE = 16384
 # the duration, which is checked before it is attempted.
 BACKUP_SUFFIX = ".pre-compact"
 
+# How long to wait for a database another process still holds.
+#
+# The startup window is *not* guaranteed exclusive, which is the correction this
+# constant exists for. `__main__.wait_for_predecessor_exit` waits for the
+# predecessor process, but the wait is bounded (20s) and a timeout is
+# deliberately a warning rather than a refusal - a wedged predecessor must not
+# stop a restart. It even says so: "its last writes may be lost to a database
+# lock". The first run of `compact-db` against the real `mux.db` hit exactly
+# that, 74ms after the gate gave up, and `VACUUM` failed with `database is
+# locked` because it must be the only connection.
+#
+# So exclusivity is checked and waited for rather than assumed, and a lock is
+# classified as retryable so the request survives to the next start.
+LOCK_WAIT_SECONDS = 30.0
+
+
+def is_lock_error(exc: BaseException) -> bool:
+    """Whether this failure means "someone else holds the file", not "this is broken".
+
+    Narrow on purpose, the same way `sqlite_store.is_locked_error` is:
+    `OperationalError` is also how SQLite reports a missing table, and treating
+    that as retryable would keep a request that can never succeed and make every
+    start pay for it.
+    """
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+
 
 @dataclass(frozen=True)
 class MaintenanceRequest:
@@ -90,6 +116,12 @@ class MaintenanceResult:
     # see `_vacuum`. Reported rather than assumed, because the first version of
     # this silently did nothing.
     page_size: int = 0
+    # Whether the failure was "the window was not available" rather than "this
+    # operation does not work". The distinction decides whether the request
+    # survives, and getting it wrong in either direction is bad: consuming a
+    # retryable failure silently drops what the operator asked for, and keeping
+    # a terminal one makes every start slow forever.
+    retryable: bool = False
 
     @property
     def bytes_reclaimed(self) -> int:
@@ -327,7 +359,12 @@ def run_maintenance(
 
     db: sqlite3.Connection | None = None
     try:
-        db = sqlite3.connect(path)
+        # A generous busy timeout for the case the startup gate cannot close: a
+        # predecessor that is still draining when this runs. `VACUUM` needs to be
+        # the only connection, so a draining predecessor fails it outright, and
+        # the default 5s is shorter than a slow drain.
+        db = sqlite3.connect(path, timeout=LOCK_WAIT_SECONDS)
+        db.execute(f"PRAGMA busy_timeout={int(LOCK_WAIT_SECONDS * 1000)}")
         if control is not None:
             control.adopt(db)
         # Ordered rather than as-requested: dropping the index frees the pages
@@ -346,6 +383,7 @@ def run_maintenance(
                 result.performed.append(OPERATION_VACUUM)
     except sqlite3.DatabaseError as exc:
         result.error = str(exc)
+        result.retryable = is_lock_error(exc)
         log.exception("database maintenance on %s failed", path)
     finally:
         if control is not None:

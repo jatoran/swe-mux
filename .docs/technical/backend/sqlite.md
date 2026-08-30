@@ -160,9 +160,17 @@ its port.
   online form of it; a cross-file table move has the same requirement. No running daemon can give
   that, and stopping swe-mux to get it reaps every live session.
   The window that does exist is the *successor's own start*: `__main__.wait_for_predecessor_exit`
-  waits for the predecessor process rather than just its port, so by the time the runtime is built
-  this process is the only holder of `mux.db` - and the PTY supervisor has the sessions throughout,
-  so nothing the operator is running dies for it.
+  waits for the predecessor process rather than just its port - and the PTY supervisor has the
+  sessions throughout, so nothing the operator is running dies for it.
+  **That wait is bounded and is not a guarantee, which the feature shipped assuming it was.** The
+  timeout is 20s and expiring it is deliberately a warning rather than a refusal, because a wedged
+  predecessor must not stop a restart; the warning even says "its last writes may be lost to a
+  database lock". The first real `compact-db` run hit exactly that - the gate gave up on pid 49276,
+  the maintenance phase ran 74ms later, and `VACUUM` failed `database is locked` because it must be
+  the only connection.
+  So exclusivity is **checked and waited for, never assumed**: `_run_pending_maintenance` probes
+  the heartbeat pid first and skips (keeping the request) while a predecessor is alive, and the
+  operation itself connects with a 30s busy timeout for the race between the probe and the vacuum.
   So maintenance is a durable **request** rather than a command. `mux compact-db` writes
   `<data_dir>/db-maintenance.json` and optionally triggers the ordinary session-preserving
   restart; the successor honours it in the `database-maintenance` phase, before the integrity
@@ -177,11 +185,17 @@ its port.
   unparseable maintenance request means rewriting a database on the strength of a file this
   process could not read. An unknown operation refuses the whole pass rather than being skipped,
   because a silently-dropped operation reports success for work that never happened.
-  **The request is consumed whether the pass succeeded or failed**, and a failed pass never stops
-  the daemon starting. An operation that fails once generally fails the same way twice, so a
-  standing request would turn one bad start into every start being slow; and a daemon that will
-  not come up because a compaction failed is strictly worse than one that starts uncompacted and
-  says so.
+  **Which failures consume the request is the correctness question, and the first version got it
+  wrong.** A failure means one of two different things and they need opposite handling. *The window
+  was not available* - a live predecessor, a locked file, a cancelled start - keeps the request,
+  because it will succeed on a later start and consuming it silently drops what the operator asked
+  for (which is what happened on the first real run: the compaction never happened and the request
+  was gone). *The operation does not work* - an unknown operation, an unreadable database, no disk -
+  consumes it, because it will fail the same way every time and a standing request would make every
+  start slow. `is_lock_error` is the classifier and is narrow on purpose, the same way
+  `is_locked_error` is: `OperationalError` is also how SQLite reports a missing table.
+  Either way a failed pass never stops the daemon starting, because a daemon that will not come up
+  because a compaction failed is strictly worse than one that starts uncompacted and says so.
   **The backup is a copy, not a rename**, and it is refused when the disk cannot hold it plus the
   rewrite. A rename would leave the daemon with no database at all if the process died between it
   and the rewrite.
