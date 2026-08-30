@@ -938,7 +938,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <a href="#before-you-start">before you start</a>
         <a href="#install-it">install it</a>
         <a href="#two-things-no-install-does">two things no install does</a>
-        <a href="#the-desktop-extra-on-windows">the desktop extra, on windows</a>
+        <a href="#the-window-and-the-tray-on-windows">the window and the tray, on windows</a>
         <a href="#start-it">start it</a>
         <a href="#if-nothing-is-on-your-path-afterwards">if nothing is on your path afterwards</a>
         <a href="#platform-support-stated-exactly">platform support, stated exactly</a>
@@ -960,9 +960,6 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="code"><pre># Recommended. Isolated environment, all three commands on PATH globally.
 uv tool install swe-mux
 
-# On Windows, take the desktop extra: it is what adds the window and the tray icon.
-uv tool install "swe-mux[desktop]"
-
 # The same isolated, on-PATH install, without uv.
 pipx install swe-mux
 
@@ -973,21 +970,25 @@ pip install swe-mux</pre></div>
       <div class="docsec" id="two-things-no-install-does">
         <div class="head"><span class="n">#</span><h2>Two things no install does</h2><span class="fill"></span></div>
         <ul class="flat">
-          <li><b>No shortcut, no Start Menu entry</b><span>Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. swe-mux starts from a terminal. On Windows you can create the shortcuts afterwards with <code>mux install-shortcut</code>, which is idempotent and has a <code>--remove</code>.</span></li>
+          <li><b>No shortcut, no Start Menu entry - until you are asked</b><span>Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. What swe-mux does about it is ask once: the first time the Windows desktop shell starts, it offers to add a Start Menu entry and to start with Windows, and never asks again either way. <code>mux install-shortcut</code> does the same thing on demand, is idempotent, and has a <code>--remove</code> that takes back all three - the login entry included.</span></li>
           <li><b>No agent CLI is installed or logged in</b><span>That stays your own arrangement with each vendor. swe-mux finds the CLIs already on your machine and runs them under your own subscription.</span></li>
         </ul>
       </div>
-      <div class="docsec" id="the-desktop-extra-on-windows">
-        <div class="head"><span class="n">#</span><h2>The desktop extra, on Windows</h2><span class="fill"></span></div>
-        <p class="prose">Without <code>[desktop]</code> you still get a <code>swe-mux</code> command, and it fails on a missing import rather than opening a window. The extra wants the WebView2 Runtime, which recent Windows builds already have.</p>
-        <p class="note">It is Windows-only by declaration: <code>pystray</code> and <code>pywebview</code> both carry a <code>win32</code> platform marker, so on Linux and macOS the extra resolves to nothing and the daemon plus a browser is the whole product.</p>
+      <div class="docsec" id="the-window-and-the-tray-on-windows">
+        <div class="head"><span class="n">#</span><h2>The window and the tray, on Windows</h2><span class="fill"></span></div>
+        <p class="prose">There is nothing extra to install. <code>pystray</code> and <code>pywebview</code> are ordinary dependencies carrying a <code>win32</code> marker, so the command above gives a Windows machine a working <code>swe-mux</code> and gives every other machine nothing to download. They want the WebView2 Runtime, which recent Windows builds already have.</p>
+        <p class="note">There was a <code>[desktop]</code> extra until 0.1.5. It still resolves, so an old script keeps working, and it now adds nothing. It went because every install got the <code>swe-mux</code> launcher whether or not it got the packages behind it, so skipping the extra produced a command whose only behaviour was to fail.</p>
       </div>
       <div class="docsec" id="start-it">
         <div class="head"><span class="n">#</span><h2>Start it</h2><span class="fill"></span></div>
-        <div class="code"><pre>muxd                          # the daemon
+        <p class="prose"><code>mux start</code> returns once the daemon is answering and leaves it running: closing the terminal does not stop it. It is idempotent, so a daemon that is already serving is reported and left alone, and nothing else in the CLI starts one implicitly.</p>
+        <div class="code"><pre>mux start                     # the daemon, in the background
 # then open http://127.0.0.1:8765
 
-swe-mux                       # Windows, with the desktop extra: the same thing in a window</pre></div>
+muxd                          # the same daemon, in the foreground
+muxd --shutdown               # stops it, the supervisor, and every session
+
+swe-mux                       # Windows: the same thing in a window, with a tray icon</pre></div>
         <p class="proof"><b>It worked when</b> <code>mux doctor</code> exits 0. It is read-only and reports on the daemon, the supervisor, the frontend build, the agent CLIs it can detect, the tailnet listener, and the background loops. It is the command that tells installed from working.</p>
       </div>
       <div class="docsec" id="if-nothing-is-on-your-path-afterwards">
@@ -1021,10 +1022,10 @@ pip show -f swe-mux</pre></div>
 # Run from a checkout instead - what you want if you are changing swe-mux itself.
 git clone https://github.com/jatoran/swe-mux
 cd swe-mux
-uv sync --extra desktop
+uv sync
 npm --prefix frontend ci        # only the source flow needs Node
 npm --prefix frontend run build # a fresh clone serves no UI until this runs once
-uv run --extra desktop swe-mux</pre></div>
+uv run swe-mux</pre></div>
         <p class="note">The frontend bundle is git-ignored build output, so a fresh clone serves a blank page rather than an error until that build has run once. <a href="../troubleshooting/">Troubleshooting</a> covers the symptom.</p>
       </div>
       <div class="docsec" id="on-device-speech-is-a-separate-extra">

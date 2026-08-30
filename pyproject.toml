@@ -102,9 +102,38 @@ dependencies = [
   # `py_vapid` at module scope for the VAPID claim signing.
   "py-vapid>=1.9",
   "pywebpush>=2.0",
+  # The tray and the native window. Windows-only by marker, because there is no
+  # Linux or macOS desktop app by design (`design/features/desktop-shell.md`), and
+  # a *base* dependency on Windows since 2026-08-30 rather than the `desktop`
+  # extra it used to be.
+  #
+  # The extra was the wrong declaration and the cost was paid by the one person
+  # least able to absorb it. `[project.gui-scripts]` builds `swe-mux` into every
+  # install - `uv tool install` included, measured: subsystem 2 (GUI) against 3
+  # (CONSOLE) for the `[project.scripts]` launchers - so a plain `uv tool install
+  # swe-mux` shipped a console-free launcher that then died on `ImportError`
+  # before it could draw anything. Both remedies it printed led back through a
+  # terminal: `uv sync --extra desktop` needs a checkout, and the Settings panel
+  # that could acquire the closure needs a running daemon, which needed `muxd`
+  # held open in a console. The first-run experience of a desktop app was
+  # therefore a modal error and a terminal, over 2.4 MB of pure-Python wheels.
+  #
+  # 2.4 MB is not a size worth an install-time choice, and the tray is not an
+  # optional feature of this product on Windows - it is how the product is
+  # started. Declaring it here is what makes `uv tool install swe-mux` followed by
+  # `swe-mux` work on a clean machine with no terminal and no network round trip,
+  # which is the whole point. Neither package is imported anywhere but
+  # `swe_mux.desktop`, so a headless Windows host pays the install and never the
+  # import.
+  #
+  # WebView2 is a *runtime* dependency of pywebview, not an install-time one, so
+  # this cannot fail an install on a machine that lacks it; `desktop.py` reports
+  # its absence when the window is created.
+  "pystray>=0.19.5; sys_platform == 'win32'",
   # Genuinely Windows-only: there is no ConPTY anywhere else. The POSIX target
   # uses the stdlib `pty` module, which needs no third-party dependency.
   "pywinpty>=3.0.2; sys_platform == 'win32'",
+  "pywebview>=5.4; sys_platform == 'win32'",
   "tree-sitter>=0.23",
   "tree-sitter-language-pack>=0.7",
   # Windows ships no IANA timezone database, so `zoneinfo.ZoneInfo("Europe/Oslo")`
@@ -177,10 +206,15 @@ muxd = "swe_mux.__main__:main"
 swe-mux = "swe_mux.desktop:main"
 
 [project.optional-dependencies]
-desktop = [
-  "pystray>=0.19.5; sys_platform == 'win32'",
-  "pywebview>=5.4; sys_platform == 'win32'",
-]
+# Deliberately empty, and kept rather than deleted. `pystray` and `pywebview`
+# moved into base `dependencies` on 2026-08-30 (the reasoning is there), which
+# leaves nothing for this extra to add - but `swe-mux[desktop]` is spelled in
+# release notes, in the 0.1.x docs, and in whatever scripts readers wrote from
+# them, and an *undeclared* extra is a warning plus a silently different install.
+# An empty one resolves to exactly what the name has always promised: an install
+# that can run the tray. Removing it is a breaking change to a documented string
+# for no gain, so it stays until a major version has a reason to move it.
+desktop = []
 # On-device speech: Kokoro TTS through onnxruntime and faster-whisper dictation,
 # with the misaki/spaCy English G2P behind them. Roughly 400 MB of wheels and
 # model machinery for a feature the browser's own speech stack and the OS voice

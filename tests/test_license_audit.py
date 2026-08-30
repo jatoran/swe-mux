@@ -86,9 +86,12 @@ def test_python_closure_excludes_dev_only_packages() -> None:
     assert "mypy" not in closure
 
 
-def test_python_closure_includes_the_desktop_extra_and_its_transitives() -> None:
+def test_python_closure_includes_the_base_and_extra_reachable_lgpl() -> None:
     closure = license_audit.python_closure()
-    assert "pystray" in closure  # the desktop extra ships in the bundle
+    # A base requirement since 2026-08-30, and still in the bundle - which is
+    # the point: the walk covers base requirements without being told to, so
+    # moving a package out of an extra cannot drop it out of the audit.
+    assert "pystray" in closure
     assert "num2words" in closure  # declared by the voice-local extra, via misaki.en
     assert "misaki" in closure
     assert "onnxruntime" in closure
@@ -103,21 +106,28 @@ def test_the_closure_walk_covers_every_distributed_extra() -> None:
     copyleft-free closure on that machine while the bundle ships LGPL num2words.
     """
     assert "voice-local" in license_audit.DISTRIBUTED_EXTRAS
-    assert "desktop" in license_audit.DISTRIBUTED_EXTRAS
+    # `desktop` left this tuple on 2026-08-30 and must not come back as a
+    # reflex: it is an empty extra now, and naming it here would read like
+    # coverage while adding none.
+    assert "desktop" not in license_audit.DISTRIBUTED_EXTRAS
     # preview-capture is deliberately absent: Playwright is never bundled.
     assert "preview-capture" not in license_audit.DISTRIBUTED_EXTRAS
 
 
-def test_the_lgpl_packages_are_reached_only_through_their_extras() -> None:
-    """Both allowlisted LGPL packages are optional, which is why the walk matters.
+def test_each_lgpl_package_is_reached_the_way_the_audit_says_it_is() -> None:
+    """Where each allowlisted LGPL package enters the closure, pinned.
 
-    Neither is a plain runtime dependency any more, so dropping either extra
-    from `DISTRIBUTED_EXTRAS` silently removes an LGPL package from the audited
-    closure while the bundle keeps shipping it. Pinning the ownership makes that
-    a test failure rather than a diligence finding.
+    `num2words` is optional, which is why the extras walk matters: dropping
+    `voice-local` from `DISTRIBUTED_EXTRAS` silently removes an LGPL package
+    from the audited closure while it is still acquired for the user.
+
+    `pystray` is the opposite case and is asserted for the opposite reason. It
+    is a base requirement, so it needs no extra to be walked - and pinning that
+    stops someone from "restoring" `desktop` to `DISTRIBUTED_EXTRAS` in the
+    belief that the audit lost coverage when the dependency moved.
     """
     assert license_audit.owning_extra("num2words") == "voice-local"
-    assert license_audit.owning_extra("pystray") == "desktop"
+    assert license_audit.owning_extra("pystray") is None
     # A non-optional dependency belongs to no extra.
     assert license_audit.owning_extra("aiohttp") is None
 
@@ -126,18 +136,27 @@ def test_dropping_the_voice_extra_would_lose_the_lgpl_package(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Proves the previous test's stake: the walk is load-bearing, not decorative."""
-    monkeypatch.setattr(license_audit, "DISTRIBUTED_EXTRAS", ("desktop",))
+    monkeypatch.setattr(license_audit, "DISTRIBUTED_EXTRAS", ())
     narrowed = license_audit.python_closure()
     assert "num2words" not in narrowed
     assert "misaki" not in narrowed
+    # Still there with no extras at all, because it is a base requirement.
     assert "pystray" in narrowed
 
 
-def test_notices_tell_a_source_user_which_extra_carries_each_lgpl_package() -> None:
-    """A bare `uv sync` installs neither, so a single `uv sync` line would lie."""
+def test_notices_tell_a_source_user_how_to_replace_each_lgpl_package() -> None:
+    """The replacement instruction has to match where the package actually is.
+
+    `num2words` needs its extra named or the line sends a reader to an install
+    that does not contain it. `pystray` needs the extra *not* named, which is
+    the half that would rot silently: it moved into base dependencies on
+    2026-08-30, and a stale `--extra desktop` here would tell a reader to pass a
+    flag that now adds nothing.
+    """
     notices = (REPO_ROOT / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8")
     assert "`uv sync --extra voice-local && uv run muxd`" in notices
-    assert "`uv sync --extra desktop && uv run muxd`" in notices
+    assert "`uv sync && uv run muxd`" in notices
+    assert "--extra desktop" not in notices
 
 
 def test_python_closure_drops_unreachable_platform_markers() -> None:
@@ -302,16 +321,18 @@ def test_spec_collects_the_lgpl_packages_as_replaceable_source() -> None:
 def test_every_allowlisted_lgpl_package_has_a_relink_proof_per_copy() -> None:
     """Every allowlisted LGPL package is proven replaceable, once per real copy.
 
-    The rule was "exactly one proof" while every package had exactly one
-    distribution channel, and ROADMAP Phase 24 made that the wrong unit: since
-    2026-08-30 `pystray` genuinely has two copies - the frozen bundle's
-    `_internal/pystray/` (proven by `build_desktop.RELINKABLE_LGPL` against the
-    built tree) and the acquired desktop closure's tree (proven by
-    `desktop_runtime.RELINKABLE_LGPL` against the tree that is unpacked) - and
-    each copy needs its own proof, because each is what some recipient actually
-    receives. `num2words` still has exactly one (the acquired voice tree;
-    `voice_runtime.RELINKABLE_LGPL`), and it must stay out of the bundle proof
-    because the bundle does not carry it.
+    The unit is the copy rather than the package, because each copy is what some
+    recipient actually receives. There are two channels and each has its own
+    proof: the frozen bundle's `_internal/<pkg>/` (`build_desktop.RELINKABLE_LGPL`,
+    checked against the built tree) and the acquired voice closure's unpacked
+    tree (`voice_runtime.RELINKABLE_LGPL`, checked where it lands).
+
+    `pystray` briefly had a third, between ROADMAP Phase 24 on 2026-08-30 and the
+    dependency move later the same day: the acquired desktop closure, with its own
+    proof in `desktop_runtime`. That closure no longer exists - `pystray` and
+    `pywebview` are base dependencies and nothing is fetched at first use - so the
+    channel is gone and its proof went with it. Adding a third proof back here
+    means a third channel exists, and the author should have to say what it is.
 
     The failures this prevents are unchanged: an allowlist entry whose promise
     nothing checks, and a proof describing a copy that is not there -
@@ -319,20 +340,13 @@ def test_every_allowlisted_lgpl_package_has_a_relink_proof_per_copy() -> None:
     contain, so the notices never point a reader at an `_internal/` that lacks
     the package.
     """
-    from swe_mux import desktop_runtime
-
     shipped = set(build_desktop.RELINKABLE_LGPL)
     acquired_voice = set(voice_runtime.RELINKABLE_LGPL)
-    acquired_desktop = set(desktop_runtime.RELINKABLE_LGPL)
-    assert shipped | acquired_voice | acquired_desktop == set(license_audit.ALLOWLIST)
+    assert shipped | acquired_voice == set(license_audit.ALLOWLIST)
     # The voice closure's packages are exactly the ones the bundle stopped
     # carrying, so bundle-proof overlap there means a proof over a missing copy.
     assert not shipped & acquired_voice
     assert acquired_voice == set(license_audit.ACQUIRED_AT_FIRST_USE)
-    # The desktop closure's packages are the opposite case: the bundle still
-    # ships them (the frozen app has the extra), so each MUST also keep its
-    # bundle proof - a channel without a proof is the original failure.
-    assert acquired_desktop <= shipped
 
 
 def test_the_acquired_lgpl_package_is_not_in_the_bundle_manifest() -> None:
@@ -448,6 +462,74 @@ def test_the_build_requires_every_distributed_extra() -> None:
     assert set(build_desktop.REQUIRED_BUILD_GROUPS) == set(
         license_audit.DISTRIBUTED_GROUPS
     )
+
+
+def test_the_relink_source_packages_are_declared_where_the_preflight_looks() -> None:
+    """The preflight reads base `dependencies`, so the package has to be there.
+
+    This is the seam the 2026-08-30 dependency move created. `pystray` used to be
+    covered by the extras preflight because it was in an extra; it is now covered
+    by `missing_relinkable_distributions`, which reads `project.dependencies`.
+    A package that is neither in an extra the build requires nor in base
+    dependencies is covered by neither, and the failure is a bundle that omits
+    an LGPL package's replaceable source.
+    """
+    import tomllib
+
+    from packaging.requirements import Requirement
+
+    manifest = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    base = {Requirement(entry).name for entry in manifest["project"]["dependencies"]}
+    assert set(build_desktop.RELINKABLE_LGPL) <= base
+
+
+def test_the_relinkable_preflight_ignores_packages_this_platform_cannot_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Windows-only relink package is not missing when the build runs elsewhere.
+
+    Without the marker check this preflight would describe the host: `pystray` is
+    `sys_platform == 'win32'`, so every call on Linux or macOS would refuse a
+    build that was never going to run there anyway - and the tests that exercise
+    the *extras* refusal would fail on two of the three CI legs.
+    """
+    other = "linux" if sys.platform == "win32" else "win32"
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        f'dependencies = ["definitely-not-installed-xyz>=1.0; sys_platform == \'{other}\'"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_desktop, "ROOT", tmp_path)
+    assert build_desktop.missing_relinkable_distributions(
+        ("definitely-not-installed-xyz",)
+    ) == []
+
+
+def test_a_missing_relink_source_package_is_refused_before_pyinstaller_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal fires in the preflight rather than after a multi-minute build.
+
+    `collect_all` on an absent package collects nothing without failing, so the
+    only other place this is caught is `verify_bundle_licenses`, at the end.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\ndependencies = [\"definitely-not-installed-xyz>=1.0\"]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_desktop, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        build_desktop, "RELINKABLE_LGPL", ("definitely-not-installed-xyz",)
+    )
+    with pytest.raises(SystemExit) as raised:
+        build_desktop.verify_build_extras_installed()
+    message = str(raised.value)
+    assert "definitely-not-installed-xyz" in message
+    # Names the right remedy: a bare `uv sync`, not a flag that no longer exists.
+    assert "uv sync" in message
+    assert "--extra desktop" not in message
 
 
 def test_an_unpublished_group_that_ships_is_still_walked() -> None:

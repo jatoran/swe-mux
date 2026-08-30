@@ -15,6 +15,46 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Changed
+
+- **On Windows, `swe-mux` now works on a plain `uv tool install swe-mux` or
+  `pip install swe-mux`, with no terminal, no extra and no download.** `pystray` and
+  `pywebview` moved out of the `desktop` extra and into ordinary dependencies, marked
+  Windows-only. Previously every install got the `swe-mux` launcher - it is a GUI entry
+  point, so it opens no console - while an install without the extra got a launcher whose
+  only behaviour was to fail on a missing import, into a message box, with both suggested
+  remedies leading back through a terminal. Over 2.4 MB of pure-Python packages. The
+  `swe-mux[desktop]` spelling still resolves and now adds nothing, so existing scripts keep
+  working.
+- **`mux install-shortcut`'s run-at-login entry can finally be created from the UI.**
+  Settings → General → Desktop integration lets you choose which of the three shortcuts to
+  write - Start Menu, Desktop, Start with Windows - where before it always reported all
+  three, could remove all three, and could only ever create two. The only way to turn on
+  run-at-login was the tray menu, which a phone or any remote client cannot reach.
+- **"Start with Windows" in the tray menu now reads both mechanisms it can be turned on
+  with.** A run-at-login entry created by `mux install-shortcut --startup` or by Settings
+  is a `shell:startup` shortcut, and the menu item only consulted the registry - so it
+  showed "off" beside a swe-mux that demonstrably did start at sign-in, and turning it "on"
+  left two entries racing to launch the same app. Either one now counts as on, and turning
+  it off clears both.
+- The Settings → Desktop integration group no longer offers to download the desktop shell,
+  because there is nothing left to download. It reports whether this environment can run the
+  tray and, when it cannot, the reinstall command for how this copy was installed.
+
+### Added
+
+- **The first launch of the Windows desktop shell offers to add itself to the Start Menu and
+  to start when you sign in.** A wheel cannot create a shortcut and nothing runs after
+  `pip`/`uv`, so `mux install-shortcut` was a command nobody knew to run. Asked once per
+  install whichever way you answer, never for the installer's own build, and never when a
+  Start Menu entry already exists. It writes no desktop icon; that stays a choice in
+  Settings.
+- **`mux start` runs the daemon in the background and returns once it is serving.** For the
+  browser-only case, for Linux and macOS where there is no desktop app, and for iterating
+  from a checkout: closing the terminal does not stop it, `muxd --shutdown` does, and a
+  daemon that is already serving is reported and left alone. It is the only command that
+  starts a daemon, and only when typed - `mux ls` against a stopped daemon still says so.
+
 ## [0.1.5] - 2026-08-30
 
 ### Added

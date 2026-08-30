@@ -212,22 +212,28 @@ daemon it is already talking to and reloads itself.
 
 ```text
 GET  /api/desktop/integration
-POST /api/desktop/integration/shortcuts        {remove?: bool}
-POST /api/desktop/integration/shell/download
+POST /api/desktop/integration/shortcuts   {remove?: bool, slots?: ["start-menu"|"desktop"|"startup"]}
 ```
 
 ROADMAP Phase 24 (`design/features/desktop-shell.md`, `routes/desktop_integration.py`).
-The status reports both halves from one answer: per-slot shortcut presence, and the desktop
-shell's importability beside its pinned-closure acquisition state (the same four-state
-vocabulary as every model store) plus the exact `extra_install_command` for the install-time
-route.
-Off Windows the status is `{supported: false}` and both POSTs answer 400 - the surface is
+The status reports both halves from one answer: per-slot shortcut presence, and whether this
+environment can import the tray - `{importable, missing, frozen, install_kind,
+reinstall_command}`, with the command empty when nothing is wrong and empty for a frozen bundle
+even when something is, because there is no installer there to re-run.
+Off Windows the status is `{supported: false}` and the POST answers 400 - the surface is
 absent, never failing.
-The shortcuts POST runs `shortcuts.apply_shortcuts` in a thread and returns its report;
-removal always addresses all three slots, including a run-at-login entry from an earlier run.
-The download POST starts the pinned acquisition idempotently and returns
-`{started, ...status}`; the tray still needs a desktop-app (re)start afterwards, which every
-surface states.
+The shortcuts POST runs `shortcuts.apply_shortcuts` in a thread and returns its report.
+`slots` names what to write and is validated at the edge (an unknown name is a 400, not a
+string reaching a rendered PowerShell script); an absent `slots` means the historical default of
+Start Menu + Desktop, so a client from before the field keeps working. **Removal ignores `slots`
+entirely** and always addresses all three, because undo has to reach a run-at-login entry from an
+earlier run that the caller has since forgotten about.
+`POST /api/desktop/integration/shell/download` existed until 2026-08-30 and is gone: it acquired
+a pinned wheel closure for an install that lacked the `desktop` extra, and there is no such
+install now that `pystray`/`pywebview` are base dependencies.
+The `startup` slot became writable in the same change - this surface always reported it and could
+remove it, while the only way to turn it *on* was the tray menu (unreachable from a phone) or a
+CLI flag.
 
 ## Release install (the frozen-app updater)
 
@@ -2900,6 +2906,7 @@ mux kill SESSION
 mux history
 mux history-duplicates [report|repair]
 mux accounts [list|verify|audit] [--limit N]
+mux start [--timeout SECONDS] [--config PATH]
 mux reload-daemon [--force]
 mux doctor [--export]
 mux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
@@ -2933,10 +2940,24 @@ do what was asked.
 Delivery diagnostics); `mux doctor --export` prints the full `GET /api/diagnostics/export` bundle
 as JSON.
 
-`mux install-shortcut` and `mux install-skill` reach no daemon at all, and that is the point
-rather than an optimisation: the person who needs the first is the one whose install produced no
-way to start a daemon, and the second writes plain files into directories this machine already
-owns.
+`mux start`, `mux install-shortcut` and `mux install-skill` reach no daemon at all, and that is
+the point rather than an optimisation: `mux start` exists precisely because there is no daemon
+yet, the person who needs `install-shortcut` is the one whose install produced no way to start
+one, and `install-skill` writes plain files into directories this machine already owns.
+
+**`mux start`** spawns a detached daemon and returns once it answers `/api/health`, so the
+browser UI is reachable with no terminal held open for it (`daemon_start.py`). Detachment is
+`setsid` on POSIX and `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows, plus
+`CREATE_BREAKAWAY_FROM_JOB` through `popen_outside_job` - the last because a `mux start` typed
+inside a swe-mux session would otherwise land the daemon in that session's kill-on-close Job.
+Four outcomes: `already-running` (idempotent, and the port is the interlock, so this is safe in a
+login script or typed twice), `started`, `starting` (alive but slow - exit 0, because a cold page
+cache is not a failure), and `failed` (the child exited; exit 1 immediately rather than after the
+timeout). It is the only thing in this CLI that starts a daemon, and it does so only when typed:
+`mux ls` against a stopped daemon still reports a stopped daemon rather than quietly starting one.
+On Windows the desktop app already covers this - `swe-mux` opens no console and spawns its own
+daemon - so `mux start` is for the browser-only case, for Linux and macOS where there is no
+desktop app at all, and for iterating from a checkout.
 
 `mux --skill` prints the swe-mux agent skill embedded in this release, and `mux install-skill`
 writes it into the skill roots agent CLIs read (`design/features/agent-skill-delivery.md` holds

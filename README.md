@@ -48,14 +48,15 @@ swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so 
 # Recommended. Isolated environment, every command on your PATH globally.
 uv tool install swe-mux
 
-# Windows: the `desktop` extra adds the native window and the tray icon.
-uv tool install "swe-mux[desktop]"
-
 # The same isolated, on-PATH install, without uv.
 pipx install swe-mux
 ```
 
-Then run `swemuxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop window on Windows.
+On Windows that is everything: run `swe-mux` and you get the native window and a tray icon, with no console and nothing else to install.
+It offers to add itself to the Start Menu and to start with Windows the first time, so after that there is nothing to launch at all.
+
+Elsewhere - or if you would rather just use the browser - `swemux start` puts the daemon in the background and returns once it is serving <http://127.0.0.1:8765>; closing the terminal does not stop it, and `muxd --shutdown` does.
+`swemuxd` still runs it in the foreground when you want the log in front of you.
 `swemux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
 
 Every install writes five commands over three programs: **`swemux`** (the CLI), **`swemuxd`** (the daemon), and **`swe-mux`** (the desktop window and tray).

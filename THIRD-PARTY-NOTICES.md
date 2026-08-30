@@ -42,7 +42,7 @@ LGPL-3.0. The Windows tray icon (`desktop.py`). Weak copyleft: it reaches swe-mu
 Python source under `swe-mux/_internal/pystray/`, not compiled into the
 executable archive. Overwrite those files with your own build of the same
 version and relaunch; the application imports them from disk at startup.
-Running from source (`uv sync --extra desktop && uv run muxd`) replaces it the
+Running from source (`uv sync && uv run muxd`) replaces it the
 usual way, with `pip install pystray==<your build>`.
 
 ## Modified redistributions

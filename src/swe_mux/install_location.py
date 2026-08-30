@@ -252,6 +252,33 @@ class InstallLocation:
             and (self.package_dir.parent.parent / "pyproject.toml").is_file()
         )
 
+    def reinstall_command(self) -> str:
+        """How to reinstall *this* copy, for a dependency that should be present.
+
+        The sibling of `extra_install_command`, for the case that has no extra to
+        name: a base dependency is missing, which means the environment is
+        partially installed rather than deliberately minimal. Since 2026-08-30
+        `pystray` and `pywebview` are in that category, and the message a user
+        reads when the tray cannot start is the reason this exists - "install the
+        `desktop` extra" was already the wrong instruction for anyone who had
+        installed correctly, and after the move it is wrong for everyone.
+
+        Same derivation as `extra_install_command` and the same reason for it: a
+        remedy that cannot be run where it is read ends the search.
+        """
+        if self.source_checkout:
+            return "uv sync"
+        if self.kind == INSTALL_UV_TOOL:
+            return 'uv tool install --force "swe-mux"'
+        if self.kind == INSTALL_PIPX:
+            return 'pipx install --force "swe-mux"'
+        if self.kind == INSTALL_FROZEN:
+            # No installer to re-run: the bundle's dependencies were fixed when
+            # it was built, so a missing one is a broken bundle, not a fixable
+            # environment. Saying so beats handing out a command that cannot help.
+            return ""
+        return f'{self.pip_command} install --force-reinstall "swe-mux"'
+
     def path_fix_lines(self) -> list[str]:
         """The concrete way to put `bin_dir` on ``PATH`` on this host.
 

@@ -13,14 +13,17 @@ thing to audit. The three properties, unchanged from where they were proven:
   ``sys.path``; nothing is written into the interpreter's own site-packages,
   and an environment that already has the closure short-circuits untouched.
 - **There is no solver.** The pin tables are generated from ``uv.lock``
-  (:mod:`swe_mux.voice_wheels`, :mod:`swe_mux.desktop_wheels`); nothing here
-  queries an index or resolves anything.
+  (:mod:`swe_mux.voice_wheels`); nothing here queries an index or resolves
+  anything.
 
-One capability was added for Phase 24, under one non-negotiable condition.
-The desktop closure contains a distribution that publishes **no wheel**
-(``proxy-tools``: sdist only, pure Python, imported unconditionally by
-pywebview), so a spec may pin sdists beside its wheels - and **"unpack" means
-extract, never build**. Installing an sdist normally runs its build backend,
+One capability was added for Phase 24, under one non-negotiable condition. The
+desktop closure it was added for is gone - ``pystray`` and ``pywebview`` became
+base dependencies on 2026-08-30 and the acquire path with them - but the
+capability stays, because what is load-bearing about it is the *refusal* and
+not the caller. A spec may pin sdists beside its wheels, for a distribution that
+publishes no wheel at all (the case was ``proxy-tools``: sdist only, pure
+Python, imported unconditionally by pywebview), and **"unpack" means extract,
+never build**. Installing an sdist normally runs its build backend,
 which is arbitrary code execution at install time and would undo every
 guarantee above; extracting a tarball executes nothing. So
 :func:`_extract_sdist` copies the already-importable package source out of the

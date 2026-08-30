@@ -92,6 +92,14 @@ MINIMUM_PYTHON = (3, 12)
 # ends their search rather than continuing it. `install_location.
 # extra_install_command` derives one that this copy of swe-mux can actually run
 # (`.docs/development/DEPENDENCY_AUDIT_2026-08-28.md` § 4).
+#
+# **`desktop` is in this table and is no longer an extra**, which is a distinction
+# worth keeping rather than collapsing. `pystray` and `pywebview` became base
+# dependencies on 2026-08-30 (`design/features/desktop-shell.md`), so the row
+# still answers the only question a user has - "can this machine run the tray" -
+# but a `no` means a *broken* install rather than an unchosen option, and it must
+# not hand out `swe-mux[desktop]`, which would now add nothing and send someone
+# away satisfied. `BASE_CAPABILITIES` names which rows are in that case.
 _EXTRAS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "desktop",
@@ -104,6 +112,10 @@ _EXTRAS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         ("faster_whisper", "onnxruntime", "misaki"),
     ),
 )
+
+#: Rows in `_EXTRAS` whose packages are base dependencies, not extras. Absence is
+#: a partially-installed environment and the remedy is a reinstall.
+BASE_CAPABILITIES: frozenset[str] = frozenset({"desktop"})
 
 # What the local report does not answer, and why. Two distinct reasons live here
 # and the detail says which, because they are not the same fact: some of these
@@ -904,7 +916,7 @@ def _extras_checks() -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     for name, label, _modules in _EXTRAS:
         if name == "desktop" and not IS_WINDOWS:
-            # The extra's own markers are `sys_platform == 'win32'`, so it resolves
+            # The packages carry `sys_platform == 'win32'` markers, so they resolve
             # to nothing elsewhere; "not installed" would read as a fixable gap.
             checks.append(
                 _check(
@@ -913,11 +925,12 @@ def _extras_checks() -> list[dict[str, Any]]:
                     title=f"{label} [{name}]",
                     status="unavailable",
                     severity="optional",
-                    detail=f"The {name} extra is Windows-only and does not apply to "
-                    "this host.",
+                    detail="The desktop shell is Windows-only and does not apply "
+                    "to this host.",
                 )
             )
             continue
+        base = name in BASE_CAPABILITIES
         missing = list(probed[name])
         if not missing:
             checks.append(
@@ -927,7 +940,11 @@ def _extras_checks() -> list[dict[str, Any]]:
                     title=f"{label} [{name}]",
                     status="ok",
                     severity="info",
-                    detail=f"The {name} extra is installed.",
+                    detail=(
+                        f"Installed ({', '.join(_modules)})."
+                        if base
+                        else f"The {name} extra is installed."
+                    ),
                 )
             )
             continue
@@ -936,16 +953,28 @@ def _extras_checks() -> list[dict[str, Any]]:
                 id=f"extra.{name}",
                 category="extras",
                 title=f"{label} [{name}]",
-                status="unavailable",
-                severity="optional",
-                detail=f"The {name} extra is not installed (missing "
-                f"{', '.join(missing)}); this capability is unavailable.",
+                # A missing base dependency is a broken install, not an absent
+                # option, so it is a `warn` and not an `unavailable` - the two
+                # words are the difference between "you did not ask for this" and
+                # "this should be here and is not".
+                status="warn" if base else "unavailable",
+                severity="warning" if base else "optional",
+                detail=(
+                    f"Missing {', '.join(missing)}. These are base dependencies of "
+                    "swe-mux on Windows, so this install is incomplete rather than "
+                    "minimal."
+                    if base
+                    else f"The {name} extra is not installed (missing "
+                    f"{', '.join(missing)}); this capability is unavailable."
+                ),
                 # Extras are fixed at build time in the frozen app, so an install
                 # command there would be advice about a different installation.
                 remedy=(
                     "Rebuild the desktop app with this extra installed in the build "
                     "environment."
                     if frozen
+                    else location.reinstall_command()
+                    if base
                     else extra_install_command(name, location)
                 ),
             )

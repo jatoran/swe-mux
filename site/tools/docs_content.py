@@ -140,9 +140,6 @@ INSTALL = Page(
             "# Recommended. Isolated environment, all three commands on PATH globally.\n"
             "uv tool install swe-mux\n"
             "\n"
-            "# On Windows, take the desktop extra: it is what adds the window and the tray icon.\n"
-            'uv tool install "swe-mux[desktop]"\n'
-            "\n"
             "# The same isolated, on-PATH install, without uv.\n"
             "pipx install swe-mux\n"
             "\n"
@@ -155,12 +152,14 @@ INSTALL = Page(
             "flat",
             [
                 (
-                    "No shortcut, no Start Menu entry",
+                    "No shortcut, no Start Menu entry - until you are asked",
                     "Wheels have no post-install hook and pip runs no install-time code, so this "
-                    "is structural rather than a step somebody forgot. swe-mux starts from a "
-                    "terminal. On Windows you can create the shortcuts afterwards with "
-                    "<code>mux install-shortcut</code>, which is idempotent and has a "
-                    "<code>--remove</code>.",
+                    "is structural rather than a step somebody forgot. What swe-mux does about "
+                    "it is ask once: the first time the Windows desktop shell starts, it offers "
+                    "to add a Start Menu entry and to start with Windows, and never asks again "
+                    "either way. <code>mux install-shortcut</code> does the same thing on "
+                    "demand, is idempotent, and has a <code>--remove</code> that takes back all "
+                    "three - the login entry included.",
                 ),
                 (
                     "No agent CLI is installed or logged in",
@@ -169,26 +168,39 @@ INSTALL = Page(
                 ),
             ],
         ),
-        ("h2", "The desktop extra, on Windows"),
+        ("h2", "The window and the tray, on Windows"),
         (
             "p",
-            "Without <code>[desktop]</code> you still get a <code>swe-mux</code> command, and it "
-            "fails on a missing import rather than opening a window. The extra wants the WebView2 "
-            "Runtime, which recent Windows builds already have.",
+            "There is nothing extra to install. <code>pystray</code> and <code>pywebview</code> "
+            "are ordinary dependencies carrying a <code>win32</code> marker, so the command "
+            "above gives a Windows machine a working <code>swe-mux</code> and gives every other "
+            "machine nothing to download. They want the WebView2 Runtime, which recent Windows "
+            "builds already have.",
         ),
         (
             "note",
-            "It is Windows-only by declaration: <code>pystray</code> and <code>pywebview</code> "
-            "both carry a <code>win32</code> platform marker, so on Linux and macOS the extra "
-            "resolves to nothing and the daemon plus a browser is the whole product.",
+            "There was a <code>[desktop]</code> extra until 0.1.5. It still resolves, so an old "
+            "script keeps working, and it now adds nothing. It went because every install got "
+            "the <code>swe-mux</code> launcher whether or not it got the packages behind it, so "
+            "skipping the extra produced a command whose only behaviour was to fail.",
         ),
         ("h2", "Start it"),
         (
+            "p",
+            "<code>mux start</code> returns once the daemon is answering and leaves it "
+            "running: closing the terminal does not stop it. It is idempotent, so a daemon "
+            "that is already serving is reported and left alone, and nothing else in the CLI "
+            "starts one implicitly.",
+        ),
+        (
             "code",
-            "muxd                          # the daemon\n"
+            "mux start                     # the daemon, in the background\n"
             "# then open http://127.0.0.1:8765\n"
             "\n"
-            "swe-mux                       # Windows, with the desktop extra: the same thing in a window",
+            "muxd                          # the same daemon, in the foreground\n"
+            "muxd --shutdown               # stops it, the supervisor, and every session\n"
+            "\n"
+            "swe-mux                       # Windows: the same thing in a window, with a tray icon",
         ),
         (
             "proof",
@@ -257,10 +269,10 @@ INSTALL = Page(
             "# Run from a checkout instead - what you want if you are changing swe-mux itself.\n"
             "git clone https://github.com/jatoran/swe-mux\n"
             "cd swe-mux\n"
-            "uv sync --extra desktop\n"
+            "uv sync\n"
             "npm --prefix frontend ci        # only the source flow needs Node\n"
             "npm --prefix frontend run build # a fresh clone serves no UI until this runs once\n"
-            "uv run --extra desktop swe-mux",
+            "uv run swe-mux",
         ),
         (
             "note",
@@ -2895,10 +2907,10 @@ CONTRIBUTING = Page(
             "code",
             "git clone https://github.com/jatoran/swe-mux\n"
             "cd swe-mux\n"
-            "uv sync --extra desktop\n"
+            "uv sync\n"
             "npm --prefix frontend ci\n"
             "npm --prefix frontend run build   # a fresh clone serves no UI until this runs once\n"
-            "uv run --extra desktop swe-mux",
+            "uv run swe-mux",
         ),
         (
             "note",
