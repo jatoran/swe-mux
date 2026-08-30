@@ -452,6 +452,17 @@ def test_the_path_cycle_is_wired_into_ci_and_refuses_to_run_unasked() -> None:
     # Restored in a `finally`, so an interrupted run does not leave the seeded
     # test value behind on whatever machine it was interrupted on.
     assert "finally {" in script and "Set-UserPath $originalValue $originalKind" in script
+    # And the three guards a real host needs, which the first real run (2026-08-30)
+    # is what surfaced. A `finally` does not run when a process is killed, so the
+    # original value is written to a file first. `AppId` cannot be overridden on
+    # the command line, so a run where swe-mux is already registered would be an
+    # upgrade of that install whose uninstall deregisters it. And `[Icons]` writes
+    # `{group}\swe-mux` with no task gating it, so the group has to be redirected
+    # or a real shortcut is overwritten and then deleted.
+    assert "$Recovery" in script and "before the seed" in script
+    assert "$AppGuid = '{7C4E1A64-2B5F-4E0B-9E2D-6E5B0D4A11C3}'" in script
+    assert "already installed and registered" in script
+    assert '"/GROUP=$Group"' in script
 
 
 def test_a_missing_client_bundle_is_refused_before_the_compiler_runs(

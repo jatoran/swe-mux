@@ -6135,36 +6135,31 @@ here and does not there.
   The PATH edit is proven by running it, not by reading the `.iss`: `ci.yml`'s
   `installer-cycle` job compiles the installer and drives install → PATH → upgrade →
   uninstall, diffing `HKCU\Environment\Path` and its registry value kind at each step against
-  a seeded REG_EXPAND_SZ value holding `%USERPROFILE%\bin`. Inno Setup is not installed on the
-  development host, so that cycle has never run locally and CI is where it is first executed.
+  a seeded REG_EXPAND_SZ value holding `%USERPROFILE%\bin`.
 
-  **This owes a `CHANGELOG.md` entry at release time, and it is recorded here because it
-  cannot be written before then.** `test_verify_release_unit.py::
-  test_this_repository_simulated_as_its_own_release_is_coherent` simulates releasing whatever
-  version `pyproject.toml` names, so *any* content under `## [Unreleased]` fails the landing
-  gate: "`## [0.1.3]` is written, but `## [Unreleased]` still has content above it, so part of
-  this release is recorded as unreleased." Three branches have now written an entry, gone red,
-  and reverted it. The words, for whoever cuts 0.1.4:
+  **The cycle has now been run for real** (2026-08-30, Inno 6.7.3 on the development host, into
+  a throwaway install directory): every assertion passed, and `HKCU\Environment\Path` came back
+  byte-identical - same 1337 characters, same 23 entries, same `REG_SZ` kind. It turned up two
+  hazards that no CI runner can ever see, because both need a machine that already has
+  something on it, and both are now guarded in the script rather than in a comment. The
+  `AppId` is fixed and no command-line switch overrides it, so running setup against an
+  existing install is an *upgrade of that install* and the uninstall afterwards deregisters
+  it; and `[Icons]` writes `{group}\swe-mux` with no task gating it, so a default-group run
+  overwrites a real Start Menu shortcut and the uninstall deletes it. The script now refuses
+  on a registered `AppId` and passes `/GROUP=`. It also writes the original PATH to a file
+  before seeding, because a `finally` does not run when a process is killed.
 
-  > **The Windows installer now installs `swemux` and `mux`, and puts them on your PATH.**
-  > 0.1.3 added those names for people installing from PyPI and said plainly that the installer
-  > shipped no command-line program; it does now. The installer writes a third directory beside
-  > the app and the PTY supervisor, holding the two launchers and nothing else, and adds that
-  > one directory to your user PATH - no elevation prompt, because the whole install is
-  > per-user. Open a new terminal afterwards: Windows tells Explorer about the change, and a
-  > console that is already open never hears about it. It is a tickbox on the setup wizard, on
-  > by default, so a machine whose PATH you curate by hand can decline it; declining installs
-  > the commands anyway, and `swemux doctor` says where they are. Installing a newer version
-  > over the top leaves PATH exactly as it found it - one entry, never two - and uninstalling
-  > removes that entry and nothing near it, with a `%USERPROFILE%\bin` coming back as a
-  > variable rather than as whatever it meant at the time. `swemuxd`/`muxd` are deliberately
-  > not part of this: the application already is the daemon and starts one when you launch it.
-  >
-  > **Fixed: `swemux doctor` no longer reports three critical faults on a healthy install.**
-  > Run from the new command-line client, the checks that ask whether the daemon can start were
-  > asking it of the wrong program - the client deliberately contains no daemon, no browser UI
-  > and no terminal backend, all of which live in the application beside it. Those rows now say
-  > so and point at where the daemon actually is.
+  **The `CHANGELOG.md` entry this owed is now written**, under `## [Unreleased]`, as one
+  `Added` and one `Fixed`. It was parked here rather than written because the landing gate
+  would not accept it: `test_verify_release_unit.py::
+  test_this_repository_simulated_as_its_own_release_is_coherent` simulated releasing whatever
+  version `pyproject.toml` names, so *any* content under `## [Unreleased]` failed it -
+  "`## [0.1.3]` is written, but `## [Unreleased]` still has content above it, so part of this
+  release is recorded as unreleased." Three branches wrote an entry, went red, and reverted it,
+  so a check that exists to stop a release shipping unrecorded changes was causing changes to
+  ship unrecorded. `verify()` now takes a stage: the gate's simulation asks the
+  development-time question and `release.yml` keeps the strict one, which is what let the words
+  move from here into the file they belong in.
 
 ### Sequenced after it, in order
 

@@ -651,8 +651,18 @@ person with no shortcut, no tray, and no idea where anything went.
   REG_EXPAND_SZ `PATH` holding `%USERPROFILE%\bin` and a deliberate `...\swe-mux-cli-old`
   prefix collision, then diffs the value after install, after installing over the top, and
   after uninstall, restoring the original in a `finally`. The script refuses to start without
-  `SWE_MUX_INSTALLER_CYCLE=1`, because it rewrites the current user's `PATH` and is meant for
-  a runner that is thrown away.
+  `SWE_MUX_INSTALLER_CYCLE=1`, because it rewrites the current user's `PATH`.
+
+  **It has been run on a real machine once** (2026-08-30, Inno 6.7.3), and the two things it
+  found are things a runner cannot find, because both need a host that already has something
+  on it. **The `AppId` is fixed and no command-line switch overrides it**, so running setup
+  where swe-mux is already registered is an upgrade of that install, and the uninstall at the
+  end deregisters it - the script now refuses on a registered `AppId`. And **`[Icons]` writes
+  `{group}\swe-mux` unconditionally**, with no task gating it, so a default-group run
+  overwrites a real Start Menu shortcut and the uninstall deletes it - the script now passes
+  `/GROUP=`. It also writes the original `PATH` to a file before seeding and removes it only
+  after a verified restore, because a `finally` does not run when a process is killed and the
+  value it would have restored is otherwise the only copy.
 - **`packaging/swe-mux.ico` is gitignored build output**, rendered by `build_desktop` from
   `desktop.create_tray_image` on every build. A fresh clone has none, so `build_installer.py`
   refuses with the command that makes it rather than letting ISCC report a bare "The system

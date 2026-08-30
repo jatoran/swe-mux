@@ -78,10 +78,20 @@ SIGNTOOL_ENV = "SWE_MUX_SIGNTOOL"
 #: it has to be the same on both `/S<name>=` and `/DSignTool=`.
 SIGNTOOL_NAME = "swemux"
 
-#: Where Inno Setup 6 installs by default, checked when `iscc` is not on PATH.
+#: Where Inno Setup 6 installs, checked when `iscc` is not on PATH.
 #: The GitHub `windows-latest` image puts it on PATH (its own image test asserts
 #: `Get-Command iscc` resolves), so this is for a developer machine.
+#:
+#: The per-user entry is not an afterthought and is listed first because it is
+#: what the message below actually produces. `winget install JRSoftware.InnoSetup`
+#: installs to `%LOCALAPPDATA%\Programs\Inno Setup 6` with no elevation, puts
+#: nothing on PATH, and touches neither `Program Files` location - so following
+#: this script's own advice used to yield an install this script then could not
+#: find (measured 2026-08-30, Inno 6.7.3). An elevated or Chocolatey install
+#: still lands in one of the machine-wide directories, which is why all three
+#: stay.
 ISCC_FALLBACKS = (
+    Path.home() / "AppData" / "Local" / "Programs" / "Inno Setup 6" / "ISCC.exe",
     Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
     Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
 )
@@ -97,7 +107,7 @@ def find_iscc() -> Path:
             return candidate
     raise SystemExit(
         "Inno Setup's compiler (ISCC.exe) was not found on PATH or in either "
-        "default location. Install Inno Setup 6.3 or newer - "
+        "of the three locations it installs to. Install Inno Setup 6.3 or newer - "
         "`winget install JRSoftware.InnoSetup` or `choco install innosetup` - or "
         "put ISCC.exe on PATH. GitHub's windows-latest image ships it already."
     )

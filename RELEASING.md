@@ -131,6 +131,18 @@ the enforcement.
 Neither replaces the `TODO(release)` sweep in step 1: those markers are deliberately still in the
 tree, so no gate can require their absence without being red on a healthy checkout.
 
+One of the unit script's checks has two correct answers, and the caller picks which.
+`changelog-entry` refuses a `## [Unreleased]` section that still holds entries above the version's
+own, which is right at the tag and wrong between releases - after a release, `pyproject.toml` still
+declares the version just published, and `## [Unreleased]` is where the next version's entries are
+supposed to go.
+The script cannot tell the two states apart by reading the tree, so `--stage` says which is being
+asked, and it defaults to the strict release-time reading.
+**A release never passes it.**
+The landing gate does, through the test that simulates this repository as its own release, which
+is what lets an entry be written between releases instead of being reverted to keep the gate green;
+a test asserts that `release.yml` does not.
+
 **Precondition owed before the first publish** (`.docs/development/ROADMAP.md` Phase 11): release
 validation must fail on a missing or stale frontend bundle rather than leaving this as a manual
 check, and `av` must be out of the wheel's install closure, because `faster-whisper` otherwise

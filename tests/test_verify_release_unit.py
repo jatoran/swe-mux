@@ -316,8 +316,13 @@ def wheel(tmp_path: Path) -> Path:
     return build_wheel(tmp_path / "swe_mux-0.1.0-py3-none-any.whl")
 
 
-def run(wheel: Path, tree: Path, tag: str = TAG) -> Any:
-    return verify_release_unit.verify(wheel, tag, tree)
+def run(wheel: Path, tree: Path, tag: str = TAG, stage: Any = verify_release_unit.RELEASE) -> Any:
+    """The default stage is the strict one, matching `verify`'s own default.
+
+    Every test that does not name a stage is therefore asking the release-time
+    question, which is the one that must not weaken.
+    """
+    return verify_release_unit.verify(wheel, tag, tree, stage=stage)
 
 
 def verdict(report: Any, name: str) -> bool:
@@ -571,6 +576,139 @@ def test_a_written_entry_with_leftover_unreleased_content_fails(
     report = run(wheel, tree)
     assert only_failure(report) == "changelog-entry"
     assert "recorded as unreleased" in message(report, "changelog-entry")
+
+
+# ------------------------------------------------------------------- the two changelog stages
+#
+# The rule above ("nothing may be left under `## [Unreleased]`") is a release-time
+# rule. Between releases the same tree is correct: `pyproject.toml` still declares
+# the version that was published, and `## [Unreleased]` is where the next
+# version's entries belong. These tests pin both directions, because a mode that
+# is only ever exercised one way is a mode that will be wrong the first time
+# somebody relies on the other.
+
+
+def _tree_with_leftover_unreleased(root: Path) -> Path:
+    """A written entry for the declared version, plus content under `Unreleased`.
+
+    The exact state this repository is in after a release, and the state that
+    made three branches revert their changelog entries to keep the gate green.
+    """
+    return build_tree(
+        root,
+        changelog=CHANGELOG_BODY.format(version=VERSION).replace(
+            "## [Unreleased]\n", "## [Unreleased]\n\n- One more thing.\n", 1
+        ),
+    )
+
+
+def test_leftover_unreleased_content_passes_at_the_development_stage(
+    tmp_path: Path, wheel: Path
+) -> None:
+    tree = _tree_with_leftover_unreleased(tmp_path / "tree")
+    report = run(wheel, tree, stage=verify_release_unit.DEVELOPMENT)
+    assert report.ok, verify_release_unit.render(report, subject="Release unit")
+    assert verdict(report, "changelog-entry") is True
+    assert "next version" in message(report, "changelog-entry")
+
+
+def test_the_same_tree_still_fails_at_the_release_stage(tmp_path: Path, wheel: Path) -> None:
+    """The other direction of the test above, over the identical bytes.
+
+    Written as a pair on purpose: the two differ only in the stage, so a change
+    that made the stage inert would fail here rather than passing both.
+    """
+    tree = _tree_with_leftover_unreleased(tmp_path / "tree")
+    report = run(wheel, tree, stage=verify_release_unit.RELEASE)
+    assert only_failure(report) == "changelog-entry"
+    assert "recorded as unreleased" in message(report, "changelog-entry")
+
+
+def test_the_stage_defaults_to_the_strict_one(tmp_path: Path, wheel: Path) -> None:
+    """A caller that says nothing gets the release-time reading.
+
+    This is the property that keeps the release path safe by construction rather
+    than by every caller remembering: relaxing it takes an argument.
+    """
+    tree = _tree_with_leftover_unreleased(tmp_path / "tree")
+    report = verify_release_unit.verify(wheel, TAG, tree)
+    assert only_failure(report) == "changelog-entry"
+
+
+def test_the_development_stage_still_requires_the_version_to_have_an_entry(
+    tmp_path: Path, wheel: Path
+) -> None:
+    """Only the third question is relaxed; the first two are asked at both stages."""
+    tree = build_tree(
+        tmp_path / "tree",
+        changelog="# Changelog\n\n## [Unreleased]\n\n- Everything, still here.\n",
+    )
+    report = run(wheel, tree, stage=verify_release_unit.DEVELOPMENT)
+    assert verdict(report, "changelog-entry") is False
+    assert "no `## [0.1.0]` section" in message(report, "changelog-entry")
+
+
+def test_the_development_stage_still_requires_the_entry_to_say_something(
+    tmp_path: Path, wheel: Path
+) -> None:
+    tree = build_tree(
+        tmp_path / "tree",
+        changelog=(
+            "# Changelog\n\n## [Unreleased]\n\n- Next version's work.\n\n"
+            "## [0.1.0] - 2026-08-28\n\n"
+            "[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.0...HEAD\n"
+            "[0.1.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.0\n"
+        ),
+    )
+    report = run(wheel, tree, stage=verify_release_unit.DEVELOPMENT)
+    assert only_failure(report) == "changelog-entry"
+    assert "nothing under it" in message(report, "changelog-entry")
+
+
+def test_the_stage_flag_selects_the_reading_and_the_evidence_records_it(
+    tmp_path: Path, wheel: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both stages over one tree, through `main`, with the report saying which ran.
+
+    A `--json` consumer reading `changelog-entry: ok` has to be able to tell
+    which of the two questions earned that verdict, or the report is ambiguous
+    about the only check with two correct answers.
+    """
+    tree = _tree_with_leftover_unreleased(tmp_path / "tree")
+    monkeypatch.setattr(verify_release_unit, "ROOT", tree)
+
+    assert verify_release_unit.main(["--json", "--tag", TAG, str(wheel)]) == 1
+    strict = json.loads(capsys.readouterr().out)
+    assert strict["evidence"]["stage"] == verify_release_unit.RELEASE
+    assert {c["name"]: c["ok"] for c in strict["checks"]}["changelog-entry"] is False
+
+    assert (
+        verify_release_unit.main(
+            ["--json", "--tag", TAG, "--stage", verify_release_unit.DEVELOPMENT, str(wheel)]
+        )
+        == 0
+    )
+    relaxed = json.loads(capsys.readouterr().out)
+    assert relaxed["evidence"]["stage"] == verify_release_unit.DEVELOPMENT
+    assert relaxed["ok"] is True
+
+
+def test_the_release_workflow_asks_the_strict_question() -> None:
+    """`release.yml` must never pass `--stage`, so it gets the default.
+
+    The whole point of adding a stage was to stop the landing gate demanding a
+    release-time property between releases. It would be self-defeating if the
+    flag leaked into the one job where that property is the thing being enforced,
+    and a leak is invisible: the workflow would go on exiting 0 while asking a
+    weaker question.
+    """
+    text = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    steps = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    invocations = [line for line in steps if "verify_release_unit.py" in line]
+    assert invocations, "release.yml no longer runs the release-unit validator"
+    for line in invocations:
+        assert "--stage" not in line, line
 
 
 def test_an_undated_heading_still_matches_its_version(tmp_path: Path, wheel: Path) -> None:
@@ -1058,6 +1196,18 @@ def test_this_repository_simulated_as_its_own_release_is_coherent() -> None:
 
     When this fails after a version bump, it is not the test that is wrong:
     `RELEASING.md` § 1 lists what a bump has to move in the same commit.
+
+    Asked at the *development* stage, and that is the whole of the difference
+    between this test and `release.yml`. This one runs in the landing gate, on
+    every branch, at every point in the release cycle - so it can never know that
+    a release is happening, and simulating one unconditionally made it demand a
+    property that is only true at the tag. It asked for an empty
+    `## [Unreleased]` on a tree whose entire purpose between releases is to fill
+    that section, and the branches that hit it resolved it the only way a red
+    gate allows: by deleting their changelog entries. A check meant to stop a
+    release shipping unrecorded changes was causing changes to ship unrecorded.
+    `release.yml` runs the same validator at the tag with the default stage,
+    where the property is real and still enforced.
     """
     module = verify_release_unit
     tree = module.SourceTree(REPO_ROOT)
@@ -1076,5 +1226,5 @@ def test_this_repository_simulated_as_its_own_release_is_coherent() -> None:
             # report `swe-mux` as absent from an artifact that ships it.
             gui_scripts=dict(project.get("gui-scripts") or {}),
         )
-        report = module.verify(wheel, f"v{version}", REPO_ROOT)
+        report = module.verify(wheel, f"v{version}", REPO_ROOT, stage=module.DEVELOPMENT)
     assert report.ok, module.render(report, subject="Release unit")
