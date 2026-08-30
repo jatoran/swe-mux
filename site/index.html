@@ -332,11 +332,11 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
 }
-/* The two facts that used to be a caption under the hero film. Above 620px the
-   phone overlay hangs up to 46px below `.herovis` and this has to clear it;
-   below 620px the phone is back in flow and the same margin is dead space. */
-.shotnote { margin-top: clamp(56px, 8vw, 80px); max-width: 72ch; }
-@media (max-width: 620px) { .shotnote { margin-top: 22px; } }
+/* Whatever follows the hero visual has to clear the phone overlay, which above
+   620px hangs up to 46px below `.herovis`. Below 620px the phone is back in
+   flow and the same margin is dead space, so it drops back to the normal one. */
+.shotgap { margin-top: clamp(56px, 8vw, 80px); }
+@media (max-width: 620px) { .shotgap { margin-top: clamp(34px, 5vw, 56px); } }
 
 /* --------------------------------------------------------------- two halves */
 .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
@@ -557,23 +557,22 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <section class="hero">
   <div class="wrap">
     <!-- The two claims that are not commodity in this category: a record read from the
-         work, and landing behind an approved check. The audience clause the headline used
-         to open with lives in the kick line above it, so the H1 is the claim and nothing
-         else. "Mission control for your coding-agent fleet" survives as a brand tagline in
-         the footer and is deliberately not the explanatory claim here. -->
-    <div class="kick">for the coding agents you already run</div>
+         work, and landing behind an approved check. The portability claim lives in the kick
+         line above the headline, so the H1 is the claim and nothing else. "Mission control
+         for your coding-agent fleet" survives as a brand tagline in the footer and is
+         deliberately not the explanatory claim here. -->
+    <div class="kick">Use your same workflow across every harness</div>
     <h1>A multiplexer for coding agents.<span class="cur"></span></h1>
     <p class="sub"><b>Real terminals, persistent sessions, Tailscale-native.</b><br />
       Optimized for mobile: <span class="go">ship from anywhere.</span></p>
     <div class="lede">
       <p>It owns the pseudoterminals, so Claude Code, Codex, opencode and any other CLI run
-      exactly as they do outside it - including whatever shipped yesterday. Around them:
-      <b>one status vocabulary</b> telling you which agent is working, which is blocked and
-      which is waiting on you; sessions that outlive the browser, the daemon and app updates;
-      and the same interface on your phone over your own tailnet, with nothing turned off.</p>
-      <p>Underneath, a record taken from the work rather than from the agent's account of it,
-      and finished worktree branches landed one at a time behind a verification command you
-      approved.</p>
+      exactly as they do outside it. Around them: <b>one status vocabulary</b> telling you
+      which agent is working, which is blocked and which is waiting on you; sessions that
+      outlive the browser, the daemon and app updates; and the same interface on your phone
+      over your own tailnet, with nothing turned off. Underneath, a record taken from the
+      work rather than from the agent's account of it, and finished branches landed one at a
+      time behind a check you approved.</p>
     </div>
     <div class="ic">
       <div class="ic-head">
@@ -626,15 +625,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
                   context meter, and touch key rail." />
       </div>
     </div>
-    <!-- Two facts rather than a caption: `site/README.md` section 8 requires the page to say
-         the captures are the real application, and a 4 MB fetch is worth naming before somebody
-         on a metered connection presses play. It clears the phone overlay's overhang, which is
-         what `.shotnote`'s top margin is for. -->
-    <p class="note shotnote">Every screenshot and loop here is the real application, captured in a
-    synthetic install with invented projects. The film is a 4 MB fetch from GitHub, and only when
-    you press play.</p>
-
-    <div class="halves">
+    <div class="halves shotgap">
       <div class="half ade">
         <h3>The workbench</h3>
         <p>Sessions, panes, tabs, notes, files, git, previews, a Run menu you define. Everything

@@ -324,11 +324,11 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
 }
-/* The two facts that used to be a caption under the hero film. Above 620px the
-   phone overlay hangs up to 46px below `.herovis` and this has to clear it;
-   below 620px the phone is back in flow and the same margin is dead space. */
-.shotnote { margin-top: clamp(56px, 8vw, 80px); max-width: 72ch; }
-@media (max-width: 620px) { .shotnote { margin-top: 22px; } }
+/* Whatever follows the hero visual has to clear the phone overlay, which above
+   620px hangs up to 46px below `.herovis`. Below 620px the phone is back in
+   flow and the same margin is dead space, so it drops back to the normal one. */
+.shotgap { margin-top: clamp(56px, 8vw, 80px); }
+@media (max-width: 620px) { .shotgap { margin-top: clamp(34px, 5vw, 56px); } }
 
 /* --------------------------------------------------------------- two halves */
 .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
@@ -511,16 +511,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
 .rel { margin-top: clamp(40px, 6vw, 64px); }
 
-/* The anti-roadmap is drawn as a panel rather than as a fourth run of bullets
-   that happens to be last. It is the cheapest instrument this site has for
-   answering a request that will never be built with a reason instead of with
-   silence, and the roadmap page now invites requests, which makes that job much
-   larger than it was. A panel is the whole treatment: no colour of its own, no
-   warning register, and the same hairline the rest of the page uses. */
-.boundary { border: 1px solid var(--line-2); background: var(--panel);
-            padding: 2px clamp(14px, 3vw, 26px) clamp(16px, 2.4vw, 22px); }
-.boundary .relhead { padding-top: clamp(14px, 2.4vw, 20px); }
-
 /* Vote rows. A count is a number, so it takes the mono face and a fixed column;
    the row itself is a link rather than a description, which is what separates
    this list from the themed ones above it. `overflow-wrap` because a title is
@@ -674,9 +664,10 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 /* -------------------------------------------------- the agent-onboarding block
 
    Prominent by position rather than by colour: it sits directly under the lede,
-   above the section nav, and takes the panel treatment the roadmap's boundary
-   panel already uses. It is the first thing on the page because the reader most
-   likely to act on it is the one who has not decided to read anything yet. */
+   above the section nav, as a panel with no colour of its own, no warning
+   register, and the same hairline the rest of the page uses. It is the first
+   thing on the page because the reader most likely to act on it is the one who
+   has not decided to read anything yet. */
 .agentbox { border: 1px solid var(--line-2); background: var(--panel);
             padding: clamp(15px, 2.6vw, 22px); margin-top: clamp(20px, 3vw, 28px); }
 .agentbox h2 { font-size: clamp(15px, 2vw, 17px); }
@@ -1029,7 +1020,7 @@ npm --prefix frontend run build</pre></div>
       </div>
       <div class="docsec" id="something-is-still-wrong">
         <div class="head"><span class="n">#</span><h2>Something is still wrong</h2><span class="fill"></span></div>
-        <p class="prose">Bugs go to <a href="https://github.com/jatoran/swe-mux/issues">the issue tracker</a>, with the export attached. Feature requests go to <a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">the Ideas discussions</a>, where a thumbs-up is a vote - and it is worth checking <a href="../../roadmap/#not-planned">deliberately not on the roadmap</a> first, because some things are answered with a reason rather than with silence.</p>
+        <p class="prose">Bugs go to <a href="https://github.com/jatoran/swe-mux/issues">the issue tracker</a>, with the export attached. Feature requests go to <a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">the Ideas discussions</a>, where a thumbs-up is a vote.</p>
       </div>
       <nav class="dsstep" aria-label="Page navigation">
         <a class="prev" rel="prev" href="../data/"><span class="l">Previous</span><span class="t">Where data lives, and what leaves the machine</span></a>
