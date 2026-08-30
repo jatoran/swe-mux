@@ -57,6 +57,58 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   because there is nothing left to download. It reports whether this environment can run the
   tray and, when it cannot, the reinstall command for how this copy was installed.
 
+### Fixed
+
+Everything in this group came from one testing session on a clean Windows 11 machine that is
+not the development host, which is the first time swe-mux had been run on one. They share a
+cause: a property of the development host was written down as a fact about Windows.
+
+- **Claude Code sessions report their lifecycle again on machines without Git Bash.** The
+  hook command named the interpreter in the MSYS form (`/c/Users/...`), which only Git Bash
+  can run. Where Claude Code dispatches hooks through PowerShell instead, all eleven events
+  failed with `CommandNotFoundException` and took status detection, history, the prompt queue
+  and approvals with them - while the session kept running and looking healthy. The path is
+  now written `C:/Users/...`, the one spelling PowerShell, Bash and cmd all execute, and it
+  reaches the shell unquoted (a space is removed via the 8.3 short name, because at command
+  position PowerShell reads a quoted string as a string rather than a program).
+- **`swemux doctor` now fails when an agent session has never reported a hook.** The failure
+  above was silent and total, and was found by a human reading the CLI's stderr. It reports
+  only sessions this daemon spawned, so a daemon restart does not flag every healthy session.
+- **A prerequisite that is installed but not on PATH is no longer reported as missing.**
+  Detection equated "on PATH" with "installed", so a machine with Git installed and Tailscale
+  installed *and connected to a tailnet* was told to `winget install` both. Tailscale's
+  Windows installer never adds its directory to PATH, so that was every GUI install of it -
+  and it silently disabled Tailscale Serve, `tailscale cert` and the direct TLS listener with
+  it. There are now three states rather than two, the off-PATH remedy names PATH instead of
+  an install, and detection looks in the default install locations.
+- **Settings → Diagnostics has a Re-scan button and a per-tool path override.** Re-scan
+  re-reads PATH from Windows before looking again, because a daemon inherits its environment
+  once at startup and would otherwise keep reporting a tool installed five minutes ago as
+  absent, with nothing saying why.
+- **Install instructions are per-platform.** A Linux user missing Git was told to run
+  `winget` and sent to a `/download/win` page.
+- **`uv` is on the prerequisite checklist**, since managed integrations are installed with it.
+- **A Windows 11 machine without WSL stops spawning `wsl.exe` every 30 seconds.** Windows 11
+  ships that binary whether or not the subsystem is installed, so availability was a
+  guaranteed false positive; the stub then blocked, because the daemon runs windowless, and
+  was tree-killed at an 8s timeout on every status poll, forever. Availability is now a
+  registry check and no WSL command inherits the daemon's stdin.
+- **Voice setup works on Python 3.13 and 3.14.** `uv tool install` picks the newest CPython
+  on the machine, and the pinned voice closure had no wheel spaCy could load on 3.14, so
+  local voice dead-ended at "no wheel this interpreter can load for: spacy". The pins now
+  cover 3.12 through 3.14, CI checks the closure against each of them rather than only the
+  3.12 it pins, and the refusal names the interpreter and the supported range instead of
+  reading as a broken package.
+- **Downloads verify TLS against the OS certificate store.** The Kokoro pronunciation model
+  failed with `unable to get local issuer certificate` against github.com on a machine whose
+  browser reached the same URL: Windows fetches most roots on demand and Python's reading of
+  the store only sees the ones already fetched.
+- **The Edge TTS install no longer throws away 80 seconds of work to report a timeout.** It
+  checks it can reach PyPI before building anything, and separates "cannot connect" from
+  "cannot verify". Its verification step - which imports the package and makes no network
+  request at all - had a 20s budget that a first-ever import on a cold, scanned filesystem
+  could not meet; it is now 120s and says what it was actually doing.
+
 ### Added
 
 - **The first launch of the Windows desktop shell offers to add itself to the Start Menu and

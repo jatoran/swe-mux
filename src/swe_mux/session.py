@@ -2137,6 +2137,15 @@ class Session:
             self.record.state_since = self.last_state_change_ts
         self.last_evidence_ts = time.time()
         self.last_hook_ts = 0.0
+        # Wall clock at which *this daemon* spawned this session, and only then:
+        # `None` for a session adopted from the supervisor or restored from cold.
+        # It is what licenses `doctor.hook_ingress` to read a silent `last_hook_ts`
+        # as a broken hook channel. A spawn is the one moment a working channel
+        # must speak (SessionStart fires unconditionally), whereas an adopted
+        # session's counter is merely reset by the restart and an idle one has no
+        # reason to speak again for hours - reading that as a fault would flag
+        # every healthy session after every reload.
+        self.hook_channel_watch_since: float | None = None
         # Only hooks whose event *must* have produced transcript records — a prompt
         # submitted, a tool run, a turn stopped. Staleness detection keys off this
         # and not `last_hook_ts`, because the hook that fires most often on a quiet
@@ -3209,6 +3218,8 @@ class SessionManager:
         )
         if initial_output:
             session.scrollback.append(initial_output)
+        # Set on the spawn path and nowhere else; see the attribute's own comment.
+        session.hook_channel_watch_since = time.time()
         self.sessions[sid] = session
         self._attach_ledger_sink(session)
         self._attach_operator_input(session)

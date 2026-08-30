@@ -29,6 +29,24 @@ EDGE_TESTED_VERSION_PREFIX = "7.2."
 EDGE_TTS_VERSION = "7.2.8"
 EDGE_TTS_REQUIREMENT = f"edge-tts=={EDGE_TTS_VERSION}"
 EDGE_INSTALL_TIMEOUT_SECONDS = 300.0
+# How long the post-install verification may take. It was 20s, and on a clean
+# Windows 11 laptop the install failed there and rolled back everything it had
+# just built (2026-08-30).
+#
+# The tempting diagnosis was a network or TLS failure, because the sibling Kokoro
+# download on the same machine really did fail on certificate verification. It is
+# not one: the `status` operation imports `edge_tts` and reads its version out of
+# the installed metadata (`assets/integrations/edge_tts_bridge.py`) and makes no
+# request at all. What it was measuring is a first-ever import of `edge_tts` and
+# `aiohttp` from a venv written seconds earlier, with a virus scanner reading
+# every one of those files for the first time. The same machine's own log gives
+# the scale: `uv venv` took 44.8s and the package install 36s, against roughly 2s
+# and 5s on a warm host, so a 20s import budget was never going to hold there.
+#
+# 120s is generous against that and still bounded, and it is the *verify* budget
+# only - `EDGE_BRIDGE_TIMEOUT_SECONDS` still governs steady-state calls, where a
+# slow answer is a real fault rather than a cold cache.
+EDGE_VERIFY_TIMEOUT_SECONDS = 120.0
 EDGE_INSTALL_OUTPUT_LIMIT = 512 * 1024
 PYPI_SIMPLE_INDEX = "https://pypi.org/simple"
 
@@ -485,6 +503,48 @@ class EdgeTtsProvider:
             raise
         return previous if previous.exists() else None
 
+    async def _preflight_index_reachable(self) -> None:
+        """Fail fast, and distinguish "cannot connect" from "cannot verify".
+
+        Those two are one line apart in a stack trace and are completely different
+        problems. A TLS-verification failure on a clean Windows machine is a trust
+        gap that `tls_trust` exists to close, and a user told only "install failed"
+        has no way to know that; a refused connection is a proxy or an offline
+        host. Both are reported here rather than fifteen lines into uv's output.
+        """
+        import ssl
+
+        import aiohttp
+
+        from .tls_trust import trusting_connector
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=15, connect=10)
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=trusting_connector()
+            ) as session:
+                async with session.head(PYPI_SIMPLE_INDEX, allow_redirects=True) as response:
+                    if response.status >= 500:
+                        raise EdgeTtsError(
+                            "install_index_unavailable",
+                            f"{PYPI_SIMPLE_INDEX} answered {response.status}; "
+                            "PyPI may be having an outage. Try again shortly.",
+                        )
+        except (ssl.SSLError, aiohttp.ClientSSLError) as exc:
+            raise EdgeTtsError(
+                "install_tls_untrusted",
+                f"could not verify the TLS certificate of {PYPI_SIMPLE_INDEX}: {exc}. "
+                "This machine's certificate trust store cannot validate a public "
+                "certificate, which usually means a TLS-inspecting proxy whose "
+                "certificate authority is not installed here.",
+            ) from exc
+        except (aiohttp.ClientError, OSError, TimeoutError) as exc:
+            raise EdgeTtsError(
+                "install_index_unreachable",
+                f"could not reach {PYPI_SIMPLE_INDEX}: {exc}. The managed installation "
+                "downloads Edge TTS from PyPI, so it needs outbound HTTPS.",
+            ) from exc
+
     async def _install_managed(
         self, operation_id: str, prior_state: dict[str, Any]
     ) -> None:
@@ -499,6 +559,14 @@ class EdgeTtsProvider:
                     "uv_not_found",
                     "uv is required for the managed Edge TTS installation",
                 )
+            # Before the multi-minute part, not after it. An install that spends
+            # 80 seconds building an environment and only then discovers it cannot
+            # reach PyPI has thrown that work away and reports the failure at the
+            # step furthest from its cause. One HEAD against the index answers
+            # both halves at once - routing and TLS trust - in about as long as it
+            # takes to fail.
+            self._install_phase(operation_id, "checking_connectivity")
+            await self._preflight_index_reachable()
             self.integration_directory.mkdir(parents=True, exist_ok=True)
             if staging.exists():
                 shutil.rmtree(staging)
@@ -531,13 +599,30 @@ class EdgeTtsProvider:
                     operation_id=operation_id,
                 )
                 self._install_phase(operation_id, "verifying")
-                payload = await self._invoke_unlocked(
-                    str(staging_python),
-                    "status",
-                    timeout_seconds=20.0,
-                    record_version=False,
-                    correlation_id=operation_id,
-                )
+                try:
+                    payload = await self._invoke_unlocked(
+                        str(staging_python),
+                        "status",
+                        timeout_seconds=EDGE_VERIFY_TIMEOUT_SECONDS,
+                        record_version=False,
+                        correlation_id=operation_id,
+                    )
+                except EdgeTtsError as exc:
+                    # A bare "Edge TTS status timed out" is what an operator saw
+                    # after 80 seconds of environment and package work was thrown
+                    # away, and it sent them looking for a network fault that was
+                    # not there. Say what the step actually does, so the next
+                    # reader does not repeat the diagnosis.
+                    if exc.code != "timeout":
+                        raise
+                    raise EdgeTtsError(
+                        "install_verify_timeout",
+                        f"the installed Edge TTS did not finish loading within "
+                        f"{EDGE_VERIFY_TIMEOUT_SECONDS:.0f}s. This step only imports the "
+                        f"package and reads its version - it makes no network request - so "
+                        f"the usual cause is a slow disk or a virus scanner reading the new "
+                        f"files for the first time. Retrying is often enough.",
+                    ) from exc
                 installed = str(payload.get("version") or "")
                 if installed != EDGE_TTS_VERSION:
                     raise EdgeTtsError(
