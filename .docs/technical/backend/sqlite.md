@@ -90,32 +90,71 @@ its port.
   runs, and logs one line for every start — which probe ran, why, what it cost, and what it
   found — because when corruption surfaces later, which starts skipped the full check is the
   first forensic question.
-- **Even the once is conditional** (2026-08-30). The full `quick_check` grew with the file to
-  60-84s of every cold start against a 3.36 GB `mux.db` — 5.8x the entire rest of the startup
-  sequence — on a host that restarts the daemon several times a day. `prepare_database` now runs
-  it only when the file's history is suspect or the last passing check has aged out:
-  `lifecycle.daemon_started` reports whether the predecessor died *unplanned* (no clean exit, no
-  recorded handoff intent, pid gone — a planned session-preserving restart is deliberately not
-  that signal), and a passing full check is recorded durably beside the file
-  (`<db>.last-verified.json`, atomic write, trusted for `FULL_VERIFICATION_INTERVAL_SECONDS` =
-  24h). Every other start runs `_light_integrity_problem` instead: a milliseconds header-and-schema
-  read that still catches the gross-corruption class the quarantine was built for (a truncated or
-  overwritten file, an unparseable schema — the class that used to crash-loop the daemon). Both
-  probes feed the same verdict cache, so a problem found by either sends the first store through
-  the quarantine-and-recreate path unchanged, and the quarantine's replacement writes a fresh
-  record because it is known-good by construction.
+- **The full check is not on the startup path at all** (2026-08-30, replacing the conditional
+  version written earlier the same day). It is *scheduled*, not skipped.
+  The conditional version kept one blocking trigger — "the previous daemon died uncleanly" — and
+  a reboot is exactly that. The first reboot after it shipped produced an 85.7s start whose
+  `database-integrity` phase was **77.67s of it**, against a 3.36 GB `mux.db`, while the operator
+  watched an empty window.
+
+  **The trigger was measuring the wrong thing, and that is the substance of the change rather
+  than a tuning.** `mux.db` is opened `journal_mode=wal` with `synchronous=FULL` (SQLite's
+  default; asserted by `test_startup_gate.py` so that it cannot drift silently underneath this
+  paragraph). Under those two settings SQLite's atomic-commit contract says a process kill *and*
+  an OS crash both leave the file consistent — the write-ahead log exists for precisely that, and
+  recovery runs in the next opener before any store reads a row. So an unclean death is not
+  evidence about the bytes on disk. What actually corrupts a SQLite file is the storage beneath
+  it — a failing drive, a filesystem bug, a device that lies about flushing — and none of that
+  correlates with how the last process exited, nor is any of it detectable sooner by making the
+  check block a start.
+
+  So the signal is kept and its **urgency** is what it now buys. `prepare_database` always runs
+  `_light_integrity_problem` (the milliseconds header-and-schema read) and returns
+  `full_check_owed` alongside the verdict; `server._database_integrity_loop` runs the owed
+  `quick_check` behind the ready daemon, after `NEAR_TERM_VERIFICATION_DELAY_SECONDS` (5s) when
+  the predecessor died uncleanly and `ROUTINE_VERIFICATION_DELAY_SECONDS` (300s) otherwise.
+  Nothing is checked *less often* than under the conditional version; the check simply stopped
+  being something a person waits for.
+
+  Three consequences, each of which is a place this could have gone wrong:
+
+  - **The background check cannot quarantine, because every store already holds the file open.**
+    It records the verdict instead (`record_database_problem` → `{"failed_at", "problem"}` in
+    `<db>.last-verified.json`), and the *next* `prepare_database` reads that record, hands the
+    problem straight to the verdict cache, and the first store to open takes
+    `connect_or_quarantine`'s existing quarantine-and-recreate path — before anything writes
+    another row. A recorded failure is believed over the light probe on purpose: the stronger
+    probe read every page, and the weaker one must not overturn it.
+  - **A cancelled walk is not a verdict.** `Connection.interrupt()` surfaces as an ordinary
+    `sqlite3.DatabaseError`, so the naive reading of that path quarantines a healthy database
+    every time the daemon shuts down mid-check. `VerificationControl` is what distinguishes them.
+  - **It must be interruptible at all**, because `asyncio.to_thread` does not cancel its worker
+    and the loop joins what is abandoned at `shutdown_default_executor` — after every log handler
+    has reported a clean stop. An uninterruptible walk would read as up to 78s of unexplained
+    silence *after* the daemon said it stopped. The prefetch checks a flag between chunks; the
+    `quick_check` is stopped by `interrupt()`, which is documented safe from another thread.
+
+  **The walk itself is ~6x faster when it runs** (`prefetch_database`). Cold, `quick_check` reads
+  4 KiB pages one at a time through a 2 MB page cache with no readahead: measured 77.67s against
+  the 3.36 GB file, an effective 43 MB/s on an NVMe SSD rated in gigabytes per second, against
+  11.55s for the same check warm. Reading the file once sequentially in 8 MiB chunks first turns
+  that queue-depth-1 stall into a streaming read and lets the walk run at its warm cost. It is
+  pure prefetch — the bytes are dropped — so it can only ever change what a verdict costs, and it
+  is skipped when the file would not fit in half the memory the machine can spare, because past
+  that the tail evicts the head and the walk pays for the reads anyway.
+
   The guarantee this trades, written down rather than implied: "every page of `mux.db` was read
-  clean before the first request" became "every page was read clean within the last 24h or since
-  the last unclean daemon death, and the header and schema were read clean before the first
-  request". A mangled interior page on a cleanly-managed file can now ride until the window
-  expires, the daemon crashes, or a query touches it (SQLite raises `DatabaseError` at that
-  moment regardless). Anything unreadable in the record — missing, mangled, future-dated (a
-  clock rolled back) — fails towards the full check, and deleting the record file is the
-  operator's lever for forcing one. Deliberately a constant rather than a `Config` field: an
-  interval knob would be a way to quietly weaken corruption detection without a code review
-  seeing it. `tests/test_startup_gate.py` pins all of it, including a real corrupted interior
-  page that the light probe passes and the full check quarantines — the accepted boundary,
-  asserted rather than left implicit.
+  clean before the first request" is now "the header and schema were read clean before the first
+  request, and every page was read clean within the last 24h — from a check that runs minutes
+  into this daemon's life rather than before it". A mangled interior page can ride until that
+  check completes, the daemon restarts, or a query touches it (SQLite raises `DatabaseError` at
+  that moment regardless). Anything unreadable in the record — missing, mangled, future-dated (a
+  clock rolled back) — fails towards owing a check, and deleting the record file is the
+  operator's lever for forcing one. `FULL_VERIFICATION_INTERVAL_SECONDS` is deliberately a
+  constant rather than a `Config` field: an interval knob would be a way to quietly weaken
+  corruption detection without a code review seeing it. `tests/test_startup_gate.py` pins all of
+  it, including a real corrupted interior page carried through the whole three-step remediation
+  (start passes → background check records → next start quarantines).
 - Writes name their columns. A positional `INSERT ... VALUES(?,…)` breaks the moment a column
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.

@@ -148,6 +148,11 @@ Inactive rows restore on every boot independently of unexpected-loss recovery se
     deliberate: building the runtime first made the whole of a measured 226.6s start into refused
     connections, and made a slow deploy indistinguishable from a hung one. A build that fails
     stops the daemon rather than leaving it reachable and useless.
+    Its corollary, and the rule that keeps the start short rather than merely legible:
+    **nothing whose answer is not needed to serve the first request may run on this path.**
+    Verifying that every page of `mux.db` is readable is the case that taught it - a question
+    about the storage layer, not about this start, and it cost 77.7s of an 85.7s post-reboot
+    start before it moved behind the ready daemon (`technical/backend/sqlite.md`).
 16. A session's root provider identity is immutable. Nested-agent promotion is a shell-only
     state transition, live transcript paths/native IDs have one owner, and supervisor metadata
     is revalidated against those facts before daemon reattachment publishes the session. The

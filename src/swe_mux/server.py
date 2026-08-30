@@ -183,7 +183,14 @@ from .session_recovery import SessionRecoveryStore
 from .session_watch import SessionWatchService
 from .settings_store import SettingsStore
 from .spawn_probe import discard_pane, settle_pane
-from .sqlite_store import begin_shutdown_drain, prepare_database
+from .sqlite_store import (
+    VerificationControl,
+    begin_shutdown_drain,
+    prepare_database,
+    record_database_problem,
+    record_database_verified,
+    run_full_verification,
+)
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
@@ -215,6 +222,7 @@ ASSISTANT_HISTORY_SEARCH_BUDGET_MS = 4_000
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 LOOP_LAG_LOOP = "loop-lag"
 LIFECYCLE_HEARTBEAT_LOOP = "lifecycle-heartbeat"
+DATABASE_INTEGRITY_LOOP = "database-integrity-check"
 MEDIA_CLEANUP_LOOP = "media-cleanup"
 RETENTION_LOOP = "store-retention"
 # Startup past this is logged as a warning. A daemon reattaching a large fleet
@@ -820,6 +828,67 @@ async def _restore_durable_sessions(
         log.exception("could not sweep orphan recovery directories")
 
 
+async def _database_integrity_loop(path: Path, delay_seconds: float, reason: str) -> None:
+    """Run the owed full `PRAGMA quick_check` once, behind the serving daemon.
+
+    Runs once and returns; the task supervisor treats a loop that returns
+    normally as finished on purpose. It is a supervised task rather than a bare
+    one so that it is named in `/api/diagnostics/background`, restarted if it
+    faults, and stopped by name at teardown like everything else.
+
+    Two things it deliberately does not do. It does not quarantine: every store
+    is already open on this file, so moving it aside here would pull the
+    database out from under live sessions. It records the failure instead, and
+    `prepare_database` turns that record into a quarantine on the next start,
+    before the first store connects. And it does not report a cancelled walk as
+    a problem - being asked to stop is not evidence about the file.
+    """
+    await asyncio.sleep(delay_seconds)
+    control = VerificationControl()
+    started = time.monotonic()
+    try:
+        result = await asyncio.to_thread(run_full_verification, path, control)
+    except asyncio.CancelledError:
+        # `asyncio.to_thread` does not cancel its worker, and the loop joins what
+        # is abandoned at `shutdown_default_executor` - after the daemon has
+        # already reported a clean stop. Interrupting is what keeps that join
+        # instant instead of up to 78s of unexplained silence.
+        control.cancel()
+        log.info(
+            "database integrity: full check of %s cancelled after %.2fs (daemon stopping)",
+            path,
+            time.monotonic() - started,
+        )
+        raise
+    if result.cancelled:
+        return
+    if result.problem is None:
+        record_database_verified(path)
+        log.info(
+            "database integrity: background full check of %s (%.2f GB) passed in %.2fs "
+            "(%.2fs of it prefetch) because %s",
+            path,
+            _database_size_gb(path),
+            result.seconds,
+            result.prefetch_seconds,
+            reason,
+        )
+        return
+    record_database_problem(path, result.problem)
+    log.error(
+        "database integrity: background full check of %s (%.2f GB) FOUND A PROBLEM after "
+        "%.2fs: %s. The daemon keeps serving - every store is already open on this file - "
+        "and the verdict is recorded, so the next start quarantines it as "
+        "%s.corrupt-<ts> and recreates the schema. Native transcripts remain the "
+        "authoritative source for anything rebuildable from them; restart when convenient.",
+        path,
+        _database_size_gb(path),
+        result.seconds,
+        result.problem,
+        path,
+    )
+
+
 def _precompress_frontend(frontend_dir: Path) -> None:
     """Refresh the static tree's gzip sidecars, and say what that cost.
 
@@ -854,6 +923,26 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
 ) -> None:
     config: Config = app[keys.CONFIG]
     background.start(LIFECYCLE_HEARTBEAT_LOOP, lambda: _lifecycle_heartbeat_loop(config.data_dir))
+    # Published before anything can be appended to it, because the first entry is
+    # now started at the very top of the build (below) rather than near the end:
+    # teardown cancels and gathers this list, and a task created before the list
+    # exists is a task nothing stops.
+    deferred_tasks: list[asyncio.Task[Any]] = []
+    publish(app, {keys.STARTUP_DEFERRED_TASKS: deferred_tasks})
+    # Connecting to the supervisor - or spawning one and waiting for its
+    # discovery file - depends on nothing else this function builds, and it is
+    # nearly all waiting: measured 4.39s on the 2026-08-30 post-reboot start.
+    # Started here and awaited at its own phase, so it runs underneath
+    # everything between instead of after it. The phase then measures the
+    # residual wait, which is the honest number - if the supervisor is already
+    # connected by the time the phase opens, the daemon really did wait 0s for
+    # it.
+    supervisor_connect: asyncio.Task[SupervisorClient] | None = None
+    if config.pty_supervisor_enabled:
+        supervisor_connect = asyncio.create_task(
+            SupervisorClient.connect_or_spawn(config), name="supervisor-connect"
+        )
+        deferred_tasks.append(supervisor_connect)
     # First, because it is the UI's own readiness and depends on nothing else
     # here. The wheel and the sdist deliberately carry no precompressed sidecars
     # (they were 35% of the download, re-compressing what the archive had already
@@ -867,35 +956,55 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # share `mux.db`, so this used to be paid eleven times, on the event loop,
     # inside whichever store constructor happened to touch the file first: 11.5s
     # per pass against a measured 2.73 GB file, ~126s per start, logged nowhere.
-    # It is answered once now (`sqlite_store.verify_database` caches per file),
-    # off the loop so the startup watchdog and the health endpoint keep running
-    # while it happens, and under a name so its growth is visible. Since
-    # 2026-08-30 even the once is conditional: a full check whose cost is the
-    # size of the file (60-84s against a 3.36 GB `mux.db`, the largest number
-    # in the whole start) runs only when the previous daemon died uncleanly or
-    # the last passing check has aged out; every other start runs the
-    # milliseconds header-and-schema probe. `prepare_database` owns the
-    # decision and both probes feed the same quarantine path.
+    # It became once-per-file, then conditional, and since 2026-08-30 it is not
+    # on this path at all: the full check is *scheduled* here and runs behind the
+    # ready daemon (`_database_integrity_loop`). What remains is the milliseconds
+    # header-and-schema probe, which is the only verdict a start can act on
+    # anyway - quarantining is safe only before the first store connects.
+    # `sqlite_store.prepare_database` holds the argument for why an unclean
+    # predecessor death no longer blocks a start: under `journal_mode=wal` with
+    # `synchronous=FULL` a process or OS crash cannot corrupt the file, so the
+    # 77.7s that signal cost on the 2026-08-30 post-reboot start was spent
+    # answering a question the storage layer had already answered.
     timeline.mark("database-integrity")
     preparation = await asyncio.to_thread(
         prepare_database,
         config.database_path,
         predecessor_died_uncleanly=predecessor_died_uncleanly,
     )
-    # Always one line, both modes: when corruption surfaces later, which starts
-    # skipped the full check - and why - is the first forensic question. A found
-    # problem is a WARNING here; the quarantine itself still logs its own ERROR
-    # from `connect_or_quarantine` when the first store opens the file.
+    # Always one line: when corruption surfaces later, what this start checked -
+    # and what it deferred - is the first forensic question. A found problem is a
+    # WARNING here; the quarantine itself still logs its own ERROR from
+    # `connect_or_quarantine` when the first store opens the file.
     log.log(
         logging.WARNING if preparation.problem else logging.INFO,
-        "database integrity: %s check of %s (%.2f GB) took %.2fs because %s%s",
+        "database integrity: %s check of %s (%.2f GB) took %.2fs because %s%s%s",
         preparation.mode,
         config.database_path,
         _database_size_gb(config.database_path),
         preparation.seconds,
         preparation.reason,
         f"; found: {preparation.problem}" if preparation.problem else "",
+        (
+            f"; a full check is scheduled in {preparation.full_check_delay_seconds:.0f}s"
+            if preparation.full_check_owed
+            else ""
+        ),
     )
+    # Started here rather than after `timeline.finish()` so that a cancelled
+    # build still stops it: `background.start` registers the task with the
+    # supervisor, and teardown stops it by name whether or not the build
+    # completed. It sleeps out its delay before touching the file, so it costs
+    # this path nothing but the registration.
+    if preparation.full_check_owed:
+        background.start(
+            DATABASE_INTEGRITY_LOOP,
+            lambda: _database_integrity_loop(
+                config.database_path,
+                preparation.full_check_delay_seconds,
+                preparation.reason,
+            ),
+        )
     timeline.mark("stores")
     history = HistoryIndex(config.database_path)
     events = EventBus(history.append_event)
@@ -974,9 +1083,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     reaper = create_reaper()
     timeline.mark("supervisor-connect")
     supervisor_client: SupervisorClient | None = None
-    if config.pty_supervisor_enabled:
+    if supervisor_connect is not None:
         try:
-            connected_client = await SupervisorClient.connect_or_spawn(config)
+            connected_client = await supervisor_connect
             supervisor_client = connected_client
             log.info(
                 "PTY supervisor connected (pid %d, %d existing session(s))",
@@ -1993,8 +2102,6 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         await process_inspector.restore()
         process_inspector.start()
 
-    deferred_tasks: list[asyncio.Task[Any]] = []
-    publish(app, {keys.STARTUP_DEFERRED_TASKS: deferred_tasks})
     process_restore_task = asyncio.create_task(
         _restore_process_ownership(), name="process-ownership-restore"
     )
@@ -2287,6 +2394,10 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         STATE_WATCHDOG_LOOP,
         PUSH_SENDER_LOOP,
         UPDATE_CHECK_LOOP,
+        # Early in nothing and late in nothing, but it must be here: its worker
+        # holds a second connection to `mux.db`, and the stores below are closed
+        # on the assumption that nothing else is reading the file.
+        DATABASE_INTEGRITY_LOOP,
     ):
         await background.stop(loop_name)
     # An in-flight download is cancelled and *awaited*, not abandoned: it holds a
