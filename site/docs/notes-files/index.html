@@ -266,6 +266,9 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
          font-size: 10px; letter-spacing: .14em; }
 .ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
 .ic-os span.on { color: var(--cyan); }
+/* Sits beside the command, and only the installer sets it. */
+.ic-qual { color: var(--fg-3); font-size: 12px; white-space: nowrap; margin-left: auto;
+           padding-right: 12px; }
 .ic-os span.on::before { content: "▸ "; color: var(--green); }
 .ic-os span.qual em { font-style: normal; color: var(--fg-4);
                       text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
