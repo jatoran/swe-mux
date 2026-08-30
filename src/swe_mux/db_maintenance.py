@@ -86,6 +86,10 @@ class MaintenanceResult:
     bytes_after: int = 0
     backup_path: Path | None = None
     error: str | None = None
+    # What the vacuum actually achieved, which is not always what it asked for -
+    # see `_vacuum`. Reported rather than assumed, because the first version of
+    # this silently did nothing.
+    page_size: int = 0
 
     @property
     def bytes_reclaimed(self) -> int:
@@ -200,17 +204,31 @@ def take_backup(path: Path) -> Path | None:
 
 
 def _rebuild_trigram_index(db: sqlite3.Connection, control: VerificationControl | None) -> bool:
-    """Rebuild the history trigram index with `detail=none`.
+    """Drop the history trigram index so it is rebuilt fresh and dense.
 
-    Measured 2026-08-30: `history_messages_trigram_data` was 480 MB and
-    `history_messages_trigram` a further 98 MB, to index 116 MB of messages -
-    the single largest object in a 3.36 GB file, and 6.3x amplification over
-    the text it searches. `detail=none` drops the per-token position data FTS5
-    keeps by default, which substring matching does not use: the index still
-    answers `LIKE '%needle%'`-shaped queries through `history.py`'s
-    `_trigram_query`, it just cannot report *where* in the message the hit was.
-    Nothing reads an offset off this index; the ordinary `history_messages_fts`
-    index is what serves ranked word search.
+    This started out as a plan to recreate it with `detail=none`, on the
+    strength of its size: measured 2026-08-30, `history_messages_trigram_data`
+    was 480 MB and `history_messages_trigram` a further 98 MB to index 116 MB of
+    messages. **That does not work**, and the reason is in `history.py` beside
+    the schema: FTS5 refuses a phrase query without position data, a trigram
+    substring match *is* a phrase query over trigrams, and `message_rows` uses
+    `MATCH` and `bm25()`. `detail=column` fails the same way.
+
+    What survives is worth more than it looks. The index this repository has
+    grew incrementally over months, and a fresh rebuild of the same definition
+    is markedly denser - measured 422.3 MB against 480 MB - so dropping it lets
+    the `VACUUM` that follows compact the file without it and lets
+    `history.py`'s existing search-maintenance path rebuild it in one pass.
+    End to end on the real file: 3.36 GB -> 2.23 GB immediately, settling at
+    2.69 GB once the index is back, against 3.19 GB for a `VACUUM` alone. Most
+    of the win is the defragmentation, not the vacuum.
+
+    Dropping rather than redefining is deliberate: `history.py` owns this
+    schema, and a second definition here is a second thing to keep in step.
+    Dropping it is also *seen* - `_ensure_message_search_schema` notices the
+    missing table, sets `reset_required=1, ready=0`, and the daemon's search
+    maintenance task backfills it while `ready=0` tells every search surface the
+    index is incomplete rather than empty.
 
     Returns False when the table is not present, which is the ordinary case on
     a fresh install and not an error.
@@ -236,20 +254,42 @@ def _rebuild_trigram_index(db: sqlite3.Connection, control: VerificationControl 
     return True
 
 
-def _vacuum(db: sqlite3.Connection, page_size: int) -> None:
-    """Rewrite the file densely, at `page_size`.
+def _vacuum(db: sqlite3.Connection, page_size: int) -> int:
+    """Rewrite the file densely, at `page_size`. Returns the page size in force.
 
-    The pragma has to precede the `VACUUM` and has to be outside a transaction;
-    on an existing file this is the only moment SQLite will honour it. A
-    `VACUUM` cannot run inside a transaction either, which is why the isolation
-    level is dropped for it and restored afterwards.
+    **`page_size` cannot be changed on a WAL database.** SQLite accepts the
+    pragma, reports no error, and ignores it - so the obvious implementation
+    (set the pragma, `VACUUM`) silently leaves a 4 KiB file at 4 KiB, which is
+    exactly what the first version of this function did against the real 3.36 GB
+    `mux.db`. It passed its unit test because the test's fixture was in the
+    default rollback mode rather than in WAL, which is the shape of test that
+    proves nothing about production. The journal mode is now part of the
+    fixture, and this function returns what it actually achieved rather than
+    what it asked for.
+
+    So the sequence is: leave WAL, set the size, `VACUUM`, return to WAL. Each
+    step is checked, and any failure leaves the database in WAL with its
+    original page size - a smaller win, never a broken file.
     """
     previous_isolation = db.isolation_level
-    db.isolation_level = None
+    db.isolation_level = None  # VACUUM and journal_mode cannot run in a transaction
+    started_mode = str(db.execute("PRAGMA journal_mode").fetchone()[0]).lower()
     try:
+        if started_mode == "wal":
+            # DELETE rather than OFF: OFF discards the rollback journal, which is
+            # the one thing making the mode switch itself crash-safe.
+            db.execute("PRAGMA journal_mode=DELETE").fetchone()
         db.execute(f"PRAGMA page_size={int(page_size)}")
         db.execute("VACUUM")
+        return int(db.execute("PRAGMA page_size").fetchone()[0])
     finally:
+        # Restore the mode the caller had, on every path. Leaving `mux.db` in
+        # rollback mode would silently cost every store WAL's concurrency, and
+        # converting a caller's non-WAL database *to* WAL would be this function
+        # changing something it was not asked to change.
+        with suppress(sqlite3.Error):
+            if str(db.execute("PRAGMA journal_mode").fetchone()[0]).lower() != started_mode:
+                db.execute(f"PRAGMA journal_mode={started_mode.upper()}").fetchone()
         db.isolation_level = previous_isolation
 
 
@@ -302,7 +342,7 @@ def run_maintenance(
             if control is not None and control.cancelled:
                 result.skipped.append(OPERATION_VACUUM)
             else:
-                _vacuum(db, VACUUM_PAGE_SIZE)
+                result.page_size = _vacuum(db, VACUUM_PAGE_SIZE)
                 result.performed.append(OPERATION_VACUUM)
     except sqlite3.DatabaseError as exc:
         result.error = str(exc)
@@ -325,10 +365,11 @@ def describe(result: MaintenanceResult) -> str:
         return f"database maintenance failed after {result.seconds:.1f}s: {result.error}"
     did = ", ".join(result.performed) if result.performed else "nothing"
     tail = f"; skipped {', '.join(result.skipped)}" if result.skipped else ""
+    page = f"; page size now {result.page_size}" if result.page_size else ""
     return (
         f"database maintenance did {did} in {result.seconds:.1f}s: "
         f"{result.bytes_before / 1e9:.2f} GB -> {result.bytes_after / 1e9:.2f} GB "
-        f"({result.bytes_reclaimed / 1e9:.2f} GB reclaimed){tail}"
+        f"({result.bytes_reclaimed / 1e9:.2f} GB reclaimed){page}{tail}"
     )
 
 

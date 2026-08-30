@@ -392,7 +392,10 @@ def _compact_db(args: Any, base: str) -> dict[str, Any]:
         "note": (
             "The next daemon start will perform this before it serves. Live sessions "
             "are held by the PTY supervisor and survive it; the UI is unavailable "
-            "while it runs, which can be several minutes on a multi-gigabyte database."
+            "while it runs: measured 21.9s for both operations against a 3.36 GB "
+            "mux.db, taking it to 2.23 GB. The history trigram index then rebuilds "
+            "in the background (about 20s, substring search is incomplete until it "
+            "finishes) and the file settles at about 2.69 GB."
         ),
     }
     if args.now:

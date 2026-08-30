@@ -36,10 +36,20 @@ from swe_mux.server import _run_pending_maintenance
 from swe_mux.sqlite_store import VerificationControl
 
 
-def _database_with_slack(path: Path) -> None:
-    """A database with real free pages, so a VACUUM has something to reclaim."""
+def _database_with_slack(path: Path, *, wal: bool = True) -> None:
+    """A database with real free pages, so a VACUUM has something to reclaim.
+
+    **In WAL by default, because `mux.db` is in WAL and the difference is not
+    cosmetic**: SQLite silently ignores `PRAGMA page_size` on a WAL database,
+    accepting the statement and changing nothing. The first version of
+    `_vacuum` was written and tested against a rollback-mode fixture, passed,
+    and then did nothing at all to the real 3.36 GB file. A fixture that does
+    not carry production's journal mode cannot see that class of bug.
+    """
     db = sqlite3.connect(path)
     try:
+        if wal:
+            db.execute("PRAGMA journal_mode=WAL").fetchone()
         db.execute("CREATE TABLE payload(id INTEGER PRIMARY KEY, body TEXT)")
         db.executemany(
             "INSERT INTO payload(body) VALUES(?)", [("x" * 2048,) for _ in range(4000)]
@@ -125,9 +135,15 @@ def test_an_unknown_operation_does_nothing_at_all(tmp_path: Path) -> None:
 # -------------------------------------------------------------- the operations
 
 
-def test_vacuum_reclaims_space_and_sets_the_page_size(tmp_path: Path) -> None:
+@pytest.mark.parametrize("wal", [True, False])
+def test_vacuum_reclaims_space_and_sets_the_page_size(tmp_path: Path, wal: bool) -> None:
+    """Both journal modes, because they take different paths through `_vacuum`.
+
+    The WAL case is the one that matters - it is what `mux.db` actually is, and
+    it is the one where a naive implementation silently changes nothing.
+    """
     database = tmp_path / "mux.db"
-    _database_with_slack(database)
+    _database_with_slack(database, wal=wal)
     result = run_maintenance(
         database, MaintenanceRequest(operations=(OPERATION_VACUUM,), requested_at=0.0)
     )
@@ -135,11 +151,32 @@ def test_vacuum_reclaims_space_and_sets_the_page_size(tmp_path: Path) -> None:
     assert result.performed == [OPERATION_VACUUM]
     assert result.bytes_reclaimed > 0
     assert result.bytes_after < result.bytes_before
+    assert result.page_size == VACUUM_PAGE_SIZE
     probe = sqlite3.connect(database)
     try:
         assert int(probe.execute("PRAGMA page_size").fetchone()[0]) == VACUUM_PAGE_SIZE
         # The point of reclaiming is that the rows survive it.
         assert probe.execute("SELECT COUNT(*) FROM payload").fetchone()[0] == 1000
+        # And the daemon is about to open this: every store assumes WAL.
+        mode = str(probe.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        assert mode == ("wal" if wal else "delete")
+    finally:
+        probe.close()
+
+
+def test_a_wal_database_is_still_in_wal_afterwards(tmp_path: Path) -> None:
+    """The page-size change requires leaving WAL, so the restore is load-bearing:
+    a database left in rollback mode would silently lose WAL's concurrency for
+    every store that opens it next."""
+    database = tmp_path / "mux.db"
+    _database_with_slack(database, wal=True)
+    run_maintenance(
+        database,
+        MaintenanceRequest(operations=(OPERATION_VACUUM,), requested_at=0.0, backup=False),
+    )
+    probe = sqlite3.connect(database)
+    try:
+        assert str(probe.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
     finally:
         probe.close()
 
@@ -197,6 +234,67 @@ def test_rebuilding_the_trigram_index_drops_it_and_its_triggers(tmp_path: Path) 
         assert probe.execute("SELECT COUNT(*) FROM history_messages").fetchone()[0] == 500
     finally:
         probe.close()
+
+
+def test_detail_none_would_break_substring_search(tmp_path: Path) -> None:
+    """Why the trigram index is dropped and recreated as-is rather than shrunk.
+
+    `detail=none` is the obvious saving on a 578 MB index and it does not work:
+    FTS5 refuses a phrase query without position data, and a trigram substring
+    match *is* a phrase query over trigrams. This is asserted rather than
+    written down because the size number makes the wrong answer look obvious -
+    it was proposed, accepted, and implemented before being measured.
+    """
+    database = tmp_path / "probe.db"
+    db = sqlite3.connect(database)
+    try:
+        db.execute("CREATE TABLE msgs(id INTEGER PRIMARY KEY, text TEXT)")
+        db.execute(
+            "CREATE VIRTUAL TABLE msgs_tri USING fts5("
+            "text, content='msgs', content_rowid='id', "
+            "tokenize='trigram case_sensitive 0', detail=none)"
+        )
+        db.execute("INSERT INTO msgs(text) VALUES('the quick brown fox')")
+        db.execute("INSERT INTO msgs_tri(msgs_tri) VALUES('rebuild')")
+        db.commit()
+        with pytest.raises(sqlite3.OperationalError, match="phrase queries are not supported"):
+            db.execute("SELECT COUNT(*) FROM msgs_tri WHERE msgs_tri MATCH ?", ('"brown fox"',))
+        # And the route that does survive, which is the way back to the saving
+        # if anyone wants to pay for it in changed search behaviour.
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM msgs_tri WHERE text LIKE ?", ("%brown fox%",)
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        db.close()
+
+
+def test_the_shipped_trigram_schema_still_supports_the_query_history_issues(
+    tmp_path: Path,
+) -> None:
+    """The other half: the definition `history.py` actually ships must answer the
+    `MATCH` + `bm25()` shape `message_rows` builds."""
+    from swe_mux.history import _MESSAGE_SEARCH_INDEX_SCHEMA
+
+    database = tmp_path / "probe.db"
+    db = sqlite3.connect(database)
+    try:
+        db.execute("CREATE TABLE history_messages(id INTEGER PRIMARY KEY, text TEXT)")
+        db.executescript(_MESSAGE_SEARCH_INDEX_SCHEMA)
+        db.execute("INSERT INTO history_messages(text) VALUES('the quick brown fox')")
+        for table in ("history_messages_fts", "history_messages_trigram"):
+            db.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
+        db.commit()
+        rows = db.execute(
+            "SELECT bm25(history_messages_trigram) FROM history_messages_trigram "
+            "WHERE history_messages_trigram MATCH ?",
+            ('"brown fox"',),
+        ).fetchall()
+        assert len(rows) == 1
+    finally:
+        db.close()
 
 
 def test_a_missing_trigram_index_is_skipped_not_failed(tmp_path: Path) -> None:
