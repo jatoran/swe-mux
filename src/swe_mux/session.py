@@ -3938,6 +3938,10 @@ class SessionManager:
         # conversation is not this one's, and keeping it would date the new run's
         # first idle with the old run's last turn.
         record.last_turn_ms = None
+        # And the sum of them, for the same reason at a longer range: a total
+        # that survived the replacement would report the new conversation as
+        # hours old on its first turn.
+        record.worked_ms = 0.0
         record.turn_started_at = None
         record.turn_epoch = 0
         record.active_turn_id = None

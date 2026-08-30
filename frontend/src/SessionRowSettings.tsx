@@ -18,8 +18,8 @@ import { StateIndicator } from './StateIndicator'
 import { currentProfile, type SettingsProfile } from './deviceSettings'
 import {
   DOT_SIZE_MAX, DOT_SIZE_MIN, ROW_FIELDS, ROW_FIELD_BY_ID, ROW_PRESETS, SEPARATORS, SEPARATOR_IDS,
-  defaultSessionRowConfig, lineConfig, normalizeDotSize, placeField, presetConfig, removeField,
-  setFieldMode, unplacedFields,
+  defaultSessionRowConfig, lineConfig, normalizeDotSize, normalizeSessionRowConfig, placeField,
+  presetConfig, removeField, setFieldMode, unplacedFields,
   type ContextRender, type CountStyle, type DiffStyle, type DotShape,
   type RowAlign, type RowFieldId, type RowLine, type RowPresetId, type SeparatorId,
   type SessionRowConfig, type StandingRender,
@@ -48,6 +48,12 @@ const sample = (overrides: Partial<Session>): Session => ({
 // four repositories would never draw it.
 const PRIMARY_ROOT = 'D:/PROJECTS/example'
 
+// One session per context band, in ramp order, so the preview demonstrates the
+// whole scale while the thresholds beside it are being dragged. Four sessions
+// and four bands is a coincidence worth spending: a preview that showed only the
+// upper half made the first threshold the one control you could not see working.
+const PREVIEW_CONTEXT = { calm: 0.22, warn: 0.48, high: 0.68, crit: 0.94 }
+
 const PREVIEW_SESSIONS: Session[] = [
   sample({
     id: 'preview-working', name: 'refactor tokenizer', backend: 'codex', model: 'gpt-5-codex',
@@ -57,7 +63,10 @@ const PREVIEW_SESSIONS: Session[] = [
     // sound without being asked, and a preview showing only the muted rendering would
     // teach the wrong thing about what the mark means.
     voice_mode: 'auto',
-    context_pct: 0.74, context_peak_pct: 0.74,
+    context_pct: PREVIEW_CONTEXT.warn, context_peak_pct: PREVIEW_CONTEXT.warn,
+    // Mid-turn, so the total is the completed sum plus the turn running now and
+    // the preview shows the field's live rendering rather than a frozen one.
+    worked_ms: 41 * 60_000, turn_started_at: NOW - 1320,
     git: {
       branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48,
       root: PRIMARY_ROOT, compare_ref: 'origin/main',
@@ -67,7 +76,9 @@ const PREVIEW_SESSIONS: Session[] = [
   }),
   sample({
     id: 'preview-ready', name: 'status detection v2', model: 'opus',
-    state: 'idle', last_turn_ms: 72_000, context_pct: 0.41, context_peak_pct: 0.55,
+    state: 'idle', last_turn_ms: 72_000,
+    context_pct: PREVIEW_CONTEXT.calm, context_peak_pct: 0.55,
+    worked_ms: 9 * 60_000,
     // A finished turn with a half-written reply still in the composer: the case
     // the unsent-input mark exists for, and the one you cannot see any other way
     // without opening the pane.
@@ -81,7 +92,9 @@ const PREVIEW_SESSIONS: Session[] = [
   sample({
     id: 'preview-awaiting', name: 'push notifications', model: 'opus',
     state: 'awaiting', awaiting_reason: 'approval', state_detail: 'Bash(rm -rf)',
-    state_since: NOW - 300, context_pct: 0.63, context_peak_pct: 0.63,
+    state_since: NOW - 300,
+    context_pct: PREVIEW_CONTEXT.high, context_peak_pct: PREVIEW_CONTEXT.high,
+    worked_ms: 26 * 60_000, turn_started_at: NOW - 300,
     git: {
       branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48,
       root: PRIMARY_ROOT, compare_ref: 'origin/main',
@@ -90,7 +103,9 @@ const PREVIEW_SESSIONS: Session[] = [
   }),
   sample({
     id: 'preview-worktree', name: 'audit sweep', backend: 'codex', model: 'gpt-5-codex',
-    state: 'working', state_since: NOW - 10_800, context_pct: 0.96, context_peak_pct: 0.97,
+    state: 'working', state_since: NOW - 10_800,
+    context_pct: PREVIEW_CONTEXT.crit, context_peak_pct: 0.97,
+    worked_ms: 3 * 3600_000, turn_started_at: NOW - 10_800,
     compaction_count: 3, cost_usd: 4.2,
     standing_activity: [{
       kind: 'subagents', source: 'hook', evidence: 'hook:SubagentStart',
@@ -136,6 +151,21 @@ const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> =
   { id: 'gauge', label: 'Gauge', hint: 'Four cells in the row, comparable down the list.' },
   { id: 'percent', label: 'Percentage', hint: 'Exact number in the row.' },
   { id: 'off', label: 'Off', hint: 'Context pressure is not shown.' },
+]
+
+/**
+ * The three thresholds, in ramp order, labelled by the colour each one turns on.
+ *
+ * Named after the colour rather than after the band ("Warn at") because the
+ * control sits beside a live preview: what the reader is matching the number to
+ * is the shade they can see, not a word from the type system.
+ */
+const CONTEXT_BANDS: Array<{
+  key: 'contextWarn' | 'contextHigh' | 'contextCrit'; label: string
+}> = [
+  { key: 'contextWarn', label: 'Yellow from' },
+  { key: 'contextHigh', label: 'Orange from' },
+  { key: 'contextCrit', label: 'Red from' },
 ]
 
 const STANDING_MODES: Array<{ id: StandingRender; label: string; hint: string }> = [
@@ -351,7 +381,30 @@ export function SessionRowSettings() {
       <Dropdown value={config.context} onChange={value => change({ ...config, context: value as ContextRender })}
         options={CONTEXT_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/>
     </label>
-    <p>{CONTEXT_MODES.find(mode => mode.id === config.context)?.hint} The indicator's colour, pulse, and hollow "engaged" variant are not configurable: they are the one thing every surface reads the same way.</p>
+    <p>{CONTEXT_MODES.find(mode => mode.id === config.context)?.hint} The indicator's <em>state</em> colour, pulse, and hollow "engaged" variant are not configurable: they are the one thing every surface reads the same way. The context ramp below is separate — it colours the gauge, not the state.</p>
+    {config.context !== 'off' && <>
+      {CONTEXT_BANDS.map(band => <label key={band.key} class="row-size-control">
+        <span>{band.label}</span>
+        <input
+          type="range"
+          min={1}
+          max={99}
+          step={1}
+          value={Math.round(config[band.key] * 100)}
+          aria-label={`${band.label}, percent of the context window`}
+          onInput={event => changeContinuous(
+            // Through the shared normalizer rather than clamped here, so a
+            // threshold dragged past its neighbour resolves the same way it
+            // would if the blob arrived from another device already crossed.
+            normalizeSessionRowConfig({
+              ...config, [band.key]: event.currentTarget.valueAsNumber / 100,
+            }),
+          )}
+        />
+        <output>{Math.round(config[band.key] * 100)}%</output>
+      </label>)}
+      <p>Where the gauge changes colour. Below the first it is green, and each threshold is the reading at which the next colour takes over. The shipped ramp is 40 / 60 / 80, which is deliberately talkative: it makes the sidebar a reading of how much room the fleet has left rather than an alarm that only fires once compacting is already overdue. The cost is that most rows carry some colour, so what you read is the spread down the column. Set it to 70 / 85 / 95 to get back a ramp that stays quiet until it matters.</p>
+    </>}
     <label>Standing activity
       <Dropdown value={config.standing} onChange={value => change({ ...config, standing: value as StandingRender })}
         options={STANDING_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/>

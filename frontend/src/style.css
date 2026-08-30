@@ -5447,8 +5447,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    exactly the users who need it most. */
 .ind-core.hollow{fill:none;stroke:var(--dot);stroke-width:2.4;stroke-linejoin:round}
 .ind-track{fill:none;stroke:#2b352f;stroke-width:1.6;stroke-linejoin:round}
-.ind-fill{fill:none;stroke:#6f8a7e;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:butt}
-.ind-fill.hot{stroke:var(--amber)}
+/* The context ramp, low to high. Four bands are drawn from the three colours a
+   theme actually defines, because `--orange` does not exist in any of them and
+   inventing one would mean picking a fourth hue by hand in each of the 25 theme
+   blocks — including several (green-phosphor, amber-crt, virtual-boy) that are
+   deliberately near-monochrome and have no honest answer to give. Mixing the
+   middle step out of `--amber` and `--red` keeps the ramp derived from whatever
+   the theme chose, so it degrades to "two shades of the same hue" on those
+   themes instead of to a colour that belongs to no palette. */
+.ind-fill{fill:none;stroke:var(--green2);stroke-width:1.8;stroke-linejoin:round;stroke-linecap:butt}
+.ind-fill.warn{stroke:var(--amber)}
+.ind-fill.high{stroke:color-mix(in srgb,var(--amber) 45%,var(--red))}
 /* Only one element in a row may go red, and the indicator owns that vocabulary. */
 .ind-fill.crit{stroke:var(--red)}
 .ind-peak{fill:none;stroke:#9fb3a8;stroke-width:2.6;opacity:.55}
@@ -5572,12 +5581,19 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-text.muted{color:#5c6f61}
 .row-text.warn{color:var(--amber)}
+/* The `percent` context rendering's upper two steps; same ramp as `.ind-fill`. */
+.row-text.high{color:color-mix(in srgb,var(--amber) 45%,var(--red))}
+.row-text.crit{color:var(--red)}
 .row-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .row-diff .add{color:#5f9e6a}.row-diff .del{color:#a5605a}
 .row-gauge,.row-diffbar{display:inline-flex;gap:1.5px;align-self:center;flex:none}
 .row-gauge i,.row-diffbar i{width:4px;height:7px;border-radius:1px;background:#2b352f;display:block}
-.row-gauge i.on{background:#6f8a7e}
-.row-gauge.hot i.on{background:var(--amber)}
+/* Same ramp as `.ind-fill`, and it has to stay the same: the arc and the cells
+   are one scale drawn two ways, and a reader who switches between them is
+   comparing colours across rows. */
+.row-gauge i.on{background:var(--green2)}
+.row-gauge.warn i.on{background:var(--amber)}
+.row-gauge.high i.on{background:color-mix(in srgb,var(--amber) 45%,var(--red))}
 .row-gauge.crit i.on{background:var(--red)}
 .row-gauge i.peak{box-shadow:inset 0 0 0 1px #9fb3a8}
 .row-diffbar i.add{background:#5f9e6a}.row-diffbar i.del{background:#a5605a}

@@ -1134,6 +1134,7 @@ async def observe_transcript(
     replay_pending = tailer.initial_size > 0
     if replay_pending:
         session.observation_replay = True
+        _reset_worked_for_replay(session)
     historical_seen = 0
     last_historical_ts: float | None = None
     try:
@@ -1144,6 +1145,10 @@ async def observe_transcript(
                     session.observation_replay = True
                     historical_seen = 0
                     last_historical_ts = None
+                    # Same pass-start reset as above: this is the tailer saying it
+                    # is reading the file from the beginning again, which is
+                    # exactly when the total must be rebuilt rather than extended.
+                    _reset_worked_for_replay(session)
                     continue
                 if replay_pending:
                     replay_pending = False
@@ -2145,6 +2150,7 @@ def _record_turn_duration(
     reported = payload.get("duration_ms")
     if isinstance(reported, int | float) and not isinstance(reported, bool) and reported > 0:
         session.record.last_turn_ms = float(reported)
+        _accumulate_worked(session, session.record.last_turn_ms)
         return
     if started <= 0.0:
         return
@@ -2160,6 +2166,43 @@ def _record_turn_duration(
         return
     session.record.last_turn_ms = round(elapsed * 1000.0, 1)
     payload["duration_ms"] = session.record.last_turn_ms
+    _accumulate_worked(session, session.record.last_turn_ms)
+
+
+def _accumulate_worked(session: Session, duration_ms: float) -> None:
+    """Add one accepted turn to the run's cumulative working time.
+
+    Called from exactly the two places that stamp ``last_turn_ms``, so the total
+    is a sum of the same measurements the row already reports one at a time and
+    can never admit a duration the gate above refused.
+
+    Turns close at most once — `_close_root_turn` returns early on a turn that is
+    neither active nor unfinished, and an arbiter that refuses a close restores
+    the bookkeeping before this runs — so a live pass cannot count one twice.
+    Replay is the case that could: `_start_transcript_observer` walks the
+    transcript from byte 0 on every attach, so a restored record that then
+    re-read its own history would double its total. `_reset_worked_for_replay`
+    handles that by making each replay pass rebuild the figure rather than add
+    to it.
+    """
+    session.record.worked_ms = round(session.record.worked_ms + max(0.0, duration_ms), 1)
+
+
+def _reset_worked_for_replay(session: Session) -> None:
+    """Zero the cumulative total at the start of a replay pass.
+
+    Replay re-derives each turn's duration from the records that opened and
+    closed it, so a pass over the whole transcript reconstructs the whole total —
+    which makes the transcript authoritative here, the same way it is for every
+    other fact this module recovers. That is also what makes re-attaching safe:
+    a session-preserving restart adopts a record carrying yesterday's total and
+    immediately re-reads the history behind it, and adding the two is how the
+    figure would silently double every time the daemon came back.
+
+    A session with no transcript observer never runs this, and simply accumulates
+    live from zero.
+    """
+    session.record.worked_ms = 0.0
 
 
 def _turn_close_landed(session: Session, accepted: bool) -> bool:

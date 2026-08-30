@@ -26,7 +26,7 @@
 /** Every field the row can draw. Order here is the settings-UI catalog order. */
 export type RowFieldId =
   | 'glyph' | 'title' | 'broadcast' | 'badges' | 'draft' | 'voice'
-  | 'state' | 'detail' | 'duration' | 'sincePrompt' | 'idleFor' | 'context'
+  | 'state' | 'detail' | 'duration' | 'sincePrompt' | 'idleFor' | 'worked' | 'context'
   | 'branch' | 'worktree' | 'diff' | 'dirty' | 'compareDiff' | 'compareFiles' | 'sync'
   | 'queue' | 'model' | 'account' | 'compactions' | 'cost' | 'cwd' | 'exit'
   | 'approvals'
@@ -37,6 +37,15 @@ export type RowAlign = 'left' | 'right'
 export type DotShape = 'hexagon' | 'circle' | 'square'
 /** How context pressure is drawn. One setting, because one fact must not render twice. */
 export type ContextRender = 'off' | 'arc' | 'gauge' | 'percent'
+/**
+ * The band a context reading falls in, low to high.
+ *
+ * Named rather than numbered because every surface that colours context has to
+ * agree on the *meaning* — the arc, the gauge cells and the percent text are one
+ * scale drawn three ways, and a second copy of the comparison chain is how they
+ * come to disagree at 59%.
+ */
+export type ContextBand = 'calm' | 'warn' | 'high' | 'crit'
 /**
  * Where standing activity is drawn, on the same one-place rule as context.
  *
@@ -84,6 +93,50 @@ export const DEFAULT_DOT_SIZE_DESKTOP = 21
 export const DEFAULT_DOT_SIZE_MOBILE = 17
 
 /**
+ * Where the context ramp changes colour by default: 40 / 60 / 80.
+ *
+ * Deliberately louder than the 70/90 two-step this replaces. That ramp was tuned
+ * so a row only spoke when compaction was imminent, which is the right shape for
+ * a warning and the wrong one for a gauge — by the time it moved, the decision it
+ * informs (finish this thread, or start a fresh one) had already been taken for
+ * you. Four bands starting at 40% make the sidebar a reading of how much room the
+ * fleet has left rather than an alarm, which is what the arc is looked at for.
+ *
+ * The cost is real and worth stating: a busy fleet now shows colour on most rows,
+ * so the signal is the *distribution* down the column rather than the presence of
+ * any one non-neutral row. Anyone who preferred the quieter reading sets these
+ * back to 0.7 / 0.9 (and anything for the third) in the settings panel.
+ */
+export const DEFAULT_CONTEXT_WARN = 0.4
+export const DEFAULT_CONTEXT_HIGH = 0.6
+export const DEFAULT_CONTEXT_CRIT = 0.8
+
+/** The narrowest gap the ramp keeps between two thresholds, in fractions. */
+const CONTEXT_THRESHOLD_GAP = 0.01
+/**
+ * Bounds on a threshold. Zero is excluded because a band no reading can fall
+ * below is not a band, and one is excluded because a band nothing can reach is
+ * a colour that never draws.
+ */
+const CONTEXT_THRESHOLD_MIN = 0.01
+const CONTEXT_THRESHOLD_MAX = 0.99
+
+/**
+ * Which band a reading falls in, given a normalized ramp.
+ *
+ * The single comparison chain every context rendering shares. Thresholds are
+ * inclusive lower bounds, so a ramp at 40/60/80 puts exactly 0.8 in `crit` — the
+ * number a user typed is the number the colour changes at, which is the only
+ * reading of "80% is red" that survives being checked against the row.
+ */
+export function contextBand(pct: number, config: SessionRowConfig): ContextBand {
+  if (pct >= config.contextCrit) return 'crit'
+  if (pct >= config.contextHigh) return 'high'
+  if (pct >= config.contextWarn) return 'warn'
+  return 'calm'
+}
+
+/**
  * Stored-layout version. Bumped whenever a *new* field must reach layouts that
  * already exist: a stored blob is authoritative and an unplaced field is off, so
  * adding one to `defaultSessionRowConfig` alone reaches nobody who has ever
@@ -116,6 +169,17 @@ export interface SessionRowConfig {
   dotSizeDesktop: number
   dotSizeMobile: number
   context: ContextRender
+  /**
+   * Where the context ramp changes colour, as fractions in (0, 1).
+   *
+   * Three numbers rather than four: the lowest band starts at zero and needs no
+   * threshold to enter. They are held sorted and separated by
+   * `normalizeContextThresholds`, so the renderers can compare against them in
+   * order without re-checking that the ramp makes sense.
+   */
+  contextWarn: number
+  contextHigh: number
+  contextCrit: number
   standing: StandingRender
   diffStyle: DiffStyle
   countStyle: CountStyle
@@ -225,7 +289,13 @@ export const ROW_FIELDS: RowFieldDescriptor[] = [
     notable: 'the session is busy with something you asked for long ago',
     priority: 78,
   },
-  { id: 'context', label: 'Context used', notable: 'past 60%', priority: 75 },
+  {
+    id: 'worked',
+    label: 'Total working time',
+    notable: 'the session has worked more than 10 minutes',
+    priority: 76,
+  },
+  { id: 'context', label: 'Context used', notable: 'past the high threshold', priority: 75 },
   { id: 'branch', label: 'Git branch', notable: 'differs from the project default', priority: 60, glyph: '⎇' },
   { id: 'worktree', label: 'Worktree', notable: 'the checkout is a linked worktree', priority: 62, glyph: '⌂' },
   { id: 'diff', label: 'Lines changed (uncommitted)', notable: 'the working tree has changes', priority: 55 },
@@ -326,6 +396,9 @@ export function defaultSessionRowConfig(): SessionRowConfig {
     dotSizeDesktop: DEFAULT_DOT_SIZE_DESKTOP,
     dotSizeMobile: DEFAULT_DOT_SIZE_MOBILE,
     context: 'arc',
+    contextWarn: DEFAULT_CONTEXT_WARN,
+    contextHigh: DEFAULT_CONTEXT_HIGH,
+    contextCrit: DEFAULT_CONTEXT_CRIT,
     standing: 'row',
     diffStyle: 'numbers',
     countStyle: 'numbers',
@@ -413,6 +486,40 @@ function normalizeLine(value: unknown, seen: Set<RowFieldId>, identityOnly: bool
 
 function pick<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? value as T : fallback
+}
+
+/**
+ * A stored ramp as a usable one: three fractions, in order, none touching.
+ *
+ * Clamped and reordered rather than rejected, on the same reasoning as
+ * `normalizeDotSize`: a hand-edited or half-typed blob should render at the
+ * nearest ramp this build can draw instead of silently snapping back to the
+ * default and looking like a lost setting. Separation is enforced upward from
+ * the low end because that is the direction the user was editing — dragging the
+ * warn threshold past `high` means "warn later", not "abandon the edit".
+ *
+ * A missing value takes the default rather than the neighbour, so a blob written
+ * before this setting existed adopts the shipped ramp whole.
+ */
+export function normalizeContextThresholds(
+  raw: Record<string, unknown>, base: SessionRowConfig,
+): Pick<SessionRowConfig, 'contextWarn' | 'contextHigh' | 'contextCrit'> {
+  // Each threshold's own ceiling leaves room for the ones above it. Without
+  // that, a `warn` pinned to the top pushes `high` and `crit` past 1 and the
+  // clamp collapses them together — a band no reading can enter, which is
+  // exactly what `CONTEXT_THRESHOLD_MAX` exists to prevent and what a push that
+  // ignored it would reintroduce from the other direction.
+  const read = (value: unknown, fallback: number, above: number): number => {
+    const ceiling = CONTEXT_THRESHOLD_MAX - above * CONTEXT_THRESHOLD_GAP
+    const usable = typeof value === 'number' && Number.isFinite(value) ? value : fallback
+    return Math.max(CONTEXT_THRESHOLD_MIN, Math.min(ceiling, usable))
+  }
+  const warn = read(raw.contextWarn, base.contextWarn, 2)
+  const high = Math.max(read(raw.contextHigh, base.contextHigh, 1), warn + CONTEXT_THRESHOLD_GAP)
+  const crit = Math.max(read(raw.contextCrit, base.contextCrit, 0), high + CONTEXT_THRESHOLD_GAP)
+  // Rounded so the stored numbers stay readable rather than 0.6000000000000001.
+  const round = (value: number): number => Math.round(value * 1000) / 1000
+  return { contextWarn: round(warn), contextHigh: round(high), contextCrit: round(crit) }
 }
 
 /**
@@ -516,6 +623,7 @@ export function normalizeSessionRowConfig(value: unknown): SessionRowConfig {
     dotSizeDesktop: normalizeDotSize(raw.dotSizeDesktop, base.dotSizeDesktop),
     dotSizeMobile: normalizeDotSize(raw.dotSizeMobile, base.dotSizeMobile),
     context: pick(raw.context, ['off', 'arc', 'gauge', 'percent'] as const, base.context),
+    ...normalizeContextThresholds(raw, base),
     standing: pick(raw.standing, ['row', 'indicator', 'off'] as const, base.standing),
     diffStyle: pick(raw.diffStyle, ['numbers', 'bar'] as const, base.diffStyle),
     countStyle: pick(raw.countStyle, ['numbers', 'pips'] as const, base.countStyle),
