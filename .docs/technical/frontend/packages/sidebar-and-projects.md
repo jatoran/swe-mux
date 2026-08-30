@@ -27,12 +27,23 @@ Version 2 moved presence-only flags into the top line's right section (the flag 
 Version 3 places `voice` on the same rule, next to `approvals`.
 Each step runs only for a blob written before it, so a layout from a later build runs none of them and a relocation never repeats.
 Rewriting the default is the opposite case and deliberately does not bump the version: "a stored blob is authoritative" is precisely the non-repaint guarantee wanted there, so only a device that has never saved a layout sees the new one.
+A new *scalar* is a third case and needs no version step either: a save writes the whole config, so an absent key can only mean the blob predates the setting, and normalization gives it the shipped value the same way a version step places a field nobody could have declined.
+The witness test (`test/sessionRowFields.test.ts`, "moving the shipped default repaints no device that has stored a layout") therefore compares against the stored blob widened by exactly the new keys, which is the assertion that stops a *placement* or a rewritten default from sneaking through with it.
+
+It also owns the context ramp: `contextWarn`/`contextHigh`/`contextCrit`, `normalizeContextThresholds`, and `contextBand`.
+The band function is the single comparison chain all three context renderings share; it is called once per row in `sessionRowFields.ts` and the result travels on the gauge object, so `StateIndicator` and `SessionRowBody` never re-derive it.
+`normalizeContextThresholds` clamps into `(0, 1)` and pushes upward to keep the ramp ordered and separated, because a threshold dragged past its neighbour is an edit to make room rather than an edit to discard.
 Identity tokens are exempt from shedding, since the strip's section may hold nothing else and the narrow widths that trigger shedding are exactly where a flag is worth most.
 
 ### `sessionRowFields.ts` - the DOM-free engine
 
 Turns (session, config, fleet context) into ordered tokens.
 It owns every notability threshold and the duration semantics, and returns the separator alongside the tokens rather than baking it between them, which lets the renderer emit a separator only between tokens that drew.
+
+Two of those semantics are worth naming.
+`workedSeconds` adds the open turn to the daemon's `worked_ms`, because the record's sum only advances at a turn boundary and a total that freezes for the whole of a long turn reads as a stopped clock.
+It dates the open turn at `interrupt_pending_at` when one is set, exactly as `liveDurationAge` does.
+The `context` field takes both its colour and its notability from `contextBand`, rather than colouring on the ramp and appearing on a constant of its own.
 
 `deriveRowContext` computes the "differs from the project default" comparisons once per snapshot, because asking each row about the other rows is quadratic.
 It also counts live sessions per checkout root, which lets a Git quantity say that several rows are quoting it.

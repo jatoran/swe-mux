@@ -14,7 +14,7 @@
 
 import { hasRunningActivity, sessionDotClass } from './sessionStatus.ts'
 import { shapePath } from './dotShapes.ts'
-import type { DotShape } from './sessionRowConfig.ts'
+import type { ContextBand, DotShape } from './sessionRowConfig.ts'
 import type { Session } from './types'
 
 /** Outer radius of the gauge ring, sized so ring plus stroke still fits the viewBox. */
@@ -27,8 +27,15 @@ const HOLLOW_STROKE = 2.4
 export interface StateIndicatorProps {
   session: Session | undefined
   shape: DotShape
-  /** Context pressure drawn as an outline around the shape. Omit to draw none. */
-  gauge?: { pct: number; peak: number } | null
+  /**
+   * Context pressure drawn as an outline around the shape. Omit to draw none.
+   *
+   * `band` arrives pre-computed rather than derived here from a threshold prop:
+   * the ramp is configurable, and a second comparison chain in the one component
+   * every surface draws is how the arc and the row's gauge come to disagree at
+   * the boundary the user just moved.
+   */
+  gauge?: { pct: number; peak: number; band: ContextBand } | null
   /**
    * Standing activity collapsed to a corner pip, with the label it carries.
    * Supplied by `sessionStandingMark`, so it is present only in the rendering
@@ -39,7 +46,8 @@ export interface StateIndicatorProps {
   class?: string
 }
 
-const band = (pct: number): string => (pct >= 0.9 ? ' crit' : pct >= 0.7 ? ' hot' : '')
+/** The ramp's class suffix. `calm` is the base rule and adds nothing. */
+const bandClass = (band: ContextBand): string => (band === 'calm' ? '' : ` ${band}`)
 
 /**
  * The indicator. `sessionDotClass` still supplies the state classes, so every
@@ -54,7 +62,7 @@ export function StateIndicator({ session, shape, gauge, standing, class: extra }
   return <span class={`${sessionDotClass(session)} state-indicator shape-${shape}${extra ? ` ${extra}` : ''}`} title={standing?.label}>
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       {gauge && <path class="ind-track" d={outline} />}
-      {gauge && <path class={`ind-fill${band(pct)}`} d={outline} pathLength={100} stroke-dasharray="100" stroke-dashoffset={100 - pct * 100} />}
+      {gauge && <path class={`ind-fill${bandClass(gauge.band)}`} d={outline} pathLength={100} stroke-dasharray="100" stroke-dashoffset={100 - pct * 100} />}
       {/* The peak sits on the same normalized outline as a 1.5-unit dash, so it
           follows whichever shape is selected without any per-shape geometry. */}
       {gauge && peak > pct && <path class="ind-peak" d={outline} pathLength={100} stroke-dasharray="1.5 98.5" stroke-dashoffset={-peak * 100} />}

@@ -4,6 +4,7 @@ import { agentTargetName } from './agentTargets'
 import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { useModalFocus } from './modalFocus'
+import { CheckIcon, CopyIcon, SelectTextIcon } from './railIcons'
 import { copyPreparedText } from './terminalClipboard'
 import { TranscriptToolCalls } from './TranscriptToolCalls'
 import {
@@ -171,7 +172,7 @@ function MessageAudioChips({ audio, requested, onSpeak, onPlay }: {
   })}</>
 }
 
-function Message({ message, copied, expanded, query, audio, audioRequested, onCopy, onExpand, onSelectText, onSpeak, onPlay }: {
+function Message({ message, copied, expanded, query, audio, audioRequested, revealed, onReveal, onCopy, onExpand, onSelectText, onSpeak, onPlay }: {
   message: TranscriptMessage
   copied: boolean
   expanded: boolean
@@ -180,6 +181,9 @@ function Message({ message, copied, expanded, query, audio, audioRequested, onCo
   audio: MessageAudio | undefined
   /** Kinds this reader has asked for and not yet seen land. */
   audioRequested: readonly VoiceContent[] | null
+  /** Touch only: this is the message whose chip row a tap has opened. */
+  revealed: boolean
+  onReveal: (ordinal: number) => void
   onCopy: (message: TranscriptMessage) => void
   onExpand: (messageId: string) => void
   onSelectText: (message: TranscriptMessage) => void
@@ -189,23 +193,36 @@ function Message({ message, copied, expanded, query, audio, audioRequested, onCo
   const clamped = transcriptClamped(message.text) && !expanded && !query
   const stamp = transcriptTimestampLabel(message.ts)
   const kind = transcriptSpeaker(message.role) === 'you' ? 'message' : 'reply'
-  return <article class={`transcript-message ${message.role}`} data-message-ordinal={message.ordinal}>
-    <div class="transcript-copy-anchor">
+  const chips = audioRequested && message.role === 'assistant'
+  const classes = ['transcript-message', message.role]
+  // The gutter the header keeps clear of the floating chip row is sized to what that row
+  // actually holds, which is two icon buttons unless this reply also carries the audio pair.
+  if (chips) classes.push('has-audio')
+  if (revealed) classes.push('actions-open')
+  return <article
+    class={classes.join(' ')}
+    data-message-ordinal={message.ordinal}
+    onClick={() => onReveal(message.ordinal)}
+  >
+    {/* Stops a press on a chip from closing the row it is in - the tap that opened this
+        one is the same event the article listens for. Inert with a mouse, where hover
+        governs and this handler never decides anything. */}
+    <div class="transcript-copy-anchor" onClick={event => event.stopPropagation()}>
       <button
-        class="transcript-copy"
+        class="transcript-copy transcript-copy-icon"
         aria-label={`Select text from this ${kind}`}
         title={`Select part of this ${kind}`}
         onClick={() => onSelectText(message)}
-      >Select</button>
+      ><SelectTextIcon /></button>
       <button
-        class={copied ? 'transcript-copy copied' : 'transcript-copy'}
-        aria-label={`Copy this ${kind}`}
-        title={`Copy this ${kind}`}
+        class={copied ? 'transcript-copy transcript-copy-icon copied' : 'transcript-copy transcript-copy-icon'}
+        aria-label={copied ? `Copied this ${kind}` : `Copy this ${kind}`}
+        title={copied ? 'Copied' : `Copy this ${kind}`}
         onClick={() => onCopy(message)}
-      >{copied ? 'Copied' : 'Copy'}</button>
+      >{copied ? <CheckIcon /> : <CopyIcon />}</button>
       {/* Replies only: read aloud speaks what the agent said, and a prompt is
           something the operator wrote. */}
-      {audioRequested && message.role === 'assistant' && <MessageAudioChips
+      {chips && <MessageAudioChips
         audio={audio}
         requested={audioRequested}
         onSpeak={kind => onSpeak(message, kind)}
@@ -221,7 +238,11 @@ function Message({ message, copied, expanded, query, audio, audioRequested, onCo
         part.match ? <mark key={index}>{part.text}</mark> : part.text,
       )
       : message.text}</p>
-    {transcriptClamped(message.text) && !query && <button class="transcript-expand" onClick={() => onExpand(message.message_id)}>
+    {transcriptClamped(message.text) && !query && <button class="transcript-expand" onClick={event => {
+      // Unfolding a long reply is not a request for its chip row.
+      event.stopPropagation()
+      onExpand(message.message_id)
+    }}>
       {expanded ? 'Show less' : 'Show more'}
     </button>}
   </article>
@@ -275,6 +296,12 @@ export function TranscriptTab({ session, readAloud = false }: {
   const [sheet, setSheet] = useState<{ title: string; text: string } | null>(null)
   const [showToolCalls, setShowToolCalls] = useState(false)
   const [openBranches, setOpenBranches] = useState<string[]>([])
+  // Touch only: the one message whose chip row a tap has opened. The controls are chrome
+  // over the prose, so on a phone - where there is no hover to reveal them with and no
+  // room to keep them out of the timestamp's way - they stay out of the column until the
+  // reader asks for them, one entry at a time. A mouse ignores this entirely: the reveal
+  // there is `:hover`, and this state changing under a click decides nothing.
+  const [openActions, setOpenActions] = useState<number | null>(null)
   // Every clip of this run, indexed by the message it speaks. Fetched once per run and
   // refreshed on clip events rather than polled: `mux:voice-clip` is raised for every
   // ready or failed clip, which is exactly when this index can change.
@@ -615,6 +642,8 @@ export function TranscriptTab({ session, readAloud = false }: {
     query={normalizedQuery}
     audio={audioIndex?.get(message.message_id)}
     audioRequested={audioIndex ? requestedFor(message.message_id) : null}
+    revealed={openActions === message.ordinal}
+    onReveal={ordinal => setOpenActions(current => (current === ordinal ? null : ordinal))}
     onCopy={item => void copy(item.text, item.ordinal)}
     onExpand={toggleExpand}
     onSpeak={(item, kind) => void speakMessage(item, kind)}

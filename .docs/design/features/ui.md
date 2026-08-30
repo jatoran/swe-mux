@@ -2511,6 +2511,9 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
+  It is not in the resting column at all: these controls are chrome over what somebody said, and a column that carries a row of buttons above every reply is one the timestamps have to share their line with.
+  A pointer reveals a message's controls by hovering that message, or by tabbing into them; a finger, which has no hover, reveals them by tapping the entry and hides them by tapping it again, one entry at a time.
+  Copy and Select are icons rather than words, so the revealed row is the width of two marks instead of two labels; the read-aloud markers keep their words, because `summary` and `verbatim` differ in what they spend and no glyph says that.
   **Copying part of a message goes through a flat-text sheet, because dragging a selection across the column cannot be made to work on a phone.**
   The messages live in a nested `overflow-y:auto` scroller, and once the anchor handle scrolls out of view Chrome re-derives the selection's base from a screen coordinate that is no longer over the anchor, so extending the other handle swallows every message above it.
   That is the browser's touch-selection controller, not this app's DOM: making the column's chrome unselectable only moved where the runaway base landed, from "and the head bar too" to "from the first message down".
@@ -3384,6 +3387,13 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   A `last_turn_ms` under `MIN_REPORTABLE_TURN_MS` (250 ms) is refused: daemons predating record-dated turn boundaries wrote the replay's own elapsed time into records that survive a restart, so those values are already on disk and the row has to refuse them on the way out too.
   A `turn_started_at` or `state_since` more than `CLOCK_SKEW_TOLERANCE_SECONDS` (5 s) in this device's future is refused for the same reason.
   Inside that band a zero is the truth — a turn one tick old really has run for no whole seconds — so the tolerance must not swallow the honest zero.
+- **`Total working time` is the session's whole spend, not the turn's** (`worked`, marked `Σ`, notable past ten minutes).
+  It is the daemon's `worked_ms` — a sum of completed root turns (`features/status-detection.md`) — plus the turn running now, added client-side because the record's sum only moves when a turn ends and a figure that freezes for the whole of a long turn reads as a broken clock on exactly the row being watched.
+  Interruption dates the open turn's contribution the way the duration column does: once the operator has asked to interrupt, what follows is teardown rather than work.
+  The `Σ` is a token prefix rather than part of the value, because the field usually sits beside the duration and two four-character times with nothing to tell them apart is worse than either alone.
+  A higher notability floor than the duration's ten seconds, and for the opposite reason: one ten-second turn is worth reporting because it just finished, while a *total* of ten seconds says only that the session has barely been used, which a row with nothing else to say already implies.
+  It renders nothing rather than `0s` for a session that has never completed a turn and has none open — the same rule the duration states at greater length, for the same reason.
+  It measures root turns only, so a session whose work is mostly background agents reads low; that is under-reporting rather than estimating, and is the trade the field is defined on.
 - **Sidebar durations are aged on the daemon's clock, not the browser's.**
   Every timestamp the row subtracts from was written by the daemon, and the two clocks are only the same clock when the browser runs on the same machine.
   Remote access is a first-class way to use swe-mux, so a laptop or phone a few seconds behind made the age of every working session negative, and clamping the negative away froze the row at `0s` for the whole turn with nothing else on screen looking wrong.
@@ -3399,6 +3409,22 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   A worktree-per-branch fleet that commits as it goes reads `+0 -0` on the HEAD-scoped pair alone, which is what the branch-scoped pair exists to fix.
   Either pair renders nothing at all when it could not be measured; a zero would claim a clean tree, or a branch identical to its base.
 - **Context pressure renders in exactly one place**, chosen by a single setting: an arc around the indicator (default, costs no row width, marks the peak on the same outline), a four-cell gauge, a percentage, or off.
+- **The context ramp is four bands, and where they change is configurable** (`contextWarn`/`contextHigh`/`contextCrit`, shipped at 40 / 60 / 80).
+  The thresholds are inclusive lower bounds, so 80% is the first reading that is red: the number typed is the number the colour changes at, which is the only reading of "80% is red" that survives being checked against a row.
+  They are held sorted and separated by `normalizeContextThresholds`, which clamps rather than rejects and pushes the upper thresholds *up* when one is dragged past them, because dragging `warn` later means "warn later" rather than "abandon the edit".
+  Notability rides the same ramp instead of a fourth hidden number: a placed `context` field in `notable` mode draws from `contextHigh` up, which at the shipped ramp is the 60% it has always been.
+  A field that colours at one threshold and appears at another tells the reader two stories about one number.
+- **All three context renderings band from one comparison chain** (`contextBand`), carried on the gauge object rather than recomputed per surface.
+  The arc, the gauge cells and the percent text are one scale drawn three ways; each used to hold its own copy of the comparison, and the failure that shape produces is two shades disagreeing at the boundary the user just moved rather than anything visibly broken.
+  The band is taken from the **live** reading, not the peak: the colour answers "how much room is left", and a session that touched 85% before compacting has room again. The peak keeps its separate mark on the ring.
+- **The ramp's fourth colour is mixed, not added to the palette.**
+  A theme defines five semantic colours (`--green --green2 --amber --red --blue`) and no orange, so the `high` band is `color-mix(in srgb, var(--amber) 45%, var(--red))`.
+  Adding `--orange` would mean picking a hue by hand in each of the 25 theme blocks, including several that are deliberately near-monochrome (`green-phosphor`, `amber-crt`, `virtual-boy`) and have no honest answer to give; a derived step degrades there to two shades of the theme's own hue instead of to a colour belonging to no palette.
+  The `calm` band is `var(--green2)` rather than the hard-coded sage it used to be, so the low end is theme-aware like the rest of the ramp.
+- **The shipped ramp is deliberately talkative, and that is a trade rather than an oversight.**
+  The 70/90 two-step it replaces only spoke once compaction was imminent, which is the right shape for an alarm and the wrong one for a gauge: by the time it moved, the decision it informs — finish this thread or start a fresh one — had already been taken for you.
+  Starting at 40% makes the sidebar a reading of how much room the fleet has left, at the cost that most rows carry some colour, so what is read is the spread down the column rather than the presence of any one non-neutral row.
+  Anyone who preferred the quiet reading sets the ramp back in the settings panel; the panel's preview holds one session per band so the whole scale is visible while the thresholds are dragged.
 - **The working pulse animates the indicator's core alone.**
   The arc is a measurement that only moves when the conversation grows, so blinking it alongside the core made a static reading look like live activity.
 

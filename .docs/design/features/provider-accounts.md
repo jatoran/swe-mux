@@ -239,6 +239,25 @@ the last good reading and changes no state.
   state is the daemon's rather than either component's.
 - The popover does not close on an outside click while a request it started is still out: a
   switch or a dismissal that lands on an unmounted popover takes its error with it.
+- Each provider section in the popover draws its accounts' quota as columns, headed once
+  above the rows: 5h, weekly, and Fable where the provider reports it.
+  The same figures joined into a sentence read fine for one account and stop reading at all
+  for several - `5% 4h3m - 63% 3d1h` and `100% 22m - 7% 6d23h` are different lengths, so
+  stacked, no two percentages sit above each other and the eye cannot compare the thing the
+  list exists to compare.
+  Every row emits every one of its section's cells, including windows it has no reading for,
+  because a row that skipped one would shift every column after it; the Fable column is the
+  exception and belongs to the section rather than the row, so a provider that never reports
+  it carries no empty third column.
+  Column tracks are sized in `ch` against a pinned font, which is the whole mechanism: the
+  headings are a `div` and the figures live in a `small` inside a `button`, so they are
+  separate formatting contexts and no `auto` track could line them up with each other.
+  The percentage is right-aligned within its track so `5%` and `100%` end level.
+  `frontend/test/renderer/account-switcher.spec.ts` measures the column positions, because
+  this geometry is pure CSS and invisible to unit tests.
+  A failed poll invalidates the whole account and replaces its cells with `unavailable`,
+  the same rule `providerQuotaWindows` applies, rather than showing a stale mix that reads
+  as current.
 - The settings panel states policy once and only where it acts. The switching and
   credential-provenance rules fold into one disclosure; `LIVE SYSTEM AUTH` renders only for
   `external`, `signed_out`, and `unreadable`, which are the states that need explaining and

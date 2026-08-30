@@ -18,8 +18,9 @@ import { displayModelName } from './modelDisplay.ts'
 import type { Session, VoiceMode } from './types'
 import { VOICE_MODE_OFF, resolveVoiceMode, voiceModeLabel, type VoiceModeDefaults } from './voiceMode.ts'
 import {
-  MAX_PIPS, ROW_FIELD_BY_ID, ROW_MIN_CHARS, SEPARATORS,
-  type RowAlign, type RowFieldId, type RowLine, type RowSlot, type SessionRowConfig,
+  MAX_PIPS, ROW_FIELD_BY_ID, ROW_MIN_CHARS, SEPARATORS, contextBand,
+  type ContextBand, type RowAlign, type RowFieldId, type RowLine, type RowSlot,
+  type SessionRowConfig,
 } from './sessionRowConfig.ts'
 
 /** Fleet-derived facts a single session cannot answer about itself. */
@@ -115,7 +116,11 @@ export function rowBudget(textWidth: number, charPx: { top: number; bottom: numb
 
 export type RowTokenKind =
   'text' | 'diff' | 'gauge' | 'count' | 'badges' | 'glyph' | 'title' | 'broadcast' | 'draft' | 'voice'
-export type RowTone = 'default' | 'muted' | 'warn' | 'add' | 'del'
+// `warn`/`high`/`crit` are the upper three steps of the context ramp, so the
+// `percent` rendering carries the same scale the arc and the gauge cells do
+// rather than a binary "past the threshold" amber. The lowest step is `default`:
+// a calm reading is the row's ordinary text colour and needs no tone of its own.
+export type RowTone = 'default' | 'muted' | 'warn' | 'high' | 'crit' | 'add' | 'del'
 
 export interface RowToken {
   id: RowFieldId
@@ -140,7 +145,7 @@ export interface RowToken {
    */
   shared?: boolean
   diff?: { added: number; removed: number }
-  gauge?: { pct: number; peak: number }
+  gauge?: ContextGauge
   count?: number
   badges?: ActivityBadge[]
   /**
@@ -175,8 +180,16 @@ const WORKING_NOTABLE_SECONDS = 60
 const AWAITING_NOTABLE_SECONDS = 20
 const LAST_TURN_NOTABLE_SECONDS = 10
 const IDLE_FOR_NOTABLE_SECONDS = 30 * 60
-const CONTEXT_NOTABLE_PCT = 0.6
 const COST_NOTABLE_USD = 1
+/**
+ * Working time worth reporting, in seconds.
+ *
+ * Higher than `LAST_TURN_NOTABLE_SECONDS` on purpose: one ten-second turn is
+ * worth reporting because it just finished, while a *total* of ten seconds says
+ * only that the session has barely been used, which the row already implies by
+ * having nothing else to say about it.
+ */
+const WORKED_NOTABLE_SECONDS = 10 * 60
 
 /**
  * Shortest `last_turn_ms` that describes a turn rather than a boundary artifact.
@@ -322,6 +335,36 @@ function liveDurationAge(session: Session, context: SessionRowContext): number |
 }
 
 /**
+ * Everything this session has spent working, in seconds, or null when unknown.
+ *
+ * The daemon's `worked_ms` is a sum of *completed* turns, so on its own the
+ * figure freezes for the whole of a long turn and then jumps by its length —
+ * which reads as a broken clock on exactly the row you were watching. The open
+ * turn is added here instead of on the record, because doing it there would mean
+ * writing a field on every tick for a number the client can derive.
+ *
+ * Interruption is dated the way `liveDurationAge` dates it: once the operator has
+ * asked to interrupt, the turn's contribution stops growing at the moment of the
+ * request, because what happens after it is teardown rather than work.
+ *
+ * Returns null rather than `0s` for a session that has never completed a turn and
+ * has none open. Zero here is not a measurement of no work — it is the absence of
+ * any measurement, and the two must not render the same, which is the same rule
+ * `durationToken` states at greater length.
+ */
+function workedSeconds(session: Session, context: SessionRowContext): number | null {
+  const completed = Math.max(0, (session.worked_ms || 0) / 1000)
+  const open = session.turn_started_at && !isEnded(session)
+    ? ageOf(session.turn_started_at, session.interrupt_pending_at ?? context.now)
+    : null
+  const total = completed + (open ?? 0)
+  return total > 0 ? total : null
+}
+
+/** Precedes the total so it cannot be misread as the turn time beside it. */
+const WORKED_MARK = 'Σ'
+
+/**
  * The time this state has cost, which is a different question per state.
  *
  * A working session is aged from the **turn** it is in, not from the state it is
@@ -437,18 +480,27 @@ function detailText(session: Session, context: SessionRowContext): { text: strin
   return null
 }
 
-function contextGauge(session: Session): { pct: number; peak: number } | null {
+export interface ContextGauge { pct: number; peak: number; band: ContextBand }
+
+function contextGauge(session: Session, config: SessionRowConfig): ContextGauge | null {
   if (!hasHarnessMeasurement(session.backend)) return null
   if (!(session.context_pct > 0)) return null
-  return { pct: session.context_pct, peak: Math.max(session.context_pct, session.context_peak_pct || 0) }
+  return {
+    pct: session.context_pct,
+    peak: Math.max(session.context_pct, session.context_peak_pct || 0),
+    // Banded from the live reading rather than the peak: the colour answers "how
+    // much room is left", and a session that touched 85% before compacting has
+    // room again. The peak keeps its own separate mark on the ring.
+    band: contextBand(session.context_pct, config),
+  }
 }
 
 /**
  * Context pressure for the indicator's arc. Separate from the token path because
  * the arc is drawn whether or not `context` is placed in a section.
  */
-export function sessionContextArc(session: Session, config: SessionRowConfig): { pct: number; peak: number } | null {
-  return config.context === 'arc' ? contextGauge(session) : null
+export function sessionContextArc(session: Session, config: SessionRowConfig): ContextGauge | null {
+  return config.context === 'arc' ? contextGauge(session, config) : null
 }
 
 /**
@@ -668,15 +720,45 @@ function candidateFor(
         seconds >= IDLE_FOR_NOTABLE_SECONDS,
       )
     }
+    case 'worked': {
+      const seconds = workedSeconds(session, context)
+      if (seconds === null) return null
+      const label = formatRowDuration(seconds)
+      return make(
+        {
+          kind: 'text',
+          text: label,
+          prefix: WORKED_MARK,
+          tone: 'muted',
+          title:
+            `this session has worked ${label} in total, summed over its completed turns` +
+            (session.turn_started_at ? ' plus the turn running now' : ''),
+        },
+        seconds >= WORKED_NOTABLE_SECONDS,
+      )
+    }
     case 'context': {
       // `arc` and `off` draw nothing here; the indicator owns the fact instead.
       if (config.context !== 'gauge' && config.context !== 'percent') return null
-      const gauge = contextGauge(session)
+      const gauge = contextGauge(session, config)
       if (!gauge) return null
       const label = `${Math.round(gauge.pct * 100)}%`
-      const notable = gauge.pct >= CONTEXT_NOTABLE_PCT
+      // Notability rides the configured ramp rather than a fourth hidden number.
+      // The two questions genuinely have one answer — "is there enough context
+      // pressure here to spend a row on" is what the `high` band means — and a
+      // separate constant is how a reader who moves the ramp ends up with a
+      // field that colours at one threshold and appears at another.
+      const notable = gauge.band === 'high' || gauge.band === 'crit'
       return config.context === 'percent'
-        ? make({ kind: 'text', text: label, title: `context ${label}`, tone: notable ? 'warn' : 'default' }, notable)
+        ? make(
+          {
+            kind: 'text',
+            text: label,
+            title: `context ${label}`,
+            tone: gauge.band === 'calm' ? 'default' : gauge.band,
+          },
+          notable,
+        )
         : make({ kind: 'gauge', text: label, title: `context ${label}`, gauge }, notable)
     }
     case 'branch': {

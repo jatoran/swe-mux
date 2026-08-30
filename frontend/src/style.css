@@ -280,6 +280,26 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-conflict{grid-column:1/-1;margin:6px 0 0;padding:6px 7px;border-left:3px solid var(--red);background:#73373c22;color:var(--red);font-size:8px}
 .account-list article.conflicted{box-shadow:inset 3px 0 var(--red)}
 .account-popover button.conflicted strong{color:var(--red)}
+/* Quota as columns, not as a sentence per account.
+   Every width here is in `ch` against one pinned font, which is the whole mechanism: the
+   headings live in a `div` and the figures in a `small` inside a `button`, so they are
+   separate formatting contexts and no `auto` track could ever line them up with each
+   other. The content is bounded and monospace - a percentage is at most `100%` and a
+   reset at most `6d23h` - so fixed tracks cost nothing and are the only thing that makes
+   one account's 5h figure sit above the next one's. Keep the two templates and the font
+   identical between `.quota-columns` and `.quota-row`, or the columns silently drift. */
+.account-popover .quota-columns,.account-popover .quota-row{display:grid;grid-template-columns:10ch 10ch minmax(0,1fr);gap:0 8px;align-items:baseline;font:9px 'Cascadia Mono',Consolas,monospace}
+.account-popover .quota-columns.has-fable,.account-popover .quota-row.has-fable{grid-template-columns:10ch 10ch 10ch minmax(0,1fr)}
+/* The rows are buttons with 7px of padding; this heading is a plain child of the section,
+   so it has to pay the same inset by hand to sit over the column it names. */
+.account-popover .quota-columns{padding:2px 7px 3px;color:var(--muted);opacity:.7;text-transform:uppercase}
+.account-popover .quota-cell{display:grid;grid-template-columns:4ch minmax(0,1fr);gap:0 4px}
+.account-popover .quota-cell b{color:var(--text);font-weight:400;text-align:right}
+.account-popover .quota-cell i{overflow:hidden;color:var(--muted);font-style:normal;white-space:nowrap}
+/* A failed poll invalidates the whole account, so it takes the window columns with it and
+   leaves the refresh age in its own column still saying when that failure was measured. */
+.account-popover .quota-row .quota-row-note{grid-column:1/-2;color:var(--muted);font-style:normal}
+.account-popover .quota-row .account-refresh-age{justify-self:end;white-space:nowrap}
 /* Sign-in inside the switcher. The popover is 340px and every row in it is a target,
    so the per-provider control is a text button on the heading line and the empty state
    is the full-width row it replaces - the one screen a new install always sees. */
@@ -4331,12 +4351,25 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .transcript-message.user{background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .transcript-copy-anchor{position:sticky;top:8px;z-index:3;height:20px;margin-bottom:-20px;display:flex;justify-content:flex-end;gap:4px;pointer-events:none}
 .transcript-message>header{display:flex;align-items:center;gap:6px;margin-bottom:4px;padding-right:100px}
+/* The reader's own gutter, sized to the chip row that floats over this header rather than
+   to a number that predates it: two icon buttons, plus the audio pair on a reply while
+   read aloud is on. The flat 100px is what the four-chip row overran, which is how the
+   controls came to sit on top of the timestamp they were meant to clear. History's column
+   keeps it - one text Copy button is all that ever floats there. */
+.transcript-tab .transcript-message>header{padding-right:52px}
+.transcript-tab .transcript-message.has-audio>header{padding-right:176px}
 .transcript-speaker{flex:1;min-width:0;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
 .transcript-message.user .transcript-speaker{color:var(--accent)}
 .transcript-message>header time{flex:none;color:var(--muted);font-size:8px}
 .transcript-copy{pointer-events:auto;flex:none;min-height:20px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .transcript-copy:hover{color:var(--text)}
 .transcript-copy.copied{border-color:var(--accent);color:var(--accent)}
+/* Copy and Select are icon-only here: their two words cost more width than the whole
+   header they float over, and this row hovers on top of somebody's prose rather than
+   sitting in chrome of its own. The audio chips keep their words - `♪ summary` and
+   `♪ verbatim` differ in what they *spend*, which no pair of glyphs can say. */
+.transcript-copy-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;padding:0}
+.transcript-copy-icon svg{width:12px;height:12px;display:block}
 /* The per-message read-aloud markers, in the same hovering chip row as Copy and Select.
    Four states, and only one of them is a play button: `ready` is the clip that already
    exists (the whole point of anchoring one to its message), `generating` is disabled
@@ -4419,6 +4452,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   /* Two controls now float here, so the header's reserved gutter widens with them. */
   .transcript-message>header{padding-right:118px}
   .transcript-copy{min-height:28px;padding:0 10px}
+  /* Thumb-sized and square. The words are gone, not the target. */
+  .transcript-copy-icon{width:28px;padding:0}
+  .transcript-copy-icon svg{width:14px;height:14px}
+  /* The reader reserves for the icon pair only. A phone has no width to hold the audio
+     chips' gutter open as well - 200px of it would push the timestamp into the speaker
+     label on every reply - and unlike the desktop column this row is not up unless the
+     reader tapped for it, so the chips overlaying the stamp is a moment they asked for
+     rather than the resting state they complained about. */
+  .transcript-tab .transcript-message>header,
+  .transcript-tab .transcript-message.has-audio>header{padding-right:72px}
   /* Four chips in the row on a phone instead of two, so the audio pair takes the
      tighter padding and lets Copy and Select keep their thumb width. */
   .transcript-copy.transcript-audio{padding:0 7px}
@@ -4436,6 +4479,34 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 @media(hover:none){
   .transcript-copy-anchor{-webkit-touch-callout:none}
   .transcript-tab.transcript-selecting .transcript-copy-anchor{opacity:0;pointer-events:none}
+}
+
+/* The chip row is chrome laid over what somebody said, so it is not in the column at rest.
+   Two reveals, because the two inputs have nothing in common:
+   a mouse gets the row on hover of the message it belongs to, which costs a pointer reader
+   nothing and keeps the resting column to prose and a timestamp;
+   a finger has no hover, so a tap on the entry opens that entry's row and a second tap
+   closes it (`TranscriptTab.tsx`, `openActions`). One at a time - a phone has no room for
+   a row of controls above every reply, which is the shape this replaces.
+   Hidden with `opacity` rather than `visibility` or `display`: a keyboard reader tabs to
+   these buttons, and neither of the other two can be focused into, so `:focus-within`
+   would never fire and the controls would be unreachable without a mouse. `pointer-events`
+   is what makes the invisible row unclickable meanwhile - opacity alone leaves it live. */
+.transcript-tab .transcript-copy-anchor{opacity:0;transition:opacity .12s ease}
+.transcript-tab .transcript-copy-anchor .transcript-copy{pointer-events:none}
+@media(prefers-reduced-motion:reduce){.transcript-tab .transcript-copy-anchor{transition:none}}
+@media(hover:hover){
+  .transcript-tab .transcript-message:hover>.transcript-copy-anchor,
+  .transcript-tab .transcript-copy-anchor:focus-within{opacity:1}
+  .transcript-tab .transcript-message:hover>.transcript-copy-anchor .transcript-copy,
+  .transcript-tab .transcript-copy-anchor:focus-within .transcript-copy{pointer-events:auto}
+}
+/* `:not(.transcript-selecting)` rather than a later override: the rule that clears this row
+   out of a selection handle's path is two classes lighter than the reveal, so it would lose
+   on specificity wherever it sat. */
+@media(hover:none){
+  .transcript-tab:not(.transcript-selecting) .transcript-message.actions-open>.transcript-copy-anchor{opacity:1}
+  .transcript-tab:not(.transcript-selecting) .transcript-message.actions-open>.transcript-copy-anchor .transcript-copy{pointer-events:auto}
 }
 
 /* Agent Context: an inventory and viewer, never an editor. Mutations are isolated to the
@@ -5111,6 +5182,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-toolbar-actions>button:hover:not(:disabled){border-color:var(--accent);color:var(--text)}
 .git-toolbar-actions>button:disabled{opacity:.45;cursor:not-allowed}
 .git-toolbar-actions .git-refresh{min-width:25px;padding:0;font-size:11px;line-height:1}
+/* The glyph carries the animation, not the button: rotating the button would spin its
+   border and its focus ring with it. `git-map-spin` is the rotation this tab already
+   uses for a worktree being removed. */
+.git-toolbar-actions .git-refresh .git-refresh-glyph{display:inline-block}
+.git-toolbar-actions .git-refresh.spinning{cursor:wait;opacity:1}
+.git-toolbar-actions .git-refresh.spinning .git-refresh-glyph{color:var(--accent);animation:git-map-spin .7s linear infinite}
+@media(prefers-reduced-motion:reduce){.git-toolbar-actions .git-refresh.spinning .git-refresh-glyph{animation:none}}
 .git-compare{display:grid;gap:3px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select,.git-compare .dropdown-trigger{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}
@@ -5453,8 +5531,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    exactly the users who need it most. */
 .ind-core.hollow{fill:none;stroke:var(--dot);stroke-width:2.4;stroke-linejoin:round}
 .ind-track{fill:none;stroke:#2b352f;stroke-width:1.6;stroke-linejoin:round}
-.ind-fill{fill:none;stroke:#6f8a7e;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:butt}
-.ind-fill.hot{stroke:var(--amber)}
+/* The context ramp, low to high. Four bands are drawn from the three colours a
+   theme actually defines, because `--orange` does not exist in any of them and
+   inventing one would mean picking a fourth hue by hand in each of the 25 theme
+   blocks — including several (green-phosphor, amber-crt, virtual-boy) that are
+   deliberately near-monochrome and have no honest answer to give. Mixing the
+   middle step out of `--amber` and `--red` keeps the ramp derived from whatever
+   the theme chose, so it degrades to "two shades of the same hue" on those
+   themes instead of to a colour that belongs to no palette. */
+.ind-fill{fill:none;stroke:var(--green2);stroke-width:1.8;stroke-linejoin:round;stroke-linecap:butt}
+.ind-fill.warn{stroke:var(--amber)}
+.ind-fill.high{stroke:color-mix(in srgb,var(--amber) 45%,var(--red))}
 /* Only one element in a row may go red, and the indicator owns that vocabulary. */
 .ind-fill.crit{stroke:var(--red)}
 .ind-peak{fill:none;stroke:#9fb3a8;stroke-width:2.6;opacity:.55}
@@ -5578,12 +5665,19 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-text.muted{color:#5c6f61}
 .row-text.warn{color:var(--amber)}
+/* The `percent` context rendering's upper two steps; same ramp as `.ind-fill`. */
+.row-text.high{color:color-mix(in srgb,var(--amber) 45%,var(--red))}
+.row-text.crit{color:var(--red)}
 .row-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .row-diff .add{color:#5f9e6a}.row-diff .del{color:#a5605a}
 .row-gauge,.row-diffbar{display:inline-flex;gap:1.5px;align-self:center;flex:none}
 .row-gauge i,.row-diffbar i{width:4px;height:7px;border-radius:1px;background:#2b352f;display:block}
-.row-gauge i.on{background:#6f8a7e}
-.row-gauge.hot i.on{background:var(--amber)}
+/* Same ramp as `.ind-fill`, and it has to stay the same: the arc and the cells
+   are one scale drawn two ways, and a reader who switches between them is
+   comparing colours across rows. */
+.row-gauge i.on{background:var(--green2)}
+.row-gauge.warn i.on{background:var(--amber)}
+.row-gauge.high i.on{background:color-mix(in srgb,var(--amber) 45%,var(--red))}
 .row-gauge.crit i.on{background:var(--red)}
 .row-gauge i.peak{box-shadow:inset 0 0 0 1px #9fb3a8}
 .row-diffbar i.add{background:#5f9e6a}.row-diffbar i.del{background:#a5605a}

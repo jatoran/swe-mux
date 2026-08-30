@@ -154,6 +154,11 @@ export interface Session {
   state_since?: number
   /** Wall-clock length of the last completed root turn, milliseconds. Run-scoped. */
   last_turn_ms?: number | null
+  /** Sum of every accepted completed root turn on this run, milliseconds.
+   *  Root-turn time only: work a harness hands off to background agents ends the
+   *  turn and is in no turn duration, so this under-reports such a session rather
+   *  than estimating. Add the open turn for a live figure. Run-scoped. */
+  worked_ms?: number | null
   /** Epoch seconds the current root turn began; absent while no turn is open. */
   turn_started_at?: number | null
   /** Monotonic identity of the current root-turn generation. */
