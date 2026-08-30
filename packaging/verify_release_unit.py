@@ -80,6 +80,12 @@ pass it did not earn.
 `--json` writes the whole report - every check's verdict, its observed detail,
 and the evidence behind it - to stdout, so a CI step can publish the reading
 rather than only the exit code.
+
+`--stage` selects which question `changelog-entry` asks of `## [Unreleased]`, and
+defaults to the strict release-time one. See `Stage` below for why one check has
+two correct answers and why the caller has to say which; the short version is
+that the landing gate runs on every branch and is never itself the release, while
+`release.yml` runs at the tag and must never pass the flag.
 """
 
 from __future__ import annotations
@@ -96,7 +102,7 @@ import zipfile
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -142,6 +148,37 @@ PYPROJECT = "pyproject.toml"
 DISTRIBUTION_NAME = "swe-mux"
 INIT = "src/swe_mux/__init__.py"
 UNRELEASED = "Unreleased"
+
+# Which question is being asked of the tree, because one of the checks has two
+# correct answers and no way to tell them apart from the tree alone.
+#
+# `changelog-entry` refuses a `## [Unreleased]` section that still has content
+# above the version's own. At the tag that is exactly right: everything in the
+# tree is about to ship as this version, so an entry filed as unreleased is a
+# change that shipped and says it did not. After the tag it is exactly wrong:
+# `pyproject.toml` still declares the version that was just published, the tree
+# has moved on, and `## [Unreleased]` is the place the next release's entries
+# are supposed to accumulate. The check cannot distinguish the two states by
+# reading the tree, because the tree is byte-identical in both - the difference
+# is entirely whether `v<version>` has been cut yet.
+#
+# So the caller says which one it is, rather than the module guessing. The only
+# caller that knows a release is happening is `release.yml`, which runs this at
+# the tag; `RELEASE` is the default precisely so that a caller which does not
+# pass one gets the strict reading. The landing gate passes `DEVELOPMENT`,
+# because the gate runs on every branch at every point in the cycle and is never
+# itself the release.
+#
+# Deliberately not a git tag lookup. `git tag --list v0.1.3` would answer the
+# real question, but the answer would depend on the checkout: CI clones with no
+# tags fetched, so the release-time rule would silently switch itself off in the
+# one place it has to hold, and a shallow or mirrored checkout would flip the
+# verdict of a validator whose whole purpose is to be deterministic about a
+# tree.
+Stage = Literal["release", "development"]
+RELEASE: Stage = "release"
+DEVELOPMENT: Stage = "development"
+STAGES: tuple[Stage, ...] = (RELEASE, DEVELOPMENT)
 
 # Documents that tell a user what to run. Both are read for command invocations
 # and every one that is not a third-party tool has to resolve against
@@ -831,7 +868,13 @@ def _check_version_literals(tree: SourceTree, version: str) -> Check:
     )
 
 
-def _check_changelog_entry(tree: SourceTree, version: str) -> Check:
+def _check_changelog_entry(tree: SourceTree, version: str, stage: Stage = RELEASE) -> Check:
+    """The version has a written entry, and - at `RELEASE` - nothing is left unreleased.
+
+    The first two questions are asked identically at both stages: the section
+    exists, and it says something. Only the third is release-time, and `Stage`
+    above records why it cannot be decided from the tree.
+    """
     name = "changelog-entry"
     text = tree.text(CHANGELOG)
     if text is None:
@@ -871,7 +914,8 @@ def _check_changelog_entry(tree: SourceTree, version: str) -> Check:
             f"(`RELEASING.md`, 'What is not automated'), so an empty `## [{version}]` "
             "section publishes a release whose notes are a heading.",
         )
-    if notes_body(sections.get(UNRELEASED, "")):
+    pending = notes_body(sections.get(UNRELEASED, ""))
+    if pending and stage == RELEASE:
         return Check(
             name,
             False,
@@ -880,6 +924,14 @@ def _check_changelog_entry(tree: SourceTree, version: str) -> Check:
             f"Move the remaining `## [{UNRELEASED}]` entries into `## [{version}]` and "
             f"leave `## [{UNRELEASED}]` empty, per `RELEASING.md` § 1. Anything left "
             "there is a change that shipped in this version and says it did not.",
+        )
+    if pending:
+        return Check(
+            name,
+            True,
+            f"`## [{version}]` carries the release notes, and `## [{UNRELEASED}]` holds "
+            f"entries for the next version, which is what it is for at the "
+            f"{DEVELOPMENT} stage. At {RELEASE} this would fail.",
         )
     return Check(
         name,
@@ -1247,8 +1299,14 @@ def _check_migration_coherence(
 # --------------------------------------------------------------------------- driver
 
 
-def verify(wheel: Path, tag: str, root: Path | None = None) -> Report:
-    """Run every check over `wheel` against the tag and the tree. Never raises."""
+def verify(
+    wheel: Path, tag: str, root: Path | None = None, stage: Stage = RELEASE
+) -> Report:
+    """Run every check over `wheel` against the tag and the tree. Never raises.
+
+    `stage` defaults to `RELEASE`, so a caller that does not think about it gets
+    the strict reading. Only `changelog-entry` reads it; see `Stage`.
+    """
     tree = SourceTree(ROOT if root is None else root)
     try:
         facts = read_wheel(wheel)
@@ -1256,6 +1314,7 @@ def verify(wheel: Path, tag: str, root: Path | None = None) -> Report:
         return _unreadable(
             wheel,
             tag,
+            stage,
             f"{wheel} does not exist.",
             "Pass the path to a built wheel, e.g. `uv build --wheel` then "
             "`uv run python packaging/verify_release_unit.py --tag <tag> dist/*.whl`.",
@@ -1264,6 +1323,7 @@ def verify(wheel: Path, tag: str, root: Path | None = None) -> Report:
         return _unreadable(
             wheel,
             tag,
+            stage,
             f"{wheel} could not be read as a wheel (zip): {error}.",
             "A wheel is a zip archive. Check the path points at the `.whl` and that the "
             "build or the download completed, then rebuild with `uv build --wheel`.",
@@ -1285,7 +1345,7 @@ def verify(wheel: Path, tag: str, root: Path | None = None) -> Report:
         _check_tag_format(tag),
         _check_version_sources(tree, version, tag),
         _check_version_literals(tree, version),
-        _check_changelog_entry(tree, version),
+        _check_changelog_entry(tree, version, stage),
         _check_changelog_links(tree, version),
         _check_wheel_version(facts, version, tag),
         _check_project_urls(tree, facts),
@@ -1297,6 +1357,7 @@ def verify(wheel: Path, tag: str, root: Path | None = None) -> Report:
     evidence.update(
         {
             "tag": tag,
+            "stage": stage,
             "version": version,
             "pyproject_version": declared_version(tree),
             "init_version": dunder_version(tree),
@@ -1328,6 +1389,7 @@ def _empty_evidence() -> dict[str, Any]:
     """
     return {
         "tag": "",
+        "stage": "",
         "version": "",
         "pyproject_version": None,
         "init_version": None,
@@ -1342,9 +1404,10 @@ def _empty_evidence() -> dict[str, Any]:
     }
 
 
-def _unreadable(wheel: Path, tag: str, detail: str, remedy: str) -> Report:
+def _unreadable(wheel: Path, tag: str, stage: Stage, detail: str, remedy: str) -> Report:
     evidence = _empty_evidence()
     evidence["tag"] = tag
+    evidence["stage"] = stage
     check = Check("artifact-readable", False, detail, remedy)
     return Report(wheel=str(wheel), ok=False, checks=[check], evidence=evidence)
 
@@ -1368,6 +1431,17 @@ def main(argv: list[str] | None = None) -> int:
         "when that names a tag.",
     )
     parser.add_argument(
+        "--stage",
+        choices=STAGES,
+        default=RELEASE,
+        help="Which question to ask of `## [Unreleased]`. The default, "
+        f"`{RELEASE}`, is the one a release runs: content left under "
+        f"`## [{UNRELEASED}]` fails, because it is a change that ships in this "
+        f"version and says it did not. `{DEVELOPMENT}` allows it, for a run "
+        "between releases where that section is where the next version's entries "
+        "belong. A release workflow must never pass this flag.",
+    )
+    parser.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
@@ -1385,7 +1459,7 @@ def main(argv: list[str] | None = None) -> int:
             "which a mismatch is still fixable."
         )
 
-    report = verify(args.wheel, tag)
+    report = verify(args.wheel, tag, stage=args.stage)
     if args.as_json:
         print(json.dumps(asdict(report), indent=2, sort_keys=True))
     else:
