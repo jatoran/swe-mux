@@ -336,7 +336,15 @@ def _cli_bundle(
     for name, size in packages.items():
         package = internal / name
         package.mkdir()
-        (package / "payload.bin").write_bytes(b"x" * size)
+        if name == "swe_mux":
+            # The real bundle's own-package directory holds nothing but the
+            # embedded skill data (spec datas); the fake mirrors that shape so
+            # the contents assertion accepts a conforming bundle.
+            skill = package / "assets" / "skills" / "swe-mux"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_bytes(b"x" * size)
+        else:
+            (package / "payload.bin").write_bytes(b"x" * size)
     for name in build_desktop.CLI_EXES if exes is None else exes:
         (bundle / name).write_bytes(b"MZ fake")
     return bundle
@@ -390,6 +398,20 @@ def test_a_client_dependency_that_stopped_being_collected_fails_the_build(
     bundle = _cli_bundle(tmp_path, packages)
 
     with pytest.raises(SystemExit, match="psutil"):
+        build_desktop.verify_cli_bundle_contents(bundle)
+
+
+def test_client_code_arriving_beside_the_skill_fails_the_build(tmp_path: Path) -> None:
+    """Admitting `swe_mux` to the manifest is for its package data alone, and the
+    name must not blunt the gate: anything in that directory other than the
+    embedded skill subtree - a module materialised as data, a second asset - is
+    the same class of leak the membership check catches for third parties."""
+    bundle = _cli_bundle(
+        tmp_path, {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES}
+    )
+    (bundle / "_internal" / "swe_mux" / "server.pyc").write_bytes(b"code")
+
+    with pytest.raises(SystemExit, match="server.pyc"):
         build_desktop.verify_cli_bundle_contents(bundle)
 
 
