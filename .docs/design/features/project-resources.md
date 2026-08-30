@@ -169,7 +169,7 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.36 editor owns mobile touch and soft-keyboard arbitration.
+- Continuity 0.2.40 owns mobile touch and soft-keyboard arbitration.
   `pointerdown` does not focus its textarea; a resolved typing tap projects the caret and focuses
   synchronously, while scrolling and cancellation do not raise the keyboard.
   Long-press selection and selection-handle adjustment preserve an already-visible keyboard but
@@ -183,13 +183,13 @@ The file tree and notes collection are utility-drawer tabs.
   and flushing on unmount could not help because the editor never handed it over. Unmount now
   calls the editor's `commitComposition()` before flushing, which folds the run in and emits its
   `continuity-change` synchronously, so the queue has the text before the flush sends it.
-- Continuity 0.2.36 also commits an open composition inside `destroy()`, but this host cannot
+- Continuity 0.2.40 also commits an open composition inside `destroy()`, but this host cannot
   rely on that: the React adapter unbinds its listeners when the ref detaches, and `destroy()`
   runs a microtask after the DOM removal that follows, so the change it emits reaches nobody
   here. The explicit call lands while the listeners are still bound, because Preact runs a
   component's effect cleanups before unmounting that component's children. Hosts that bind
   directly to the element and never detach need nothing.
-- Continuity 0.2.36 scopes every block-marker toggle to the lines it rewrites: bullet, numbered,
+- Continuity 0.2.40 scopes every block-marker toggle to the lines it rewrites: bullet, numbered,
   and task toggles, blockquote wrapping, and heading demotion.
   Marking one line of a multi-line paragraph previously left the following line as CommonMark
   lazy-continuation text, which silently folded that untouched line into the new block, and the
@@ -258,7 +258,7 @@ The file tree and notes collection are utility-drawer tabs.
   spellcheck, Markdown projection on/off (`plain` keeps undo, multi-cursor, list continuation,
   and autosave and only stops the rendering), what `Tab` does, typography, the touch command
   rail, and the editor's own keyboard shortcuts.
-- The knobs are exactly what the vendored editor exposes: element properties/attributes
+- The knobs are exactly what the editor exposes: element properties/attributes
   (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`, `command-rail`, `indent-guides`)
   and its `--continuity-*` custom properties. Nothing is emulated on top, so a setting either
   maps to the editor or is not offered.
@@ -267,10 +267,15 @@ The file tree and notes collection are utility-drawer tabs.
   nested lists, so they are on unless the config says otherwise — and *only* an explicit
   `false` turns them off, so a daemon too old to know the key does not silently land on the
   editor's default instead of ours.
+  Because they are on by default here, Continuity 0.2.40's one behavior change lands on every
+  note: `indent-guides="on"` now draws a guide at the *first* indent level too, where earlier
+  versions started at the second. Nothing configures that separately - it is the same knob
+  drawing one more rule - so a note that looked right before looks right with an extra guide,
+  and the only way back is turning guides off entirely.
 - Colours are deliberately not among them. The theme already maps the app palette onto the
   editor's colour variables, and a second source for them would fight the theme.
 - A blank/zero typography value means *keep the editor's default* rather than pinning today's
-  value here, so upgrading the vendored editor can still move its defaults.
+  value here, so upgrading the editor can still move its defaults.
 - Preferences reach a live editor as element configuration, never as a remount: remounting
   would drop undo history and reseed from the last *loaded* text, discarding edits since. The
   editor pins measured typography from a ResizeObserver on its own box, which a font change
@@ -344,7 +349,7 @@ The file tree and notes collection are utility-drawer tabs.
   trail does not cover it, and the section's own content fills the screen below it.
 - The editor's `revealRange` is not how heading jumps get there because revealing a range also
   makes it the primary selection.
-  Continuity 0.2.36 accurately reveals find results against projected geometry on desktop and
+  Continuity 0.2.40 accurately reveals find results against projected geometry on desktop and
   coarse pointers, but a heading jump must remain viewport-only and retain one source row for
   the heading trail.
 - No exported geometry converts pixels to lines outside the editor, so the jump is a feedback

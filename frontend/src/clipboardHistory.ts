@@ -6,7 +6,7 @@
 // `navigator.clipboard.writeText` calls:
 //
 //  1. `Clipboard.prototype.writeText` is wrapped, which covers every programmatic
-//     copy in the app *and* in the vendored editor (it calls the same global).
+//     copy in the app *and* in the Continuity editor (it calls the same global).
 //  2. A capture-phase `copy`/`cut` listener on the document covers the paths that
 //     never touch `writeText`: plain DOM selections, and the editor's
 //     `execCommand("copy")` fallback on insecure contexts / mobile.

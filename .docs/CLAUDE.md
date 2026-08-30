@@ -132,7 +132,7 @@
   reachable only by hand-editing a committed TOML file, which is the failure that test
   exists to prevent recurring.
 - Changing what shows or hides the mobile soft keyboard: `design/features/ui.md`,
-  `technical/frontend/packages.md`; open ask against the vendored note editor:
+  `technical/frontend/packages.md`; open ask against the note editor:
   `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`
 - Changing terminal input ownership across devices, the PTY WebSocket frames, or how a
   shared PTY is sized: `design/features/terminal-input.md`, `design/interfaces.md`,

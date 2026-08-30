@@ -2958,7 +2958,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 - **Clipboard history** is a shared, bounded ring of every text copied *inside* swe-mux, and the
   drawer's first tab. Capture is installed once at boot in `clipboardHistory.ts` rather than at each copy
   site: `Clipboard.prototype.writeText` is wrapped (which covers all ~30 in-app calls *and* the
-  vendored Continuity editor, since it calls the same global) plus a capture-phase `copy`/`cut`
+  Continuity editor, since it calls the same global) plus a capture-phase `copy`/`cut`
   listener for the paths that never reach `writeText` (plain DOM selections, the editor's
   `execCommand` fallback). One gesture can trip both hooks, so identical text inside a short
   window is collapsed client-side and the daemon promotes an existing entry instead of
@@ -3120,7 +3120,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.36 separately owns single-finger note-touch
+  text entry, so the early blur is safe. Continuity 0.2.40 separately owns single-finger note-touch
   arbitration and the editor's Android soft-keyboard gate. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
 - Continuity tracks explicit typing intent and visual-viewport keyboard occlusion per editor.

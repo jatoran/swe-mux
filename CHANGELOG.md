@@ -31,6 +31,14 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   variable rather than as whatever it meant at the time. `swemuxd`/`muxd` are deliberately
   not part of this: the application already is the daemon and starts one when you launch it.
 
+### Changed
+
+- **Notes and Markdown files draw one more indent guide.**
+  The editor they share moved to Continuity 0.2.40, which draws a guide at the first indent
+  level as well as the deeper ones. Indent guides are on by default in swe-mux, so this shows
+  up on every nested list without anything to turn on; Settings → Text editor still turns
+  guides off entirely if you would rather not have them. Nothing else about the editor changed.
+
 ### Fixed
 
 - **`swemux doctor` no longer reports three critical faults on a healthy install.**

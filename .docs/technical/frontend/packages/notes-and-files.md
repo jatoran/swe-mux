@@ -99,7 +99,7 @@ The lookup is fed the first visible line, since a jump moves the viewport and ne
 
 `noteScroll.ts` is the measured jump: a DOM-free convergence loop over a four-call `ViewportScroller` (visible line window, scroll offset, scroll-to, viewport height) that brings a source line to the top of the projection without any pixels-to-lines conversion, which the editor deliberately does not export.
 
-### The vendored editor's two hosting hazards
+### The editor's two hosting hazards
 
 Note teardown calls the editor's `commitComposition()` before flushing the save queue, because a composing run is withheld from the engine and so has never been emitted as a change.
 The SDK's own commit inside `destroy()` is too late for this host, whose adapter unbinds its listeners at ref detach.
