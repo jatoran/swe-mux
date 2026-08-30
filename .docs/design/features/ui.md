@@ -784,7 +784,14 @@ Its rules, and what each one is defending:
 - **The sidebar is the panel's only in-tab navigation, and only genuinely long tabs are pages.**
   A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Input, Voice).
   A page holding two controls costs a navigation step to show less than a glance would - which is how the Projects tab briefly grew a "Project resources" page that rendered two sentences and no control.
-  Every other tab renders as one scrolling column, and while it is the *active* tab the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
+  Every other tab renders as one scrolling column, and the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
+  **A tab discloses what it contains whether or not it has been opened**, so the sidebar describes one kind of tab rather than two: the section count is the rule, never the visit.
+  Pages come from the declaration and sections come from the tab's own markup - read from the live DOM while the tab is on screen and from its vnodes otherwise, which is the same walk the settings search index uses to reach an unmounted tab.
+  Reading only the DOM is what used to give a tab its chevron on the second visit and not the first.
+  A section link on a tab that is not on screen selects that tab first and scrolls once its own rail exists, because the heading it names is not in the document until then.
+  Two limits are deliberate and neither can change whether a chevron is drawn.
+  The vnode read cannot see headings a child component renders (`<AccountSettings/>`, the Alerts panel), so a preview is a floor that the live read replaces on arrival; and it is built once per open rather than per render, so a heading whose rendering is conditional on an edit made in this session is corrected by visiting the tab.
+  Tabs with a single section - Git, Automation, Alerts - are given no disclosure at all, which is `SECTION_RAIL_MIN` doing its job: listing one section is a row spent saying what one glance already shows.
   There is no second copy of this navigation in the content pane: the horizontal row it used to carry wrapped or overflowed the moment a tab had real pages, and it duplicated a sidebar one glance away.
   For paged tabs only the selected page is visible; `settingsSubpageId` maps related implementation headings to one user-facing capability page, and search and deep links select the owning page before revealing a control, so hidden pages remain fully addressable.
   **Arriving on a tab by any route - sidebar click, search result, deep link - expands its page links in the sidebar.**

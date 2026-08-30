@@ -56,7 +56,16 @@ A group is a run of the array rather than a declared membership, and `tabForSect
 
 `settingsSubpages` declares the pages of the genuinely long tabs (Accounts, Prompt queue, Input, Voice) before those tabs mount; every other tab is one scrolling column.
 `settingsSubpageId` maps related implementation headings to the user-facing page that owns them.
-The sidebar is the only in-tab navigation: the desktop column and the mobile slide-in drawer both list a paged tab's pages below it, and the *active* unpaged tab's rendered sections as scroll anchors (from `SECTION_RAIL_MIN` sections, scroll-spy highlighted).
+The sidebar is the only in-tab navigation: the desktop column and the mobile slide-in drawer both list a paged tab's pages below it, and an unpaged tab's rendered sections as scroll anchors (from `SECTION_RAIL_MIN` sections, scroll-spy highlighted).
+Sections are read from the live DOM while a tab is on screen and from `harvestHeadings` over its vnodes otherwise, so a tab's disclosure is decided by its section count rather than by whether it has been visited - reading only the DOM gave a tab its chevron on the second visit and not the first.
+The preview is built once per open (measured at 6.5ms cold, 1.1-2.4ms after, for the thirteen unpaged tabs) rather than keyed on the draft the way the search index is, because `change()` replaces the draft on every keystroke and thirteen vnode trees per keypress is the cost that index exists to avoid.
+What that gives up is bounded and checked: a heading a child component renders is invisible to the walk, and a heading whose rendering is conditional on a session edit is stale - the four that exist are on paged tabs or on a tab with six other headings, so neither can change whether a chevron is drawn, and the live read corrects the list on arrival.
+
+Drawing sections for tabs that are not active turned two latent misattributions into visible ones, and both are now structural rather than remembered.
+The live read carries the tab it was read from (`rail: {tab, sections}`), because it happens in an effect and the render between the click and that effect still holds the tab just left - a bare list cannot say so, and the sidebar drew the previous tab's sections as the new tab's own for that frame.
+And `.settings-content` is stamped with `data-settings-tab`, which the read checks before believing what it sees: its `MutationObserver` callback is a microtask while the effect cleanup that would retire it is not, so a read scheduled by the outgoing tab can run against the incoming tab's DOM.
+Both used to self-correct one render later and stopped being harmless the moment the sidebar kept the answer.
+`test/renderer/settings-layout.spec.ts` walks four tabs asserting the first one's list never changes, which is the only place either is observable.
 The content pane carries no duplicate row of page links.
 Arriving on a tab by any route expands its links; only the chevron collapses them, and never automatically.
 Clicking the tab navigates to its remembered page.

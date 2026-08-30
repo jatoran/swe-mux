@@ -39,7 +39,7 @@ import {
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
-import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
+import { domVNode, harvestHeadings, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
 import { flashSetting, revealSetting, settingSelector } from './settingReveal'
 import {
   railSectionIds, rememberedSections, rememberedTab, rememberSection, rememberTab,
@@ -267,6 +267,9 @@ const SETTINGS_NARROW_QUERY = '(max-width:760px)'
 // searchable in the next one, for as long as the page lives.
 const liveTabEntries = new Map<SettingsTab,SettingsSearchEntry[]>()
 
+/** One empty list, so "this tab has no sections yet" is a stable effect dependency. */
+const NO_SECTIONS: SettingsRailSection[] = []
+
 // The note editor's own binding table, enumerated from the editor package so the
 // list can never drift from what it actually binds. `isBrowserSafe` is false for
 // the chords Chromium claims first (Ctrl+R, Ctrl+K, …): the default browser-safe
@@ -430,7 +433,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // once: the panel fills the viewport at this width, so a rotation or a desktop window
   // dragged narrow has to move the section list between column and drawer with it.
   const [narrow,setNarrow] = useState(()=>window.matchMedia(SETTINGS_NARROW_QUERY).matches)
-  const [railSections,setRailSections] = useState<SettingsRailSection[]>([])
+  /**
+   * The active tab's rendered sections, carrying the tab they were read from.
+   *
+   * They are read in an effect, so between the click that switches tabs and that
+   * effect there is a render where this state still describes the tab just left. A bare
+   * list cannot say so, and the sidebar drew it as the new tab's own sections for that
+   * frame — visible now that it also draws sections for tabs that are not active.
+   * Pairing them makes the mismatch derivable instead of invisible.
+   */
+  const [rail,setRail] = useState<{tab:SettingsTab;sections:SettingsRailSection[]}>(()=>({tab:activeTab,sections:NO_SECTIONS}))
+  const railSections = rail.tab===activeTab?rail.sections:NO_SECTIONS
   const [activeSection,setActiveSection] = useState('')
   const [selectedSubpages,setSelectedSubpages] = useState<Record<string,string>>(()=>rememberedSections())
   const [expandedTabs,setExpandedTabs] = useState<Set<SettingsTab>>(()=>new Set([initialSection?tabForSection(initialSection):rememberedTab()]))
@@ -452,6 +465,23 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const tabNavRef = useRef<HTMLElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
   const searchIndex = useRef<{source:Config|null;entries:SettingsSearchEntry[]}|null>(null)
+  /**
+   * The section list of every unpaged tab, so the sidebar can disclose one before that
+   * tab has mounted. Built once per open from the tabs' vnodes and overwritten per tab
+   * by the live read on arrival, which is the only thing that can see a child
+   * component's headings.
+   *
+   * Not rebuilt per render, and deliberately not keyed on the draft the way the search
+   * index is: `change()` replaces the draft on every keystroke, and rebuilding thirteen
+   * vnode trees per keypress is the cost that index exists to avoid paying. What that
+   * gives up is a heading whose *rendering is conditional* on an edit made in this
+   * session — there are four, all of them on paged tabs or on a tab that has six other
+   * headings, so none can change whether a chevron is drawn, and visiting the tab
+   * corrects the list either way.
+   */
+  const railPreview = useRef<Map<SettingsTab,SettingsRailSection[]>|null>(null)
+  /** A section chosen on a tab that was not on screen, scrolled to once its rail exists. */
+  const pendingSection = useRef('')
   const wasSearching = useRef(false)
   const confirmPanel = useRef<HTMLElement>(null)
   const resetPanel = useRef<HTMLElement>(null)
@@ -638,7 +668,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // one-shot read would miss them. Attributes are deliberately not observed — the
   // read stamps `data-settings-section` on each heading, which would re-trigger it.
   useEffect(()=>{
-    setRailSections([])
     setActiveSection('')
     if(!draft)return
     const content=contentEl()
@@ -646,6 +675,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     let frame=0
     const read=()=>{
       frame=0
+      // The observer fires on the commit that swapped tabs, and its callback is a
+      // microtask while this effect's cleanup is not — so a read scheduled by the
+      // outgoing tab can run against the incoming tab's DOM and report its headings
+      // under the wrong tab. That used to self-correct one render later; it stopped
+      // being harmless once the sidebar kept the answer.
+      if(content.dataset.settingsTab!==activeTab)return
       const headings=[...content.querySelectorAll<HTMLElement>('h3')]
       const sections=pagedSubpages?declaredSubpages:railSectionIds(headings.map(heading=>heading.textContent||''))
       let at=0
@@ -658,7 +693,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         if(owner&&id)owner.dataset.settingsSubpage=id
         at+=1
       }
-      setRailSections(current=>sameRailSections(current,sections)?current:sections)
+      // The live read is authoritative and replaces the vnode preview for this tab:
+      // it is the only one that can see what a child component rendered.
+      if(!pagedSubpages)railPreview.current?.set(activeTab,sections)
+      setRail(current=>current.tab===activeTab&&sameRailSections(current.sections,sections)?current:{tab:activeTab,sections})
     }
     read()
     const observer=new MutationObserver(()=>{ if(!frame)frame=requestAnimationFrame(read) })
@@ -711,12 +749,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   // Restore the remembered section once the rail for this tab exists. A pending
   // search jump always wins: that caller named an exact control, not a section.
+  // A section picked in the sidebar for a tab that was not on screen outranks the
+  // remembered one for the same reason — it is the reason this tab was opened.
+  // It may name a section the live read does not have (the preview it was drawn from
+  // cannot see a child component's headings), which lands on the tab and scrolls
+  // nowhere rather than guessing at a neighbour.
   const restoredFor = useRef('')
   useEffect(()=>{
     if(!railSections.length||restoredFor.current===activeTab)return
     restoredFor.current=activeTab
+    const requested=pendingSection.current
+    pendingSection.current=''
     if(jump)return
-    const remembered=rememberedSections()[activeTab]
+    const remembered=requested||rememberedSections()[activeTab]
     if(pagedSubpages){
       const next=remembered&&railSections.some(section=>section.id===remembered)?remembered:railSections[0]?.id
       if(next)setSelectedSubpages(current=>({...current,[activeTab]:next}))
@@ -777,6 +822,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const selectSubpage=(tab:SettingsTab,id:string)=>{
     setSelectedSubpages(current=>({...current,[tab]:id}))
     setExpandedTabs(current=>new Set(current).add(tab))
+    selectTab(tab)
+  }
+  /**
+   * The scroll-anchor half of the same control, for an unpaged tab. A section on the
+   * tab already on screen scrolls to it; one on any other tab selects that tab first,
+   * because the heading it names does not exist in the DOM until then.
+   */
+  const openSection=(tab:SettingsTab,id:string)=>{
+    if(tab===activeTab){scrollToSection(id);setNavOpen(false);return}
+    pendingSection.current=id
     selectTab(tab)
   }
   /**
@@ -1463,16 +1518,23 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // Narrow, the same list slides in over the content instead of docking beside it;
   // closed it is `visibility:hidden` rather than `aria-hidden`, which is what keeps its
   // buttons out of the focus order without hiding elements that are still focusable.
-  const tabNav = <Fragment>
+  const renderTabNav = (previews:Map<SettingsTab,SettingsRailSection[]>) => <Fragment>
     <nav ref={tabNavRef} id="settings-tab-nav" class={`settings-tabs${narrow?' settings-tabs-drawer':''}${narrow&&navOpen?' open':''}`} role="tablist" aria-label="Settings sections">
       {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
         <span aria-hidden="true">{group.group}</span>
         {group.tabs.map(tab=>{
           // A paged tab lists its declared pages. An unpaged tab lists the sections it
-          // actually rendered, as scroll anchors — knowable only while it is the active
-          // tab, which is also the only time scrolling it means anything.
+          // renders, as scroll anchors. Those come from the live DOM while it is the
+          // active tab and from its vnodes otherwise, so a tab discloses the same
+          // sections whether or not it has been opened — reading only the DOM is what
+          // made the chevron appear on the second visit and not the first, and made
+          // the sidebar describe two kinds of tab that are not different.
           const pages=settingsSubpages[tab.id]||[]
-          const sections=!pages.length&&tab.id===activeTab&&railSections.length>=SECTION_RAIL_MIN?railSections:[]
+          const live=tab.id===activeTab?railSections:[]
+          // The live read starts empty on every tab switch, so the preview also covers
+          // the frame between arriving and reading, where the chevron would blink out.
+          const rendered=pages.length?[]:(live.length?live:previews.get(tab.id)||[])
+          const sections=rendered.length>=SECTION_RAIL_MIN?rendered:[]
           const entries=pages.length?pages:sections
           const expanded=expandedTabs.has(tab.id)&&entries.length>0
           return <Fragment key={tab.id}>
@@ -1483,7 +1545,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             {expanded&&<div class="settings-subtabs" role="group" aria-label={`${tab.label} pages`}>
               {pages.length
                 ?pages.map(page=><button key={page.id} type="button" class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>)
-                :sections.map(section=><button key={section.id} type="button" class={activeSection===section.id?'active':''} onClick={()=>{scrollToSection(section.id);setNavOpen(false)}}>{section.label}</button>)}
+                :sections.map(section=><button key={section.id} type="button" class={tab.id===activeTab&&activeSection===section.id?'active':''} onClick={()=>openSection(tab.id,section.id)}>{section.label}</button>)}
             </div>}
           </Fragment>
         })}
@@ -1491,6 +1553,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     </nav>
     {narrow&&navOpen&&<button type="button" class="settings-nav-scrim" aria-label="Close settings sections" onClick={()=>setNavOpen(false)} />}
   </Fragment>
+  /** Nothing is previewable before the config lands: no tab can be built without it. */
+  const NO_PREVIEWS:Map<SettingsTab,SettingsRailSection[]> = new Map()
   // Before the bundle lands the panel renders its full chrome — header, section
   // list, footer — with a placeholder in the content area, so opening Settings
   // paints immediately and the chosen tab can be selected while data loads.
@@ -1503,7 +1567,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       {narrow&&loadingSearch}
       <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     <main class="settings-body">
-      {narrow?tabNav:<div class="settings-nav-col">{loadingSearch}{tabNav}</div>}
+      {narrow?renderTabNav(NO_PREVIEWS):<div class="settings-nav-col">{loadingSearch}{renderTabNav(NO_PREVIEWS)}</div>}
       <div class="settings-content"><section class="settings-loading" role="status" aria-live="polite">{status}</section></div>
     </main>
     <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
@@ -2481,6 +2545,27 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>How tightly the Action rail under each terminal packs its buttons. Below Comfortable, a phone's buttons drop under the 44px touch target, which is why the two devices are set separately.</p></section></Fragment>}
   </Fragment>
 
+  // Built here rather than beside the sidebar because it needs `tabContent`, and built
+  // once because it is structure: a tab's headings are the same on the render that
+  // opened the panel and the one after a checkbox moved. Each tab is built separately
+  // so a latent throw in one costs that tab's chevron rather than the whole panel,
+  // which is the rule the search index already follows for the same call.
+  //
+  // Measured in the renderer harness over five opens: 6.5ms on the first (cold) build
+  // and 1.1-2.4ms after, for thirteen tabs. The four paged tabs are skipped and they
+  // are the two largest — Voice's command reference and Accounts' model routing — so
+  // the preview costs less than a search does for the same reason it is affordable
+  // at all.
+  if(!railPreview.current){
+    const preview=new Map<SettingsTab,SettingsRailSection[]>()
+    for(const tab of settingsTabs){
+      if(settingsSubpages[tab.id])continue
+      try{preview.set(tab.id,railSectionIds(harvestHeadings(tabContent(tab.id))))}
+      catch{preview.set(tab.id,[])}
+    }
+    railPreview.current=preview
+  }
+
   // Rebuilt on the first keystroke of a search and then reused until the search
   // ends or the config changes under it: typing costs a scan of a few hundred
   // pre-normalized strings, not fourteen vnode trees per keystroke, while state
@@ -2541,8 +2626,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     {!!query.trim()&&<div class="settings-search-scrim" onPointerDown={()=>setQuery('')} />}
     <main class="settings-body">
-      {narrow?tabNav:<div class="settings-nav-col">{searchBox}{tabNav}</div>}
-      <div class="settings-content">
+      {narrow?renderTabNav(railPreview.current):<div class="settings-nav-col">{searchBox}{renderTabNav(railPreview.current)}</div>}
+      {/* Which tab this DOM belongs to, so a heading read cannot attribute it to another.
+          The observer that drives that read fires on the commit that swaps tabs, while the
+          effect holding the previous tab's id is still the one registered. */}
+      <div class="settings-content" data-settings-tab={activeTab}>
         {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3>Validation errors</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
 
         {tabContent(activeTab)}
