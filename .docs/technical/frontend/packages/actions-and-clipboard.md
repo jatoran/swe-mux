@@ -69,6 +69,8 @@ Nothing calls it on its own - it is reached only from the fork scope's "Reattach
   In a project scope its chips carry the hide control and the ghost chips for what is hidden; in a fork scope its toolbar carries the reattach plan.
 - `ActionsTab.tsx` renders the unified Actions drawer as three named views: Skills, Prompts, and Clipboard.
   Only one catalog is mounted at a time and the selected view is remembered on the device.
+  Its labels come from `drawerSegments.ts`, and `DrawerViewTabs.tsx` gives it the same full-width rail used by Files, Git, Activity, and Agent.
+  A compact target line is mobile-only because the overlay covers the focused terminal these views can mutate.
   Command-rail configuration stays in the standalone editor and has no button in this usage surface.
   Skills and template rows insert or edit; they do not create a second pinning state.
 

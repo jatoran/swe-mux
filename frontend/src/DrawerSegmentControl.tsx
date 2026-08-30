@@ -1,5 +1,6 @@
 import { availableDrawerSegments, type DrawerSegmentContext } from './drawerSegments'
 import type { DrawerTabId } from './drawerTabs'
+import { DrawerViewTabs } from './DrawerViewTabs'
 
 // The one segmented control in the drawer.
 //
@@ -20,38 +21,18 @@ type Props = {
   active: string | null
   context: DrawerSegmentContext
   onSelect: (segment: string) => void
-  /**
-   * Draw compactly, for a tab that puts its segments in the heading row.
-   *
-   * Same control, same registry, same keyboard behaviour — only narrower. A tab whose
-   * heading is the segment's own name (Git: "Map", "Log", "Provenance") was printing
-   * that name twice, once as a heading and once as the selected chip directly beneath
-   * it, and spending a row of a small panel to do it.
-   */
-  inline?: boolean
 }
 
-export function DrawerSegmentControl({ tab, active, context, onSelect, inline }: Props) {
+export function DrawerSegmentControl({ tab, active, context, onSelect }: Props) {
   const segments = availableDrawerSegments(tab, context)
   // One available segment is not a choice, so it is not drawn as one. This is the Agent tab
   // on a shell session (Instructions alone) rather than a hypothetical.
   if (segments.length < 2) return null
-  return <div class={`segmented-tabs drawer-segmented${inline ? ' drawer-segmented-inline' : ''}`}
-    role="tablist" aria-label={`${tab} view`}>
-    {segments.map((segment, index) => <button
-      key={segment.id}
-      role="tab"
-      aria-selected={segment.id === active}
-      class={segment.id === active ? 'active' : ''}
-      title={segment.title}
-      tabIndex={segment.id === active ? 0 : -1}
-      onClick={() => onSelect(segment.id)}
-      onKeyDown={event => {
-        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-        event.preventDefault()
-        const offset = event.key === 'ArrowLeft' ? -1 : 1
-        onSelect(segments[(index + offset + segments.length) % segments.length].id)
-      }}
-    >{segment.label}</button>)}
-  </div>
+  return <DrawerViewTabs
+    className="drawer-segmented"
+    ariaLabel={`${tab} view`}
+    active={active || segments[0].id}
+    items={segments}
+    onSelect={onSelect}
+  />
 }

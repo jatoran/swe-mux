@@ -80,7 +80,7 @@ import {
   type DrawerEdge, type DrawerLayout, type DrawerProjectPresentation,
   type DrawerProjectPresentationMap,
 } from './drawerLayout'
-import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS } from './drawerSegments'
+import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS, resolveDrawerSegment } from './drawerSegments'
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
@@ -8133,12 +8133,20 @@ export function App() {
       {drawerDisplayMenu.tab&&(()=>{
         const tab=drawerDisplayMenu.tab
         const blocked=!canHideDrawerTab(hiddenDrawerTabs,tab)
-        return <button
-          role="menuitem"
-          disabled={blocked}
-          title={blocked?'The side panel must keep at least one tab.':undefined}
-          onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
-        >Hide {drawerTab(tab).label}</button>
+        const segment=resolveDrawerSegment(tab,activeDrawerPresentation.selected_segments[tab],{
+          hasTranscript:hasHarnessTranscript(active?.backend),
+          isAgentSession:!!active&&isAgentBackend(active.backend),
+        })
+        const topic=helpTopicForDrawer(tab,segment)
+        return <>
+          {topic&&<button role="menuitem" onClick={()=>{setDrawerDisplayMenu(null);openHelp(topic.id)}}>Help: {topic.title}</button>}
+          <button
+            role="menuitem"
+            disabled={blocked}
+            title={blocked?'The side panel must keep at least one tab.':undefined}
+            onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
+          >Hide {drawerTab(tab).label}</button>
+        </>
       })()}
       <MenuGroup
         id="drawer-visible-tabs"

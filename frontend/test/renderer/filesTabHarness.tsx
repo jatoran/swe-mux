@@ -99,18 +99,12 @@ window.addEventListener('mux:open-setting', event => {
 
 function FilesHarness() {
   const [segment, setSegment] = useState(params.get('view') === 'recent' ? 'recent' : 'explorer')
-  // The real drawer chrome: Files draws its segments *in* the heading row, because its two
-  // headings are its two segment labels, and the scope beside them is the Project's bare
-  // name with no `Project:` in front of it.
+  // The real content-first drawer chrome: the view rail is the first row inside Files.
   return <aside class="utility-drawer docked" style={`width:${width}px;height:100dvh;display:flex`}>
     <section class="drawer-pane" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column">
       <div class="drawer-body drawer-body-files" style="flex:1;min-width:0;min-height:0;display:flex;flex-direction:column">
-        <div class="drawer-pane-heading with-segments">
-          <DrawerSegmentControl tab="files" active={segment} inline
-            context={{ hasTranscript: true, isAgentSession: true }} onSelect={setSegment} />
-          <span class="drawer-scope-context">{PROJECT.name}</span>
-          <button class="drawer-collapse" aria-label="Collapse side panel">×</button>
-        </div>
+        <DrawerSegmentControl tab="files" active={segment}
+          context={{ hasTranscript: true, isAgentSession: true }} onSelect={setSegment} />
         <div class="drawer-segment-body" style="flex:1;min-height:0;display:flex;flex-direction:column">
           <ProjectResource
             project={PROJECT}
