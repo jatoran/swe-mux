@@ -5,9 +5,9 @@
 Run Claude Code, Codex, opencode and any other CLI side by side in real terminals, see which one needs you, and drive the whole thing from your phone.
 It runs on your own machine: no vendor backend, no relay, no account, no telemetry.
 
-<video src="https://github.com/jatoran/swe-mux/releases/download/v0.1.2/hero.mp4" controls muted></video>
+[![A seventy second walkthrough: starting agents, watching the fleet, and landing a finished branch](site/img/desktop-workspace.webp)](https://swemux.dev)
 
-<sub>If the video does not play inline, [watch it here](https://github.com/jatoran/swe-mux/releases/download/v0.1.2/hero.mp4). More at <https://swemux.dev>.</sub>
+<sub>A silent seventy-second walkthrough - **[play it on swemux.dev](https://swemux.dev)**. GitHub only plays video uploaded through its own web UI, so this is a still that links to the player rather than a video tag that would render as a dead frame here.</sub>
 
 [![ci](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
