@@ -723,7 +723,15 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
         built = "app bundle only" if args.skip_frontend else "frontend + app bundle"
         log(f"rebuilding {built} into dist/.staging (old app stays up)")
         shutil.rmtree(STAGING_ROOT, ignore_errors=True)
-        build_arguments = ["--app-distpath", str(STAGING_ROOT)]
+        # `--skip-cli` unconditionally. `dist/swe-mux-cli` is an installer input,
+        # not part of the running app: the daemon never launches it, the swap
+        # never renames it, and nothing here would be stale without it. Building
+        # it would put a fresh write into `dist/` during the one operation whose
+        # whole design is to touch nothing there until the swap - and if a
+        # `swemux` from that bundle happened to be sitting in a terminal, the
+        # build would fail on a locked exe minutes in. Refresh it deliberately
+        # with `packaging/build_desktop.py --cli-only`.
+        build_arguments = ["--app-distpath", str(STAGING_ROOT), "--skip-cli"]
         if skip_supervisor:
             build_arguments.append("--skip-supervisor")
         if args.skip_frontend:

@@ -18,6 +18,7 @@ import importlib.util
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -320,3 +321,206 @@ def test_the_spec_ships_the_whole_standard_library() -> None:
     spec = (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
     assert "sys.stdlib_module_names" in spec
     assert "hiddenimports=hiddenimports + STDLIB_HIDDENIMPORTS" in spec
+
+
+# ------------------------------------------------------------- the console client
+
+
+def _cli_bundle(
+    root: Path, packages: dict[str, int], *, exes: tuple[str, ...] | None = None
+) -> Path:
+    """A stand-in `dist/swe-mux-cli`: launchers at the top, packages under `_internal/`."""
+    bundle = root / "swe-mux-cli"
+    internal = bundle / "_internal"
+    internal.mkdir(parents=True)
+    for name, size in packages.items():
+        package = internal / name
+        package.mkdir()
+        (package / "payload.bin").write_bytes(b"x" * size)
+    for name in build_desktop.CLI_EXES if exes is None else exes:
+        (bundle / name).write_bytes(b"MZ fake")
+    return bundle
+
+
+def cli_spec_text() -> str:
+    return (REPO_ROOT / "packaging" / "swe_mux_cli.spec").read_text(encoding="utf-8")
+
+
+def test_a_client_bundle_matching_its_manifest_passes(tmp_path: Path) -> None:
+    bundle = _cli_bundle(
+        tmp_path, {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES}
+    )
+    build_desktop.verify_cli_bundle_contents(bundle)  # does not raise
+
+
+def test_the_daemon_leaking_back_into_the_client_fails_the_build(tmp_path: Path) -> None:
+    """The regression this bundle exists to prevent, at the size it actually was.
+
+    The first build of `swe_mux_cli.spec` was 143 MiB rather than 28, because
+    `cli install-shortcut` imports `swe_mux.shortcuts`, which reaches
+    `swe_mux.desktop`, which imports `swe_mux.__main__`, which imports
+    `swe_mux.server`. Nothing about that chain is visible in a diff - only in a
+    measurement - so the measurement is the gate.
+    """
+    packages = {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES}
+    packages["ctranslate2"] = 40_000_000
+    bundle = _cli_bundle(tmp_path, packages)
+
+    with pytest.raises(SystemExit) as failure:
+        build_desktop.verify_cli_bundle_contents(bundle)
+
+    message = str(failure.value)
+    assert "ctranslate2" in message, "the failure must name the offending package"
+    assert "40.0 MB" in message, "the failure must say what it costs"
+    assert "swe_mux_cli.spec" in message, "the failure must say what to do about it"
+
+
+def test_a_client_dependency_that_stopped_being_collected_fails_the_build(
+    tmp_path: Path,
+) -> None:
+    """`psutil` backs `swe_mux.lifecycle`'s ledger, which every command writes to.
+
+    Its absence is an ImportError at first use, in the frozen client, on a machine
+    with no traceback anywhere - the same shape as the app bundle's
+    missing-package half, and it needs the same gate.
+    """
+    packages = {
+        name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES if name != "psutil"
+    }
+    bundle = _cli_bundle(tmp_path, packages)
+
+    with pytest.raises(SystemExit, match="psutil"):
+        build_desktop.verify_cli_bundle_contents(bundle)
+
+
+def test_the_client_manifest_is_a_parameter_too(tmp_path: Path) -> None:
+    bundle = _cli_bundle(tmp_path, {"only_this": 5})
+    build_desktop.verify_cli_bundle_contents(bundle, expected={"only_this"})  # does not raise
+
+
+def test_the_client_spec_excludes_the_daemon_by_name() -> None:
+    """The boundary this bundle *is*, asserted rather than left to one import chain.
+
+    Excluding `swe_mux.desktop` alone cuts today's only path to the daemon. All
+    three are named so that a second door - a new module-level import of
+    `swe_mux.server` from something the client reaches - fails the build here
+    instead of quietly shipping 115 MB more.
+    """
+    clause = re.search(r"EXCLUDES = \[([^\]]*)\]", cli_spec_text())
+    assert clause, "the client spec's excludes did not parse; this guard would assert nothing"
+    excluded = {token.strip().strip('"') for token in clause.group(1).split(",")}
+    assert {"swe_mux.desktop", "swe_mux.__main__", "swe_mux.server"} <= excluded
+    # And nothing the client is expected to carry may also be excluded, which would
+    # make the two gates argue and fail every build on the missing-package half.
+    assert not (excluded & set(build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES))
+
+
+def test_the_two_launchers_the_spec_collects_are_the_ones_the_build_verifies() -> None:
+    """`CLI_EXES` is defined independently of the spec, so assert they agree.
+
+    Deriving it from the spec would make the verification read its own subject and
+    prove nothing; leaving them unrelated would let a dropped `EXE()` entry ship a
+    bundle with one launcher and a smoke test that never looked for the other.
+    """
+    collected = tuple(re.findall(r'launcher\("([^"]+)"\)', cli_spec_text()))
+    assert collected, "no launcher() calls parsed; this guard would assert nothing"
+    assert tuple(f"{name}.exe" for name in collected) == build_desktop.CLI_EXES
+
+
+def test_the_launchers_are_the_client_commands_the_package_looks_for() -> None:
+    """The build's claim and `install_location`'s search have to name one set.
+
+    `install_location.CLIENT_COMMANDS` is what `doctor` and `install-shortcut`
+    resolve against; `CLI_EXES` is what the build produces. A bundle shipping
+    `swemux.exe` while the package hunts for something else is an install that
+    reports itself broken.
+    """
+    from swe_mux.install_location import CLIENT_COMMANDS
+
+    assert {name.removesuffix(".exe") for name in build_desktop.CLI_EXES} == set(
+        CLIENT_COMMANDS
+    )
+
+
+def test_the_client_is_a_console_program_and_the_app_is_not() -> None:
+    """The whole reason there is a second spec.
+
+    A GUI-subsystem process on Windows has no stdout and no stderr at all, so a
+    client built with `console=False` would print nothing while exiting 0.
+    """
+    assert "console=True" in cli_spec_text()
+    assert "console=False" in (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_the_frozen_entry_point_exits_with_the_code_main_returns() -> None:
+    """The defect the first smoke run caught, pinned so it cannot come back.
+
+    `swe_mux.cli.main` *returns* its exit code because `[project.scripts]` wraps it
+    in `sys.exit(main())`. `packaging/cli_entry.py` calling it bare made
+    `swemux ls` against a dead daemon print "cannot reach the mux daemon" and exit
+    **0**, so every script branching on the documented codes took the success path.
+    """
+    entry = (REPO_ROOT / "packaging" / "cli_entry.py").read_text(encoding="utf-8")
+    assert "raise SystemExit(main())" in entry
+
+
+def test_the_smoke_test_refuses_a_bundle_that_is_missing_a_launcher(tmp_path: Path) -> None:
+    bundle = _cli_bundle(tmp_path, {"psutil": 1}, exes=("swemux.exe",))
+    with pytest.raises(SystemExit, match="mux.exe"):
+        build_desktop.smoke_cli_bundle(bundle)
+
+
+def test_the_smoke_test_fails_on_the_wrong_exit_code(tmp_path: Path) -> None:
+    """The assertion is the exit code, not the output, and this proves it.
+
+    A launcher that printed the right error and exited 0 is exactly what shipped
+    on the first build, and a smoke test reading stdout would have called it fine.
+
+    The runner is injected rather than monkeypatched onto `subprocess`, which is
+    a module shared by everything else running in this interpreter.
+    """
+    import subprocess as subprocess_module
+
+    def always_zero(command: list[str], **_: object) -> Any:
+        return subprocess_module.CompletedProcess(command, 0, stdout="", stderr="")
+
+    bundle = _cli_bundle(tmp_path, {"psutil": 1})
+    with pytest.raises(SystemExit, match="documented exit code"):
+        build_desktop.smoke_cli_bundle(bundle, run=always_zero)
+
+
+def test_the_smoke_test_never_reads_the_operators_data_directory(tmp_path: Path) -> None:
+    """A build script that touched `~/.mux` would be reaching into a live install.
+
+    Every invocation gets a throwaway `MUX_DATA_DIR`, so the client's config read
+    lands somewhere disposable rather than on the machine's real one.
+    """
+    import subprocess as subprocess_module
+
+    seen: list[str] = []
+
+    def record(command: list[str], **kwargs: Any) -> Any:
+        environment = kwargs.get("env") or {}
+        seen.append(str(environment.get("MUX_DATA_DIR")))
+        code = 0 if command[1] == "--help" else 3
+        return subprocess_module.CompletedProcess(command, code, stdout="", stderr="")
+
+    bundle = _cli_bundle(tmp_path, {"psutil": 1})
+    build_desktop.smoke_cli_bundle(bundle, run=record)
+
+    assert seen and all(value not in {"None", ""} for value in seen)
+    assert all(Path(value).name.startswith("swe-mux-cli-smoke-") for value in seen)
+
+
+def test_a_staged_redeploy_never_builds_the_client_bundle() -> None:
+    """`dist/swe-mux-cli` is an installer input, not part of the running app.
+
+    A staged redeploy builds into `dist/.staging` precisely so it writes nothing
+    live; the client bundle has no staging path and always goes to `dist/`, so the
+    redeploy has to opt out of it explicitly. And a `swemux` sitting in a terminal
+    would fail that build on a locked exe minutes in.
+    """
+    redeploy = (REPO_ROOT / "packaging" / "redeploy_desktop.py").read_text(encoding="utf-8")
+    assert '"--app-distpath", str(STAGING_ROOT), "--skip-cli"' in redeploy
