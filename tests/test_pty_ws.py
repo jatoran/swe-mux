@@ -669,6 +669,34 @@ async def test_client_diagnostic_persists_allowlisted_repairs_rate_limited() -> 
             "selecting": True,
             "durationMs": 2400,
         }
+
+        # A native paste that bypassed the pane's capture listener and was handled by
+        # xterm itself. Content-free by construction - a length and two booleans - so it
+        # belongs to this class rather than to the paste trace's wider clamp, and it is
+        # the only signal that can distinguish a paste the pane owned from one it did
+        # not: the trace fires from `onData`, downstream of both.
+        await ws.send_json(
+            {
+                "type": "client_diagnostic",
+                "phase": "terminal_paste_unclaimed",
+                "detail": {
+                    "backend": "codex",
+                    "bracketedPasteMode": True,
+                    "chars": 833,
+                    "multiline": True,
+                    "targetTag": "TEXTAREA",
+                },
+            }
+        )
+        unclaimed_event = await _next_event_of(events, "terminal_input_diagnostic")
+        assert unclaimed_event.payload["phase"] == "terminal_paste_unclaimed"
+        assert json.loads(unclaimed_event.payload["detail"]) == {
+            "backend": "codex",
+            "bracketedPasteMode": True,
+            "chars": 833,
+            "multiline": True,
+            "targetTag": "TEXTAREA",
+        }
         await ws.close()
 
 

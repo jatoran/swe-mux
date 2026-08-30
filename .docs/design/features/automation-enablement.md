@@ -244,16 +244,18 @@ Layers 2 and 4 are deliberately two maps rather than one with a precedence rule.
 They answer different questions, and a default alone cannot express "no Project on this
 machine lands without me" - a repository that wrote `granted` outranks it, and the install
 on/off switches can only refuse the capability everywhere, which is blunter.
-The matrix renders them as one control: a dropdown for the default and an **enforce
-everywhere** lock beside it, with a coverage line ("applies to 12 of 15 Projects, 3 set
-their own") so a global edit's reach is visible before the click rather than after.
+The matrix renders them as one control: a dropdown for the default and an **enforce** lock
+beside it, with a compact coverage line (`12 inherit · 3 custom`) so a global edit's reach
+is visible before the click rather than after.
+On narrow screens each row name spans the table, with the aligned Global and Project controls
+beneath it; the comparison stays intact without squeezing the name into a residual column.
 
 **Widening never happens implicitly.** Layer 2 reaches only unset fields, so shipping or
 changing a default cannot alter what an existing Project does; layer 4 only subtracts.
 That is the rule `automation_global_allow` already follows and the reason the first-use
 starting sets are written into each Project's own file rather than inherited from a constant.
 
-**The Project cell has three positions, not two.** "Follow global" writes null and the daemon
+**The Project cell has three positions, not two.** "Use global" writes null and the daemon
 *removes* the key. Writing the global's current value instead would pin the Project to today's
 answer, and a later change to the default would then skip exactly the Projects whose operator
 believed they were inheriting. The pre-2026-08-29 dropdown had this bug in a milder form: it

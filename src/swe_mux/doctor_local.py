@@ -158,6 +158,14 @@ _DAEMON_ONLY: tuple[tuple[str, str, str, str], ...] = (
         "",
     ),
     (
+        "hook_ingress",
+        "Agent hook channel",
+        "Needs a running daemon: whether a session has ever reported a lifecycle "
+        "hook is per-session state held in the daemon process, and only a session "
+        "that daemon spawned is owed one.",
+        "",
+    ),
+    (
         "remote",
         "Tailscale and remote access",
         "Not run in the local report: whether a phone can reach this machine is not "

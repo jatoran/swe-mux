@@ -35,8 +35,8 @@ import {
   type TerminalCell,
 } from './mobileInput'
 import { isMobileTerminalInput, mobileEnterNeedsPinnedSend, mobileEnterPayload, mobileImeDelta } from './mobileTerminalIme'
-import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsManualBracketing, ResilientClipboardProvider } from './terminalClipboard'
-import { noteTerminalFocus } from './insertTarget'
+import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsManualBracketing, ResilientClipboardProvider, strayPasteBelongsToPane } from './terminalClipboard'
+import { currentInsertTarget, noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
 import { padRingCount, padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotLabel, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
@@ -135,7 +135,10 @@ import {
   inputIsTraceablePaste,
   PASTE_TRACE_AFTER_MS,
   PASTE_TRACE_PHASE,
+  PASTE_UNCLAIMED_PHASE,
   summarizePastePayload,
+  type PasteOrigin,
+  type PasteWrite,
 } from './pasteTrace'
 import { composerIsReadable, readComposerText } from './composerText'
 import { ClipboardDropup } from './ClipboardDropup'
@@ -271,26 +274,40 @@ function acceptsTerminalAttachments(session: Session) {
 }
 
 /**
- * Paste text, wrapping it by hand when xterm's mirror of the child's bracketed-paste
- * mode has gone stale.
+ * The paste write currently being performed, for the trace to read.
  *
- * xterm only wraps a paste once it has *seen* the child enable the mode, and an agent
- * CLI enables it exactly once at startup. A pane that reset its terminal on reconnect
- * can therefore come back believing the mode is off while the CLI still has it on.
- * Unwrapped, xterm rewrites every newline to a carriage return, so the CLI submits the
- * paste one line at a time and keeps only the text after the final newline.
+ * Set synchronously around the `term.input`/`term.paste` call, and read inside the
+ * `onData` handler that same call drives, so the value is never ambiguous and never
+ * outlives the stack that set it - including across panes, since only one paste can be
+ * mid-write at a time. A plain variable rather than a ref because `pasteIntoTerminal`
+ * is a free function shared by callers inside and outside the construction effect.
+ */
+let activePasteWrite: PasteWrite | null = null
+
+function performPasteWrite(write: PasteWrite, send: () => void) {
+  activePasteWrite = write
+  try {
+    send()
+  } finally {
+    activePasteWrite = null
+  }
+}
+
+/**
+ * Paste text, bracketing it by hand for any agent harness.
  *
- * The daemon restates the mode in its replay, which fixes this at the source; this is
- * the backstop for a session so long-lived that even retained scrollback has rolled
- * past the enable. Restricted to multi-line text into an agent session: that is the
- * only shape this bug can affect, so nothing else changes behaviour.
+ * xterm wraps a paste only once it has *seen* the child enable bracketed paste, and
+ * that mirror goes stale in both directions - see `pasteNeedsManualBracketing`, which
+ * is why it is no longer consulted. An agent CLI holds the mode on for its whole life,
+ * so the wrapper is always the right bytes for one, and this produces byte-identical
+ * output to `term.paste` whenever the mirror was telling the truth.
  *
  * The paste wrapper does not protect a payload's FIRST newline, which is a separate
  * measured defect and is why the leading run is lifted out into key presses ahead of
  * the paste (`composerInsertion.ts`). It goes through `term.input` rather than being
  * prepended to the paste text, because xterm would rewrite it to a bare CR.
  */
-function pasteIntoTerminal(term: Terminal, inputBackend: string, text: string) {
+function pasteIntoTerminal(term: Terminal, inputBackend: string, text: string, origin: PasteOrigin) {
   // Takes the resolved backend rather than the session, so that a caller inside the
   // terminal's construction effect cannot pass a value captured at mount. That effect
   // is keyed on `session.id` and never re-runs on a promotion, so a `Session` argument
@@ -299,19 +316,15 @@ function pasteIntoTerminal(term: Terminal, inputBackend: string, text: string) {
   // after the promotion landed (measured 2026-08-27). `inputBackendRef` is the live
   // answer; see `terminalPaneMemo.ts` for what keeps it live.
   const { leading, body } = composerInsertionParts(text, inputBackend)
-  if (leading) term.input(leading, true)
+  if (leading) performPasteWrite({ origin, kind: 'leading' }, () => term.input(leading, true))
   if (!body) return
-  if (pasteNeedsManualBracketing({
-    text: body,
-    agentBackend: isAgentBackend(inputBackend),
-    bracketedPasteMode: term.modes.bracketedPasteMode,
-  })) {
+  if (pasteNeedsManualBracketing({ text: body, agentBackend: isAgentBackend(inputBackend) })) {
     // term.input keeps this on the normal onData path, so broadcast membership and
     // the replay guard treat it exactly like a real paste.
-    term.input(bracketedPaste(body), true)
+    performPasteWrite({ origin, kind: 'payload' }, () => term.input(bracketedPaste(body), true))
     return
   }
-  term.paste(body)
+  performPasteWrite({ origin, kind: 'payload' }, () => term.paste(body))
 }
 
 function terminalCaretSnapshot(term: Terminal): TerminalCaretSnapshot {
@@ -371,7 +384,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, inputBack
       // Some browsers block the richer Clipboard API while still allowing text reads.
     }
   }
-  pasteIntoTerminal(term, inputBackend, await navigator.clipboard.readText())
+  pasteIntoTerminal(term, inputBackend, await navigator.clipboard.readText(), 'rail')
   return 'text'
 }
 
@@ -1077,9 +1090,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     pasteAttachmentRef.current=(text,nativeImage)=>{
       attachmentPasteDepth+=1
       try{
-        if(attachmentNeedsManualBracketing(nativeImage,isAgentBackend(inputBackendRef.current),term.modes.bracketedPasteMode))term.input(bracketedPaste(text),true)
-        else if(nativeImage)term.paste(text)
-        else pasteIntoTerminal(term,inputBackendRef.current,text)
+        if(attachmentNeedsManualBracketing(nativeImage,isAgentBackend(inputBackendRef.current)))performPasteWrite({origin:'attachment',kind:'payload'},()=>term.input(bracketedPaste(text),true))
+        else if(nativeImage)performPasteWrite({origin:'attachment',kind:'payload'},()=>term.paste(text))
+        else pasteIntoTerminal(term,inputBackendRef.current,text,'attachment')
       }finally{
         attachmentPasteDepth-=1
       }
@@ -1228,15 +1241,35 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // record per paste — payload shape plus the composer and cursor before the
     // paste and after its echo settles — for the caret-lands-short-of-the-tail
     // field report that never survives until someone can look at it live.
-    const tracePaste = (data: string) => {
+    const tracePaste = (data: string, write: PasteWrite | null, captureSource: TerminalInputSource | null) => {
       const readRegion = composerRegionForBackend(backendRef.current)
       if (!readRegion) return
       const payload = summarizePastePayload(data)
       const before = composerTraceSnapshot(terminalCaretSnapshot(term), readRegion)
+      // Which control produced the paste, and what xterm believed about the child's
+      // bracketed-paste mode while producing it. Without the first, a report naming
+      // Ctrl+V can be neither confirmed nor refuted from the stored traces - every
+      // path arrives here as the same wrapped payload. Without the second, a paste
+      // that went out wrong because the mirror was lying is indistinguishable from a
+      // healthy one, since `bracketed` above only says what these bytes carried, not
+      // whether the child was going to honour it. `origin: null` means the bytes did
+      // not come from the pane's own paste path at all, which is itself the finding.
+      const provenance = {
+        origin: write?.origin ?? null,
+        captureSource,
+        bracketedPasteMode: term.modes.bracketedPasteMode,
+        backend: backendRef.current,
+      }
       window.setTimeout(() => {
         if (disposed) return
         const after = composerTraceSnapshot(terminalCaretSnapshot(term), readRegion)
-        reportInputDiagnostic(PASTE_TRACE_PHASE, { afterMs: PASTE_TRACE_AFTER_MS, payload, before, after })
+        reportInputDiagnostic(PASTE_TRACE_PHASE, {
+          afterMs: PASTE_TRACE_AFTER_MS,
+          ...provenance,
+          payload,
+          before,
+          after,
+        })
       }, PASTE_TRACE_AFTER_MS)
     }
     const stopInputStallWatch = watchMainThreadStalls(stall => {
@@ -2464,6 +2497,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       const onDataAt = performance.now()
+      // Read before anything can clear it: xterm fires this synchronously from inside
+      // the `term.paste`/`term.input` call that `performPasteWrite` wrapped.
+      const pasteWrite = activePasteWrite
       const capture = pendingInputCapture
         ? { ...pendingInputCapture, onDataAt }
         : null
@@ -2504,7 +2540,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       wheelPacer.flush()
-      if (inputIsTraceablePaste(data, capture?.source ?? null)) tracePaste(data)
+      if (inputIsTraceablePaste(data, capture?.source ?? null, pasteWrite)) {
+        tracePaste(data, pasteWrite, capture?.source ?? null)
+      }
       sendInput(data, false, shouldBroadcast, false, capture)
     })
     // View keys skip xterm's `input()` so they are never broadcast, and are dropped rather
@@ -2724,7 +2762,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const text=event.clipboardData.getData('text/plain')
       if(!text)return
       notePhysicalInput(event, 'paste')
-      event.preventDefault();resetMobileInput();pasteIntoTerminal(term,inputBackendRef.current,text);focusTerminalInput()
+      event.preventDefault();resetMobileInput();pasteIntoTerminal(term,inputBackendRef.current,text,'mobile');focusTerminalInput()
     }
     mobileLiveInput?.addEventListener('beforeinput',mobileBeforeInput)
     mobileLiveInput?.addEventListener('input',mobileTextInput)
@@ -3207,6 +3245,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // touch long-press selection gesture, but never open our own menu here.
       event.preventDefault()
     }
+    // The last native paste this pane took ownership of, so the alarm below can tell a
+    // paste that reached xterm's own handler from one this pane deliberately let pass.
+    let claimedPasteEvent: Event | null = null
     const pasteEvent = (event: ClipboardEvent) => {
       const data=event.clipboardData
       if (!data) return
@@ -3217,6 +3258,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if(files.length){
           event.preventDefault()
           event.stopPropagation()
+          claimedPasteEvent=event
           void attachFilesRef.current(files)
           return
         }
@@ -3224,9 +3266,70 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const text=data.getData('text/plain')
       if(!text)return
       notePhysicalInput(event, 'paste')
-      claimTerminalTextPaste(event,value=>{
-        pasteIntoTerminal(term,inputBackendRef.current,value)
+      if(claimTerminalTextPaste(event,value=>{
+        pasteIntoTerminal(term,inputBackendRef.current,value,'native')
+      }))claimedPasteEvent=event
+    }
+    /**
+     * A text paste that reached xterm's own textarea handler.
+     *
+     * Every terminal paste is supposed to be claimed by `pasteEvent` in the capture
+     * phase, where `stopPropagation` keeps it from ever reaching this element - so this
+     * listener firing means the claim was bypassed, and the payload went out with
+     * whatever bracketing xterm's mirror of the child's mode happened to say. That is
+     * the shape of every "Ctrl+V submits my paste line by line" report, and it was
+     * previously indistinguishable from a healthy paste in the logs: the trace fires
+     * from `onData`, which cannot see which DOM listener produced the bytes.
+     *
+     * Content-free by construction - a length and two booleans, no excerpt - because it
+     * rides the ordinary input-diagnostic clamp rather than the trace's wider one.
+     */
+    const unclaimedPaste = (event: ClipboardEvent) => {
+      if (event === claimedPasteEvent) return
+      const text = event.clipboardData?.getData('text/plain') || ''
+      if (!text) return
+      reportInputDiagnostic(PASTE_UNCLAIMED_PHASE, {
+        backend: backendRef.current,
+        bracketedPasteMode: term.modes.bracketedPasteMode,
+        chars: text.length,
+        multiline: /[\r\n]/.test(text),
+        targetTag: (event.target instanceof HTMLElement ? event.target.tagName : '') || '',
       })
+    }
+    /**
+     * Ctrl+V while the keyboard is somewhere that will not take it.
+     *
+     * `pasteEvent` only sees pastes dispatched inside the terminal host. Click a rail
+     * button, a session tab, or anything else that is focusable but not editable, press
+     * Ctrl+V, and the browser dispatches the paste to that element instead: this pane
+     * never hears it, xterm never hears it, and the paste silently goes nowhere - which
+     * reads to the user as exactly the same defect as a paste that went out wrong.
+     *
+     * Routed by `currentInsertTarget`, the same last-focused-surface record every other
+     * insert path uses, so at most one pane can answer and a paste is never delivered to
+     * a terminal the user was not last typing into. Everything that would legitimately
+     * receive the paste itself is stepped around first: another terminal's own host,
+     * a real text field anywhere in the app, and any open dialog.
+     */
+    const documentPaste = (event: ClipboardEvent) => {
+      const target = event.target
+      const focused = document.activeElement
+      const insertTarget = currentInsertTarget()
+      // `.terminal-host` matches ANY pane's host, not only this one's: that host's own
+      // capture listener owns the paste, and this one runs first (document is above it),
+      // so a check scoped to `host.current` would have one pane adopt another's event.
+      if (!strayPasteBelongsToPane({
+        paneHidden: paneIsHidden(),
+        targetInTerminalHost: target instanceof Element
+          ? !!target.closest('.terminal-host')
+          : !!(host.current && target instanceof Node && host.current.contains(target)),
+        inDialog: (target instanceof Element && !!target.closest('[role="dialog"]'))
+          || (focused instanceof Element && !!focused.closest('[role="dialog"]')),
+        focusHeldByOtherField: focusHeldByOtherField(activeEditableField()),
+        focusedTerminalSessionId: insertTarget?.kind === 'terminal' ? insertTarget.sessionId : null,
+        sessionId: session.id,
+      })) return
+      pasteEvent(event)
     }
     const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types || []).includes('Files')
     const dragEnter = (event: DragEvent) => {
@@ -3275,6 +3378,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     host.current.addEventListener('focusin', claimOnFocus)
     host.current.addEventListener('contextmenu', openMenu)
     host.current.addEventListener('paste', pasteEvent, true)
+    // Bubble phase on xterm's own textarea: the capture listener above stops a claimed
+    // paste before it can reach this element, so anything that arrives here is a paste
+    // the pane did not own. Registered after `term.open`, hence after xterm's handler,
+    // which stops propagation but not its element's remaining listeners.
+    term.textarea?.addEventListener('paste', unclaimedPaste)
+    document.addEventListener('paste', documentPaste, true)
     host.current.addEventListener('dragenter', dragEnter)
     host.current.addEventListener('dragover', dragOver)
     host.current.addEventListener('dragleave', dragLeave)
@@ -3315,7 +3424,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // A pane spawned as a shell chose WebGL, and a promotion can make that the wrong
@@ -3386,7 +3495,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(!term)throw new Error('The target terminal is not mounted.')
     try {
       const pasted=textOnly
-        ?(pasteIntoTerminal(term,inputBackendRef.current,await navigator.clipboard.readText()),'text' as const)
+        ?(pasteIntoTerminal(term,inputBackendRef.current,await navigator.clipboard.readText(),'rail'),'text' as const)
         :await pasteBrowserClipboard(term, session, inputBackendRef.current, files=>attachFilesRef.current(files))
       focusAfterTerminalActionRef.current()
       if(pasted==='text')showClipboardStatus('Pasted')
@@ -3659,7 +3768,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     await settleTerminalInsertion(
       text,
       !!submit,
-      value=>pasteIntoTerminal(target,inputBackendRef.current,value),
+      value=>pasteIntoTerminal(target,inputBackendRef.current,value,'insert'),
       ()=>{
         if(termRef.current!==target)throw new Error('The target terminal changed before submit. Draft kept.')
         sendKey('\r')
@@ -4048,8 +4157,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
     const text=data?.getData('text/plain')||''
-    if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
+    if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     <button role="menuitem" onClick={() => { setMenu(null); runCommand('clipboard.open') }}>Clipboard history…</button>

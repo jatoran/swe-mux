@@ -52,6 +52,7 @@ from typing import Any, Protocol
 
 import aiohttp
 
+from .tls_trust import trusting_connector
 from .voice_models import ProgressCallback, report_progress
 
 log = logging.getLogger(__name__)
@@ -333,7 +334,9 @@ class WheelClosureStore:
         try:
             cache.mkdir(parents=True, exist_ok=True)
             downloaded = 0
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=trusting_connector()
+            ) as session:
                 for item in files:
                     destination = cache / item.filename
                     self._progress["current_file"] = item.filename

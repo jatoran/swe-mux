@@ -177,6 +177,66 @@ test('the policy matrix draws Global and Project side by side, grouped by depend
   await expect(row.locator('input[type=checkbox]')).toHaveCount(2)
 })
 
+test('the sticky policy headings close against the top bar with no content gap', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'Policy')
+  const dismiss = page.locator('.automation-preset-dismiss')
+  if (await dismiss.count()) await dismiss.click()
+
+  for (const width of [1200, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    const geometry = await page.evaluate(() => {
+      const main = document.querySelector('.automation-panel > main')
+      const grid = document.querySelector('.automation-matrix-grid:not(.automation-authority-grid)')
+      const heading = grid?.querySelector('.automation-matrix-head')
+      if (!(main instanceof HTMLElement) || !(grid instanceof HTMLElement)
+        || !(heading instanceof HTMLElement)) return null
+      main.scrollTop = grid.offsetTop
+      return {
+        mainTop: main.getBoundingClientRect().top,
+        headingTop: heading.getBoundingClientRect().top,
+      }
+    })
+    expect(geometry).not.toBeNull()
+    expect(Math.abs(geometry!.headingTop - geometry!.mainTop)).toBeLessThanOrEqual(1)
+  }
+})
+
+test('agent authority keeps readable Global and Project columns at desktop and phone widths', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'Policy')
+  const authority = page.locator('.automation-authority-grid')
+  await expect(authority.locator('.automation-authority-row')).toHaveCount(6)
+
+  const firstRow = authority.locator('.automation-authority-row').first()
+  await expect(firstRow.locator('.dropdown-value')).toHaveText(['Direct', 'Approve each'])
+  await expect(authority.locator('.automation-authority-row').nth(1).locator('.dropdown-value'))
+    .toHaveText(['Direct', 'Use global'])
+  await expect(firstRow.locator('.automation-authority-meta')).toContainText('1 inherit · 1 custom')
+  const desktopWidths = await firstRow.locator('.dropdown-trigger').evaluateAll(nodes =>
+    nodes.map(node => node.getBoundingClientRect().width))
+  expect(desktopWidths.every(width => width >= 220)).toBe(true)
+
+  await page.setViewportSize({ width: 390, height: 800 })
+  const geometry = await authority.evaluate(node => ({
+    width: node.getBoundingClientRect().width,
+    scrollWidth: node.scrollWidth,
+  }))
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(Math.ceil(geometry.width) + 1)
+
+  const nameBox = await firstRow.locator('.automation-matrix-name').boundingBox()
+  const controlBoxes = await firstRow.locator('.dropdown-trigger').evaluateAll(nodes =>
+    nodes.map(node => {
+      const box = node.getBoundingClientRect()
+      return { x: box.x, y: box.y, width: box.width }
+    }))
+  expect(nameBox).not.toBeNull()
+  expect(controlBoxes).toHaveLength(2)
+  expect(controlBoxes[0].y).toBeGreaterThan(nameBox!.y)
+  expect(Math.abs(controlBoxes[0].width - controlBoxes[1].width)).toBeLessThan(1)
+  expect(controlBoxes.every(box => box.width >= 160)).toBe(true)
+})
+
 test('a ceiling-blocked row greys the Project switch and keeps the Project choice', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await openTab(page, 'Policy')

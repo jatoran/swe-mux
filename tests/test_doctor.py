@@ -223,3 +223,97 @@ def test_report_carries_no_secret_or_message_content_keys() -> None:
                "diagnostic", "delivery_blocking"}
     for row in report["observation_freshness"]:
         assert set(row).issubset(allowed)
+
+
+def _hook_session(
+    *,
+    sid: str,
+    name: str,
+    backend: str,
+    watch_since: float | None,
+    last_hook_ts: float = 0.0,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        record=SimpleNamespace(id=sid, name=name, backend=backend),
+        hook_channel_watch_since=watch_since,
+        last_hook_ts=last_hook_ts,
+    )
+
+
+def test_hook_ingress_silence_reports_a_spawned_session_that_never_spoke() -> None:
+    rows = doctor.hook_ingress_silence(
+        [_hook_session(sid="s1", name="one", backend=_AGENT, watch_since=100.0)],
+        now=100.0 + doctor.HOOK_SILENCE_GRACE_SECONDS + 1,
+    )
+    assert [row["id"] for row in rows] == ["s1"]
+    assert rows[0]["seconds_silent"] > doctor.HOOK_SILENCE_GRACE_SECONDS
+
+
+def test_hook_ingress_silence_ignores_a_session_still_inside_its_grace() -> None:
+    assert (
+        doctor.hook_ingress_silence(
+            [_hook_session(sid="s1", name="one", backend=_AGENT, watch_since=100.0)],
+            now=100.0 + doctor.HOOK_SILENCE_GRACE_SECONDS - 1,
+        )
+        == []
+    )
+
+
+def test_hook_ingress_silence_ignores_an_adopted_session() -> None:
+    """The exact false positive that would fire on every reload.
+
+    A daemon restart resets `last_hook_ts` for every surviving session while no
+    hook is owed - an idle agent has no reason to speak for hours. Only a session
+    this daemon *spawned* was promised a SessionStart, which is what
+    `hook_channel_watch_since` records and why it is `None` here.
+    """
+    assert (
+        doctor.hook_ingress_silence(
+            [_hook_session(sid="s1", name="one", backend=_AGENT, watch_since=None)],
+            now=1e9,
+        )
+        == []
+    )
+
+
+def test_hook_ingress_silence_ignores_a_witnessed_session_and_a_shell() -> None:
+    rows = doctor.hook_ingress_silence(
+        [
+            _hook_session(
+                sid="s1", name="one", backend=_AGENT, watch_since=1.0, last_hook_ts=2.0
+            ),
+            _hook_session(sid="s2", name="two", backend="shell", watch_since=1.0),
+        ],
+        now=1e9,
+    )
+    assert rows == []
+
+
+def test_hook_ingress_silence_ignores_an_uninstrumented_harness() -> None:
+    """Launch clean is supposed to be silent; reporting it would be a lie."""
+    rows = doctor.hook_ingress_silence(
+        [_hook_session(sid="s1", name="one", backend=_AGENT, watch_since=1.0)],
+        now=1e9,
+        instrumented=lambda backend: False,
+    )
+    assert rows == []
+
+
+def test_silent_hook_channel_is_a_critical_report_failure() -> None:
+    sources = _healthy_sources()
+    sources["hook_silence"] = [
+        {"id": "s1", "name": "one", "backend": _AGENT, "since": 1.0, "seconds_silent": 300.0}
+    ]
+    report = doctor.build_doctor_report(**sources)
+    check = next(c for c in report["checks"] if c["id"] == "hook_ingress.silent")
+    assert check["status"] == "fail"
+    assert check["severity"] == "critical"
+    assert check["remedy"]
+    assert report["ok"] is False
+
+
+def test_healthy_report_states_the_hook_channel_is_working() -> None:
+    report = doctor.build_doctor_report(**_healthy_sources())
+    check = next(c for c in report["checks"] if c["id"] == "hook_ingress.ok")
+    assert check["status"] == "ok"
+    assert report["hook_ingress_silence"] == []

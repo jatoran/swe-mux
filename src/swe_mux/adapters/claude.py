@@ -15,6 +15,7 @@ from pathlib import Path
 
 from ..approvals import DECISION_HOOK_EVENTS
 from ..harness import HARNESSES, descriptor
+from ..host_platform import IS_WINDOWS
 from ..mcp_contract import claude_read_permissions
 from ..skill_install import materialize_claude_plugin
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
@@ -65,24 +66,113 @@ def _write_config_if_changed(path: Path, payload: object) -> Path:
     return path
 
 
-def _bash_executable_path(executable: str) -> str:
-    """Translate a Windows executable path for Claude's Bash hook runner."""
-    normalized = executable.replace("\\", "/")
-    if len(normalized) >= 3 and normalized[1:3] == ":/":
-        return f"/{normalized[0].lower()}{normalized[2:]}"
-    return normalized
+def _windows_short_path(path: str) -> str:
+    """The 8.3 form of *path*, or *path* unchanged when Windows will not give one.
+
+    Only ever called to remove a space, and it is the one mechanism that can: see
+    `_shell_agnostic_executable_path` for why quoting is not an option here. 8.3
+    generation is on by default for the system volume, so an interpreter under
+    `C:\\Program Files` or a home directory with a space in it is covered; a volume
+    with `fsutil 8dot3name` disabled returns the long path and the caller falls
+    back. Never raises - a failure here is a degraded hook command, not a crash.
+    """
+    if not IS_WINDOWS:
+        return path
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetShortPathNameW.argtypes = [
+            ctypes.wintypes.LPCWSTR,
+            ctypes.wintypes.LPWSTR,
+            ctypes.wintypes.DWORD,
+        ]
+        kernel32.GetShortPathNameW.restype = ctypes.wintypes.DWORD
+        needed = kernel32.GetShortPathNameW(path, None, 0)
+        if not needed:
+            return path
+        buffer = ctypes.create_unicode_buffer(needed)
+        if not kernel32.GetShortPathNameW(path, buffer, needed):
+            return path
+        return buffer.value or path
+    except (OSError, AttributeError, ValueError):
+        return path
+
+
+def _shell_agnostic_executable_path(executable: str) -> str:
+    """A Windows executable path that both PowerShell and Bash will execute.
+
+    Claude Code decides for itself which shell runs a hook `command`, and on
+    Windows that is Bash on a machine with Git Bash and PowerShell on one without.
+    This used to emit the MSYS form (`/c/Users/...`), which is correct only under
+    the first: PowerShell reads it as a command *name* and every one of the eleven
+    hooks dies with `CommandNotFoundException`, silently taking status detection,
+    history, the prompt queue and approvals with it. That is the whole
+    observability layer, and nothing said so - it was found by a tester reading
+    the CLI's stderr on a machine without Git Bash.
+
+    The drive-letter forward-slash form (`C:/Users/...`) is the one spelling all
+    three of PowerShell, Bash and cmd execute, verified on each. It must reach the
+    shell **unquoted**, which is why the space is worth this much trouble: at
+    command position PowerShell parses a quoted string as a string expression
+    rather than a program, so `'C:/Program Files/...'` is inert there, and there
+    is no quoting style the two shells share. `_windows_short_path` removes the
+    space instead of escaping it.
+
+    A space that survives is left quoted and reported. It runs under Bash and not
+    under PowerShell, which is strictly better than today and no longer silent:
+    `doctor.hook_ingress` fails on a session that has produced no hook.
+
+    Keyed on the *shape* of the path rather than on the running host, so a POSIX
+    interpreter path is returned untouched (there is nothing to translate) and the
+    Windows behaviour stays assertable from the Linux and macOS CI legs.
+    """
+    if len(executable) < 3 or executable[1:3] not in {":\\", ":/"}:
+        return executable
+    candidate = executable
+    if " " in candidate and IS_WINDOWS:
+        candidate = _windows_short_path(candidate)
+    return candidate.replace("\\", "/")
+
+
+#: Characters an interpreter path may carry and still reach the shell unquoted.
+#: Deliberately a closed allowlist rather than a blocklist of metacharacters: this
+#: string is interpreted by three shells with three different special sets, and
+#: the only defensible claim is about what is inert in all of them. `~` is in it
+#: because 8.3 short names are built from it (`C:/PROGRA~1/...`) and neither Bash
+#: nor PowerShell expands a tilde that is not at the start of a word - verified on
+#: both. `$`, backtick, `%` and quotes are out: each is expanded by at least one.
+_UNQUOTED_SAFE = re.compile(r"^[A-Za-z0-9_.:/~+,@-]+$")
 
 
 def _hook_command(event: str, executable: str | None = None, identity: Path | None = None) -> str:
-    python = _bash_executable_path(executable or sys.executable)
-    argv = [python, "-m", "swe_mux.hook_client", event]
+    """One Claude Code hook `command`, runnable under whichever shell it picks.
+
+    Assembled rather than `shlex.join`ed whole, because the interpreter must not
+    be quoted and `shlex` cannot express that: it quotes `~`, so the 8.3 path that
+    exists precisely to avoid quoting would come back quoted anyway. The argument
+    tail is still `shlex.join`ed - those are arguments, where POSIX quoting is
+    read as quoting by Bash and passed through literally by PowerShell.
+    """
+    python = _shell_agnostic_executable_path(executable or sys.executable)
+    tail = ["-m", "swe_mux.hook_client", event]
     if identity is not None:
-        # Native path, deliberately not translated for the Bash hook runner:
-        # `shlex.join` single-quotes it, POSIX single quotes keep the backslashes
-        # literal, and the reader is Python on Windows — which cannot open the
-        # `/c/...` form the interpreter path needs.
-        argv.extend(["--identity", str(identity)])
-    return shlex.join(argv)
+        # Native path, deliberately not translated: the reader is Python, which
+        # opens a Windows path happily in either spelling, and it is an argument
+        # rather than the command name - so quoting it is harmless under every
+        # shell, which is not true of the interpreter above.
+        tail.extend(["--identity", str(identity)])
+    if _UNQUOTED_SAFE.match(python):
+        return f"{python} {shlex.join(tail)}"
+    log.warning(
+        "claude hook command cannot express the interpreter path unquoted (%s), so it is "
+        "quoted: hooks will run if Claude Code dispatches them through Bash and will fail "
+        "with CommandNotFoundException if it dispatches them through PowerShell. "
+        "`swemux doctor` reports the outcome per session as hook_ingress.",
+        python,
+    )
+    return shlex.join([python, *tail])
 
 
 class ClaudeAdapter(BackendAdapter):

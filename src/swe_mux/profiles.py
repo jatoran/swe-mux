@@ -96,6 +96,18 @@ def _posix_login_shell() -> str | None:
 
 
 def _wsl_distros() -> list[str]:
+    """The distributions this host has, or nothing when it has no WSL.
+
+    Gated on `wsl_available` rather than on `wsl.exe` being on PATH: Windows 11
+    ships that binary whether or not the subsystem is installed, and spawning it
+    windowless on a machine without one blocks until the timeout instead of
+    erroring. `stdin` is closed for the same reason - an inherited console handle
+    the daemon does not own is what the stub blocks on.
+    """
+    from .wsl_bridge import wsl_available
+
+    if not wsl_available():
+        return []
     executable = _available("wsl.exe")
     if not executable:
         return []
@@ -103,6 +115,7 @@ def _wsl_distros() -> list[str]:
         result = subprocess.run(
             [executable, "--list", "--quiet"],
             check=False,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=3,
             creationflags=background_creation_flags(),
