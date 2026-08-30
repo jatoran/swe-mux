@@ -7,6 +7,7 @@
 <title>Blog · swe-mux</title>
 <meta name="description" content="Engineering write-ups about swe-mux: what broke, what the measurement said, and what got decided because of it." />
 <meta name="color-scheme" content="dark" />
+<meta name="darkreader-lock" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
 (function () {
@@ -48,9 +49,14 @@
           "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --pad: clamp(18px, 4vw, 40px);
   --maxw: 1160px;
+  /* The browser's own widgets - scrollbars, the caret, form controls, spellcheck
+     underlines - follow this and not the variables above, and the meta tag alone does
+     not reach them. Declared per theme so the toggle moves them too. */
+  color-scheme: dark;
 }
 
 :root[data-theme="light"] {
+  color-scheme: light;
   /* fg 15.8:1 · fg-2 8.6:1 · fg-3 5.5:1 · fg-4 3.2:1 */
   --bg:      #fbfbfd;
   --panel:   #ffffff;

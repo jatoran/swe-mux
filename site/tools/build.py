@@ -765,6 +765,7 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(description)}" />
 <meta name="color-scheme" content="dark" />
+<meta name="darkreader-lock" />
 <script>
 /* Runs before first paint so the chosen scheme never flashes. */
 {THEME_INIT}
