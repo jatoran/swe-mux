@@ -31,9 +31,22 @@
 .NOTES
   **This edits the current user's PATH**, which is why it refuses to start unless
   `SWE_MUX_INSTALLER_CYCLE=1` is set. Intended for an ephemeral CI runner. It
-  saves the original value and kind up front and restores them in a `finally`, so
-  an interrupted run does not leave the seeded test value behind - but a machine
-  you care about is still the wrong place to run it.
+  saves the original value and kind up front and restores them in a `finally`.
+
+  Three things make it survivable on a machine somebody cares about, which is
+  where it was first run for real (2026-08-30, Inno 6.7.3):
+
+  - **The original PATH is written to a file before the seed**, and deleted only
+    after a successful restore. A `finally` does not run if the process is killed,
+    so without the file the recovery story is "remember 1337 characters". The path
+    of that file is printed, and the run ends by telling you it is gone.
+  - **It refuses if the AppId is already registered.** Add/Remove Programs is keyed
+    by a fixed `AppId` that no command-line switch can override, so running setup
+    against an existing install is an *upgrade of that install* - and the uninstall
+    at the end would then deregister somebody's real copy.
+  - **`/GROUP=` redirects the Start Menu folder.** `[Icons]` writes `{group}\swe-mux`
+    unconditionally, with no task gating it, so a default-group run would overwrite
+    a real shortcut and the uninstall would delete it.
 
 .PARAMETER Installer
   The compiled `*-setup.exe` to exercise.
@@ -41,11 +54,16 @@
 .PARAMETER InstallDir
   Where to install it. Passed as `/DIR=`, so it never lands in the default
   location and cannot collide with a real install.
+
+.PARAMETER Group
+  The Start Menu folder, passed as `/GROUP=`. Defaulted to a name no real install
+  uses for the reason above.
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$Installer,
-  [Parameter(Mandatory = $true)][string]$InstallDir
+  [Parameter(Mandatory = $true)][string]$InstallDir,
+  [string]$Group = 'swe-mux PATH cycle (test)'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,6 +86,20 @@ $EnvKey = 'HKCU:\Environment'
 # `RUNNER_TEMP` on a GitHub runner, the OS temp directory anywhere else, so this
 # is runnable by hand on a throwaway machine and not only in CI.
 $Scratch = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$Recovery = Join-Path $Scratch 'swe-mux-path-cycle-recovery.json'
+
+# Never changeable from the command line, so a collision here is not something the
+# caller can route around - see the AppId note in the .NOTES block and the comment
+# above `#define AppGuid` in swe-mux.iss.
+$AppGuid = '{7C4E1A64-2B5F-4E0B-9E2D-6E5B0D4A11C3}'
+foreach ($hive in @('HKCU:', 'HKLM:')) {
+  $key = "$hive\Software\Microsoft\Windows\CurrentVersion\Uninstall\${AppGuid}_is1"
+  if (Test-Path $key) {
+    throw ("swe-mux is already installed and registered at $key. This cycle would " +
+           "be treated as an upgrade of it, and the uninstall at the end would " +
+           "deregister it. Run this where swe-mux is not installed.")
+  }
+}
 
 function Get-UserPath {
   # Read the *raw* value, exactly as the installer's Pascal does.
@@ -131,6 +163,13 @@ $originalValue = Get-UserPath
 $originalKind = Get-UserPathKind
 $cliDir = Join-Path $InstallDir 'swe-mux-cli'
 
+# Written before the seed, not after: the `finally` below does not run if this
+# process is killed, and the value it would have restored is the only copy.
+@{ kind = $originalKind; value = $originalValue } | ConvertTo-Json -Depth 3 |
+  Set-Content -Path $Recovery -Encoding UTF8
+Write-Host "PATH before this run is saved at $Recovery"
+Write-Host "  restore by hand with: Set-ItemProperty 'HKCU:\Environment' Path <value> -Type $originalKind"
+
 try {
   # A seeded PATH that exercises the property most likely to be damaged: an
   # unexpanded variable reference, stored as REG_EXPAND_SZ. If the installer read
@@ -149,7 +188,7 @@ try {
   # so between them the two runs cover both routes to selecting this task.
   $log = Join-Path $Scratch 'swe-mux-install.log'
   $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
-                 "/DIR=$InstallDir", '/TASKS=addtopath', "/LOG=$log")
+                 "/DIR=$InstallDir", "/GROUP=$Group", '/TASKS=addtopath', "/LOG=$log")
   $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
   Assert ($process.ExitCode -eq 0) "setup exited 0 (was $($process.ExitCode))"
 
@@ -206,7 +245,7 @@ try {
   # No `/TASKS` this time: the default selection, which is what a user who takes
   # the wizard's defaults gets and what the task being ticked-by-default means.
   $upgradeArguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
-                        "/DIR=$InstallDir", "/LOG=$log")
+                        "/DIR=$InstallDir", "/GROUP=$Group", "/LOG=$log")
   $process = Start-Process -FilePath $Installer -ArgumentList $upgradeArguments -Wait -PassThru
   Assert ($process.ExitCode -eq 0) "the second setup exited 0 (was $($process.ExitCode))"
   $upgraded = Get-UserPath
@@ -232,8 +271,20 @@ try {
   Assert ((Get-UserPathKind) -eq 'ExpandString') "the value kind is unchanged by the uninstall"
   Assert (-not (Test-Path (Join-Path $InstallDir 'swe-mux-cli'))) "the client bundle was removed"
 
+  # The Start Menu folder is redirected by `/GROUP=`, so an orphan here would be
+  # named after this script rather than after the product - but an orphan is still
+  # an orphan, and the uninstall is what this run is about.
+  $group = Join-Path $env:APPDATA (Join-Path 'Microsoft\Windows\Start Menu\Programs' $Group)
+  Assert (-not (Test-Path $group)) "the Start Menu folder was removed ($group)"
+
   Write-Host "`nPATH cycle verified."
 }
 finally {
   Set-UserPath $originalValue $originalKind
+  if ((Get-UserPath) -eq $originalValue -and (Get-UserPathKind) -eq $originalKind) {
+    Remove-Item -Path $Recovery -ErrorAction SilentlyContinue
+    Write-Host "PATH restored; recovery file removed."
+  } else {
+    Write-Warning "PATH was NOT restored to its original value. It is in $Recovery."
+  }
 }

@@ -888,12 +888,18 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <span class="fill"></span>
       </div>
       <div class="relgroups">
-        <div><span class="k">Fixed</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Added</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 1 entry</summary>
+        <summary>all 3 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>The Windows installer now installs <code>swemux</code> and <code>mux</code>, and puts them on your PATH.</b> 0.1.3 added those names for people installing from PyPI and said plainly that the installer shipped no command-line program; it does now. The installer writes a third directory beside the app and the PTY supervisor, holding the two launchers and nothing else, and adds that one directory to your user PATH - no elevation prompt, because the whole install is per-user. Open a new terminal afterwards: Windows tells Explorer about the change, and a console that is already open never hears about it. It is a tickbox on the setup wizard, on by default, so a machine whose PATH you curate by hand can decline it; declining installs the commands anyway, and <code>swemux doctor</code> says where they are. Installing a newer version over the top leaves PATH exactly as it found it - one entry, never two - and uninstalling removes that entry and nothing near it, with a <code>%USERPROFILE%\bin</code> coming back as a variable rather than as whatever it meant at the time. <code>swemuxd</code>/<code>muxd</code> are deliberately not part of this: the application already is the daemon and starts one when you launch it.</span></li>
+        </ul>
         <div class="changetype">Fixed</div>
         <ul class="bullets">
+          <li><span><b><code>swemux doctor</code> no longer reports three critical faults on a healthy install.</b> Run from the new command-line client, the checks that ask whether the daemon can start were asking it of the wrong program - the client deliberately contains no daemon, no browser UI and no terminal backend, all of which live in the application beside it. Those rows now say so and point at where the daemon actually is.</span></li>
           <li><span><b>Opening the Agent tab no longer stalls when a recorded directory is on a filesystem that is not reachable.</b> Claude's <code>~/.claude.json</code> keeps an entry for every directory it has ever run in, and finding the one for your session used to ask the filesystem about each of them in turn. A recorded directory can name anywhere you have ever worked - a drive that is no longer attached, a share on a machine that is off, a WSL distribution that is stopped - and Windows does not answer for those quickly, it retries. On one machine with 183 recorded directories, one of them a stopped WSL distribution, a single request took 367 seconds. Path comparison now settles the ordinary case from the directory names alone, and any question it does put to the filesystem is given a deadline and its failure remembered, so an unreachable location costs a moment once instead of a minute per entry. Sessions starting up were on the same path and were delayed the same way.</span></li>
         </ul>
       </details>

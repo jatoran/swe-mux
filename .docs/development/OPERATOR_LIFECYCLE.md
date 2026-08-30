@@ -124,7 +124,7 @@ The one case it does not handle is an upgrade that moves the install directory: 
 
 **The whole cycle is exercised in CI rather than argued about here.**
 `ci.yml`'s `installer-cycle` job compiles the installer and runs install → `PATH` → upgrade → uninstall against a seeded `HKCU\Environment\Path`, diffing the value and its registry kind at each step (`packaging/installer/verify_path_cycle.ps1`).
-Inno Setup is not installed on the development host, so that is where it first runs.
+**Run for real on 2026-08-30** (Inno 6.7.3, the development host, against a `%LOCALAPPDATA%\Temp` install directory): PATH gained exactly one entry, the pre-existing entries survived in order with `%USERPROFILE%\bin` still unexpanded, a neighbouring `C:\tools\swe-mux-cli-old` was untouched, `swemux` and `mux` resolved by name and ran, a second install over the top changed the value by nothing at all, and the uninstall left `HKCU\Environment\Path` byte-identical to its 1337-character original with its `REG_SZ` kind intact.
 
 Silent install, for a scripted or unattended deployment:
 
