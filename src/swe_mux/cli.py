@@ -585,7 +585,19 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
             "desktop app rather than printing anything."
         ),
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    # herdr's `--skill` shape: the binary carries its own agent instructions, so
+    # what an agent reads always matches this exact release. A flag rather than a
+    # subcommand because it is the one thing here addressed to a program that has
+    # not learned the subcommands yet.
+    parser.add_argument(
+        "--skill",
+        action="store_true",
+        help="print the swe-mux agent skill (SKILL.md) embedded in this release and exit",
+    )
+    # Not `required=True`: `--skill` is a complete invocation with no subcommand.
+    # `main` restores the old behaviour for a bare `swemux` by raising the same
+    # argparse usage error (exit 2) a required subparser would have.
+    sub = parser.add_subparsers(dest="command", required=False)
 
     ls = sub.add_parser("ls", parents=[common], help="list sessions (filterable)")
     ls.add_argument("--project", help="only sessions in this project id")
@@ -730,6 +742,52 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         ),
     )
 
+    install_skill = sub.add_parser(
+        "install-skill",
+        parents=[common],
+        help="write the swe-mux agent skill into the directories agent CLIs read",
+        description=(
+            "Write the embedded swe-mux skill (`swemux --skill` prints it) into "
+            "the skill roots agent CLIs actually read, so agents in a checkout "
+            "learn what swe-mux offers them without any third-party tool or "
+            "registry. The default scope is one project checkout: two writes "
+            "(`.claude/skills/` and the shared `.agents/skills/`) cover every "
+            "registered harness. `--global` targets the per-user roots instead, "
+            "which reach every session those CLIs run anywhere - including "
+            "outside swe-mux - so it prints the exact paths first and writes "
+            "only under `--yes`. `--remove` takes back only files it can "
+            "recognize as its own."
+        ),
+    )
+    install_skill.add_argument(
+        "--project",
+        metavar="DIR",
+        help="the checkout to install into (default: the current directory)",
+    )
+    install_skill.add_argument(
+        "--global",
+        dest="global_scope",
+        action="store_true",
+        help="target the per-user skill roots every session reads",
+    )
+    install_skill.add_argument(
+        "--harness",
+        action="append",
+        default=[],
+        choices=agent_harnesses(),
+        help="only the roots this harness reads (repeatable; default: all)",
+    )
+    install_skill.add_argument(
+        "--remove",
+        action="store_true",
+        help="remove previously installed copies (recognized files only)",
+    )
+    install_skill.add_argument(
+        "--yes",
+        action="store_true",
+        help="proceed with a --global install or removal instead of only printing the plan",
+    )
+
     resume = sub.add_parser("resume", parents=[common], help="resume a history entry")
     resume.add_argument("id", help="history entry id")
     resume.add_argument("--project", required=True)
@@ -776,6 +834,66 @@ def install_shortcut_command(args: argparse.Namespace) -> tuple[Any, Any]:
         ) from exc
     report = shortcuts.apply_shortcuts(config=config, slots=slots, remove=args.remove)
     return report.as_dict(), lambda _: shortcuts.render_report(report)
+
+
+def install_skill_command(args: argparse.Namespace) -> tuple[Any, Any]:
+    """Run `install-skill` here, without asking a daemon anything.
+
+    Local like `install-shortcut`, and for the same reason: the person pointing
+    an agent CLI at a checkout may have no daemon running at all, and the write
+    is a plain file into directories this machine already owns.
+
+    Global scope is the one act that gets a disclosure step. `~/.claude/skills/`
+    reaches every agent this user ever runs, including outside swe-mux, so
+    without `--yes` the command prints exactly what it would touch and stops -
+    a successful preview, exit 0, not a failure.
+    """
+    from . import skill_install
+
+    if args.project and args.global_scope:
+        raise CliError(
+            "--project and --global name two different scopes; pass one of them",
+            EXIT_LOCAL_FAIL,
+        )
+    if args.global_scope:
+        targets = skill_install.global_targets()
+        scope = "global"
+    else:
+        project = Path(args.project or ".").expanduser().resolve()
+        if not project.is_dir():
+            raise CliError(f"{project} is not a directory", EXIT_NOT_FOUND)
+        targets = skill_install.project_targets(project)
+        scope = "project"
+    targets = skill_install.filter_targets(targets, args.harness)
+    verb = "remove" if args.remove else "install"
+    if args.global_scope and not args.yes:
+        writes = skill_install.plan(targets)
+        confirm = f"Pass --yes to {verb} at these per-user paths."
+    elif args.remove:
+        writes = skill_install.remove(targets)
+        confirm = ""
+    else:
+        writes = skill_install.install(targets, skill_install.skill_text())
+        confirm = ""
+    result = {
+        "scope": scope,
+        "action": verb,
+        "confirmed": not confirm,
+        "writes": [write.to_dict() for write in writes],
+        "ok": not any(write.error for write in writes),
+    }
+
+    def render(_: Any) -> None:
+        for write in writes:
+            readers = ", ".join(write.readers)
+            line = f"{write.action:9s} {write.path}  (read by {readers})"
+            if write.reason:
+                line += f" - {write.reason}"
+            print(line)
+        if confirm:
+            print(confirm)
+
+    return result, render
 
 
 def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
@@ -891,6 +1009,8 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
         return _ui_overlay_command(args, base)
     if args.command == "install-shortcut":
         return install_shortcut_command(args)
+    if args.command == "install-skill":
+        return install_skill_command(args)
     if args.command == "resume":
         body = {"project_id": args.project}
         return request("POST", f"/api/history/{args.id}/resume", body, base=base), None
@@ -900,6 +1020,15 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.skill:
+        from . import skill_install
+
+        print(skill_install.skill_text(), end="")
+        return EXIT_OK
+    if args.command is None:
+        # The subparser is optional only so `--skill` can stand alone; a bare
+        # invocation keeps the usage error (exit 2) it has always had.
+        parser.error("a command is required (or --skill)")
     base = resolve_base_url(getattr(args, "url", None))
     try:
         result, human = dispatch(args, base)
@@ -907,6 +1036,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mux: {exc}", file=sys.stderr)
         return exc.code
     _print(result, getattr(args, "json", False), human)
+    if args.command == "install-skill" and isinstance(result, dict):
+        # A policy refusal (a foreign file left in place) is the command doing
+        # its job; only an attempted write or removal the filesystem rejected
+        # exits non-zero.
+        if not result.get("ok", True):
+            return EXIT_LOCAL_FAIL
     if args.command == "install-shortcut" and isinstance(result, dict):
         # An unsupported host is not a failure - nothing was asked of it that it
         # could have done - so only a shortcut that was attempted and did not

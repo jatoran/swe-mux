@@ -963,12 +963,23 @@ def smoke_cli_bundle(
     executable = bundle_root / CLI_EXES[0]
     with tempfile.TemporaryDirectory(prefix="swe-mux-cli-smoke-") as scratch:
         environment = {**os.environ, "MUX_DATA_DIR": scratch}
-        for arguments, expected_code, why in (
-            (["--help"], 0, "the parser did not build"),
+        for arguments, expected_code, must_contain, why in (
+            (["--help"], 0, "", "the parser did not build"),
             (
                 ["ls", "--url", "http://127.0.0.1:1"],
                 EXIT_CONNECTION,
+                "",
                 "an unreachable daemon did not produce the documented exit code",
+            ),
+            # The skill is a data file (`swe_mux/assets/skills/`), not bytecode,
+            # so only executing the frozen bundle proves the spec's datas entry
+            # carried it. The content check matters too: a missing file is a
+            # traceback and a wrong exit code, but an empty one would exit 0.
+            (
+                ["--skill"],
+                0,
+                "MUX_SESSION_ID",
+                "the embedded agent skill did not print (datas entry dropped?)",
             ),
         ):
             completed = run(
@@ -978,7 +989,7 @@ def smoke_cli_bundle(
                 env=environment,
                 cwd=scratch,
             )
-            if completed.returncode != expected_code:
+            if completed.returncode != expected_code or must_contain not in completed.stdout:
                 raise SystemExit(
                     f"CLI bundle smoke test failed: `{executable.name} "
                     f"{' '.join(arguments)}` exited {completed.returncode}, expected "
@@ -986,7 +997,9 @@ def smoke_cli_bundle(
                     f"stdout: {completed.stdout.strip()[:2000]}\n"
                     f"stderr: {completed.stderr.strip()[:2000]}"
                 )
-    print(f"Smoked {executable} (--help, and exit {EXIT_CONNECTION} on a dead daemon)")
+    print(
+        f"Smoked {executable} (--help, --skill, and exit {EXIT_CONNECTION} on a dead daemon)"
+    )
 
 
 def build_cli_bundle() -> None:

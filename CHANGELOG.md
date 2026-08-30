@@ -15,6 +15,18 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **swe-mux now ships an agent skill, embedded in every install.** `swemux --skill` prints
+  the copy matching the running release, and `swemux install-skill` writes it into the skill
+  directories agent CLIs actually read - two writes inside a checkout cover every registered
+  harness, with no third-party tool and no registry. The skill teaches an agent the
+  in-session environment check and where the current contract lives (the mux MCP tools, or
+  `swemux --help`); it deliberately enumerates no commands, so it cannot go stale between
+  releases. Installing into the per-user skill roots, which reach every agent you run
+  anywhere, prints the exact paths first and proceeds only under `--yes`; `--remove` takes
+  back only files the installer can recognize as its own.
+
 ### Changed
 
 - **The daemon starts tens of seconds faster when its database has grown large.**

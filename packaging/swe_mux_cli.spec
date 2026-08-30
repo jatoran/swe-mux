@@ -138,7 +138,17 @@ analysis = Analysis(
     [str(ROOT / "cli_entry.py")],
     pathex=[str(PROJECT / "src")],
     binaries=[],
-    datas=[],
+    # Only the skills subtree, not the whole of assets/: `swemux --skill` prints
+    # the embedded agent skill, and everything else under assets/ (configurator
+    # guides, hook scripts) belongs to the daemon this bundle deliberately is
+    # not. `smoke_cli_bundle` executes `--skill` against the built tree, so a
+    # dropped entry here fails the build rather than shipping a traceback.
+    datas=[
+        (
+            str(PROJECT / "src" / "swe_mux" / "assets" / "skills"),
+            "swe_mux/assets/skills",
+        )
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
