@@ -34,6 +34,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   never a lock: everything it turns off stays one switch away, the choice is re-applyable
   and reversible from Settings → General, and existing installs are never stamped with a
   choice they did not make.
+- **The empty workspace now offers three first steps instead of nothing.** A quest log on
+  the empty stage points at the three setups that cannot finish in one screen: voice
+  (opens the guided setup), isolated worktrees, and connecting a phone. It is capped at
+  three by design - it will never become a todo list - the voice entry completes itself
+  when voice is set up, and dismissing an entry is permanent, on every device.
 - **Voice setup is now a guided walk.** Settings → Voice gains "Guided setup" (also in the
   command palette and by voice: "set up voice"): pick the engine, watch the one-press
   download's three progress lines, test the microphone where a permission prompt is

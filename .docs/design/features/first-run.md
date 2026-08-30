@@ -3,7 +3,9 @@
 ## What it is
 
 The first-run experience: one modal sequence (tier choice, then harness enablement), backed
-by two machine-side flags so a choice made on the desktop never reappears on the phone.
+by machine-side flags so a choice made on the desktop never reappears on the phone, plus a
+three-entry quest log on the empty workspace stage for the setups that cannot finish in one
+screen.
 The experience tier is the product's answer to its own scale - 100+ commands, 200+ config
 keys, 17 settings tabs - chosen once, as three genuine products rather than a good/reduced
 ladder.
@@ -75,6 +77,26 @@ shown only while `experience_tier` is `""`, so the arbitration gains no fourth s
 Skip skips everything and writes only `harness_setup_complete`; "Configure in Settings…"
 does the same and opens Settings → Agents.
 
+## The quest log, capped at three
+
+Three multi-step setups worth pointing at - voice (opens the guided setup, `voice.md`),
+isolated worktrees (opens the Git tab), and connecting a phone (opens Settings → Remote) -
+drawn as one card inside the empty workspace stage, the largest element on a new user's
+screen and previously an inert one (usability audit finding 8).
+
+The cap is the feature: a quest log that grows into a general todo list is an obligation
+handed to a user on first launch, which is worse than not having one.
+So the registry is a closed three-entry tuple in two places that must agree
+(`frontend/src/questRegistry.ts` and `QUEST_IDS` in `src/swe_mux/config.py`), nothing
+generates entries, and a fourth is a deliberate edit to both.
+
+Completion is honest rather than tracked: the voice quest derives from the config keys the
+guided setup writes (`tts_enabled`/`stt_enabled`), and the other two - which have no single
+"done" signal a browser can read - complete only by explicit dismissal.
+Dismissal is machine-side (`quests_dismissed`, validated against the closed set) and
+permanent: nothing ever resurrects a dismissed quest, on this device or another, and there
+is deliberately no Settings control to re-open one.
+
 ## Key files
 
 - `src/swe_mux/experience_tiers.py` - the tier table and its invariants.
@@ -82,7 +104,9 @@ does the same and opens Settings → Agents.
 - `src/swe_mux/config.py` - `experience_tier` (choice-validated, hot).
 - `frontend/src/HarnessSetup.tsx` - the two-step first-run panel and the tier copy.
 - `frontend/src/Settings.tsx` - General → Experience tier (re-apply, reversible).
-- `tests/test_experience_tiers.py` - the contracts above.
+- `frontend/src/questRegistry.ts`, `frontend/src/QuestLog.tsx` - the quest log.
+- `tests/test_experience_tiers.py`, `tests/test_quest_log.py`,
+  `frontend/test/questRegistry.test.ts` - the contracts above.
 
 ## Relates to
 
