@@ -20,11 +20,36 @@ Rules, from the [Show HN guidelines](https://news.ycombinator.com/showhn.html) a
 
 Primary:
 
-> Show HN: swe-mux - see what each coding agent actually did, and land it behind your checks
+> Show HN: swe-mux - a coding-agent multiplexer built for desktop and mobile
 
-Alternate:
+**80 characters is the hard limit** and this is 71. The one before it was 93 and would have been
+truncated, which is how the limit gets discovered.
 
-> Show HN: I built a control plane for running many coding agents at once
+It names the category first so a stranger self-selects in a second, then the differentiator.
+"Built for desktop and mobile" rather than "with full mobile support" or "also optimized for
+mobile": *also* reads as an afterthought and *parity* makes the desktop the reference and the
+phone the thing catching up, when the claim is that both are places you actually work.
+
+Alternates, if the first lands flat:
+
+> Show HN: swe-mux - run many coding agents in real terminals, and from your phone
+
+> Show HN: swe-mux - I ship its updates from an agent session running inside it
+
+The second is the strongest *fact* available - it is a claim about the author rather than about
+the software, so scepticism has nothing to push against - but it buries the category, which is
+the wrong trade for a first submission.
+
+**Deleted, and do not restore them:**
+
+- "run parallel coding agents whose sessions never die". Sessions are not immortal: a supervisor
+  crash, a force close, or a power loss ends them, and the post concedes that rather than
+  claiming otherwise. The fastest possible way to have the top comment be a link to `config.py`.
+- Anything leading with evidence, provenance, or "see what each agent actually did". That is the
+  deepest engineering here and the hardest thing to sell to someone who has not yet been burned
+  by it - an audit pitch, which presumes a reader who already runs a fleet. It belongs in the
+  body, not the title. Lead with what is felt immediately.
+- "control plane" in the title. Jargon that reads as enterprise, and the acronym collides.
 
 **Deleted, and do not restore it:** "run parallel coding agents whose sessions never die".
 Sessions are not immortal: a supervisor crash, a force close, or a power loss ends them, and the post concedes that rather than claiming otherwise.
@@ -32,8 +57,11 @@ That title is the fastest possible way to have the top comment be a link to `con
 
 ## Text (first comment, posted immediately by the submitter)
 
-I run multiple coding agents all day (Claude Code, Codex, opencode) and the thing that actually got hard was not keeping them alive - it was answering "what did each of these do, and is it safe to merge?" eight times an afternoon.
+I run several coding agents all day (Claude Code, Codex, opencode) and the two things that actually got hard were knowing which one needed me at any moment, and being stuck at the desk while they worked.
 swe-mux is the tool I built and have been living in for months, now open source under Apache 2.0.
+I ship its updates from an agent session running inside it, which is the shortest way to say what the session model is: a supervisor process separate from the daemon owns the pseudoterminals, so rebuilding and replacing the whole application leaves the agents working.
+
+It runs your CLIs in **real terminals** rather than re-rendering them into a UI of its own, which is the difference that matters most in practice: anything your CLI shipped yesterday works here today, there is no flag waiting to be exposed, and you can start a plain shell and promote it to an agent mid-session. Windows is the proving platform - the full gate including real ConPTY tests runs there - which is unusual enough in this category to be worth stating.
 
 The core ideas:
 

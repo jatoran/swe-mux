@@ -254,18 +254,26 @@ def section(md: str, heading: str) -> str:
 # are gone, because an anchor is a position in a document rather than a
 # destination and the two do not belong in one list.
 #
-# `blog` is here before `site/blog/` exists. The page is owned by another branch
-# that lands beside this one; registering the route now is what stops the nav
-# being edited twice. `tools/check.mjs` carries it in PENDING_PAGES, which is
-# where that debt is recorded and where it is removed once the page arrives.
+# `blog` is commented out rather than deleted. The builder, the styles and the
+# `content/blog.html` + `content/blog/` sources are all still here and working -
+# what is missing is posts, and a Blog tab leading to an empty index is worse
+# than no tab at all. Uncommenting the line below is the whole restore.
 PAGES = [
     ("", "index.html", "swe-mux"),
     ("docs", "docs/index.html", "Docs"),
-    ("blog", "blog/index.html", "Blog"),
+    # ("blog", "blog/index.html", "Blog"),  # restore when there are posts to put on it
     ("changelog", "changelog/index.html", "Changelog"),
     ("roadmap", "roadmap/index.html", "Roadmap"),
     ("acknowledgements", "acknowledgements/index.html", "Acknowledgements"),
 ]
+
+#: Built and linked from the footer, but kept out of the header bar and the
+#: burger. The header is for the handful of pages a visitor is deciding between;
+#: acknowledgements is something you go looking for once, deliberately, and
+#: spending a nav slot on it costs more than it returns. `compare` has always
+#: worked this way - this only makes the rule explicit and gives it a second
+#: member.
+HEADER_HIDDEN = frozenset({"acknowledgements"})
 
 BURGER = (
     '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3.4h13V5h-13Zm0 '
@@ -735,7 +743,9 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
     # a whitespace diff on eight pages that have nothing to do with this.
     extra = f"\n{scripts}" if scripts else ""
     items = [(up, "home", False)] + [
-        (f"{up}{s}/", label.lower(), s == nav_slug) for s, _, label in PAGES if s
+        (f"{up}{s}/", label.lower(), s == nav_slug)
+        for s, _, label in PAGES
+        if s and s not in HEADER_HIDDEN
     ]
 
     def links(indent: str) -> str:
@@ -831,7 +841,6 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
         <ul>
           <li><a href="{up}">home</a></li>
           <li><a href="{up}docs/">docs</a></li>
-          <li><a href="{up}blog/">blog</a></li>
           <li><a href="{up}changelog/">changelog</a></li>
           <li><a href="{up}roadmap/">roadmap</a></li>
           <li><a href="{up}acknowledgements/">acknowledgements</a></li>
@@ -2320,12 +2329,14 @@ BUILDERS = {
         "swe-mux against Herdr, tmux, Orca, Conductor, Superset, and Warp. Every cell is "
         "sourced and dated, and the rows where swe-mux loses are marked.",
     ),
-    "blog": (
-        build_blog,
-        "Blog · swe-mux",
-        "Engineering write-ups about swe-mux: what broke, what the measurement said, and "
-        "what got decided because of it.",
-    ),
+    # Commented out with its PAGES entry above, and for the same reason: the
+    # builder works and the sources are here, there are just no posts yet.
+    # "blog": (
+    #     build_blog,
+    #     "Blog · swe-mux",
+    #     "Engineering write-ups about swe-mux: what broke, what the measurement said, and "
+    #     "what got decided because of it.",
+    # ),
     "privacy": (
         build_privacy,
         "Privacy · swe-mux",
