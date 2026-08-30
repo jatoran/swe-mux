@@ -1298,6 +1298,23 @@ The expandable Settings sidebar exposes those pages on desktop and mobile:
 | Mux assistant | The independent assistant chat capability: `assistant_*` and `voice_chat_patience_ms` (`assistant.md`) |
 | Diagnostics | Wake-word testing, stage latency, mobile setup, and phone DNS |
 
+### Guided setup (`frontend/src/VoiceSetup.tsx`)
+
+Voice is the most branching setup in the product - engine choice, model download,
+microphone permission - and every voice defect fixed on 2026-08-29 was a first-run defect,
+so a wizard walks the four decisions in order: engine (Kokoro or the OS voice; Edge stays a
+Settings-only experimental), the one-press acquisition with its three progress lines, a
+microphone check with a live level meter (so the permission prompt - and a WebView2 refusal,
+named by `captureFailureNote` - happens where it is visible rather than mid-conversation),
+and one spoken sentence through `POST /api/voice/speak`.
+
+The wizard owns sequencing and nothing else: it mounts the same `KokoroModelPanel` and
+`WhisperModelPanel` Settings renders (exported, not copied - one acquisition surface, two
+hosts) and writes the same ordinary config keys, so it cannot drift from the panels or the
+policy it fronts.
+Reachable from the Read aloud page ("Guided setup…"), the palette and voice
+(`voice.setup`), and the first-run quest log.
+
 **Read aloud** means text flowing out of swe-mux as speech.
 **Talk & dictation** means microphone audio flowing into swe-mux as text.
 The UI does not use “Speak” as a third capability name because it can be read in either direction.

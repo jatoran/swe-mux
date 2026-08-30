@@ -208,6 +208,11 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const [graphLimit,setGraphLimit]=useState(GRAPH_STEP)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
+  // Log and Provenance revalidate exactly as the Map does and said nothing while they
+  // did, so the one control that reports the revalidation could only tell the truth on
+  // one of the three views it sits above.
+  const [graphBusy,setGraphBusy]=useState(false)
+  const [provenanceBusy,setProvenanceBusy]=useState(false)
   const [expandedTree,setExpandedTree]=useState(()=>readGitTabMemory(project?.id).expandedTree??'')
   // Full-detail rows, one per checkout the reader has expanded. The Map itself is read
   // with `detail=summary`, which withholds every per-file list: four lists of up to two
@@ -284,6 +289,11 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // applies. Lifted out of the strip because a blocked row opens it (`GitLandRow.tsx`),
   // which is what lets a row name a Project-wide control without drawing one.
   const [landingOpen,setLandingOpen]=useState<boolean|null>(null)
+  // What the one shared Refresh control reports: whether *the view it would refresh* is
+  // being read. The three views are independent reads with independent lifetimes, so a
+  // single flag would have had the control spin over a Log that had long since arrived
+  // because the Map behind it was revalidating.
+  const viewBusy=view==='map'?busy:view==='log'?graphBusy:provenanceBusy
 
   const refresh=useCallback(async(fresh=false)=>{
     if(!project){setOverview(null);return}
@@ -327,6 +337,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const refreshGraph=useCallback(async(limit:number,search:{query:string;field:'message'|'author';regex:boolean})=>{
     if(!project)return
     const mine=++graphGeneration.current
+    setGraphBusy(true)
     try{
       const query=new URLSearchParams({project_id:project.id,limit:String(limit)})
       // Only sent when there is something to search for. An empty `grep` would ask Git
@@ -345,11 +356,13 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       // wrong rather than merely stale.
       if(!search.query.trim()&&limit===GRAPH_STEP)writeGitTabMemory(project.id,{graph:parsed})
     }catch(cause){if(mine===graphGeneration.current)setError(describeGitError(cause,'Reading the commit graph'))}
+    finally{if(mine===graphGeneration.current)setGraphBusy(false)}
   },[project?.id])
 
   const refreshProvenance=useCallback(async(search='')=>{
     if(!project){setProvenance([]);setProvenanceGroups([]);setRefMoves([]);return}
     const mine=++provenanceGeneration.current
+    setProvenanceBusy(true)
     try{
       const query=new URLSearchParams({project_id:project.id,limit:'500'})
       if(search.trim())query.set('subject',search.trim())
@@ -360,6 +373,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       // Unsearched only, for the same reason as the graph above.
       if(!search.trim())writeGitTabMemory(project.id,{provenance:{rows,groups,refMoves:moves}})
     }catch(cause){if(mine===provenanceGeneration.current)setProvenanceError(cause instanceof Error?cause.message:String(cause))}
+    finally{if(mine===provenanceGeneration.current)setProvenanceBusy(false)}
   },[project?.id])
 
   /**
@@ -782,7 +796,13 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           a toggle of this tab's own. The refresh control is its glyph alone, so it keeps
           an explicit accessible name. */}
       <div class="git-toolbar-actions">
-        <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map'){void refresh(true);if(expandedTree)void loadTreeDetail(expandedTree)}else if(view==='log')void refreshGraph(graphLimit,{query:logQuery,field:logField,regex:logRegex});else void refreshProvenance(provenanceQuery)}}>↻</button>
+        {/* Spinning while the view it refreshes is being read, including the automatic
+            read on arrival. Every view here is stale-while-revalidate: the cached
+            reading paints instantly and the real one lands a moment later, so without
+            this the tab looked settled while it was still working and the only visible
+            evidence was the content changing under the reader. The glyph spins rather
+            than the button, or the border would rotate with it. */}
+        <button class={`git-refresh${viewBusy?' spinning':''}`} disabled={viewBusy} aria-busy={viewBusy?'true':undefined} aria-label="Refresh" title={viewBusy?'Refreshing…':'Refresh'} onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map'){void refresh(true);if(expandedTree)void loadTreeDetail(expandedTree)}else if(view==='log')void refreshGraph(graphLimit,{query:logQuery,field:logField,regex:logRegex});else void refreshProvenance(provenanceQuery)}}><span class="git-refresh-glyph">↻</span></button>
         {/* Bulk is a mode, not a permanent column. Fifty accumulated worktrees is what
             makes it necessary; a checkbox under every branch name on a surface people
             open to read a diff is what makes it a mode. */}

@@ -2413,6 +2413,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   It is not made redundant by the Resources dialog that also draws its surface - a modal covers the terminal, and this tab exists to answer "what is *this* session running" beside it, with the focused session pinned first - but that is asked rarely enough not to spend a permanent rail slot on for someone who has not asked for it.
   The default applies only to a browser with no stored visibility choice at all; an explicitly emptied set is a choice and stays empty.
   **Alerts is deliberately not hidden**: it is the only tab that draws an unread badge, so hiding it would remove the one glanceable "something needs you" signal from the rail.
+  **The default is tier-shaped** (`defaultHiddenDrawerTabs`, the sanctioned frontend reader of `experience_tier`): a pure-terminal install additionally puts away Queue, Transcript, Activity, Agent, and Schedule - machinery for the agent layer that tier switched off - leaving Actions, Files, Notes, Git, and Alerts.
+  Presentation only, under the same consultation rule: a device with no stored choice re-derives on every config arrival (so applying a tier in Settings takes effect live), and a stored choice is never overwritten (`first-run.md`).
 
 ### Segments and sections
 

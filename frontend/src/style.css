@@ -280,6 +280,26 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-conflict{grid-column:1/-1;margin:6px 0 0;padding:6px 7px;border-left:3px solid var(--red);background:#73373c22;color:var(--red);font-size:8px}
 .account-list article.conflicted{box-shadow:inset 3px 0 var(--red)}
 .account-popover button.conflicted strong{color:var(--red)}
+/* Quota as columns, not as a sentence per account.
+   Every width here is in `ch` against one pinned font, which is the whole mechanism: the
+   headings live in a `div` and the figures in a `small` inside a `button`, so they are
+   separate formatting contexts and no `auto` track could ever line them up with each
+   other. The content is bounded and monospace - a percentage is at most `100%` and a
+   reset at most `6d23h` - so fixed tracks cost nothing and are the only thing that makes
+   one account's 5h figure sit above the next one's. Keep the two templates and the font
+   identical between `.quota-columns` and `.quota-row`, or the columns silently drift. */
+.account-popover .quota-columns,.account-popover .quota-row{display:grid;grid-template-columns:10ch 10ch minmax(0,1fr);gap:0 8px;align-items:baseline;font:9px 'Cascadia Mono',Consolas,monospace}
+.account-popover .quota-columns.has-fable,.account-popover .quota-row.has-fable{grid-template-columns:10ch 10ch 10ch minmax(0,1fr)}
+/* The rows are buttons with 7px of padding; this heading is a plain child of the section,
+   so it has to pay the same inset by hand to sit over the column it names. */
+.account-popover .quota-columns{padding:2px 7px 3px;color:var(--muted);opacity:.7;text-transform:uppercase}
+.account-popover .quota-cell{display:grid;grid-template-columns:4ch minmax(0,1fr);gap:0 4px}
+.account-popover .quota-cell b{color:var(--text);font-weight:400;text-align:right}
+.account-popover .quota-cell i{overflow:hidden;color:var(--muted);font-style:normal;white-space:nowrap}
+/* A failed poll invalidates the whole account, so it takes the window columns with it and
+   leaves the refresh age in its own column still saying when that failure was measured. */
+.account-popover .quota-row .quota-row-note{grid-column:1/-2;color:var(--muted);font-style:normal}
+.account-popover .quota-row .account-refresh-age{justify-self:end;white-space:nowrap}
 /* Sign-in inside the switcher. The popover is 340px and every row in it is a target,
    so the per-provider control is a text button on the heading line and the empty state
    is the full-width row it replaces - the one screen a new install always sees. */
@@ -1614,6 +1634,16 @@ body {
 .harness-setup>header{padding:12px 16px;border-bottom:1px solid var(--line);color:var(--accent);font-size:11px;letter-spacing:.08em}
 .harness-setup-body{overflow-y:auto;padding:14px 16px}.harness-setup-body>p{margin:0 0 12px;color:var(--muted);font-size:10px;line-height:1.6}.harness-setup-note{border-left:2px solid var(--line);padding-left:8px}.harness-setup-loading{color:var(--muted)}
 .harness-setup-row,.harness-setup-scan{display:flex;align-items:center;gap:12px;margin-top:10px;padding:10px;border:1px solid var(--line);background:var(--bg)}.harness-setup-row>span,.harness-setup-scan>span{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.harness-setup-row strong,.harness-setup-scan strong{color:var(--text);font-size:11px}.harness-setup-row small,.harness-setup-scan small{color:var(--muted);font-size:9px;line-height:1.4;overflow-wrap:anywhere}.harness-setup-found{color:var(--green)!important}.harness-setup-absent{color:var(--muted)!important}.harness-setup-scan{margin-top:16px;border-style:dashed}
+.harness-setup-tier{cursor:pointer}.harness-setup-tier input[type=radio]{flex:none}
+.voice-setup-meter{display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px;border:1px solid var(--line);background:var(--bg);position:relative;overflow:hidden}
+.voice-setup-meter-fill{position:absolute;inset:0 auto 0 0;background:color-mix(in srgb,var(--green) 30%,transparent);transition:width 80ms linear;pointer-events:none}
+.voice-setup-meter button,.voice-setup-meter small{position:relative}
+.quest-log{width:min(520px,86%);margin-top:6px;padding:12px 14px;border:1px solid var(--line);background:#00000022;text-align:left}
+.quest-log h2{margin:0 0 8px;font-size:12px;letter-spacing:.02em}.quest-log h2 small{color:var(--muted);font-weight:400;font-size:9px;margin-left:8px}
+.quest-log-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.quest-log-text{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.quest-log-text strong{font-size:11px}.quest-log-text small{color:var(--muted);font-size:9px;line-height:1.4}
+.quest-log-row button{flex:none}
 .harness-setup-error{margin:12px 0 0;color:var(--red);font-size:10px}
 .harness-setup>footer{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}.harness-setup-spacer{flex:1}.harness-setup>footer button{min-height:33px;padding:0 12px;border:1px solid var(--line);background:var(--panel2);color:var(--text);cursor:pointer}.harness-setup>footer button.link{border-color:transparent;background:transparent;color:var(--muted)}.harness-setup>footer button.primary{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}.harness-setup>footer button:disabled{opacity:.5;cursor:default}
 @keyframes tutorial-focus{50%{box-shadow:0 0 0 9999px #030504c7,0 0 0 8px color-mix(in srgb,var(--green) 12%,transparent),0 0 42px color-mix(in srgb,var(--green) 72%,transparent)}}
@@ -5152,6 +5182,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-toolbar-actions>button:hover:not(:disabled){border-color:var(--accent);color:var(--text)}
 .git-toolbar-actions>button:disabled{opacity:.45;cursor:not-allowed}
 .git-toolbar-actions .git-refresh{min-width:25px;padding:0;font-size:11px;line-height:1}
+/* The glyph carries the animation, not the button: rotating the button would spin its
+   border and its focus ring with it. `git-map-spin` is the rotation this tab already
+   uses for a worktree being removed. */
+.git-toolbar-actions .git-refresh .git-refresh-glyph{display:inline-block}
+.git-toolbar-actions .git-refresh.spinning{cursor:wait;opacity:1}
+.git-toolbar-actions .git-refresh.spinning .git-refresh-glyph{color:var(--accent);animation:git-map-spin .7s linear infinite}
+@media(prefers-reduced-motion:reduce){.git-toolbar-actions .git-refresh.spinning .git-refresh-glyph{animation:none}}
 .git-compare{display:grid;gap:3px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select,.git-compare .dropdown-trigger{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}

@@ -19,6 +19,7 @@ const calls: Call[] = []
 const params = new URLSearchParams(location.search)
 // `empty` is the state a new install is in and the one the popover had no answer for.
 const saved = params.get('saved') === '1'
+const many = params.get('accounts') === 'multi'
 const outcome = params.get('outcome') || 'succeeded'
 
 const NOW = Math.floor(Date.now() / 1000)
@@ -32,16 +33,47 @@ const ACCOUNTS = [
   },
 ]
 
+// Three accounts whose every figure is a different width - `5%` against `100%`, `22m`
+// against `6d23h` - plus one with no Fable reading at all and one whose poll failed. Read
+// as sentences and stacked, no two of these percentages land in the same place, which is
+// the thing `account-switcher.spec.ts` measures. One account could never show it.
+const MANY = [
+  {
+    id: 'account-claude', provider: 'claude', label: 'work', created_at: NOW, updated_at: NOW,
+    identity_source: 'token', email: 'work@example.com',
+    quota: {
+      status: 'ok', refreshed_at: NOW,
+      session: { used_percent: 5, window_minutes: 300, resets_at: NOW + 4 * 3600 + 3 * 60 },
+      weekly: { used_percent: 63, window_minutes: 10080, resets_at: NOW + 3 * 86400 + 3600 },
+      fable: { used_percent: 30, window_minutes: 10080 },
+    },
+  },
+  {
+    id: 'account-claude-2', provider: 'claude', label: 'personal', created_at: NOW, updated_at: NOW,
+    identity_source: 'token', email: 'me@example.com',
+    quota: {
+      status: 'ok', refreshed_at: NOW - 7200,
+      session: { used_percent: 100, window_minutes: 300, resets_at: NOW + 22 * 60 },
+      weekly: { used_percent: 7, window_minutes: 10080, resets_at: NOW + 6 * 86400 + 23 * 3600 },
+    },
+  },
+  {
+    id: 'account-claude-3', provider: 'claude', label: 'client', created_at: NOW, updated_at: NOW,
+    identity_source: 'cli', email: 'client@example.com',
+    quota: { status: 'error', error: 'claude usage endpoint returned 500', refreshed_at: NOW - 60 },
+  },
+]
+
 let login: Record<string, Login> = { claude: null, codex: null }
 
 const snapshot = () => ({
   providers: ['claude', 'codex'],
-  selected: { claude: saved ? 'account-claude' : null, codex: null },
+  selected: { claude: saved || many ? 'account-claude' : null, codex: null },
   current: {
-    claude: { state: saved ? 'saved' : 'signed_out', account_id: saved ? 'account-claude' : null },
+    claude: { state: saved || many ? 'saved' : 'signed_out', account_id: saved || many ? 'account-claude' : null },
     codex: { state: 'signed_out', account_id: null },
   },
-  accounts: saved ? ACCOUNTS : [],
+  accounts: many ? MANY : saved ? ACCOUNTS : [],
   poll_minutes: 5,
   stale_minutes: 30,
   refreshing: false,
