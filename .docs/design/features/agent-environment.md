@@ -68,6 +68,14 @@ The scan reads only known JSON, TOML, Markdown, skill, command, and plugin-manif
 Each configuration file is capped at 1 MiB, symlinks are refused, Markdown agent discovery is bounded, and each response section is capped at 256 items with an explicit truncation flag.
 Malformed and unreadable sources become diagnostics instead of failing the complete inventory.
 
+**A `stat` against a path the config named is a probe, and it was the expensive one.**
+`~/.claude.json` carries a `projects` entry per directory Claude has ever run in - 183 of them on the development host - and finding this session's project-scoped MCP table used to hand every key to `same_path`, which stats both sides.
+A key can name anywhere the user has ever worked, including a provider that is not there, and one of those 183 was a UNC path into a stopped WSL distro: the file's Claude inventory test cost **367.7 s**, all of it inside `discover_agent_environment`, which is what serves the tab.
+Two changes, in the order they apply.
+Entries carrying no server are dropped before any path is compared, because an empty table contributes no rows whatever its key says - 183 candidates down to 2 on that host.
+What remains is matched on the strings first (`same_path_lexically`), since a directory the CLI is running in matches its own recorded spelling, and only a sweep that matched nothing escalates to the filesystem - where `path_identity` bounds it per provider anyway.
+Same test after: **0.02 s**.
+
 Opening or refreshing the tab never:
 
 - starts or health-checks an MCP server;

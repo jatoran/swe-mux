@@ -77,6 +77,8 @@ A bounded passive inventory of one live CLI generation.
 **Not:** starting or health-checking MCP, importing plugins, or executing hooks.
 It never exposes hook command lines, arguments, inline shell bodies, environment, or credentials.
 It never writes provider state, and never claims configured items are loaded or connected.
+It also never stats a path that only a config file named: `_project_scoped_mcp_tables` drops `~/.claude.json` `projects` entries that carry no server before comparing any key, then matches what is left on the strings (`path_identity.same_path_lexically`), and only escalates to the filesystem when nothing matched.
+Sweeping all 183 of this host's keys through `same_path` cost 367.7 s inside one request, because one of them was a UNC path into a stopped WSL distro - a stat against a recorded network path is a probe, and this tab probes nothing.
 
 `resolve_mcp_servers` is the one seam that hands out an MCP entry's *raw* configuration, for the tool-catalog fetch alone.
 It comes from the same walk that decides which row reads `shadowed`, so the configuration a fetch dials is always the one the CLI would use, and it never travels inside an API response.

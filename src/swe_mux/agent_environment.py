@@ -37,7 +37,7 @@ from .adapters.claude import claude_data_home
 from .adapters.codex import codex_data_home
 from .agent_skills import discover_skills, parse_frontmatter
 from .harness import Backend, descriptor, is_agent_harness, require_backend
-from .path_identity import same_path
+from .path_identity import same_path, same_path_lexically
 
 Scope = Literal["built_in", "managed", "user", "project", "local", "session", "unknown"]
 
@@ -992,6 +992,46 @@ class McpServerConfig:
     config: dict[str, Any]
 
 
+def _project_scoped_mcp_tables(
+    projects: Mapping[str, Any], cwd: Path
+) -> list[tuple[dict[str, Any], Scope]]:
+    """The project-scoped MCP tables `~/.claude.json` records for this directory.
+
+    Claude keeps one entry per directory it has ever been run in, so on a working
+    machine that map is long - 183 entries on the host this was measured on. Two
+    things follow, and this is a named function rather than a filter expression
+    because the second one is not obvious.
+
+    **Entries carrying no server are dropped before any path is compared.** An
+    empty table contributes no rows whatever its key says, so comparing that key
+    is pure cost. On the measured host it takes the paths this has to consider
+    from 183 to 2.
+
+    **What is left is compared lexically first, and only escalated if nothing
+    matched.** `same_path` is exact because it can ask the filesystem, but these
+    keys are recorded strings naming anywhere the user has ever worked: a drive
+    that is no longer attached, a share on a machine that is off, a WSL distro
+    that is stopped. Asking the filesystem about one of those blocks - a single
+    `os.path.exists` on `//wsl.localhost/<distro>` with the distro stopped was
+    measured at 80.1 seconds, inside a request. A directory the CLI is running in
+    matches its own recorded spelling, so the exact comparison is the fallback
+    rather than the rule, and the fallback is bounded per provider by
+    `path_identity` regardless. Opening this tab is documented to probe nothing;
+    a stat against a network path is a probe.
+    """
+    carrying_servers = [
+        (str(path), value["mcpServers"])
+        for path, value in projects.items()
+        if isinstance(value, dict)
+        and isinstance(value.get("mcpServers"), dict)
+        and value["mcpServers"]
+    ]
+    matched = [table for path, table in carrying_servers if same_path_lexically(path, cwd)]
+    if not matched:
+        matched = [table for path, table in carrying_servers if same_path(path, cwd)]
+    return [(table, "local") for table in matched]
+
+
 def _mcp_entries_from_data(
     backend: Backend,
     data: dict[str, Any],
@@ -1021,13 +1061,7 @@ def _mcp_entries_from_data(
     if isinstance(direct, dict):
         tables.append((direct, source.scope))
     if backend == "claude" and isinstance(data.get("projects"), dict):
-        for project_path, project_data in data["projects"].items():
-            matches = same_path(project_path, cwd)
-            project_servers = (
-                project_data.get("mcpServers") if isinstance(project_data, dict) else None
-            )
-            if matches and isinstance(project_servers, dict):
-                tables.append((project_servers, "local"))
+        tables.extend(_project_scoped_mcp_tables(data["projects"], cwd))
     entries: list[tuple[dict[str, Any], McpServerConfig]] = []
     for table, scope in tables:
         for server_name, raw in table.items():
