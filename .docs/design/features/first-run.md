@@ -48,6 +48,25 @@ inventing a mode system.
   restart-scoped keys inside the terminal tier apply at the next daemon reload, and the
   first-run panel says so in place rather than restarting anything itself.
 
+## Density follows the tier
+
+The tier's one sanctioned frontend reader is `defaultHiddenDrawerTabs`
+(`frontend/src/drawerVisibility.ts`): a pure-terminal install's drawer defaults to five
+tabs (Actions, Files, Notes, Git, Alerts) instead of ten, putting away the agent-layer
+machinery the tier switched off.
+Presentation, never capability - the tabs stay one context-menu toggle away - and the same
+consultation rule as the shipped default: only a device with no stored visibility choice
+derives from the tier, and a stored choice (including the empty set) is never overwritten.
+A device with no stored choice re-derives on every config arrival, so re-applying a tier
+from Settings changes the drawer live.
+
+The left sidebar is deliberately not tier-shaped: its collapsed rail is five fixed
+controls (projects, resources, Run, configurator, menu), which is not the overwhelm the
+usability audit measured - the eleven-tab drawer is
+(`development/USABILITY_AUDIT_2026-08-20.md`, scale table and finding 11).
+The Run menu's advanced sections are the audit's finding 9 and stay a separate design
+decision rather than a tier side effect.
+
 ## Sequencing
 
 `firstRunSurface()` (`frontend/src/tutorial.ts`) still arbitrates: the harness panel leads,

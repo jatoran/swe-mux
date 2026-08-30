@@ -88,7 +88,8 @@ import {
 } from './sidebarResize'
 import { normalizeDrawerTabOrder } from './drawerTabOrder'
 import {
-  DRAWER_HIDDEN_KEY, canHideDrawerTab, drawerTabVisible, parseHiddenDrawerTabs,
+  DRAWER_HIDDEN_KEY, canHideDrawerTab, defaultHiddenDrawerTabs, drawerTabVisible, parseHiddenDrawerTabs,
+  type ExperienceTierChoice,
   serializeHiddenDrawerTabs, withDrawerTabHidden,
 } from './drawerVisibility'
 import {
@@ -1774,6 +1775,12 @@ export function App() {
     // not reappear on another. False (or a daemon predating the flag) shows it once.
     setHarnessSetupNeeded(config.harness_setup_complete===false)
     setExperienceTierUnchosen(config.experience_tier==='')
+    // Density follows the tier, but only until the user chooses: a device with
+    // no stored visibility set re-derives its default from the tier on every
+    // config arrival (so applying a tier in Settings takes effect live), while
+    // a stored choice - including the empty set - is never overwritten.
+    if(localStorage.getItem(DRAWER_HIDDEN_KEY)===null)
+      setHiddenDrawerTabs(defaultHiddenDrawerTabs((config.experience_tier??'') as ExperienceTierChoice))
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
     applyRailDensity(config)
