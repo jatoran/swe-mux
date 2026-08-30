@@ -840,11 +840,21 @@ Its rules, and what each one is defending:
   unsupported case rather than leaving a heading with nothing under it.
 - "Connect a phone" opens a modal (`ConnectPhone.tsx`) with a scannable QR of the connection URL
   (the `.ts.net` MagicDNS name, secure Serve address when up), a system-prerequisites checklist
-  (Git, Node, npm, Tailscale, each with a next step), and a security-posture line stating that any
-  tailnet device reaches the daemon with no login.
+  (Git, Node, npm, uv, Tailscale, each with a next step), and a security-posture line stating that
+  any tailnet device reaches the daemon with no login.
 - The Diagnostics tab holds the standing system-prerequisites checklist, the three
   session-preserving reload actions (`ui.reload`, `daemon.reload`, `app.redeploy`), and an Export
   diagnostics button that copies one bundle to the clipboard with a selectable textarea fallback.
+  Each prerequisite row renders **three** states, not two. `present` (green), `off_path` (amber -
+  found at a known install location, so the remedy names PATH rather than an install command), and
+  `missing` (red, with the install command and download link). Collapsing the middle state is what
+  told a user with Git and a connected Tailscale to `winget install` both of them.
+  Every row carries a path override, and the section has a Re-scan button. Re-scan is a `POST`
+  rather than a re-fetch on purpose: the daemon inherited its PATH once at spawn, so a button that
+  only re-ran detection would return the same answer for a tool the user had just installed and
+  teach them the feature does not work. It reports which of the three things happened - PATH
+  changed and was re-read, PATH re-read and unchanged, or (off Windows) no out-of-band PATH exists
+  and a daemon restart is needed.
   The reload buttons dispatch the app's own command registry rather than re-implementing the
   paths, so a change to what "reload daemon" means reaches this panel for free, and a command the
   host does not offer disables its button instead of failing when pressed.

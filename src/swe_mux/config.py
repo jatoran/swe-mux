@@ -24,6 +24,7 @@ from .keybindings import is_command
 from .llm_endpoint import LLM_PROVIDERS, base_url_error
 from .llm_endpoint import catalog_url_error as llm_catalog_url_error
 from .llm_endpoint import model_error as llm_model_error
+from .prerequisites import PREREQUISITE_IDS
 
 
 def default_data_dir() -> Path:
@@ -678,6 +679,14 @@ class Config:
     # queue for its sessions. Load-bearing, so the UI must name that consequence.
     # Empty by default (everything instrumented). Restart-scoped like the MCP toggle.
     harness_instrument_enabled: dict[str, bool] = field(default_factory=dict)
+    # Absolute paths to prerequisite tools the user pointed swe-mux at, keyed by
+    # prerequisite id (`prerequisites.PREREQUISITE_IDS`). The escape hatch for
+    # every install layout detection cannot guess: it is consulted before PATH and
+    # before the well-known locations, and it is the only one of the three the user
+    # can act on directly. Empty by default; an entry that no longer exists on disk
+    # is ignored rather than reported missing, so a stale override degrades to
+    # ordinary detection instead of hiding a working install.
+    tool_paths: dict[str, str] = field(default_factory=dict)
     # The experience tier chosen at first run (`experience_tiers.py`): "terminal",
     # "deterministic", or "automations", or "" when never chosen - which is every
     # install that predates the chooser, deliberately: a tier records a choice, and
@@ -1945,6 +1954,30 @@ _PATTERN_RULES: tuple[_Pattern, ...] = (
 )
 
 
+def _tool_path_errors(config: Config) -> dict[str, str]:
+    """Validate `tool_paths`, returning the error map rather than mutating one.
+
+    Its own function so `_validate` gains no branches: that function is the one
+    the repository's C901 cap is measured against, and the rule is that nothing
+    may be written worse than the worst thing already there.
+
+    The value is a path, not a command, and is deliberately *not* checked for
+    existence here. A config file is portable and is loaded before the disk it
+    names is necessarily mounted; a missing target is handled where it is used
+    (`tool_locations.locate_tool` falls through to the ordinary search), which
+    degrades a stale override to plain detection instead of refusing the config.
+    """
+    tool_paths = config.tool_paths
+    if not isinstance(tool_paths, dict) or any(
+        not isinstance(name, str) or not isinstance(path, str) or not path.strip()
+        for name, path in tool_paths.items()
+    ):
+        return {"tool_paths": "must map prerequisite ids to non-empty path strings"}
+    if unknown := set(tool_paths) - set(PREREQUISITE_IDS):
+        return {"tool_paths": "unknown prerequisites: " + ", ".join(sorted(unknown))}
+    return {}
+
+
 def _validate(config: Config) -> None:
     errors: dict[str, str] = {}
     # Every spending cap validates through one implementation against the bounds
@@ -2064,6 +2097,10 @@ def _validate(config: Config) -> None:
             not isinstance(name, str) or not isinstance(flag, bool) for name, flag in value.items()
         ):
             errors[bool_map] = "must map harness names to booleans"
+    # Assigned from a helper rather than branched on inline: `_validate` is the
+    # function the C901 cap of 88 is *set* to, so a new `if`/`elif` pair here does
+    # not fit and must not be made to fit by raising the cap.
+    errors.update(_tool_path_errors(config))
     quests = config.quests_dismissed
     if not isinstance(quests, list) or any(entry not in QUEST_IDS for entry in quests):
         errors["quests_dismissed"] = "entries must be quest ids: " + ", ".join(QUEST_IDS)
