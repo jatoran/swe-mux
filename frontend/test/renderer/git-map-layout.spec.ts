@@ -106,6 +106,28 @@ test('the Git toolbar keeps its actions together under the shared segmented cont
   await expect(page.locator('.git-refresh')).toHaveAttribute('aria-label','Refresh')
 })
 
+test('the refresh glyph spins through the automatic read on arrival, not only a pressed one',async({page})=>{
+  await page.setViewportSize({width:360,height:640})
+  // The harness holds the worktrees read open until released, which is the delay the tab
+  // is stale-while-revalidate *for*: the cached reading paints at once and the measured
+  // one lands later. The tab used to look settled through all of it.
+  await page.goto('/git-map-harness.html?slow=1')
+  const refresh=page.locator('.git-refresh')
+  await expect(refresh).toHaveClass(/spinning/)
+  await expect(refresh).toHaveAttribute('aria-busy','true')
+  await expect(refresh).toBeDisabled()
+  // Rotating, rather than merely coloured: the glyph carries the animation so the button's
+  // own border does not turn with it.
+  const glyph=page.locator('.git-refresh .git-refresh-glyph')
+  expect(await glyph.evaluate(element=>getComputedStyle(element).animationName)).toBe('git-map-spin')
+  expect(await refresh.evaluate(element=>getComputedStyle(element).animationName)).toBe('none')
+
+  await page.evaluate(()=>(globalThis as unknown as {__releaseWorktrees:()=>void}).__releaseWorktrees())
+  await expect(refresh).not.toHaveClass(/spinning/)
+  await expect(refresh).toBeEnabled()
+  await expect(page.locator('.git-map-row').first()).toBeVisible()
+})
+
 test('Git Map gives ahead its own cool emphasis',async({page})=>{
   await page.setViewportSize({width:240,height:500})
   await page.goto('/git-map-harness.html')
