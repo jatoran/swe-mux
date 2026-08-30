@@ -638,6 +638,13 @@ Two timings cross the API boundary so a client can age a session without a secon
   Negative is the same rejection and reaches it the same way, rather than clamping to zero and publishing the clamp as a real measurement of no time.
   The field is run-scoped and cleared wherever observation identity resets, because a duration
   measured in a replaced conversation is not this conversation's.
+- `worked_ms` is the sum of every **accepted** completed root turn on this run.
+  It accumulates from the same measurement as `last_turn_ms`, at the same moment, behind the same plausibility gate, so a duration the record refused to report as "the last turn" is not quietly admitted into the total either; a figure assembled from rejected measurements is worse than one that runs short, because nothing on the row would say which it was.
+  It is **root-turn time and nothing else.** Work a harness dispatches to background agents ends the root turn and is in no turn duration at all (that is what `running_work_since` exists for), so a session that works that way under-reports rather than being estimated at.
+  A close the arbiter refused adds nothing, because it did not happen: the turn is still running and will close for real later, and counting the attempt would bill one stretch twice.
+  **Replay rebuilds the total rather than extending it.** `_start_transcript_observer` walks the transcript from byte 0 on every attach, so a session-preserving restart adopts a record carrying the total so far and then immediately re-reads the history behind it — adding the two would double the figure on every restart. `_reset_worked_for_replay` zeroes it at the start of each replay pass instead, which makes the transcript authoritative here the same way it is for every other fact recovered from it, and makes re-attaching idempotent. A session with no transcript observer never runs it and simply accumulates live from zero.
+  The open turn is deliberately **not** added on the record: a client that wants a live figure adds `now - turn_started_at` itself, rather than the daemon writing a field on every tick for a number that can be derived.
+  Run-scoped like the rest of the turn fields.
 - `last_human_prompt_at` is when a **person** last submitted a request here, and is deliberately a different question from `turn_started_at`.
   Plenty of turns are opened by something other than a person: mux delivering an agent-authored queued message, or a Stop hook injecting a teammate message the instant the previous turn ends.
   A session can therefore be minutes into a fresh turn and an hour past anything its operator said — measured live at a `3m22` turn on a session thirteen minutes into work asked for once.

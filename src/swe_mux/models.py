@@ -229,6 +229,22 @@ class SessionRecord:
     #: None until a turn has ended on this run. Reset with observation identity,
     #: because a duration from a replaced conversation is not this one's.
     last_turn_ms: float | None = None
+    #: Sum of every **accepted** completed root turn on this run, milliseconds.
+    #:
+    #: The cumulative counterpart of ``last_turn_ms``, and it accumulates from
+    #: exactly the same measurement, at the same moment, under the same
+    #: plausibility gate — so a duration this record refused to report as "the
+    #: last turn" is not quietly admitted here either. A total assembled from
+    #: rejected measurements is worse than one that runs slightly short, because
+    #: nothing about the row would say which it was.
+    #:
+    #: Deliberately root-turn time and nothing else. Work a harness dispatches to
+    #: background agents ends the root turn and is invisible to every turn
+    #: duration (see ``running_work_since``), so on a session that works that way
+    #: this under-reports rather than estimating. Reset with observation identity,
+    #: like the turn fields, because time spent by a replaced conversation is not
+    #: this one's.
+    worked_ms: float = 0.0
     #: Epoch seconds the current root turn began; None while no turn is open.
     #: This, not ``state_since``, is what "how long has it been working" means:
     #: a turn survives every tool call and every approval blip inside it, while

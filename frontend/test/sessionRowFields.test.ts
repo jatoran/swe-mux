@@ -419,6 +419,105 @@ test('context draws in exactly one place', () => {
   assert.deepEqual(bottomText(item, { ...base, context: 'off' }), [])
 })
 
+test('every context rendering bands the same reading the same way', () => {
+  const base = withBottom(defaultSessionRowConfig(), ['context'])
+  const readings: Array<[number, string]> = [
+    [0.05, 'calm'], [0.39, 'calm'], [0.4, 'warn'], [0.59, 'warn'],
+    [0.6, 'high'], [0.79, 'high'], [0.8, 'crit'], [1, 'crit'],
+  ]
+  for (const [pct, band] of readings) {
+    const item = session({ context_pct: pct, context_peak_pct: pct })
+    // The arc, the gauge token and the percent token are one scale drawn three
+    // ways. Asserting them together is the point: each used to carry its own
+    // comparison chain, and the failure that shape produces is two shades
+    // disagreeing at one boundary rather than anything being obviously broken.
+    assert.equal(sessionContextArc(item, { ...base, context: 'arc' })?.band, band, `arc at ${pct}`)
+    const gauge = buildSessionRowTokens(item, { ...base, context: 'gauge' }, context())
+    assert.equal(gauge.bottom.left.tokens[0]?.gauge?.band, band, `gauge at ${pct}`)
+    const percent = buildSessionRowTokens(item, { ...base, context: 'percent' }, context())
+    const tone = percent.bottom.left.tokens[0]?.tone ?? 'default'
+    assert.equal(tone, band === 'calm' ? 'default' : band, `percent at ${pct}`)
+  }
+})
+
+test('a moved threshold moves the colour and what counts as notable together', () => {
+  const quiet = { ...withBottom(defaultSessionRowConfig(), ['context'], 'notable'), context: 'percent' as const, contextWarn: 0.7, contextHigh: 0.85, contextCrit: 0.95 }
+  const item = session({ context_pct: 0.65, context_peak_pct: 0.65 })
+  // 65% is `high` on the shipped ramp and `calm` on this one, so it both loses
+  // its colour and stops earning a place on the row. The two must move together:
+  // a field that colours at one threshold and appears at another is the reader
+  // being told two different stories about the same number.
+  assert.equal(sessionContextArc(item, { ...quiet, context: 'arc' })?.band, 'calm')
+  assert.deepEqual(bottomText(item, quiet), [], 'calm is not notable')
+  assert.deepEqual(bottomText(item, { ...quiet, contextWarn: 0.3, contextHigh: 0.6, contextCrit: 0.9 }), ['65%'])
+})
+
+test('a crossed or absent ramp resolves upward instead of being rejected', () => {
+  const base = defaultSessionRowConfig()
+  assert.equal(base.contextWarn, 0.4)
+  assert.equal(base.contextHigh, 0.6)
+  assert.equal(base.contextCrit, 0.8)
+  // Dragging `warn` past its neighbours means "warn later", so the ones above it
+  // are pushed up rather than the edit being discarded.
+  const crossed = normalizeSessionRowConfig({ ...base, contextWarn: 0.9 })
+  assert.ok(crossed.contextWarn < crossed.contextHigh && crossed.contextHigh < crossed.contextCrit)
+  assert.equal(crossed.contextWarn, 0.9)
+  // Out of range and non-numeric both fall back rather than producing a band no
+  // reading can enter or leave.
+  const wild = normalizeSessionRowConfig({ ...base, contextWarn: -5, contextCrit: 'soon' })
+  assert.equal(wild.contextWarn, 0.01)
+  assert.equal(wild.contextCrit, base.contextCrit)
+  assert.equal(normalizeSessionRowConfig({ ...base, contextHigh: Number.NaN }).contextHigh, base.contextHigh)
+  // Each threshold's ceiling leaves room for the ones above it, so pinning the
+  // bottom one to the top of the range cannot push the others to 100% — a band
+  // no reading below full context can enter is the failure the clamp exists to
+  // prevent, and an unbounded push would reintroduce it from the other side.
+  const pinned = normalizeSessionRowConfig({ ...base, contextWarn: 1 })
+  assert.ok(
+    pinned.contextWarn < pinned.contextHigh
+      && pinned.contextHigh < pinned.contextCrit
+      && pinned.contextCrit < 1,
+    `a pinned ramp stays ordered and reachable: ${JSON.stringify(pinned)}`,
+  )
+})
+
+test('total working time sums completed turns and adds the one running now', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['worked'])
+  // Nothing measured is not a measurement of nothing: a session that has never
+  // completed a turn draws no token rather than `0s`.
+  assert.deepEqual(bottomText(session(), config), [])
+  assert.deepEqual(bottomText(session({ worked_ms: 0 }), config), [])
+  assert.deepEqual(bottomText(session({ worked_ms: 5 * 60_000 }), config), ['5m'])
+  // The mark is a token prefix rather than part of the value, so a total cannot
+  // be misread as the turn time it usually sits beside.
+  assert.equal(
+    buildSessionRowTokens(session({ worked_ms: 5 * 60_000 }), config, context())
+      .bottom.left.tokens[0]?.prefix,
+    'Σ',
+  )
+  // The record's sum only moves when a turn ends, so the open turn is added here
+  // or the figure freezes for the whole of the turn you are watching.
+  assert.deepEqual(
+    bottomText(session({ worked_ms: 5 * 60_000, turn_started_at: NOW - 120 }), config),
+    ['7m'],
+  )
+  // Interruption stops the open turn's contribution where it was asked for; what
+  // happens after that is teardown, not work.
+  assert.deepEqual(
+    bottomText(
+      session({ worked_ms: 5 * 60_000, turn_started_at: NOW - 600, interrupt_pending_at: NOW - 540 }),
+      config,
+    ),
+    ['6m'],
+  )
+})
+
+test('total working time is notable only past ten minutes', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['worked'], 'notable')
+  assert.deepEqual(bottomText(session({ worked_ms: 9 * 60_000 }), config), [])
+  assert.deepEqual(bottomText(session({ worked_ms: 10 * 60_000 }), config), ['10m'])
+})
+
 test('the queue depth comes from the fleet context, not the session', () => {
   const config = withBottom(defaultSessionRowConfig(), ['queue'], 'notable')
   assert.deepEqual(bottomText(session(), config), [])
@@ -916,9 +1015,12 @@ test('moving the shipped default repaints no device that has stored a layout', (
   // default change is not a migration.
   //
   // It works because a save writes the whole `SessionRowConfig`, so a stored blob
-  // has every key and `normalizeSessionRowConfig` never reaches its fallbacks.
-  // If a future field is ever added without that being true, this fails here
-  // rather than on somebody's sidebar.
+  // has every key it could have had and `normalizeSessionRowConfig` never reaches
+  // its fallbacks for one of them. A key added *after* the blob was written is the
+  // exception and is checked separately below: nobody can have declined a setting
+  // that did not exist, so it takes the shipped value the same way `voice` takes
+  // its placement — which is why this compares against the stored blob widened by
+  // exactly the new keys rather than against the blob alone.
   const stored = {
     version: 3,
     top: {
@@ -953,7 +1055,15 @@ test('moving the shipped default repaints no device that has stored a layout', (
     gitGlyphs: false,
     mobileFields: false,
   }
-  assert.deepEqual(normalizeSessionRowConfig(stored), stored)
+  const base = defaultSessionRowConfig()
+  assert.deepEqual(normalizeSessionRowConfig(stored), {
+    ...stored,
+    // The context ramp postdates this blob, so it arrives at the shipped values
+    // rather than being invented from the two-band scale that came before it.
+    contextWarn: base.contextWarn,
+    contextHigh: base.contextHigh,
+    contextCrit: base.contextCrit,
+  })
 })
 
 test('a version-2 blob gains only the flag it predates, never the new default', () => {

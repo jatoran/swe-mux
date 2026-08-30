@@ -1365,6 +1365,100 @@ async def test_instantaneous_turn_is_discarded_rather_than_reported() -> None:
     assert session.record.last_turn_ms == 31_000.0
 
 
+async def test_working_time_accumulates_only_the_turns_that_were_accepted() -> None:
+    """The total is a sum of the same measurements the row reports one at a time.
+
+    Accumulating anywhere other than beside ``last_turn_ms`` is how a total comes
+    to include the nine-hour boundary artifact the row itself refuses to show —
+    and a figure assembled from rejected measurements is worse than one that runs
+    short, because nothing on the row says which it is.
+    """
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    assert session.record.worked_ms == 0.0
+
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(30.0)
+    await _finish_root_turn(session, events, source="transcript")
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(12.0)
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.worked_ms == 42_000.0
+
+    # A harness-reported duration is what `last_turn_ms` takes, so it is what the
+    # sum takes too.
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(90.0)
+    await _finish_root_turn(session, events, source="transcript", duration_ms=8_000)
+    assert session.record.worked_ms == 50_000.0
+
+    # Both ends of the plausibility gate contribute nothing, exactly as they
+    # contribute nothing to `last_turn_ms`.
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(9 * 60 * 60)
+    await _finish_root_turn(session, events, source="transcript")
+    await _begin_root_turn(session, events, source="transcript")
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.worked_ms == 50_000.0
+
+
+async def test_a_refused_close_adds_nothing_to_the_working_total() -> None:
+    """A close the arbiter refused did not happen, so it may not be counted.
+
+    The turn is still running afterwards and will close for real later; counting
+    the refused attempt would bill the same stretch twice.
+    """
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(240.0)
+
+    session.transition = lambda *args, **kwargs: False
+    await _finish_root_turn(session, events, source="hook", evidence="hook:Stop")
+    assert session.record.worked_ms == 0.0
+
+
+async def test_replay_rebuilds_the_working_total_rather_than_extending_it() -> None:
+    """Re-reading a transcript from byte 0 must not double the figure it derives.
+
+    This is the failure mode the accumulator would otherwise have: a
+    session-preserving restart adopts a record carrying the total so far and then
+    immediately re-walks the history behind it, so every restart would double the
+    number. The reset makes each replay pass authoritative instead.
+    """
+    from swe_mux.observation import (
+        _begin_root_turn,
+        _finish_root_turn,
+        _reset_worked_for_replay,
+    )
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(60.0)
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.worked_ms == 60_000.0
+
+    # What the observer does when it attaches to a transcript that already has
+    # content: zero, then re-derive from the records themselves.
+    _reset_worked_for_replay(session)
+    assert session.record.worked_ms == 0.0
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(60.0)
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.worked_ms == 60_000.0
+
+
 async def test_a_refused_close_leaves_the_turn_running() -> None:
     """Closing a turn is the arbiter's call, so nothing may be dismantled first.
 
