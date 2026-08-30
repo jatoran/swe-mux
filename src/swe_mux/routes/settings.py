@@ -52,9 +52,18 @@ async def get_config(request: web.Request) -> web.Response:
 # 177.3 KiB (34%). The config the panel actually renders from is 12.7 KiB. So
 # the panel blocked on 40x the data it needed, for two tabs the operator usually
 # has not opened.
-PAINT_PARTS = ("keybindings", "profiles", "projects", "automation", "project_config")
+# Measured per part, 2026-08-30, after the first split (each figure includes the
+# ~14ms baseline of serializing `config`, which every response carries):
+#   keybindings      1.1ms   the Save path PUTs these back, so rendering without
+#                            them would let a Save overwrite the file with empty
+#                            defaults - it is the one cheap part that must stay
+#   projects        21.7ms
+#   automation      30.0ms   read only inside `activeTab==='automation'`
+#   profiles        42.0ms   read only inside `activeTab==='terminals'`; it stats
+#                            executables to detect shells, which is why it leads
+PAINT_PARTS = ("keybindings", "projects", "project_config")
 # Fetched by the tab that needs them, on the same endpoint.
-DEFERRED_PARTS = ("usage", "provider")
+DEFERRED_PARTS = ("usage", "provider", "profiles", "automation")
 BUNDLE_PARTS = PAINT_PARTS + DEFERRED_PARTS
 
 
