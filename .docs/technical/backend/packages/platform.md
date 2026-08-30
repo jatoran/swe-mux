@@ -131,6 +131,14 @@ The distro-side half of a native WSL agent.
 
 Its failure mode is silence by construction - a bridged agent that cannot reach the daemon runs perfectly and simply never reports - so any change must keep the reachability probe and the `reasons` it produces, and must never let "not checked" render as available.
 
+**`wsl_available()` is a registry read, not a PATH lookup, and both halves of that matter.**
+Windows 11 ships `C:\Windows\System32\wsl.exe` whether or not the subsystem is installed, so `shutil.which("wsl.exe")` is a *guaranteed* false positive there - which is what made a machine with no WSL pay a blocked-then-tree-killed 8s probe on every 30s status cycle, forever, for a feature it had not asked for (2026-08-30).
+Availability now also requires one of three registry markers (`Lxss` per-user, or the `LxssManager` / `WslService` service keys), so a host without the subsystem spawns nothing at all.
+The second half is `stdin`: `_run_wsl` passes `DEVNULL` rather than inheriting.
+The daemon spawns windowless (`background_creation_flags`), so an inherited handle to a console it does not own is what the stub blocked on - the same command with a console attached returns instantly.
+Both gates apply to `profiles._wsl_distros` too, which is the other place that spawns `wsl.exe`.
+The answer is cached and `clear_status_cache()` drops it, so installing WSL and pressing re-scan is visible without a restart.
+
 **Not:** the listener itself (`__main__`/`tailscale`), the firewall rule (`windows_firewall`), or the capability label (`profiles.derive_capabilities`, which is pure and takes the answer as an argument).
 
 ## Verifying a platform change

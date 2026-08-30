@@ -211,10 +211,25 @@ The phase breakdown and incident procedure live in `../../development/TERMINAL_I
 
 **Every paste into a readable composer records a paste trace, and it is the one diagnostic that carries content.**
 It exists for a transient field defect - after a paste the caret sits a few characters before the end of the pasted text - whose evidence (the clipboard, the composer, the cursor) is gone before anyone can look.
-The pane (`pasteTrace.ts`) recognizes a paste by its native event source or by the bracketed-paste wrapper alone, so rail-button and voice pastes are caught, and records one report per paste: a payload summary (codepoint count, wrapper presence, bounded head/tail excerpt, every non-printable-ASCII codepoint flagged by position) plus the composer region, its bounded row text, and the hardware cursor - captured before the paste and again 600 ms later, after the echo.
+The pane (`pasteTrace.ts`) records one report per paste: a payload summary (codepoint count, wrapper presence, bounded head/tail excerpt, every non-printable-ASCII codepoint flagged by position) plus the composer region, its bounded row text, and the hardware cursor - captured before the paste and again 600 ms later, after the echo.
 The content it carries is the point: an invisible U+200B in the payload, or a cursor cell that disagrees with the region's text end, is the diagnosis.
 That is a deliberate exception to the no-input-text rule above, so the report persists as its own `terminal_paste_trace` event type - never as a `terminal_input_diagnostic` phase - under a wider daemon clamp sized for its two snapshots, and is read back with `GET /api/events?session=<id>`.
 It fires only for a backend `composerRegionForBackend` can read, only on the live (non-replaying) input path, and inherits the `client_diagnostic` per-phase rate limit.
+
+**Every trace carries its provenance, because the payload alone cannot adjudicate a report that names a control.**
+A write the pane's own paste path produced declares its `origin` - `native` (Ctrl+V), `rail`, `insert`, `mobile`, `manual`, `attachment` - and each report also carries the physical `captureSource`, the `backend`, and `bracketedPasteMode`: what xterm believed about the child's mode while the bytes were built.
+The first field is what a "Ctrl+V behaves differently from the Paste button" report needs and what 109 stored traces could not answer, because every path arrives at `onData` as the same wrapped payload.
+The last is what separates a paste that went out wrong from one that went out right: `bracketed` says only what these bytes carried, never whether the child was going to honour it.
+An `origin` of `null` means the bytes did not come through `pasteIntoTerminal` at all, which is itself the finding.
+Recognition falls back to the old heuristic - the native event source, or the bracketed wrapper alone - only for those.
+
+**Exactly one report per paste, and it is the payload's.**
+A leading newline run lifted out of a Codex paste is sent ahead of it as key presses, and that write used to be traced as a paste of its own on the one path that reaches `onData` with a native capture source.
+Both reports land 600 ms later, microseconds apart, where the durable sink's one-per-second-per-phase window drops the second - so tracing the two-byte write did not add a useless report beside the real one, it replaced it.
+
+**A paste that reached xterm's own textarea handler is reported as `terminal_paste_unclaimed`.**
+The pane claims every terminal paste in the capture phase, where `stopPropagation` keeps it from ever reaching that element, so this listener firing means the claim was bypassed and the payload went out with whatever xterm's mirror decided.
+It is content-free - a length, the mode, and two booleans - so it is an ordinary `terminal_input_diagnostic` phase, and it is the only signal that can distinguish a paste this pane owned from one it did not: the trace fires from `onData`, downstream of both.
 
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
@@ -267,7 +282,13 @@ work, while a claim that changes owners must use the freshly registered viewport
   The action acknowledgement follows the carriage return, so a caller cannot clear its source draft before submission was actually attempted.
 - Native terminal text paste and the command-rail Paste action converge on the mounted pane's paste path.
   The pane takes ownership of the native clipboard event before xterm can turn unbracketed newlines into carriage returns.
-  Agent multiline text is manually bracketed when xterm's mode mirror is stale, while shell and single-line paste behavior stays unchanged.
+  Multi-line agent text is bracketed by the pane itself rather than by xterm, on the harness trait alone; shell and single-line paste behavior stays unchanged.
+- **xterm's mirror of the child's bracketed-paste mode decides nothing.**
+  It is a guess - xterm sets it only once it has *seen* the child enable the mode - and it goes stale in both directions: an agent that enabled it before the pane's last reset reads as off, and a mirror set by a child that has since been replaced, or by a CLI that has left its TUI, reads as on.
+  Both produce the same symptom, a paste the CLI submits a line at a time, and only the first direction was ever repaired.
+  So the mode is not an input to the decision (`pasteNeedsManualBracketing`, `attachmentNeedsManualBracketing`, both now single-purpose on the harness trait).
+  Nothing changes when the mirror was telling the truth: `term.paste` and `bracketedPaste` write identical bytes - the same `\n`→`\r` rewrite inside the same wrapper - so removing the condition can only change what happens when it was lying.
+  The mirror is still *read*, on both paste paths, and recorded in the trace as evidence.
 - Pointer-generated mouse reports and caret-steering keys (Codex, OMP, pi) are unicast regardless of broadcast membership.
   A pointer target belongs only to the pane in which it was chosen.
 
@@ -304,6 +325,11 @@ When that is an approval or a question, the text does not fill a composer - it *
 - **A keystroke paste is not an insert.**
   Ctrl+V, the rail Paste button, the mobile paste handler, and the manual-paste fallback all reach `pasteIntoTerminal` directly, so they get the leading-newline repair but not the refusal: someone pasting with the pane in front of them may legitimately be answering the prompt they can see.
   The refusal is for text pushed from elsewhere in the UI, where the operator may not be looking at the pane at all.
+- **A keystroke paste with the keyboard nowhere useful still lands.**
+  The pane's paste listener is on its own host, so Ctrl+V pressed while the focus sits on something focusable but not editable - a rail button just clicked, a session tab - is dispatched to that element instead: the pane never hears it, xterm never hears it, and the paste goes silently nowhere, which reads to the operator as the same defect as a paste that went out wrong.
+  A document-level listener answers exactly that case, routed by `currentInsertTarget` - the same last-focused-surface record every insert path uses - so at most one pane can answer it and a paste is never delivered to a terminal the operator was not last typing into.
+  Everything that would legitimately receive the paste itself is stepped around first: another terminal's own host, a real text field anywhere in the app, and any open dialog.
+  It is a fallback rather than a second paste path: it hands the event to the same handler, so bracketing, the leading-newline lift, attachments, and the trace are unchanged.
 
 ## Unsent composer text
 

@@ -296,6 +296,27 @@ The guarded assertions themselves did not move: a real turn still has to produce
   The identity file is rewritten on every spawn so it can never hold a superseded secret, and
   `session_env` only materializes a bare settings file when none exists — rewriting the pane's
   own would strip `--identity` back out of it.
+- **The hook `command` must run under whichever shell Claude Code picks, and swe-mux does not
+  get to choose.** Until 2026-08-30 the interpreter was written in the MSYS form
+  (`/d/PROJECTS/.../python.exe`), which is correct only where Claude Code dispatches hooks
+  through Git Bash. On a Windows machine without it the CLI uses PowerShell, which reads that
+  as a *command name*, and all eleven events die with `CommandNotFoundException` — taking
+  status detection, history, the prompt queue and approvals with them while the pane keeps
+  running and looking healthy. It shipped that way and was found by a tester reading the CLI's
+  stderr, not by anything in swe-mux.
+  Two rules follow, both in `adapters/claude.py`.
+  The path is written `D:/PROJECTS/.../python.exe` — drive letter, forward slashes — which is
+  the one spelling PowerShell, Bash and cmd all execute, verified on each.
+  And it reaches the shell **unquoted**, because at command position PowerShell parses a quoted
+  string as a string expression rather than a program, and there is no quoting style the two
+  shells share. That is why a space is *removed* (via the 8.3 short name) instead of escaped,
+  and why the command is assembled rather than `shlex.join`ed whole: `shlex` quotes `~`, so the
+  short path that exists to avoid quoting would come back quoted. The argument tail is still
+  `shlex.join`ed — those are arguments, where POSIX quoting is read as quoting by Bash and
+  passed through literally by PowerShell.
+  A space that survives is quoted and logged, and the residue is caught at runtime rather than
+  assumed away: `doctor.hook_ingress_silence` fails the report for any instrumented agent
+  session this daemon spawned that has never reported a hook.
 - Worktree startup policy belongs to adapters because trust artifacts and primary-checkout access differ by harness.
   The base adapter has no-op `preflight_worktree` and `worktree_spawn_args` hooks, so future harnesses opt in without provider branches in worktree orchestration.
   Claude preflight clones the canonical primary trust entry into `~/.claude.json`, carries `.claude/settings.local.json`, and contributes `--add-dir`.

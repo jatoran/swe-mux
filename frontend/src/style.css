@@ -304,6 +304,25 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
    so the per-provider control is a text button on the heading line and the empty state
    is the full-width row it replaces - the one screen a new install always sees. */
 .account-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:7px}.account-section-head h4{margin:0}.account-popover .account-signin{color:var(--green)}.account-popover .account-signin:disabled{opacity:.45;cursor:default}.account-popover button.account-empty-cta{width:100%;display:block;padding:9px 7px;color:var(--muted);text-align:left}.account-popover button.account-empty-cta strong{color:var(--green);font-weight:400}.account-popover button.account-empty-cta:hover{background:var(--panel2)}
+/* Live sessions spawned under an account, and the ones a switch left behind.
+   The count rides in the row's own `small` as a second track, so the quota columns
+   above it keep the `ch` geometry `.quota-row` depends on: its first two tracks are
+   fixed, and only the flexible one carrying the refresh age gives up the width. */
+.account-popover section>button small{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:0 6px}
+.account-popover .account-session-count{justify-self:end;padding:0 4px;border:1px solid var(--line);color:var(--muted);font-style:normal;white-space:nowrap}
+.account-popover section>button.active .account-session-count{border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green)}
+.account-popover .account-session-notice{margin:5px 2px 2px;padding:5px 7px;border-left:3px solid var(--amber,#e5c07b);background:#735f3722;color:var(--amber,#e5c07b);font-size:8px;line-height:1.5}
+/* The empty state of the sidebar's status block: an invitation, not a row of dashes
+   for a provider this machine has never signed in to. It is the expanded sidebar's
+   alone - the 40px rail and the phone's toolbar render nothing at all rather than a
+   call to action neither has room for. */
+.account-prompt{display:grid;gap:7px;padding:8px}
+.account-prompt>div>strong{display:block;color:var(--green);font-weight:400}
+.account-prompt>div>small{display:block;margin-top:3px;color:var(--muted);line-height:1.5}
+.account-prompt-actions{display:flex;flex-wrap:wrap;gap:5px}
+.account-prompt-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
+.account-prompt-actions button.primary{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
+.account-prompt-actions button:hover{background:var(--panel2)}
 /* A sign-in the daemon is running. It reports the same three states wherever it is
    drawn, because the state is the daemon's rather than this component's. */
 .account-login{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 7px;margin:5px 2px;padding:7px;border:1px solid var(--line);background:var(--panel2)}.account-login strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.account-login small{grid-column:1;color:var(--muted);font-size:8px;line-height:1.5;overflow-wrap:anywhere}.account-login button{grid-row:1/3;align-self:center;min-height:25px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}.account-login button:disabled{opacity:.45;cursor:not-allowed}.account-login.running{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}.account-login.running strong{color:var(--accent)}.account-login.succeeded{border-color:color-mix(in srgb,var(--green) 55%,var(--line))}.account-login.succeeded strong{color:var(--green)}.account-login.failed{border-color:color-mix(in srgb,var(--red) 60%,var(--line))}.account-login.failed strong{color:var(--red)}
@@ -1594,7 +1613,7 @@ body {
 .remote-connection{margin:8px 0}.remote-connection dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 10px;margin:0}.remote-connection dt{color:var(--muted);text-transform:uppercase;font-size:9px}.remote-state{font-weight:600}.remote-state-ok{color:var(--green)}.remote-state-warn{color:var(--amber)}.remote-connection code{color:var(--text);background:var(--panel2);padding:1px 5px;border-radius:4px}
 .remote-firewall{margin:10px 0;padding:10px;border:1px solid var(--line);background:var(--bg)}.remote-firewall strong{display:block;margin-bottom:4px}
 .remote-phone-dns{margin:10px 0;border:1px solid var(--line);background:var(--bg)}.remote-phone-dns summary{cursor:pointer;padding:8px 10px;color:var(--accent)}.remote-phone-dns[open] summary{border-bottom:1px solid var(--line)}.remote-phone-dns p{margin:8px 10px 4px;color:var(--muted)}.remote-phone-dns ol{margin:4px 10px 10px;padding-left:18px;display:grid;gap:5px;color:var(--text)}.remote-phone-dns code{color:var(--text);background:var(--panel2);padding:1px 5px;border-radius:4px}
-.settings-prerequisites{margin:10px 0;padding:10px;border:1px solid var(--line);background:var(--bg)}.settings-prerequisites ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:7px}.settings-prerequisites li{display:grid;gap:2px}.settings-prerequisites li>span{font-weight:600}.settings-prerequisites li.prereq-ok>span{color:var(--green)}.settings-prerequisites li.prereq-missing>span{color:var(--amber)}.settings-prerequisites small{color:var(--muted)}.settings-prerequisites code{color:var(--text);background:var(--panel2);padding:1px 5px;border-radius:4px}
+.settings-prerequisites{margin:10px 0;padding:10px;border:1px solid var(--line);background:var(--bg)}.settings-prerequisites ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:7px}.settings-prerequisites li{display:grid;gap:2px}.settings-prerequisites li>span{font-weight:600}.settings-prerequisites li.prereq-ok>span{color:var(--green)}.settings-prerequisites li.prereq-missing>span{color:var(--red)}.settings-prerequisites li.prereq-warn>span{color:var(--amber)}.settings-prerequisites li>label.check{margin-top:3px}.settings-prerequisites small{color:var(--muted)}.settings-prerequisites code{color:var(--text);background:var(--panel2);padding:1px 5px;border-radius:4px}
 .connect-phone-backdrop{position:fixed;inset:0;z-index:60;display:grid;place-items:center;background:#000a;padding:16px}.connect-phone{width:min(420px,100%);max-height:90vh;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}.connect-phone>header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--line)}.connect-phone-body{padding:12px;display:grid;gap:10px}.connect-phone-url{display:grid;justify-items:center;gap:8px;text-align:center}.remote-qr{width:220px;max-width:100%;padding:10px;background:#fff;border-radius:8px}.remote-qr svg{display:block;width:100%;height:auto}.connect-phone-note{color:var(--amber);font-size:11px}
 /* Explains what a setting will actually do, under the control it belongs to. Muted:
    it is read once while choosing, not scanned. */
@@ -3244,6 +3263,7 @@ body {
      so the only thing to buy is height. */
   .sidebar-status>.account-switcher .account-summary>button{min-height:46px}
   .sidebar-status .resource-usage-summary{min-height:46px}
+.sidebar-status .account-prompt-actions button{min-height:44px}
   .sidebar-footer{height:auto;min-height:54px;padding:5px 6px}
   .sidebar-footer button.menu-trigger{display:flex;min-height:44px;align-items:center;justify-content:center}
   .sidebar-footer .notes-shelf-trigger{height:44px;min-height:44px}
