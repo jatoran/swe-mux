@@ -92,6 +92,13 @@
   "source checkout, not built" rather than failing, and
   `test_doctor_local.py::test_every_category_the_daemon_report_emits_is_covered_or_declared_unchecked`
   asserts only that a category comes back either way.
+- Changing the first-run sequence (the experience tier chooser, its key sets, the harness
+  panel, or `firstRunSurface` arbitration): `design/features/first-run.md`,
+  `design/features/setting-links.md`, `design/interfaces.md`,
+  `src/swe_mux/experience_tiers.py`.
+  The rule the feature turns on: a tier sets defaults and never locks capability - no
+  backend module may branch on `experience_tier`, which is enforced by a test, and every
+  key a tier assigns is an ordinary config key with its own in-place switch.
 - Changing panes, tabs, splits, drag/drop, or the mobile workspace projection:
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:

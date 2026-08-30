@@ -672,6 +672,15 @@ class Config:
     # queue for its sessions. Load-bearing, so the UI must name that consequence.
     # Empty by default (everything instrumented). Restart-scoped like the MCP toggle.
     harness_instrument_enabled: dict[str, bool] = field(default_factory=dict)
+    # The experience tier chosen at first run (`experience_tiers.py`): "terminal",
+    # "deterministic", or "automations", or "" when never chosen - which is every
+    # install that predates the chooser, deliberately: a tier records a choice, and
+    # stamping one onto an existing install would claim a choice nobody made.
+    # The tier SETS defaults and never gates capability: applying one writes an
+    # absolute batch of ordinary config keys (each reversible on its own), and
+    # nothing anywhere may branch on this value to decide what a user can do. Its
+    # only standing readers are default-density surfaces and the Settings readout.
+    experience_tier: str = ""
     # Whether the first-run harness panel has been dismissed (enabled or skipped).
     # Machine-side rather than device-local, because harness enablement is machine
     # config: a first-run choice made on the desktop must not reappear on the phone.
@@ -1810,6 +1819,11 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
         "direct tailnet listening uses the detected Tailscale address automatically",
     ),
     _Choice("terminal_renderer", ("auto", "dom", "webgl"), "must be auto, dom, or webgl"),
+    _Choice(
+        "experience_tier",
+        ("", "terminal", "deterministic", "automations"),
+        "must be terminal, deterministic, automations, or empty (never chosen)",
+    ),
     _Choice("notes_default_open", ("dock", "popout"), "must be dock or popout"),
     _Choice("note_syntax", ("markdown", "plain"), "must be markdown or plain"),
     _Choice("note_tab_behavior", ("indent", "focus"), "must be indent or focus"),

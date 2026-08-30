@@ -689,6 +689,7 @@ export function App() {
   // and it has to be able to work that drawer the way it works the workspace sidebar.
   const [settingsNavOpen, setSettingsNavOpen] = useState(false)
   const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
+  const [experienceTierUnchosen, setExperienceTierUnchosen] = useState(false)
   // False until the first `/api/config` call settles, either way. Whether the first-run
   // harness panel is going to lead is a fact only the daemon holds, and it arrives after
   // the first paint - so the tour waits for it rather than painting a card that a dialog
@@ -1772,6 +1773,7 @@ export function App() {
     // First-run harness panel, gated daemon-side so a choice made on one device does
     // not reappear on another. False (or a daemon predating the flag) shows it once.
     setHarnessSetupNeeded(config.harness_setup_complete===false)
+    setExperienceTierUnchosen(config.experience_tier==='')
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
     applyRailDensity(config)
@@ -8237,6 +8239,7 @@ export function App() {
         conditions that have to agree. The harness panel leads and the tour waits; the
         reasoning is on the function. */}
     {firstRun === 'harness' && <HarnessSetup
+      tierNeeded={experienceTierUnchosen}
       onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}}
       // Handing off to Settings → Agents is a choice to configure by hand, so the tour must
       // not open on top of that. It is suppressed for this session only and NOT marked

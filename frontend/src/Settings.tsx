@@ -83,6 +83,7 @@ type Config = {
   harness_enabled:Record<string,boolean>
   harness_mcp_enabled:Record<string,boolean>
   harness_skill_enabled:Record<string,boolean>
+  experience_tier:''|'terminal'|'deterministic'|'automations'
   harness_instrument_enabled:Record<string,boolean>
   git_poll_seconds:number;worktree_root:string;git_swe_mux_prompt_enabled:boolean
   git_swe_mux_prompt_decisions:Record<string,'keep_visible'|'ignore_all'>
@@ -491,6 +492,28 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(page)setSelectedSubpages(current=>({...current,[activeTab]:page}))
   }
 
+  // The experience tier applies through its own endpoint (the key sets are
+  // policy, computed in the daemon), then adopts the returned config wholesale:
+  // a tier press is a deliberate batch reset of its own keys, so the draft is
+  // refreshed rather than left holding values the daemon just rewrote.
+  const [tierChoice, setTierChoice] = useState<''|'terminal'|'deterministic'|'automations'>('')
+  const [tierStatus, setTierStatus] = useState('')
+  const applyExperienceTier = async (): Promise<void> => {
+    if (!tierChoice) return
+    setTierStatus('')
+    try {
+      const next = await api<Config & {restart_required: string[]}>(
+        'POST', '/api/experience-tier', {tier: tierChoice},
+      )
+      adoptConfig(next)
+      setTierStatus(next.restart_required.length
+        ? 'Applied. Instrumentation changes take effect at the next daemon reload (sessions survive).'
+        : 'Applied.')
+    } catch (cause) {
+      setTierStatus(`Could not apply: ${cause instanceof Error ? cause.message : String(cause)}`)
+    }
+  }
+
   // One place that takes a config as newly authoritative. Three paths do it — the panel
   // opening, a save returning, and Restore defaults — and each used to spell the chain
   // out again. They had already drifted apart: open applied the theme and nothing else,
@@ -501,6 +524,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const adoptConfig = useCallback((next: Config) => {
     setConfig(next)
     setDraft(next)
+    setTierChoice(next.experience_tier)
     setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])))
     configureCustomTheme(next.custom_theme)
     applyTheme(next.theme)
@@ -1479,6 +1503,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <label>Startup directory<input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /></label>
             <label>Default backend<Dropdown value={draft.default_backend} onChange={value=>change('default_backend',value)} options={allBackendNames().map(name=>({value:name,label:name==='shell'?'Shell':harnessDisplayName(name)}))}/></label>
             <p>What a new session starts as, and where it starts, when nothing more specific applies. A Project's own default overrides both.</p>
+          </section>
+
+          <section data-setting="experience_tier"><h3>Experience tier</h3>
+            <p>The first-run choice of how much swe-mux does: pure terminal (nothing watching), deterministic (transcripts, status, the fleet surface; model-free), or automations (adds the scan timeline and model-backed observers). A tier is a batch of defaults, never a lock - every switch it touches stays individually editable.</p>
+            <label>Tier<Dropdown value={tierChoice} onChange={value=>setTierChoice(value as typeof tierChoice)} options={[...(draft.experience_tier===''?[{value:'',label:'Not chosen'}]:[]),{value:'terminal',label:'Pure terminal'},{value:'deterministic',label:'Deterministic'},{value:'automations',label:'Automations'}]}/></label>
+            <div class="settings-tutorial-reset"><div><p>Applying re-writes exactly the tier's own keys (instrumentation, MCP, fleet plumbing, automation masters), overwriting any hand edits to those keys; everything else is untouched.</p></div><button disabled={!tierChoice||tierChoice===draft.experience_tier} onClick={()=>void applyExperienceTier()}>Apply tier defaults</button></div>
+            {tierStatus&&<p class="profile-hint" role="status">{tierStatus}</p>}
           </section>
 
           <section><h3>Getting started tutorial</h3>
