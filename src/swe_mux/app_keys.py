@@ -238,6 +238,11 @@ AUTOMATION_TASKS: web.AppKey[set[asyncio.Task[Any]]] = web.AppKey("automation_ta
 ACTION_TIMEOUT_TASKS: web.AppKey[set[asyncio.Task[Any]]] = web.AppKey("action_timeout_tasks")
 #: One entry per worktree-removal purge in flight.
 GRAVEYARD_TASKS: web.AppKey[set[asyncio.Task[Any]]] = web.AppKey("graveyard_tasks")
+#: The pid the heartbeat named when this daemon started, or -1. Captured before
+#: `daemon_started` stamps our own pid over it, because the database-maintenance
+#: phase has to know whether the predecessor is still holding `mux.db` and a
+#: probe taken later reads this process.
+PREDECESSOR_PID: web.AppKey[int] = web.AppKey("predecessor_pid")
 STARTUP_DEFERRED_TASKS: web.AppKey[list[asyncio.Task[Any]]] = web.AppKey(
     "startup_deferred_tasks"
 )

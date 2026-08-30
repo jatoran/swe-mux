@@ -232,6 +232,13 @@ Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 LOOP_LAG_LOOP = "loop-lag"
 LIFECYCLE_HEARTBEAT_LOOP = "lifecycle-heartbeat"
 DATABASE_INTEGRITY_LOOP = "database-integrity-check"
+# How long the database-maintenance phase waits for a predecessor to release
+# `mux.db`. Far longer than the ordinary startup gate's 20s, because this only
+# runs when an operator asked for a compaction and is already expecting the
+# daemon to be unavailable - and because on the development host the
+# predecessor exceeded that 20s gate on every measured restart.
+MAINTENANCE_PREDECESSOR_WAIT_SECONDS = 180.0
+MAINTENANCE_WAIT_REPORT_SECONDS = 15.0
 MEDIA_CLEANUP_LOOP = "media-cleanup"
 RETENTION_LOOP = "store-retention"
 # Startup past this is logged as a warning. A daemon reattaching a large fleet
@@ -738,12 +745,21 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     that existed before this change and must not become one.
     """
     config: Config = app[keys.CONFIG]
+    # Read *before* `daemon_started`, which stamps our own pid over it. The
+    # database-maintenance phase needs to know whether the predecessor is still
+    # holding `mux.db`, and by the time that phase runs the heartbeat names this
+    # process - so a probe taken there reads self and proceeds into a locked
+    # file, which is exactly what happened twice against the real database.
+    predecessor_pid = heartbeat_pid(config.data_dir)
+    if predecessor_pid == os.getpid():
+        predecessor_pid = -1
     # Death forensics first: report a predecessor that vanished without a clean
     # shutdown while this daemon is still barely started, then keep our own
     # heartbeat fresh so the next daemon can do the same for us. The verdict
     # also decides how hard the database-integrity phase must look: an
     # unplanned death forces the full probe.
     predecessor_died_uncleanly = daemon_started(config.data_dir, log)
+    app[keys.PREDECESSOR_PID] = predecessor_pid
     timeline = StartupTimeline(log, ledger=lambda message: ledger(config.data_dir, message))
     app[keys.STARTUP] = timeline
     watchdog = asyncio.create_task(timeline.watchdog(), name="startup-watchdog")
@@ -837,7 +853,62 @@ async def _restore_durable_sessions(
         log.exception("could not sweep orphan recovery directories")
 
 
-async def _run_pending_maintenance(config: Config) -> None:
+async def _wait_for_exclusive_database(
+    config: Config, predecessor_pid: int, operations: tuple[str, ...]
+) -> bool:
+    """Wait for the predecessor to release `mux.db`. True when it is ours.
+
+    Separate from the ordinary startup gate on purpose, and much more patient
+    than it. `wait_for_predecessor_exit` bounds its wait at 20s because a wedged
+    predecessor must never stop a restart; that is the right trade for every
+    start except this one, where an operator has explicitly asked for work that
+    cannot run without exclusive ownership and is already expecting the daemon
+    to be unavailable. Measured on the development host: the predecessor exceeded
+    the 20s gate on both real `compact-db` runs, so without this the feature
+    simply never fires.
+
+    Reports while it waits, because this is the startup path and a silent minute
+    here is the failure mode the whole timeline exists to prevent.
+    """
+    if predecessor_pid <= 0 or not pid_running(predecessor_pid):
+        return True
+    log.warning(
+        "database maintenance (%s) is pending and the previous daemon (pid %d) still "
+        "holds %s; waiting up to %.0fs for it to exit",
+        ", ".join(operations),
+        predecessor_pid,
+        config.database_path,
+        MAINTENANCE_PREDECESSOR_WAIT_SECONDS,
+    )
+    deadline = time.monotonic() + MAINTENANCE_PREDECESSOR_WAIT_SECONDS
+    reported = time.monotonic()
+    while time.monotonic() < deadline:
+        if not pid_running(predecessor_pid):
+            log.warning(
+                "previous daemon pid %d has exited; this start owns the database",
+                predecessor_pid,
+            )
+            return True
+        if time.monotonic() - reported >= MAINTENANCE_WAIT_REPORT_SECONDS:
+            reported = time.monotonic()
+            log.warning(
+                "still waiting for previous daemon pid %d to exit (%.0fs left)",
+                predecessor_pid,
+                deadline - time.monotonic(),
+            )
+        await asyncio.sleep(0.25)
+    log.warning(
+        "previous daemon pid %d did not exit within %.0fs, so this start cannot own %s. "
+        "The maintenance request is kept and the next start will try again; if this "
+        "repeats, stop swe-mux fully once and start it again.",
+        predecessor_pid,
+        MAINTENANCE_PREDECESSOR_WAIT_SECONDS,
+        config.database_path,
+    )
+    return False
+
+
+async def _run_pending_maintenance(config: Config, predecessor_pid: int = -1) -> None:
     """Honour a `mux compact-db` request, if one is pending.
 
     Returns immediately when there is none, which is every ordinary start - the
@@ -867,19 +938,17 @@ async def _run_pending_maintenance(config: Config) -> None:
     request = read_maintenance_request(config.data_dir)
     if request is None:
         return
-    # Cheap and first: if the predecessor is still running, this process is not
-    # the only holder and `VACUUM` cannot succeed. Skipping costs a pid probe and
-    # keeps the request; attempting would burn a 3 GB backup copy to fail.
-    predecessor = heartbeat_pid(config.data_dir)
-    if predecessor > 0 and predecessor != os.getpid() and pid_running(predecessor):
-        log.warning(
-            "database maintenance (%s) is pending, but the previous daemon (pid %d) is "
-            "still running, so this start does not own %s exclusively. The request is "
-            "kept and the next start will try again.",
-            ", ".join(request.operations),
-            predecessor,
-            config.database_path,
-        )
+    # The predecessor must be gone before this can work, and on this machine it
+    # routinely is not: `wait_for_predecessor_exit` gives up at 20s and starts
+    # anyway (correctly - a wedged predecessor must not block a restart), and
+    # both real `compact-db` runs then found the file locked.
+    #
+    # So wait again, here, for much longer. That is affordable exactly because a
+    # compaction is pending: an operator asked for this and is already expecting
+    # the daemon to be unavailable, whereas an ordinary start is right to refuse
+    # to wait. A predecessor that never exits keeps the request rather than
+    # failing it.
+    if not await _wait_for_exclusive_database(config, predecessor_pid, request.operations):
         return
     log.warning(
         "database maintenance requested (%s); the daemon will not serve until it "
@@ -1076,7 +1145,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # which reaps every live session. Nothing schedules it and no route triggers
     # it.
     timeline.mark("database-maintenance")
-    await _run_pending_maintenance(config)
+    await _run_pending_maintenance(config, app.get(keys.PREDECESSOR_PID, -1))
     timeline.mark("database-integrity")
     preparation = await asyncio.to_thread(
         prepare_database,
