@@ -54,6 +54,31 @@ const known = (value: unknown): value is DrawerTabId =>
  */
 export const DEFAULT_HIDDEN_DRAWER_TABS: readonly DrawerTabId[] = ['processes']
 
+export type ExperienceTierChoice = '' | 'terminal' | 'deterministic' | 'automations'
+
+/**
+ * The default hidden set as a function of the chosen experience tier.
+ *
+ * This is the sanctioned frontend reader of `experience_tier`, and it chooses
+ * presentation only: a pure-terminal install should not draw eleven drawer tabs
+ * when six of them are machinery for the agent layer the tier switched off. The
+ * terminal default keeps Actions, Files, Notes, Git, and Alerts - the surfaces a
+ * terminal-first user still owns - and puts away Queue, Transcript, Activity,
+ * Agent, Schedule, and Processes. Alerts stays for the reason
+ * `DEFAULT_HIDDEN_DRAWER_TABS` records: it is the one tab with an unread badge.
+ *
+ * Same consultation rule as the base default: applied only while the device has
+ * no stored choice (`mux.drawer.hidden.v1` absent). The moment the user touches
+ * the visibility menu, their set - including the empty set - wins forever, so a
+ * tier change never overwrites a person's arrangement.
+ */
+export function defaultHiddenDrawerTabs(tier: ExperienceTierChoice): DrawerTabId[] {
+  if (tier === 'terminal') {
+    return ['queue', 'transcript', 'activity', 'agent', 'schedule', 'processes']
+  }
+  return [...DEFAULT_HIDDEN_DRAWER_TABS]
+}
+
 /** Coerce anything stored (or written by an older build) into a usable hidden set. */
 export function parseHiddenDrawerTabs(raw: string | null): DrawerTabId[] {
   if (raw === null) return [...DEFAULT_HIDDEN_DRAWER_TABS]

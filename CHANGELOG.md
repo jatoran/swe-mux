@@ -34,6 +34,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   never a lock: everything it turns off stays one switch away, the choice is re-applyable
   and reversible from Settings → General, and existing installs are never stamped with a
   choice they did not make.
+- **The side panel's default density follows the chosen tier.** A pure-terminal install
+  opens with five panel tabs (Actions, Files, Notes, Git, Alerts) instead of ten; the
+  agent-layer tabs stay one right-click away, exactly as before. Only a device that has
+  never touched the panel visibility menu follows the tier default - any choice you have
+  made, including showing everything, is never overwritten.
 - **Agents can be handed the skill automatically, per harness.** A new "Fleet access"
   control in Settings → Harnesses phrases the choice as capability - may agents in this
   harness's sessions see the fleet, and how do they learn they can - with MCP tools, the
