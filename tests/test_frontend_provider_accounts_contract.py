@@ -39,7 +39,11 @@ def test_provider_account_ui_surfaces_identity_verification_and_duplicates() -> 
     assert "'/api/provider-accounts/verify'" in source
     # Switching is unconditional: no force flag, no "switch anyway" confirmation.
     assert "force" not in source
-    assert "Sessions already running follow the switch" in source
+    # And it says so without claiming the switch reaches processes already running,
+    # which it does not: a CLI reads its credential file at startup, and Codex keeps
+    # the account it read. The count in the popover is what replaced the claim.
+    assert "It is never blocked and never confirmed, but it is not retroactive" in source
+    assert "Sessions already running follow the switch" not in source
     assert ".account-conflict{" in css
     assert ".account-identity.verified{" in css
 
@@ -92,7 +96,7 @@ def test_running_sign_in_is_daemon_state_that_every_client_sees() -> None:
     assert source.count("<LoginProgress ") == 2
     # A running sign-in resolves on human time, so it gets its own poll cadence.
     assert "const LOGIN_POLL_MS" in source
-    assert "awaitingLogin?LOGIN_POLL_MS:intervalMs" in source
+    assert "awaitingLogin?LOGIN_POLL_MS:idle?idleMs:intervalMs" in source
     for state in ("running", "succeeded", "failed"):
         assert f".account-login.{state}{{" in css
     # The command the tooltip names is the daemon's, built from the configured
@@ -119,7 +123,7 @@ def test_account_settings_states_policy_once_and_only_where_it_acts() -> None:
     # Reference, not instruction: folded, but still the same sentences.
     assert 'class="account-explainer"' in source
     assert "<summary>How switching works</summary>" in source
-    assert "Sessions already running follow the switch" in source
+    assert "keep spending the outgoing account until it is restarted" in source
     assert "startup never restores an older saved account" in source
     # Only drawn when it is not simply restating the row marked ◆ active below it.
     assert "current?.state!=='saved'&&<div class={`account-current" in source
@@ -262,3 +266,95 @@ def test_resource_popover_is_three_figures_with_one_ram_box() -> None:
     assert "OWNED RAM" not in resources
     assert "OWNED PROC" not in resources
     assert "grid-template-columns:repeat(auto-fit,minmax(72px,1fr))" in css
+
+
+def test_status_block_draws_only_providers_this_machine_has_a_credential_for() -> None:
+    """Two rows reporting "signed out" is a feature advertising itself.
+
+    `providers` is the inventory of what mux *can* manage and is two entries from
+    the first launch, so a machine that has never signed in to either drew two
+    sidebar rows, two `—` chips on the collapsed rail, and two more on the phone's
+    toolbar. Visibility is derived from whether a credential exists on the daemon
+    host rather than remembered, so signing in to one provider brings back that
+    provider's row and not the other's.
+    """
+    display = (ROOT / "frontend" / "src" / "providerAccountDisplay.ts").read_text(
+        encoding="utf-8"
+    )
+    source = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "export function visibleProviders" in display
+    # `unreadable` is a credential that exists and cannot be parsed: a problem to
+    # report, not an absence to hide. `signed_out` is the only absence.
+    assert "const PRESENT_AUTH_STATES=new Set(['saved','external','unreadable'])" in display
+    # All three surfaces read the same list, or "hidden" would mean one of them:
+    # the collapsed rail, the phone's toolbar, and the expanded sidebar's rows.
+    assert source.count("visible.map(provider=>") == 3
+    assert "{visible.map(provider=>{const account=selected(provider)" in source
+    # The full inventory still reaches the popover and Settings, which have to offer
+    # a sign-in for a provider that has no credential yet.
+    assert "const providers=status?.providers||[]" in source
+    # The condensed surfaces render nothing rather than a call to action neither has
+    # room for; the expanded sidebar carries the invitation for all three. Nothing to
+    # draw and nothing to invite with is nothing at all - an empty grid still occupies
+    # a row of the status block.
+    assert "const invite=!compact&&!!status&&!visible.length" in source
+    assert "if(!visible.length&&!invite&&!open)return null" in source
+    assert 'class="account-prompt"' in source
+    assert ".account-prompt{" in css
+    assert ".sidebar-status .account-prompt-actions button{min-height:44px}" in css
+
+
+def test_the_account_invitation_is_dismissed_machine_side_and_answers_itself() -> None:
+    """Hiding puts away the invitation, not the feature.
+
+    The status block is derived from whether a credential exists, so signing in
+    later brings the quota rows back whatever the flag says - which is why there is
+    deliberately no control to un-hide it. Machine-side for the reason the quest
+    dismissals are: the credentials it invites you to add are the daemon host's, so
+    putting it away at the desk must put it away on the phone too.
+    """
+    app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    source = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
+        encoding="utf-8"
+    )
+    config = (ROOT / "src" / "swe_mux" / "config.py").read_text(encoding="utf-8")
+
+    assert "provider_accounts_prompt_dismissed: bool = False" in config
+    assert "{ provider_accounts_prompt_dismissed: true }" in app
+    assert "config.provider_accounts_prompt_dismissed === true" in app
+    # Held while a first-run surface is up: the tour has an account step of its own,
+    # and two invitations to the same thing at once is the overwhelm first-run exists
+    # to remove.
+    assert "promptSuppressed={firstRun!=='none'}" in app
+    assert "!promptDismissed&&!promptSuppressed" in source
+
+
+def test_the_popover_counts_sessions_per_account_without_claiming_identity() -> None:
+    """A switch is not retroactive, so the count is what makes that visible.
+
+    Deliberately "spawned under", never "using": mux stamps what it had selected
+    when the process started, and cannot see a `/login` typed inside a pane.
+    """
+    display = (ROOT / "frontend" / "src" / "providerAccountDisplay.ts").read_text(
+        encoding="utf-8"
+    )
+    source = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "export function strandedSessions" in display
+    assert "spawnedSessionCount" in display
+    # Counted by the daemon and carried on the accounts payload, so the phone, the
+    # popover and Settings cannot disagree about the number.
+    assert "sessions?:AccountSessionCounts" in source
+    assert "spawnedSessionCount(status?.sessions,account.id)" in source
+    assert "strandedSessions(status,provider).map" in source
+    assert "not proof of what it authenticates as now" in source
+    assert "Switching is not retroactive" in display
+    assert ".account-popover .account-session-count{" in css
+    assert ".account-popover .account-session-notice{" in css
