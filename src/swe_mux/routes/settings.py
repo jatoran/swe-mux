@@ -118,6 +118,41 @@ async def patch_config(request: web.Request) -> web.Response:
     return response
 
 
+async def apply_experience_tier(request: web.Request) -> web.Response:
+    """Apply one experience tier's absolute key assignment (`experience_tiers.py`).
+
+    A dedicated route rather than a browser-computed PATCH because the key sets
+    are policy, and policy computed in the browser is a second copy that drifts.
+    The write itself goes through `update_config` exactly like a PATCH, so
+    validation, revision bumping, hot/restart classification, and the
+    `configuration_changed` event are all the ordinary ones.
+    """
+    from ..experience_tiers import TIERS, tier_changes
+
+    config: Config = request.app[keys.CONFIG]
+    body = await request.json()
+    tier = body.get("tier")
+    if tier not in TIERS:
+        return json_response(
+            {"error": "invalid configuration", "fields": {"tier": f"must be one of {TIERS}"}},
+            422,
+        )
+    hot, restart = update_config(config, tier_changes(tier))
+    apply_runtime_config(request.app, hot)
+    log.info(
+        "experience tier applied",
+        extra={"tier": tier, "restart_required": ",".join(sorted(restart))},
+    )
+    await request.app[keys.EVENTS].emit(
+        "configuration_changed", source="experience-tier", changed=sorted(hot | restart)
+    )
+    response = json_response(
+        {**config.public_dict(), "hot_applied": sorted(hot), "restart_required": sorted(restart)}
+    )
+    response.headers["ETag"] = f'"{config.revision}"'
+    return response
+
+
 def _revision_conflict(
     config: Config, request: web.Request, body_revision: Any
 ) -> web.Response | None:
@@ -455,6 +490,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/config", get_config),
     web.get("/api/settings/bundle", settings_bundle),
     web.patch("/api/config", patch_config),
+    web.post("/api/experience-tier", apply_experience_tier),
     web.post("/api/settings/apply", apply_settings),
     web.post("/api/config/reset", reset_config),
     web.get("/api/keybindings", get_keybindings),

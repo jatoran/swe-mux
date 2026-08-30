@@ -8,21 +8,61 @@ import {
 } from './harnessRegistry'
 
 /**
- * First-run harness panel.
+ * First-run panel: the experience tier, then the harness list.
  *
- * Runs detection, lists what it found with detected harnesses pre-ticked, offers a
- * separate "scan history" choice, and a skip that writes nothing but the
- * completion flag. First-run state is daemon-side (`harness_setup_complete`), not
- * device-local, because harness enablement is machine config: a choice made on the
- * desktop must not reappear on the phone.
+ * The tier step comes first because it frames everything after it, and it is
+ * phrased as three genuine products rather than a good/reduced ladder - pure
+ * terminal is the strongest claim swe-mux has against tools that re-render
+ * agents into their own UI, and a reader who concludes it is "the one without
+ * the good features" has been failed by the copy. A tier sets defaults through
+ * `POST /api/experience-tier` and locks nothing; every switch it touches stays
+ * individually editable in Settings.
+ *
+ * The harness step runs detection, lists what it found with detected harnesses
+ * pre-ticked, offers a separate "scan history" choice, and a skip that writes
+ * nothing but the completion flag. First-run state is daemon-side
+ * (`harness_setup_complete`, `experience_tier`), not device-local, because both
+ * are machine config: a choice made on the desktop must not reappear on the
+ * phone.
  *
  * `onConfigureMore` hands off to Settings -> Agents for per-harness executable,
  * arguments, and width editing, so this panel assembles the enable/scan parts
  * rather than duplicating that surface.
  */
+
+export type ExperienceTier = 'terminal' | 'deterministic' | 'automations'
+
+export const EXPERIENCE_TIERS: { id: ExperienceTier; title: string; blurb: string }[] = [
+  {
+    id: 'terminal',
+    title: 'Pure terminal',
+    blurb: 'Real terminals and nothing else. Agents run in genuine PTYs with no hooks, no '
+      + 'status detection, and no fleet plumbing - swe-mux never touches what runs inside. '
+      + 'The strongest choice when that guarantee is the point; everything else stays one '
+      + 'switch away, never removed.',
+  },
+  {
+    id: 'deterministic',
+    title: 'Deterministic',
+    blurb: 'Terminals plus the model-free layer: transcripts, live status detection, managed '
+      + 'harnesses, and the agent fleet surface. Nothing here calls a model or spends money.',
+  },
+  {
+    id: 'automations',
+    title: 'Automations',
+    blurb: 'Everything in Deterministic, plus the scan timeline and the model-backed '
+      + 'observers - the parts that spend tokens, under budgets you set and per-Project '
+      + 'switches you opt into.',
+  },
+]
+
 export function HarnessSetup(
-  { onDone, onConfigureMore }: { onDone: () => void; onConfigureMore: () => void },
+  { tierNeeded, onDone, onConfigureMore }:
+  { tierNeeded: boolean; onDone: () => void; onConfigureMore: () => void },
 ) {
+  const [step, setStep] = useState<'tier' | 'harnesses'>(tierNeeded ? 'tier' : 'harnesses')
+  const [tier, setTier] = useState<ExperienceTier>('deterministic')
+  const [tierRestart, setTierRestart] = useState(false)
   const [choices, setChoices] = useState<Record<string, boolean>>({})
   const [scanHistory, setScanHistory] = useState(true)
   const [ready, setReady] = useState(false)
@@ -43,6 +83,22 @@ export function HarnessSetup(
   }, [])
 
   const detected = allHarnessesIncludingDisabled()
+
+  const applyTier = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const applied = await api<{ restart_required: string[] }>(
+        'POST', '/api/experience-tier', { tier },
+      )
+      setTierRestart(applied.restart_required.length > 0)
+      setStep('harnesses')
+      setBusy(false)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+      setBusy(false)
+    }
+  }
 
   // Persist only choices that differ from detection, so the stored map stays the
   // three-state minimum: an installed harness left ticked follows detection (no
@@ -71,8 +127,9 @@ export function HarnessSetup(
     }
   }
 
-  // Skip writes nothing but the completion flag: no `harness_enabled` entries, so a
-  // harness installed later is still picked up by detection.
+  // Skip writes nothing but the completion flag: no `harness_enabled` entries (a
+  // harness installed later is still picked up by detection), and no tier - an
+  // unmade choice stays visible as unmade in Settings rather than being guessed.
   const skip = async () => {
     setBusy(true)
     setError('')
@@ -87,12 +144,39 @@ export function HarnessSetup(
 
   const anyDetected = detected.some(harness => harness.installed)
 
+  if (step === 'tier') {
+    return <div class="harness-setup-backdrop" role="dialog" aria-modal="true" aria-label="Choose how much swe-mux does">
+      <section class="harness-setup">
+        <header><strong>SET UP::EXPERIENCE</strong></header>
+        <div class="harness-setup-body">
+          <p>How much should swe-mux do? Each tier is a set of defaults, not a lock: everything a tier leaves off stays one switch away in Settings, and you can re-apply a different tier there any time.</p>
+          {EXPERIENCE_TIERS.map(entry => <label class="harness-setup-row check harness-setup-tier" key={entry.id}>
+            <span>
+              <strong>{entry.title}</strong>
+              <small>{entry.blurb}</small>
+            </span>
+            <input type="radio" name="experience-tier" checked={tier === entry.id} onChange={() => setTier(entry.id)} />
+          </label>)}
+          {error && <p class="harness-setup-error" role="alert">{error}</p>}
+        </div>
+        <footer>
+          <button type="button" class="link" disabled={busy} onClick={() => { void skip(); onConfigureMore() }}>Configure in Settings…</button>
+          <span class="harness-setup-spacer" />
+          <button type="button" disabled={busy} onClick={() => void skip()}>Skip setup</button>
+          <button type="button" class="primary" disabled={busy} onClick={() => void applyTier()}>Continue</button>
+        </footer>
+      </section>
+    </div>
+  }
+
   return <div class="harness-setup-backdrop" role="dialog" aria-modal="true" aria-label="Set up agents">
     <section class="harness-setup">
       <header><strong>SET UP::AGENTS</strong></header>
       <div class="harness-setup-body">
         <p>swe-mux found these agent CLIs on this machine. Enabled harnesses appear in the launchers; you can change any of this later under Settings → Agents.</p>
-        <p class="harness-setup-note">When mux launches an enabled agent it adds two things per session: its lifecycle hooks (so status, history, and the prompt queue work) and a read-only mux MCP server (so the agent can see the fleet). Both are per-session and removed when the session ends. You can turn either off per harness under Settings → Agents ("launch clean" runs an agent unobserved).</p>
+        {tierRestart
+          ? <p class="harness-setup-note">Your pure-terminal choice is saved and applies fully at the next daemon reload (menu → Reload daemon; sessions survive). Until then, sessions launch with the standard instrumentation.</p>
+          : <p class="harness-setup-note">When mux launches an enabled agent it adds two things per session: its lifecycle hooks (so status, history, and the prompt queue work) and a read-only mux MCP server (so the agent can see the fleet). Both are per-session and removed when the session ends. You can turn either off per harness under Settings → Agents ("launch clean" runs an agent unobserved).</p>}
         <p class="harness-setup-note">Next, after this: create a Project for a folder, sign in to each agent CLI so its account and history appear (mux reads Claude and Codex auth, so the account switcher is empty until you run each CLI's login), then start a session. Set up a phone under Settings → Remote.</p>
         {!ready&&<p class="harness-setup-loading">Detecting…</p>}
         {ready&&!detected.length&&<p>No harnesses are registered.</p>}

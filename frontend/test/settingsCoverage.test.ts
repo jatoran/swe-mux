@@ -69,6 +69,9 @@ const BESPOKE_CONTROLS: Record<string, string> = {
   // Edited through the per-harness Fleet access control, which writes the MCP
   // and skill maps together from one capability choice.
   harness_skill_enabled: "change('harness_skill_enabled',next)",
+  // Applied through its own endpoint because the key sets are daemon policy;
+  // the draft adopts the returned config rather than editing the field.
+  experience_tier: "'/api/experience-tier'",
   // Written straight through rather than into the draft: one switch with its own
   // explanation, whose neighbours act on state the daemon must already hold.
   wsl_bridge_enabled: '{wsl_bridge_enabled:enabled}',

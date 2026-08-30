@@ -26,6 +26,14 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   releases. Installing into the per-user skill roots, which reach every agent you run
   anywhere, prints the exact paths first and proceeds only under `--yes`; `--remove` takes
   back only files the installer can recognize as its own.
+- **First run now asks how much swe-mux should do.** Three experience tiers, phrased as
+  three genuine products: pure terminal (real terminals, nothing watching - no hooks, no
+  status detection, no fleet plumbing), deterministic (transcripts, live status, managed
+  harnesses, the agent fleet surface; model-free), and automations (adds the scan timeline
+  and the model-backed observers, under your budgets). A tier is a batch of defaults,
+  never a lock: everything it turns off stays one switch away, the choice is re-applyable
+  and reversible from Settings → General, and existing installs are never stamped with a
+  choice they did not make.
 - **Agents can be handed the skill automatically, per harness.** A new "Fleet access"
   control in Settings → Harnesses phrases the choice as capability - may agents in this
   harness's sessions see the fleet, and how do they learn they can - with MCP tools, the

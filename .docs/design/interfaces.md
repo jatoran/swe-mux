@@ -2705,6 +2705,9 @@ The single case that cannot be made atomic is the final rename failing after the
 One `configuration_changed` is emitted for the transaction, carrying `changed` and a `keybindings` flag, in place of the two the split pair used to raise.
 `PATCH /api/config` and `PUT /api/keybindings` remain, unchanged, for callers with only one half to write.
 
+`POST /api/experience-tier` takes `{tier}` (`terminal` | `deterministic` | `automations`) and applies that tier's absolute key assignment through the same `update_config` path, answering like a `PATCH /api/config` (`public_dict` plus `hot_applied` and `restart_required`).
+The key sets are daemon policy (`experience_tiers.py`), never computed in a client; an unknown tier is a 422 (`design/features/first-run.md`).
+
 `GET /api/automation/dashboard` includes recent observer-call diagnostics without response
 content: requested and resolved model, generation, provider, finish reason, HTTP status,
 retryability, token and cost usage, latency, and response content type and length.
