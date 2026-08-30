@@ -299,27 +299,40 @@ def test_spec_collects_the_lgpl_packages_as_replaceable_source() -> None:
         assert f'"{name}",' in spec, f"{name} must stay in the collect_all loop"
 
 
-def test_every_allowlisted_lgpl_package_has_exactly_one_relink_proof() -> None:
-    """Every allowlisted LGPL package is proven replaceable in exactly one place.
+def test_every_allowlisted_lgpl_package_has_a_relink_proof_per_copy() -> None:
+    """Every allowlisted LGPL package is proven replaceable, once per real copy.
 
-    There are two places since 2026-08-29 and the split is the point. A package
-    the bundle *ships* is proven by `build_desktop.RELINKABLE_LGPL`, against the
-    built tree. A package swe-mux does not ship but does pin, download and import
-    - `num2words`, after ROADMAP Phase 21 Workstream D moved the voice closure out
-    of the bundle - is proven by `voice_runtime.RELINKABLE_LGPL`, against the tree
-    that is unpacked.
+    The rule was "exactly one proof" while every package had exactly one
+    distribution channel, and ROADMAP Phase 24 made that the wrong unit: since
+    2026-08-30 `pystray` genuinely has two copies - the frozen bundle's
+    `_internal/pystray/` (proven by `build_desktop.RELINKABLE_LGPL` against the
+    built tree) and the acquired desktop closure's tree (proven by
+    `desktop_runtime.RELINKABLE_LGPL` against the tree that is unpacked) - and
+    each copy needs its own proof, because each is what some recipient actually
+    receives. `num2words` still has exactly one (the acquired voice tree;
+    `voice_runtime.RELINKABLE_LGPL`), and it must stay out of the bundle proof
+    because the bundle does not carry it.
 
-    The failure this prevents is an allowlist entry whose promise nothing checks:
-    THIRD-PARTY-NOTICES.md would still print the replacement instructions, and
-    nothing would notice they had become false. Overlap is a failure too - two
-    proofs for one package means one of them is describing a copy that is not
-    there.
+    The failures this prevents are unchanged: an allowlist entry whose promise
+    nothing checks, and a proof describing a copy that is not there -
+    `ACQUIRED_AT_FIRST_USE` remains exactly the packages the bundle does not
+    contain, so the notices never point a reader at an `_internal/` that lacks
+    the package.
     """
+    from swe_mux import desktop_runtime
+
     shipped = set(build_desktop.RELINKABLE_LGPL)
-    acquired = set(voice_runtime.RELINKABLE_LGPL)
-    assert shipped | acquired == set(license_audit.ALLOWLIST)
-    assert not shipped & acquired
-    assert acquired == set(license_audit.ACQUIRED_AT_FIRST_USE)
+    acquired_voice = set(voice_runtime.RELINKABLE_LGPL)
+    acquired_desktop = set(desktop_runtime.RELINKABLE_LGPL)
+    assert shipped | acquired_voice | acquired_desktop == set(license_audit.ALLOWLIST)
+    # The voice closure's packages are exactly the ones the bundle stopped
+    # carrying, so bundle-proof overlap there means a proof over a missing copy.
+    assert not shipped & acquired_voice
+    assert acquired_voice == set(license_audit.ACQUIRED_AT_FIRST_USE)
+    # The desktop closure's packages are the opposite case: the bundle still
+    # ships them (the frozen app has the extra), so each MUST also keep its
+    # bundle proof - a channel without a proof is the original failure.
+    assert acquired_desktop <= shipped
 
 
 def test_the_acquired_lgpl_package_is_not_in_the_bundle_manifest() -> None:

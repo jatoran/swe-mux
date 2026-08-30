@@ -208,6 +208,27 @@ cover a terminal or arrive on top of a turn; `role="status"` with
 `.ui-update-banner` strip beside it, which says this browser tab is behind the
 daemon it is already talking to and reloads itself.
 
+## Desktop integration (what a PyPI install can add later)
+
+```text
+GET  /api/desktop/integration
+POST /api/desktop/integration/shortcuts        {remove?: bool}
+POST /api/desktop/integration/shell/download
+```
+
+ROADMAP Phase 24 (`design/features/desktop-shell.md`, `routes/desktop_integration.py`).
+The status reports both halves from one answer: per-slot shortcut presence, and the desktop
+shell's importability beside its pinned-closure acquisition state (the same four-state
+vocabulary as every model store) plus the exact `extra_install_command` for the install-time
+route.
+Off Windows the status is `{supported: false}` and both POSTs answer 400 - the surface is
+absent, never failing.
+The shortcuts POST runs `shortcuts.apply_shortcuts` in a thread and returns its report;
+removal always addresses all three slots, including a run-at-login entry from an earlier run.
+The download POST starts the pinned acquisition idempotently and returns
+`{started, ...status}`; the tray still needs a desktop-app (re)start afterwards, which every
+surface states.
+
 ## Release install (the frozen-app updater)
 
 ```text

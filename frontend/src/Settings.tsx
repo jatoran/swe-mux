@@ -1512,6 +1512,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             {tierStatus&&<p class="profile-hint" role="status">{tierStatus}</p>}
           </section>
 
+          <DesktopIntegrationSection/>
+
           <section><h3>Getting started tutorial</h3>
             <div class="settings-tutorial-reset"><div><p>Replay the guided tour of Projects, provider accounts, tabs, pane splits, resources, and the main navigation.</p></div><button onClick={()=>requestClose('tutorial')}>Reset &amp; run tutorial</button></div>
           </section>
@@ -2618,6 +2620,77 @@ function assetFor(raw:Event,model:string):Record<string,unknown>|null{
   if(detail?.model!==model)return null
   const asset=detail.asset
   return asset&&typeof asset.status==='string'?asset:null
+}
+
+type DesktopIntegrationStatus = {
+  supported:boolean
+  shortcuts?:{slots:Record<string,{path:string;present:boolean}>}
+  shell?:{
+    importable:boolean;frozen:boolean;install_kind:string;extra_command:string
+    closure:{status:string;supported:boolean;source?:string|null;total_bytes:number;downloaded_bytes:number;current_file?:string|null;error?:string|null}
+  }
+}
+
+/**
+ * Desktop integration a PyPI install can turn on later (ROADMAP Phase 24):
+ * shortcuts (always solvable, merely unwired until now) and the desktop shell
+ * closure (tray + native window), acquired over the same pinned-wheel path as
+ * the speech libraries. Windows only, by absence: the daemon answers
+ * `supported:false` elsewhere and this renders nothing at all.
+ */
+function DesktopIntegrationSection(){
+  const [status,setStatus]=useState<DesktopIntegrationStatus|null>(null)
+  const [note,setNote]=useState('')
+  const [busy,setBusy]=useState(false)
+  const load=()=>{void api<DesktopIntegrationStatus>('GET','/api/desktop/integration').then(setStatus).catch(()=>setStatus(null))}
+  useEffect(()=>{load()},[])
+  const closure=status?.shell?.closure
+  const downloading=closure?.status==='downloading'
+  useEffect(()=>{
+    if(!downloading)return
+    const timer=setInterval(load,2000)
+    return()=>clearInterval(timer)
+  },[downloading])
+  if(!status?.supported)return null
+  const slots=status.shortcuts?.slots||{}
+  const present=Object.entries(slots).filter(([,slot])=>slot.present).map(([name])=>name.replace('_',' '))
+  const applyShortcuts=async(remove:boolean)=>{
+    setBusy(true);setNote('')
+    try{
+      const report=await api<{outcomes?:{slot:string;action:string}[];reason?:string}>('POST','/api/desktop/integration/shortcuts',{remove})
+      setNote(report.reason||((report.outcomes||[]).map(outcome=>`${outcome.slot.replace('_',' ')}: ${outcome.action}`).join(' · ')||'Nothing to do.'))
+      load()
+    }catch(cause){setNote(cause instanceof Error?cause.message:String(cause))}
+    finally{setBusy(false)}
+  }
+  const acquire=async()=>{
+    setBusy(true);setNote('')
+    try{await api('POST','/api/desktop/integration/shell/download');load()}
+    catch(cause){setNote(cause instanceof Error?cause.message:String(cause))}
+    finally{setBusy(false)}
+  }
+  const shell=status.shell
+  const megabytes=Math.max(1,Math.round((closure?.total_bytes||0)/1048576))
+  const pct=closure?.total_bytes?Math.min(100,Math.round((closure.downloaded_bytes||0)/closure.total_bytes*100)):0
+  return <section><h3>Desktop integration</h3>
+    <p>What the Windows installer sets up and a PyPI install can add later: Start Menu and Desktop shortcuts, and the desktop shell (tray icon + native window).</p>
+    <div class="settings-tutorial-reset"><div><p>Shortcuts{present.length?` · present: ${present.join(', ')}`:' · none present'}. Removal also takes back a run-at-login entry from an earlier install.</p></div>
+      <div><button disabled={busy} onClick={()=>void applyShortcuts(false)}>Install shortcuts</button><button disabled={busy} onClick={()=>void applyShortcuts(true)}>Remove</button></div>
+    </div>
+    {shell&&(shell.importable
+      ?<p class="profile-hint"><span class="state-dot idle"/> Desktop shell::available{shell.frozen?' · this is the desktop app':closure?.source==='downloaded'?' · acquired - launch (or restart) the swe-mux desktop app to get the tray and window':' · start it with the swe-mux command'}</p>
+      :<div class="kokoro-model-panel">
+        <p aria-live="polite"><span class={`state-dot ${downloading?'running':'stopped'}`}/> Desktop shell::{closure?.status||'not_downloaded'}
+          {downloading&&` · ${pct}% (${Math.round((closure?.downloaded_bytes||0)/1048576)}/${megabytes} MB)${closure?.current_file?` · ${closure.current_file}`:''}`}
+          {closure?.status==='error'&&closure.error&&` · ${closure.error}`}
+          {closure?.status==='not_downloaded'&&' · the tray and native window need it'}
+        </p>
+        {closure?.supported&&!downloading&&closure.status!=='ready'&&<button disabled={busy} onClick={()=>void acquire()}>{closure.status==='error'?'Retry download':`Download the desktop shell (~${megabytes} MB)`}</button>}
+        <p class="profile-hint">Verified against pinned hashes, like the speech libraries. Prefer the install-time route? <code>{shell.extra_command}</code></p>
+        {closure?.status==='ready'&&<p class="profile-hint">Acquired. Launch the swe-mux desktop app (or restart it) to get the tray and window - it starts inside that process, not this daemon.</p>}
+      </div>)}
+    {note&&<p class="profile-hint" role="status">{note}</p>}
+  </section>
 }
 
 function VoiceRuntimePanel({initial,action=true}:{initial:VoiceRuntimeInfo|null;action?:boolean}){

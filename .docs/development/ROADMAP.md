@@ -6254,25 +6254,51 @@ recoverable only by reinstalling.
 
 Workstream D built exactly the mechanism this needs and shipped it in 0.1.4: `voice_runtime`
 fetches pinned wheels, verifies them against pinned SHA-256s, unpacks into a data-dir site
-directory, and activates it on `sys.path`. The tray closure is a strictly easier case than the one
-already working - `pystray` and `pywebview` are pure Python over ctypes and COM, with no compiled
-extensions, no abi3 forwarder to collect, and no model to download.
+directory, and activates it on `sys.path`.
 
-So "enable the tray and the desktop window" becomes a press, on the acquisition path that already
-exists, rather than a reinstall.
+**Two premises above were corrected by measurement on 2026-08-30, before building.** "Pure
+Python over ctypes and COM, no compiled extensions" was wrong in detail: `pystray` pulls
+`pillow` and `pywebview` pulls `pythonnet → clr-loader → cffi`, and pillow and cffi are
+compiled, version-specific wheels. That it did not matter is a graph fact rather than luck
+once measured: both are base-reachable (pillow through previews, cffi through cryptography),
+so the *acquired* set - `closure(root + desktop) − closure(root)` - is seven pure-Python
+distributions totalling ~2.4 MB on Windows. And one of those seven, `proxy-tools`, publishes
+**no wheel at all** (sdist only, 2,978 bytes) while pywebview imports it unconditionally - so
+the pinned-wheel path could not deliver the closure as-is. The resolution, decided rather than
+worked around: the shared store (`wheel_closure.py`) may pin an sdist under one non-negotiable
+condition - **extract, never build**. Nothing from the archive is executed; the
+already-importable package source is copied out, and an sdist whose package would need a build
+step is refused loudly (`tests/test_wheel_closure.py` pins the refusals). Vendoring the 3 KB
+package was considered and rejected: it would create a notices obligation and a fork nobody
+updates, for bytes the pinned path can carry as-is.
+
+So "enable the tray and the desktop window" becomes a press, on the acquisition path that
+already exists, rather than a reinstall.
 
 ### Candidate work
 
-- [ ] A **Desktop integration** group in Settings carrying both controls: install or remove the
-  shortcut, and acquire or remove the tray closure.
-- [ ] Acquire `pystray` and `pywebview` through `voice_runtime`'s pinned-wheel path, or a sibling
-  of it, rather than a second downloader.
-- [ ] **Say plainly that the tray needs a restart.** The voice closure activates for a lazy
+- [x] A **Desktop integration** group in Settings carrying both controls: install or remove the
+  shortcut, and acquire the tray closure. (Shipped 2026-08-30, Settings → General;
+  `routes/desktop_integration.py`.)
+- [x] Acquire `pystray` and `pywebview` through `voice_runtime`'s pinned-wheel path, or a sibling
+  of it, rather than a second downloader. (The path was extracted into `wheel_closure.py` and
+  both closures now share one store; `desktop_runtime.py` is a spec, not a downloader.)
+- [x] **Say plainly that the tray needs a restart.** The voice closure activates for a lazy
   import; the tray is started inside `desktop.main`, so acquiring it mid-run almost certainly
   means "installed, restart to use". Stating that is better than a user discovering it.
-- [ ] **Windows only, by absence rather than by failure.** Both packages carry
+  (`desktop.main` activates the acquired tree before its imports, and the Settings copy says
+  "launch or restart the swe-mux desktop app" on both the ready state and after acquisition.)
+- [x] **Windows only, by absence rather than by failure.** Both packages carry
   `sys_platform == 'win32'` markers and there is no Linux desktop app by design, so on other
-  platforms the control should not be drawn at all.
+  platforms the control should not be drawn at all. (The status answers `supported: false` off
+  Windows and the section renders nothing; the store refuses before importability, so even an
+  environment with the extra installed cannot draw a pressable state there.)
+
+One deliberate deviation from "surfaced from the quest log only if the chosen tier suggests
+it": the quest log stays at its three entries. Its cap is the feature
+(`design/features/first-run.md`), the three existing entries out-rank a tray pointer for a
+first-run user, and the Settings group plus the improved `desktop.main` ImportError message
+carry discovery.
 
 ### Deliberately not in first run
 
@@ -6283,11 +6309,16 @@ the extra, so there is nothing to ask there either.
 
 ### Phase 24 exit criteria
 
-- [ ] A user who installed from PyPI without the `desktop` extra can obtain the tray, the native
-  window and a shortcut without reinstalling, and without being told a command to type.
-- [ ] Nothing is fetched without an explicit press, verified against a pinned hash, on the path
-  that already carries the speech closure rather than a second one.
-- [ ] The control is absent on platforms that have no desktop app, rather than present and
+- [x] A user who installed from PyPI without the `desktop` extra can obtain the tray, the native
+  window and a shortcut without reinstalling, and without being told a command to type - and
+  the interesting half of that sentence is now measured rather than assumed: the closure
+  includes one dependency that ships no wheel at all, which is exactly the case "a command to
+  type" (`pip install`) would have papered over and the pinned path had to face. The
+  install-time command is still *shown*, as the stated alternative, never as the only route.
+- [x] Nothing is fetched without an explicit press, verified against a pinned hash, on the path
+  that already carries the speech closure rather than a second one. (One store, two specs; the
+  sdist case is extract-never-build, enforced by refusal.)
+- [x] The control is absent on platforms that have no desktop app, rather than present and
   failing.
 
 ## Decision-gated capabilities

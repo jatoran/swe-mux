@@ -26,6 +26,16 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   releases. Installing into the per-user skill roots, which reach every agent you run
   anywhere, prints the exact paths first and proceeds only under `--yes`; `--remove` takes
   back only files the installer can recognize as its own.
+- **A PyPI install can now gain the tray, the native window, and shortcuts without
+  reinstalling.** Settings → General → Desktop integration installs or removes the Start
+  Menu and Desktop shortcuts, and acquires the desktop shell's dependencies on one press -
+  about 2.4 MB, verified against pinned hashes on the same path that fetches the speech
+  libraries, never anything without an explicit press. One of those dependencies publishes
+  no wheel at all, so the acquirer gained a pinned-sdist case with a strict rule: the
+  archive is extracted, never built - nothing from it is ever executed, and an sdist that
+  would need a build step is refused. The tray starts inside the desktop app, so after
+  acquiring you launch (or restart) `swe-mux` once; every surface says so. On platforms
+  with no desktop app the whole group is simply absent.
 - **First run now asks how much swe-mux should do.** Three experience tiers, phrased as
   three genuine products: pure terminal (real terminals, nothing watching - no hooks, no
   status detection, no fleet plumbing), deterministic (transcripts, live status, managed
