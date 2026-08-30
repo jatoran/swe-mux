@@ -884,10 +884,48 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     </div>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.2...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.3...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
       <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.1.3">0.1.3</a></h2>
+        <span class="when">2026-08-29</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.1.3">release notes</a>
+      </div>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">6 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">3 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">4 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 13 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>swe-mux now installs as <code>swemux</code> and <code>swemuxd</code>.</b> The old <code>mux</code> and <code>muxd</code> are unchanged aliases of the same two programs, so nothing you have already written needs updating. The new names exist because <code>mux</code> is shared with an unrelated tool, and on a machine carrying both, whichever installed last is the one your shell finds. This applies to installs from PyPI; the Windows installer ships no command-line program yet, and an operator who wants one alongside it can <code>uv tool install swe-mux</code>.</span></li>
+          <li><span><b>A frontend fix can now reach an installed app without replacing it.</b> <code>mux ui-overlay</code> packages the built frontend as a hash-verified overlay the daemon prefers over its bundled copy, at about 11 MiB against the ~370 MiB a full application update rewrites. The overlay is pinned twice - to the release and to a hash of the daemon's own route table - and an overlay that does not match the running backend is refused rather than served, because a frontend that disagrees with its daemon about which endpoints exist fails arbitrarily rather than legibly. Reverting to the bundled copy is one action.</span></li>
+          <li><span><b>Signing in to a provider account now starts from the account switcher.</b> It could previously switch between saved accounts but not add one, so an install with nothing saved showed "No saved accounts" beside a <code>manage...</code> button - the one screen a new install always reaches, and the one with no way forward on it. A sign-in also outlives the request that began it.</span></li>
+          <li><span><b>An agent can name the model for a session it asks to spawn.</b> Three of the five harnesses had declared model selection unmeasured; running their CLIs found all three accept a model flag, so this was being refused on a majority of harnesses because nobody had read <code>--help</code>. What the session actually started with is checked afterwards rather than assumed.</span></li>
+          <li><span><b>Agent authority can be set once for every Project.</b> Fifteen Projects previously meant fifteen editors to say one thing, with no way at all to say it about a Project whose own file already held a value. An install-wide default now reaches unset fields and an install-wide ceiling caps every Project, and may only narrow.</span></li>
+          <li><span><b>Agent instruction files can be linked into a session's context and unlinked again.</b></span></li>
+        </ul>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span><b>The desktop application is about 111 MiB instead of about 400 MiB.</b> The on-device speech closure - spaCy, CTranslate2, onnxruntime, misaki and their dependencies, roughly 277 MiB - is no longer shipped. Both speech features are off by default, so every install was previously downloading it, and letting the operating system scan it, for a capability it had not been asked to provide. It is now acquired on an explicit press, from pinned URLs verified against pinned SHA-256s, in one action that reports each part separately. A user who never enables voice saves about 289 MiB of download and disk; a user who does downloads about 193 MiB rather than 400 MiB.</span></li>
+          <li><span><b>An update now writes only the files that changed.</b> Measured across two real consecutive builds, 97.9% of files and 92.3% of bytes were already present and are reused in place rather than rewritten - which matters twice, because a file that is not rewritten also keeps the verdict the operating system's scanner already gave it. A whole-archive checksum is still verified before anything is staged, and an update that cannot reuse enough falls back to replacing the application outright.</span></li>
+          <li><span><b>A Project can trust its own agents' edits to the verification gate.</b> A branch that edited <code>.worktree-verify</code> refused its own land every time, and approving it was a per-digest act a human had to perform first - a routine edit here, so it stalled work on a review nobody was really performing. A gate edited by any other author still refuses and presents its bytes.</span></li>
+        </ul>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b>Voice could refuse to start on a page that had been open a long time, and say the daemon was at fault.</b> The voice status was fetched once when the page loaded, and a page that lost that one request never asked again - so every later attempt was refused with "daemon transcription is unavailable", a claim about a daemon it had never successfully reached and did not re-ask before refusing. The desktop application is what paid for this, because its page is opened once and kept for days across daemon restarts and updates, while a browser tab gets reloaded and quietly repairs itself. The status is now re-read whenever the event stream reconnects and again by the attempt itself before it refuses, and the reason is written where you can read it instead of appearing as a bare <code>error</code>.</span></li>
+          <li><span><b>The desktop application now decides its own microphone permission.</b> It previously inherited whatever the installed WebView2 runtime happened to do with a request nobody answered, for whatever address the embedded browser had been pointed at, and remembered that answer in its profile. The microphone is now granted to swe-mux's own address, denied to any other, and nothing is persisted.</span></li>
+          <li><span><b>A land stopped by a verification block now restarts when the block is cleared.</b> A refusal was terminal, so approving the gate's bytes fixed the <em>next</em> land and left the one that caused the block dead, to be asked for again by hand - or by an agent that had already been told its request was over.</span></li>
+          <li><span><b>An operator's own Land now shows the explanation the queue wrote for it.</b> The queue composed a bounded message naming what stopped it, in which checkout, against which trunk, and what to do next, and then dropped it whenever the requester was a person rather than an agent.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

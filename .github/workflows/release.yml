@@ -372,6 +372,35 @@ jobs:
           name: desktop
           path: dist/
 
+      # The body of the Release, written before it is created so a changelog that
+      # cannot produce one stops the job rather than publishing something else.
+      #
+      # This step exists because the alternative was silently wrong for three
+      # releases. `gh release create --generate-notes` produces GitHub's own
+      # commit list and compare link, so v0.1.3 published with a one-line body
+      # while `RELEASING.md` had been stating the contract as "a Release whose
+      # body is the new `CHANGELOG.md` section" the whole time. Nothing could
+      # notice: a generated body is a perfectly well-formed release body, just
+      # not this project's, and `CHANGELOG.md` is deliberately hand-written from
+      # what changed for a user rather than from commit subjects.
+      #
+      # **There is deliberately no fallback.** A release whose notes are wrong is
+      # worse than a release that stops and says why, because the notes are what
+      # a user reads and nothing downstream re-examines them. The script exits
+      # non-zero when the section is missing or empty, and this job ends there.
+      #
+      # The runner's own `python3` rather than uv, as in `update-manifest` below:
+      # the script and the two modules it imports are standard library only, so
+      # installing a toolchain here would buy nothing. `build` has already run
+      # `verify_release_unit.py` over this same file - the extractor imports that
+      # module's section parser rather than carrying a second one - so by the
+      # time this runs, the section has been proven present, non-empty, dated,
+      # and no longer under `## [Unreleased]`.
+      - name: Extract the release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 packaging/release_notes.py --tag "$TAG" --out "$RUNNER_TEMP/notes.md"
+
       # `gh` rather than a third-party release action: it ships on the runner, it
       # authenticates with the automatic token, and it is one fewer external
       # action with write access to this repository's releases.
@@ -380,6 +409,13 @@ jobs:
       # has no release yet, while a tag pushed after a draft release was prepared
       # by hand does, and both are normal. `--clobber` makes a re-run of a failed
       # publish idempotent instead of erroring on an already-uploaded asset.
+      #
+      # The notes are applied on **both** paths, not only on create. The draft
+      # path above is exactly the one where a body written by hand would survive
+      # into publication, which is the gap this closes rather than a case worth
+      # preserving: `RELEASING.md` makes the changelog section the body, so a
+      # draft's prose is a rehearsal of it and not a second source. It also makes
+      # a re-run of a failed job converge - the same input produces the same body.
       - name: Create or update the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -390,8 +426,10 @@ jobs:
           if printf '%s' "$VERSION" | grep -Eq '(a|b|rc)[0-9]+$'; then
             prerelease="--prerelease"
           fi
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --generate-notes $prerelease
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
           fi
           gh release upload "$TAG" dist/* --clobber
 

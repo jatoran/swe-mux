@@ -65,6 +65,18 @@ Until then, prefer the `grep` above to the table: it asks the tree rather than a
   section, dated with the day the tag is cut, and leave `## [Unreleased]` empty above it.
 - Update the link references at the foot of `CHANGELOG.md`: point `[Unreleased]` at
   `compare/vX.Y.Z...HEAD` and add a `[X.Y.Z]` release-tag link.
+  Both are load-bearing beyond the changelog page: the GitHub Release body's `**Full changelog**`
+  footer is built from the `[X.Y.Z]` reference, so a missing one fails the release job.
+- Regenerate the site and commit it in the same commit: `python site/tools/build.py`, then
+  `git add site/`.
+  `site/changelog/index.html` and its thirty siblings are **committed build output**, and
+  `pages.yml` deploys `site/` verbatim without ever running the generator - so a release commit
+  that edits `CHANGELOG.md` and not the page publishes a site that does not mention the version a
+  user just installed.
+  That is exactly what 0.1.3 did: `swemux.dev/changelog/` showed 0.1.2 for a day while 0.1.3 was
+  live on PyPI, on GitHub Releases and in `version.json`, and it was repaired by hand afterwards.
+  `.worktree-verify` and `ci.yml`'s `site` job both fail on a stale page now, so this step is what
+  keeps them green rather than a courtesy.
 - Confirm no `TODO(release)` placeholder survives in `pyproject.toml`, `CHANGELOG.md`, or
   `SECURITY.md`. The `OWNER` placeholder in every repository URL is resolved once, when the
   repository is published, and must not reach a published artifact.
@@ -148,8 +160,22 @@ Its contract:
   missing or stale frontend bundle, missing license metadata, or a failing gate.
 - Publish to **TestPyPI first**, then to PyPI, through PyPI Trusted Publishing (OIDC). No
   long-lived repository token exists, so there is nothing to rotate or leak.
-- Attach the frozen Windows desktop bundle to a GitHub Release whose body is the new
-  `CHANGELOG.md` section. **The bundle's filename is a contract, not a convenience**: the
+- Create a GitHub Release **whose body is the new `CHANGELOG.md` section**, extracted from the
+  tagged revision by `packaging/release_notes.py` and handed to `gh` as `--notes-file`.
+  It reads the section with the same parser `verify_release_unit.py` gated the build with, so the
+  check that refuses to publish an empty section and the extractor that writes the body cannot
+  disagree about where that section begins and ends.
+  One line is added: a `**Full changelog**` link to `CHANGELOG.md` at the tag.
+  **There is no fallback.** A tag whose section is missing or empty fails the job rather than
+  publishing something else, and the notes are applied whether the release is being created or
+  was prepared as a draft beforehand.
+  This paragraph described behaviour the workflow did not have until 2026-08-29: it used
+  `gh release create --generate-notes`, so v0.1.3 published with a body that was one line of
+  GitHub's own compare link. `tests/test_release_notes.py` now fails if `--generate-notes` comes
+  back.
+- Attach every published artifact to that Release: the wheel and sdist, the portable desktop
+  archive and its per-file hash manifest, the Windows installer, and `version.json`.
+  **The bundle's filename is a contract, not a convenience**: the
   in-app updater recognizes its own platform's artifact by name alone, so it must be built by
   `packaging/package_desktop_release.py` (`swe-mux-<version>-<platform>-<arch>.zip`, one
   top-level `swe-mux/` directory carrying the `bundle.json` the updater reads). An artifact
@@ -271,6 +297,31 @@ is whichever *finishes* first, not whichever holds newer content. `pages.yml` no
 on `workflow_run` of `release`, so the last deployment is the newest one. **After any release,
 confirm `https://swemux.dev/version.json` actually names the new version**, rather than assuming
 the job that wrote it was the job that won.
+
+## What 0.1.3 taught, 2026-08-29
+
+Both of these were repaired by hand after the release, and both had the same shape: a document
+described the behaviour the project wanted, nothing executed that description, and the gap was
+invisible because the wrong outcome is indistinguishable from the right one unless you go and look.
+
+**A release body assembled by GitHub is still a release body.**
+`release.yml` ran `gh release create --generate-notes`, so v0.1.3 published with a body that was
+literally the compare link, while section 4 above had been stating the contract as "a Release
+whose body is the new `CHANGELOG.md` section" since before 0.1.0.
+Nothing was red and nothing could be: generated notes are well-formed.
+The notes are now extracted by `packaging/release_notes.py` and passed as `--notes-file`, with no
+fallback, and `tests/test_release_notes.py` fails if `--generate-notes` returns.
+
+**A generated artifact that is committed is only as fresh as the commit that regenerated it.**
+The 0.1.3 release commit updated `CHANGELOG.md` and not `site/changelog/index.html`, which is
+generated from it, so `swemux.dev/changelog/` advertised 0.1.2 for a day.
+`check_changelog.py` passed throughout and was right to: it asks whether `CHANGELOG.md` carries a
+dated entry per released version, which it did.
+Nothing asked whether the artifact still matched its source, and CI ran no site checks at all.
+It does now (`ci.yml`'s `site` job), the landing gate does too
+(`tests/test_site_artifacts.py`), and section 1 makes the regenerate part of the release commit.
+Note what neither of them checks: a hand-edited `site/index.html`, which has no generator, and
+anything in `site/` that `build.py` does not write.
 
 ## What is not automated, on purpose
 

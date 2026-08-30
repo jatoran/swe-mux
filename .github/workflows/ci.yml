@@ -1,6 +1,6 @@
 # CI gate for swe-mux.
 #
-# Two jobs, because the two questions are different.
+# Three jobs, because the three questions are different.
 #
 # `verify` (windows-latest) is the full gate on the proving platform: ruff, mypy,
 # the whole pytest suite including the real-ConPTY integration tests and the
@@ -36,6 +36,12 @@
 # so the flag stays until a run is green. See
 # `.docs/development/CROSS_PLATFORM_FINDINGS.md` § What the first macOS run
 # actually found.
+#
+# `site` is the newest of the three and the narrowest: it asks whether the
+# published site still matches the repository it is generated from. It exists
+# because `site/changelog/index.html` is committed build output that nothing
+# regenerated or checked, so the site advertised 0.1.2 for a day after 0.1.3
+# shipped. See the comment on the job.
 name: ci
 
 on:
@@ -453,3 +459,83 @@ jobs:
           name: installer-cycle-log
           path: ${{ runner.temp }}/swe-mux-install.log
           if-no-files-found: ignore
+  # swemux.dev, which until 2026-08-29 no CI job looked at in any way.
+  #
+  # The gap that produced this job: `site/changelog/index.html` is **committed
+  # build output**, generated from `CHANGELOG.md` by `site/tools/build.py`, and
+  # `pages.yml` uploads `site/` verbatim without ever running that script. So the
+  # 0.1.3 release commit updated `CHANGELOG.md`, nobody regenerated the page, and
+  # `swemux.dev/changelog/` went on showing 0.1.2 while 0.1.3 was live on PyPI, on
+  # GitHub Releases and in `version.json`. Every gate that existed passed
+  # correctly the whole time, because nothing anywhere asked whether the generated
+  # artifact still matched the source it was generated from.
+  #
+  # **Deliberately not path-filtered**, unlike `pages.yml`. A `site/**` filter is
+  # precisely what would have missed this: the commit that staled the page touched
+  # `CHANGELOG.md` and not `site/`. The full source set behind these pages is
+  # `CHANGELOG.md`, `site/tools/docs_content.py`, `packaging/third_party_licenses.json`,
+  # `THIRD-PARTY-NOTICES.md` and `site/content/` - a list that would rot, against a
+  # job whose static half is seconds.
+  #
+  # Its own job rather than steps inside `verify` so a site failure reads as one,
+  # and on ubuntu because none of this is platform-shaped. It runs beside the
+  # 30-minute Windows job, so it adds nothing to the wall clock.
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `check_changelog.py` asks `git tag --list v*` for the versions that
+          # must have an entry, and the default checkout fetches no tags at all.
+          # Without this it would print its "could not list git tags" note, check
+          # the package version alone, and exit 0 - a pass earned by asking almost
+          # nothing, which is the same silent-narrowing failure as the one above.
+          # `--require-tags` below turns that state into a failure rather than
+          # trusting this line to keep working.
+          fetch-depth: 0
+
+      # No `uv sync`, no `setup-python`, no npm for the three steps below: the
+      # site tools import the standard library and each other and nothing else, so
+      # a toolchain install here would buy a slower job and no coverage.
+
+      # The staleness gate, and the one this job was written for. `--check`
+      # regenerates every page in memory and compares it to the committed bytes,
+      # which asks the working-tree-differs question without writing anything and
+      # without a `git diff` that CRLF could confuse. Its failure output names the
+      # stale pages and the two commands that fix them.
+      - name: Generated site pages are current
+        run: python3 site/tools/build.py --check
+
+      - name: Every released version has a changelog entry
+        run: python3 site/tools/check_changelog.py --require-tags
+
+      - name: Text tokens meet WCAG AA, on every page
+        run: python3 site/tools/contrast.py
+
+      # The heaviest of the four and the only one with a runner-shaped risk: it
+      # drives a real browser over all 31 pages at four widths in both themes.
+      # Everything it loads is `file://` or a stub it builds itself - it makes no
+      # network request, so it cannot go red because GitHub was slow.
+      #
+      # Playwright is not a dependency of the site; it is borrowed from the app's
+      # frontend workspace, which is why the install below is `--prefix frontend`.
+      # `--with-deps` because a hosted image is not guaranteed to carry Chromium's
+      # shared libraries and a missing one fails at launch rather than at install.
+      #
+      # Measured at 66s on the development host, plus about a minute of install.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend
+        run: npm --prefix frontend ci
+
+      - name: Install Playwright Chromium
+        run: npm --prefix frontend exec playwright install --with-deps chromium
+
+      - name: Site gate (overflow, links, assets, docs browser, theme)
+        run: node site/tools/check.mjs

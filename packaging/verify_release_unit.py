@@ -393,20 +393,23 @@ def changelog_sections(text: str) -> dict[str, str]:
     return sections
 
 
-def _has_content(body: str) -> bool:
-    """True when a section says anything.
+def notes_body(section: str) -> str:
+    """One section's markdown as it would be published, or `""` when it says nothing.
 
-    Link-reference lines do not count. They sit at the foot of the file, which
-    is inside the *last* section by any structural reading, so counting them
-    would make an empty final entry look populated - and an empty entry for the
-    version being released is precisely one of the states this checks for.
+    Link-reference lines do not count and are removed. They sit at the foot of
+    the file, which is inside the *last* section by any structural reading, so
+    keeping them would make an empty final entry look populated - and an empty
+    entry for the version being released is precisely one of the states
+    `_check_changelog_entry` looks for. It would also put four bare `[0.1.0]:`
+    lines at the end of that release's GitHub Release body.
+
+    This is the one place that decides what a section's publishable text is.
+    `packaging/release_notes.py` builds the GitHub Release body from it, so the
+    validator that refuses to publish an empty section and the extractor that
+    writes the notes cannot disagree about which bytes the section holds.
     """
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not stripped or _LINK_REFERENCE.match(stripped):
-            continue
-        return True
-    return False
+    kept = [line for line in section.splitlines() if not _LINK_REFERENCE.match(line.strip())]
+    return "\n".join(kept).strip()
 
 
 def changelog_links(text: str) -> dict[str, str]:
@@ -418,7 +421,7 @@ def changelog_links(text: str) -> dict[str, str]:
     return references
 
 
-def _section_for(sections: dict[str, str], version: str) -> str | None:
+def section_for(sections: dict[str, str], version: str) -> str | None:
     """The section whose label opens with the version, so a dated heading matches."""
     for label, body in sections.items():
         if label == version or label.startswith(f"{version} ") or label.startswith(f"{version}]"):
@@ -840,13 +843,13 @@ def _check_changelog_entry(tree: SourceTree, version: str) -> Check:
             "Release body and the site's changelog page are both drawn from this file.",
         )
     sections = changelog_sections(text)
-    body = _section_for(sections, version)
+    body = section_for(sections, version)
     if body is None:
         unreleased = sections.get(UNRELEASED, "")
         consequence = (
             f" The `## [{UNRELEASED}]` section is not empty, so the entries for this "
             "release are most likely still sitting in it."
-            if _has_content(unreleased)
+            if notes_body(unreleased)
             else ""
         )
         return Check(
@@ -859,7 +862,7 @@ def _check_changelog_entry(tree: SourceTree, version: str) -> Check:
             "The GitHub Release body is this section; without it the release publishes "
             "with no notes.",
         )
-    if not _has_content(body):
+    if not notes_body(body):
         return Check(
             name,
             False,
@@ -868,7 +871,7 @@ def _check_changelog_entry(tree: SourceTree, version: str) -> Check:
             f"(`RELEASING.md`, 'What is not automated'), so an empty `## [{version}]` "
             "section publishes a release whose notes are a heading.",
         )
-    if _has_content(sections.get(UNRELEASED, "")):
+    if notes_body(sections.get(UNRELEASED, "")):
         return Check(
             name,
             False,
