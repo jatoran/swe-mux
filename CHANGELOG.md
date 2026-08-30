@@ -34,6 +34,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   never a lock: everything it turns off stays one switch away, the choice is re-applyable
   and reversible from Settings → General, and existing installs are never stamped with a
   choice they did not make.
+- **Voice setup is now a guided walk.** Settings → Voice gains "Guided setup" (also in the
+  command palette and by voice: "set up voice"): pick the engine, watch the one-press
+  download's three progress lines, test the microphone where a permission prompt is
+  visible and explained, and hear one spoken sentence at the end. Every step drives the
+  same controls Settings already has, so nothing new can drift.
 - **The side panel's default density follows the chosen tier.** A pure-terminal install
   opens with five panel tabs (Actions, Files, Notes, Git, Alerts) instead of ten; the
   agent-layer tabs stay one right-click away, exactly as before. Only a device that has

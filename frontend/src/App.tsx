@@ -166,6 +166,7 @@ import type { ApprovalMode, DeliveryReadiness, Project, ProjectGroup, Session, L
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { HarnessSetup } from './HarnessSetup'
+import { VoiceSetup } from './VoiceSetup'
 import { ActionEditorModal } from './ActionEditorModal'
 import { GuidedTutorial } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, firstRunSurface, mobileTutorialChrome, resetTutorial, shouldStartTutorial, type TutorialStepId } from './tutorial'
@@ -691,6 +692,7 @@ export function App() {
   const [settingsNavOpen, setSettingsNavOpen] = useState(false)
   const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
   const [experienceTierUnchosen, setExperienceTierUnchosen] = useState(false)
+  const [voiceSetupOpen, setVoiceSetupOpen] = useState(false)
   // False until the first `/api/config` call settles, either way. Whether the first-run
   // harness panel is going to lead is a fact only the daemon holds, and it arrives after
   // the first paint - so the tour waits for it rather than painting a card that a dialog
@@ -5595,6 +5597,12 @@ export function App() {
     { id: 'tutorial.start', label: 'Take the guided tour', category: 'view', available: true, run: () => startTutorial(), voice:{
       phrases:['take the tour','start the tour','run the tutorial','show me around','start the guided tour'],
     } },
+    // The guided voice setup gets its own command for the same reason the tour
+    // did: a setup surface reachable only from inside Settings is invisible to
+    // the person who needs it most.
+    { id: 'voice.setup', label: 'Set up voice (guided)', category: 'voice', available: true, run: () => setVoiceSetupOpen(true), voice:{
+      phrases:['set up voice','voice setup','guided voice setup','configure voice'],
+    } },
     // One per topic, so a surface is reachable by its own name from the palette and by
     // voice - the same rule `drawerSegments.ts` enforces for a folded-in segment.
     ...HELP_TOPICS.map(topic => ({
@@ -8239,7 +8247,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so
         "exactly one of them, ever" is a property of the function rather than of two
@@ -8253,6 +8261,8 @@ export function App() {
       // complete: declining the harness panel is not declining the tour, and silently
       // consuming a first-run walk the user never saw is the more expensive mistake.
       onConfigureMore={()=>{setHarnessSetupNeeded(false); setTutorialOpen(false); openSettings('Agents')}}
+    />}
+    {voiceSetupOpen && <VoiceSetup onClose={()=>setVoiceSetupOpen(false)}
     />}
 
     {actionEditorOpen && <ActionEditorModal projectId={active?.project_id || activeProject?.id} onClose={() => setActionEditorOpen(false)} />}
