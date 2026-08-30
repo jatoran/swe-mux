@@ -12,7 +12,10 @@ leaves a standing request behind.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +29,14 @@ from swe_mux.db_maintenance import (
     MaintenanceRequest,
     clear_request,
     describe,
+    is_lock_error,
     maintenance_summary,
     read_request,
     request_path,
     run_maintenance,
     write_request,
 )
+from swe_mux.lifecycle import HEARTBEAT_NAME
 from swe_mux.server import _run_pending_maintenance
 from swe_mux.sqlite_store import VerificationControl
 
@@ -369,13 +374,78 @@ async def test_the_daemon_performs_and_consumes_a_request(tmp_path: Path, caplog
 
 
 @pytest.mark.asyncio
-async def test_a_failing_pass_still_consumes_the_request(tmp_path: Path) -> None:
+async def test_a_terminal_failure_consumes_the_request(tmp_path: Path) -> None:
     """A standing request would turn one bad start into every start being slow."""
     config = Config(data_dir=tmp_path)
     config.database_path.write_bytes(b"this is not a database")
     write_request(tmp_path, (OPERATION_VACUUM,))
     await _run_pending_maintenance(config)
     assert read_request(tmp_path) is None
+
+
+@pytest.mark.asyncio
+async def test_a_live_predecessor_keeps_the_request_instead_of_burning_it(
+    tmp_path: Path, caplog: Any
+) -> None:
+    """The bug this feature shipped with, asserted.
+
+    `wait_for_predecessor_exit` is bounded at 20s and a timeout is deliberately
+    a warning rather than a refusal, so the startup window is *not* guaranteed
+    exclusive. Against the real `mux.db` the gate gave up, this ran 74ms later,
+    and `VACUUM` failed with `database is locked` - and the first version then
+    consumed the request, so the operator's compaction silently never happened.
+    """
+    config = Config(data_dir=tmp_path)
+    _database_with_slack(config.database_path)
+    # A heartbeat naming a live process that is *not* this one. The parent is
+    # alive for the whole test and is not us, which is exactly the predecessor's
+    # shape; using `heartbeat()` here would write our own pid and the probe would
+    # correctly read it as self.
+    (tmp_path / HEARTBEAT_NAME).write_text(
+        json.dumps({"pid": os.getppid(), "heartbeat_at": time.time(), "clean_exit": False}),
+        encoding="utf-8",
+    )
+    write_request(tmp_path, (OPERATION_VACUUM,))
+    before = config.database_path.stat().st_size
+
+    with caplog.at_level(logging.WARNING, logger="swe_mux.server"):
+        await _run_pending_maintenance(config)
+
+    # Kept, untouched, and said out loud.
+    assert read_request(tmp_path) is not None
+    assert config.database_path.stat().st_size == before
+    assert "still running" in caplog.text
+    # And it did not pay for a backup it could not use.
+    assert not list(tmp_path.glob("*.pre-compact"))
+
+
+@pytest.mark.asyncio
+async def test_a_lock_failure_keeps_the_request(tmp_path: Path, monkeypatch: Any) -> None:
+    """The other half of the same rule, from the operation rather than the probe.
+
+    A predecessor that exits between the pid probe and the `VACUUM` is a real
+    race, so the lock has to be classified where it surfaces too.
+    """
+    config = Config(data_dir=tmp_path)
+    _database_with_slack(config.database_path)
+    write_request(tmp_path, (OPERATION_VACUUM,))
+
+    def locked(*_args: Any, **_kwargs: Any) -> Any:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("swe_mux.db_maintenance._vacuum", locked)
+    await _run_pending_maintenance(config)
+    assert read_request(tmp_path) is not None
+
+
+def test_only_a_lock_is_classified_retryable(tmp_path: Path) -> None:
+    """Narrow on purpose: `OperationalError` is also a missing table, and
+    treating that as retryable keeps a request that can never succeed."""
+    assert is_lock_error(sqlite3.OperationalError("database is locked"))
+    assert is_lock_error(sqlite3.OperationalError("database table is locked: foo"))
+    assert not is_lock_error(sqlite3.OperationalError("no such table: payload"))
+    assert not is_lock_error(sqlite3.DatabaseError("file is not a database"))
+    assert not is_lock_error(ValueError("locked"))
 
 
 @pytest.mark.asyncio

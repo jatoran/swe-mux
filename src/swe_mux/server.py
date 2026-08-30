@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import mimetypes
+import os
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -100,7 +101,9 @@ from .lifecycle import (
     daemon_clean_exit,
     daemon_started,
     heartbeat,
+    heartbeat_pid,
     ledger,
+    pid_running,
 )
 from .llm_endpoint import LLM_PROVIDERS, CapabilityStore, LlmReadiness
 from .llm_endpoint import capabilities_of_record as llm_capabilities_of_record
@@ -838,16 +841,45 @@ async def _run_pending_maintenance(config: Config) -> None:
     """Honour a `mux compact-db` request, if one is pending.
 
     Returns immediately when there is none, which is every ordinary start - the
-    phase costs a single failed file read. The request is consumed whether the
-    pass succeeded or failed, because an operation that fails once will
-    generally fail the same way again, and a standing request would turn one bad
-    start into every start being slow.
+    phase costs a single failed file read.
+
+    **This start is not guaranteed to own the database, and the first version of
+    this assumed it did.** `wait_for_predecessor_exit` waits for the predecessor
+    process, but the wait is bounded at 20s and a timeout is deliberately a
+    warning rather than a refusal - a wedged predecessor must not stop a
+    restart. Against the real `mux.db` the gate gave up, this ran 74ms later,
+    and `VACUUM` failed with `database is locked` because it must be the only
+    connection. So exclusivity is *checked* here, and a lock is retryable rather
+    than terminal.
+
+    Which failures keep the request is the whole correctness question:
+
+    - **The window was not available** (the predecessor is still alive, or the
+      file is locked): the request survives, because it will succeed on a later
+      start and consuming it silently drops what the operator asked for.
+    - **The operation does not work** (an unknown operation, an unreadable
+      database, no disk): the request is consumed, because it will fail the same
+      way every time and a standing request would make every start slow.
 
     Never raises. A daemon that will not start because a compaction failed is
     strictly worse than one that starts on an uncompacted database and says so.
     """
     request = read_maintenance_request(config.data_dir)
     if request is None:
+        return
+    # Cheap and first: if the predecessor is still running, this process is not
+    # the only holder and `VACUUM` cannot succeed. Skipping costs a pid probe and
+    # keeps the request; attempting would burn a 3 GB backup copy to fail.
+    predecessor = heartbeat_pid(config.data_dir)
+    if predecessor > 0 and predecessor != os.getpid() and pid_running(predecessor):
+        log.warning(
+            "database maintenance (%s) is pending, but the previous daemon (pid %d) is "
+            "still running, so this start does not own %s exclusively. The request is "
+            "kept and the next start will try again.",
+            ", ".join(request.operations),
+            predecessor,
+            config.database_path,
+        )
         return
     log.warning(
         "database maintenance requested (%s); the daemon will not serve until it "
@@ -861,16 +893,25 @@ async def _run_pending_maintenance(config: Config) -> None:
         )
     except asyncio.CancelledError:
         control.cancel()
-        log.warning("database maintenance cancelled; the request is consumed either way")
-        clear_maintenance_request(config.data_dir)
+        # Kept, not consumed: being asked to stop is not the operation failing,
+        # and the operator still wants it done.
+        log.warning("database maintenance cancelled; the request is kept for the next start")
         raise
     except Exception:  # noqa: BLE001 - a failed compaction must not stop the daemon
         log.exception("database maintenance raised; continuing without it")
         clear_maintenance_request(config.data_dir)
         return
+    if result.retryable:
+        log.warning(
+            "%s. The request is kept and the next start will try again.",
+            describe_maintenance(result),
+        )
+        if result.backup_path is not None:
+            log.warning("a pre-compaction copy was left at %s", result.backup_path)
+        return
     clear_maintenance_request(config.data_dir)
     log.log(logging.ERROR if result.error else logging.WARNING, "%s", describe_maintenance(result))
-    if result.backup_path is not None and not result.error:
+    if result.backup_path is not None:
         log.warning(
             "the pre-compaction copy is at %s; delete it once you are satisfied "
             "(it is the size of the database)",
