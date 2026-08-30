@@ -777,6 +777,15 @@ CLIENT_INPUT_DIAGNOSTIC_PHASES = frozenset(
         # duration being the discriminator, since the compat-mouse suppression window that
         # used to leak was really a cap on how long a deliberate hold was allowed to be.
         "mobile_gesture_keyboard_changed",
+        # A native paste that reached xterm's own textarea handler because the pane's
+        # capture listener did not claim it. Every terminal paste is supposed to converge
+        # on the pane's paste path, which is what repairs bracketing and lifts a leading
+        # newline out of a Codex paste; a paste that bypassed it went out with whatever
+        # xterm decided, which is the shape of every "Ctrl+V submits my paste line by
+        # line" report. The trace fires from `onData` and cannot see which DOM listener
+        # produced the bytes, so this is the only thing that can distinguish the two.
+        # Content-free - a length and two booleans - hence its place among these phases.
+        "terminal_paste_unclaimed",
     }
 )
 

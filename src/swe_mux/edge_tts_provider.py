@@ -11,6 +11,8 @@ import shutil
 import sys
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,24 @@ EDGE_TESTED_VERSION_PREFIX = "7.2."
 EDGE_TTS_VERSION = "7.2.8"
 EDGE_TTS_REQUIREMENT = f"edge-tts=={EDGE_TTS_VERSION}"
 EDGE_INSTALL_TIMEOUT_SECONDS = 300.0
+# How long the post-install verification may take. It was 20s, and on a clean
+# Windows 11 laptop the install failed there and rolled back everything it had
+# just built (2026-08-30).
+#
+# The tempting diagnosis was a network or TLS failure, because the sibling Kokoro
+# download on the same machine really did fail on certificate verification. It is
+# not one: the `status` operation imports `edge_tts` and reads its version out of
+# the installed metadata (`assets/integrations/edge_tts_bridge.py`) and makes no
+# request at all. What it was measuring is a first-ever import of `edge_tts` and
+# `aiohttp` from a venv written seconds earlier, with a virus scanner reading
+# every one of those files for the first time. The same machine's own log gives
+# the scale: `uv venv` took 44.8s and the package install 36s, against roughly 2s
+# and 5s on a warm host, so a 20s import budget was never going to hold there.
+#
+# 120s is generous against that and still bounded, and it is the *verify* budget
+# only - `EDGE_BRIDGE_TIMEOUT_SECONDS` still governs steady-state calls, where a
+# slow answer is a real fault rather than a cold cache.
+EDGE_VERIFY_TIMEOUT_SECONDS = 120.0
 EDGE_INSTALL_OUTPUT_LIMIT = 512 * 1024
 PYPI_SIMPLE_INDEX = "https://pypi.org/simple"
 
@@ -67,6 +87,125 @@ class EdgeTtsError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionPlan:
+    """How this host can build the isolated environment edge-tts installs into.
+
+    Two implementations, and the order between them is not a preference: uv is
+    strictly more capable and is tried first.
+
+    **uv** provisions the *interpreter* as well as the environment
+    (`uv venv --python 3.12` downloads CPython when the machine has none), which
+    is the only thing that works on the audience this whole integration is aimed
+    at - a clean machine, or the frozen desktop app, where `sys.executable` is the
+    PyInstaller bundle and `python -m venv` does not exist at all.
+
+    **venv** covers the case uv cannot be assumed for: a source install on a
+    machine that has a real Python but no uv. It builds the environment with the
+    daemon's own interpreter, which is safe here for a reason specific to this
+    package - `edge-tts` is `py3-none-any`, so it loads on whatever version that
+    interpreter happens to be and there is no wheel-tag question to get wrong.
+    """
+
+    kind: str
+    executable: str
+
+    def create_argv(self, staging: Path) -> list[str]:
+        if self.kind == "uv":
+            return [self.executable, "venv", "--python", "3.12", str(staging)]
+        return [self.executable, "-m", "venv", str(staging)]
+
+    def install_argv(self, staging_python: Path) -> list[str]:
+        if self.kind == "uv":
+            return [
+                self.executable,
+                "pip",
+                "install",
+                "--python",
+                str(staging_python),
+                "--default-index",
+                PYPI_SIMPLE_INDEX,
+                EDGE_TTS_REQUIREMENT,
+            ]
+        # `--index-url` is pip's spelling of the same simple index uv is given, so
+        # both paths install the same pinned artifact from the same place. The
+        # created environment's *own* python runs it, never the daemon's, so
+        # nothing can land outside the staging directory.
+        return [
+            str(staging_python),
+            "-m",
+            "pip",
+            "install",
+            "--index-url",
+            PYPI_SIMPLE_INDEX,
+            "--disable-pip-version-check",
+            "--no-input",
+            EDGE_TTS_REQUIREMENT,
+        ]
+
+
+def _classify_environment_failure(plan: ProvisionPlan, failure: EdgeTtsError) -> EdgeTtsError:
+    """Name the one environment-creation failure that has a specific remedy.
+
+    Debian and Ubuntu ship `venv` without `ensurepip` unless `python3-venv` is
+    installed, so `python -m venv` fails there on a machine that looks perfectly
+    healthy - and the raw message is long enough that the apt command in it can be
+    lost. It is the single most likely way the non-uv path fails, so it gets a
+    sentence rather than a passed-through stderr tail. Every other failure keeps
+    its original classification: guessing at causes is what this file is trying
+    to stop doing.
+    """
+    if plan.kind != "venv":
+        return failure
+    text = str(failure).casefold()
+    if "ensurepip" not in text and "python3-venv" not in text:
+        return failure
+    return EdgeTtsError(
+        "install_venv_incomplete",
+        "this Python cannot create a virtual environment with pip in it, which on "
+        "Debian and Ubuntu means the `python3-venv` package is not installed "
+        "(`sudo apt install python3-venv`). Installing uv avoids the whole "
+        f"question. Original error: {failure}",
+    )
+
+
+def select_provision_plan(
+    *,
+    which: Callable[[str], str | None] | None = None,
+    interpreter: str | None = None,
+    frozen: bool | None = None,
+) -> ProvisionPlan | None:
+    """The best available way to build the environment, or None when there is none.
+
+    Every input is injectable because the answer is about the *host*, and an
+    assertion about behaviour must not be derived from the machine checking it.
+    The uv lookup is taken as a **resolver** rather than as a path for exactly
+    that reason: a `uv_path: str | None = None` parameter cannot express "there is
+    no uv here", because `None` also means "you did not tell me", so the first
+    version of this silently consulted the developer's own uv and every test that
+    meant to exercise the fallback exercised the uv path instead.
+
+    The frozen guard is the other load-bearing half. In the desktop app
+    `sys.executable` is the PyInstaller bundle: it has no `venv` module, and
+    running it with `-m` re-enters swe-mux rather than Python. Offering it as a
+    fallback would produce a confusing failure at best and a second daemon at
+    worst.
+
+    `which` defaults to `None` rather than to `shutil.which` itself: a callable
+    default is bound once, when this function is *defined*, so a caller or a test
+    that replaces `shutil.which` afterwards would never be consulted.
+    """
+    resolved_uv = (which or shutil.which)("uv")
+    if resolved_uv:
+        return ProvisionPlan("uv", resolved_uv)
+    if frozen if frozen is not None else bool(getattr(sys, "frozen", False)):
+        return None
+    executable = interpreter if interpreter is not None else sys.executable
+    if not executable:
+        return None
+    return ProvisionPlan("venv", executable)
 
 
 class EdgeVoiceCatalog:
@@ -289,6 +428,12 @@ class EdgeTtsProvider:
             "python": str(python),
             "requirement": EDGE_TTS_REQUIREMENT,
             "uv_available": shutil.which("uv") is not None,
+            # `uv_available` is kept because it is still the *preferred* method and
+            # the UI names it, but it is no longer what decides whether the button
+            # works: a source install with a real Python and no uv can build the
+            # environment with `venv`. Deciding on `uv_available` alone would keep
+            # offering the manual-only path to someone the fallback covers.
+            "install_method": plan.kind if (plan := select_provision_plan()) else None,
             "installed_at": state.get("installed_at"),
             "updated_at": state.get("updated_at"),
             "last_install_error": state.get("last_install_error"),
@@ -485,6 +630,48 @@ class EdgeTtsProvider:
             raise
         return previous if previous.exists() else None
 
+    async def _preflight_index_reachable(self) -> None:
+        """Fail fast, and distinguish "cannot connect" from "cannot verify".
+
+        Those two are one line apart in a stack trace and are completely different
+        problems. A TLS-verification failure on a clean Windows machine is a trust
+        gap that `tls_trust` exists to close, and a user told only "install failed"
+        has no way to know that; a refused connection is a proxy or an offline
+        host. Both are reported here rather than fifteen lines into uv's output.
+        """
+        import ssl
+
+        import aiohttp
+
+        from .tls_trust import trusting_connector
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=15, connect=10)
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=trusting_connector()
+            ) as session:
+                async with session.head(PYPI_SIMPLE_INDEX, allow_redirects=True) as response:
+                    if response.status >= 500:
+                        raise EdgeTtsError(
+                            "install_index_unavailable",
+                            f"{PYPI_SIMPLE_INDEX} answered {response.status}; "
+                            "PyPI may be having an outage. Try again shortly.",
+                        )
+        except (ssl.SSLError, aiohttp.ClientSSLError) as exc:
+            raise EdgeTtsError(
+                "install_tls_untrusted",
+                f"could not verify the TLS certificate of {PYPI_SIMPLE_INDEX}: {exc}. "
+                "This machine's certificate trust store cannot validate a public "
+                "certificate, which usually means a TLS-inspecting proxy whose "
+                "certificate authority is not installed here.",
+            ) from exc
+        except (aiohttp.ClientError, OSError, TimeoutError) as exc:
+            raise EdgeTtsError(
+                "install_index_unreachable",
+                f"could not reach {PYPI_SIMPLE_INDEX}: {exc}. The managed installation "
+                "downloads Edge TTS from PyPI, so it needs outbound HTTPS.",
+            ) from exc
+
     async def _install_managed(
         self, operation_id: str, prior_state: dict[str, Any]
     ) -> None:
@@ -493,51 +680,75 @@ class EdgeTtsProvider:
         previous: Path | None = None
         activated = False
         try:
-            uv = shutil.which("uv")
-            if uv is None:
+            plan = select_provision_plan()
+            if plan is None:
                 raise EdgeTtsError(
-                    "uv_not_found",
-                    "uv is required for the managed Edge TTS installation",
+                    "provisioner_not_found",
+                    "the managed Edge TTS installation needs either uv, or a real "
+                    "Python interpreter it can build a virtual environment with. "
+                    "The frozen desktop app has no usable interpreter of its own, so "
+                    "install uv - or point Settings at an external Python that "
+                    "already has edge-tts.",
                 )
+            # Before the multi-minute part, not after it. An install that spends
+            # 80 seconds building an environment and only then discovers it cannot
+            # reach PyPI has thrown that work away and reports the failure at the
+            # step furthest from its cause. One HEAD against the index answers
+            # both halves at once - routing and TLS trust - in about as long as it
+            # takes to fail.
+            self._install_phase(operation_id, "checking_connectivity")
+            await self._preflight_index_reachable()
             self.integration_directory.mkdir(parents=True, exist_ok=True)
             if staging.exists():
                 shutil.rmtree(staging)
             async with self._operation_lock:
                 self._install_phase(operation_id, "creating_environment")
-                await self._run_install_command(
-                    [uv, "venv", "--python", "3.12", str(staging)],
-                    label="Edge TTS environment creation",
-                    operation_id=operation_id,
-                )
+                try:
+                    await self._run_install_command(
+                        plan.create_argv(staging),
+                        label=f"Edge TTS environment creation ({plan.kind})",
+                        operation_id=operation_id,
+                    )
+                except EdgeTtsError as exc:
+                    raise _classify_environment_failure(plan, exc) from exc
                 staging_python = self.managed_python(staging)
                 if not staging_python.is_file():
                     raise EdgeTtsError(
                         "install_invalid",
-                        "uv completed without creating the managed Python interpreter",
+                        f"{plan.kind} completed without creating the managed Python "
+                        "interpreter",
                     )
                 self._install_phase(operation_id, "installing_package")
                 await self._run_install_command(
-                    [
-                        uv,
-                        "pip",
-                        "install",
-                        "--python",
-                        str(staging_python),
-                        "--default-index",
-                        PYPI_SIMPLE_INDEX,
-                        EDGE_TTS_REQUIREMENT,
-                    ],
-                    label="Edge TTS package installation",
+                    plan.install_argv(staging_python),
+                    label=f"Edge TTS package installation ({plan.kind})",
                     operation_id=operation_id,
                 )
                 self._install_phase(operation_id, "verifying")
-                payload = await self._invoke_unlocked(
-                    str(staging_python),
-                    "status",
-                    timeout_seconds=20.0,
-                    record_version=False,
-                    correlation_id=operation_id,
-                )
+                try:
+                    payload = await self._invoke_unlocked(
+                        str(staging_python),
+                        "status",
+                        timeout_seconds=EDGE_VERIFY_TIMEOUT_SECONDS,
+                        record_version=False,
+                        correlation_id=operation_id,
+                    )
+                except EdgeTtsError as exc:
+                    # A bare "Edge TTS status timed out" is what an operator saw
+                    # after 80 seconds of environment and package work was thrown
+                    # away, and it sent them looking for a network fault that was
+                    # not there. Say what the step actually does, so the next
+                    # reader does not repeat the diagnosis.
+                    if exc.code != "timeout":
+                        raise
+                    raise EdgeTtsError(
+                        "install_verify_timeout",
+                        f"the installed Edge TTS did not finish loading within "
+                        f"{EDGE_VERIFY_TIMEOUT_SECONDS:.0f}s. This step only imports the "
+                        f"package and reads its version - it makes no network request - so "
+                        f"the usual cause is a slow disk or a virus scanner reading the new "
+                        f"files for the first time. Retrying is often enough.",
+                    ) from exc
                 installed = str(payload.get("version") or "")
                 if installed != EDGE_TTS_VERSION:
                     raise EdgeTtsError(

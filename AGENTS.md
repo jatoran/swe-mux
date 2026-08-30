@@ -106,6 +106,16 @@ inside a process of their own.
 If any of those stops being true, a verification lock is a stopgap.
 Fix the isolation instead, because serialised verification is the largest cost in parallel work.
 
+**The gate yields the CPU to the live fleet.** Parallel gates are safe for *each other* but
+not for the operator: measured 2026-08-30, three concurrent gates plus a renderer suite held
+all 32 logical CPUs at ~85% and delayed typed input across every live session. So
+`.worktree-verify` drops itself to below-normal priority before its first step and
+`playwright.renderer.config.ts` does the same at config load; every child inherits the class,
+so the whole run yields while costing almost nothing on an idle host. `MUX_KEEP_PRIORITY=1`
+opts out (timing the gate is the one reason to). The lowering is best-effort by design and
+would otherwise rot silently, so `tests/test_verify_gate_priority.py` executes the shipped
+lowering commands against a scratch child rather than trusting the log line.
+
 Worktree bootstrap (`.worktree-setup`) is `uv sync` plus `npm ci`, sharing the uv and npm
 caches, so it is a dependency install rather than a download. It is not free: if agent
 tasks are short, prefer reusing a few long-lived worktrees over creating one per task.

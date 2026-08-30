@@ -324,15 +324,43 @@ Three things: the source-checkout resolution (`redeploy_source_root`, with `PACK
 
 ### `prerequisites.py`
 
-The onboarding presence check for Git, Node, npm, and Tailscale, each with what it backs and a next step (`detect_prerequisites`), resolved through `which_real`.
+The onboarding presence check for Git, Node, npm, uv, and Tailscale, each with what it backs and a next step (`detect_prerequisites`), resolved through `tool_locations.locate_tool` and reported in three states rather than two.
 
-**Not:** installing anything, version comparison (that is the harness CLI-drift signal), or non-tool prerequisites like the OpenRouter key.
+`uv` joined the list on 2026-08-30 because managed integrations shell out to it, and the install steps became per-platform on the same date: they were `winget` and `/download/win` on every host, which is advice a Linux user cannot act on.
+
+**Not:** installing anything, version comparison (that is the harness CLI-drift signal), non-tool prerequisites like the OpenRouter key, or the location search itself (`tool_locations.py`).
+
+### `tool_locations.py`
+
+Where an external tool is on this machine and how that was determined: override, then PATH, then a short table of default install locations.
+`refresh_search_path` re-reads the Windows machine and user `Environment` keys into `os.environ["PATH"]` and returns whether anything changed.
+
+The split from `shim_paths.which_real` is the point and must hold.
+That function answers "what would run if this daemon spawned this name" and has to keep exact PATH semantics, because a tool that cannot be invoked by name is unusable to something that invokes it by name.
+This one answers "does the user have this installed", and equating the two is what reported Git and a connected Tailscale as absent on a clean Windows 11 machine and told the user to install software they already had (2026-08-30, first run on hardware that is not the development host).
+`ToolLocation.invocable_by_name` is what keeps a caller that builds an argv honest: it is false for an override and for an off-PATH find, both of which must be spawned by absolute path.
+
+**Not:** a filesystem search (slow, non-deterministic, and able to find a stale copy), resolving agent CLIs or shells, or any spawn.
+
+### `tls_trust.py`
+
+One cached, verifying client `SSLContext` for outbound HTTPS, built from the platform's own certificate verifier via `truststore`, with `certifi` and then the stdlib default as fallbacks.
+`trusting_connector()` is the `aiohttp.TCPConnector` every public-internet fetch uses (`voice_models`, `wheel_closure`, `update_check`, `update_install`, the Edge TTS install preflight).
+
+It exists because Windows fetches most roots on demand through CryptoAPI and `ssl.enum_certificates` lists only what has already been fetched, so a clean machine's Python genuinely cannot build a chain that its browser can.
+
+**Not:** a global `truststore.inject_into_ssl()`, deliberately.
+That replaces `ssl.SSLContext` process-wide and verifies the peer chain on every socket including a server one, so swe-mux's own HTTPS listener (`tailscale.direct_mobile_voice_tls`), which requests no client certificate, would fail every browser connection with "Peer sent no certificates to verify".
+Also not server-side TLS, and never an unverified context - the worst case here is the stdlib default, which is the previous behaviour.
 
 ### `doctor.py`
 
 The pure assembly behind `swemux doctor` and `GET /api/diagnostics/doctor`.
 `build_doctor_report` turns already-fetched diagnostic payloads into a flat `checks[]` list with per-check status, severity, and remedy plus a machine-readable capability block.
 `observation_freshness` projects the fleet's stale, relocated, and sibling-blocked agent sessions from the status fields the state-log exposes.
+`hook_ingress_silence` projects instrumented agent sessions **this daemon spawned** that have never reported a lifecycle hook, which is the only fault class here that is total and completely silent: when the harness cannot run the hook command, status detection, history, the prompt queue and approvals all stop while the session keeps looking healthy.
+
+It is narrow on purpose. It reads `hook_channel_watch_since`, which `SessionManager.spawn` sets and adoption and cold restore do not, because a daemon restart resets every surviving session's in-memory hook counter while no hook is owed - flagging those would fire on every healthy session after every reload.
 
 **Not:** fetching anything (the server handler gathers the payloads), any mutation, new detection logic, or printing secrets or terminal or message content.
 
