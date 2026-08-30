@@ -24,9 +24,8 @@ body:
 
         Two things worth checking first, because both save you writing:
 
-        - [Deliberately not on the roadmap](https://swemux.dev/roadmap/#not-planned).
-          These are boundaries rather than gaps, and a request inside one gets a reason
-          rather than a queue place.
+        - The [roadmap](https://swemux.dev/roadmap/). If it is already there, say so and
+          add what you need from it rather than opening a parallel thread.
         - The [existing ideas](https://github.com/jatoran/swe-mux/discussions/categories/ideas).
           If yours is already there, a thumbs-up on it counts for more than a second thread.
 
