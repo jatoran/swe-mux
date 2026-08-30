@@ -37,7 +37,7 @@ class VoiceWheel:
 #: SHA-256 over (filename, sha256, size) of every pin, in table order. Moves only
 #: when the acquired closure moves, so it is a stable identity for "this exact
 #: voice closure" that a state file and a diagnostic can both carry.
-CLOSURE_DIGEST = "5534d0f77c67f94d70c426f18110ec778f2ec1f1256f4f5535e4751e262439d7"
+CLOSURE_DIGEST = "2359f259483849d7bb62aa232b9a9674543b13366cb3f5f262527e9a575997da"
 
 #: The distributions acquired at first use, in dependency-name order.
 DISTRIBUTIONS: tuple[str, ...] = (
@@ -386,17 +386,24 @@ WHEELS: tuple[VoiceWheel, ...] = (
     VoiceWheel("setuptools", "83.0.0", "setuptools-83.0.0-py3-none-any.whl", "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl", "29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3", 1008090),
     VoiceWheel("shellingham", "1.5.4", "shellingham-1.5.4-py2.py3-none-any.whl", "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", "7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", 9755),
     VoiceWheel("smart-open", "8.0.1", "smart_open-8.0.1-py3-none-any.whl", "https://files.pythonhosted.org/packages/c3/96/325b8c507ccecc50421fecc0345a502ee6e4a44785af3c4e6ecbadad624a/smart_open-8.0.1-py3-none-any.whl", "3e97f90e92a952cb57863dfe132082c400a52eeeb27c067692fb51dbcc5b0089", 73504),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp312-cp312-macosx_10_13_x86_64.whl", "https://files.pythonhosted.org/packages/f2/e4/f206fbca55637ebf16c7183f96ade8365c0d8bb9307fdc0e0a74a25532ca/spacy-3.8.15-cp312-cp312-macosx_10_13_x86_64.whl", "9b22d269dfa6aa3c6a000e576b261bee46c277afaf915a3fe1e0a81ad227ee7e", 6264500),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp312-cp312-macosx_11_0_arm64.whl", "https://files.pythonhosted.org/packages/2b/8c/5276816f217a1e479bc249c1b8d7be3eb11adc571e3e327950527475894f/spacy-3.8.15-cp312-cp312-macosx_11_0_arm64.whl", "39ac175bbf8a8381c41b8e0abbdede3ff29d1f29f3cac42644f5719671e20884", 6128694),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "https://files.pythonhosted.org/packages/77/7e/36f41f0bc4d2f40f4427a0ff3dd7afc4b185e7aac9a29c17a693faf490fd/spacy-3.8.15-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "b4527b7824e8228f2abed18774b224de7aad9b900d47ff66483abdf16d0c8a5e", 32195955),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "https://files.pythonhosted.org/packages/49/3d/88004d9518c912c30140e47f930abcbc9e7240d4c2aebe52c05b7f70df79/spacy-3.8.15-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "fa9df68fc8887c0a6440b84d1d307980e594d99b45f19a37d733e58caa9a6682", 32695414),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp312-cp312-win_amd64.whl", "https://files.pythonhosted.org/packages/25/06/994516301ca55c800be99c5c1daadf669d3f62ad3b4d5053619a4bde33b0/spacy-3.8.15-cp312-cp312-win_amd64.whl", "9ad71e9ce6c4e1b984a91bc82b2e4e08df23581f5cc670bbacf29a07a9822d5a", 14306712),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp312-cp312-win_arm64.whl", "https://files.pythonhosted.org/packages/dc/97/32025f9065ef4db7af5aeb4cd560db62c7e3440e2bc9003f91f2493cc804/spacy-3.8.15-cp312-cp312-win_arm64.whl", "35060be85c952df84e9095713ba05f8515473e127ad0c6b43cd22a1b42d4cdbc", 13723587),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp313-cp313-macosx_10_13_x86_64.whl", "https://files.pythonhosted.org/packages/88/af/32b21b02062122e3fd14d3660e7c322c2c6306bdce4991fa35e41fcc7c12/spacy-3.8.15-cp313-cp313-macosx_10_13_x86_64.whl", "c9683078efb96dee8b1a751bc0bfa9271a6604b7257547849b4254f285ce77d9", 6247285),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp313-cp313-macosx_11_0_arm64.whl", "https://files.pythonhosted.org/packages/62/af/45038bc57767f8998e357b3be311e904daab119050dceb03cc937ee2ba54/spacy-3.8.15-cp313-cp313-macosx_11_0_arm64.whl", "c8b187654941e417c4cc0378ed7860bf6aad7bbbc370b925994a9cebeb8ca615", 6108393),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "https://files.pythonhosted.org/packages/75/73/9241e095491abdf83ef02fe7b49c50a431fe55b11ad56ba92e56b90e3c59/spacy-3.8.15-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "6b27d0abf1138644837536705578dc1ea48a693796b283a49202e1dbde0a3b02", 31792735),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "https://files.pythonhosted.org/packages/02/6f/2169d692c0502f73e64aa7bbc3cba14a26af85c4b648ed153083ecdce45d/spacy-3.8.15-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "ce66d75279ee84b749eea058ff3ea79a31adf0ff53f887943dced258ceb6ce2a", 32329824),
-    VoiceWheel("spacy", "3.8.15", "spacy-3.8.15-cp313-cp313-win_amd64.whl", "https://files.pythonhosted.org/packages/73/a1/dae0084ba86cdc786585184d4f3400129031dfc6cfbf2df4086dd083d59a/spacy-3.8.15-cp313-cp313-win_amd64.whl", "aaa70356876c152f0235ff5bc4869f7a45133392ff73aa881113376f7eec0caa", 14295593),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp312-cp312-macosx_10_13_x86_64.whl", "https://files.pythonhosted.org/packages/60/b2/33e8e4cac876090c5d8b4016b23ca2647f66c2a87c518ea010047e78ee1f/spacy-3.8.16-cp312-cp312-macosx_10_13_x86_64.whl", "e045765035e9760f38637101f41a7c89d3b69659dcc70e716bb4011a95969ac9", 6565218),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp312-cp312-macosx_11_0_arm64.whl", "https://files.pythonhosted.org/packages/d2/1e/247e43597b10576eccfed55af7999663f00ae934394acebef724cabdc1b7/spacy-3.8.16-cp312-cp312-macosx_11_0_arm64.whl", "44a641085abbe3a09ea56a89f2e50b5f51aea6cf69213b70305fb48e341b883b", 6460523),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "https://files.pythonhosted.org/packages/0e/8c/2b150ea6e9b667b710e7365328edfdd3c6729af4e48124baa80c4784c26b/spacy-3.8.16-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "a2c46c35467d963a62dc0407c99d3a18562d4c85ee887a57e4a07dde020f1a38", 34901687),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "https://files.pythonhosted.org/packages/b9/9c/3b5d64a72ac40cf584134c6639ac67f8f2d504eb081c91da3ad2ffae5c04/spacy-3.8.16-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "8d0f63c3124d0a34a37e9b519d004cee1269744be07f91f843902e6c9f3e557a", 35496883),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp312-cp312-win_amd64.whl", "https://files.pythonhosted.org/packages/4e/c0/4122fa6c3670d504ad5a3094c9b512f0d0908f66cefeb8c8c3349f8c6a28/spacy-3.8.16-cp312-cp312-win_amd64.whl", "5991c334e71c23b798c25e0d403295dde4d2d1fb58c2e075450b964db03c05ea", 15180961),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp312-cp312-win_arm64.whl", "https://files.pythonhosted.org/packages/36/55/2fd66419866455289c090cd177faf7d3ee360f36b2eea5e4c74b2c541a58/spacy-3.8.16-cp312-cp312-win_arm64.whl", "770cc0581fc06c0723cb1488dc1d1da0570801168da786674626f342d903ed37", 14552405),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp313-cp313-macosx_10_13_x86_64.whl", "https://files.pythonhosted.org/packages/a5/5a/ebe53a3cd1edf5f8cb4b9465ae2383b0b4f6a2c8bd96afa0408f682df4bb/spacy-3.8.16-cp313-cp313-macosx_10_13_x86_64.whl", "f42f257404e749d9048d3b3b97004692210057d38e03c2f156817258bf6daf2b", 6585155),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp313-cp313-macosx_11_0_arm64.whl", "https://files.pythonhosted.org/packages/29/f8/80f9ddf288c494b3a7b737bff3b938ef70328c49aaf0a90738aa90b638b8/spacy-3.8.16-cp313-cp313-macosx_11_0_arm64.whl", "ce120d4077050352f344b987354be3e3fddb207436b537cf91a891837657ce2c", 6465153),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "https://files.pythonhosted.org/packages/7d/5f/b039865cf4e2fa82c8defc737c37af4480e70a56d1e1c380865b3df89f54/spacy-3.8.16-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "f765cb6cbef82b5d98c46936a1385e87fb05919433fbc6b953e3c093ac30f8ef", 34527537),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "https://files.pythonhosted.org/packages/12/48/60048a3558f591fbaf11a73b342262699178cf44dd6fb88827118be34335/spacy-3.8.16-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "111d817b32755d869e5ed6cc258b55c50c6687f47b78f6ebb2c14b1ce5ee707c", 35151231),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp313-cp313-win_amd64.whl", "https://files.pythonhosted.org/packages/55/f4/a613999ef17bf8252d4e6a62609b9d16a932e1cfd56f9c682e5dd82d91ba/spacy-3.8.16-cp313-cp313-win_amd64.whl", "cc7e449aec9a313bc037ef5ea45fb0ac99135d92dace8421d68414d16be39543", 15163063),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp313-cp313-win_arm64.whl", "https://files.pythonhosted.org/packages/15/6e/97039de4f188ae3c69b5de9c852b4c5c5252896d2bc3d9ed1af93655ba1d/spacy-3.8.16-cp313-cp313-win_arm64.whl", "024ce6408ea00c7f8c6387a6de65bb67aad40c51c9d63705303c5cb9a8ef51b0", 14540066),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp314-cp314-macosx_10_15_x86_64.whl", "https://files.pythonhosted.org/packages/3a/18/d495cb375546ea29f74224854e605daa08a3e438530aa0d311ad11699833/spacy-3.8.16-cp314-cp314-macosx_10_15_x86_64.whl", "dc17227717aa254b63c90161d8de4ec672ca5bd8e5c92effba2a8510498ee355", 6603726),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp314-cp314-macosx_11_0_arm64.whl", "https://files.pythonhosted.org/packages/ff/c9/6f12f115f672627f7cc9cc10201b6ae2e59f1907b30f38cf48e120108942/spacy-3.8.16-cp314-cp314-macosx_11_0_arm64.whl", "39304dd9800065c09fa440983ac75cf444469b159959171c0e0d761b3e854d62", 6508263),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "https://files.pythonhosted.org/packages/f2/68/ec6fbae239df6e1ba1b8c7187fb9d3654b908c9789be5288004b8665fd56/spacy-3.8.16-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", "04fd0206c9f33a0542a40049211528742b5492ef5f971d06b151b9cc49b9237b", 34427589),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "https://files.pythonhosted.org/packages/c4/1c/439d28bda90d057e0688c80c89487174e8dae4988268abea461edaf4f28b/spacy-3.8.16-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "6c51eac85344784ca7b184f0c3f7da0fca47c354d63e05e733d90cae35a2ecc4", 34800189),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp314-cp314-win_amd64.whl", "https://files.pythonhosted.org/packages/bb/22/f3f45881d0f5cd7c3ee4011f4c5ffafa76d4ee520649b3eb04440d6dd67c/spacy-3.8.16-cp314-cp314-win_amd64.whl", "86227a0a0d3dfee3f3dcc15f73c1387b586d77b075348afc250ffafea88ffcec", 15202134),
+    VoiceWheel("spacy", "3.8.16", "spacy-3.8.16-cp314-cp314-win_arm64.whl", "https://files.pythonhosted.org/packages/24/2f/0f2470625e61a3f58792e8fd94ac5fd0682057c9918cac09c3aef3ca203d/spacy-3.8.16-cp314-cp314-win_arm64.whl", "15908539b375bd8e3c627a076dac793b8fd790c5945f3a696837dd70776a4fc0", 14603383),
     VoiceWheel("spacy-legacy", "3.0.12", "spacy_legacy-3.0.12-py2.py3-none-any.whl", "https://files.pythonhosted.org/packages/c3/55/12e842c70ff8828e34e543a2c7176dac4da006ca6901c9e8b43efab8bc6b/spacy_legacy-3.0.12-py2.py3-none-any.whl", "476e3bd0d05f8c339ed60f40986c07387c0a71479245d6d0f4298dbd52cda55f", 29971),
     VoiceWheel("spacy-loggers", "1.0.5", "spacy_loggers-1.0.5-py3-none-any.whl", "https://files.pythonhosted.org/packages/33/78/d1a1a026ef3af911159398c939b1509d5c36fe524c7b644f34a5146c4e16/spacy_loggers-1.0.5-py3-none-any.whl", "196284c9c446cc0cdb944005384270d775fdeaf4f494d8e269466cfa497ef645", 22343),
     VoiceWheel("srsly", "2.5.3", "srsly-2.5.3-cp312-cp312-macosx_10_13_x86_64.whl", "https://files.pythonhosted.org/packages/02/cc/e9f7fcec4cc92ad8bad6316c4241638b8cf7380382d4489d94ec6c436452/srsly-2.5.3-cp312-cp312-macosx_10_13_x86_64.whl", "71e51c046ccbeefb86524c6b1e17574f579c6ac4dc8ea4a09437d3e8f88342d3", 658379),
@@ -485,6 +492,60 @@ WHEELS: tuple[VoiceWheel, ...] = (
 )
 
 
+def _supported_python_range(wheels: tuple[VoiceWheel, ...] = WHEELS) -> str:
+    """The CPython versions the pinned closure actually carries wheels for.
+
+    Derived from the table rather than written down beside it, because a written
+    range is a second source of truth and the copy is what goes stale - the exact
+    shape of the bug this message exists to explain.
+
+    Only distributions whose wheels are *all* version-specific constrain anything.
+    One `py3-none-any` or `cp38-abi3` wheel makes a distribution loadable on every
+    interpreter in range, and treating its version-specific siblings as limits is
+    how a first attempt at this reported "CPython 3.14 only" for a closure that
+    resolves cleanly on 3.12, 3.13 and 3.14: `hf-xet` ships both a `cp314-cp314`
+    wheel and a `cp38-abi3` one, and the abi3 wheel is the whole answer.
+
+    A diagnostic, not a gate. It reports min-through-max of the intersection and
+    so would over-claim on a genuinely non-contiguous set; the thing that actually
+    proves the closure loads is
+    `packaging/check_voice_closure_interpreters.py`, which runs the real selector
+    inside each interpreter.
+    """
+    from packaging.utils import parse_wheel_filename
+
+    constrained: dict[str, set[tuple[int, int]]] = {}
+    unconstrained: set[str] = set()
+    for wheel in wheels:
+        try:
+            _, _, _, tags = parse_wheel_filename(wheel.filename)
+        except Exception:  # noqa: BLE001 - not a candidate, and not this function's problem
+            continue
+        for tag in tags:
+            if not (tag.interpreter.startswith("cp") and tag.abi.startswith("cp")):
+                # `py3-none-any`, `cp38-abi3`: loads on anything in range.
+                unconstrained.add(wheel.distribution)
+                continue
+            try:
+                version = (int(tag.interpreter[2]), int(tag.interpreter[3:]))
+            except ValueError:
+                continue
+            constrained.setdefault(wheel.distribution, set()).add(version)
+    common: set[tuple[int, int]] | None = None
+    for distribution, versions in constrained.items():
+        if distribution in unconstrained:
+            continue
+        common = versions if common is None else (common & versions)
+    if common is None:
+        return "any CPython this project supports"
+    if not common:
+        return "no single CPython version"
+    low, high = min(common), max(common)
+    if low == high:
+        return f"CPython {low[0]}.{low[1]} only"
+    return f"CPython {low[0]}.{low[1]} through {high[0]}.{high[1]}"
+
+
 def wheels_for_this_interpreter(
     wheels: tuple[VoiceWheel, ...] = WHEELS,
 ) -> tuple[VoiceWheel, ...]:
@@ -497,10 +558,13 @@ def wheels_for_this_interpreter(
     wheel whose deployment target is older than the running system's.
 
     Raises `LookupError` naming the distributions this interpreter has no wheel
-    for. That is a refusal rather than a partial install: a closure missing one
-    native package fails at import time, much later, with an error that names the
-    wrong thing.
+    for, the interpreter itself, and the range the closure does support. That is a
+    refusal rather than a partial install: a closure missing one native package
+    fails at import time, much later, with an error that names the wrong thing.
     """
+    import sys
+    import sysconfig
+
     from packaging.tags import sys_tags
     from packaging.utils import parse_wheel_filename
 
@@ -521,9 +585,21 @@ def wheels_for_this_interpreter(
 
     missing = sorted(set(DISTRIBUTIONS) - set(best))
     if missing:
+        # Name the interpreter and the range the closure covers, not just the
+        # package. The bare version of this message read as a broken or missing
+        # dependency and sent a tester looking for one, when the actual cause was
+        # that `uv tool install` had put swe-mux on a CPython newer than any wheel
+        # spaCy had published - a version mismatch, and a completely different
+        # thing to do about it. `packaging/check_voice_closure_interpreters.py` is
+        # what stops this reaching a user again.
         raise LookupError(
-            "the pinned voice closure has no wheel this interpreter can load for: "
-            + ", ".join(missing)
+            "the pinned voice closure has no wheel that CPython "
+            f"{sys.version_info.major}.{sys.version_info.minor} on "
+            f"{sysconfig.get_platform()} can load, for: {', '.join(missing)}. "
+            f"The closure supports {_supported_python_range(wheels)}. This is an "
+            "interpreter-version mismatch rather than a missing or broken package: "
+            "run swe-mux on a Python in that range, or upgrade swe-mux to a release "
+            "whose pins cover this one."
         )
     return tuple(wheel for _, wheel in sorted(best.values(), key=lambda item: item[1].filename))
 
