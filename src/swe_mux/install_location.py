@@ -11,8 +11,8 @@ command they could run to find out anything at all.
 
 This module is the single answer to "where am I, and can I be reached". Four
 surfaces read it - the first-run hint ``muxd`` prints, ``python -m swe_mux
---where``, the ``install`` rows in the local ``mux doctor`` report, and
-``mux install-shortcut``'s target resolution - so all four agree by construction
+--where``, the ``install`` rows in the local ``swemux doctor`` report, and
+``swemux install-shortcut``'s target resolution - so all four agree by construction
 rather than by four separate guesses at the same filesystem.
 
 Three rules it keeps.
@@ -65,23 +65,25 @@ from .host_platform import IS_WINDOWS
 #: Every launcher `pyproject.toml` declares, with the kind of launcher it builds.
 #: ``gui`` is the console-less (``pythonw``-style) launcher: it has no stdout or
 #: stderr at all, which is why `desktop.main` writes its own log instead.
-#: `swemux`/`swemuxd` are the primary spelling and `mux`/`muxd` the kept aliases,
-#: in that order, because this tuple is also the order `--where` prints them and
-#: the first line a confused user reads should be the documented name.
+#: Three launchers over three programs, which is the floor: a CLI, a daemon, and
+#: a console-less shell that must be its own `[project.gui-scripts]` entry.
+#: `mux`/`muxd` were declared here as aliases for one day (2026-08-29 to
+#: 2026-08-30) and were removed rather than kept - `pyproject.toml` carries why,
+#: and the short version is that shipping a launcher under a contested name is
+#: what creates the collision it was meant to survive.
 SHIPPED_COMMANDS: tuple[tuple[str, str], ...] = (
     ("swemux", "console"),
     ("swemuxd", "console"),
-    ("mux", "console"),
-    ("muxd", "console"),
     ("swe-mux", "gui"),
 )
 
 #: The client and daemon launchers in preference order, for the places that need
-#: to name *one* of them. Resolved against the install rather than hardcoded: a
-#: copy installed before the `swemux` pair existed still has the aliases, and
-#: printing a command that is not on that machine is the failure this avoids.
-CLIENT_COMMANDS: tuple[str, ...] = ("swemux", "mux")
-DAEMON_COMMANDS: tuple[str, ...] = ("swemuxd", "muxd")
+#: to name *one* of them. Still tuples, and still resolved against the install
+#: rather than hardcoded, though each currently holds one name: the machinery
+#: exists because printing a command that is not on *this* machine is the failure
+#: it avoids, and that is a property of the lookup rather than of the count.
+CLIENT_COMMANDS: tuple[str, ...] = ("swemux",)
+DAEMON_COMMANDS: tuple[str, ...] = ("swemuxd",)
 
 #: The bundle directories a frozen install lays out as siblings under one parent,
 #: in the order a launcher is looked for. `dist/` has exactly this shape and the
@@ -251,6 +253,33 @@ class InstallLocation:
             self.package_dir.parent.name == "src"
             and (self.package_dir.parent.parent / "pyproject.toml").is_file()
         )
+
+    def reinstall_command(self) -> str:
+        """How to reinstall *this* copy, for a dependency that should be present.
+
+        The sibling of `extra_install_command`, for the case that has no extra to
+        name: a base dependency is missing, which means the environment is
+        partially installed rather than deliberately minimal. Since 2026-08-30
+        `pystray` and `pywebview` are in that category, and the message a user
+        reads when the tray cannot start is the reason this exists - "install the
+        `desktop` extra" was already the wrong instruction for anyone who had
+        installed correctly, and after the move it is wrong for everyone.
+
+        Same derivation as `extra_install_command` and the same reason for it: a
+        remedy that cannot be run where it is read ends the search.
+        """
+        if self.source_checkout:
+            return "uv sync"
+        if self.kind == INSTALL_UV_TOOL:
+            return 'uv tool install --force "swe-mux"'
+        if self.kind == INSTALL_PIPX:
+            return 'pipx install --force "swe-mux"'
+        if self.kind == INSTALL_FROZEN:
+            # No installer to re-run: the bundle's dependencies were fixed when
+            # it was built, so a missing one is a broken bundle, not a fixable
+            # environment. Saying so beats handing out a command that cannot help.
+            return ""
+        return f'{self.pip_command} install --force-reinstall "swe-mux"'
 
     def path_fix_lines(self) -> list[str]:
         """The concrete way to put `bin_dir` on ``PATH`` on this host.

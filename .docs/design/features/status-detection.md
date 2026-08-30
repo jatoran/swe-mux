@@ -950,8 +950,8 @@ the same `record.observation_stale_since`, `session.observation_stale_reason`, a
 `_note_transcript_staleness`, the rollover-refusal path, and the reason initialization at
 construct time). It is a read-only projection, never a new authority: the delivery block and
 the transition ledger are unchanged. The consolidated `GET /api/diagnostics/doctor` report
-(`mux doctor`) folds it into a `freshness` check that fails when any row is delivery-blocking
-and warns otherwise, so `mux doctor` answers "is any session quietly reporting a dead
+(`swemux doctor`) folds it into a `freshness` check that fails when any row is delivery-blocking
+and warns otherwise, so `swemux doctor` answers "is any session quietly reporting a dead
 conversation" without reading each session's state-log by hand.
 
 ## Regression defense

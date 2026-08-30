@@ -48,19 +48,19 @@ swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so 
 # Recommended. Isolated environment, every command on your PATH globally.
 uv tool install swe-mux
 
-# Windows: the `desktop` extra adds the native window and the tray icon.
-uv tool install "swe-mux[desktop]"
-
 # The same isolated, on-PATH install, without uv.
 pipx install swe-mux
 ```
 
-Then run `swemuxd` and open <http://127.0.0.1:8765>, or `swe-mux` for the desktop window on Windows.
+On Windows that is everything: run `swe-mux` and you get the native window and a tray icon, with no console and nothing else to install.
+It offers to add itself to the Start Menu and to start with Windows the first time, so after that there is nothing to launch at all.
+
+Elsewhere - or if you would rather just use the browser - `swemux start` puts the daemon in the background and returns once it is serving <http://127.0.0.1:8765>; closing the terminal does not stop it, and `swemuxd --shutdown` does.
+`swemuxd` still runs it in the foreground when you want the log in front of you.
 `swemux doctor` is a read-only health report covering the daemon, the supervisor, the frontend build, detected agent CLIs, the tailnet listener, and background loops.
 
-Every install writes five commands over three programs: **`swemux`** (the CLI), **`swemuxd`** (the daemon), and **`swe-mux`** (the desktop window and tray).
-`mux` and `muxd` are kept as aliases of the first two, so anything written against them keeps working.
-Prefer `swemux` and `swemuxd` in anything you write down: `mux` is shared with at least one unrelated tool, and on a machine with both, whichever installed last is the one your shell finds.
+Every install writes three commands, one per program: **`swemux`** (the CLI), **`swemuxd`** (the daemon), and **`swe-mux`** (the desktop window and tray).
+There are no short aliases, deliberately: `mux` is shared with at least one unrelated tool, and shipping a launcher under a contested name is what creates the collision rather than what survives it.
 
 A **Windows installer** is published from v0.1.2 onward, alongside a portable archive, on the [releases page](https://github.com/jatoran/swe-mux/releases).
 It is **not code signed**, so SmartScreen warns on first run; the PyPI install avoids that prompt entirely.
@@ -104,7 +104,7 @@ What each claim rests on: [`.docs/development/CROSS_PLATFORM_FINDINGS.md`](.docs
 
 ## Remote access
 
-The daemon listens on localhost and on the machine's detected Tailscale IPv4 address; `muxd --local-only` keeps it local.
+The daemon listens on localhost and on the machine's detected Tailscale IPv4 address; `swemuxd --local-only` keeps it local.
 **Tailscale policy is the access boundary**, and swe-mux has no separate remote login, so a tailnet peer your policy admits has terminal and code-execution authority.
 
 Browsers restrict the clipboard and microphone over plain HTTP, so for those put Tailscale Serve in front: `tailscale serve --bg http://127.0.0.1:8765`.

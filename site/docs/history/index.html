@@ -971,8 +971,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="docsec" id="when-two-entries-share-a-conversation">
         <div class="head"><span class="n">#</span><h2>When two entries share a conversation</h2><span class="fill"></span></div>
         <p class="prose">A conversation that was resumed under two different session identities can end up as two history rows. That is reported and repairable rather than left to accumulate:</p>
-        <div class="code"><pre>mux history-duplicates            # report what would change
-mux history-duplicates repair     # merge each conversation's rows</pre></div>
+        <div class="code"><pre>swemux history-duplicates            # report what would change
+swemux history-duplicates repair     # merge each conversation's rows</pre></div>
       </div>
       <div class="docsec" id="usage-is-reconstructed-from-these">
         <div class="head"><span class="n">#</span><h2>Usage is reconstructed from these</h2><span class="fill"></span></div>

@@ -140,9 +140,6 @@ INSTALL = Page(
             "# Recommended. Isolated environment, all three commands on PATH globally.\n"
             "uv tool install swe-mux\n"
             "\n"
-            "# On Windows, take the desktop extra: it is what adds the window and the tray icon.\n"
-            'uv tool install "swe-mux[desktop]"\n'
-            "\n"
             "# The same isolated, on-PATH install, without uv.\n"
             "pipx install swe-mux\n"
             "\n"
@@ -155,12 +152,14 @@ INSTALL = Page(
             "flat",
             [
                 (
-                    "No shortcut, no Start Menu entry",
+                    "No shortcut, no Start Menu entry - until you are asked",
                     "Wheels have no post-install hook and pip runs no install-time code, so this "
-                    "is structural rather than a step somebody forgot. swe-mux starts from a "
-                    "terminal. On Windows you can create the shortcuts afterwards with "
-                    "<code>mux install-shortcut</code>, which is idempotent and has a "
-                    "<code>--remove</code>.",
+                    "is structural rather than a step somebody forgot. What swe-mux does about "
+                    "it is ask once: the first time the Windows desktop shell starts, it offers "
+                    "to add a Start Menu entry and to start with Windows, and never asks again "
+                    "either way. <code>mux install-shortcut</code> does the same thing on "
+                    "demand, is idempotent, and has a <code>--remove</code> that takes back all "
+                    "three - the login entry included.",
                 ),
                 (
                     "No agent CLI is installed or logged in",
@@ -169,26 +168,39 @@ INSTALL = Page(
                 ),
             ],
         ),
-        ("h2", "The desktop extra, on Windows"),
+        ("h2", "The window and the tray, on Windows"),
         (
             "p",
-            "Without <code>[desktop]</code> you still get a <code>swe-mux</code> command, and it "
-            "fails on a missing import rather than opening a window. The extra wants the WebView2 "
-            "Runtime, which recent Windows builds already have.",
+            "There is nothing extra to install. <code>pystray</code> and <code>pywebview</code> "
+            "are ordinary dependencies carrying a <code>win32</code> marker, so the command "
+            "above gives a Windows machine a working <code>swe-mux</code> and gives every other "
+            "machine nothing to download. They want the WebView2 Runtime, which recent Windows "
+            "builds already have.",
         ),
         (
             "note",
-            "It is Windows-only by declaration: <code>pystray</code> and <code>pywebview</code> "
-            "both carry a <code>win32</code> platform marker, so on Linux and macOS the extra "
-            "resolves to nothing and the daemon plus a browser is the whole product.",
+            "There was a <code>[desktop]</code> extra until 0.1.5. It still resolves, so an old "
+            "script keeps working, and it now adds nothing. It went because every install got "
+            "the <code>swe-mux</code> launcher whether or not it got the packages behind it, so "
+            "skipping the extra produced a command whose only behaviour was to fail.",
         ),
         ("h2", "Start it"),
         (
+            "p",
+            "<code>mux start</code> returns once the daemon is answering and leaves it "
+            "running: closing the terminal does not stop it. It is idempotent, so a daemon "
+            "that is already serving is reported and left alone, and nothing else in the CLI "
+            "starts one implicitly.",
+        ),
+        (
             "code",
-            "muxd                          # the daemon\n"
+            "swemux start                     # the daemon, in the background\n"
             "# then open http://127.0.0.1:8765\n"
             "\n"
-            "swe-mux                       # Windows, with the desktop extra: the same thing in a window",
+            "swemuxd                          # the same daemon, in the foreground\n"
+            "swemuxd --shutdown               # stops it, the supervisor, and every session\n"
+            "\n"
+            "swe-mux                       # Windows: the same thing in a window, with a tray icon",
         ),
         (
             "proof",
@@ -257,10 +269,10 @@ INSTALL = Page(
             "# Run from a checkout instead - what you want if you are changing swe-mux itself.\n"
             "git clone https://github.com/jatoran/swe-mux\n"
             "cd swe-mux\n"
-            "uv sync --extra desktop\n"
+            "uv sync\n"
             "npm --prefix frontend ci        # only the source flow needs Node\n"
             "npm --prefix frontend run build # a fresh clone serves no UI until this runs once\n"
-            "uv run --extra desktop swe-mux",
+            "uv run swe-mux",
         ),
         (
             "note",
@@ -347,7 +359,7 @@ FIRST_SESSION = Page(
         ("h2", "Checking swe-mux can see your CLI"),
         (
             "code",
-            "mux harnesses        # every harness in the registry, with its detection state",
+            "swemux harnesses        # every harness in the registry, with its detection state",
         ),
         (
             "p",
@@ -1623,8 +1635,8 @@ HISTORY = Page(
         ),
         (
             "code",
-            "mux history-duplicates            # report what would change\n"
-            "mux history-duplicates repair     # merge each conversation's rows",
+            "swemux history-duplicates            # report what would change\n"
+            "swemux history-duplicates repair     # merge each conversation's rows",
         ),
         ("h2", "Usage is reconstructed from these"),
         (
@@ -1939,9 +1951,9 @@ USAGE = Page(
         ),
         (
             "code",
-            "mux accounts             # what is saved, and which is active\n"
-            "mux accounts verify      # re-verify each saved identity\n"
-            "mux accounts audit       # the credential audit trail",
+            "swemux accounts             # what is saved, and which is active\n"
+            "swemux accounts verify      # re-verify each saved identity\n"
+            "swemux accounts audit       # the credential audit trail",
         ),
         ("h2", "The three pots, and why they are never summed"),
         (
@@ -2242,55 +2254,55 @@ CLI = Page(
             (
                 ["Command", "What it does"],
                 [
-                    ["mux ls", "List sessions. Filter with --project, --state, --backend."],
+                    ["swemux ls", "List sessions. Filter with --project, --state, --backend."],
                     [
-                        "mux spawn",
+                        "swemux spawn",
                         "Spawn a session. --project is required; --backend, --name, --profile, "
                         "--exe, and repeatable --arg shape it.",
                     ],
                     [
-                        "mux send",
+                        "swemux send",
                         "Send input to a session, named by id, name, or a unique id prefix.",
                     ],
-                    ["mux kill", "Terminate a session."],
-                    ["mux resume", "Resume a history entry. --project is required."],
-                    ["mux projects", "List Projects."],
-                    ["mux profiles", "List launch profiles."],
+                    ["swemux kill", "Terminate a session."],
+                    ["swemux resume", "Resume a history entry. --project is required."],
+                    ["swemux projects", "List Projects."],
+                    ["swemux profiles", "List launch profiles."],
                     [
-                        "mux harnesses",
+                        "swemux harnesses",
                         "List every harness in the registry with its detection state. The first "
                         "thing to run when a CLI you have installed is not being recognised.",
                     ],
-                    ["mux history", "List conversation history."],
+                    ["swemux history", "List conversation history."],
                     [
-                        "mux history-duplicates",
+                        "swemux history-duplicates",
                         "Report, or with <code>repair</code> merge, history entries that share one "
                         "conversation.",
                     ],
                     [
-                        "mux accounts",
+                        "swemux accounts",
                         "<code>list</code>, <code>verify</code>, or <code>audit</code> saved "
                         "provider accounts.",
                     ],
                     [
-                        "mux doctor",
+                        "swemux doctor",
                         "The consolidated read-only diagnostics report. <code>--export</code> "
                         "prints the full bundle as JSON.",
                     ],
                     [
-                        "mux update",
+                        "swemux update",
                         "Report the release check and this install's update path. "
                         "<code>--install VERSION</code> downloads that release and verifies its "
                         "hash against the published manifest before anything is staged.",
                     ],
                     [
-                        "mux reload-daemon",
+                        "swemux reload-daemon",
                         "Restart the daemon in place. Sessions survive when the PTY supervisor is "
                         "on; <code>--force</code> restarts without it and <b>kills every "
                         "session</b>.",
                     ],
                     [
-                        "mux install-shortcut",
+                        "swemux install-shortcut",
                         "Create the Start Menu and Desktop shortcuts a wheel install structurally "
                         "cannot (Windows). <code>--startup</code> adds a run-at-login entry, "
                         "<code>--remove</code> takes them all away. Idempotent.",
@@ -2335,7 +2347,7 @@ CLI = Page(
             "keeps working whether or not a daemon is running. The doctor codes compose the two "
             "that already existed rather than adding a scheme of their own.",
         ),
-        ("h2", "mux doctor has two modes, and picks between them itself"),
+        ("h2", "swemux doctor has two modes, and picks between them itself"),
         (
             "flat",
             [
@@ -2693,7 +2705,7 @@ TROUBLESHOOTING = Page(
             "python -c \"import sysconfig; print(sysconfig.get_path('scripts'))\"\n"
             "\n"
             "# Or ask swe-mux itself.\n"
-            "muxd --where",
+            "swemuxd --where",
         ),
         (
             "note",
@@ -2803,7 +2815,7 @@ TROUBLESHOOTING = Page(
         ("h2", "swe-mux cannot see an agent CLI I have installed"),
         (
             "code",
-            "mux harnesses      # every harness in the registry, and what it resolved to",
+            "swemux harnesses      # every harness in the registry, and what it resolved to",
         ),
         (
             "p",
@@ -2853,7 +2865,7 @@ TROUBLESHOOTING = Page(
         ("h2", "Getting a diagnostic somebody can read"),
         (
             "code",
-            "mux doctor --export > diagnostics.json",
+            "swemux doctor --export > diagnostics.json",
         ),
         (
             "p",
@@ -2895,10 +2907,10 @@ CONTRIBUTING = Page(
             "code",
             "git clone https://github.com/jatoran/swe-mux\n"
             "cd swe-mux\n"
-            "uv sync --extra desktop\n"
+            "uv sync\n"
             "npm --prefix frontend ci\n"
             "npm --prefix frontend run build   # a fresh clone serves no UI until this runs once\n"
-            "uv run --extra desktop swe-mux",
+            "uv run swe-mux",
         ),
         (
             "note",

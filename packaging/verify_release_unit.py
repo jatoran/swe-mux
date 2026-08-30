@@ -221,7 +221,7 @@ KNOWN_EXTERNAL_COMMANDS = frozenset(
 )
 
 # `uv run <options> <command>` and friends. The command being documented is the
-# one *after* the runner, so `uv run mux doctor` is a use of `mux` and not of
+# one *after* the runner, so `uv run swemux doctor` is a use of `mux` and not of
 # `uv`. Only the two-word form is a runner: `uv build` and `uv tool install` are
 # uses of `uv` itself.
 _RUNNER_PREFIXES = (("uv", "run"), ("pipx", "run"), ("uvx",), ("npx",))
@@ -855,7 +855,7 @@ def _check_version_literals(tree: SourceTree, version: str) -> Check:
             f"{'; '.join(stale)}.",
             f"Bump every location in `RELEASING.md` § Versioning to {version} in one "
             "commit. A daemon that answers `/api/health` with the previous version never "
-            "fails while doing it, and it is what `mux doctor` and the in-app update "
+            "fails while doing it, and it is what `swemux doctor` and the in-app update "
             "check both read. If one of these literals is not the swe-mux version at all, "
             "the fix is the one `RELEASING.md` calls owed: make these read "
             "`swe_mux.__version__` instead of carrying a copy.",

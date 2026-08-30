@@ -1,4 +1,4 @@
-"""The degraded `mux doctor` report that runs when no daemon answers.
+"""The degraded `swemux doctor` report that runs when no daemon answers.
 
 Nothing here starts, reaches, or needs a daemon - which is the point: the report
 under test exists for the machine where one will not start, so a test that needed
@@ -571,6 +571,35 @@ def test_an_absent_extra_remedy_is_runnable_by_whoever_reads_it(
     assert checks["extra.voice-local"]["remedy"] == 'pipx install --force "swe-mux[voice-local]"'
 
 
+def test_a_missing_base_capability_warns_rather_than_reading_as_unchosen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`desktop` shares a table with the extras and is not one of them.
+
+    `pystray` and `pywebview` became base dependencies on 2026-08-30, so their
+    absence means a partially-installed environment rather than a capability
+    nobody asked for - and the two need opposite words. `unavailable` would tell
+    someone whose tray is broken that nothing is wrong, and the old remedy would
+    send them to install `swe-mux[desktop]`, which is now an empty extra that
+    would change nothing and end the search.
+    """
+    monkeypatch.setattr(doctor_local, "IS_WINDOWS", True)
+    monkeypatch.setattr(doctor_local, "_module_resolves", lambda _: False)
+    monkeypatch.delattr(doctor_local.sys, "frozen", raising=False)
+    checks = {check["id"]: check for check in doctor_local._extras_checks()}
+    desktop = checks["extra.desktop"]
+    assert desktop["status"] == "warn"
+    assert desktop["severity"] == "warning"
+    assert "incomplete" in desktop["detail"]
+    assert "[desktop]" not in desktop["remedy"]
+    # The row beside it is a real extra and must keep the other vocabulary, or
+    # this test would pass on a change that made everything a warning.
+    assert checks["extra.voice-local"]["status"] == "unavailable"
+    assert "[voice-local]" in checks["extra.voice-local"]["remedy"] or checks[
+        "extra.voice-local"
+    ]["remedy"] == "uv sync --extra voice-local"
+
+
 def test_preview_capture_is_reported_once_by_the_asset_row_that_knows_more() -> None:
     """W9's capability row subsumes an extras row, so there must not be both.
 
@@ -687,7 +716,7 @@ def _fake_install(
     if files is None:
         files = {
             str(_INSTALL_SCRIPTS / f"{name}{_INSTALL_EXE}")
-            for name in ("mux", "muxd", "swe-mux")
+            for name in ("swemux", "swemuxd", "swe-mux")
         }
     files = files | {str(_INSTALL_ROOT / "uv-receipt.toml")}
     normalized = {_install_key(entry) for entry in files}
@@ -810,7 +839,7 @@ def test_the_json_report_carries_the_install_facts_the_prose_states(
     install = report["capabilities"]["install"]
     assert install["kind"] == "uv-tool"
     assert install["on_path"] is False
-    assert install["unreachable"] == ["mux", "muxd", "swe-mux"]
+    assert install["unreachable"] == ["swemux", "swemuxd", "swe-mux"]
     assert install["module_fallback"].endswith("-m swe_mux")
 
 

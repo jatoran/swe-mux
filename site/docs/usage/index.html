@@ -945,9 +945,9 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="head"><span class="n">#</span><h2>Provider accounts</h2><span class="fill"></span></div>
         <p class="prose">Save, relabel, reauthenticate, switch, and remove Claude and Codex logins, with subscription-window polling so you can see how much of a window is left. Only authentication is copied, and switching is always an explicit act you take.</p>
         <p class="note"><b>This is for one person switching between accounts they personally own and pay for</b>, replacing the logout and login cycle the provider CLIs otherwise require. It is not account pooling and not a way around a usage limit: accounts are never shared between people, credentials stay local and go nowhere but the provider's own endpoints, and sessions are never load-balanced across accounts.</p>
-        <div class="code"><pre>mux accounts             # what is saved, and which is active
-mux accounts verify      # re-verify each saved identity
-mux accounts audit       # the credential audit trail</pre></div>
+        <div class="code"><pre>swemux accounts             # what is saved, and which is active
+swemux accounts verify      # re-verify each saved identity
+swemux accounts audit       # the credential audit trail</pre></div>
       </div>
       <div class="docsec" id="the-three-pots-and-why-they-are-never-summed">
         <div class="head"><span class="n">#</span><h2>The three pots, and why they are never summed</h2><span class="fill"></span></div>

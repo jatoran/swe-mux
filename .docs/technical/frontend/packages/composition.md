@@ -49,7 +49,7 @@ Index: `../packages.md`.
   The last reads as pending rather than broken, because sending someone to hunt for a fault that does not exist is its own failure.
 - The section is hidden until an overlay exists. An empty panel explaining a mechanism nobody is using is noise on a page that already has a lot of it, and it appears at the moment there is something to revert.
 - Settings → Diagnostics → **Frontend overlay** carries the status, the revert/restore press, the `frontend_overlay_enabled` switch, and a "Reload daemon (keep sessions)" button beside them, because a revert only reaches the screen at the next daemon start.
-  `mux ui-overlay revert` is the path that does not need this UI, and is the one to reach for when the overlay is why the UI will not load.
+  `swemux ui-overlay revert` is the path that does not need this UI, and is the one to reach for when the overlay is why the UI will not load.
 
 ## Fleet refresh
 

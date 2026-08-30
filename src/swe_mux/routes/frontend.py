@@ -17,7 +17,7 @@ application's UI.
 with this build - and restricting it would mean the one control that exists for
 "the overlay broke the UI" was reachable from fewer places than the thing that
 broke. Note that a broken overlay usually breaks *every* client, including the
-phone, which is why `mux ui-overlay revert` exists and is the real answer;
+phone, which is why `swemux ui-overlay revert` exists and is the real answer;
 this endpoint is the convenient one, not the last resort.
 
 Nothing here re-verifies on a read. Verification is a start-time act whose answer

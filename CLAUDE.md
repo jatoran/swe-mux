@@ -28,9 +28,9 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   hash-verified 10.9 MiB overlay and installs it into the data dir, where the daemon prefers
   it over its own bundled copy:
   `uv run python packaging/build_frontend_overlay.py --build --install`, then
-  `mux reload-daemon`. Seconds and one session-preserving restart, against a multi-minute
-  ~370 MB staged swap. `mux ui-overlay status` says which tree is being served and why,
-  `mux ui-overlay revert` puts the bundled one back, and both work without the UI - which is
+  `swemux reload-daemon`. Seconds and one session-preserving restart, against a multi-minute
+  ~370 MB staged swap. `swemux ui-overlay status` says which tree is being served and why,
+  `swemux ui-overlay revert` puts the bundled one back, and both work without the UI - which is
   the point, because the failure mode an overlay can cause is a frontend that will not load.
 
   Three things to know before reaching for it. **Package from the checkout the running app
@@ -43,7 +43,7 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   first hop is still a redeploy**, because a frozen app built before this feature has no
   overlay support in its bundled backend.
 - **Backend/daemon change**: `curl -X POST http://127.0.0.1:8765/api/daemon/restart`
-  (or UI menu → "Reload daemon (keep sessions)", or `mux reload-daemon`). Every session
+  (or UI menu → "Reload daemon (keep sessions)", or `swemux reload-daemon`). Every session
   survives — but the daemon restarts with your code **only when it runs from source**
   (`uv run` / dev). The restart spawns a successor of the *same executable*: a **frozen
   desktop app** daemon respawns its bundled (old) backend code, and your source change
@@ -62,7 +62,7 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   leaves the running app untouched, and a new build that never turns healthy is rolled back
   to `dist/swe-mux.prev` (bad bundle kept at `dist/swe-mux.failed`). If the swap's rename
   retries exhaust on a `WinError 5/32` lock straggler, the script relaunches the old bundle
-  itself; do NOT reach for `taskkill`/`muxd --shutdown` (that reaps sessions). Endpoint log:
+  itself; do NOT reach for `taskkill`/`swemuxd --shutdown` (that reaps sessions). Endpoint log:
   `<data_dir>/redeploy.log`.
 - **Supervisor change** (`supervisor.py`, `pty_host.py`, `scrollback.py`, `win_jobobj.py`,
   `subprocess_flags.py`, the supervisor spec/entry): **the redeploy above cannot ship this,
@@ -72,7 +72,7 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   change silently does nothing. Restarting swe-mux around the redeploy does not help; the
   order is not the problem. Updating the supervisor **reaps every live session**, so it is a
   deliberate act, not part of a normal update. From a terminal **outside** swe-mux:
-  1. `uv run muxd --shutdown` (reaps all sessions *and* stops the supervisor)
+  1. `uv run swemuxd --shutdown` (reaps all sessions *and* stops the supervisor)
   2. `Get-Process swe-mux, swe-mux-supervisor -ErrorAction SilentlyContinue` — expect nothing
   3. `uv run python packaging/build_desktop.py --supervisor-only`
   4. relaunch the app
@@ -82,7 +82,7 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   returns `False` when the running bundle is stale. **Prefer avoiding it entirely** — a new
   supervisor message that an older supervisor can reject ("unknown message type") while the
   daemon degrades gracefully needs no reap, whereas a `PROTOCOL_VERSION` bump forces one.
-- **Never** run `muxd --shutdown`, kill `swe-mux-supervisor.exe`, or taskkill swe-mux
+- **Never** run `swemuxd --shutdown`, kill `swe-mux-supervisor.exe`, or taskkill swe-mux
   processes as part of an update — those reap every live session. They are only for
   intentionally stopping everything, or for the deliberate supervisor update above.
 

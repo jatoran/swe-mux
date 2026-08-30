@@ -248,8 +248,8 @@ def test_the_desktop_entry_point_is_a_gui_script_and_the_others_are_not() -> Non
     """The half of the tradeoff `pyproject.toml` cannot assert about itself.
 
     Moving `swe-mux` back to `[project.scripts]` re-introduces the console
-    window; moving `mux` or `muxd` *out* of it would silence two programs whose
-    entire output is text. Both are one-line edits, and neither would fail
+    window; moving `swemux` or `swemuxd` *out* of it would silence two programs
+    whose entire output is text. Both are one-line edits, and neither would fail
     anything else in this suite.
     """
     root = Path(__file__).resolve().parent.parent
@@ -258,22 +258,27 @@ def test_the_desktop_entry_point_is_a_gui_script_and_the_others_are_not() -> Non
     assert manifest["project"]["scripts"] == {
         "swemux": "swe_mux.cli:main",
         "swemuxd": "swe_mux.__main__:main",
-        "mux": "swe_mux.cli:main",
-        "muxd": "swe_mux.__main__:main",
     }
 
 
-def test_the_alias_pairs_are_the_same_program_rather_than_two_of_them() -> None:
-    """`swemux` may not drift into meaning something `mux` does not.
+def test_one_launcher_per_program_and_no_second_name_for_any_of_them() -> None:
+    """Three names, three targets, and re-adding an alias has to be deliberate.
 
-    The pair exists because `mux` is a contested name, not because there are two
-    clients. Pointing one of them at a different target - a "v2" entry point, a
-    thin wrapper - would make every document that says `mux` quietly describe a
-    different program, and nothing else in this suite compares the two targets.
+    `mux` and `muxd` were aliases of these two for one day (2026-08-29 to
+    2026-08-30). `pyproject.toml` records why they went; this asserts the shape
+    that decision produced, because the cheap way to undo it is a one-line edit
+    that nothing else here would notice.
+
+    Asserted as a bijection rather than by naming the removed pair: the rule is
+    "one launcher per program", which also catches a *new* alias under some
+    third spelling - the same mistake wearing a different name.
     """
     root = Path(__file__).resolve().parent.parent
     manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    scripts = manifest["project"]["scripts"]
-    assert scripts["swemux"] == scripts["mux"]
-    assert scripts["swemuxd"] == scripts["muxd"]
-    assert scripts["swemux"] != scripts["swemuxd"]
+    targets = list(manifest["project"]["scripts"].values()) + list(
+        manifest["project"]["gui-scripts"].values()
+    )
+    assert len(targets) == len(set(targets)), (
+        "two launchers point at one target, which is an alias - see the "
+        "`[project.scripts]` comment for why this project does not ship them"
+    )

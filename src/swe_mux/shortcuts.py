@@ -559,31 +559,36 @@ def _resolve_target(location: InstallLocation, *, remove: bool) -> tuple[Path, t
             "`python -m swe_mux --where` to see what it did ship."
         )
     notes: list[str] = []
-    if not remove and _desktop_extra_missing():
-        notes.append(
-            "The `desktop` extra is not installed, so the shortcut will open nothing "
-            "until it is. Install it with `uv tool install swe-mux --with pystray "
-            "--with pywebview`, or `pip install swe-mux[desktop]`."
-        )
+    if not remove:
+        missing = _missing_shell_modules()
+        if missing:
+            reinstall = location.reinstall_command()
+            notes.append(
+                f"This environment cannot import {', '.join(missing)}, so the shortcut "
+                "will open nothing until that is fixed. These are base dependencies of "
+                "swe-mux on Windows, so this is a partially-installed environment "
+                "rather than an extra nobody chose"
+                + (f": reinstall with `{reinstall}`." if reinstall else ".")
+            )
     return target, tuple(notes)
 
 
-def _desktop_extra_missing() -> bool:
-    """Whether the tray/WebView dependencies are absent from this environment.
+def _missing_shell_modules() -> tuple[str, ...]:
+    """Which tray/WebView modules this environment cannot import, if any.
 
     Probed with `find_spec` rather than imported: the question is only whether a
     click on the new shortcut will reach a window, and importing `webview` to
     find out would cost seconds and start initialising a GUI toolkit.
-    """
-    import importlib.util
 
-    for module in ("pystray", "webview"):
-        try:
-            if importlib.util.find_spec(module) is None:
-                return True
-        except (ImportError, ValueError):
-            return True
-    return False
+    This used to report "the `desktop` extra is not installed" and hand out an
+    install command for it. Since 2026-08-30 there is no such extra to be
+    missing - `pystray` and `pywebview` are base dependencies - so a failure here
+    means a broken install rather than an unchosen option, and saying otherwise
+    would send someone to add a flag that changes nothing.
+    """
+    from .desktop_runtime import missing_shell_modules
+
+    return missing_shell_modules()
 
 
 def apply_shortcuts(

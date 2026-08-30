@@ -909,7 +909,7 @@ async def _wait_for_exclusive_database(
 
 
 async def _run_pending_maintenance(config: Config, predecessor_pid: int = -1) -> None:
-    """Honour a `mux compact-db` request, if one is pending.
+    """Honour a `swemux compact-db` request, if one is pending.
 
     Returns immediately when there is none, which is every ordinary start - the
     phase costs a single failed file read.
@@ -1140,7 +1140,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     #
     # This deliberately puts minutes of work on the startup path, against the
     # rule the rest of this function now follows. The exception is narrow and
-    # explicit: an operator typed `mux compact-db`, it happens once, the phase
+    # explicit: an operator typed `swemux compact-db`, it happens once, the phase
     # reports itself while it runs, and the alternative is stopping swe-mux,
     # which reaps every live session. Nothing schedules it and no route triggers
     # it.
@@ -1284,7 +1284,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
                 "PTY supervisor unavailable; sessions will run in-process and "
                 "will not survive a daemon restart. This is a degraded start: "
                 "the supervisor is on by default. See supervisor-console.log in "
-                "the data directory, and `mux doctor`"
+                "the data directory, and `swemux doctor`"
             )
     timeline.mark("adapters-and-shims")
     mcp_url = f"http://127.0.0.1:{config.port}/mcp"

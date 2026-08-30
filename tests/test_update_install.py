@@ -482,7 +482,7 @@ async def test_a_source_install_declines_to_swap_and_says_what_to_run(
     assert "uv tool upgrade swe-mux" in refusal.value.message
     # Refused synchronously, so nothing was fetched at all.
     assert fetch.calls == []
-    # ...and still recorded, so `mux update` can say why nothing happened.
+    # ...and still recorded, so `swemux update` can say why nothing happened.
     assert installer.snapshot()["phase"] == PHASE_REFUSED
 
 

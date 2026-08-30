@@ -67,7 +67,7 @@ CLI_DIST = ROOT / "dist" / "swe-mux-cli"
 #: Named here rather than derived from `install_location.CLIENT_COMMANDS` because
 #: this is the *build's* claim about what it produced, and a verification that
 #: reads its subject's own definition proves nothing.
-CLI_EXES = ("swemux.exe", "mux.exe")
+CLI_EXES = ("swemux.exe",)
 
 
 def supervisor_source_hash() -> str:
@@ -272,7 +272,15 @@ def describe_bundle(bundle_root: Path) -> Path:
 # an accident, and the failure it guards - a frozen app that silently reacquires
 # 277 MB it was supposed to have shed - is invisible until somebody measures a
 # release.
-REQUIRED_BUILD_EXTRAS = ("desktop", "voice-local")
+#
+# `desktop` was the other entry until 2026-08-30, for the *original* reason -
+# `pystray` is LGPL and the spec's `collect_all` had to be able to find it. That
+# requirement did not go away; it became structural. `pystray` and `pywebview`
+# are base dependencies now (`pyproject.toml`), so every environment that can
+# import swe-mux at all has them and there is no flag left to forget. Naming an
+# empty extra here would assert nothing while reading like a guard, which is the
+# exact shape this comment block exists to warn about.
+REQUIRED_BUILD_EXTRAS = ("voice-local",)
 
 # Dependency *groups* the bundle is built from, for the same inverted reason.
 # `g2p-model` holds `en-core-web-sm`, which the bundle also no longer carries -
@@ -331,8 +339,67 @@ def missing_extra_distributions(
     return missing
 
 
+def missing_relinkable_distributions(names: Sequence[str] = ()) -> list[str]:
+    """Relink-source packages this machine declares, needs, and does not have.
+
+    Separate from `missing_extra_distributions` because these are *base*
+    requirements and no flag can be missing for them - which is exactly why they
+    need their own check rather than none. When `pystray` sat in the `desktop`
+    extra, forgetting the flag is what the extras preflight caught; now that it
+    is a base dependency the equivalent failure is a partially-installed
+    environment, and it fails just as late and just as expensively:
+    `collect_all` on an absent package collects nothing *without failing*, so
+    the build runs to completion and `verify_bundle_licenses` rejects the result
+    minutes later over a missing `_internal/pystray/`.
+
+    Markers are evaluated against *this* interpreter, for the same reason
+    `missing_extra_distributions` does it: `pystray` is `sys_platform == 'win32'`
+    and the question here is whether this machine can build a compliant bundle,
+    not whether the package exists somewhere in the distribution. Without that,
+    every call on Linux would report `pystray` missing and this preflight would
+    describe the host rather than the build.
+
+    `names` defaults to `RELINKABLE_LGPL` so adding a relink-source package
+    cannot leave the check behind, and is a parameter so the refusal's wording is
+    assertable on a host where the real list resolves to nothing (`.docs/CLAUDE.md`:
+    an assertion about an artifact must not be derived from the environment
+    checking it).
+    """
+    import tomllib
+    from importlib.metadata import PackageNotFoundError, version
+
+    from packaging.requirements import Requirement
+
+    wanted = set(names or RELINKABLE_LGPL)
+    manifest = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    missing: list[str] = []
+    for entry in manifest["project"].get("dependencies", []):
+        requirement = Requirement(entry)
+        if requirement.name not in wanted:
+            continue
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        try:
+            version(requirement.name)
+        except PackageNotFoundError:
+            missing.append(requirement.name)
+    return missing
+
+
 def verify_build_extras_installed() -> None:
     """Refuse to build from an environment that cannot produce a compliant bundle."""
+    unrelinkable = missing_relinkable_distributions()
+    if unrelinkable:
+        raise SystemExit(
+            "The desktop bundle ships these LGPL packages as replaceable source, "
+            "and they are not installed:\n  "
+            + "\n  ".join(unrelinkable)
+            + "\nThey are base dependencies (`pyproject.toml`), so this is a "
+            "partially-installed environment rather than a missing flag: run "
+            "`uv sync` and build again. Building without them produces a bundle "
+            "with no `_internal/<package>/`, and `verify_bundle_licenses` refuses "
+            "it at the end of the build instead of here."
+        )
     missing = missing_extra_distributions()
     if missing:
         flags = " ".join(
@@ -819,7 +886,7 @@ def build_supervisor_bundle(*, force: bool = False) -> bool:
         if SUPERVISOR_EXE.is_file():
             raise SystemExit(
                 "Supervisor bundle rebuild failed. If a supervisor is running it locks "
-                "its exe; stop it first with `muxd --shutdown` (this reaps all "
+                "its exe; stop it first with `swemuxd --shutdown` (this reaps all "
                 "sessions), then rebuild."
             ) from exc
         raise

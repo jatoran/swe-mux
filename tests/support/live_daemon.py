@@ -746,7 +746,7 @@ def supervisor_discovery(data_dir: Path) -> dict[str, Any] | None:
 async def reap_any_supervisor(data_dir: Path) -> bool:
     """Stop the supervisor keyed on `data_dir`, reaping every session it holds.
 
-    This is `muxd --shutdown` for one test: the same `kill_server` the CLI calls,
+    This is `swemuxd --shutdown` for one test: the same `kill_server` the CLI calls,
     which reaps through the protocol when it can and falls back to an
     identity-checked terminate when it cannot. The identity check is what makes
     this safe to call from a test at all - it refuses any pid whose command line

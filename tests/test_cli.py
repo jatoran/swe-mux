@@ -465,21 +465,25 @@ def test_install_shortcut_json_carries_every_path_it_wrote(
     ("argv0", "expected"),
     [
         (r"C:\Users\x\.venv\Scripts\swemux.exe", "swemux"),
-        (r"C:\Users\x\.venv\Scripts\mux.exe", "mux"),
         ("/home/x/.local/bin/swemux", "swemux"),
-        ("/home/x/.local/bin/mux", "mux"),
+        # Anything this project does not ship prints the name it documents,
+        # rather than whatever the copy happens to be called.
+        (r"C:\Users\x\.venv\Scripts\mux.exe", "swemux"),
+        ("/home/x/.local/bin/sm", "swemux"),
     ],
 )
 def test_the_usage_line_names_the_command_that_was_actually_typed(
     argv0: str, expected: str
 ) -> None:
-    """Four launchers, one program: a hardcoded `prog` prints the wrong one.
+    """The `.exe` suffix has to come off, and a foreign name has to be ignored.
 
-    `[project.scripts]` declares `swemux` and `mux` for this client, so half of
-    every usage line and every argparse error would have named a command the user
-    did not type. The `.exe` case is the one that matters on the proving platform
-    - a console script there is a real executable, and argparse's own default
-    would print `swemux.exe`.
+    Two failures in one place. Argparse's own default `prog` is `argv[0]`'s
+    basename, which on the proving platform is `swemux.exe` - a spelling nobody
+    types and no document contains. And a renamed or symlinked copy must still
+    print the name this project documents, which is why `LAUNCHER_NAMES` is a
+    closed set rather than "whatever the file is called": `mux` was a launcher
+    until 2026-08-30, and a usage line naming it now would be advice to run
+    something that does not exist.
     """
     assert cli.invoked_as(argv0) == expected
     assert cli.build_parser(prog=cli.invoked_as(argv0)).format_usage().startswith(

@@ -31,7 +31,7 @@ from PyPI on an explicit press and unpacks it as plain, readable Python
 source under `<data-dir>/voice-runtime/site/num2words/` - acquired on an explicit press by `swe_mux.voice_runtime`, from the same PyPI wheel this repository pins in `swe_mux/voice_wheels.py`.
 Overwrite those files with your own build of the same version and relaunch;
 the application imports them from disk at startup.
-Running from source (`uv sync --extra voice-local && uv run muxd`) replaces it the
+Running from source (`uv sync --extra voice-local && uv run swemuxd`) replaces it the
 usual way, with `pip install num2words==<your build>`.
 
 ### pystray 0.19.5 - LGPLv3
@@ -42,7 +42,7 @@ LGPL-3.0. The Windows tray icon (`desktop.py`). Weak copyleft: it reaches swe-mu
 Python source under `swe-mux/_internal/pystray/`, not compiled into the
 executable archive. Overwrite those files with your own build of the same
 version and relaunch; the application imports them from disk at startup.
-Running from source (`uv sync --extra desktop && uv run muxd`) replaces it the
+Running from source (`uv sync && uv run swemuxd`) replaces it the
 usual way, with `pip install pystray==<your build>`.
 
 ## Modified redistributions
