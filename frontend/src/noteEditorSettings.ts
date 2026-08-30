@@ -1,7 +1,7 @@
 import type { ShortcutPolicy } from '@continuity-editor/editor'
 
 /**
- * Note-editor preferences: the configurable surface of the vendored Continuity
+ * Note-editor preferences: the configurable surface of the Continuity
  * editor, resolved from the daemon config into the two shapes it accepts.
  *
  * Continuity takes its configuration two ways and this module keeps that split
@@ -107,7 +107,7 @@ export function noteShortcutBindings(overrides: unknown): Record<string, string 
 /**
  * Typography and rail geometry, as the custom properties Continuity reads. A
  * value the user left at zero/blank is absent from the result: the editor's own
- * default then applies, so upgrading the vendored editor can still move it.
+ * default then applies, so upgrading the editor can still move it.
  */
 export function noteEditorCssVars(config: Record<string, unknown>): Record<string, string> {
   const vars: Record<string, string> = {}

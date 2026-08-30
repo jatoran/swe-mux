@@ -202,7 +202,7 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | @codemirror/search | 6.7.1 | MIT |
 | @codemirror/state | 6.7.1 | MIT |
 | @codemirror/view | 6.43.9 | MIT |
-| @continuity-editor/editor | 0.2.36 | MIT |
+| @continuity-editor/editor | 0.2.40 | MIT |
 | @lezer/common | 1.5.2 | MIT |
 | @lezer/cpp | 1.1.6 | MIT |
 | @lezer/css | 1.3.6 | MIT |

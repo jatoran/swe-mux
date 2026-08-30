@@ -42,7 +42,7 @@
     "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.9",
-    "@continuity-editor/editor": "file:vendor/continuity-editor-0.2.36.tgz",
+    "@continuity-editor/editor": "^0.2.40",
     "@lezer/highlight": "^1.2.3",
     "@ricky0123/vad-web": "^0.0.24",
     "@xterm/addon-clipboard": "^0.2.0",
