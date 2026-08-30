@@ -17,6 +17,41 @@ set -euo pipefail
 
 step() { printf '\n=== %s ===\n' "$*" >&2; }
 
+# The gate saturates every core (`-n auto` pytest, tsc, the node suites), and
+# several worktrees legitimately run it at once - so it yields the CPU to the
+# interactive fleet instead of competing with it. The whole run drops to
+# below-normal priority here, before anything is spawned, and every child
+# inherits it: Windows passes the priority class down only from a BelowNormal or
+# Idle parent, which is exactly the class chosen, and POSIX children inherit
+# niceness unconditionally. Measured 2026-08-30: three concurrent gates plus a
+# renderer suite held all 32 logical CPUs at ~85% and delayed typed input across
+# every live session; a below-normal batch run costs the gate almost nothing on
+# an otherwise-idle host and everything it was stealing on a busy one.
+# `MUX_KEEP_PRIORITY=1` opts out (timing the gate itself is the one reason to).
+# Lowering is best-effort and never fails the gate, but always says what it did.
+if [[ -n "${MUX_KEEP_PRIORITY:-}" ]]; then
+  printf 'priority: kept (MUX_KEEP_PRIORITY is set)\n' >&2
+else
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # $$ is the MSYS pid; the Windows one lives in /proc/<pid>/winpid.
+      winpid=$(cat "/proc/$$/winpid" 2>/dev/null || true)
+      if [[ -n "$winpid" ]] && powershell.exe -NoProfile -Command "(Get-Process -Id $winpid).PriorityClass = 'BelowNormal'" >/dev/null 2>&1; then
+        printf 'priority: below normal (winpid %s)\n' "$winpid" >&2
+      else
+        printf 'priority: unchanged (could not lower winpid=%s)\n' "${winpid:-unknown}" >&2
+      fi
+      ;;
+    *)
+      if renice -n 10 -p $$ >/dev/null 2>&1; then
+        printf 'priority: niceness 10 (pid %s)\n' "$$" >&2
+      else
+        printf 'priority: unchanged (renice refused)\n' >&2
+      fi
+      ;;
+  esac
+fi
+
 step "pytest"
 # Distributed across the host's physical cores (`-n auto`). The suite is
 # function-scoped throughout, keeps its state in per-test tmp dirs, and binds no

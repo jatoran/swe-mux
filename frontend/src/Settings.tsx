@@ -86,6 +86,10 @@ type Config = {
   harness_skill_enabled:Record<string,boolean>
   experience_tier:''|'terminal'|'deterministic'|'automations'
   harness_instrument_enabled:Record<string,boolean>
+  // Absolute paths the user pointed swe-mux at, keyed by prerequisite id. The
+  // escape hatch for install layouts detection cannot guess; consulted ahead of
+  // PATH and ahead of the well-known locations.
+  tool_paths:Record<string,string>
   git_poll_seconds:number;worktree_root:string;git_swe_mux_prompt_enabled:boolean
   git_swe_mux_prompt_decisions:Record<string,'keep_visible'|'ignore_all'>
   new_project_parent:string;reconcile_external_history:boolean;theme:ThemeName
@@ -217,7 +221,13 @@ type UsageStatus = {
   cache?:{updated_at?:number;sources?:Record<string,{totals?:Record<string,number>}>}
 }
 
-type Prerequisite = {id:string;label:string;purpose:string;present:boolean;path:string|null;download_url:string;install_command:string}
+// `state` is three-valued and `present` is the older two-valued view of the same
+// answer, true for both found states. The middle state exists because collapsing
+// it is what told users to install software they already had: an installer that
+// does not touch PATH (Tailscale's, on every Windows machine) left a working tool
+// reading as absent.
+type PrerequisiteState = 'present'|'off_path'|'missing'
+type Prerequisite = {id:string;label:string;purpose:string;present:boolean;state:PrerequisiteState;source:string;path:string|null;download_url:string;install_command:string;path_remedy:string|null}
 type KeybindingCommand = {id:string;label:string;category:string}
 type KeybindingPolicy = {browser_reserved:string[];desktop_only:string[];application_reserved:string[];terminal_reserved:string[];rules:string[]}
 type KeybindingsResponse = {
@@ -418,6 +428,24 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     finally{setOverlayBusy(false)}
   }
   const [prerequisites,setPrerequisites]=useState<Prerequisite[]|null>(null)
+  const [prereqBusy,setPrereqBusy]=useState(false)
+  // What the last re-scan actually did. Kept separate from the rows because "I
+  // looked again and PATH really is unchanged" is a different answer from "I
+  // looked again", and the difference is the whole reason the button is not just
+  // a re-fetch: a daemon inherits its environment once, so a tool installed while
+  // swe-mux was running is invisible until PATH is re-read from the OS.
+  const [prereqRescan,setPrereqRescan]=useState<{path_refreshed:boolean;path_refresh_supported:boolean}|null>(null)
+  const rescanPrerequisites=async():Promise<void>=>{
+    if(prereqBusy)return
+    setPrereqBusy(true)
+    try{
+      const result=await api<{prerequisites:Prerequisite[];path_refreshed:boolean;path_refresh_supported:boolean}>(
+        'POST','/api/diagnostics/prerequisites/refresh')
+      setPrerequisites(result.prerequisites)
+      setPrereqRescan({path_refreshed:result.path_refreshed,path_refresh_supported:result.path_refresh_supported})
+    }catch{setPrereqRescan(null)}
+    finally{setPrereqBusy(false)}
+  }
   // Placeholder for the assistant's new-project location: the parent directory most
   // of the registered projects already live in. A hint only - never written back.
   // Derived from the bundle's own `projects` part rather than a second
@@ -1365,6 +1393,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const next={...(draft!.harness_skill_enabled||{})}
     if(on) next[name]=true; else delete next[name]
     change('harness_skill_enabled',next)
+  }
+  // An empty box clears the override rather than storing "", so the stored map
+  // only ever holds answers the user actually gave and a cleared one falls all
+  // the way back to ordinary detection.
+  const setToolPath = (id:string, value:string):void => {
+    const next={...(draft!.tool_paths||{})}
+    if(value.trim()) next[id]=value.trim(); else delete next[id]
+    change('tool_paths',next)
   }
   const startHistoryScan = async ():Promise<void> => {
     try { setScanJob((await api<{job:HistoryScanJob}>('POST','/api/history/scan')).job) }
@@ -2416,11 +2452,28 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='diagnostics'&&<Fragment>
           <section><h3>System prerequisites</h3>
           <p class="profile-hint">These back specific features. Each fails gracefully when absent, so a missing one reads as unconfigured, not broken.</p>
+          {/* Re-scan is a POST, not a re-fetch: the daemon inherited its PATH once
+              at startup, so a tool installed while swe-mux was running stays
+              invisible until PATH is read back from the OS. A button that only
+              re-ran detection would have returned the same wrong answer and taught
+              the user that the feature does not work. */}
+          <div class="settings-config-actions"><div>
+            <button type="button" disabled={prereqBusy} onClick={()=>void rescanPrerequisites()}>{prereqBusy?'Re-scanning…':'Re-scan'}</button>
+            {prereqRescan&&<small>{prereqRescan.path_refreshed
+              ?'PATH changed since startup and has been re-read.'
+              :prereqRescan.path_refresh_supported
+                ?'Re-read PATH from Windows; it is unchanged since startup.'
+                :'Re-checked. On this platform PATH cannot be re-read out of band, so a tool installed since startup needs a daemon restart.'}</small>}
+          </div></div>
           {prerequisites
-            ?<div class="settings-prerequisites"><ul>{prerequisites.map(prereq=><li key={prereq.id} class={prereq.present?'prereq-ok':'prereq-missing'}>
-              <span>{prereq.present?'✓':'✗'} {prereq.label}</span>
+            ?<div class="settings-prerequisites"><ul>{prerequisites.map(prereq=><li key={prereq.id} class={prereq.state==='present'?'prereq-ok':prereq.state==='off_path'?'prereq-warn':'prereq-missing'}>
+              <span>{prereq.state==='present'?'✓':prereq.state==='off_path'?'!':'✗'} {prereq.label}</span>
               <small>{prereq.purpose}{prereq.present&&prereq.path?` · ${prereq.path}`:''}</small>
-              {!prereq.present&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
+              {/* Three states, three sentences. Telling someone to install what
+                  they already have is the failure this replaced. */}
+              {prereq.state==='off_path'&&<small class="settings-inline-error">{prereq.path_remedy}</small>}
+              {prereq.state==='missing'&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
+              <label class="check"><span>Path override</span><input type="text" placeholder="leave empty to detect automatically" value={draft.tool_paths?.[prereq.id]??''} onChange={e=>setToolPath(prereq.id,e.currentTarget.value)} /><small>An absolute path to the executable. Used ahead of PATH, and saved with the rest of Settings.</small></label>
             </li>)}</ul></div>
             :<p>Prerequisite status is unavailable.</p>}
           </section>

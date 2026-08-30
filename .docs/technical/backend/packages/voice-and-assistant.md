@@ -59,6 +59,27 @@ the bridge, and atomically activates `current` without displacing a working envi
 GET/status methods read cached state only; probe, refresh, preview, and synthesis are explicit operations.
 Spoken text reaches the bridge through a bounded temporary file and never through argv or logs.
 
+The install checks reachability **before** the multi-minute work (`_preflight_index_reachable`, one HEAD against the index) and separates "cannot connect" from "cannot verify", which are one line apart in a traceback and completely different problems.
+Before that it spent 44.8s creating an environment and 36s installing a package, then reported the failure at the step furthest from its cause.
+
+**`select_provision_plan` picks how the environment gets built, and uv is preferred rather than required.**
+uv is tried first and is not a preference: `uv venv --python 3.12` provisions the *interpreter* as well as the environment, which is the only thing that works on the audience this integration is aimed at - a clean machine, or the frozen desktop app, where `sys.executable` is the PyInstaller bundle and `python -m venv` does not exist.
+The `venv` fallback covers the case uv cannot be assumed for: a source install on a machine with a real Python and no uv.
+It is safe for this package specifically because `edge-tts` is `py3-none-any`, so the daemon's own interpreter version raises no wheel-tag question.
+The frozen guard is load-bearing - offering the bundle as an interpreter would re-enter swe-mux under `-m` rather than run Python, which is a second daemon rather than an error.
+`install_method` (`"uv"`, `"venv"`, or `null`) is what the UI's install button gates on; `uv_available` is still reported but deciding on it alone would keep offering the manual-only path to exactly the users the fallback covers.
+`_classify_environment_failure` names the one failure with a specific remedy: Debian and Ubuntu ship `venv` without `ensurepip` unless `python3-venv` is installed, which is the most likely way this path fails and whose apt command can otherwise be lost to the stderr tail slice.
+
+Note the injection shape in `select_provision_plan`: it takes a `which` **resolver**, not a `uv_path`.
+A `uv_path: str | None = None` parameter cannot express "there is no uv here" because `None` also means "you did not tell me", and the first version of this silently consulted the developer's own uv - every test that meant to exercise the fallback exercised the uv path instead.
+Its default is `None` rather than `shutil.which` for the same class of reason: a callable default binds once at definition, so a monkeypatched `shutil.which` would never be seen.
+
+**The verify step makes no network request, and its message has to say so.**
+It was budgeted at 20s and failed there on a clean Windows 11 laptop, rolling back everything it had just built; the natural reading was a network or TLS fault, and the sibling Kokoro download on the same machine really was one - so the diagnosis went to the wrong place.
+`status` imports `edge_tts` and reads its version out of installed metadata (`assets/integrations/edge_tts_bridge.py`).
+What 20s was measuring was a first-ever import from a venv written seconds earlier with a scanner reading every new file, on a host whose `uv venv` took 44.8s against roughly 2s warm.
+`EDGE_VERIFY_TIMEOUT_SECONDS` is 120 and is deliberately separate from `EDGE_BRIDGE_TIMEOUT_SECONDS`: a slow steady-state call is a real fault, a slow cold import is a cold cache.
+
 **Not:** redistributing or importing `edge-tts` in the daemon, arbitrary SSML, Microsoft authorization, silent fallback, or Kokoro pronunciation handling.
 
 ## `assets/integrations/edge_tts_bridge.py`
@@ -157,6 +178,20 @@ That is a set difference over the lockfile's own graph, so which packages are ac
 `wheels_for_this_interpreter` picks one wheel per distribution using `packaging.tags.sys_tags()`, the same ordering pip and uv use.
 The interesting cases are exactly the ones a hand-rolled `(platform, machine, version)` key gets wrong: `cp39-abi3` wheels that load on 3.12, `py2.py3-none-any`, macOS deployment targets.
 `CLOSURE_DIGEST` moves only when the pins move, which is what lets a state file say which closure it built without re-hashing 315 MB.
+
+**The closure has to cover every interpreter swe-mux can be installed onto, and nothing used to check that.**
+`requires-python = ">=3.12"` lets `uv tool install swe-mux` land on whatever the newest CPython on the machine is, while the table is only as new as its slowest native dependency.
+Those drifted apart in silence and reached a user: on a clean Windows 11 laptop uv picked 3.14, spaCy 3.8.15 had published no `cp314` wheel, and local voice setup dead-ended at "the pinned voice closure has no wheel this interpreter can load for: spacy" (2026-08-30).
+Every CI leg pins 3.12 - the one interpreter that was always going to say yes - so nothing there could have caught it.
+
+Three things close it, and they are deliberately at three different levels.
+The pins moved to spaCy 3.8.16, which publishes `cp314`.
+`packaging/check_voice_closure_interpreters.py` runs the real selector *inside* 3.12, 3.13 and 3.14 and is a CI step, because that is the only honest answer - selection is made against the target interpreter's own `packaging.tags` and no amount of reading filenames from 3.12 reproduces it.
+`tests/test_voice_wheels.py` asserts the cheap always-on half at tag level: a distribution with no universal wheel must publish a version-specific one for every supported minor.
+
+The refusal also names the interpreter and the range now (`_supported_python_range`, derived from the table rather than written beside it).
+The bare form read as a missing or broken package and sent the reader looking for one, when the cause was a version mismatch.
+Note that only distributions whose wheels are *all* version-specific constrain that range: one `py3-none-any` or `cp38-abi3` wheel makes a distribution loadable throughout, and counting its version-specific siblings as limits is how a first attempt reported "CPython 3.14 only" for a closure that resolves on 3.12 through 3.14.
 
 **Not:** a place to add a package by hand, a resolver, or a description of anything but this repository's own resolution.
 
