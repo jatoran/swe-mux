@@ -32,10 +32,12 @@ Five things are checked per version, and each of them has shipped wrong somewher
 It also checks the two structural invariants a Keep a Changelog file has: an
 `## [Unreleased]` heading with a reference, and no version appearing twice.
 
-No arguments, no configuration, and a non-zero exit on failure, like
-`tools/check.mjs` and `tools/contrast.py` beside it. `--tag` exists for the one
-caller that needs it: a release workflow, which knows the tag it is about to
-publish and wants the check to fail before the artifacts go out rather than after.
+A non-zero exit on failure, like `tools/check.mjs` and `tools/contrast.py` beside
+it. Two flags exist, each for one caller. `--tag` is for a release workflow, which
+knows the tag it is about to publish and wants the check to fail before the
+artifacts go out rather than after. `--require-tags` is for `ci.yml`, where a
+checkout that fetched no tags would otherwise make this exit 0 having checked
+almost nothing.
 """
 
 from __future__ import annotations
@@ -86,6 +88,25 @@ def released_versions(tag: str | None) -> list[str]:
     return [line.strip().removeprefix("v") for line in out.splitlines() if line.strip()]
 
 
+def require_tags(wanted: list[str]) -> None:
+    """Refuse to report a pass that was earned by seeing no tags.
+
+    The tolerance above is right for a person running this in a fresh clone and
+    wrong for CI, where `actions/checkout` fetches no tags by default: this
+    script would print its note, check the package version alone, exit 0, and
+    look exactly like a pass. A gate that silently narrows what it asks is the
+    failure this whole file exists to prevent one version of, so the caller that
+    knows tags must be there says so and gets a failure instead.
+    """
+    if not wanted:
+        fail(
+            "no `v*` tags are visible, so there is nothing to check the released "
+            "versions against. This was run with --require-tags, which means the "
+            "caller expected a checkout carrying them - in GitHub Actions that is "
+            "`actions/checkout` with `fetch-depth: 0`, since the default fetches none."
+        )
+
+
 def package_version() -> str | None:
     m = re.search(r'^version\s*=\s*"([^"]+)"', PYPROJECT.read_text(encoding="utf-8"), re.M)
     return m.group(1) if m else None
@@ -98,6 +119,13 @@ def main() -> int:
         help="check this tag alone (for example v0.1.2), rather than every tag in the "
         "repository. Use it from a release workflow, where the tag exists but the "
         "release does not yet.",
+    )
+    ap.add_argument(
+        "--require-tags",
+        action="store_true",
+        help="fail when no `v*` tag is visible, rather than checking the package "
+        "version alone. Use it from CI, where a default checkout fetches no tags and "
+        "the tolerant reading would be an exit 0 that asked almost nothing.",
     )
     args = ap.parse_args()
 
@@ -134,6 +162,9 @@ def main() -> int:
             )
         else:
             print(f"  {version}  declared in pyproject.toml, section present")
+
+    if args.require_tags:
+        require_tags(wanted)
 
     if not wanted:
         print("  no released versions to check")
