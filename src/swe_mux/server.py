@@ -9,6 +9,7 @@ instances will fight over the same mux.db.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import mimetypes
 import time
@@ -55,6 +56,10 @@ from .build_support import precompress_static
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
 from .config import Config
+from .db_maintenance import clear_request as clear_maintenance_request
+from .db_maintenance import describe as describe_maintenance
+from .db_maintenance import read_request as read_maintenance_request
+from .db_maintenance import run_maintenance
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore
 from .errors import NotFound
@@ -190,6 +195,7 @@ from .sqlite_store import (
     record_database_problem,
     record_database_verified,
     run_full_verification,
+    verification_record_path,
 )
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
@@ -828,6 +834,56 @@ async def _restore_durable_sessions(
         log.exception("could not sweep orphan recovery directories")
 
 
+async def _run_pending_maintenance(config: Config) -> None:
+    """Honour a `mux compact-db` request, if one is pending.
+
+    Returns immediately when there is none, which is every ordinary start - the
+    phase costs a single failed file read. The request is consumed whether the
+    pass succeeded or failed, because an operation that fails once will
+    generally fail the same way again, and a standing request would turn one bad
+    start into every start being slow.
+
+    Never raises. A daemon that will not start because a compaction failed is
+    strictly worse than one that starts on an uncompacted database and says so.
+    """
+    request = read_maintenance_request(config.data_dir)
+    if request is None:
+        return
+    log.warning(
+        "database maintenance requested (%s); the daemon will not serve until it "
+        "finishes. Live sessions are held by the PTY supervisor and are unaffected.",
+        ", ".join(request.operations),
+    )
+    control = VerificationControl()
+    try:
+        result = await asyncio.to_thread(
+            run_maintenance, config.database_path, request, control
+        )
+    except asyncio.CancelledError:
+        control.cancel()
+        log.warning("database maintenance cancelled; the request is consumed either way")
+        clear_maintenance_request(config.data_dir)
+        raise
+    except Exception:  # noqa: BLE001 - a failed compaction must not stop the daemon
+        log.exception("database maintenance raised; continuing without it")
+        clear_maintenance_request(config.data_dir)
+        return
+    clear_maintenance_request(config.data_dir)
+    log.log(logging.ERROR if result.error else logging.WARNING, "%s", describe_maintenance(result))
+    if result.backup_path is not None and not result.error:
+        log.warning(
+            "the pre-compaction copy is at %s; delete it once you are satisfied "
+            "(it is the size of the database)",
+            result.backup_path,
+        )
+    if result.error is None and result.performed:
+        # The file was rewritten, so any recorded verdict describes bytes that no
+        # longer exist. Forcing a fresh check is cheap now that it runs behind
+        # the ready daemon, and it is the honest state.
+        with contextlib.suppress(OSError):
+            verification_record_path(config.database_path).unlink()
+
+
 async def _database_integrity_loop(path: Path, delay_seconds: float, reason: str) -> None:
     """Run the owed full `PRAGMA quick_check` once, behind the serving daemon.
 
@@ -966,6 +1022,20 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # `synchronous=FULL` a process or OS crash cannot corrupt the file, so the
     # 77.7s that signal cost on the 2026-08-30 post-reboot start was spent
     # answering a question the storage layer had already answered.
+    # Before the integrity probe and before any store opens the file, because
+    # this is the one moment the daemon owns it exclusively: the predecessor
+    # process has exited (`__main__.wait_for_predecessor_exit`) and no store has
+    # connected yet. `VACUUM` and a cross-file table move both need that, and no
+    # running daemon can ever provide it.
+    #
+    # This deliberately puts minutes of work on the startup path, against the
+    # rule the rest of this function now follows. The exception is narrow and
+    # explicit: an operator typed `mux compact-db`, it happens once, the phase
+    # reports itself while it runs, and the alternative is stopping swe-mux,
+    # which reaps every live session. Nothing schedules it and no route triggers
+    # it.
+    timeline.mark("database-maintenance")
+    await _run_pending_maintenance(config)
     timeline.mark("database-integrity")
     preparation = await asyncio.to_thread(
         prepare_database,
