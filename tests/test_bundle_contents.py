@@ -540,8 +540,16 @@ def test_the_frozen_entry_point_exits_with_the_code_main_returns() -> None:
 
 
 def test_the_smoke_test_refuses_a_bundle_that_is_missing_a_launcher(tmp_path: Path) -> None:
-    bundle = _cli_bundle(tmp_path, {"psutil": 1}, exes=("swemux.exe",))
-    with pytest.raises(SystemExit, match="mux.exe"):
+    """A dropped `EXE()` entry has to fail here rather than at an install.
+
+    Built with no launchers at all, which is what `CLI_EXES` having one entry
+    now makes the only way to be missing one - and the reason this asserts on
+    `CLI_EXES` rather than on a literal filename: the check is "everything the
+    spec promises is present", and a second launcher added later must be covered
+    without anyone remembering to edit this.
+    """
+    bundle = _cli_bundle(tmp_path, {"psutil": 1}, exes=())
+    with pytest.raises(SystemExit, match=build_desktop.CLI_EXES[0]):
         build_desktop.smoke_cli_bundle(bundle)
 
 

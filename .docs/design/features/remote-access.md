@@ -46,7 +46,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 
 ## Boundaries and diagnostics
 
-- Settings and `mux doctor` report localhost, detected tailnet address/direct URL,
+- Settings and `swemux doctor` report localhost, detected tailnet address/direct URL,
   listener state, secure mobile URL/status, and Funnel warning. `POST
   /api/remote/mobile-voice/enable` requires the dedicated explicit-action header and returns a
   secure URL only when one is actually available; otherwise it returns a non-destructive error.
@@ -85,7 +85,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   config (`public_dict`, no secrets), remote-connection state, firewall status, network counters,
   the fleet status-health aggregate, and the tails of `daemon.log` and `redeploy.log`.
   It never includes terminal bytes or message content; the two logs are command-free by design.
-  `mux doctor --export` prints the same bundle from the CLI, and Settings → Remote copies it to
+  `swemux doctor --export` prints the same bundle from the CLI, and Settings → Remote copies it to
   the clipboard with a selectable textarea fallback for plain-HTTP tailnet clients where the
   Clipboard API is restricted.
 - A "Connect a phone" modal (reachable from Settings → Remote) renders a scannable QR of the
@@ -115,7 +115,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   deferred one. Nothing downloads or installs.
   Installing an update **does** download, and it stays on the operator's side of that line:
   it happens only on an explicit act naming a version (`POST /api/update/install`,
-  `mux update --install`, `design/interfaces.md`), it fetches the artifact the manifest
+  `swemux update --install`, `design/interfaces.md`), it fetches the artifact the manifest
   names from GitHub Releases, and it verifies the SHA-256 before anything is staged. The
   same switch gates it, so "off means nothing leaves the machine" holds for both halves.
   Every other outbound path in the app belongs to a feature the operator turned on and
@@ -219,7 +219,7 @@ the Serve route is shared regardless of which port or data directory a daemon us
   still carry an image, but proactive clipboard reads (including the long-press Paste fallback)
   require a secure context. Press Talk or Enable secure mobile access to provision the private
   HTTPS address without entering a Serve command, then grant the browser microphone permission.
-- Do not enable Funnel. Re-run `mux doctor` or use Settings → Remote and security after
+- Do not enable Funnel. Re-run `swemux doctor` or use Settings → Remote and security after
   changing Tailscale/listener configuration.
 
 ## Key files
@@ -237,6 +237,6 @@ the Serve route is shared regardless of which port or data directory a daemon us
   `src/swe_mux/routes/update.py`, `frontend/src/UpdateBanner.tsx`,
   `frontend/src/updateCheck.ts`
 - Diagnostics export bundle: `src/swe_mux/server.py` (`diagnostics_export`), `src/swe_mux/cli.py`
-  (`mux doctor --export`)
+  (`swemux doctor --export`)
 - Settings/status and browser redirect: `frontend/src/Settings.tsx`,
   `frontend/src/mobileVoice.ts`, `frontend/src/ConversationControl.tsx`

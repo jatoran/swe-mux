@@ -939,7 +939,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <a href="#mux-the-client">mux, the client</a>
         <a href="#which-daemon-mux-talks-to">which daemon mux talks to</a>
         <a href="#exit-codes">exit codes</a>
-        <a href="#mux-doctor-has-two-modes-and-picks-between-them-itself">mux doctor has two modes, and picks between them itself</a>
+        <a href="#swemux-doctor-has-two-modes-and-picks-between-them-itself">swemux doctor has two modes, and picks between them itself</a>
       </nav>
       <div class="docsec" id="muxd-the-daemon">
         <div class="head"><span class="n">#</span><h2>muxd, the daemon</h2><span class="fill"></span></div>
@@ -962,21 +962,21 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="tablewrap"><table>
           <thead><tr><th>Command</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td>mux ls</td><td>List sessions. Filter with --project, --state, --backend.</td></tr>
-            <tr><td>mux spawn</td><td>Spawn a session. --project is required; --backend, --name, --profile, --exe, and repeatable --arg shape it.</td></tr>
-            <tr><td>mux send</td><td>Send input to a session, named by id, name, or a unique id prefix.</td></tr>
-            <tr><td>mux kill</td><td>Terminate a session.</td></tr>
-            <tr><td>mux resume</td><td>Resume a history entry. --project is required.</td></tr>
-            <tr><td>mux projects</td><td>List Projects.</td></tr>
-            <tr><td>mux profiles</td><td>List launch profiles.</td></tr>
-            <tr><td>mux harnesses</td><td>List every harness in the registry with its detection state. The first thing to run when a CLI you have installed is not being recognised.</td></tr>
-            <tr><td>mux history</td><td>List conversation history.</td></tr>
-            <tr><td>mux history-duplicates</td><td>Report, or with <code>repair</code> merge, history entries that share one conversation.</td></tr>
-            <tr><td>mux accounts</td><td><code>list</code>, <code>verify</code>, or <code>audit</code> saved provider accounts.</td></tr>
-            <tr><td>mux doctor</td><td>The consolidated read-only diagnostics report. <code>--export</code> prints the full bundle as JSON.</td></tr>
-            <tr><td>mux update</td><td>Report the release check and this install's update path. <code>--install VERSION</code> downloads that release and verifies its hash against the published manifest before anything is staged.</td></tr>
-            <tr><td>mux reload-daemon</td><td>Restart the daemon in place. Sessions survive when the PTY supervisor is on; <code>--force</code> restarts without it and <b>kills every session</b>.</td></tr>
-            <tr><td>mux install-shortcut</td><td>Create the Start Menu and Desktop shortcuts a wheel install structurally cannot (Windows). <code>--startup</code> adds a run-at-login entry, <code>--remove</code> takes them all away. Idempotent.</td></tr>
+            <tr><td>swemux ls</td><td>List sessions. Filter with --project, --state, --backend.</td></tr>
+            <tr><td>swemux spawn</td><td>Spawn a session. --project is required; --backend, --name, --profile, --exe, and repeatable --arg shape it.</td></tr>
+            <tr><td>swemux send</td><td>Send input to a session, named by id, name, or a unique id prefix.</td></tr>
+            <tr><td>swemux kill</td><td>Terminate a session.</td></tr>
+            <tr><td>swemux resume</td><td>Resume a history entry. --project is required.</td></tr>
+            <tr><td>swemux projects</td><td>List Projects.</td></tr>
+            <tr><td>swemux profiles</td><td>List launch profiles.</td></tr>
+            <tr><td>swemux harnesses</td><td>List every harness in the registry with its detection state. The first thing to run when a CLI you have installed is not being recognised.</td></tr>
+            <tr><td>swemux history</td><td>List conversation history.</td></tr>
+            <tr><td>swemux history-duplicates</td><td>Report, or with <code>repair</code> merge, history entries that share one conversation.</td></tr>
+            <tr><td>swemux accounts</td><td><code>list</code>, <code>verify</code>, or <code>audit</code> saved provider accounts.</td></tr>
+            <tr><td>swemux doctor</td><td>The consolidated read-only diagnostics report. <code>--export</code> prints the full bundle as JSON.</td></tr>
+            <tr><td>swemux update</td><td>Report the release check and this install's update path. <code>--install VERSION</code> downloads that release and verifies its hash against the published manifest before anything is staged.</td></tr>
+            <tr><td>swemux reload-daemon</td><td>Restart the daemon in place. Sessions survive when the PTY supervisor is on; <code>--force</code> restarts without it and <b>kills every session</b>.</td></tr>
+            <tr><td>swemux install-shortcut</td><td>Create the Start Menu and Desktop shortcuts a wheel install structurally cannot (Windows). <code>--startup</code> adds a run-at-login entry, <code>--remove</code> takes them all away. Idempotent.</td></tr>
           </tbody>
         </table></div>
         <p class="prose">Every subcommand takes <code>--json</code> to print the raw daemon response instead of a table, and <code>--url</code> to point at a specific daemon.</p>
@@ -1001,8 +1001,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         </table></div>
         <p class="note"><b>A degraded report never exits 0</b>, so a script gating on <code>mux doctor</code> keeps working whether or not a daemon is running. The doctor codes compose the two that already existed rather than adding a scheme of their own.</p>
       </div>
-      <div class="docsec" id="mux-doctor-has-two-modes-and-picks-between-them-itself">
-        <div class="head"><span class="n">#</span><h2>mux doctor has two modes, and picks between them itself</h2><span class="fill"></span></div>
+      <div class="docsec" id="swemux-doctor-has-two-modes-and-picks-between-them-itself">
+        <div class="head"><span class="n">#</span><h2>swemux doctor has two modes, and picks between them itself</h2><span class="fill"></span></div>
         <ul class="flat">
           <li><b>Full report</b><span>When a daemon answers. Categories for the daemon, each harness, remote access, the firewall, host prerequisites, fleet status health, the background loops, conversation freshness, WSL, and optional assets. Nothing in it reads a secret, a terminal byte, or message content.</span></li>
           <li><b>Local report</b><span>When nothing answers, because a daemon that will not start is the most likely new-user failure and the full report presupposes exactly the thing that is missing. It checks the interpreter, the imports, the config, the frontend bundle, the data directory, the database, the port, this host's pseudoterminal backend, and the supervisor bundle.</span></li>

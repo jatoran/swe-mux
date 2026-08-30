@@ -654,7 +654,7 @@ def _source_replacement_lines(name: str) -> list[str]:
     extra = owning_extra(name)
     install = f"uv sync --extra {extra}" if extra else "uv sync"
     return [
-        f"Running from source (`{install} && uv run muxd`) replaces it the",
+        f"Running from source (`{install} && uv run swemuxd`) replaces it the",
         f"usual way, with `pip install {name}==<your build>`.",
     ]
 

@@ -159,30 +159,42 @@ Issues = "https://github.com/jatoran/swe-mux/issues"
 # These are console programs: they print tables, reports, and daemon logs, and a
 # console is where their output belongs.
 #
-# **Four names, two programs, and the pairs are aliases rather than variants.**
-# `swemux` and `mux` are the same client; `swemuxd` and `muxd` are the same
-# daemon. Nothing dispatches on the name it was invoked under, so an alias can
-# never drift into behaving differently from the name beside it.
+# **Two names, two programs, and `mux`/`muxd` are deliberately not among them.**
+# They were declared as aliases from 2026-08-29 until 2026-08-30, and giving up
+# the short name was a decision rather than a tidy-up - so the reasoning is here,
+# because the argument that produced the aliases is exactly the one that would
+# re-add them.
 #
-# The `swemux` pair is the primary spelling and the `mux` pair is kept working
-# because `mux` is not a name this project can rely on owning. The npm package
-# `mux` installs a `mux` executable of its own and is published from the same
-# category of tool (0.28.2, 2026-08-12), and the repository behind it,
-# `coder/mux`, has since renamed itself to `coder/xum`. Why they renamed is not
-# a question this project can answer and no claim about it is made here; what is
-# observable is that a four-letter name in this category is contested, and that
-# whichever of the two installs second wins PATH order on a machine with both.
+# `mux` is not a name this project can rely on owning. The npm package `mux`
+# installs a `mux` executable of its own and is published from the same category
+# of tool (0.28.2, 2026-08-12); the repository behind it, `coder/mux`, has since
+# renamed itself to `coder/xum`. Why they renamed is not a question this project
+# can answer and no claim about it is made here. What is observable is that a
+# four-letter name in this category is contested, and that on a machine with both
+# installed, PATH order silently decides which one a typed `mux` runs.
 #
-# Adding rather than replacing is the whole point. Every document, script, and
-# habit that says `mux` keeps working, so this costs no user anything and can be
-# revisited from either direction. `packaging/verify_release_unit.py` joins these
-# names to the documents that mention them, so a future removal fails the release
-# check rather than silently telling a new user to run something that is gone.
+# The aliases were added on the reasoning that they cost nothing and could be
+# revisited from either direction. Both halves were wrong in the same way. They
+# do not cost nothing: shipping a launcher under a contested name is what creates
+# the collision, and a user whose `mux` resolves to somebody else's tool gets a
+# confusing failure from a swe-mux that never runs. And "revisitable from either
+# direction" was only true while the documents had not settled - by the time this
+# was measured they carried 180 `mux` and 35 `muxd` invocations against 21
+# `swemux`, so the cheap direction and the correct one had already diverged.
+#
+# Removing it is what actually removes the risk: swe-mux now occupies no
+# contested name, so nothing of another project's can shadow it. The residual
+# case - a `swemux` that PATH does not reach - is diagnosed rather than assumed:
+# `install_location.unreachable` is "launchers this install shipped that the bare
+# name does not reach", and `swemux doctor` and the daemon's own PATH hint both
+# report it.
+#
+# `tests/test_launcher_names.py` fails on any code span in this repository that
+# still tells a reader to run `mux` or `muxd`, because a document naming a
+# launcher that no longer exists is the one failure this removal can cause.
 [project.scripts]
 swemux = "swe_mux.cli:main"
 swemuxd = "swe_mux.__main__:main"
-mux = "swe_mux.cli:main"
-muxd = "swe_mux.__main__:main"
 
 # `swe-mux` is the tray and the native window, and it is here rather than above
 # because the two tables build different launchers. `[project.scripts]` builds a

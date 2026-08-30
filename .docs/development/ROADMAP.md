@@ -6092,10 +6092,27 @@ here and does not there.
 
 ### Taken into 0.1.3
 
-- [ ] **Add `swemux` and `swemuxd` as the primary console scripts, keeping `mux` and `muxd` as
+- [x] **Add `swemux` and `swemuxd` as the primary console scripts, keeping `mux` and `muxd` as
   working aliases.** Purely additive, so nothing that exists stops working and no document that
   says `mux` becomes wrong - which is also what makes it safe without resolving the trademark
   question first.
+  **(Shipped 2026-08-29. The aliases were removed on 2026-08-30, and both halves of the argument
+  above turned out to be wrong in the same way.)**
+  "Purely additive, so nothing stops working" reads the cost as zero, but shipping a launcher
+  under the contested name is *what creates* the collision this section documents so carefully:
+  a machine with npm's `mux` installed resolves a typed `mux` by PATH order, and the loser is
+  whichever installed first. Keeping the alias does not survive that - it enters it. Not
+  occupying the name is what leaves nothing to shadow, and the residual case (a `swemux` PATH
+  cannot reach) is already diagnosed by `install_location.unreachable` rather than guessed at.
+  "No document that says `mux` becomes wrong" was true on the day and stopped being true by the
+  next one: the documents had not settled yet, and when the sweep was finally measured they
+  carried 180 `mux` and 35 `muxd` invocations against 21 `swemux`. The cheap direction and the
+  correct one had already diverged, and every day of delay widened the gap.
+  The generalisable form, and the reason this is recorded rather than quietly amended: **"purely
+  additive" is a claim about the code, not about the name.** A second name for one program is
+  additive in `[project.scripts]` and subtractive everywhere a reader has to choose between them.
+  `tests/test_launcher_names.py` now fails on any code span that names a removed launcher, so the
+  sweep is a property of the repository rather than an act somebody remembers finishing.
 - [x] ~~**The Windows installer puts the CLI on PATH.**~~ **Attempted, refuted, and the refutation
   is the finding.** There is no CLI in the frozen bundle to put on PATH. `packaging/swe_mux.spec`
   builds exactly one executable, `swe-mux.exe`, with `console=False` - a GUI-subsystem process has

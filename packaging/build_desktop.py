@@ -67,7 +67,7 @@ CLI_DIST = ROOT / "dist" / "swe-mux-cli"
 #: Named here rather than derived from `install_location.CLIENT_COMMANDS` because
 #: this is the *build's* claim about what it produced, and a verification that
 #: reads its subject's own definition proves nothing.
-CLI_EXES = ("swemux.exe", "mux.exe")
+CLI_EXES = ("swemux.exe",)
 
 
 def supervisor_source_hash() -> str:
@@ -886,7 +886,7 @@ def build_supervisor_bundle(*, force: bool = False) -> bool:
         if SUPERVISOR_EXE.is_file():
             raise SystemExit(
                 "Supervisor bundle rebuild failed. If a supervisor is running it locks "
-                "its exe; stop it first with `muxd --shutdown` (this reaps all "
+                "its exe; stop it first with `swemuxd --shutdown` (this reaps all "
                 "sessions), then rebuild."
             ) from exc
         raise

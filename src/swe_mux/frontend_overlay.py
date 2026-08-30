@@ -53,7 +53,7 @@ common post-update start cost 0.5 ms rather than 90.
 
 **A one-press revert.** Reverting flips one boolean in one small atomic file. It
 never moves, deletes or rewrites a tree, so it cannot half-fail and cannot be the
-thing that leaves an install unserveable. `mux ui-overlay revert` does it without
+thing that leaves an install unserveable. `swemux ui-overlay revert` does it without
 the UI, which matters because the overlay's own failure mode is a UI that will
 not load.
 

@@ -22,7 +22,7 @@ Report privately through GitHub, never as a public issue or pull request.
 
 Include the swe-mux version, the operating system, whether the daemon was reachable on a
 tailnet at the time, the exact steps to reproduce, and what an attacker gains.
-An attached diagnostics bundle (`mux doctor --export`) is useful and contains no terminal bytes
+An attached diagnostics bundle (`swemux doctor --export`) is useful and contains no terminal bytes
 or message content; review it before attaching it anyway.
 
 ### What to expect

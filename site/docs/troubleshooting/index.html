@@ -957,7 +957,7 @@ python -m swe_mux
 python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
 
 # Or ask swe-mux itself.
-muxd --where</pre></div>
+swemuxd --where</pre></div>
         <p class="note"><code>uv tool install swe-mux</code> and <code>pipx install swe-mux</code> both put all three on PATH globally, and are the recommended forms for that reason.</p>
       </div>
       <div class="docsec" id="there-is-no-desktop-shortcut-or-start-menu-entry">
@@ -993,7 +993,7 @@ npm --prefix frontend run build</pre></div>
       </div>
       <div class="docsec" id="swe-mux-cannot-see-an-agent-cli-i-have-installed">
         <div class="head"><span class="n">#</span><h2>swe-mux cannot see an agent CLI I have installed</h2><span class="fill"></span></div>
-        <div class="code"><pre>mux harnesses      # every harness in the registry, and what it resolved to</pre></div>
+        <div class="code"><pre>swemux harnesses      # every harness in the registry, and what it resolved to</pre></div>
         <p class="prose">If it resolved to the wrong binary, or to none, set the path for that harness in Settings, Harnesses. That is the usual fix on a machine carrying several installs of the same CLI. A harness the registry has never heard of is a different situation and not a fault: it runs perfectly in a real terminal, it just gets no layer on top.</p>
       </div>
       <div class="docsec" id="the-microphone-does-not-work-on-my-phone">
@@ -1017,7 +1017,7 @@ npm --prefix frontend run build</pre></div>
       </div>
       <div class="docsec" id="getting-a-diagnostic-somebody-can-read">
         <div class="head"><span class="n">#</span><h2>Getting a diagnostic somebody can read</h2><span class="fill"></span></div>
-        <div class="code"><pre>mux doctor --export &gt; diagnostics.json</pre></div>
+        <div class="code"><pre>swemux doctor --export &gt; diagnostics.json</pre></div>
         <p class="prose">That is the full bundle as JSON: the sanitized configuration, remote-connection state, firewall status, network counters, fleet status health, the status timeline and recovery sink statistics, any cold sessions, and the tails of the daemon log. It is an artifact to attach to a bug report rather than a table to read.</p>
         <p class="note">It is sanitized rather than raw, and the full report reads no secret, no terminal byte, and no message content. Read it before you attach it anyway.</p>
       </div>

@@ -595,7 +595,7 @@ class DesktopRuntime:
 
         There are two mechanisms and they were written by different features:
         this toggle writes an `HKCU\\...\\Run` value, and `shortcuts.py` writes a
-        `.lnk` into `shell:startup` for `mux install-shortcut --startup` and for
+        `.lnk` into `shell:startup` for `swemux install-shortcut --startup` and for
         the first-run offer. Windows honours both, so reporting only the registry
         one meant a tick box that read "off" beside a swe-mux that demonstrably
         did start with Windows - and toggling it "on" then left two entries
@@ -674,7 +674,7 @@ class DesktopRuntime:
                     "Shortcuts not written",
                     "swe-mux could not finish writing its shortcuts. See "
                     f"{self.config.data_dir / 'lifecycle.log'} for what happened; "
-                    "`mux install-shortcut` retries it.",
+                    "`swemux install-shortcut` retries it.",
                 )
         except Exception as exc:  # noqa: BLE001 - never take the tray down for this
             ledger(self.config.data_dir, f"first-run shortcut offer failed: {exc}")

@@ -173,7 +173,7 @@ Inactive rows restore on every boot independently of unexpected-loss recovery se
   mode only. With the PTY supervisor, a daemon crash or restart leaves agents running; the
   next daemon reattaches and revalidates mirrored provider/transcript identity. Proven legacy
   contamination is repaired before observation resumes and its false history owner is hidden.
-  Only a supervisor crash/kill (its Job closes) or an explicit quit / `muxd --shutdown` takes
+  Only a supervisor crash/kill (its Job closes) or an explicit quit / `swemuxd --shutdown` takes
   agents down. The supervisor itself cannot be hot-updated without killing sessions; it
   self-exits after a bounded idle window with no clients and no live sessions.
 - Browser disconnect removes subscribers while PTYs and bounded scrollback remain live.

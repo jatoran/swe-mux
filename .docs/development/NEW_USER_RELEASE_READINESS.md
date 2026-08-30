@@ -11,7 +11,7 @@ The harness enablement work (`design/features/backends.md`, the three-state laun
 ## Relationship to the roadmap
 
 This is a feeder plan, not a competing sequence.
-`ROADMAP.md` lists it under "Plans not sequenced here" and already carries the agnostic principle its items serve: Phase 7 takes every harness list and label from the registry and turns `mux doctor` into a consolidated read-only report, and Phase 11 requires a clean-machine install whose behaviour matches its documented capabilities.
+`ROADMAP.md` lists it under "Plans not sequenced here" and already carries the agnostic principle its items serve: Phase 7 takes every harness list and label from the registry and turns `swemux doctor` into a consolidated read-only report, and Phase 11 requires a clean-machine install whose behaviour matches its documented capabilities.
 Most items here land in Phase 7 (the diagnostics, the connection-state and firewall checks) or Phase 11 (the first-use download gates and neutral defaults).
 This document owns the fresh-machine detail those phases depend on rather than restating it there.
 
@@ -37,7 +37,7 @@ P0:
 - Done: phone-side DNS checklist in the Remote and Voice tabs.
 - Done: Tailscale-aware cause-pointing text (`connection_detail` per state).
 - Done: Windows Defender Firewall inspect and repair (`windows_firewall.py`, `GET /api/remote/firewall`, `POST /api/remote/firewall/repair`, Remote-tab panel), platform-gated to a frozen Windows build.
-- Done: one-click diagnostics export (`GET /api/diagnostics/export`, `mux doctor --export`, Remote-tab button with clipboard and textarea fallback).
+- Done: one-click diagnostics export (`GET /api/diagnostics/export`, `swemux doctor --export`, Remote-tab button with clipboard and textarea fallback).
 
 P1 and P2:
 - Done: QR of the connection URL and the "Connect a phone" modal (`frontend/src/remoteConnection.tsx` `ConnectionQr` via the `qrcode-generator` dependency, `frontend/src/ConnectPhone.tsx`), reachable from Settings -> Remote. The URL uses the `.ts.net` MagicDNS name.
@@ -53,13 +53,13 @@ P1 and P2:
 - Done: first-run chaining copy (harnesses -> project -> account login -> session) in the first-run panel.
 - Done: CLI-version-drift signal (best-effort `probe_cli_version`, `version_untested` against a maintainer-armed `TESTED_CLI_VERSIONS`, shown in Settings -> Harnesses).
 - Done: confirmed `ProcessPanel.tsx`'s `127.0.0.1:3000` was a seeded example; changed it to a placeholder so it no longer reads as an assumed dev-server port.
-- Done (Phase 7): the diagnostics export, prerequisites, connection-state, and firewall pieces are now consumed by the consolidated `mux doctor` report (`GET /api/diagnostics/doctor`, assembled by `doctor.build_doctor_report`), which adds per-check severity/remedy, a machine-readable capability block, and the observation-freshness check. This document owns the fresh-machine detail; the aggregation lives in `ROADMAP.md` Phase 7.
-- Done (Phase 11, W10): `mux doctor` answers when the daemon does not.
+- Done (Phase 7): the diagnostics export, prerequisites, connection-state, and firewall pieces are now consumed by the consolidated `swemux doctor` report (`GET /api/diagnostics/doctor`, assembled by `doctor.build_doctor_report`), which adds per-check severity/remedy, a machine-readable capability block, and the observation-freshness check. This document owns the fresh-machine detail; the aggregation lives in `ROADMAP.md` Phase 7.
+- Done (Phase 11, W10): `swemux doctor` answers when the daemon does not.
   The consolidated report above presupposed a running daemon, which made the one diagnostic the project ships useless for the most likely fresh-install failure - a new user whose install is broken ran it and got a connection error.
   An unreachable daemon now produces the local report (`doctor_local.build_local_doctor_report`) over the checks that stop a daemon starting: the Python floor, the package's own import graph, the config file, the frontend bundle in the installed package (the self-reported half of the release-artifact gate a wheel from a clean clone can otherwise fail silently), the data directory's existence and writability, whether `mux.db` opens, whether the configured port is already held, whether this host's PTY backend imports, the frozen app's supervisor bundle, the prerequisite tools, harness detection, the W9 first-use asset inventory below, and the presence of each optional extra with its install command.
   The daemon report is untouched and byte-compatible.
   Three things are load-bearing rather than incidental: `unchecked` is its own status so a skipped check reads as neither healthy nor absent, prerequisite/harness/asset rows come from the daemon report's own builders rather than a second copy, and the exit codes compose the existing two (`1` on a failing check, `3` otherwise) so a degraded report never exits `0`.
-  Contract: `design/interfaces.md`, "`mux doctor` without a running daemon".
+  Contract: `design/interfaces.md`, "`swemux doctor` without a running daemon".
 - Done (Phase 11 W9): the **first-use asset inventory** below is now reported rather than discovered by failing. See "First-use assets" for what a clean machine is told and what each state's command is.
 
 Still open (deliberately not code): ship the frozen `dist/` app for external testers; code-signing and SmartScreen decision; foreign-PATH shim/detection testing across npm, bun, and native installers; CLI-on-PATH packaging verification; arming `TESTED_CLI_VERSIONS` with verified bounds.
@@ -136,7 +136,7 @@ One "unavailable" is what made a fresh install fail oddly - an operator who had 
 
 | Asset | States a clean machine can be in | Command for each | Reported by |
 |---|---|---|---|
-| Preview capture (Playwright package) | `extra_missing` | `uv sync --extra preview-capture && uv run playwright install chromium`, or "no command helps" on the packaged app | `POST /previews/{id}/capture`, `optional_asset:preview_capture` in `mux doctor` |
+| Preview capture (Playwright package) | `extra_missing` | `uv sync --extra preview-capture && uv run playwright install chromium`, or "no command helps" on the packaged app | `POST /previews/{id}/capture`, `optional_asset:preview_capture` in `swemux doctor` |
 | Preview capture (Chromium binary) | `browser_missing` | `uv run playwright install chromium` - and *only* that half | same |
 | On-device speech libraries | `not_downloaded` / `downloading` / `error`, plus `unsupported` for a platform the pinned closure has no wheels for | Settings -> Voice -> Download speech libraries (or the `voice-local` extra, which is the only remedy when `unsupported`) | `GET /api/voice`, `GET /api/voice/models/runtime`, `optional_asset:voice_runtime` |
 | Whisper dictation weights | `not_downloaded` / `downloading` / `error`, plus `backend_installed: false` when the speech libraries are absent | Settings -> Voice -> Download (or `uv sync --extra voice-local` for the extra) | `GET /api/voice`, `GET /api/voice/models/whisper`, `optional_asset:voice_whisper:<model>` |
@@ -151,7 +151,7 @@ Four things that were already true before W9 and needed confirming rather than f
 - `stt_language` and `stt_whisper_model` are already drawn in Settings -> Voice as explicit first-use choices with copy saying so. They are English-first (`en-US`, `turbo` for dictation, `small.en` for routing) and stated rather than hidden; W9 did not change them, because changing a default is not the same as reporting one.
 - The Silero VAD assets do **not** download. Vite emits the ~11 MB WASM runtime and ~2.3 MB ONNX model into the frontend bundle and this daemon serves them same-origin; the "lazy" load on first Talk is a lazy import. Both this document and the Settings copy previously said otherwise, and both are corrected.
 
-What W9 actually added: the three-state preview-capture report with a per-half remedy and a launch-time reclassification when the filesystem probe was wrong; `WhisperModelStore` (`not_downloaded → downloading → ready → error`, the same mechanism the Kokoro weights already used) with its own routes and Settings panel; a transcription refusal in place of the implicit fetch, including the skip that stops an absent *routing* model being downloaded to discover it was never needed; and an `optional_assets` block plus `optional_asset:*` checks in `mux doctor`, at severity `optional` so a clean install never exit-codes non-zero for owning none of them.
+What W9 actually added: the three-state preview-capture report with a per-half remedy and a launch-time reclassification when the filesystem probe was wrong; `WhisperModelStore` (`not_downloaded → downloading → ready → error`, the same mechanism the Kokoro weights already used) with its own routes and Settings panel; a transcription refusal in place of the implicit fetch, including the skip that stops an absent *routing* model being downloaded to discover it was never needed; and an `optional_assets` block plus `optional_asset:*` checks in `swemux doctor`, at severity `optional` so a clean install never exit-codes non-zero for owning none of them.
 
 Still open and deliberately not code: preview capture does not work in the frozen desktop app at all, because `preview-capture` is outside `DISTRIBUTED_EXTRAS` (`packaging/license_audit.py`).
 Bundling a ~150 MB Chromium for an optional feature and auto-running `playwright install` on first press were both rejected - the second is the exact silent-fetch failure this section exists to remove.
@@ -214,7 +214,7 @@ Verify: `frontend/src/ProcessPanel.tsx` references `http://127.0.0.1:3000`; conf
 
 | Item | Priority | Intent | Key files |
 |---|---|---|---|
-| One-click diagnostics export | P0 | Bundle `daemon.log`, `redeploy.log`, the status diagnostic bundle, network diagnostics, and sanitized config into one copyable blob; mirror Orca `buildConnectionDiagnosticsReport` | `src/swe_mux/server.py`, existing `mux doctor` and `/api/diagnostics/network` |
+| One-click diagnostics export | P0 | Bundle `daemon.log`, `redeploy.log`, the status diagnostic bundle, network diagnostics, and sanitized config into one copyable blob; mirror Orca `buildConnectionDiagnosticsReport` | `src/swe_mux/server.py`, existing `swemux doctor` and `/api/diagnostics/network` |
 | CLI-version drift signal | P1 | Confirm graceful degradation on a newer CLI and surface "this CLI is newer than mux tested" | `src/swe_mux/harness.py`, `design/features/backends.md` |
 
 ## Sequencing

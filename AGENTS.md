@@ -24,7 +24,7 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   enough). Symptom of this trap: a verified-correct CSS/JS fix that "still doesn't work" for
   the user, especially on mobile.
 - **Backend/daemon change**: `curl -X POST http://127.0.0.1:8765/api/daemon/restart`
-  (or UI menu → "Reload daemon (keep sessions)", or `mux reload-daemon`). Every session
+  (or UI menu → "Reload daemon (keep sessions)", or `swemux reload-daemon`). Every session
   survives — but the daemon restarts with your code **only when it runs from source**
   (`uv run` / dev). The restart spawns a successor of the *same executable*: a **frozen
   desktop app** daemon respawns its bundled (old) backend code, and your source change
@@ -42,9 +42,9 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   leaves the running app untouched, and a new build that never turns healthy is rolled back
   to `dist/swe-mux.prev` (bad bundle kept at `dist/swe-mux.failed`). If the swap's rename
   retries exhaust on a `WinError 5/32` lock straggler, the script relaunches the old bundle
-  itself; do NOT reach for `taskkill`/`muxd --shutdown` (that reaps sessions). Endpoint log:
+  itself; do NOT reach for `taskkill`/`swemuxd --shutdown` (that reaps sessions). Endpoint log:
   `<data_dir>/redeploy.log`.
-- **Never** run `muxd --shutdown`, kill `swe-mux-supervisor.exe`, or taskkill swe-mux
+- **Never** run `swemuxd --shutdown`, kill `swe-mux-supervisor.exe`, or taskkill swe-mux
   processes as part of an update — those reap every live session. They are only for
   intentionally stopping everything.
 

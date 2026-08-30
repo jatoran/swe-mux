@@ -28,7 +28,7 @@ Every location, verified against the tree:
 |---|---|---|
 | `pyproject.toml` | `[project] version` | The wheel and sdist, and therefore PyPI, `uv tool install`, and `pipx`. Authoritative |
 | `src/swe_mux/__init__.py` | `__version__` | The configurator's generated inventory, which is what an agent asks (`src/swe_mux/routes/configurator.py`) |
-| `src/swe_mux/routes/system.py` | two literals | `GET /api/health`, both the 503 startup body and the ready body. This is what `mux doctor` prints as `swe_mux_version`, and what an in-app update check compares against |
+| `src/swe_mux/routes/system.py` | two literals | `GET /api/health`, both the 503 startup body and the ready body. This is what `swemux doctor` prints as `swe_mux_version`, and what an in-app update check compares against |
 | `src/swe_mux/routes/diagnostics.py` | two literals | The diagnostics export bundle and its capability block - the artifact attached to a bug report |
 | `src/swe_mux/mcp.py` | one literal | `serverInfo.version`, advertised to every agent CLI that connects to the mux MCP server |
 | `src/swe_mux/provider_accounts.py` | one literal | `clientInfo.version`, sent to a provider endpoint |
@@ -238,15 +238,15 @@ falling back to PyPI for dependencies TestPyPI does not carry:
 ```bash
 uv tool install --index-url https://test.pypi.org/simple/ \
   --index-strategy unsafe-best-match swe-mux==X.Y.Z
-mux --help
-muxd --local-only
+swemux --help
+swemuxd --local-only
 ```
 
 Confirm before promoting to PyPI:
 
-- `muxd --local-only` starts and serves a working interface at `http://127.0.0.1:8765`, which is
+- `swemuxd --local-only` starts and serves a working interface at `http://127.0.0.1:8765`, which is
   the check that proves the frontend bundle shipped.
-- `mux doctor` runs and prints the new version as `swe_mux_version`, which proves the
+- `swemux doctor` runs and prints the new version as `swe_mux_version`, which proves the
   `routes/system.py` literals were bumped.
 - The configurator's reported version matches the installed distribution version, which proves
   `__init__.py` was bumped. This is the version-drift check, made on a real install rather than

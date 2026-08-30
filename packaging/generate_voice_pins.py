@@ -70,7 +70,7 @@ ACQUIRE_GROUPS = ("g2p-model",)
 # Acquired at first use, but by a store that already exists and already owns it.
 # `en-core-web-sm` is the spaCy model `voice_models.SpacyModelStore` has fetched,
 # pinned, unpacked onto `sys.path` and reported since 2026-08-28, with its own
-# settings panel and its own `mux doctor` check. Two stores fetching one wheel
+# settings panel and its own `swemux doctor` check. Two stores fetching one wheel
 # into two directories is two answers to "is the G2P model ready", and the one
 # that is wrong is whichever the reader did not look at.
 #

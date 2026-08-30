@@ -60,7 +60,9 @@ uv tool install swe-mux
 pipx install swe-mux
 ```
 
-Either installs the three entry points: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
+Either installs the three entry points: `swemux` (the CLI), `swemuxd` (the daemon), and `swe-mux` (the desktop window and tray).
+One name per program, and there are no short aliases: `mux` and `muxd` existed for one day (2026-08-29 to 2026-08-30) and were removed, because `mux` is shared with at least one unrelated tool in the same category and shipping a launcher under that name is what creates the collision rather than what survives it.
+If a launcher ever is unreachable, `swemux doctor` names it - `install_location.unreachable` is "shipped but the bare name does not reach it", which is exactly the shadowing case.
 **There is no extra to remember.**
 `pystray` and `pywebview` are base dependencies marked `sys_platform == 'win32'` since 2026-08-30, so this command gives a Windows machine a working tray and gives every other machine nothing extra to download.
 
@@ -84,12 +86,14 @@ The first time, it offers to add itself to the Start Menu and to start when you 
 Everywhere else, and for anyone who wants only the browser:
 
 ```
-mux start        # detached; returns once http://127.0.0.1:8765 answers
-muxd             # foreground, if you want the log in front of you
-muxd --shutdown  # stops the daemon, the supervisor, and every session
+swemux start        # detached; returns once http://127.0.0.1:8765 answers
+swemuxd             # foreground, if you want the log in front of you
+swemuxd --shutdown  # stops the daemon, the supervisor, and every session
 ```
 
-`mux start` is idempotent (a daemon already serving is reported and left alone) and nothing else in the CLI starts a daemon implicitly.
+`swemux start` is idempotent (a daemon already serving is reported and left alone) and nothing else in the CLI starts a daemon implicitly.
+Either command prints where the UI is and how to stop it, and opens it in your browser - but only when a terminal is watching the process, so the tray's own daemon, a detached `swemux start` child, a restart successor and a login task are all unaffected.
+`--no-browser` on either, or `SWE_MUX_NO_BROWSER` for a caller that cannot pass a flag.
 
 ### From source
 
@@ -102,7 +106,7 @@ npm --prefix frontend run build
 uv run swe-mux
 ```
 
-For a headless daemon plus an ordinary browser, which is the Linux and macOS shape, run `uv run muxd` and open <http://127.0.0.1:8765>.
+For a headless daemon plus an ordinary browser, which is the Linux and macOS shape, run `uv run swemuxd` and open <http://127.0.0.1:8765>.
 
 `npm --prefix frontend run build` is not optional on a fresh clone.
 Its output lands in `src/swe_mux/static/` and is gitignored, so a checkout that has never run it serves the API and no interface at all.
@@ -194,11 +198,11 @@ It takes the version from the bundle's own `bundle.json` rather than from the pr
 **`swe-mux[voice-local]` could not be installed at all before 2026-08-28, and that is worth knowing if you tried.**
 The published 0.1.0 wheel declared `Requires-Dist: en-core-web-sm`, a spaCy model that is published as a GitHub release asset and exists on no index, so both `pip` and `uv` refused the extra outright rather than degrading ([`DEPENDENCY_AUDIT_2026-08-28.md`](DEPENDENCY_AUDIT_2026-08-28.md) § 4).
 The fix moved that model out of published metadata: the extra now installs from any index, and the model is fetched on first use like the Kokoro weights, by the same **Settings → Voice → Download Kokoro voices** press.
-The command to install the extra is whatever your installation accepts, and `mux doctor` now prints that command rather than a fixed one - `uv tool install --force "swe-mux[voice-local]"`, `pipx install --force "swe-mux[voice-local]"`, `<your python> -m pip install "swe-mux[voice-local]"`, or `uv sync --extra voice-local` in a source checkout.
+The command to install the extra is whatever your installation accepts, and `swemux doctor` now prints that command rather than a fixed one - `uv tool install --force "swe-mux[voice-local]"`, `pipx install --force "swe-mux[voice-local]"`, `<your python> -m pip install "swe-mux[voice-local]"`, or `uv sync --extra voice-local` in a source checkout.
 | `preview-capture` | `playwright`, for Preview screenshot capture. | Capture is unavailable. `capture_capability()` distinguishes the extra being absent from the extra being present with no browser binary, and carries the exact command for each. Nothing downloads a browser implicitly. |
-| `voice-edge` | `edge-tts==7.2.8`, as a source-install convenience only. | Nothing, structurally. The runtime reaches Edge TTS through an externally managed bridge interpreter, so whether `edge_tts` resolves in this environment says nothing about whether the feature works. The frozen desktop spec excludes the LGPL package even when the build environment has this extra installed. `mux doctor` deliberately does not report a row for it, because such a row would be a confident wrong answer. |
+| `voice-edge` | `edge-tts==7.2.8`, as a source-install convenience only. | Nothing, structurally. The runtime reaches Edge TTS through an externally managed bridge interpreter, so whether `edge_tts` resolves in this environment says nothing about whether the feature works. The frozen desktop spec excludes the LGPL package even when the build environment has this extra installed. `swemux doctor` deliberately does not report a row for it, because such a row would be a confident wrong answer. |
 
-Optional assets are a separate question from optional extras, and `mux doctor` reports both.
+Optional assets are a separate question from optional extras, and `swemux doctor` reports both.
 An extra installed with nothing downloaded and a cached model with no extra are different states with different commands.
 
 - Playwright's Chromium: `uv run playwright install chromium`, about 150 MB.
@@ -237,7 +241,7 @@ A worktree is a different case and deliberately syncs less: `.worktree-setup` ru
 Four upgrade properties are worth knowing before you rely on them.
 
 **An installer-managed install upgrades by running the installer, and cannot use the in-app updater.**
-The in-app updater (`POST /api/update/install`, `mux update --install`) hands its verified archive to `packaging/redeploy_desktop.py`, which is not carried in the bundle - it lives in a source checkout.
+The in-app updater (`POST /api/update/install`, `swemux update --install`) hands its verified archive to `packaging/redeploy_desktop.py`, which is not carried in the bundle - it lives in a source checkout.
 `redeploy_launch.redeploy_source_root()` looks for that script and a `pyproject.toml` beside the app, an installed copy has neither, and the preflight therefore refuses with `no_swap_tool` **before anything is downloaded**, naming the release page instead.
 That is the honest answer rather than a bug: the installer is the upgrade path for an installer install, and the same `AppId` makes running the new one an in-place replacement rather than a second entry in Add/Remove Programs.
 
@@ -250,7 +254,7 @@ The Ready page says so when it detects a previous version; finish or detach runn
 A source install (`pip`, `uv tool`, `pipx`) needs nothing extra for it: the supervisor runs as `python -m swe_mux.supervisor` out of the same installed package.
 A frozen install needs the `swe-mux-supervisor` bundle beside the app, which the Windows installer always packs.
 Where a supervisor cannot be reached or spawned the daemon still starts, unsupervised, and logs one ERROR naming the reason; `supervisor-console.log` in the data directory is what the child itself said.
-Without an attached supervisor, `POST /api/daemon/restart` refuses with HTTP 409 and `{"error": "supervisor_not_attached"}` rather than silently reaping, and `mux reload-daemon --force` is the explicit override that accepts the reap.
+Without an attached supervisor, `POST /api/daemon/restart` refuses with HTTP 409 and `{"error": "supervisor_not_attached"}` rather than silently reaping, and `swemux reload-daemon --force` is the explicit override that accepts the reap.
 The tray omits its "Restart daemon (keep sessions)" item entirely when the *setting* is off; with the setting on and no supervisor attached the item is shown and the route refuses it, because the route knows the runtime state and the tray does not.
 
 **The frozen app respawns its own executable.**
@@ -259,7 +263,7 @@ Confirm which build is being served before assuming a change is live: compare th
 
 **The PTY supervisor is updated separately and reaps every session.**
 `packaging/redeploy_desktop.py` cannot ship a supervisor change and says nothing when it does not.
-Updating it is `uv run muxd --shutdown`, then `uv run python packaging/build_desktop.py --supervisor-only`, then relaunch, all from outside swe-mux.
+Updating it is `uv run swemuxd --shutdown`, then `uv run python packaging/build_desktop.py --supervisor-only`, then relaunch, all from outside swe-mux.
 A release that requires it says so in its release notes rather than leaving the updater to surprise the operator.
 
 **A schema migration keeps a copy of what it replaced.**
@@ -392,9 +396,9 @@ All rotate, so a noisy day cannot grow an unbounded file.
 
 ---
 
-## Diagnosis: `mux doctor`
+## Diagnosis: `swemux doctor`
 
-`mux doctor` is the entry point, and it has two modes that answer different questions.
+`swemux doctor` is the entry point, and it has two modes that answer different questions.
 The CLI decides between them by what happened to the request, never by a flag.
 
 ### Full report, when a daemon answers
@@ -462,11 +466,11 @@ The CLI's codes are a contract; scripts branch on them, never on prose.
 The `doctor` codes compose the two that already existed rather than adding a scheme.
 A failing local check is still `1`, because a named broken check is the more actionable fact.
 A local report with nothing failing is `3`, which is exactly what `3` has always meant.
-**A degraded report therefore never exits `0`**, and a script gating on `mux doctor` keeps working unchanged.
+**A degraded report therefore never exits `0`**, and a script gating on `swemux doctor` keeps working unchanged.
 
-Verified on this host: `mux doctor --url http://127.0.0.1:59999` against nothing exits `3` and prints the local report; `mux doctor` against a live daemon with one degraded background loop exits `1`.
+Verified on this host: `swemux doctor --url http://127.0.0.1:59999` against nothing exits `3` and prints the local report; `swemux doctor` against a live daemon with one degraded background loop exits `1`.
 
-### `mux doctor --export`
+### `swemux doctor --export`
 
 The full diagnostics bundle as JSON: the sanitized config through `public_dict()`, remote-connection state, firewall status, network counters, the fleet status-health aggregate, the status-timeline and session-recovery sink stats, any cold sessions, and the tails of `daemon.log` and `redeploy.log`.
 It is always JSON, because it is an artifact to copy rather than a table to read.
@@ -481,7 +485,7 @@ Terminal bytes are never included, for the same reason scrollback is not: they a
 
 ### The daemon will not start
 
-Run `mux doctor`.
+Run `swemux doctor`.
 With nothing listening it produces the local report, and the first `FAIL` is the one to fix.
 Each failing row carries a remedy line, so the next step is not a documentation hunt.
 
@@ -492,8 +496,8 @@ The four causes that account for most of these, and what the report says about e
 - **A broken install.** `install.imports` fails with the real exception. On Windows the specific risk is `pywinpty`, the one compiled dependency in the runtime closure, where a wheel/ABI mismatch or a missing VC++ runtime surfaces as an `ImportError` that `install.pty` names.
 - **An unwritable or missing data directory.** `install.data_dir` distinguishes "exists and cannot be written" from "does not exist and cannot be created", and points at `MUX_DATA_DIR`.
 
-`muxd --local-only` starts without the direct Tailscale listener, which removes tailnet detection from the startup path when you are isolating a network problem.
-`muxd --port` and `muxd --host` override the configured listener for one run; `--host` must be a loopback address, because the Tailscale listener is detected rather than configured.
+`swemuxd --local-only` starts without the direct Tailscale listener, which removes tailnet detection from the startup path when you are isolating a network problem.
+`swemuxd --port` and `swemuxd --host` override the configured listener for one run; `--host` must be a loopback address, because the Tailscale listener is detected rather than configured.
 
 A bound listener is not a ready daemon.
 `/api/health` answers 503 with the startup phase in flight until the runtime exists, so "it is listening but everything 503s" is the daemon still building, not a fault.
@@ -518,7 +522,7 @@ A durable registry row is written on the spawn registration task, before any his
 Sessions whose daemon and PTY owner both died come back as visible, dead, resumable rows rather than vanishing.
 `session_recovery_checkpoint_bytes` set to `0` keeps the registry, which is the part that brings sessions back, and stores no terminal bytes.
 
-Check the state before concluding anything: `mux doctor` against a running daemon reports supervisor attachment as a `daemon` row, and `mux doctor --export` lists cold sessions with their reason and capture state.
+Check the state before concluding anything: `swemux doctor` against a running daemon reports supervisor attachment as a `daemon` row, and `swemux doctor --export` lists cold sessions with their reason and capture state.
 
 ### The UI is blank on a fresh clone
 
@@ -532,7 +536,7 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-`mux doctor` distinguishes the two cases that look identical from the browser.
+`swemux doctor` distinguishes the two cases that look identical from the browser.
 In a source checkout, `install.frontend` is `warn` and carries exactly that command, because a missing bundle there is normal and one command away.
 In an installed copy, the same absence is `fail`, because a wheel that ships without a UI is a packaging fault.
 The distinction is drawn by `_source_checkout_root()`, which looks for `frontend/package.json` two directories above the package.
@@ -567,7 +571,7 @@ It installs into a throwaway virtualenv created outside the checkout, with `PYTH
 The isolation is the point and is not trusted: `import-isolation` reads the imported package's `__file__` back out of the child and fails unless it resolves inside the virtualenv, because a checkout satisfies every other check by itself.
 It starts no daemon and binds no port.
 
-If a published wheel reaches you in this state, `mux doctor`'s `install.frontend` row says so from the copy already on your machine, and reinstalling from a complete artifact is the fix.
+If a published wheel reaches you in this state, `swemux doctor`'s `install.frontend` row says so from the copy already on your machine, and reinstalling from a complete artifact is the fix.
 
 ---
 

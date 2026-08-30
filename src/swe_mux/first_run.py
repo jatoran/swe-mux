@@ -3,7 +3,7 @@
 A wheel cannot create a Start Menu entry. `pip` and `uv` write launchers into a
 scripts directory and stop, with no hook that runs afterwards (`shortcuts.py`
 opens with the same fact, because it is the same gap seen from the other side).
-So `mux install-shortcut` exists - and is a command nobody runs, because nobody
+So `swemux install-shortcut` exists - and is a command nobody runs, because nobody
 knows it is there. The result is an install whose only route in is a name on
 `PATH`, on the platform where `PATH` is least likely to be right.
 
@@ -58,7 +58,7 @@ OFFER_TEXT = (
     "and nothing to launch.\n"
     "\n"
     "You can change this later from the tray menu (Start with Windows) or from "
-    "Settings, and `mux install-shortcut --remove` takes back everything this "
+    "Settings, and `swemux install-shortcut --remove` takes back everything this "
     "writes.\n"
     "\n"
     "swe-mux will not ask again either way."

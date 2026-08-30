@@ -154,8 +154,8 @@ def test_notices_tell_a_source_user_how_to_replace_each_lgpl_package() -> None:
     flag that now adds nothing.
     """
     notices = (REPO_ROOT / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8")
-    assert "`uv sync --extra voice-local && uv run muxd`" in notices
-    assert "`uv sync && uv run muxd`" in notices
+    assert "`uv sync --extra voice-local && uv run swemuxd`" in notices
+    assert "`uv sync && uv run swemuxd`" in notices
     assert "--extra desktop" not in notices
 
 

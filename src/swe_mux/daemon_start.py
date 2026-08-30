@@ -8,13 +8,13 @@ helps three other people:
 - someone on Linux or macOS, where there is no tray and no desktop app by design
   (`design/features/desktop-shell.md`), whose only entry point is `muxd`;
 - someone on Windows who wants the browser UI and not a native window;
-- anyone iterating on the daemon from a checkout, where `uv run muxd` is the fast
+- anyone iterating on the daemon from a checkout, where `uv run swemuxd` is the fast
   path and a held console is the price of it.
 
 For all three the answer is the same shape, and it is the one herdr's
 `server/autodetect.rs` uses: spawn a detached child, wait for it to serve, then
 return. What is deliberately *not* copied is herdr's implicit spawn on any
-invocation - `mux ls` against a stopped daemon should keep saying so rather than
+invocation - `swemux ls` against a stopped daemon should keep saying so rather than
 starting one behind the user's back. This is a command you type.
 
 Two properties do the work.
@@ -22,7 +22,7 @@ Two properties do the work.
 **The child outlives this process.** POSIX gets `start_new_session=True`
 (`setsid`), so it leads its own session and no terminal hangup reaches it.
 Windows gets `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` and, through
-`popen_outside_job`, `CREATE_BREAKAWAY_FROM_JOB` - the last because a `mux start`
+`popen_outside_job`, `CREATE_BREAKAWAY_FROM_JOB` - the last because a `swemux start`
 typed *inside* a swe-mux session would otherwise put the daemon in that session's
 kill-on-close Job and have it reaped when the session is removed, which is the
 same hazard `desktop.ensure_daemon` and `__main__._warn_if_inside_job` already
@@ -43,6 +43,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,7 +181,7 @@ def start_daemon(
             creationflags=creation_flags(),
             start_new_session=os.name != "nt",
         )
-    ledger(config.data_dir, f"mux start spawned daemon pid {child.pid}")
+    ledger(config.data_dir, f"swemux start spawned daemon pid {child.pid}")
 
     started = time.monotonic()
     deadline = started + timeout_seconds
@@ -217,6 +218,91 @@ def start_daemon(
     )
 
 
+#: Set to anything non-empty to stop a daemon opening a browser. The escape
+#: hatch for the case a flag cannot reach: a login task, a service wrapper, or a
+#: `swemuxd` somebody else's script starts on this machine.
+NO_BROWSER_ENV = "SWE_MUX_NO_BROWSER"
+
+
+def should_open_browser(
+    *,
+    requested: bool,
+    stdout_isatty: bool,
+    environ: Mapping[str, str],
+) -> bool:
+    """Whether a starting daemon should put the UI in front of somebody.
+
+    The question is not "is this the first run" but **"is a person watching this
+    process right now"**, and a TTY is the honest test for that. Every way
+    swe-mux starts without one is a way where a browser window would be wrong:
+    the tray spawns its daemon with stdio to a log file and shows a window of its
+    own, `swemux start`'s detached child writes to `daemon-start.log`, a
+    self-restarting successor is nobody's foreground, and a login task has no
+    console at all. All four are non-TTY, so one rule covers them without any of
+    them having to know about this.
+
+    Pure, and every input is passed: the branch that decides whether a window
+    appears on somebody's screen is exactly the kind that must be assertable from
+    a host that has no browser.
+    """
+    if not requested:
+        return False
+    if environ.get(NO_BROWSER_ENV, "").strip():
+        return False
+    return stdout_isatty
+
+
+def open_browser(url: str) -> bool:
+    """Open `url`, reporting whether the attempt was made without error.
+
+    Never raises. A browser that will not open is a worse outcome than no
+    browser only if it also takes the daemon with it, and the daemon is the part
+    that matters - the URL has already been printed by the banner either way.
+    """
+    import webbrowser
+
+    try:
+        return bool(webbrowser.open(url, new=2))
+    except Exception:  # noqa: BLE001 - a convenience must not fail a daemon start
+        return False
+
+
+def startup_banner(url: str, *, windows: bool, opened_browser: bool) -> str:
+    """What a person who just typed `swemuxd` needs to read.
+
+    Until 2026-08-30 this moment printed aiohttp's `======== Running on ...`
+    line and nothing else, which was doing the job by accident: it happens to
+    carry the URL, and it happens to be the only thing a new user sees. It is the
+    *only* moment swe-mux gets, because nothing runs after `pip`/`uv` install a
+    wheel - `uv tool install` prints its own "Installed 3 executables" and there
+    is no hook to add a word to it.
+
+    So it says the four things that are otherwise a documentation hunt: where the
+    UI is, how to stop it (which is genuinely non-obvious - Ctrl-C detaches and
+    leaves supervised sessions running for the next daemon), what the desktop
+    shell is called on the platform that has one, and the command that tells
+    installed from working.
+    """
+    lines = [
+        "",
+        f"  swe-mux is serving  {url}",
+    ]
+    if opened_browser:
+        lines.append("  opening it in your browser")
+    lines += [
+        "",
+        "  swemuxd --shutdown   stop the daemon, the supervisor and every session",
+        "                       (Ctrl-C only detaches; sessions keep running)",
+    ]
+    if windows:
+        lines.append("  swe-mux              the same thing in a window, with a tray icon")
+    lines += [
+        "  swemux doctor        read-only health report",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render(outcome: StartOutcome) -> str:
     """The human rendering: what happened, where to point a browser, where to look."""
     if outcome.status == "already-running":
@@ -226,7 +312,7 @@ def render(outcome: StartOutcome) -> str:
         lines.append(f"swe-mux is serving {outcome.url}  (pid {outcome.pid})")
         lines.append("")
         lines.append("It is detached: closing this terminal will not stop it.")
-        lines.append("Stop everything with `muxd --shutdown`.")
+        lines.append("Stop everything with `swemuxd --shutdown`.")
     elif outcome.status == "starting":
         lines.append(f"Started (pid {outcome.pid}), still coming up.")
         lines.append(outcome.detail)

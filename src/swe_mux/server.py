@@ -1104,7 +1104,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
                 "PTY supervisor unavailable; sessions will run in-process and "
                 "will not survive a daemon restart. This is a degraded start: "
                 "the supervisor is on by default. See supervisor-console.log in "
-                "the data directory, and `mux doctor`"
+                "the data directory, and `swemux doctor`"
             )
     timeline.mark("adapters-and-shims")
     mcp_url = f"http://127.0.0.1:{config.port}/mcp"

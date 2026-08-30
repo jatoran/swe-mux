@@ -345,7 +345,7 @@ async def daemon_restart(request: web.Request) -> web.Response:
                     "the PTY supervisor is not attached, so a daemon restart would "
                     "kill every session. It is on by default, so this daemon "
                     "either failed to start one (see supervisor-console.log in the "
-                    "data directory, and `mux doctor`) or has pty_supervisor_enabled "
+                    "data directory, and `swemux doctor`) or has pty_supervisor_enabled "
                     "turned off. Pass force=true to restart anyway and accept the reap"
                 ),
             },
@@ -612,7 +612,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
                     "the PTY supervisor is not attached, so a redeploy would kill "
                     "every session. It is on by default, so this daemon either "
                     "failed to start one (see supervisor-console.log in the data "
-                    "directory, and `mux doctor`) or has pty_supervisor_enabled "
+                    "directory, and `swemux doctor`) or has pty_supervisor_enabled "
                     "turned off. Pass force=true to redeploy anyway and accept the reap"
                 ),
             },
