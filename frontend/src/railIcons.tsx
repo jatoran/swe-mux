@@ -32,6 +32,17 @@ export const CopyIcon = () => <svg {...stroke}>
   <path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2" />
 </svg>
 
+/** A text cursor: select *part* of this, rather than all of it.
+ *
+ * The I-beam is the mark for the gesture the button starts, and it is the one shape that
+ * cannot be confused with `CopyIcon` beside it in the transcript's chip row - a single
+ * upright beam against two offset sheets. Drawn bare rather than over rules of text: this
+ * renders at 12px, where a beam crossing two more strokes is a smudge, and the silhouette
+ * is what has to survive. */
+export const SelectTextIcon = () => <svg {...stroke}>
+  <path d="M8 4h8M8 20h8M12 4v16" />
+</svg>
+
 /** The copy mark over an input rule: copy, but of the line being typed.
  *
  * A bare copy glyph is already spent on Copy reply, and the two sit close enough

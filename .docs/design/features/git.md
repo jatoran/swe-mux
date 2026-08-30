@@ -272,6 +272,7 @@ uncommitted work together.
   Everywhere else the heading names something the segments do not (`Change Map` under Activity), and those tabs are unchanged.
   It is the same control from the same registry (`DrawerSegmentControl`), with the same keyboard behaviour, drawn compactly and sized to its labels so the Project scope still fits beside it.
 - The toolbar under it carries one search box for the current reading at its leading edge; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
+  The glyph spins whenever the view it would refresh is being read, automatic reads included (see § Refresh and mutation boundary).
 
 ### Searching each reading
 
@@ -476,6 +477,10 @@ uncommitted work together.
 - A failed revalidation leaves the previous reading in place, so a transient Git error cannot turn an answer the reader already has into a blocking read.
 - The client keeps its own copy of all three readings and the reader's position in them (`gitTabCache.ts`), painted immediately on mount or Project switch: the tab is not `keepMounted`, so without it every open paid a blank round trip for an answer that rarely changed.
   A **search result is never cached** - a query's answer is a different question from the default reading, and painting one as the other would be wrong rather than stale.
+- **The Refresh glyph spins for the whole of that revalidation, including the automatic one on arrival**, and the control disables while it does.
+  The cached reading is what makes the tab feel instant, and it is also what made it look *settled* while it was still working: the only visible evidence of the read was the content changing under the reader a moment later, which reads as a glitch rather than as an answer arriving.
+  Each of the three views tracks its own read, because they have independent lifetimes and one shared flag would spin the control over a Log that had long since landed.
+  The glyph carries the animation rather than the button, or the border and focus ring would turn with it.
 - Concurrent overview requests for the same Project root, comparison ref, and worktree scope share one daemon computation.
   A timed-out or disconnected browser cannot create an overlapping Git-process storm by refreshing again, and holding Refresh cannot start a second storm over the first.
 

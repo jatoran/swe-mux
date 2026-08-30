@@ -182,6 +182,7 @@ The stylesheet is the only consumer of the *property* but not the only consumer 
 The app's stroke marks, kept in shared modules so one concept is one drawing wherever it appears.
 
 - `railIcons.tsx` holds the Action rail marks, the `DRAWER_TAB_ICONS` map every drawer tab must appear in, and the menu marks the app menu, the sidebar menu, and the Project and session context menus read - including their `MenuGroup` headers.
+  It is also where an icon-only control inside a tab takes its mark from, such as the transcript reader's per-message Copy and Select (`CopyIcon`, `CheckIcon`, `SelectTextIcon`).
   A mark is added here rather than inline so a concept drawn in more than one menu (History, Groups, Settings, Prompts) stays one drawing.
   That is also why a redrawn tab mark replaces its component rather than adding one beside it: `CommandKeyIcon`, `NotePencilIcon`, and `QueueClockIcon` are read by both the drawer map and the menu rows, so the two cannot drift.
   Sizes come from CSS rather than `1em`, because these surfaces run a 9-10 px font that would render an em-sized icon unreadably small.

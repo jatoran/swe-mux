@@ -129,6 +129,12 @@ def is_foreign_host_path(value: str) -> bool:
 
 
 SCHEMA_VERSION = 35
+
+#: The quest log's closed set, capped at three by design rather than by review:
+#: a fourth entry is a change to this tuple and to the frontend registry beside
+#: it (`frontend/src/questRegistry.ts`), and the cap is the feature - a quest log
+#: that grows into a todo list is an obligation handed to a new user.
+QUEST_IDS = ("voice", "worktrees", "phone")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -681,6 +687,12 @@ class Config:
     # nothing anywhere may branch on this value to decide what a user can do. Its
     # only standing readers are default-density surfaces and the Settings readout.
     experience_tier: str = ""
+    # Quest-log entries the user has dismissed for good (`frontend/src/questRegistry.ts`
+    # renders the log on the empty workspace stage). A closed three-entry set by
+    # construction - a quest log that grows into a todo list is an obligation
+    # handed to a new user - and dismissal is machine-side and permanent: a quest
+    # put away on the desktop must never resurface on the phone.
+    quests_dismissed: list[str] = field(default_factory=list)
     # Whether the first-run harness panel has been dismissed (enabled or skipped).
     # Machine-side rather than device-local, because harness enablement is machine
     # config: a first-run choice made on the desktop must not reappear on the phone.
@@ -2032,6 +2044,9 @@ def _validate(config: Config) -> None:
             not isinstance(name, str) or not isinstance(flag, bool) for name, flag in value.items()
         ):
             errors[bool_map] = "must map harness names to booleans"
+    quests = config.quests_dismissed
+    if not isinstance(quests, list) or any(entry not in QUEST_IDS for entry in quests):
+        errors["quests_dismissed"] = "entries must be quest ids: " + ", ".join(QUEST_IDS)
     for field_name in (
         "harness_exe",
         "harness_args",

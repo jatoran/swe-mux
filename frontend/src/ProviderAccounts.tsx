@@ -4,7 +4,7 @@ import { api } from './api'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { currentProfile } from './deviceSettings'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaSummary, quotaWindowSummary, shownUsageBand, type LoginDisplay, type QuotaWindowDisplay } from './providerAccountDisplay'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, quotaWindowSummary, shownUsageBand, QUOTA_COLUMN_HEADINGS, type LoginDisplay, type QuotaWindowDisplay } from './providerAccountDisplay'
 import { serverNow } from './serverClock.ts'
 import { emitTutorialAction } from './tutorial'
 // Provider marks live in `harnessIcons.tsx`, which every surface naming a harness reads. This
@@ -202,8 +202,13 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
   },[open,opensDown,busy])
   const popup=open&&<div ref={popover} class="account-popover ui-portal" style={popoverStyle} role="dialog" aria-label="Provider account switcher">
-      <header><div><strong>ACCOUNTS</strong><span>session · weekly</span></div><button aria-label="Close account switcher" onClick={()=>setOpen(false)}>×</button></header>
-      {providers.map(provider=>{const current=status?.current[provider];const active=selected(provider);const login=loginOf(status?.login,provider);const saved=status?.accounts.filter(account=>account.provider===provider)||[];return <section>
+      <header><div><strong>ACCOUNTS</strong><span>quota per account</span></div><button aria-label="Close account switcher" onClick={()=>setOpen(false)}>×</button></header>
+      {providers.map(provider=>{const current=status?.current[provider];const active=selected(provider);const login=loginOf(status?.login,provider);const saved=status?.accounts.filter(account=>account.provider===provider)||[];
+        // Decided once per provider, then handed to every row, so the columns are the
+        // section's rather than each account's. See `hasFableWindow`.
+        const sectionFable=hasFableWindow(saved)
+        const columns=quotaRowCells(undefined,sectionFable).map(cell=>cell.key)
+        return <section>
         {/* Sign-in lives here, not only in Settings. With nothing saved this popover
             used to print "No saved accounts" and offer a `manage…` button, which is
             the one screen a new install always lands on and the one with no way
@@ -211,7 +216,20 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
         <div class="account-section-head"><h4>{provider}</h4><button class="account-signin" disabled={!!busy||login?.state==='running'} title={signInTitle(status?.login_commands,provider)} onClick={()=>startLogin(provider)}>+ sign in</button></div>
         {current?.state!=='saved'&&<p class={`account-current-notice ${current?.state||'signed_out'}`}>{currentDescription(current,active)}{current?.match_hint?` ${hintDescription(current)}`:''}</p>}
         <LoginProgress login={login} busy={!!busy} onDismiss={()=>dismissLogin(provider)}/>
-        {saved.map(account=><button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<>{quotaSummary(account)}{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}> · {formatRefreshAge(account.quota.refreshed_at)}</i>:''}</>}</small></button>)}
+        {/* Named once, above the rows, rather than on each of them: the labels are what
+            make a bare column of percentages readable, and repeating them per account
+            would be three more words per row on a 340px popover. Hidden from assistive
+            technology because each row already carries the same windows named in full,
+            in its own accessible label. */}
+        {!!saved.length&&<div class={`quota-columns${sectionFable?' has-fable':''}`} aria-hidden="true">
+          {columns.map(key=><span key={key}>{QUOTA_COLUMN_HEADINGS[key]}</span>)}
+        </div>}
+        {saved.map(account=><button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} aria-label={`${account.label}: ${account.conflict&&!account.conflict.is_primary?'duplicate account, polling suspended':quotaTitle(account)}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
+          {account.quota?.status==='error'
+            ?<em class="quota-row-note">unavailable</em>
+            :quotaRowCells(account,sectionFable).map(cell=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}><b>{cell.percent}</b><i>{cell.reset}</i></span>)}
+          {account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}
+        </span>}</small></button>)}
         {!saved.length&&!login&&<button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>No saved accounts — <strong>sign in to {provider}</strong></button>}
       </section>})}
       {error&&<p class="account-error" role="alert">{error}</p>}

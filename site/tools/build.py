@@ -336,16 +336,6 @@ PAGE_CSS = """
 
 .rel { margin-top: clamp(40px, 6vw, 64px); }
 
-/* The anti-roadmap is drawn as a panel rather than as a fourth run of bullets
-   that happens to be last. It is the cheapest instrument this site has for
-   answering a request that will never be built with a reason instead of with
-   silence, and the roadmap page now invites requests, which makes that job much
-   larger than it was. A panel is the whole treatment: no colour of its own, no
-   warning register, and the same hairline the rest of the page uses. */
-.boundary { border: 1px solid var(--line-2); background: var(--panel);
-            padding: 2px clamp(14px, 3vw, 26px) clamp(16px, 2.4vw, 22px); }
-.boundary .relhead { padding-top: clamp(14px, 2.4vw, 20px); }
-
 /* Vote rows. A count is a number, so it takes the mono face and a fixed column;
    the row itself is a link rather than a description, which is what separates
    this list from the themed ones above it. `overflow-wrap` because a title is
@@ -499,9 +489,10 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 /* -------------------------------------------------- the agent-onboarding block
 
    Prominent by position rather than by colour: it sits directly under the lede,
-   above the section nav, and takes the panel treatment the roadmap's boundary
-   panel already uses. It is the first thing on the page because the reader most
-   likely to act on it is the one who has not decided to read anything yet. */
+   above the section nav, as a panel with no colour of its own, no warning
+   register, and the same hairline the rest of the page uses. It is the first
+   thing on the page because the reader most likely to act on it is the one who
+   has not decided to read anything yet. */
 .agentbox { border: 1px solid var(--line-2); background: var(--panel);
             padding: clamp(15px, 2.6vw, 22px); margin-top: clamp(20px, 3vw, 28px); }
 .agentbox h2 { font-size: clamp(15px, 2vw, 17px); }
@@ -1410,9 +1401,8 @@ def build_docs(up: str) -> str:
     body.append('      <div class="kick">install it, use it, then read why</div>')
     body.append("      <h1>Documentation</h1>")
     body.append(
-        '      <div class="lede"><p>Written for somebody <b>using</b> swe-mux. Start at '
-        "<a href=\"install/\">Install</a> and read forward, or search - every page is its "
-        "own URL and the sidebar is on all of them.</p></div>"
+        '      <div class="lede"><p>Start at <a href="install/">Install</a> and read '
+        "forward, or jump to a section below.</p></div>"
     )
     body.extend(_agent_block(up))
 
@@ -1928,9 +1918,7 @@ def build_most_requested() -> str:
       <div class="relhead"><h2>Most requested</h2><span class="fill"></span></div>
       <p class="prose">The open <a href="{IDEAS}">Ideas</a> discussions carrying the most
       thumbs-up, read from the GitHub API once a day. <b>A vote is a signal, not a
-      commitment.</b> Nothing is scheduled by appearing here, and a request can sit at the
-      top of this list and still be one of the things
-      <a href="#not-planned">deliberately not on the roadmap</a>.</p>
+      commitment.</b> Nothing is scheduled by appearing here.</p>
       <ul class="votes">
 {rows}
       </ul>

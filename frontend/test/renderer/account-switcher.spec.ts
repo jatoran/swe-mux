@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test'
+import { expect, test, type Locator } from 'playwright/test'
 
 /**
  * The switcher as a way *in*, not only a way to switch between what already exists.
@@ -14,6 +14,53 @@ import { expect, test } from 'playwright/test'
  *    because the state is polled rather than owned by the request that started it;
  *  - a failure carries its reason, which is the only copy of it that exists.
  */
+
+test('several accounts stack into quota columns rather than into sentences of different lengths', async ({ page }) => {
+  await page.goto('/account-switcher-harness.html?accounts=multi')
+  await page.click('.account-summary > button >> nth=0')
+
+  const rows = page.locator('.account-popover .quota-row')
+  await expect(rows).toHaveCount(3)
+
+  // The property, measured rather than asserted about the markup: within each column,
+  // every account's figure starts at the same x. This can only be checked in a browser -
+  // the headings are a `div` and the figures are in a `small` inside a `button`, so they
+  // are separate formatting contexts and no `auto` grid track would ever line them up.
+  const left = (target: Locator) => target.evaluateAll(nodes =>
+    nodes.map(node => Math.round(node.getBoundingClientRect().left)))
+  for (const key of ['session', 'weekly', 'fable']) {
+    const columns = await left(page.locator(`.account-popover .quota-cell-${key} b`))
+    // The errored account draws no cells at all, so two of the three rows reach here.
+    expect(columns.length).toBeGreaterThan(1)
+    expect(new Set(columns).size).toBe(1)
+  }
+  // And the percentages themselves are right-aligned inside their column, so `5%` and
+  // `100%` end level instead of starting level and drifting apart.
+  const rights = await page.locator('.account-popover .quota-cell-session b').evaluateAll(nodes =>
+    nodes.map(node => Math.round(node.getBoundingClientRect().right)))
+  expect(new Set(rights).size).toBe(1)
+
+  // The headings sit over the columns they name, which is what makes a bare column of
+  // percentages readable at all.
+  const headings = page.locator('.account-popover .quota-columns span')
+  await expect(headings).toHaveText(['5h', 'weekly', 'fable'])
+  const headingLefts = await left(page.locator('.account-popover .quota-columns span'))
+  const firstCells = await left(rows.first().locator('.quota-cell'))
+  expect(headingLefts).toEqual(firstCells)
+
+  // A failed poll invalidates the whole account rather than one window of it, and says so
+  // in place of a stale mix that would read as current.
+  await expect(page.locator('.account-popover .quota-row-note')).toHaveText('unavailable')
+})
+
+test('the codex section carries two quota columns, not an empty fable one', async ({ page }) => {
+  await page.goto('/account-switcher-harness.html?accounts=multi')
+  await page.click('.account-summary > button >> nth=0')
+  // Claude reports Fable; Codex has no saved account here at all, so no columns are drawn
+  // for it. The column set belongs to the section, never to the popover.
+  await expect(page.locator('.account-popover .quota-columns')).toHaveCount(1)
+  await expect(page.locator('.account-popover .quota-columns.has-fable')).toHaveCount(1)
+})
 
 test('an empty popover offers the sign-in it used to only describe the absence of', async ({ page }) => {
   await page.goto('/account-switcher-harness.html')
