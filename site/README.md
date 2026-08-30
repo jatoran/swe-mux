@@ -190,9 +190,10 @@ If a fact will not fit, it belongs to the section that owns it, not to the hero.
 It is the only place on the page that shows the whole application at once, so it may include chrome.
 Everywhere else the rule against full-window screenshots still holds.
 
-**One note sits under it and it is not a caption** (`.shotnote`).
-It carries the two facts a caption was the wrong place for: that every capture on the page is the real application in a synthetic install, which section 8 requires the page to say once, and that the film is a 4 MB fetch nothing triggers until you press play, which somebody on a metered connection is owed before they press it.
-Its top margin clears the phone overlay, which hangs up to 46px below `.herovis` above 620px and returns to flow below it, so the margin is halved at that breakpoint rather than left as dead space.
+**Nothing is captioned under it.**
+A note explaining that the captures are real, or that the film is a deferred fetch, is meta-commentary about the page rather than a claim about the product, and it reads as an apology.
+The facts still hold - every capture is the real application in a synthetic install with invented projects, and the film is `preload="none"` so nothing is fetched until a visitor presses play - they are just not narrated to the reader.
+What survives is the spacing: `.shotgap` on the block after `.herovis` clears the phone overlay, which hangs up to 46px below it above 620px and returns to flow below it, so the margin drops back to the normal section gap at that breakpoint rather than being left as dead space.
 
 ## Rejected, so they are not re-proposed
 
@@ -700,8 +701,8 @@ something real, so those four were **rehomed rather than deleted**:
 | Caption fact | Where it went |
 |---|---|
 | "Nothing here decides anything - it reconciles, runs the approved bytes, and fast-forwards" | Section 06's second paragraph. It was the only description of the land queue anywhere on the page, and it was in a caption. |
-| "Real screenshot", and that the captures are a synthetic install | The one `.shotnote` under the hero, stated once for the whole page rather than fourteen times. |
-| "It is a 4 MB download from the release page, so nothing is fetched until you ask" | The same note. |
+| "Real screenshot", and that the captures are a synthetic install | Nowhere. It was briefly one `.shotnote` under the hero and is now dropped: a page that tells you its screenshots are real is arguing with a doubt the reader did not have. The property is enforced by section 8, not announced. |
+| "It is a 4 MB download from the release page, so nothing is fetched until you ask" | Nowhere. `preload="none"` already makes it true, and a visitor is not owed a sentence about a fetch that has not happened. |
 | "The dead end is the thing an agent's own summary reliably leaves out" | Already in section 09's `Cross-session memory` row, so it was simply dropped. |
 
 Three captions were **stated morals** and are the reason the rule is now absolute: "which is the
@@ -994,7 +995,7 @@ Nothing is dropped; it is reordered around what a person comes to a changelog fo
 
 **A curated projection, never a rendering.**
 `.docs/development/ROADMAP.md` is thousands of lines of internal plan.
-Four rules govern the projection, and they are stated in `content/roadmap.html` itself so they travel with the file:
+Three rules govern the projection, and they are stated in `content/roadmap.html` itself so they travel with the file:
 
 1. **No dates.**
    A public roadmap that names a month is a promise made by someone who cannot keep it, and it ages into a liability the week it slips.
@@ -1003,15 +1004,18 @@ Four rules govern the projection, and they are stated in `content/roadmap.html` 
 3. **Forward-looking only.**
    The page had an "Already here" section listing twelve shipped themes and it was cut.
    A roadmap that lists shipped work is a feature list with a misleading name, the landing page and `README.md` already carry that list, and the changelog is the checkable version of it.
-   What is left is direction: being built now, next, recorded-not-scheduled, and the boundaries.
-4. **The boundaries are the argument.**
-   **Deliberately not on the roadmap** (never actuates, never kills a process on suspicion, no cloud service, no chat-bot adapter, no remote execution hosts) is not a list of gaps.
-   It is the cheapest instrument the site has for answering a request that will never be built with a reason instead of with silence, and section 12 made that job much larger by inviting requests.
-   So it is drawn as a panel (`.boundary`), carries the stable id `#not-planned`, and is linked from the lede, from the section that invites requests, and from the generated vote block.
-   Those three links and that id are a contract: `README.md` and the discussion template both point at `#not-planned`.
 
-Keep the whole thing to a few screens.
-When it grows past that, cut themes rather than adding pages.
+**The page is one list, and that is deliberate.**
+It carried four sections - a "being built now" theme, "next", a "recorded, not scheduled" tier, and a "deliberately not on the roadmap" panel with the stable id `#not-planned`.
+All but "next" are gone.
+The first three were shades of the same answer ("we might do this") drawn as though they were different commitments, and a reader wanting to know whether swe-mux will ever do the thing they came for had to work out which tier their answer was in.
+The boundary panel was the strongest writing on the page and is the one worth understanding before re-proposing it: it answered a request that will never be built with a reason instead of with silence.
+It was cut because a visitor arrives asking what the product will do, not what it refuses to, and a list of refusals sitting between "next" and "how to ask" reads as defensiveness on a page that is otherwise an invitation.
+Four inbound links pointed at `#not-planned` - the repository `README.md`, the Ideas discussion template, the comparison page, and the troubleshooting doc - and each was rewritten to state the relevant boundary itself rather than to point at a deleted anchor.
+**If a boundary needs stating, state it where the reader is** (the comparison page's "not built is not the same as not yet built" row is the model), not in a catalogue nobody navigates to.
+
+Keep the whole thing to a couple of screens, one sentence per item.
+When it grows past that, cut items rather than adding sections back.
 
 **The "Most requested" block is generated and everything around it is not.**
 `content/roadmap.html` carries a single `MOST-REQUESTED` marker comment, and `build.py` replaces it with the block it renders from `content/ideas.json`.

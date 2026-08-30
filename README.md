@@ -131,7 +131,7 @@ The maintained design contract starts at [`.docs/design/00_OVERVIEW.md`](.docs/d
 
 Contributions are welcome.
 Feature requests are [Discussions in the Ideas category](https://github.com/jatoran/swe-mux/discussions/categories/ideas), where a thumbs-up is a vote and the most-voted open ideas are drawn on the [roadmap](https://swemux.dev/roadmap/); [issues](https://github.com/jatoran/swe-mux/issues) are for bugs.
-Describe the problem rather than the fix, and check [deliberately not on the roadmap](https://swemux.dev/roadmap/#not-planned) first.
+Describe the problem rather than the fix.
 [`CONTRIBUTING.md`](CONTRIBUTING.md) covers what a change has to satisfy; [`CLAUDE.md`](CLAUDE.md) covers the working rules; [`SECURITY.md`](SECURITY.md) is where a vulnerability report goes.
 
 ## License
