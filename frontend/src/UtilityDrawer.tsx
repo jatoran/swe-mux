@@ -14,11 +14,11 @@ import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, type DrawerTabId } from './drawerTabs'
 import {
-  drawerCollapseHostStack, drawerTabs, setDrawerSplitRatio,
+  drawerTabs, setDrawerSplitRatio,
   type DrawerLayout, type DrawerNode, type DrawerProjectPresentation, type DrawerStack,
 } from './drawerLayout'
 import {
-  availableDrawerSegments, drawerSectionTarget, drawerSegment, hasDrawerSegments,
+  availableDrawerSegments, drawerSectionTarget, hasDrawerSegments,
   hasSharedSegmentBody, resolveDrawerSegment, type DrawerSegmentContext,
 } from './drawerSegments'
 import { helpTopicForDrawer } from './helpTopics'
@@ -52,10 +52,11 @@ import { sessionDisplayName } from './sessionNames'
 // chord, and it hands its column back to the drawer on open rather than repeating the tab
 // strip beside it.
 //
-// Losing that rail on open also loses the pointer affordance for closing again, so exactly
-// one pane heading — the drawer's top-right, see `drawerCollapseHostStack` — carries a
-// collapse control. Clicking an already-selected tab still collapses the drawer too; the
-// control exists because that gesture is not discoverable.
+// Clicking an already-selected tab collapses the drawer. Escape, the mobile scrim, the
+// mobile back stack, gestures, commands, and the tab context menu expose the same action
+// without spending a permanent control in every pane heading.
+
+const CONTENT_FIRST_TABS: readonly DrawerTabId[] = ['notes', 'files', 'actions', 'git', 'activity', 'agent']
 
 type Props = {
   layout: DrawerLayout
@@ -67,9 +68,8 @@ type Props = {
   onTab: (tab: DrawerTabId, collapseIfSelected?: boolean) => void
   /** Select a segment of a tab. Persisted per Project beside the tab selection itself. */
   onSegment: (tab: DrawerTabId, segment: string) => void
-  /** Open help on one topic. The pane heading offers it for whichever surface it is
-   *  drawing, which is what makes the answer reachable from where the question is asked
-   *  rather than only from the app menu. */
+  /** Open help on one topic. Headered panes offer it inline; every tab with a topic also
+   *  exposes it through the tab context menu owned by App. */
   onHelp: (topic: string) => void
   /** One-shot request to scroll a *section* into view and flash it, from a palette entry,
    *  a voice phrase, or an Action button that names one. Sections are co-visible regions
@@ -246,8 +246,6 @@ export function UtilityDrawer(props: Props) {
   const focusedTab = presentation.focused_tab
   const stackOrder = drawerTabs(layout)
   const mobileStack: DrawerStack = { type: 'stack', id: 'mobile-projection', tabs: stackOrder }
-  // Mobile flattens the tree to one stack, so that stack is trivially its own top-right.
-  const collapseHostId = mobile ? mobileStack.id : drawerCollapseHostStack(layout.root).id
   // Structural availability and the user's hidden set, resolved together in
   // `drawerVisibility.ts` so the launcher rail outside this component answers the same
   // question the same way. A hidden tab reached by name is peeked, not unhidden.
@@ -597,7 +595,7 @@ export function UtilityDrawer(props: Props) {
         aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}`}
         tabIndex={id === selected ? 0 : -1}
         class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
-        title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
+        title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${id === selected && !props.transientTab ? ' - click again to collapse' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
         onPointerDown={projection
           ? event => { beginTabLongPress(event, id); props.onProjectionTabReorder?.(event, id) }
           : event => props.onTabDragStart(event, id)}
@@ -631,13 +629,8 @@ export function UtilityDrawer(props: Props) {
     const selected = visibleTabs.includes(requested) ? requested : visibleTabs[0]
     const active = drawerTab(selected)
     const segment = segmentFor(selected)
-    // The segment names the surface once a tab holds more than one. "Change Map" is what
-    // that pane is; "Activity" is only where it lives, and a heading that never changed
-    // while the body did would be the tab strip repeated rather than a label.
-    const heading = (segment && drawerSegment(selected, segment)?.heading) || active.heading
-    // The tabs whose heading is always exactly their selected segment's label. Drawing both
-    // spends a row of a narrow panel printing the selected chip's own word above it.
-    const inlineSegments = selected === 'git' || selected === 'files'
+    const heading = active.heading
+    const contentFirst = CONTENT_FIRST_TABS.includes(selected)
     const notesHere = stack.tabs.includes('notes')
     return <section
       key={stack.id}
@@ -653,23 +646,8 @@ export function UtilityDrawer(props: Props) {
         class={`drawer-body drawer-body-${selected}`}
         style={{ '--drawer-panel-title-width': `${Math.min(22, heading.length + 2.5)}ch` } as JSX.CSSProperties}
       >
-        {/* Git puts its segments in the heading row instead of a heading.
-            Everywhere else the heading names something the segment strip does not
-            ("Change Map" under Activity), but Git's three headings are the three
-            segment labels - so the row above the control was the control's own
-            selected chip, spelled out, costing a line of a panel people keep narrow.
-            The scope context stays: which Project this repository belongs to is the
-            one fact the segments do not carry. */}
-        <div class={`drawer-pane-heading${inlineSegments ? ' with-segments' : ''}`}>
-          {inlineSegments
-            ? <DrawerSegmentControl
-                tab={selected}
-                active={segment}
-                context={segmentContext}
-                onSelect={id => props.onSegment(selected, id)}
-                inline
-              />
-            : <h2 class="drawer-panel-title" title={active.title}>{heading}</h2>}
+        {!contentFirst && <div class="drawer-pane-heading">
+          <h2 class="drawer-panel-title" title={active.title}>{heading}</h2>
           <span class="drawer-scope-context">{scopeContext(selected)}</span>
           {/* Drawn from the topic registry rather than per tab, so a surface with no
               topic gets no control instead of an empty modal, and a topic added later
@@ -683,19 +661,13 @@ export function UtilityDrawer(props: Props) {
               onClick={() => props.onHelp(topic.id)}
             >?</button> : null
           })()}
-          {stack.id === collapseHostId && <button
-            class="drawer-collapse"
-            aria-label="Collapse side panel"
-            title="Collapse side panel"
-            onClick={onClose}
-          >×</button>}
-        </div>
-        {!inlineSegments && <DrawerSegmentControl
+        </div>}
+        <DrawerSegmentControl
           tab={selected}
           active={segment}
           context={segmentContext}
           onSelect={id => props.onSegment(selected, id)}
-        />}
+        />
         {notesHere && renderNoteHost(selected === 'notes')}
         {selected !== 'notes' && renderSegmentedBody(stack.id, selected, segment)}
       </div>
@@ -766,7 +738,6 @@ export function UtilityDrawer(props: Props) {
     <div class="drawer-body">
       <div class="drawer-pane-heading">
         <h2 class="drawer-panel-title">Side panel</h2>
-        <button class="drawer-collapse" aria-label="Collapse side panel" title="Collapse side panel" onClick={onClose}>×</button>
       </div>
       <p class="drawer-empty">Nothing to show here. Every panel is either hidden or unavailable for the focused session.</p>
       <p class="drawer-empty">

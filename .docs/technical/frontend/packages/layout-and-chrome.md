@@ -121,7 +121,7 @@ What crosses the boundary is one `data-rail-density` attribute on the root eleme
 
 ## Utility drawer
 
-`drawerLayout.ts`, `drawerTransient.ts`, `drawerVisibility.ts`, `UtilityDrawer.tsx`, `drawerTabs.ts`,
+`drawerLayout.ts`, `drawerTransient.ts`, `drawerVisibility.ts`, `UtilityDrawer.tsx`, `drawerTabs.ts`, `DrawerViewTabs.tsx`,
 `drawerNotes.ts`, `noteTabs.ts`, `sidebarResize.ts`, and feature-named tab bodies
 
 - `drawerLayout.ts` owns the JSX-free device-local recursive tree and per-Project presentation algebra.
@@ -131,6 +131,8 @@ What crosses the boundary is one `data-rail-density` attribute on the root eleme
   Every strip, the desktop launcher rail, and the Settings mirror read it rather than repeating the rule.
 - `App.tsx` owns migration, atomic persistence, independent drawer-tab and right-rail display preferences, transient-state lifetime, and collapse routing.
 - `UtilityDrawer.tsx` owns desktop recursion plus the flat mobile projection, tab long-press, and singleton body dispatch, delegating rail overflow mechanics to `OverflowRail`.
+- `UtilityDrawer.tsx` omits pane headings for Notes, Files, Actions, Git, Activity, and Agent, while preserving the header contract for Transcript, Schedule, Alerts, Queue, and Processes.
+- `DrawerViewTabs.tsx` owns the full-width secondary-rail markup, roving tab stop, arrow-key selection, and shared Actions-derived presentation.
 - `drawerTabs.ts` is the tab registry.
 - `drawerNotes.ts` remembers the selected Notes sub-tab per Project.
 - `noteTabs.ts` owns deterministic tab ordering, deletion fallback, and the per-Project note count behind the last-note delete guard.
@@ -138,7 +140,7 @@ What crosses the boundary is one `data-rail-density` attribute on the root eleme
 
 ## Drawer segments and sections
 
-`drawerSegments.ts`, `DrawerSegmentControl.tsx`
+`drawerSegments.ts`, `DrawerSegmentControl.tsx`, `DrawerViewTabs.tsx`
 
 The drawer's second axis: what a tab is *showing*, once a tab shows more than one thing.
 Two kinds are deliberately kept apart.
@@ -148,9 +150,10 @@ A **section** is a co-visible region of one scroller reached by scroll-and-flash
 `drawerSegments.ts` stays JSX-free and unit-testable like `drawerTabs.ts`, so availability is a predicate over a small context of booleans (`hasTranscript`, `isAgentSession`) rather than over a `Session`.
 `resolveDrawerSegment` falls back to the first available segment.
 
-`DrawerSegmentControl.tsx` is the single control every segmented tab draws, in the same place, from the same registry.
+`DrawerSegmentControl.tsx` adapts registered segments into `DrawerViewTabs.tsx`.
+`ActionsTab.tsx` reads its registered section labels into the same component while retaining its device-local catalog selection.
 Unavailable segments are **omitted rather than disabled**, because a greyed-out "Timeline" promises a surface that does not exist, and a tab with one available segment draws no control at all.
-It paints from one shared `.segmented-tabs` rule that the Resources dialog and the Automation dashboard also use, so "these are views of this surface" reads as the same statement everywhere.
+The drawer rail uses `.drawer-view-tabs`; Resources and Automation retain `.segmented-tabs` because they are modal-scale controls rather than utility-drawer chrome.
 
 The registry exists so `App.tsx` can generate a palette command and a voice phrase per segment and per section: without it, folding a tab into a segment would delete the surface's command *and* its spoken navigation.
 `RETIRED_DRAWER_SEGMENTS` is the same obligation in reverse, and is a row rather than a deletion.

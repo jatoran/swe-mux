@@ -10,6 +10,7 @@
 import { render } from 'preact'
 import { ActionsTab } from '../../src/ActionsTab'
 import { AgentContextTab } from '../../src/AgentContextTab'
+import { DrawerSegmentControl } from '../../src/DrawerSegmentControl'
 import type { Project, Session } from '../../src/types'
 import '../../src/style.css'
 
@@ -110,19 +111,14 @@ window.fetch = (async (input: RequestInfo | URL) => {
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 
-// The real drawer chrome, because both surfaces are measured *against* the pane heading
-// that sits above them: the whole point of removing their own session lines is that the
-// heading already carries the session.
+// The real content-first drawer chrome: Actions owns its catalog rail and Agent uses the
+// shared registered-segment rail. Neither receives a redundant pane heading.
 render(
   <aside class="utility-drawer docked" style="width:380px;height:100dvh;display:flex">
     <section class="drawer-pane" style="flex:1;min-height:0;display:flex;flex-direction:column">
       <div class="drawer-body" style="flex:1;min-height:0;display:flex;flex-direction:column">
-        <div class="drawer-pane-heading">
-          <h2 class="drawer-panel-title">{params.get('tab') === 'agent' ? 'Instructions & Memory' : 'Actions'}</h2>
-          <span class="drawer-scope-context">Session: Schedule Session Resume</span>
-        </div>
         {params.get('tab') === 'agent'
-          ? <AgentContextTab project={PROJECT} session={SESSION} />
+          ? <><DrawerSegmentControl tab="agent" active="instructions" context={{hasTranscript:true,isAgentSession:true}} onSelect={()=>{}}/><AgentContextTab project={PROJECT} session={SESSION} /></>
           : <ActionsTab
             session={SESSION}
             project={PROJECT}
