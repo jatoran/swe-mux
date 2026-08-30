@@ -110,8 +110,10 @@ def test_remove_leaves_a_directory_holding_anything_else(tmp_path: Path) -> None
 
 def test_global_targets_name_the_documented_per_user_roots(tmp_path: Path) -> None:
     targets = global_targets(
-        claude_home=tmp_path / "claude-home",
-        codex_home=tmp_path / "codex-home",
+        data_homes={
+            "claude": tmp_path / "claude-home",
+            "codex": tmp_path / "codex-home",
+        },
         user_home=tmp_path / "home",
     )
     roots = {str(target.root) for target in targets}
@@ -223,6 +225,18 @@ def test_cli_global_with_yes_writes_the_per_user_roots(
 
 def test_cli_rejects_both_scopes_at_once(tmp_path: Path) -> None:
     assert main(["install-skill", "--project", str(tmp_path), "--global"]) == 1
+
+
+def test_every_agent_harness_declares_a_project_and_a_user_root() -> None:
+    """The installer derives its targets from `skill_install_roots`, so a
+    harness that declares neither scope silently drops out of both commands -
+    this is the guard that makes the omission loud instead."""
+    from swe_mux.harness import agent_harnesses, descriptor
+
+    for name in agent_harnesses():
+        kinds = descriptor(name).skill_install_roots
+        assert any(kind.startswith("project-") for kind in kinds), name
+        assert any(kind.startswith("user-") for kind in kinds), name
 
 
 def test_the_wheel_and_bundles_carry_the_asset() -> None:
