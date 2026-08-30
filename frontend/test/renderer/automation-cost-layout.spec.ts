@@ -177,6 +177,31 @@ test('the policy matrix draws Global and Project side by side, grouped by depend
   await expect(row.locator('input[type=checkbox]')).toHaveCount(2)
 })
 
+test('the sticky policy headings close against the top bar with no content gap', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'Policy')
+  const dismiss = page.locator('.automation-preset-dismiss')
+  if (await dismiss.count()) await dismiss.click()
+
+  for (const width of [1200, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    const geometry = await page.evaluate(() => {
+      const main = document.querySelector('.automation-panel > main')
+      const grid = document.querySelector('.automation-matrix-grid:not(.automation-authority-grid)')
+      const heading = grid?.querySelector('.automation-matrix-head')
+      if (!(main instanceof HTMLElement) || !(grid instanceof HTMLElement)
+        || !(heading instanceof HTMLElement)) return null
+      main.scrollTop = grid.offsetTop
+      return {
+        mainTop: main.getBoundingClientRect().top,
+        headingTop: heading.getBoundingClientRect().top,
+      }
+    })
+    expect(geometry).not.toBeNull()
+    expect(Math.abs(geometry!.headingTop - geometry!.mainTop)).toBeLessThanOrEqual(1)
+  }
+})
+
 test('agent authority keeps readable Global and Project columns at desktop and phone widths', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await openTab(page, 'Policy')
