@@ -57,6 +57,10 @@ ToolCatalogSource = Literal["documented_catalog", "runtime_dependent"]
 # rather than a silent `none`. See `.docs/design/features/agent-environment.md`.
 McpToolSource = Literal["live_process", "app_server", "client_dial", "none"]
 Backend = Literal["shell", "claude", "codex", "omp", "pi", "opencode"]
+
+#: Where swe-mux may install its own agent skill for a harness; see
+#: `HarnessDescriptor.skill_install_roots` for what each kind resolves to.
+SkillInstallRoot = Literal["project-claude", "project-agents", "user-data-home", "user-agents"]
 AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
 # How a harness forks a conversation, for the harnesses that can.
 #
@@ -583,6 +587,16 @@ class HarnessDescriptor:
     # `/` for everything else, which types `/name` on oh-my-pi where the CLI wants
     # `/skill:name`.
     skill_invocation_prefix: str
+    # The minimal covering set of skill roots swe-mux installs its own skill into
+    # for this harness (`skill_install.py`), named by kind rather than by path so
+    # one declaration serves project and user scope. It is deliberately *not* the
+    # exhaustive list of roots the CLI reads - `agent_skills.py` owns that scan -
+    # but every kind here must be one the CLI verifiably reads, because a write
+    # into a root the CLI ignores is litter that teaches nothing. Kinds:
+    # `project-claude` = `<cwd>/.claude/skills`, `project-agents` =
+    # `<cwd>/.agents/skills` (the shared Agent Skills root), `user-data-home` =
+    # `<data_home()>/skills`, `user-agents` = `~/.agents/skills`.
+    skill_install_roots: tuple[SkillInstallRoot, ...]
     # npm package prefix and entrypoint suffix, when the CLI ships as an npm package
     # whose `.cmd` shim resolves to a JS entrypoint. Used to recognize a harness from
     # an already-launched command line. `None` when unmeasured; recognition then falls
@@ -1094,6 +1108,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             "Learned project memory files used by Claude. Repository worktrees share this source.",
         ),
         skill_invocation_prefix="/",
+        skill_install_roots=("project-claude", "user-data-home"),
         npm_entrypoint=("@anthropic-ai/claude-code/", "/cli.js"),
         requires_direct_entrypoint=False,
         headless_probes=HeadlessProbes(
@@ -1209,6 +1224,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             "Codex does not expose a stable project-memory file inventory.",
         ),
         skill_invocation_prefix="$",
+        # Codex reads the shared project root but ignores `~/.agents` at user
+        # scope; its user root is `$CODEX_HOME/skills` (agent_skills.py).
+        skill_install_roots=("project-agents", "user-data-home"),
         npm_entrypoint=("@openai/codex/", "/codex.js"),
         requires_direct_entrypoint=True,
         # One invocation covers all three: `exec` is already non-interactive and the
@@ -1324,6 +1342,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         global_instruction_parts=_OMP_GLOBAL_INSTRUCTIONS,
         memory_inventory=None,
         skill_invocation_prefix="/skill:",
+        # OMP scans Claude's project root, the shared `.agents` roots, and
+        # `~/.claude/skills` as well; these three cost no write of their own
+        # because each is already a sibling harness's declared root.
+        skill_install_roots=("project-claude", "project-agents", "user-agents"),
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
         # `-p` is print mode; `--no-tools` is the read-only guarantee. Its `task`
@@ -1439,6 +1461,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         global_instruction_parts=_PI_GLOBAL_INSTRUCTIONS,
         memory_inventory=None,
         skill_invocation_prefix="/",
+        # pi also reads its own `~/.pi/agent/skills`, but the shared `.agents`
+        # roots reach it without a pi-only write.
+        skill_install_roots=("project-agents", "user-agents"),
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
         # No subagent probe: pi's documented tool set is read/write/edit/bash/glob/
@@ -1565,6 +1590,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         global_instruction_parts=_OPENCODE_GLOBAL_INSTRUCTIONS,
         memory_inventory=None,
         skill_invocation_prefix="/",
+        skill_install_roots=("project-agents", "user-agents"),
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
         # `opencode run` is the non-interactive form. Its read-only guarantee is

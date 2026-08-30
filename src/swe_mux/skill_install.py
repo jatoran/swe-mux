@@ -37,10 +37,11 @@ Two rules keep the writes honest:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from .harness import descriptor
+from .harness import agent_harnesses, descriptor
 
 #: Claude keys a skill by its directory name and Codex by the frontmatter name,
 #: so the directory and the frontmatter `name:` must be the same string for the
@@ -77,29 +78,52 @@ class SkillTarget:
         return self.root / SKILL_DIR_NAME / "SKILL.md"
 
 
+def _grouped(targets: list[tuple[Path, str]]) -> list[SkillTarget]:
+    """Collapse (root, reader) pairs into one target per root, readers ordered
+    by the registry, roots in first-seen order."""
+    grouped: dict[Path, list[str]] = {}
+    for root, reader in targets:
+        grouped.setdefault(root, []).append(reader)
+    return [SkillTarget(root, tuple(readers)) for root, readers in grouped.items()]
+
+
 def project_targets(project: Path) -> list[SkillTarget]:
-    """The roots inside one checkout. Two writes cover all five harnesses."""
-    return [
-        SkillTarget(project / ".claude" / "skills", ("claude", "omp")),
-        SkillTarget(project / ".agents" / "skills", ("codex", "pi", "omp", "opencode")),
-    ]
+    """The roots inside one checkout, derived from each harness's declared
+    `skill_install_roots`. Today that resolves to two writes covering every
+    registered harness; a new harness joins by declaring its roots, with no
+    change here."""
+    pairs: list[tuple[Path, str]] = []
+    for name in agent_harnesses():
+        for kind in descriptor(name).skill_install_roots:
+            if kind == "project-claude":
+                pairs.append((project / ".claude" / "skills", name))
+            elif kind == "project-agents":
+                pairs.append((project / ".agents" / "skills", name))
+    return _grouped(pairs)
 
 
 def global_targets(
     *,
-    claude_home: Path | None = None,
-    codex_home: Path | None = None,
+    data_homes: Mapping[str, Path] | None = None,
     user_home: Path | None = None,
 ) -> list[SkillTarget]:
-    """The per-user roots. Reaches every session those CLIs run anywhere."""
+    """The per-user roots. Reaches every session those CLIs run anywhere.
+
+    ``data_homes`` overrides a harness's ``data_home()`` by name - the test
+    seam, though the real resolvers already honour ``CLAUDE_CONFIG_DIR`` and
+    ``CODEX_HOME``.
+    """
     home = user_home or Path.home()
-    claude_root = (claude_home or descriptor("claude").data_home()) / "skills"
-    codex_root = (codex_home or descriptor("codex").data_home()) / "skills"
-    return [
-        SkillTarget(claude_root, ("claude", "omp")),
-        SkillTarget(codex_root, ("codex",)),
-        SkillTarget(home / ".agents" / "skills", ("pi", "omp", "opencode")),
-    ]
+    overrides: Mapping[str, Path] = data_homes or {}
+    pairs: list[tuple[Path, str]] = []
+    for name in agent_harnesses():
+        for kind in descriptor(name).skill_install_roots:
+            if kind == "user-data-home":
+                base = overrides.get(name) or descriptor(name).data_home()
+                pairs.append((base / "skills", name))
+            elif kind == "user-agents":
+                pairs.append((home / ".agents" / "skills", name))
+    return _grouped(pairs)
 
 
 def filter_targets(targets: list[SkillTarget], harnesses: list[str]) -> list[SkillTarget]:

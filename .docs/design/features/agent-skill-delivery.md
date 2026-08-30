@@ -38,6 +38,9 @@ explicitly; nothing installs it silently.
 The roots are the ones `agent_skills.py` verified against the real CLIs
 (Claude Code 2.1.220, Codex 0.145); the installer targets the same directories the scanner
 reads, and `test_the_scanner_finds_what_the_installer_wrote` closes that loop offline.
+The table is derived, not hand-kept: each harness declares its minimal covering set on
+`HarnessDescriptor.skill_install_roots`, and the installer groups the union - so a new
+harness joins by declaring its roots, with no `skill_install.py` change.
 
 | Scope | Path | Read by |
 |---|---|---|
