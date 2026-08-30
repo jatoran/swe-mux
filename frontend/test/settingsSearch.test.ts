@@ -84,6 +84,59 @@ test('repeated labels within a tab are distinguished by occurrence', () => {
   assert.equal(second.section, 'Second block')
 })
 
+test('a control under an h4 group names the h3 block above it too', () => {
+  // The whole point of a path: "Input · view" told a reader nothing about where the
+  // row lives, because the category heading had overwritten the section heading.
+  const [, , row] = tab(
+    h('h3', {}, 'Keyboard shortcuts'),
+    h('section', {}, h('h4', {}, 'View'), h('button', {}, 'Open global Scratchpad')))
+  assert.deepEqual(row.path, ['Keyboard shortcuts', 'View'])
+  assert.equal(row.section, 'Keyboard shortcuts · View')
+})
+
+test('a group heading closes with its section, so what follows keeps the block', () => {
+  // The disclosure after the shortcut table used to file itself under whichever
+  // category rendered last.
+  const entries = tab(
+    h('h3', {}, 'Keyboard shortcuts'),
+    h('div', {},
+      h('section', {}, h('h4', {}, 'View'), h('button', {}, 'Open Settings')),
+      h('section', {}, h('h4', {}, 'History'), h('button', {}, 'Browse history'))),
+    h('details', {}, h('summary', {}, 'Reserved shortcut policy')))
+  const policy = entries.find(entry => entry.label === 'Reserved shortcut policy')
+  assert.deepEqual(policy?.path, ['Keyboard shortcuts'])
+  assert.deepEqual(entries.find(entry => entry.label === 'Browse history')?.path,
+    ['Keyboard shortcuts', 'History'], 'a sibling group replaces the previous one')
+})
+
+test('a new h3 drops the h4 under the block it closed', () => {
+  const [, , , field] = tab(
+    h('h3', {}, 'Touch gestures'), h('h4', {}, 'Swipes'),
+    h('h3', {}, 'Keyboard shortcuts'), h('label', {}, 'Enabled'))
+  assert.deepEqual(field.path, ['Keyboard shortcuts'])
+})
+
+test('a heading is filed under its block rather than under itself', () => {
+  const [, group] = tab(h('h3', {}, 'Keyboard shortcuts'), h('h4', {}, 'View'))
+  assert.equal(group.label, 'View')
+  assert.deepEqual(group.path, ['Keyboard shortcuts'])
+})
+
+test('a labelled block inside a section does not claim the section', () => {
+  // `<strong>` marks a sub-block ("EDITOR::CHORDS") without opening one; letting it
+  // take a level would file the controls after it under a shouted phrase.
+  const [, , field] = tab(
+    h('h3', {}, 'Editor shortcuts'), h('strong', {}, 'EDITOR::CHORDS'), h('label', {}, 'Policy'))
+  assert.deepEqual(field.path, ['Editor shortcuts'])
+})
+
+test('the enclosing headings are keywords, so a block name narrows a search', () => {
+  const entries = tab(
+    h('h3', {}, 'Keyboard shortcuts'),
+    h('section', {}, h('h4', {}, 'View'), h('button', {}, 'Open global Scratchpad')))
+  assert.equal(searchSettings(entries, 'keyboard scratchpad')[0]?.label, 'Open global Scratchpad')
+})
+
 const entries = [
   ...tab(h('h3', {}, 'General'), h('label', {}, 'Scrollback bytes'), h('label', {}, 'History limit')),
   ...harvestSettings(

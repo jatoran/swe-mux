@@ -34,6 +34,18 @@ Search indexes the vnode tree of every tab: `Settings.tsx` renders each tab thro
 Ranking is not local to it.
 `fuzzyText.ts` owns the ladder - exact name, name prefix, word in name, substring, secondary text, then a span-bounded subsequence pass - and the sidebar filter scores by the same one, so a name typed in either box resolves the same way.
 
+An entry records its enclosing headings as a `path` (`<h3>` at level 1, `<h4>` at level 2) rather than as one nearest-heading string.
+A single slot is claimed by whichever heading rendered last, which is why every keyboard-shortcut row used to place itself as "Input · view" - its category - having overwritten the section it belongs to.
+Two rules make the path hold, and each fixes a defect the other does not.
+Levels are positional, so opening one closes every deeper one and a new `<h3>` cannot inherit the previous block's `<h4>`.
+And a heading is closed by the end of its `<section>`, which is what stops a group's `<h4>` from following the walk out and claiming the block's later controls - the "Reserved shortcut policy" disclosure filed itself under the last category rendered above it.
+`<strong>` emits an entry without claiming a level: it marks a labelled block inside a section rather than opening one.
+`section` is the joined path, and is what result identity de-duplicates on, so two same-named controls in different groups are two results.
+
+`settingsBreadcrumb` (in `settingsTabs.ts`, not here) turns a path into the line a result row shows.
+It lives with the page mapping because that is the fact it needs: a page is named only when a heading does not already name it, so Input's pages - which *are* its `<h3>`s - are not said twice, while Voice's several-headings-per-page grouping is.
+The index itself stays free of the tab registry and knows nothing about which tabs paginate.
+
 ### `settingsTabs.ts` - the navigation model
 
 Browser-free: the tabs and their four contiguous groups, declared subpages, deep-link name resolution, legacy id migration, and the remembered tab and per-tab remembered page.

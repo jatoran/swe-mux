@@ -36,7 +36,16 @@ export type SettingsSearchEntry = {
   tab: string
   tabLabel: string
   tabIndex: number
-  /** Nearest enclosing heading, for disambiguating results in the list. */
+  /**
+   * Enclosing headings, outermost first — `['Keyboard shortcuts', 'View']`. A single
+   * slot cannot describe a tab that nests `<h4>` groups under an `<h3>`: whichever
+   * heading rendered last wins, so every keyboard-shortcut row filed itself under its
+   * category ("View") and lost the section a reader needs to place it. Levels are
+   * positional, so setting one drops every deeper heading and a new `<h3>` cannot
+   * inherit the previous block's `<h4>`.
+   */
+  path: string[]
+  /** `path` joined for display and for result identity. Derived, never set apart from it. */
   section: string
   /** Display text, as written in the JSX. */
   label: string
@@ -62,6 +71,13 @@ export const kindSelector: Record<SettingsEntryKind, string> = {
 const EMITS: Record<string, SettingsEntryKind> = {
   h3: 'section', h4: 'section', strong: 'section', label: 'field', button: 'action', summary: 'action',
 }
+// Which slot of the heading path a tag owns. `strong` emits an entry without
+// claiming a level: it marks a labelled block inside a section rather than opening
+// one, and letting it truncate the path would file that section's later controls
+// under a phrase like "EDITOR::CHORDS".
+const HEADING_LEVEL: Record<string, number> = { h3: 1, h4: 2 }
+/** How a heading path reads in one line. */
+export const SECTION_SEPARATOR = ' · '
 // An emitting tag inside one of these is decoration, not a control: `<strong>`
 // inside a paragraph is emphasis, `<button>` inside a `<label>` is part of that
 // field. Skipping them keeps the index to things a user can actually navigate to.
@@ -141,8 +157,17 @@ function leadText(node: unknown): string {
 type Harvest = {
   entries: SettingsSearchEntry[]
   counts: Map<string, number>
-  heading: string
+  path: string[]
   last: SettingsSearchEntry | null
+}
+
+/**
+ * Open a heading at `level`, closing every deeper one. An empty heading changes
+ * nothing rather than blanking the path — a glyph-only `<h3>` is not a new block.
+ */
+function openHeading(state: Harvest, level: number, text: string): void {
+  if (!text) return
+  state.path = [...state.path.slice(0, level - 1), text]
 }
 
 function emit(state: Harvest, tab: string, tabLabel: string, tabIndex: number, kind: SettingsEntryKind, node: unknown): void {
@@ -154,9 +179,12 @@ function emit(state: Harvest, tab: string, tabLabel: string, tabIndex: number, k
   const countKey = `${kind}:${key}`
   const occurrence = state.counts.get(countKey) || 0
   state.counts.set(countKey, occurrence + 1)
+  // Emitted before the node's own heading is opened, so a heading is filed under
+  // the block that contains it rather than under itself.
+  const path = [...state.path]
   const entry: SettingsSearchEntry = {
-    tab, tabLabel, tabIndex, section: kind === 'section' ? '' : state.heading, label, key,
-    keywords: normalizeSearchText(`${state.heading} ${textOf(node)}`), kind, occurrence,
+    tab, tabLabel, tabIndex, path, section: path.join(SECTION_SEPARATOR), label, key,
+    keywords: normalizeSearchText(`${path.join(' ')} ${textOf(node)}`), kind, occurrence,
   }
   state.entries.push(entry)
   state.last = entry
@@ -174,18 +202,26 @@ function walk(node: unknown, state: Harvest, tab: string, tabLabel: string, tabI
   const swallowed = ancestors.some(name => SWALLOWS.has(name))
   const kind = EMITS[tag]
   if (kind && !swallowed) {
-    if (kind === 'section' && tag !== 'strong') state.heading = leadText(node) || state.heading
     emit(state, tab, tabLabel, tabIndex, kind, node)
+    if (kind === 'section' && HEADING_LEVEL[tag]) openHeading(state, HEADING_LEVEL[tag], leadText(node))
   } else if (HELP_TAGS.has(tag) && !swallowed && state.last) {
     const help = normalizeSearchText(textOf(node))
     if (help) state.last.keywords = `${state.last.keywords} ${help}`.trim()
   }
+  // A heading governs what follows it, not what it contains, so nothing but a
+  // `<section>` boundary can close one. Every settings block is a `<section>` —
+  // including each keyboard-shortcut category — which is what stops that block's
+  // `<h4>` from following the walk out and claiming its siblings: without this the
+  // "Reserved shortcut policy" disclosure files itself under the last category
+  // rendered above it.
+  const enclosing = tag === 'section' ? [...state.path] : null
   walk(childrenOf(node), state, tab, tabLabel, tabIndex, [...ancestors, tag])
+  if (enclosing) state.path = enclosing
 }
 
 /** Index one tab's rendered vnode tree. */
 export function harvestSettings(node: unknown, tab: string, tabLabel: string, tabIndex: number): SettingsSearchEntry[] {
-  const state: Harvest = { entries: [], counts: new Map(), heading: '', last: null }
+  const state: Harvest = { entries: [], counts: new Map(), path: [], last: null }
   walk(node, state, tab, tabLabel, tabIndex, [])
   return state.entries
 }
@@ -212,7 +248,7 @@ export function domVNode(element: Element): VNodeLike {
  * for a tab whose body is one child component and therefore harvests nothing.
  */
 export const tabEntry = (tab: string, tabLabel: string, tabIndex: number): SettingsSearchEntry => ({
-  tab, tabLabel, tabIndex, section: '', label: tabLabel, key: normalizeSearchText(tabLabel),
+  tab, tabLabel, tabIndex, path: [], section: '', label: tabLabel, key: normalizeSearchText(tabLabel),
   keywords: normalizeSearchText(tabLabel), kind: 'section', occurrence: 0,
 })
 

@@ -2,7 +2,7 @@ import { Fragment } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import { saveFailureStatus, type SettingsApplyResponse } from './settingsSave'
-import { displayChord, type Command } from './commands'
+import { commandCategoryLabel, displayChord, shortcutMatches, UNBOUND_CHORD, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
@@ -43,7 +43,7 @@ import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, ta
 import { flashSetting, revealSetting, settingSelector } from './settingReveal'
 import {
   railSectionIds, rememberedSections, rememberedTab, rememberSection, rememberTab,
-  sameRailSections, SECTION_RAIL_MIN, settingsSubpageId, settingsSubpages, settingsTabGroups, settingsTabs, tabForSection,
+  sameRailSections, SECTION_RAIL_MIN, settingsBreadcrumb, settingsSubpageId, settingsSubpages, settingsTabGroups, settingsTabs, tabForSection,
   type SettingsRailSection, type SettingsTab,
 } from './settingsTabs'
 import {
@@ -341,6 +341,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [bindingCommands, setBindingCommands] = useState<KeybindingCommand[]>([])
   const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy>({browser_reserved:[],desktop_only:[],application_reserved:[],terminal_reserved:[],rules:[]})
   const [capturingCommand, setCapturingCommand] = useState<string|null>(null)
+  // The shortcut table's own filter. Separate from the panel-wide search because it
+  // answers a different question: that one asks where a setting lives, this one narrows
+  // a 110-row table you are already looking at, and typing into it must not navigate away.
+  const [shortcutQuery, setShortcutQuery] = useState('')
   const [bindingError, setBindingError] = useState('')
   const [harnessArgs, setHarnessArgs] = useState<Record<string,string>>({})
   const [detectedProfiles, setDetectedProfiles] = useState<LaunchProfile[]>([])
@@ -1085,7 +1089,25 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
   }
 
-  const bindingForCommand=(commandId:string)=>Object.entries(bindings).find(([,assigned])=>assigned===commandId)?.[0]
+  // One pass over the bindings instead of a scan per row: the shortcut table asks this
+  // for all 110 commands on every render, and each answer used to walk the whole map.
+  // First chord wins, which is what the scan it replaces returned.
+  const commandChords=useMemo(()=>{
+    const chords=new Map<string,string>()
+    for(const [chord,assigned] of Object.entries(bindings))if(!chords.has(assigned))chords.set(assigned,chord)
+    return chords
+  },[bindings])
+  const bindingForCommand=(commandId:string)=>commandChords.get(commandId)
+
+  // Which shortcut rows the filter leaves showing. Rows are *hidden*, never dropped
+  // from the tree: the panel-wide search index is harvested from the mounted tab's live
+  // DOM and kept for the page session, so a filtered-out row would quietly leave that
+  // index and stay gone. A filter set in one corner of one tab must not decide what the
+  // whole panel can find. Keeping every row also keeps document order, and with it the
+  // `occurrence` a search result navigates by.
+  const visibleShortcuts=useMemo(()=>new Set(bindingCommands
+    .filter(command=>shortcutMatches(command,commandChords.get(command.id),shortcutQuery))
+    .map(command=>command.id)),[bindingCommands,commandChords,shortcutQuery])
   const clearBinding=(commandId:string)=>{
     setBindings(current=>Object.fromEntries(Object.entries(current).filter(([,assigned])=>assigned!==commandId)))
     if(capturingCommand===commandId)setCapturingCommand(null)
@@ -2029,11 +2051,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section class="input-settings">
           <div class="keybinding-heading"><div><h3>Keyboard shortcuts</h3><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
+          {/* Inert while a chord is being recorded: that recorder listens on the window in
+              capture phase and swallows every key, so an enabled box here would eat the
+              filter text and bind it. */}
+          <input class="keybinding-filter" type="search" value={shortcutQuery} disabled={!!capturingCommand} placeholder="Filter commands and chords…" aria-label="Filter keyboard shortcuts" autocomplete="off" spellcheck={false} onInput={event=>setShortcutQuery(event.currentTarget.value)}/>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
-          <div class="keybinding-list">
-            {[...new Set(bindingCommands.map(command=>command.category))].map(category=><section class="keybinding-group" aria-label={`${category} shortcuts`}><h4>{category}</h4>{bindingCommands.filter(command=>command.category===category).map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord):'not set'}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>)}
+          <div class="keybinding-list" hidden={!visibleShortcuts.size}>
+            {[...new Set(bindingCommands.map(command=>command.category))].map(category=>{const rows=bindingCommands.filter(command=>command.category===category);return <section class="keybinding-group" aria-label={`${commandCategoryLabel(category)} shortcuts`} hidden={!rows.some(command=>visibleShortcuts.has(command.id))}><h4>{commandCategoryLabel(category)}</h4>{rows.map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''} hidden={!visibleShortcuts.has(command.id)}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord):UNBOUND_CHORD}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>})}
           </div>
+          {!!shortcutQuery.trim()&&!!bindingCommands.length&&!visibleShortcuts.size&&<p class="keybinding-empty" role="status">No shortcut matches “{shortcutQuery.trim()}”.</p>}
           <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>DESKTOP APP</strong>{bindingPolicy.desktop_only.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>APPLICATION</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
           </section>
         </Fragment>}
@@ -2490,6 +2517,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     setJump({entry})
     setQuery('')
     setHighlight(0)
+    // A shortcut row the filter is hiding cannot be scrolled to. The panel-wide search
+    // can still find it (rows are hidden, not removed), so the filter yields to it.
+    setShortcutQuery('')
   }
   const onSearchKey=(event:{key:string;preventDefault:()=>void})=>{
     if(!searchResults.length)return
@@ -2502,7 +2532,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const searchBox = <div class="settings-search">
     <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={searchResults.length>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
     {!!query.trim()&&<div id="settings-search-results" class="settings-search-results" role="listbox" aria-label="Search results">
-      {searchResults.length?searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{entry.tabLabel}{entry.section?` · ${entry.section}`:''}</small></button>):<p>No setting matches “{query.trim()}”.</p>}
+      {searchResults.length?searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{settingsBreadcrumb(entry.tab as SettingsTab,entry.tabLabel,entry.path)}</small></button>):<p>No setting matches “{query.trim()}”.</p>}
     </div>}
   </div>
   return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label="Settings">

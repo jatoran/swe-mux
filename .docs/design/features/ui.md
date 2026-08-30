@@ -892,6 +892,32 @@ Its rules, and what each one is defending:
   The index and the jump's candidate scan both cover only `.settings-content`, so the
   sidebar's page and section links — which repeat every heading — can never duplicate a
   result or shift the occurrence a recorded result points at.
+- A result says where it lives as a breadcrumb: its tab, the page that owns it when a heading
+  does not already name that page, then the headings enclosing it, nearest two.
+  The index records those headings as a **path** rather than a nearest-heading string, which is
+  what makes a nested tab describable at all: a single slot is claimed by whichever heading
+  rendered last, so every keyboard-shortcut row read "Input · view" — its category — and never
+  named the section it sits in.
+  Levels are positional, so opening one closes every deeper one, and a heading is closed by the
+  end of its `<section>`; without the second rule a group's `<h4>` follows the walk out and
+  claims the block's later controls.
+  `settingsBreadcrumb` in `settingsTabs.ts` builds the line, because which page owns a heading
+  is a navigation fact and the index knows nothing about pagination.
+- The shortcut table on Input carries **its own** filter, separate from the panel-wide search,
+  as the note editor's chord table does on Text editor.
+  The two answer different questions: the panel search asks where a setting lives and navigates
+  away, while this one narrows a 110-row table already on screen.
+  It matches the label, the command id, the category, and the chord in both its stored
+  (`ctrl+shift+p`) and displayed (`Ctrl Shift P`) spellings, so "what owns this chord" is
+  answerable; an unbound row answers to `not set`, exactly as it reads.
+  Filtered rows are **hidden, not unmounted**, because the panel-wide index is harvested from
+  the mounted tab's live DOM and kept for the page session — a dropped row would leave that
+  index and stay gone, letting a filter set in one corner of one tab decide what the whole
+  panel can find. Hiding also preserves document order, and with it the occurrence a recorded
+  search result navigates by. Picking a search result clears the filter, since a hidden row
+  cannot be scrolled to.
+  The box is inert while a chord is being recorded: that recorder listens on the window in
+  capture phase and would eat the filter text and bind it.
 - Every OpenRouter model setting uses the same filtering combobox, wherever it lives.
   It accepts typed queries and filters the cached catalog live by model name or exact ID, and its
   listbox scrolls inside a bounded desktop or mobile height instead of expanding to the height of
@@ -967,6 +993,9 @@ Its rules, and what each one is defending:
   inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
   Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
   binding cannot compete with browser zoom suppression or leak the same input into xterm.
+  Rows group by command category, and the group heading is the category rendered as a word
+  (`commandCategoryLabel`) rather than the id it is stored as — the settings search index reads
+  the *text* of the heading it files a row under, so a raw `view` reached the result list.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
