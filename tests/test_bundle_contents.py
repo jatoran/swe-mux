@@ -415,6 +415,57 @@ def test_the_client_spec_excludes_the_daemon_by_name() -> None:
     assert not (excluded & set(build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES))
 
 
+def test_the_client_excludes_the_stdlib_door_to_pywin32() -> None:
+    """The one dependency the client never asked for, and the manifest is what found it.
+
+    `logging.handlers` defines `NTEventLogHandler`, whose `__init__` imports
+    `win32evtlogutil` and `win32evtlog`; PyInstaller follows an import inside a
+    function body like any other, so pywin32 landed in a bundle that never logs
+    to the NT event log. The first CI run of `installer-cycle` is what surfaced
+    it: this host collected `win32` and the runner collected `win32` **and**
+    `pywin32_system32`, because whether pywin32's DLL directory is a separate
+    top-level entry depends on the install layout.
+
+    Excluding is safe by construction rather than by what happens to work: CPython
+    wraps that import in `try/except ImportError`, so `import logging.handlers`
+    needs nothing from pywin32 - which matters because `swe_mux.supervisor`
+    imports it and is reachable from `swemux doctor`.
+    """
+    clause = re.search(r"EXCLUDES = \[([^\]]*)\]", cli_spec_text())
+    assert clause, "the client spec's excludes did not parse; this guard would assert nothing"
+    excluded = {token.strip().strip('"') for token in clause.group(1).split(",")}
+    assert {"win32evtlog", "win32evtlogutil"} <= excluded
+    # And the manifest agrees: declaring the pair would have encoded one runner's
+    # shape instead of removing the difference.
+    assert not (
+        {"win32", "pywin32_system32"} & set(build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES)
+    )
+
+
+def test_the_stdlib_import_the_client_excludes_is_the_guarded_one() -> None:
+    """Read CPython's own source, because that is what makes the exclusion safe.
+
+    If `logging.handlers` ever imported pywin32 at module scope, or dropped the
+    `except ImportError`, excluding it would turn every `import logging.handlers`
+    in the frozen client into a crash - and the client does use logging. This
+    fails on the day that assumption stops holding rather than on the day a user
+    runs `swemux doctor`.
+    """
+    import inspect
+    import logging.handlers
+
+    source = inspect.getsource(logging.handlers)
+    module_scope = [
+        line
+        for line in source.splitlines()
+        if line.startswith(("import ", "from ")) and "win32" in line
+    ]
+    assert not module_scope, f"pywin32 is imported at module scope now: {module_scope}"
+    guarded = inspect.getsource(logging.handlers.NTEventLogHandler.__init__)
+    assert "import win32evtlogutil, win32evtlog" in guarded
+    assert "except ImportError" in guarded
+
+
 def test_the_two_launchers_the_spec_collects_are_the_ones_the_build_verifies() -> None:
     """`CLI_EXES` is defined independently of the spec, so assert they agree.
 
