@@ -199,7 +199,7 @@ type G2pModelInfo = {
   distribution:string;version:string
   total_bytes:number;downloaded_bytes:number;error?:string|null
 }
-type KokoroModelInfo = {
+export type KokoroModelInfo = {
   status:'not_downloaded'|'downloading'|'ready'|'error'
   total_bytes:number;downloaded_bytes:number;current_file?:string|null
   error?:string|null;voices:string[];g2p?:G2pModelInfo;runtime?:VoiceRuntimeInfo
@@ -209,7 +209,7 @@ type KokoroModelInfo = {
 // first-use asset, plus `supported`: a platform the pinned closure has no wheels
 // for is an absence no press can fix, and drawing it as `not_downloaded` beside
 // a button would be an interface that lies.
-type VoiceRuntimeInfo = {
+export type VoiceRuntimeInfo = {
   status:'not_downloaded'|'downloading'|'ready'|'error'
   source?:'installed'|'downloaded'|null
   supported:boolean;closure:string;distributions:number
@@ -232,7 +232,7 @@ type VoiceStatusInfo = {
 // Same four states as the Kokoro model, deliberately: every asset swe-mux fetches
 // on demand reports one vocabulary. `backend_installed` is the *other* kind of
 // absence — the `voice-local` extra itself missing — which no download fixes.
-type WhisperModelInfo = {
+export type WhisperModelInfo = {
   model:string
   status:'not_downloaded'|'downloading'|'ready'|'error'
   backend_installed:boolean
@@ -343,7 +343,7 @@ function VerificationBadge({entry}:{entry:LlmProviderEntry}){
 }
 
 
-export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, onLaunchConfigurator, initialSection, initialSetting, revealToken, voiceCommands=[], navOpen=false, onNavOpenChange, drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void;
+export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, onStartVoiceSetup, onLaunchConfigurator, initialSection, initialSetting, revealToken, voiceCommands=[], navOpen=false, onNavOpenChange, drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void;onStartVoiceSetup?:()=>void;
   /** Start the configurator agent. Owned by the composition root, like the tutorial:
    *  a launch places a pane in the workspace, which this panel does not have. */
   onLaunchConfigurator?:(harness?:string)=>void; initialSection?:string;
@@ -2048,6 +2048,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='voice'&&<Fragment>
           <section><h3>Read aloud</h3>
           <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
+          {onStartVoiceSetup&&<div class="settings-tutorial-reset"><div><p>First time? The guided setup walks the engine choice, the model download, a microphone check, and a spoken confirmation.</p></div><button onClick={()=>{onClose();onStartVoiceSetup()}}>Guided setup…</button></div>}
           {/* Three switches decide whether a word is ever spoken, and they used to sit in
               three unrelated places — a checkbox here, a pane chip there, a button on a
               floating strip — so the honest answer to "why is it talking / why is it
@@ -2670,7 +2671,9 @@ function VoiceRuntimePanel({initial,action=true}:{initial:VoiceRuntimeInfo|null;
   </div>
 }
 
-function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
+// Exported for the guided voice setup (`VoiceSetup.tsx`), which reuses these
+// panels rather than copying them - one acquisition surface, two hosts.
+export function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   const [model,setModel]=useState<KokoroModelInfo|null>(initial)
   const [starting,setStarting]=useState(false)
   // The panel is unmounted while another provider is selected. Re-read on each
@@ -2785,7 +2788,7 @@ function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
  * because `faster_whisper.download_model` disables the hub's progress hook and
  * there is nothing to read. Elapsed seconds is a reading; a bar would be fiction.
  */
-function WhisperModelPanel({initial,runtime}:{initial:WhisperModelInfo[]|null;runtime:VoiceRuntimeInfo|null}){
+export function WhisperModelPanel({initial,runtime}:{initial:WhisperModelInfo[]|null;runtime:VoiceRuntimeInfo|null}){
   const [models,setModels]=useState<WhisperModelInfo[]|null>(initial)
   const [busy,setBusy]=useState('')
   const refresh=()=>void api<{models:WhisperModelInfo[]}>('GET','/api/voice/models/whisper')

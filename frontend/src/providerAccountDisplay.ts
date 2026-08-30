@@ -112,6 +112,48 @@ export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=
   }))
 }
 
+export type QuotaRowCell={key:QuotaGridSegment['key'];percent:string;reset:string}
+
+/** The heading each quota column carries, in the same vocabulary the tooltips use. */
+export const QUOTA_COLUMN_HEADINGS:Record<QuotaRowCell['key'],string>={session:'5h',weekly:'weekly',fable:'fable'}
+
+/** Whether any account in a provider's list reports a Fable window.
+ *
+ * The section's columns are decided once, for every row in it, rather than per account:
+ * a provider that never reports Fable should not carry an empty third column, and a
+ * provider that does must carry it on every row - including the accounts that happen to
+ * have no reading - or the column stops being a column. */
+export const hasFableWindow=(accounts:QuotaAccountDisplay[]):boolean=>
+  accounts.some(account=>account.quota?.status!=='error'&&!!account.quota?.fable)
+
+/** One account's quota windows as aligned cells rather than as a sentence.
+ *
+ * `quotaSummary` joins the same three figures with separators, which reads fine for one
+ * account and stops reading at all for several: `5% 4h3m - 63% 3d1h` and
+ * `71% 22m - 100% 6d23h` are different lengths, so stacked in the switcher no two
+ * percentages sit above each other and the eye cannot compare the thing the list exists
+ * to compare. The cells are fixed-order and fixed-width, so every row's 5h figure is in
+ * the 5h column.
+ *
+ * A window the account has no reading for still gets its cell: a row that omitted it
+ * would shift every column after it, which is the defect rather than a smaller version
+ * of it. */
+export function quotaRowCells(account:QuotaAccountDisplay|undefined,fable:boolean,nowSeconds=serverNow()):QuotaRowCell[]{
+  // An errored poll invalidates the whole account, the same rule `providerQuotaWindows`
+  // applies: a stale mix of one good window and two missing ones reads as current.
+  const quota=account?.quota?.status==='error'?null:account?.quota
+  const cell=(key:QuotaRowCell['key'],window?:QuotaWindowDisplay|null):QuotaRowCell=>({
+    key,
+    percent:percent(readableWindow(window)),
+    // Fable reports no reset instant of its own; the weekly window beside it is the one
+    // that rolls over, and printing that time twice would claim two clocks.
+    reset:key==='fable'?'':formatResetRemaining(window?.resets_at,nowSeconds),
+  })
+  const cells=[cell('session',quota?.session),cell('weekly',quota?.weekly)]
+  if(fable)cells.push(cell('fable',quota?.fable))
+  return cells
+}
+
 // A `chipUsageBand` once banded a chip by its *hottest* window so the border could escalate on
 // a window the chip was not printing. It went out with the mobile toolbar's multi-window chip:
 // every condensed indicator now draws exactly one number, and a border disagreeing with the

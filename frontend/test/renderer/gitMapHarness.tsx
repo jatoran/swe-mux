@@ -11,10 +11,20 @@ const worktreeHead='c6824e7d0123456789abcdef0123456789abcdef'
 const mainHead='9299950aa1bb2cc3dd4ee5ff6001122334455667'
 const cleanSummary={total:0,additions:0,deletions:0,binary_files:0,files:[],truncated:false}
 
+// The delay the tab is stale-while-revalidate *for*. Held open until the spec releases it,
+// because a fixed sleep here would be a race the spec loses on a loaded machine - and a
+// spinner that only appears for a millisecond is exactly the thing being fixed.
+let releaseWorktrees:(()=>void)|null=null
+const slow=new URLSearchParams(location.search).get('slow')==='1'
+const held=slow?new Promise<void>(resolve=>{releaseWorktrees=resolve}):null
+Object.assign(globalThis,{__releaseWorktrees:()=>releaseWorktrees?.()})
+
 globalThis.fetch=async input=>{
   const url=String(input)
   if(url.startsWith('/api/git/swe-mux-setup?'))return response({show:false,reason:'decided',decision:'keep_visible',can_ignore:false,tracked:false})
-  if(url.startsWith('/api/git/worktrees?'))return response({
+  if(url.startsWith('/api/git/worktrees?')){
+  if(held)await held
+  return response({
     repository:{root:project.root,common_dir:'D:\\PROJECTS\\swe-mux\\.git'},
     comparison:{ref:'origin/main',display:'origin/main',source:'origin_head',available:true,reason:null,candidates:['origin/main']},
     worktrees:[{
@@ -32,6 +42,7 @@ globalThis.fetch=async input=>{
       conflicted:cleanSummary,unstaged:cleanSummary,staged:cleanSummary,branch_delta:cleanSummary,
     }],
   })
+  }
   if(url.startsWith('/api/git/graph?'))return response({
     lines:[
       {kind:'commit',graph:'* ',oid:worktreeHead,parents:[mainHead],refs:['sidebar-session-git-lines-fix'],author:'Codex',committed_at:1786800000,subject:'Fix sidebar Git lines'},
