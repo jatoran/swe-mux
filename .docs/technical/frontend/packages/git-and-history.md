@@ -232,6 +232,15 @@ Markers are drawn only while `tts_enabled` is on: this is a per-item surface rep
 
 Search filters and highlights the loaded messages without changing copy-all, and its temporary scroll position restores the normal reading place on clear.
 Each message shows the shared full local date-time label, and each per-message copy control uses a message-bounded sticky anchor.
+
+The per-message row is chrome laid over somebody's words, so it is absent from the resting column and revealed per input.
+A pointer reveals the row on hover of the message that owns it, or on keyboard focus into it.
+Touch has no hover, so a tap on the entry opens that entry's row and a second tap closes it, one entry at a time (`openActions`); the anchor stops the press on a chip from closing the row it sits in, and a live selection still clears the whole row out of a handle's path.
+The hidden state is `opacity` plus `pointer-events`, never `visibility` or `display`, because a keyboard reader has to be able to focus a control that is not drawn yet.
+Copy and Select are icon-only (`CopyIcon`, `CheckIcon` while flashing, `SelectTextIcon` from `railIcons.tsx`), with the words carried by `aria-label` and `title`.
+The read-aloud markers keep their words: `summary` and `verbatim` differ in what they spend, which no pair of glyphs can say.
+The header's reserved gutter is sized to what the row actually holds - the icon pair, or the icon pair plus the audio markers on a reply while read aloud is on (`has-audio`) - rather than to one flat number, which is how a four-chip row came to sit on top of the timestamp it was meant to clear.
+On a phone the gutter reserves for the icon pair only: holding the audio markers' width open would push the timestamp into the speaker label on every reply, and that row is not drawn unless the reader tapped for it.
 Explicit Show more state persists device-locally by session, agent run, and stable message id in a 500-entry registry that stores no transcript text; search-only expansion is not saved.
 
 ### Partial copy

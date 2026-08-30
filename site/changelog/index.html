@@ -324,11 +324,11 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
 }
-/* The two facts that used to be a caption under the hero film. Above 620px the
-   phone overlay hangs up to 46px below `.herovis` and this has to clear it;
-   below 620px the phone is back in flow and the same margin is dead space. */
-.shotnote { margin-top: clamp(56px, 8vw, 80px); max-width: 72ch; }
-@media (max-width: 620px) { .shotnote { margin-top: 22px; } }
+/* Whatever follows the hero visual has to clear the phone overlay, which above
+   620px hangs up to 46px below `.herovis`. Below 620px the phone is back in
+   flow and the same margin is dead space, so it drops back to the normal one. */
+.shotgap { margin-top: clamp(56px, 8vw, 80px); }
+@media (max-width: 620px) { .shotgap { margin-top: clamp(34px, 5vw, 56px); } }
 
 /* --------------------------------------------------------------- two halves */
 .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
@@ -511,16 +511,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
 .rel { margin-top: clamp(40px, 6vw, 64px); }
 
-/* The anti-roadmap is drawn as a panel rather than as a fourth run of bullets
-   that happens to be last. It is the cheapest instrument this site has for
-   answering a request that will never be built with a reason instead of with
-   silence, and the roadmap page now invites requests, which makes that job much
-   larger than it was. A panel is the whole treatment: no colour of its own, no
-   warning register, and the same hairline the rest of the page uses. */
-.boundary { border: 1px solid var(--line-2); background: var(--panel);
-            padding: 2px clamp(14px, 3vw, 26px) clamp(16px, 2.4vw, 22px); }
-.boundary .relhead { padding-top: clamp(14px, 2.4vw, 20px); }
-
 /* Vote rows. A count is a number, so it takes the mono face and a fixed column;
    the row itself is a link rather than a description, which is what separates
    this list from the themed ones above it. `overflow-wrap` because a title is
@@ -674,9 +664,10 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 /* -------------------------------------------------- the agent-onboarding block
 
    Prominent by position rather than by colour: it sits directly under the lede,
-   above the section nav, and takes the panel treatment the roadmap's boundary
-   panel already uses. It is the first thing on the page because the reader most
-   likely to act on it is the one who has not decided to read anything yet. */
+   above the section nav, as a panel with no colour of its own, no warning
+   register, and the same hairline the rest of the page uses. It is the first
+   thing on the page because the reader most likely to act on it is the one who
+   has not decided to read anything yet. */
 .agentbox { border: 1px solid var(--line-2); background: var(--panel);
             padding: clamp(15px, 2.6vw, 22px); margin-top: clamp(20px, 3vw, 28px); }
 .agentbox h2 { font-size: clamp(15px, 2vw, 17px); }
@@ -893,15 +884,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <span class="fill"></span>
       </div>
       <div class="relgroups">
-        <div><span class="k">Added</span> <span class="sep">5 entries</span></div>
+        <div><span class="k">Added</span> <span class="sep">6 entries</span></div>
         <div><span class="k">Changed</span> <span class="sep">1 entry</span></div>
       </div>
       <details class="relmore">
-        <summary>all 6 entries</summary>
+        <summary>all 7 entries</summary>
         <div class="changetype">Added</div>
         <ul class="bullets">
           <li><span><b>swe-mux now ships an agent skill, embedded in every install.</b> <code>swemux --skill</code> prints the copy matching the running release, and <code>swemux install-skill</code> writes it into the skill directories agent CLIs actually read - two writes inside a checkout cover every registered harness, with no third-party tool and no registry. The skill teaches an agent the in-session environment check and where the current contract lives (the mux MCP tools, or <code>swemux --help</code>); it deliberately enumerates no commands, so it cannot go stale between releases. Installing into the per-user skill roots, which reach every agent you run anywhere, prints the exact paths first and proceeds only under <code>--yes</code>; <code>--remove</code> takes back only files the installer can recognize as its own.</span></li>
           <li><span><b>First run now asks how much swe-mux should do.</b> Three experience tiers, phrased as three genuine products: pure terminal (real terminals, nothing watching - no hooks, no status detection, no fleet plumbing), deterministic (transcripts, live status, managed harnesses, the agent fleet surface; model-free), and automations (adds the scan timeline and the model-backed observers, under your budgets). A tier is a batch of defaults, never a lock: everything it turns off stays one switch away, the choice is re-applyable and reversible from Settings → General, and existing installs are never stamped with a choice they did not make.</span></li>
+          <li><span><b>The empty workspace now offers three first steps instead of nothing.</b> A quest log on the empty stage points at the three setups that cannot finish in one screen: voice (opens the guided setup), isolated worktrees, and connecting a phone. It is capped at three by design - it will never become a todo list - the voice entry completes itself when voice is set up, and dismissing an entry is permanent, on every device.</span></li>
           <li><span><b>Voice setup is now a guided walk.</b> Settings → Voice gains "Guided setup" (also in the command palette and by voice: "set up voice"): pick the engine, watch the one-press download's three progress lines, test the microphone where a permission prompt is visible and explained, and hear one spoken sentence at the end. Every step drives the same controls Settings already has, so nothing new can drift.</span></li>
           <li><span><b>The side panel's default density follows the chosen tier.</b> A pure-terminal install opens with five panel tabs (Actions, Files, Notes, Git, Alerts) instead of ten; the agent-layer tabs stay one right-click away, exactly as before. Only a device that has never touched the panel visibility menu follows the tier default - any choice you have made, including showing everything, is never overwritten.</span></li>
           <li><span><b>Agents can be handed the skill automatically, per harness.</b> A new "Fleet access" control in Settings → Harnesses phrases the choice as capability - may agents in this harness's sessions see the fleet, and how do they learn they can - with MCP tools, the skill file, both, or neither. The two routes are deliberately not symmetric and the control says so: for Claude the skill travels as a session-scoped plugin from the mux data directory and nothing is written into your Projects, while for codex, pi, omp, and opencode it is written into the Project's <code>.agents/skills/</code> at session start, because those CLIs read skills from nowhere else. Automatic delivery is off by default - swe-mux does not write into your checkout unasked - and turning it off later stops the writes without deleting anything.</span></li>
