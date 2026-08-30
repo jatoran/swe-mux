@@ -563,12 +563,25 @@ person with no shortcut, no tray, and no idea where anything went.
     `yaml` and `cryptography`, because `cli install-shortcut` imports `swe_mux.shortcuts`,
     which reaches `swe_mux.desktop` for `create_tray_image`, which imports `swe_mux.__main__`,
     which imports `swe_mux.server`. Excluding `swe_mux.desktop`, `swe_mux.__main__` and
-    `swe_mux.server` makes it **28 MiB**: two 3.5 MB executables plus `psutil` and `win32`
-    (0.3 MB under `_internal/`). Cutting the chain is sound rather than a size trick -
+    `swe_mux.server` makes it **28 MiB**: two 3.5 MB executables plus `psutil`, the one
+    third-party package left (0.1 MB under `_internal/`). Cutting the chain is sound rather
+    than a size trick -
     `shortcuts.ensure_icon` returns before that import for a frozen target and its import is
     already inside an `except Exception`. `build_desktop.verify_cli_bundle_contents` asserts
     the membership and `smoke_cli_bundle` runs the built launchers, so a reachable import the
     excludes turned into a `ModuleNotFoundError` fails the build.
+  - **pywin32 came from the standard library, and the manifest is what found it.** This host
+    collected `psutil` and `win32`; the GitHub runner collected `win32` **and**
+    `pywin32_system32`, so the first CI run of the `installer-cycle` job went red while the
+    build was correct here - the "the host is not the runner" shape again. The client never
+    depended on pywin32: `logging.handlers` defines `NTEventLogHandler`, whose `__init__`
+    imports `win32evtlogutil`, and PyInstaller follows an import inside a function body like
+    any other. Excluding that pair removed the variance rather than describing it; declaring
+    `pywin32_system32` would have pinned one runner's install layout into the manifest, the
+    same mistake as a size floor measured on one host. Safe by construction, because CPython
+    wraps that import in `try/except ImportError` - `import logging.handlers` needs nothing
+    from pywin32, and constructing the handler without it prints a notice rather than raising.
+    `psutil` is now the only third-party package in the bundle.
 
   The daemon entry (`swemuxd`/`muxd`) is deliberately **not** in it, and 143 MiB is the
   measurement of that too: `swe_mux.__main__` imports `swe_mux.server`, so a daemon launcher

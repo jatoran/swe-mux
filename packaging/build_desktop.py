@@ -843,18 +843,27 @@ def build_supervisor_bundle(*, force: bool = False) -> bool:
 # subcommand, and PyInstaller follows every one of them. Nothing about that is
 # visible in a diff; it is visible in a size.
 #
-# The two that remain arrive by different routes, and the second is worth knowing
-# about. `psutil` is a real edge: `swe_mux.lifecycle` imports it and `shortcuts`
-# imports `lifecycle` for the ledger every command writes to. `win32` (pywin32)
-# is reached from the **standard library** - `logging.handlers` defines
-# `NTEventLogHandler`, which imports `win32evtlogutil`, and PyInstaller follows
-# the import whether or not the handler is ever constructed. Together they are
-# 0.3 MB, so both ship rather than being chased out.
+# One package, and it is a real edge: `swe_mux.lifecycle` imports `psutil` and
+# `shortcuts` imports `lifecycle` for the ledger every command writes to.
+#
+# There were two until 2026-08-30, and the second is the reason this manifest
+# earns its keep. `win32` (pywin32) arrived from the **standard library** -
+# `logging.handlers` defines `NTEventLogHandler`, whose `__init__` imports
+# `win32evtlogutil`, and PyInstaller follows an import inside a function body
+# like any other. This host collected `win32`; the GitHub runner collected
+# `win32` **and** `pywin32_system32`, because whether pywin32's DLL directory is
+# a separate top-level entry depends on the install layout. So the manifest went
+# red on CI while being correct here - which is the gate working, not failing.
+#
+# The fix was to remove the import rather than declare the difference: declaring
+# `pywin32_system32` would have pinned one runner's shape into this file, the
+# same mistake as a size floor measured on one host. See the `win32evtlog` pair
+# in `packaging/swe_mux_cli.spec` for why cutting it is safe by construction.
 #
 # Windows-measured, like `EXPECTED_BUNDLE_PACKAGES`, and the same rule applies: a
 # platform this was never measured on records its own set rather than widening
 # this one. Only Windows has an installer, so only Windows builds this today.
-EXPECTED_CLI_BUNDLE_PACKAGES = frozenset({"psutil", "win32"})
+EXPECTED_CLI_BUNDLE_PACKAGES = frozenset({"psutil"})
 
 
 def verify_cli_bundle_contents(
