@@ -2509,6 +2509,9 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
+  It is not in the resting column at all: these controls are chrome over what somebody said, and a column that carries a row of buttons above every reply is one the timestamps have to share their line with.
+  A pointer reveals a message's controls by hovering that message, or by tabbing into them; a finger, which has no hover, reveals them by tapping the entry and hides them by tapping it again, one entry at a time.
+  Copy and Select are icons rather than words, so the revealed row is the width of two marks instead of two labels; the read-aloud markers keep their words, because `summary` and `verbatim` differ in what they spend and no glyph says that.
   **Copying part of a message goes through a flat-text sheet, because dragging a selection across the column cannot be made to work on a phone.**
   The messages live in a nested `overflow-y:auto` scroller, and once the anchor handle scrolls out of view Chrome re-derives the selection's base from a screen coordinate that is no longer over the anchor, so extending the other handle swallows every message above it.
   That is the browser's touch-selection controller, not this app's DOM: making the column's chrome unselectable only moved where the runaway base landed, from "and the head bar too" to "from the first message down".
