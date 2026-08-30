@@ -145,14 +145,10 @@
   set, because the client learns the new leaf's id from the response but learns where it sits
   only on the next layout refresh — see `ui.md` for why a plain focus in that gap is undone,
   and which other flows share the mechanism.
-- **Another surface can open History on one conversation.** The overlay accepts an entry id and
-  loads that conversation directly instead of a filtered list, which is how a surface that already
-  knows *which* session it means (the Git tab's session links) reaches an ended one. The request is
-  unscoped on purpose: the row is named by id, and pre-filtering to a Project would hide a
-  conversation that belongs to another one. Two misses are expected rather than exceptional and are
-  reported as themselves, leaving the browser open on its list so the reader can still search by
-  hand: a deleted row answers 404, and a harness that kept no readable transcript answers 409
-  `transcript_unavailable`.
+- **Another surface can open History on one conversation.**
+  The overlay accepts an entry id and loads that conversation directly instead of a filtered list, which is how a surface that already knows *which* session it means (the Git tab's session links and a recovered pane's transcript action) reaches an ended one.
+  The request is unscoped on purpose: the row is named by id, and pre-filtering to a Project would hide a conversation that belongs to another one.
+  Two misses are expected rather than exceptional and are reported as themselves, leaving the browser open on its list so the reader can still search by hand: a deleted row answers 404, and a harness that kept no readable transcript answers 409 `transcript_unavailable`.
 - Transcript controls occupy a dedicated non-shrinking action bar before verbose run metadata.
   The controls wrap at narrow widths, while metadata wraps inside a bounded scroll region, so
   provider, token, context, and compaction details cannot displace Resume or the transcript.

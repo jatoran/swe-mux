@@ -1159,11 +1159,12 @@ history metadata write.
 The row and layout leaf remain present.
 The operation emits `session_stood_down {session_id, backend, duration_ms}`.
 
-`POST /sessions/{id}/resume` accepts no body and is valid only for an inactive session.
-An agent delegates to the shared conversation-resume authority; a shell replays its recorded executable, argv, cwd, environment, and completion mode.
-The daemon proves the replacement live, replaces the old terminal identity in the Project layout, discards the inactive recovery row, and returns `201 {session, replaced}`.
-Failure before layout replacement leaves the inactive session intact.
-Success emits `session_resumed_from_inactive {session_id, replaced, backend}`.
+`POST /sessions/{id}/resume` accepts no body and is valid for an inactive session or a retained ended agent.
+An agent delegates to the shared conversation-resume authority; an inactive shell replays its recorded executable, argv, cwd, environment, and completion mode.
+The daemon proves the replacement live, replaces the old terminal identity in the Project layout, discards the old session identity and recovery row, and returns `201 {session, replaced}`.
+Failure before layout replacement leaves the retained session intact.
+Inactive success emits `session_resumed_from_inactive {session_id, replaced, backend, agent_run_id, recovered, duration_ms}`.
+Other ended-agent success emits `session_resumed_from_ended` with the same payload.
 
 `POST /sessions/{id}/standing-activity/clear` takes an optional
 `{kind?: 'loop'|'cron'|'background_tasks'|'subagents'}` (the whole set when omitted or when the

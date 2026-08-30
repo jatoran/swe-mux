@@ -45,7 +45,7 @@ export function EndedPaneBanner(
       : null}
     {missing ? <span class="cold-pane-empty">{missing}</span> : null}
     {onOpenTranscript ? <button onClick={onOpenTranscript}>Read transcript</button> : null}
-    {onResume ? <button onClick={onResume}>{inactive ? 'Resume' : 'Resume as new…'}</button> : null}
+    {onResume ? <button onClick={onResume}>Resume</button> : null}
     {onRestart ? <button onClick={onRestart}>Restart terminal</button> : null}
   </div>
 }

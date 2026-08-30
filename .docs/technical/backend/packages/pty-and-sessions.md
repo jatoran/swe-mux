@@ -180,7 +180,7 @@ Proof that a pane survived its own spawn: a settle window with optional caller-s
 
 ## `session_resume.py`
 
-The single resume authority, shared by the History route and the scheduled-resume path.
+The single agent-conversation resume authority, shared by the History route, the retained-session replacement route, and the scheduled-resume path.
 
 - The structural refusals: `not_agent`, `native_id_missing`, `cwd_missing`, `transcript_unavailable`, `target_project_missing`, `adapter_missing`.
 - The two claim checks: a mux pane on the conversation, and `conversation_holder` for processes mux does not own.
