@@ -882,11 +882,11 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="relgroups">
         <div><span class="k">Changed</span> <span class="sep">7 entries</span></div>
-        <div><span class="k">Fixed</span> <span class="sep">10 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">11 entries</span></div>
         <div><span class="k">Added</span> <span class="sep">3 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 20 entries</summary>
+        <summary>all 21 entries</summary>
         <div class="changetype">Changed</div>
         <ul class="bullets">
           <li><span><b>On Windows, <code>swe-mux</code> now works on a plain <code>uv tool install swe-mux</code> or <code>pip install swe-mux</code>, with no terminal, no extra and no download.</b> <code>pystray</code> and <code>pywebview</code> moved out of the <code>desktop</code> extra and into ordinary dependencies, marked Windows-only. Previously every install got the <code>swe-mux</code> launcher - it is a GUI entry point, so it opens no console - while an install without the extra got a launcher whose only behaviour was to fail on a missing import, into a message box, with both suggested remedies leading back through a terminal. Over 2.4 MB of pure-Python packages. The <code>swe-mux[desktop]</code> spelling still resolves and now adds nothing, so existing scripts keep working.</span></li>
@@ -906,6 +906,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <li><span><b>Settings → Diagnostics has a Re-scan button and a per-tool path override.</b> Re-scan re-reads PATH from Windows before looking again, because a daemon inherits its environment once at startup and would otherwise keep reporting a tool installed five minutes ago as absent, with nothing saying why.</span></li>
           <li><span><b>Install instructions are per-platform.</b> A Linux user missing Git was told to run <code>winget</code> and sent to a <code>/download/win</code> page.</span></li>
           <li><span><b><code>uv</code> is on the prerequisite checklist</b>, since managed integrations are installed with it.</span></li>
+          <li><span><b>The Edge TTS integration installs without uv when there is a real Python to use.</b> uv is still preferred and still tried first, because <code>uv venv --python 3.12</code> can provide the interpreter as well as the environment - which is the only thing that works on a machine with no Python, or in the frozen desktop app where <code>sys.executable</code> is the bundle rather than a Python. A source install with neither uv nor that problem now falls back to <code>python -m venv</code> and pip, installing the same pinned version from the same index. Where neither is possible the refusal names both remedies instead of only naming uv, and a Debian machine missing <code>python3-venv</code> is told that specifically.</span></li>
           <li><span><b>A Windows 11 machine without WSL stops spawning <code>wsl.exe</code> every 30 seconds.</b> Windows 11 ships that binary whether or not the subsystem is installed, so availability was a guaranteed false positive; the stub then blocked, because the daemon runs windowless, and was tree-killed at an 8s timeout on every status poll, forever. Availability is now a registry check and no WSL command inherits the daemon's stdin.</span></li>
           <li><span><b>Voice setup works on Python 3.13 and 3.14.</b> <code>uv tool install</code> picks the newest CPython on the machine, and the pinned voice closure had no wheel spaCy could load on 3.14, so local voice dead-ended at "no wheel this interpreter can load for: spacy". The pins now cover 3.12 through 3.14, CI checks the closure against each of them rather than only the 3.12 it pins, and the refusal names the interpreter and the supported range instead of reading as a broken package.</span></li>
           <li><span><b>Downloads verify TLS against the OS certificate store.</b> The Kokoro pronunciation model failed with <code>unable to get local issuer certificate</code> against github.com on a machine whose browser reached the same URL: Windows fetches most roots on demand and Python's reading of the store only sees the ones already fetched.</span></li>

@@ -19,6 +19,10 @@ export type EdgeProviderStatus = {
     status:'not_installed'|'installing'|'ready'|'error';phase?:string|null
     error?:string|null;version?:string|null;python:string;requirement:string
     uv_available:boolean;installed_at?:number|null;updated_at?:number|null
+    // Which mechanism would build the environment, or null when neither can.
+    // This, not `uv_available`, decides whether the button works: a source
+    // install with a real Python and no uv falls back to `venv`.
+    install_method?:'uv'|'venv'|null
     last_install_error?:string|null
   }
   catalog:EdgeCatalog
@@ -111,9 +115,10 @@ export function EdgeTtsSettings({value,onChange}:{
     </div>
     <div class="edge-managed-install">
       <p aria-live="polite"><span class={`state-dot ${provider?.managed.status==='ready'?'idle':provider?.managed.status==='installing'?'running':'stopped'}`}/> managed::{provider?.managed.status||'loading'}{provider?.managed.phase?` · ${provider.managed.phase.replaceAll('_',' ')}`:''}{provider?.managed.version?` · edge-tts ${provider.managed.version}`:''}{provider?.managed.error?` · ${provider.managed.error}`:''}</p>
-      <div class="theme-actions"><button type="button" disabled={!!busy||provider?.managed.status==='installing'||provider?.managed.uv_available===false} onClick={()=>void install()}>{provider?.managed.status==='installing'?'Installing…':provider?.managed.status==='ready'?'Repair / reinstall managed Edge TTS':provider?.managed.status==='error'?'Retry managed installation':'Install Edge TTS integration'}</button></div>
-      <small>swe-mux asks <code>uv</code> to fetch <code>{provider?.managed.requirement||'edge-tts==7.2.8'}</code> directly from PyPI into the environment containing <code>{provider?.managed.python||'<data_dir>/integrations/edge-tts/current/python'}</code>, verifies it, and activates it atomically. The package remains inspectable and replaceable under its <a href="https://github.com/rany2/edge-tts/blob/master/LICENSE" target="_blank" rel="noreferrer">LGPL-3.0 license</a>. Nothing installs merely because this provider is selected.</small>
-      {provider?.managed.uv_available===false&&<p class="tts-lexicon-hint">Managed installation requires <code>uv</code>. Install uv or use the external interpreter override.</p>}
+      <div class="theme-actions"><button type="button" disabled={!!busy||provider?.managed.status==='installing'||provider?.managed.install_method===null} onClick={()=>void install()}>{provider?.managed.status==='installing'?'Installing…':provider?.managed.status==='ready'?'Repair / reinstall managed Edge TTS':provider?.managed.status==='error'?'Retry managed installation':'Install Edge TTS integration'}</button></div>
+      <small>swe-mux asks <code>{provider?.managed.install_method==='venv'?'python -m venv':'uv'}</code> to build an isolated environment and fetch <code>{provider?.managed.requirement||'edge-tts==7.2.8'}</code> directly from PyPI into the environment containing <code>{provider?.managed.python||'<data_dir>/integrations/edge-tts/current/python'}</code>, verifies it, and activates it atomically. The package remains inspectable and replaceable under its <a href="https://github.com/rany2/edge-tts/blob/master/LICENSE" target="_blank" rel="noreferrer">LGPL-3.0 license</a>. Nothing installs merely because this provider is selected.</small>
+      {provider?.managed.install_method==='venv'&&<p class="tts-lexicon-hint"><code>uv</code> was not found, so swe-mux will build the environment with this install's own Python (<code>python -m venv</code>). uv is preferred because it can also provide the interpreter; installing it is not required here.</p>}
+      {provider?.managed.install_method===null&&<p class="tts-lexicon-hint">Managed installation needs either <code>uv</code> or a real Python interpreter to build an environment with, and this build has neither. Install uv, or use the external interpreter override below.</p>}
       {provider?.managed.status==='ready'&&provider.managed.last_install_error&&<p class="tts-lexicon-hint tts-lexicon-error">The current managed integration is still active, but its last repair failed: {provider.managed.last_install_error}</p>}
       {provider?.managed.status==='ready'&&!!value.tts_edge_python.trim()&&<p class="tts-lexicon-hint">The managed environment is ready, but the external interpreter override is active. Clear the override and Save to use the managed installation.</p>}
     </div>

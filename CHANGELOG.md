@@ -88,6 +88,14 @@ cause: a property of the development host was written down as a fact about Windo
 - **Install instructions are per-platform.** A Linux user missing Git was told to run
   `winget` and sent to a `/download/win` page.
 - **`uv` is on the prerequisite checklist**, since managed integrations are installed with it.
+- **The Edge TTS integration installs without uv when there is a real Python to use.** uv is
+  still preferred and still tried first, because `uv venv --python 3.12` can provide the
+  interpreter as well as the environment - which is the only thing that works on a machine
+  with no Python, or in the frozen desktop app where `sys.executable` is the bundle rather
+  than a Python. A source install with neither uv nor that problem now falls back to
+  `python -m venv` and pip, installing the same pinned version from the same index. Where
+  neither is possible the refusal names both remedies instead of only naming uv, and a
+  Debian machine missing `python3-venv` is told that specifically.
 - **A Windows 11 machine without WSL stops spawning `wsl.exe` every 30 seconds.** Windows 11
   ships that binary whether or not the subsystem is installed, so availability was a
   guaranteed false positive; the stub then blocked, because the daemon runs windowless, and
