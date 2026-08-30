@@ -372,12 +372,20 @@ def test_every_outcome_reaches_the_lifecycle_ledger(
     assert "shortcut install desktop: created" in written
 
 
-def test_a_missing_desktop_extra_is_noted_on_install_and_not_on_removal(
+def test_an_unimportable_shell_is_noted_on_install_and_not_on_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A shortcut that opens nothing is worth a sentence; a removed one is not."""
+    """A shortcut that opens nothing is worth a sentence; a removed one is not.
+
+    The note's wording changed with the 2026-08-30 dependency move and the
+    change is the assertion: it used to say "the `desktop` extra is not
+    installed" and hand out a command to add it, which after the move sends
+    someone to pass a flag that adds nothing. A missing module here means a
+    partially-installed environment, so the sentence names the modules and a
+    reinstall.
+    """
     monkeypatch.setattr(shortcuts, "IS_WINDOWS", True)
-    monkeypatch.setattr(shortcuts, "_desktop_extra_missing", lambda: True)
+    monkeypatch.setattr(shortcuts, "_missing_shell_modules", lambda: ("pystray",))
 
     def runner(_script: str) -> str:
         return '{"slot":"desktop","path":"x","action":"created","detail":""}\n'
@@ -390,7 +398,9 @@ def test_a_missing_desktop_extra_is_noted_on_install_and_not_on_removal(
         "slots": (shortcuts.SLOT_DESKTOP,),
     }
     installed = shortcuts.apply_shortcuts(**common)  # type: ignore[arg-type]
-    assert any("desktop` extra is not installed" in note for note in installed.notes)
+    note = next(note for note in installed.notes if "pystray" in note)
+    assert "cannot import pystray" in note
+    assert "extra" not in note.replace("rather than an extra nobody chose", "")
     removed = shortcuts.apply_shortcuts(remove=True, **common)  # type: ignore[arg-type]
     assert removed.notes == ()
 

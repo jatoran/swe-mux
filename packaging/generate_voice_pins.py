@@ -54,8 +54,13 @@ TARGET = ROOT / "src" / "swe_mux" / "voice_wheels.py"
 #: The project's own distribution name in `uv.lock`.
 ROOT_PACKAGE = "swe-mux"
 
-#: Seeds that stay in the shipped bundle.
-KEEP_EXTRAS = ("desktop",)
+#: Seeds that stay in the shipped bundle, beyond the base requirements the walk
+#: always takes. Empty since 2026-08-30: `desktop` was the only entry, and
+#: `pystray`/`pywebview` moved into base `dependencies` (`pyproject.toml`), which
+#: is where the walk already finds them. Naming an empty extra here would read as
+#: a seed while contributing nothing - the failure mode this file's own docstring
+#: warns about for the acquire side.
+KEEP_EXTRAS: tuple[str, ...] = ()
 KEEP_GROUPS: tuple[str, ...] = ()
 
 #: Seeds that are acquired at first use instead of shipped.

@@ -54,16 +54,18 @@ Do not let "installs and the CLI runs" or "the source daemon starts under pytest
 
 ```
 uv tool install swe-mux
-uv tool install "swe-mux[desktop]"
 ```
 
 ```
 pipx install swe-mux
-pipx install "swe-mux[desktop]"
 ```
 
-Either installs the three entry points declared in `[project.scripts]`: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
-Take the bracketed form on Windows and the plain one elsewhere; the Extras table below says why.
+Either installs the three entry points: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
+**There is no extra to remember.**
+`pystray` and `pywebview` are base dependencies marked `sys_platform == 'win32'` since 2026-08-30, so this command gives a Windows machine a working tray and gives every other machine nothing extra to download.
+
+The `desktop` extra these commands used to name still resolves - it is declared and empty, so `"swe-mux[desktop]"` in an old script keeps working - and it adds nothing.
+Why it went is worth one line, because the failure was quiet: `swe-mux` is a `[project.gui-scripts]` entry, so *every* install shipped that launcher, and an install without the extra shipped a launcher whose only behaviour was to fail with no console to fail into.
 
 **`uv tool install` is not `uv add`, and the difference is the whole point of this section.**
 `uv tool install` and `pipx install` give the package its own environment and put its console scripts on your PATH, so `mux` is a command you can run anywhere.
@@ -71,18 +73,33 @@ Take the bracketed form on Windows and the plain one elsewhere; the Extras table
 Both are legitimate; they answer different questions, and reaching for the second while wanting the first is the confusion this paragraph exists to prevent.
 
 **There is no `--extra` flag on `uv tool install`.**
-Extras are named in the requirement itself, which is why the second command above is `"swe-mux[desktop]"` and not `uv tool install swe-mux --extra desktop`.
+Extras are named in the requirement itself - `"swe-mux[voice-local]"`, not `uv tool install swe-mux --extra voice-local`.
 The quotes are for the shell, which would otherwise glob or mangle the brackets.
+
+### Starting it
+
+On Windows, run `swe-mux`: no console opens, a tray icon appears, and the window comes up when the daemon is serving.
+The first time, it offers to add itself to the Start Menu and to start when you sign in; accept and there is nothing left to launch.
+
+Everywhere else, and for anyone who wants only the browser:
+
+```
+mux start        # detached; returns once http://127.0.0.1:8765 answers
+muxd             # foreground, if you want the log in front of you
+muxd --shutdown  # stops the daemon, the supervisor, and every session
+```
+
+`mux start` is idempotent (a daemon already serving is reported and left alone) and nothing else in the CLI starts a daemon implicitly.
 
 ### From source
 
 ```
 git clone https://github.com/jatoran/swe-mux
 cd swe-mux
-uv sync --extra desktop
+uv sync
 npm --prefix frontend ci
 npm --prefix frontend run build
-uv run --extra desktop swe-mux
+uv run swe-mux
 ```
 
 For a headless daemon plus an ordinary browser, which is the Linux and macOS shape, run `uv run muxd` and open <http://127.0.0.1:8765>.
@@ -150,8 +167,8 @@ Distribute the whole `dist/swe-mux/` folder, never the `.exe` alone.
 Build dependencies and the build itself:
 
 ```
-uv sync --extra desktop --extra voice-local --group package
-uv run --extra desktop --extra voice-local --group package python packaging/build_desktop.py
+uv sync --extra voice-local --group package
+uv run --extra voice-local --group package python packaging/build_desktop.py
 ```
 
 `voice-local` is optional to install and mandatory to build from.
@@ -171,7 +188,7 @@ It takes the version from the bundle's own `bundle.json` rather than from the pr
 
 | Extra | What it adds | Degraded without it |
 | --- | --- | --- |
-| `desktop` | `pystray` and `pywebview`, both marked `sys_platform == 'win32'`. Gives the native window, the tray icon, and the "Start with Windows" registration. | The `swe-mux` entry point raises `RuntimeError` naming both remedies: `uv sync --extra desktop`, or **Settings → General → Desktop integration** in the browser UI, which since 2026-08-30 acquires the closure without a reinstall (~2.4 MB, pinned hashes; a desktop-app start afterwards brings up the tray). `muxd` plus a browser is unaffected. On non-Windows hosts the extra resolves to nothing and the Settings group is absent, which `mux doctor` reports as `unavailable` rather than as a fixable gap. |
+| `desktop` | **Nothing. Declared and empty since 2026-08-30**, kept only so `"swe-mux[desktop]"` in an existing script still resolves instead of warning. What it used to add - `pystray` and `pywebview`, both `sys_platform == 'win32'` - are base dependencies now. | Not applicable: there is no state where this extra is the difference. If the tray cannot start anyway, the environment is partially installed rather than minimal, and the `swe-mux` entry point says so with the reinstall command for *this* install shape (`install_location.reinstall_command`). `muxd` plus a browser is unaffected either way. |
 | `voice-local` | On-device speech: `faster-whisper` dictation, Kokoro TTS through `onnxruntime`, and the misaki/spaCy English G2P behind it. Roughly 400 MB of wheels and model machinery. | Read aloud falls back to `tts_engine = "sapi"`, the OS voice, which is already the shipped default. Dictation falls back to `stt_engine = "sapi"`, which is Windows Speech Recognition driven through `powershell.exe` and refuses on any other host. Every call site imports lazily and answers with a typed diagnostic naming the extra. |
 
 **`swe-mux[voice-local]` could not be installed at all before 2026-08-28, and that is worth knowing if you tried.**
@@ -195,11 +212,11 @@ Nothing downloads on a fresh install unless the operator turns voice on: `tts_en
 For a source checkout you develop and build in, use the full form:
 
 ```
-uv sync --extra desktop --extra voice-local --group dev --group package
+uv sync --extra voice-local --group dev --group package
 ```
 
 The short form silently strips PyInstaller and breaks the desktop build, which is why `RELEASE_MANUAL_TASKS.md` § Sync command names the long one.
-A measured second half of the same trap: `uv sync --extra desktop --extra voice-local --group package` also uninstalls `playwright`, `greenlet`, and `pyee`, because the command does not name `preview-capture`.
+A measured second half of the same trap: `uv sync --extra voice-local --group package` also uninstalls `playwright`, `greenlet`, and `pyee`, because the command does not name `preview-capture`.
 That is correct for the bundle, whose distributed closure is `("desktop", "voice-local")`, and wrong for a source-run daemon, which silently loses Preview screenshot capture.
 Adding `--extra preview-capture` is the fuller form for a primary checkout and leaves the license audit clean, because `preview-capture` is outside the distributed closure.
 

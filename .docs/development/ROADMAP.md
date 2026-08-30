@@ -6321,6 +6321,45 @@ the extra, so there is nothing to ask there either.
 - [x] The control is absent on platforms that have no desktop app, rather than present and
   failing.
 
+### Superseded the same day, and the lesson is worth more than the phase
+
+The acquire-at-first-use closure shipped on 2026-08-30 and was removed on 2026-08-30. Nothing
+about it was wrong; it was a well-built repair for a defect one line above it in the stack.
+
+The question it never asked is **why the tray was optional at all.** Everything in the section
+above is framed as "a user who installed without the `desktop` extra", and the whole phase
+follows from accepting that as a given. Two facts that were available before the work started
+say it should not have been:
+
+- `[project.gui-scripts]` builds `swe-mux` into *every* install, extra or not. So a plain
+  `uv tool install swe-mux` shipped a console-free launcher whose only behaviour was to die on
+  `ImportError`. That is not "a capability the user did not choose", it is a broken entry point.
+- The closure is 2.4 MB. The phase measured this itself, in the paragraph above, and then used
+  it to argue the download would be *fast* rather than to ask whether a download was warranted.
+
+Both remedies the error printed also led back through a terminal - `uv sync --extra desktop`
+needs a checkout, and this phase's own Settings press needs a running daemon, which needed
+`muxd` held open in a console. So the first run of a desktop app was a modal error and a
+terminal, and the phase's exit criteria were all met while that stayed true, because none of
+them was about the first run.
+
+Moving both packages into base `dependencies` (`sys_platform == 'win32'`) deleted the
+condition instead: install, type `swe-mux`, get a tray. The store, the pin table, its generator
+and its parity test went with it, and the LGPL obligation `pystray` carries moved to a preflight
+over base dependencies (`build_desktop.missing_relinkable_distributions`).
+
+**The generalisable form: when a repair is this well-engineered, check that the thing it repairs
+is supposed to exist.** A press that can only ever report "already installed" is the tell, and it
+was visible from the acquire set's own definition - `closure(root + desktop) − closure(root)` is
+empty the moment the packages move, which is a one-line consequence nobody computed because
+nobody was asking that question.
+
+What survived is worth naming, because none of it was wasted: `wheel_closure.WheelClosureStore`
+(the extraction that gave the voice closure an audited home), the extract-never-build sdist rule
+and its refusals, and the Settings **Desktop integration** group - which kept the shortcut half,
+gained the `startup` slot it could previously report and remove but never create, and lost only
+the download button.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new

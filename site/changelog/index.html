@@ -880,7 +880,25 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.5...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Changed</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Added</span> <span class="sep">2 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 6 entries</summary>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span><b>On Windows, <code>swe-mux</code> now works on a plain <code>uv tool install swe-mux</code> or <code>pip install swe-mux</code>, with no terminal, no extra and no download.</b> <code>pystray</code> and <code>pywebview</code> moved out of the <code>desktop</code> extra and into ordinary dependencies, marked Windows-only. Previously every install got the <code>swe-mux</code> launcher - it is a GUI entry point, so it opens no console - while an install without the extra got a launcher whose only behaviour was to fail on a missing import, into a message box, with both suggested remedies leading back through a terminal. Over 2.4 MB of pure-Python packages. The <code>swe-mux[desktop]</code> spelling still resolves and now adds nothing, so existing scripts keep working.</span></li>
+          <li><span><b><code>mux install-shortcut</code>'s run-at-login entry can finally be created from the UI.</b> Settings → General → Desktop integration lets you choose which of the three shortcuts to write - Start Menu, Desktop, Start with Windows - where before it always reported all three, could remove all three, and could only ever create two. The only way to turn on run-at-login was the tray menu, which a phone or any remote client cannot reach.</span></li>
+          <li><span><b>"Start with Windows" in the tray menu now reads both mechanisms it can be turned on with.</b> A run-at-login entry created by <code>mux install-shortcut --startup</code> or by Settings is a <code>shell:startup</code> shortcut, and the menu item only consulted the registry - so it showed "off" beside a swe-mux that demonstrably did start at sign-in, and turning it "on" left two entries racing to launch the same app. Either one now counts as on, and turning it off clears both.</span></li>
+          <li><span>The Settings → Desktop integration group no longer offers to download the desktop shell, because there is nothing left to download. It reports whether this environment can run the tray and, when it cannot, the reinstall command for how this copy was installed.</span></li>
+        </ul>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>The first launch of the Windows desktop shell offers to add itself to the Start Menu and to start when you sign in.</b> A wheel cannot create a shortcut and nothing runs after <code>pip</code>/<code>uv</code>, so <code>mux install-shortcut</code> was a command nobody knew to run. Asked once per install whichever way you answer, never for the installer's own build, and never when a Start Menu entry already exists. It writes no desktop icon; that stays a choice in Settings.</span></li>
+          <li><span><b><code>mux start</code> runs the daemon in the background and returns once it is serving.</b> For the browser-only case, for Linux and macOS where there is no desktop app, and for iterating from a checkout: closing the terminal does not stop it, <code>muxd --shutdown</code> does, and a daemon that is already serving is reported and left alone. It is the only command that starts a daemon, and only when typed - <code>mux ls</code> against a stopped daemon still says so.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

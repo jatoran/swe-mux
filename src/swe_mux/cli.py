@@ -620,6 +620,34 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     kill = sub.add_parser("kill", parents=[common], help="terminate a session")
     kill.add_argument("session", help="session id, name, or unique id prefix")
 
+    start = sub.add_parser(
+        "start",
+        parents=[common],
+        help="start the daemon in the background and wait for it to serve",
+        description=(
+            "Start a detached daemon and return once it answers, so the browser "
+            "UI is reachable without a terminal held open for it. On Windows the "
+            "desktop app already does this - `swe-mux` opens no console and "
+            "spawns its own daemon - so this is for the browser-only case, for "
+            "Linux and macOS where there is no desktop app at all, and for "
+            "iterating from a checkout. Idempotent: a daemon that is already "
+            "serving is reported and left alone. Nothing else in this CLI starts "
+            "a daemon implicitly; `mux ls` against a stopped one still says so."
+        ),
+    )
+    start.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="how long to wait for the daemon to answer (default: 90)",
+    )
+    start.add_argument(
+        "--config",
+        type=Path,
+        help="config file to start the daemon with (default: the usual one)",
+    )
+
     reload_daemon = sub.add_parser(
         "reload-daemon",
         parents=[common],
@@ -792,6 +820,34 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     resume.add_argument("id", help="history entry id")
     resume.add_argument("--project", required=True)
     return parser
+
+
+def start_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
+    """Run `start` here, without asking a daemon anything.
+
+    Local like `install-shortcut`, and for the sharper version of the same
+    reason: the entire point is that there is no daemon yet, so a command that
+    needed one to run could never be the one that starts it.
+
+    A config that will not load is raised as a local failure rather than let
+    through, because the alternative is spawning a child that fails the same way
+    where nobody is watching - the failure would land in a log file instead of in
+    front of the person who just typed the command.
+    """
+    from .config import load_config
+    from .daemon_start import START_TIMEOUT_SECONDS, render, start_daemon
+
+    try:
+        config = load_config(args.config)
+    except Exception as exc:  # noqa: BLE001 - a broken config is an expected caller
+        raise CliError(
+            f"the swe-mux config did not load ({type(exc).__name__}: {exc}), so there "
+            "is no daemon to start. Run `mux doctor --local` for the local report.",
+            EXIT_LOCAL_FAIL,
+        ) from exc
+    timeout = START_TIMEOUT_SECONDS if args.timeout is None else args.timeout
+    outcome = start_daemon(config, url=base, timeout_seconds=timeout)
+    return outcome.as_dict(), lambda _: render(outcome)
 
 
 def install_shortcut_command(args: argparse.Namespace) -> tuple[Any, Any]:
@@ -1007,6 +1063,8 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
         return request("GET", "/api/provider-accounts", base=base), None
     if args.command == "ui-overlay":
         return _ui_overlay_command(args, base)
+    if args.command == "start":
+        return start_command(args, base)
     if args.command == "install-shortcut":
         return install_shortcut_command(args)
     if args.command == "install-skill":
@@ -1041,6 +1099,12 @@ def main(argv: list[str] | None = None) -> int:
         # its job; only an attempted write or removal the filesystem rejected
         # exits non-zero.
         if not result.get("ok", True):
+            return EXIT_LOCAL_FAIL
+    if args.command == "start" and isinstance(result, dict):
+        # `starting` exits 0 beside `started`: the daemon is running and has not
+        # finished, which is a slow start rather than a failure, and a script
+        # that treated the two differently would flap on a cold cache.
+        if result.get("status") == "failed":
             return EXIT_LOCAL_FAIL
     if args.command == "install-shortcut" and isinstance(result, dict):
         # An unsupported host is not a failure - nothing was asked of it that it

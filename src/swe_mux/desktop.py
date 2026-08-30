@@ -48,9 +48,12 @@ ERROR_ALREADY_EXISTS = 183
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
 MB_OK = 0x00000000
+MB_YESNO = 0x00000004
+MB_ICONQUESTION = 0x00000020
 MB_ICONWARNING = 0x00000030
 MB_SETFOREGROUND = 0x00010000
 MB_TOPMOST = 0x00040000
+ID_YES = 6
 # How long a freshly spawned daemon may take to answer `/api/health` before the
 # tray stops waiting for it and brings the window up anyway. A daemon binds its
 # port only after opening its databases and reattaching supervised sessions, and
@@ -189,6 +192,46 @@ def startup_command(
     return subprocess.list2cmdline(parts)
 
 
+def _shell_import_failure(exc: ImportError) -> str:
+    """What to tell someone whose tray cannot import its toolkit.
+
+    This message is read in a message box by a person who has just installed
+    swe-mux and double-clicked something, so it gets one job: name a command
+    they can run *here*. It used to name two that they could not - `uv sync
+    --extra desktop` needs a checkout, and "acquire them from Settings" needs a
+    running daemon, which needed a terminal - which made the first-run failure of
+    a desktop app a dead end that pointed back at a console.
+
+    Since 2026-08-30 `pystray` and `pywebview` are base dependencies, so reaching
+    this at all means a partially-installed environment rather than an option
+    nobody picked, and the remedy is a reinstall derived from how this copy got
+    here (`install_location.reinstall_command`).
+    """
+    from .desktop_runtime import missing_shell_modules
+    from .install_location import detect_install_location
+
+    missing = missing_shell_modules()
+    names = ", ".join(missing) if missing else str(exc)
+    lines = [
+        f"The swe-mux desktop shell cannot start: this Python cannot import {names}.",
+        "",
+        "These ship as ordinary dependencies of swe-mux on Windows, so an install "
+        "that has them missing is incomplete rather than minimal.",
+    ]
+    try:
+        remedy = detect_install_location().reinstall_command()
+    except Exception:  # noqa: BLE001 - a diagnostic must not fail over a diagnostic
+        remedy = ""
+    if remedy:
+        lines += ["", f"Reinstall with:  {remedy}"]
+    lines += [
+        "",
+        "swe-mux itself is unaffected - `muxd` still serves the browser UI at "
+        "http://127.0.0.1:8765 without the tray.",
+    ]
+    return "\n".join(lines)
+
+
 def create_tray_image(size: int = 64):  # type: ignore[no-untyped-def]
     from PIL import Image, ImageDraw
 
@@ -214,6 +257,64 @@ def create_tray_image(size: int = 64):  # type: ignore[no-untyped-def]
         width=max(1, scale),
     )
     return image
+
+
+def _run_key_enabled(config: Config) -> bool:
+    """Whether `HKCU\\...\\Run` holds this install's own login command."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, RUN_VALUE)
+    except OSError:
+        return False
+    assert config.config_path is not None
+    return str(value) == startup_command(config.config_path)
+
+
+def _startup_shortcut_present() -> bool:
+    """Whether a `shell:startup` link written by `shortcuts.py` is in place."""
+    from .shortcuts import SHORTCUT_FILENAME, SLOT_STARTUP, resolve_folders
+
+    try:
+        return (resolve_folders().for_slot(SLOT_STARTUP) / SHORTCUT_FILENAME).is_file()
+    except Exception:  # noqa: BLE001 - a known-folder lookup must not break the menu
+        return False
+
+
+def _remove_startup_shortcut(config: Config) -> None:
+    """Take back a `shell:startup` link when the toggle is turned off.
+
+    Uses `apply_shortcuts(remove=True)` rather than unlinking the file, because
+    removal there addresses all three slots by design and is the one code path
+    that knows how this project's links are named and recorded.
+    """
+    from .shortcuts import apply_shortcuts
+
+    try:
+        apply_shortcuts(config=config, remove=True)
+    except Exception as exc:  # noqa: BLE001 - reported, never raised at a menu click
+        ledger(config.data_dir, f"could not remove the login shortcut: {exc}")
+
+
+def _ask_yes_no(title: str, message: str) -> bool:
+    """A modal yes/no, or False anywhere that cannot show one.
+
+    False rather than True for an unanswerable question: this gates writing files
+    into the user's Start Menu, and the safe reading of "nobody could be asked" is
+    that nobody said yes.
+    """
+    if sys.platform != "win32":
+        return False
+    result = ctypes.windll.user32.MessageBoxW(
+        None,
+        message,
+        title,
+        MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST,
+    )
+    return int(result) == ID_YES
 
 
 def show_desktop_warning(title: str, message: str) -> None:
@@ -490,25 +591,33 @@ class DesktopRuntime:
         webbrowser.open(self.url, new=2)
 
     def startup_enabled(self, _item: object | None = None) -> bool:
-        import winreg
+        """Whether *anything* starts swe-mux at login, not just this menu item.
 
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-                value, _ = winreg.QueryValueEx(key, RUN_VALUE)
-        except OSError:
-            return False
-        assert self.config.config_path is not None
-        return str(value) == startup_command(self.config.config_path)
+        There are two mechanisms and they were written by different features:
+        this toggle writes an `HKCU\\...\\Run` value, and `shortcuts.py` writes a
+        `.lnk` into `shell:startup` for `mux install-shortcut --startup` and for
+        the first-run offer. Windows honours both, so reporting only the registry
+        one meant a tick box that read "off" beside a swe-mux that demonstrably
+        did start with Windows - and toggling it "on" then left two entries
+        racing to launch the same single-instance app.
+
+        Either present is enabled. `toggle_startup` clears both when it turns the
+        setting off, which is what makes that true rather than optimistic.
+        """
+        return _run_key_enabled(self.config) or _startup_shortcut_present()
 
     def toggle_startup(self, icon: object, _item: object) -> None:
         import winreg
 
         assert self.config.config_path is not None
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-            if self.startup_enabled():
+        if self.startup_enabled():
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
                 with suppress(OSError):
                     winreg.DeleteValue(key, RUN_VALUE)
-            else:
+            # The other mechanism, or the user turns it off and it stays on.
+            _remove_startup_shortcut(self.config)
+        else:
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
                 winreg.SetValueEx(
                     key,
                     RUN_VALUE,
@@ -519,6 +628,56 @@ class DesktopRuntime:
         update = getattr(icon, "update_menu", None)
         if update:
             update()
+
+    def offer_shortcuts(self) -> None:
+        """Ask once, on the first start that could have been the last confusing one.
+
+        Runs on its own thread: `MessageBoxW` is modal and pystray dispatches menu
+        callbacks on the thread that owns the icon, so doing this inline would
+        freeze the tray behind a dialog nobody has answered yet.
+
+        Every failure here is swallowed into the ledger. The offer is a
+        convenience on top of a working app, and a shortcut writer that takes the
+        tray down with it would be a strictly worse trade than never offering.
+        """
+        from . import first_run
+        from .install_location import INSTALL_FROZEN, detect_install_location
+        from .shortcuts import SHORTCUT_FILENAME, SLOT_START_MENU, resolve_folders
+
+        try:
+            location = detect_install_location()
+            folders = resolve_folders()
+            present = (folders.for_slot(SLOT_START_MENU) / SHORTCUT_FILENAME).is_file()
+            if not first_run.should_offer(
+                data_dir=self.config.data_dir,
+                frozen=location.kind == INSTALL_FROZEN,
+                start_menu_present=present,
+            ):
+                return
+            accepted = _ask_yes_no(first_run.OFFER_TITLE, first_run.OFFER_TEXT)
+            first_run.record_answer(self.config.data_dir, accepted=accepted)
+            ledger(
+                self.config.data_dir,
+                f"first-run shortcut offer: {'accepted' if accepted else 'declined'}",
+            )
+            if not accepted:
+                return
+            from .shortcuts import apply_shortcuts
+
+            report = apply_shortcuts(
+                config=self.config,
+                slots=first_run.OFFER_SLOTS,
+                location=location,
+            )
+            if not report.ok:
+                show_desktop_warning(
+                    "Shortcuts not written",
+                    "swe-mux could not finish writing its shortcuts. See "
+                    f"{self.config.data_dir / 'lifecycle.log'} for what happened; "
+                    "`mux install-shortcut` retries it.",
+                )
+        except Exception as exc:  # noqa: BLE001 - never take the tray down for this
+            ledger(self.config.data_dir, f"first-run shortcut offer failed: {exc}")
 
     def close_to_tray(self) -> bool | None:
         if self.exiting:
@@ -687,22 +846,11 @@ class DesktopRuntime:
         ledger(self.config.data_dir, f"webview remote debugging on 127.0.0.1:{port}")
 
     def run(self) -> None:
-        # An install that skipped the `desktop` extra may have acquired the
-        # shell closure through Settings -> Desktop integration (ROADMAP Phase
-        # 24); putting it on sys.path must happen before the imports below, and
-        # is inert everywhere else.
-        from .desktop_runtime import activate_for_desktop
-
-        activate_for_desktop(self.config.data_dir)
         try:
             import pystray
             import webview
         except ImportError as exc:
-            raise RuntimeError(
-                "Desktop dependencies are missing. Install with: uv sync --extra "
-                "desktop, or acquire them from Settings → General → Desktop "
-                "integration in the browser UI."
-            ) from exc
+            raise RuntimeError(_shell_import_failure(exc)) from exc
 
         # A daemon that has not answered yet still gets a tray and a window: the
         # shell is the only way to reach the app, and exiting here used to strand
@@ -776,6 +924,12 @@ class DesktopRuntime:
         threading.Thread(target=self.icon.run, name="swe-mux-tray", daemon=True).start()
         threading.Thread(
             target=self.activation_loop, name="swe-mux-activate", daemon=True
+        ).start()
+        # After the tray exists, so the app the dialog is talking about is
+        # visibly running behind it, and on its own thread so a dialog left
+        # unanswered costs nothing.
+        threading.Thread(
+            target=self.offer_shortcuts, name="swe-mux-first-run", daemon=True
         ).start()
         try:
             webview.start(

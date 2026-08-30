@@ -2693,7 +2693,9 @@ dependencies = [
     { name = "pillow" },
     { name = "psutil" },
     { name = "py-vapid" },
+    { name = "pystray", marker = "sys_platform == 'win32'" },
     { name = "pywebpush" },
+    { name = "pywebview", marker = "sys_platform == 'win32'" },
     { name = "pywinpty", marker = "sys_platform == 'win32'" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
@@ -2702,10 +2704,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-desktop = [
-    { name = "pystray", marker = "sys_platform == 'win32'" },
-    { name = "pywebview", marker = "sys_platform == 'win32'" },
-]
 preview-capture = [
     { name = "playwright" },
 ]
@@ -2756,9 +2754,9 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'preview-capture'", specifier = ">=1.49" },
     { name = "psutil", specifier = ">=6.1" },
     { name = "py-vapid", specifier = ">=1.9" },
-    { name = "pystray", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=0.19.5" },
+    { name = "pystray", marker = "sys_platform == 'win32'", specifier = ">=0.19.5" },
     { name = "pywebpush", specifier = ">=2.0" },
-    { name = "pywebview", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=5.4" },
+    { name = "pywebview", marker = "sys_platform == 'win32'", specifier = ">=5.4" },
     { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=3.0.2" },
     { name = "spacy", marker = "extra == 'voice-local'", specifier = ">=3.8.15" },
     { name = "tree-sitter", specifier = ">=0.23" },

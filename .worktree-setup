@@ -16,8 +16,14 @@ export npm_config_cache="${npm_config_cache:-$HOME/.npm}"
 # real misaki G2P tests in `test_kokoro_tts.py` are `importorskip`-guarded, so
 # a bare sync turns them into silent skips. The extra is optional at install
 # time for a user who is happy with the browser's speech stack; a worktree that
-# runs the verification gate is not that user. `--extra desktop` is deliberately
-# NOT here: a worktree never builds or runs the app (CLAUDE.md § Worktrees).
+# runs the verification gate is not that user.
+#
+# There is no `--extra desktop` to leave out any more: `pystray` and `pywebview`
+# became base dependencies on 2026-08-30, so a plain `uv sync` installs them on
+# Windows. That does not change the worktree rule they used to illustrate - a
+# worktree still never builds or runs the app (CLAUDE.md § Worktrees) - it just
+# means the tray's dependencies are present in the venv and unimported, which is
+# what they are in a headless install too.
 #
 # The spaCy model those G2P tests also need is not in that extra and must not be
 # (`pyproject.toml`, `voice-local`): it lives in the `g2p-model` dependency

@@ -116,9 +116,12 @@ The speech **libraries**, as a first-use asset, under the same four-state vocabu
 ROADMAP Phase 21 Workstream D.
 The desktop bundle carried 277.1 MiB of spaCy, thinc, blis, CTranslate2, onnxruntime, tokenizers, numpy, misaki and num2words for two features that both ship switched off, and now carries none of it.
 
-Since ROADMAP Phase 24 the store's mechanism - state file, streaming verification, staged unpack and swap, `sys.path` activation - lives in `wheel_closure.py` as `WheelClosureStore`, parameterized by a `ClosureSpec`, because the desktop shell closure (`desktop_runtime.py`) needed the identical path and a second copy of it would be a second thing to audit.
+Since ROADMAP Phase 24 the store's mechanism - state file, streaming verification, staged unpack and swap, `sys.path` activation - lives in `wheel_closure.py` as `WheelClosureStore`, parameterized by a `ClosureSpec`, because the desktop shell closure needed the identical path and a second copy of it would be a second thing to audit.
 `voice_runtime.py` keeps everything voice-specific: the two capability module sets, `closure_importable(capability)`, the num2words relink declaration, and the spec.
-`wheel_closure._extract_sdist` is the one Phase 24 addition to the mechanism, because the desktop closure's `proxy-tools` publishes no wheel: a spec may pin an sdist, under the non-negotiable **extract-never-build** rule.
+The desktop closure it was extracted for is gone - `pystray` and `pywebview` became base dependencies on 2026-08-30 and there is nothing left to acquire (`design/features/desktop-shell.md`) - so `wheel_closure.py` currently has exactly one consumer.
+The extraction stands anyway: it is the audited path, and the alternative to keeping it general is folding it back into `voice_runtime` and re-extracting it for the next closure.
+`wheel_closure._extract_sdist` is the one Phase 24 addition to the mechanism, and it now has no live caller: the desktop closure's `proxy-tools` published no wheel, so a spec may pin an sdist, under the non-negotiable **extract-never-build** rule.
+It stays because the load-bearing part of it is the refusal rather than the caller.
 Nothing from the archive is executed, only the already-importable package source is copied out, and an sdist whose package would need building is refused loudly (`tests/test_wheel_closure.py`).
 
 `VoiceRuntimeStore` fetches the pinned wheels for **this interpreter**, verifies each against its size and SHA-256 while streaming, unpacks them into `<data_dir>/voice-runtime/site` beside the live tree and swaps, then puts that directory on `sys.path`.

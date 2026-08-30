@@ -77,6 +77,21 @@ continues to own every terminal.
   a monitor or reducing its resolution cannot restore the title bar off-screen.
 - Start with Windows writes the exact current executable/config command to the current-user Run
   key. No machine-wide installation or elevation is required.
+  **It reads two mechanisms and writes one**, since 2026-08-30. `shortcuts.py` puts a `.lnk` in
+  `shell:startup` for `mux install-shortcut --startup`, for Settings, and for the first-run
+  offer, and Windows honours that exactly as it honours the Run value - so a menu item that
+  consulted only the registry showed "off" beside a swe-mux that demonstrably did start at
+  sign-in, and ticking it on left two entries racing to launch one single-instance app.
+  `startup_enabled` is now true if *either* is present and turning it off clears both;
+  turning it on still writes the Run value, because that is the one this menu owns.
+- **The first successful start of a wheel install offers its own shortcuts** (`first_run.py`).
+  A wheel cannot create one and no hook runs after `pip`/`uv`, so `mux install-shortcut` is a
+  command nobody knows to run; the first launch is the only moment the person is present and the
+  app has visibly worked. One modal yes/no, off the window thread, writing Start Menu +
+  run-at-login (never a desktop icon - that is a preference, and an unrequested one teaches
+  people to decline every future dialog). Asked once per install whichever way it is answered,
+  never for a frozen install (the installer did it), and never when a Start Menu entry already
+  exists whoever wrote it.
 - Tray Quit uses a native topmost Windows confirmation owned by the desktop supervisor, not the
   WebView. Confirmation therefore works identically while the window is visible, minimized, or
   hidden. Confirmed Quit reports the live terminal count, requests authenticated graceful
@@ -198,22 +213,30 @@ It is a real surface - anything that can reach the port can drive the page - so 
 
 ## Packaging
 
-- Runtime extra: `uv sync --extra desktop`.
-  Since ROADMAP Phase 24 (2026-08-30) an install that skipped it is not stuck with a
-  reinstall: Settings → General → **Desktop integration** acquires the shell closure over the
-  same pinned-hash path as the speech libraries (`swe_mux.desktop_runtime`, ~2.4 MB on
-  Windows - seven pure-Python distributions once the set difference excludes everything
-  base-reachable), and wires `swemux install-shortcut`'s machinery behind Install/Remove
-  buttons (`routes/desktop_integration.py`).
-  Three rules it carries: Windows only **by absence** (off Windows the endpoint answers
-  unsupported and nothing renders, before importability is even consulted); the tray needs a
-  process (re)start and every surface says so, because `desktop.main` starts it in its own
-  process - which now calls `desktop_runtime.activate_for_desktop` before importing
-  `pystray`/`webview`, so an acquired closure works on the next launch; and the closure's one
-  no-wheel dependency (`proxy-tools`, sdist only, imported unconditionally by pywebview) is
-  pinned as an sdist and **extracted, never built** - nothing from the archive is executed,
-  and an sdist that would need building is refused (`wheel_closure._extract_sdist`).
-- Build dependencies: `uv sync --extra desktop --extra voice-local --group package`.
+- Runtime dependencies: **none to choose.** `pystray` and `pywebview` are base dependencies,
+  marked `sys_platform == 'win32'`, since 2026-08-30. A plain `pip install swe-mux` or
+  `uv tool install swe-mux` on Windows can run the tray, and `swe-mux` works on first launch
+  with no network round trip and no terminal.
+  This replaced the `desktop` extra and, with it, ROADMAP Phase 24's acquire-at-first-use
+  closure (`desktop_wheels.py`, `generate_desktop_pins.py`, `desktop_runtime`'s store).
+  **The extra was the defect, not the missing repair.** `[project.gui-scripts]` builds `swe-mux`
+  into every install - including `uv tool install`, measured: PE subsystem 2 (GUI) against 3
+  (CONSOLE) for the `[project.scripts]` launchers - so an install without the extra shipped a
+  console-free launcher that died on `ImportError` before drawing anything, and both remedies it
+  printed led back through a terminal (`uv sync --extra desktop` needs a checkout; the Settings
+  acquire needs a running daemon, which needed `muxd` held open). A desktop app whose first run
+  is a modal error and a console, over 2.4 MB of pure-Python wheels, is a packaging decision
+  worth reversing rather than repairing.
+  The empty `desktop` extra stays declared so `swe-mux[desktop]` keeps resolving for anyone who
+  scripted it from the 0.1.x docs.
+  What survives: `desktop_runtime.missing_shell_modules()` (a probe, not a store) and Settings →
+  General → **Desktop integration**, which now reports importability with a runnable reinstall
+  command and writes shortcuts - **including the `startup` slot**, which it could previously
+  report and remove but never create (`routes/desktop_integration.py`).
+  `wheel_closure._extract_sdist` also survives, unused by any current spec: the sdist capability
+  was added for this closure's `proxy-tools`, and what is load-bearing about it is the refusal
+  (**extract, never build**) rather than the caller.
+- Build dependencies: `uv sync --extra voice-local --group package`.
   `--group package` is what brings the `g2p-model` group with it, and the build refuses without it
   (`build_desktop.REQUIRED_BUILD_GROUPS`).
 - `voice-local` is optional at install time and mandatory at build time, and since 2026-08-29
