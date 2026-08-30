@@ -752,7 +752,7 @@ class UpdateInstaller:
         )
         # Refusals that need nothing from the network are made here, so the
         # caller gets them as the response to its own request rather than having
-        # to poll for them - and recorded anyway, so `mux update` and the next
+        # to poll for them - and recorded anyway, so `swemux update` and the next
         # daemon can still say why the last attempt did nothing. A refusal
         # answered only in an HTTP body is one nobody can find afterwards.
         try:
@@ -1203,7 +1203,7 @@ class UpdateInstaller:
                 f"speaks {running}. Installing it would require updating the "
                 "supervisor, which reaps every live session, so it is not something "
                 "this updater will do behind your back. Follow the supervisor update "
-                "flow in the release notes: stop swe-mux with `muxd --shutdown`, "
+                "flow in the release notes: stop swe-mux with `swemuxd --shutdown`, "
                 "replace the bundle by hand, and relaunch.",
             )
 

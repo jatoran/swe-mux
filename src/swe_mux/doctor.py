@@ -1,6 +1,6 @@
 """Consolidated read-only diagnostics report assembled from existing endpoints.
 
-`mux doctor` used to be a bare alias for ``GET /api/remote/status``. This module
+`swemux doctor` used to be a bare alias for ``GET /api/remote/status``. This module
 turns it into one structured report over the diagnostics the daemon already
 serves (`/api/health`, `/api/remote/status`, `/api/remote/firewall`,
 `/api/diagnostics/{prerequisites,status-health,background}`) plus the one class of

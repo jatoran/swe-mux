@@ -983,7 +983,7 @@ When capture fails inside the Windows desktop shell, the shell's own WebView2 pe
   install already has them; the "lazy" in the capture path is a lazy *import*, not a network
   fetch. Copy that told users otherwise was wrong, and the distinction matters on a metered or
   air-gapped machine.
-- All of this is also a row in `mux doctor` (`optional_asset:voice_whisper:<model>`,
+- All of this is also a row in `swemux doctor` (`optional_asset:voice_whisper:<model>`,
   `optional_asset:voice_kokoro`), at severity `optional`, and a row whose feature is switched off
   says "nothing has fetched it" rather than reporting a missing capability.
 - **Two decoders by job, chosen by the `X-Mux-Decode-Profile` request header.** A spoken command

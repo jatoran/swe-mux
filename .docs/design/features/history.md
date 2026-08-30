@@ -130,7 +130,7 @@
   earliest row — the conversation's own — is the one a reconcile indexes into; without the full
   ordering the winner was whatever SQLite returned first, and the content hopped between
   duplicates across restarts. `GET /api/history/duplicates` reports the rows still split,
-  and `POST /api/history/duplicates/repair` (`mux history-duplicates [repair]`, dry by default)
+  and `POST /api/history/duplicates/repair` (`swemux history-duplicates [repair]`, dry by default)
   folds each conversation back into one entry: the keeper takes the latest observation, a rename
   a later pane carried, the widest native timestamp span and the last pane's exit markers, then
   the duplicates and their rebuildable message copies are deleted. It refuses a group whose

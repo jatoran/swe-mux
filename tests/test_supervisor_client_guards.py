@@ -5,7 +5,7 @@ Both are "act on evidence you do not have" defects:
 - a spawn RPC that did not answer used to fall back to an in-process PTY
   unconditionally, while the supervisor finished the spawn anyway - two agents,
   one workspace;
-- `muxd --shutdown` used to terminate whatever pid the discovery file named as
+- `swemuxd --shutdown` used to terminate whatever pid the discovery file named as
   long as its process name contained "swe", which after a pid recycle is an
   unrelated program, killed along with every process tree it owns.
 """

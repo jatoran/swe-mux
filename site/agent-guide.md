@@ -109,7 +109,7 @@ A fresh clone serves no UI at all until that build has run once, and the symptom
 ## 4. First run
 
 ```
-muxd
+swemuxd
 ```
 
 Then open `http://127.0.0.1:8765`.
@@ -118,10 +118,10 @@ On Windows with the `desktop` extra, `swe-mux` opens the same thing in a native 
 Verify before going further:
 
 ```
-mux doctor
+swemux doctor
 ```
 
-`mux doctor` is read-only.
+`swemux doctor` is read-only.
 It reports on the daemon, the supervisor process, the frontend build, which agent CLIs it can detect, the tailnet listener, and the background loops.
 Read its output to the user rather than summarizing it as "fine": it is the one command that distinguishes "installed" from "working", and its exit code is meaningful.
 
@@ -207,7 +207,7 @@ There is no analytics, no crash reporting, and no account.
 
 ## 10. Rules for you
 
-- **Verify, do not assume.** After each stage, run the command that proves it worked (`mux doctor`, `python --version`, opening the page) and read the real output.
+- **Verify, do not assume.** After each stage, run the command that proves it worked (`swemux doctor`, `python --version`, opening the page) and read the real output.
 - **Do not invent commands or flags.** If something is not in this file or in `README.md`, look it up rather than guessing. A command that does not exist costs a user whose install is already broken the one thing they came for.
 - **Do not run destructive commands.** Nothing here needs `sudo`, and nothing here needs an existing directory removed.
 - **Say what you did not do.** If you skipped the phone step or the desktop extra, tell them, and tell them what they gave up.

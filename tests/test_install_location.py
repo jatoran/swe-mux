@@ -95,7 +95,7 @@ else:
 #: Both tools default here, on every platform they support.
 _UV_SHIMS = _HOME / ".local" / "bin"
 
-_LAUNCHERS = tuple(f"{name}{_EXE}" for name in ("mux", "muxd", "swe-mux"))
+_LAUNCHERS = tuple(f"{name}{_EXE}" for name in ("swemux", "swemuxd", "swe-mux"))
 
 
 def _key(entry: str, *, case_insensitive: bool) -> str:
@@ -324,7 +324,7 @@ def test_the_console_client_bundle_describes_the_install_not_its_own_directory()
     true only about the directory it happened to be looking in.
     """
     client = _CLI_BUNDLE / f"swemux{_EXE}"
-    alias = _CLI_BUNDLE / f"mux{_EXE}"
+    alias = _CLI_BUNDLE / f"swemux{_EXE}"
     app = _BUNDLE / f"swe-mux{_EXE}"
     location = detect_install_location(
         frozen=True,
@@ -337,7 +337,7 @@ def test_the_console_client_bundle_describes_the_install_not_its_own_directory()
     )
     assert location.client_bundle is True
     assert location.executable("swemux") == client
-    assert location.executable("mux") == alias
+    assert location.executable("swemux") == alias
     assert location.executable("swe-mux") == app
     # The daemon launchers are console scripts a wheel install ships and no frozen
     # bundle does; reporting them as present would be an invented capability.
@@ -405,7 +405,7 @@ def test_an_installed_wheel_is_never_a_client_bundle() -> None:
 def test_a_uv_tool_shim_directory_can_be_relocated_by_its_variable() -> None:
     present = {
         str(_UV_ROOT / "uv-receipt.toml"),
-        str(_ELSEWHERE / f"mux{_EXE}"),
+        str(_ELSEWHERE / f"swemux{_EXE}"),
     }
     location = detect_install_location(
         frozen=False,
@@ -441,7 +441,7 @@ def test_a_shim_directory_with_none_of_our_commands_is_not_reported() -> None:
 def test_commands_in_a_directory_that_is_not_on_path_are_unreachable() -> None:
     location = _uv_tool_install(path=_PATHSEP.join([_NOISE, str(_OTHER_SCRIPTS)]))
     assert location.on_path is False
-    assert [command.name for command in location.unreachable] == ["mux", "muxd", "swe-mux"]
+    assert [command.name for command in location.unreachable] == ["swemux", "swemuxd", "swe-mux"]
     assert all(command.status == "not on PATH" for command in location.unreachable)
 
 
@@ -460,7 +460,7 @@ def test_path_matching_ignores_case_on_windows_and_not_elsewhere() -> None:
     """
     shouted = str(_UV_SHIMS).upper()
     location = _uv_tool_install(path=shouted, case_insensitive_probe=True)
-    mux = location.command("mux")
+    mux = location.command("swemux")
     assert mux is not None
     # The probe answers yes to both spellings, so the case rule in `_same_path`
     # is what the assertion is about rather than a missing file.
@@ -470,7 +470,7 @@ def test_path_matching_ignores_case_on_windows_and_not_elsewhere() -> None:
     # And the POSIX rule from a Windows host too, so the Windows leg still
     # covers the branch it ships to everybody else.
     posix = _posix_install(path="/OPT/SWE-MUX/BIN", case_insensitive_probe=True)
-    posix_mux = posix.command("mux")
+    posix_mux = posix.command("swemux")
     assert posix_mux is not None
     assert posix_mux.resolved is not None, "the probe must find the shouted spelling"
     assert posix.on_path is False
@@ -496,10 +496,10 @@ def test_a_different_install_earlier_on_path_is_named_as_a_shadow() -> None:
         exists=_layout(present),  # type: ignore[arg-type]
     )
     assert location.on_path is False
-    mux = location.command("mux")
+    mux = location.command("swemux")
     assert mux is not None
-    assert mux.resolved == _OTHER_SCRIPTS / f"mux{_EXE}"
-    assert mux.status == f"shadowed by {_OTHER_SCRIPTS / f'mux{_EXE}'}"
+    assert mux.resolved == _OTHER_SCRIPTS / f"swemux{_EXE}"
+    assert mux.status == f"shadowed by {_OTHER_SCRIPTS / f'swemux{_EXE}'}"
 
 
 def test_an_install_that_shipped_no_commands_is_not_reported_as_reachable() -> None:
@@ -524,7 +524,7 @@ def test_an_install_that_shipped_no_commands_is_not_reported_as_reachable() -> N
 
 
 def test_a_missing_launcher_is_never_reported_as_merely_unreachable() -> None:
-    present = {str(_UV_ROOT / "uv-receipt.toml"), str(_UV_SCRIPTS / f"mux{_EXE}")}
+    present = {str(_UV_ROOT / "uv-receipt.toml"), str(_UV_SCRIPTS / f"swemux{_EXE}")}
     location = detect_install_location(
         frozen=False,
         executable=str(_INTERPRETER),
@@ -542,7 +542,7 @@ def test_a_missing_launcher_is_never_reported_as_merely_unreachable() -> None:
     assert desktop.path is None
     assert desktop.status == "not installed"
     # ... and it is not counted among the things a PATH edit would fix.
-    assert [command.name for command in location.unreachable] == ["mux"]
+    assert [command.name for command in location.unreachable] == ["swemux"]
 
 
 # --------------------------------------------------------------------------- #
@@ -594,7 +594,7 @@ def test_where_answers_the_four_questions_it_exists_for() -> None:
 
 
 def test_where_does_not_offer_shortcuts_off_windows() -> None:
-    """`mux install-shortcut` is Windows-only, so POSIX is not told to run it."""
+    """`swemux install-shortcut` is Windows-only, so POSIX is not told to run it."""
     posix = _posix_install(path="/usr/bin")
     text = render_where(posix, version="9.9.9")
     assert "install-shortcut" not in text
@@ -666,7 +666,7 @@ def test_the_live_probe_describes_this_very_interpreter() -> None:
     }
     # The suite runs from a checkout's own virtual environment.
     assert location.kind == INSTALL_VENV
-    assert location.executable("muxd") is not None
+    assert location.executable("swemuxd") is not None
     # And it reads this host, which is what makes every fixture above have to
     # be shaped for this host too.
     assert location.windows is IS_WINDOWS

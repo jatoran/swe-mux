@@ -7,7 +7,7 @@ for the predecessor *process*, not just its port, so by the time the runtime is
 built this process is the only one holding `mux.db` - and the PTY supervisor
 owns the sessions throughout, so nothing the operator is running dies for it.
 
-So maintenance is a durable *request* rather than a command: `mux compact-db`
+So maintenance is a durable *request* rather than a command: `swemux compact-db`
 writes the request and triggers the ordinary session-preserving restart, and the
 successor honours it in a named startup phase before any store opens the file.
 That deliberately puts minutes of work on the startup path, which everything
@@ -412,7 +412,7 @@ def describe(result: MaintenanceResult) -> str:
 
 
 def maintenance_summary(data_dir: Path) -> dict[str, Any]:
-    """What a pending request asks for, for `mux doctor` and the CLI."""
+    """What a pending request asks for, for `swemux doctor` and the CLI."""
     request = read_request(data_dir)
     if request is None:
         return {"pending": False}

@@ -20,7 +20,7 @@ Scorecard:
 
 Notable severity corrections with the evidence that drove them:
 
-- Stale-discovery kill (their P0 #3): requires an unclean supervisor exit AND PID reuse onto a "swe"-named process AND an operator running `muxd --shutdown`.
+- Stale-discovery kill (their P0 #3): requires an unclean supervisor exit AND PID reuse onto a "swe"-named process AND an operator running `swemuxd --shutdown`.
   It is real and worth fixing, but it is operator-triggered with a triple-coincidence precondition: P2.
   Codex also missed that the discovery file already records `started_at` (supervisor.py:179) - the guard they recommended building already has its data persisted, making the fix one line, not a schema change.
 - Land state/event atomicity (their P1): the state machine never reads `land_events` for correctness; partial unique indexes enforce idempotency and one-inflight-per-trunk at schema level, and `restore()` re-derives from the repository after a crash.
@@ -92,7 +92,7 @@ Codex-confirmed findings are folded in at corrected severity; items marked NEW w
 
 ### P2
 
-7. Stale supervisor discovery can kill an unrelated "swe"-named process on `muxd --shutdown` (supervisor_client.py:587-614).
+7. Stale supervisor discovery can kill an unrelated "swe"-named process on `swemuxd --shutdown` (supervisor_client.py:587-614).
    One-line fix: validate against the `started_at` the discovery file already records, matching the PID+creation-time policy used everywhere in processes.py.
 8. Supervisor teardown does not quiesce in-flight spawns (`_background_tasks` neither cancelled nor awaited, supervisor.py:205-220); a spawn racing `reap_all_and_exit` can land a child in no job, escaping the kill-on-close reap.
 9. NEW - `session.tasks` grows unbounded on the OSC7/cwd-telemetry paths.

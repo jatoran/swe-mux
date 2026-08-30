@@ -946,10 +946,10 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="head"><span class="n">#</span><h2>Running from a checkout</h2><span class="fill"></span></div>
         <div class="code"><pre>git clone https://github.com/jatoran/swe-mux
 cd swe-mux
-uv sync --extra desktop
+uv sync
 npm --prefix frontend ci
 npm --prefix frontend run build   # a fresh clone serves no UI until this runs once
-uv run --extra desktop swe-mux</pre></div>
+uv run swe-mux</pre></div>
         <p class="note">The frontend bundle is git-ignored build output. A fresh clone serves a blank page rather than an error until that build has run once.</p>
       </div>
       <div class="docsec" id="the-verification-gate">

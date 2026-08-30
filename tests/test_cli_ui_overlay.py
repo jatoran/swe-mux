@@ -1,4 +1,4 @@
-"""`mux ui-overlay`, which is the overlay's only control that does not need the UI.
+"""`swemux ui-overlay`, which is the overlay's only control that does not need the UI.
 
 That is the whole reason it exists as a command rather than only an endpoint: an
 overlay's own failure mode is a frontend that will not load, so a revert reachable

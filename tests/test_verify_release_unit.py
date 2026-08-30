@@ -58,8 +58,8 @@ URLS = {
     "Issues": "https://github.com/jatoran/swe-mux/issues",
 }
 SCRIPTS = {
-    "mux": "swe_mux.cli:main",
-    "muxd": "swe_mux.__main__:main",
+    "swemux": "swe_mux.cli:main",
+    "swemuxd": "swe_mux.__main__:main",
     "swe-mux": "swe_mux.desktop:main",
 }
 
@@ -117,8 +117,8 @@ uv sync --extra desktop
 uv run --extra desktop swe-mux
 ```
 
-For a headless daemon run `uv run muxd`, and `uv run mux doctor` is the health
-report. `muxd --local-only` keeps it local. The `verify` job is what CI calls it.
+For a headless daemon run `uv run swemuxd`, and `uv run swemux doctor` is the health
+report. `swemuxd --local-only` keeps it local. The `verify` job is what CI calls it.
 
 <!-- TODO(release): pypi - once published, `uv tool install swe-mux`. -->
 """
@@ -132,7 +132,7 @@ uv build
 git tag -a v0.1.0 -m "v0.1.0"
 ```
 
-Then confirm `mux --help` and `muxd --local-only` both work.
+Then confirm `swemux --help` and `swemuxd --local-only` both work.
 """
 
 STORE_BODY = '''"""A store. It never uses PRAGMA user_version, for the usual reason."""
@@ -894,7 +894,7 @@ def test_renaming_an_entry_point_breaks_the_documents_that_name_it(
     tmp_path: Path, wheel: Path
 ) -> None:
     """The whole point: the docs and `[project.scripts]` are one fact, checked once."""
-    scripts = {"mux2": "swe_mux.cli:main", "muxd": "swe_mux.__main__:main"}
+    scripts = {"swemux2": "swe_mux.cli:main", "swemuxd": "swe_mux.__main__:main"}
     tree = build_tree(tmp_path / "tree", pyproject=_pyproject(scripts=scripts))
     report = run(wheel, tree)
     assert verdict(report, "documented-commands") is False
@@ -907,7 +907,7 @@ def test_renaming_an_entry_point_breaks_the_documents_that_name_it(
 def test_a_declared_script_missing_from_the_wheel_fails(
     tmp_path: Path, tree: Path
 ) -> None:
-    scripts = {"mux": SCRIPTS["mux"], "muxd": SCRIPTS["muxd"]}
+    scripts = {"swemux": SCRIPTS["swemux"], "swemuxd": SCRIPTS["swemuxd"]}
     wheel = build_wheel(tmp_path / "w.whl", scripts=scripts)
     report = run(wheel, tree)
     assert only_failure(report) == "console-scripts"
@@ -919,7 +919,9 @@ def test_a_declared_script_missing_from_the_wheel_fails(
 def test_a_script_pointing_at_a_different_target_fails(
     tmp_path: Path, tree: Path
 ) -> None:
-    wheel = build_wheel(tmp_path / "w.whl", scripts=dict(SCRIPTS, mux="swe_mux.old_cli:main"))
+    wheel = build_wheel(
+        tmp_path / "w.whl", scripts=dict(SCRIPTS, swemux="swe_mux.old_cli:main")
+    )
     report = run(wheel, tree)
     assert only_failure(report) == "console-scripts"
     assert "wheel has swe_mux.old_cli:main" in message(report, "console-scripts")
@@ -937,7 +939,7 @@ def test_a_wheel_with_no_entry_points_at_all_fails(tmp_path: Path, tree: Path) -
 
 def _split_launchers() -> tuple[dict[str, str], dict[str, str]]:
     """The real repository's split: two console launchers and one GUI launcher."""
-    console = {"mux": SCRIPTS["mux"], "muxd": SCRIPTS["muxd"]}
+    console = {"swemux": SCRIPTS["swemux"], "swemuxd": SCRIPTS["swemuxd"]}
     return console, {"swe-mux": SCRIPTS["swe-mux"]}
 
 

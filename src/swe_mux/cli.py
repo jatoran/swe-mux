@@ -1,6 +1,6 @@
-"""The `mux` command-line control surface.
+"""The `swemux` command-line control surface.
 
-`mux` is not a text twin of the browser: the browser and mobile clients are the
+`swemux` is not a text twin of the browser: the browser and mobile clients are the
 interactive surface, and MCP serves structured reads to agents. This CLI is the
 part with no substitute - the operations you run when the UI is not the right tool
 and the things a script needs: a scriptable spawn, a filtered session list, kill,
@@ -21,7 +21,7 @@ Design rules this file keeps (ROADMAP Phase 7, "Practical CLI control"):
   rather than adding a scheme. A local check failed is still `1`, because a named
   broken check is the more actionable fact; a local report with nothing failing is
   `3`, which is exactly what `3` already meant - the daemon is unreachable. A
-  degraded report therefore never exits `0`, and a script gating on `mux doctor`
+  degraded report therefore never exits `0`, and a script gating on `swemux doctor`
   keeps working unchanged.
 - **Human tables by default, `--json` for machines.** Default output is a table a
   person reads; `--json` prints the raw daemon payload verbatim. Scripts never
@@ -72,7 +72,7 @@ DEFAULT_URL = "http://127.0.0.1:8765"
 #: rather than "whatever `argv[0]` says": the value is printed to the user, and a
 #: renamed or symlinked copy naming itself something else should read as the
 #: command this project documents rather than as whatever it was called.
-LAUNCHER_NAMES = frozenset({"swemux", "mux"})
+LAUNCHER_NAMES = frozenset({"swemux"})
 #: What an unrecognizable `argv[0]` prints. The primary spelling, so the fallback
 #: teaches the name the documents use.
 DEFAULT_PROG = "swemux"
@@ -148,7 +148,7 @@ def request(
         raise CliError(f"daemon returned HTTP {exc.code}: {detail}", EXIT_HTTP) from exc
     except urllib.error.URLError as exc:
         raise CliError(
-            f"cannot reach the mux daemon at {base}: {exc.reason}. "
+            f"cannot reach the swe-mux daemon at {base}: {exc.reason}. "
             "Is it running? Set MUX_URL or pass --url to point elsewhere.",
             EXIT_CONNECTION,
             reason=str(exc.reason),
@@ -318,7 +318,7 @@ def _render_doctor(result: Any) -> str:
     if local:
         daemon = result.get("daemon") or {}
         lines += [
-            f"mux could not reach the swe-mux daemon at {daemon.get('url')}"
+            f"swemux could not reach the swe-mux daemon at {daemon.get('url')}"
             + (f": {daemon.get('detail')}" if daemon.get("detail") else "")
             + ".",
             "This is the LOCAL report: only the checks answerable from this machine ran.",
@@ -487,7 +487,7 @@ def _render_ui_overlay(result: Any) -> str:
 
 
 def _ui_overlay_command(args: Any, base: str) -> tuple[Any, Callable[[Any], str] | None]:
-    """Dispatch one `mux ui-overlay` action.
+    """Dispatch one `swemux ui-overlay` action.
 
     `install` sends a much longer timeout than the CLI's default: the daemon
     hashes and extracts the whole tree, and a client that gave up at ten seconds
@@ -598,13 +598,14 @@ def invoked_as(
 ) -> str:
     """The name this process was launched under, for `usage:` and error text.
 
-    `[project.scripts]` declares four launchers over two programs - `swemux` and
-    `mux` for this client, `swemuxd` and `muxd` for the daemon - so a hardcoded
-    `prog` would print one name at a user who typed the other. Nothing here
-    dispatches on the answer; it is display text only, which is why an
-    unrecognizable `argv[0]` falls back rather than failing. `names` and `default`
-    are arguments because the daemon has its own pair (`swemuxd`, `muxd`) and the
-    rule is identical; only the vocabulary differs.
+    `[project.scripts]` declares one launcher per program - `swemux` for this
+    client, `swemuxd` for the daemon - so today this echoes back the only name
+    there is. It is kept rather than replaced by a constant for two reasons: a
+    renamed or symlinked copy must still print the name this project documents
+    (which is what the closed `names` set enforces), and the daemon has its own
+    vocabulary, which is why `names` and `default` are arguments at all. Nothing
+    here dispatches on the answer; it is display text only, which is why an
+    unrecognizable `argv[0]` falls back rather than failing.
 
     The `.exe` strip is Windows-specific and load-bearing there: a console script
     is a real executable, so `sys.argv[0]` ends in `.exe` and argparse's own
@@ -679,6 +680,43 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
     kill = sub.add_parser("kill", parents=[common], help="terminate a session")
     kill.add_argument("session", help="session id, name, or unique id prefix")
+
+    start = sub.add_parser(
+        "start",
+        parents=[common],
+        help="start the daemon in the background and wait for it to serve",
+        description=(
+            "Start a detached daemon and return once it answers, so the browser "
+            "UI is reachable without a terminal held open for it. On Windows the "
+            "desktop app already does this - `swe-mux` opens no console and "
+            "spawns its own daemon - so this is for the browser-only case, for "
+            "Linux and macOS where there is no desktop app at all, and for "
+            "iterating from a checkout. Idempotent: a daemon that is already "
+            "serving is reported and left alone. Nothing else in this CLI starts "
+            "a daemon implicitly; `swemux ls` against a stopped one still says so."
+        ),
+    )
+    start.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="how long to wait for the daemon to answer (default: 90)",
+    )
+    start.add_argument(
+        "--config",
+        type=Path,
+        help="config file to start the daemon with (default: the usual one)",
+    )
+    start.add_argument(
+        "--no-browser",
+        action="store_true",
+        help=(
+            "do not open the UI in a browser. Only opened when this command "
+            "started a daemon and a terminal is watching; SWE_MUX_NO_BROWSER "
+            "does the same for a caller that cannot pass a flag"
+        ),
+    )
 
     reload_daemon = sub.add_parser(
         "reload-daemon",
@@ -782,7 +820,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
             "command exists rather than only an endpoint: an overlay's own failure "
             "mode is a UI that will not load, and a control reachable only through "
             "that UI would be no control at all. Every subcommand takes effect at the "
-            "next daemon start; `mux reload-daemon` applies one while preserving "
+            "next daemon start; `swemux reload-daemon` applies one while preserving "
             "sessions."
         ),
     )
@@ -885,6 +923,51 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     return parser
 
 
+def start_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
+    """Run `start` here, without asking a daemon anything.
+
+    Local like `install-shortcut`, and for the sharper version of the same
+    reason: the entire point is that there is no daemon yet, so a command that
+    needed one to run could never be the one that starts it.
+
+    A config that will not load is raised as a local failure rather than let
+    through, because the alternative is spawning a child that fails the same way
+    where nobody is watching - the failure would land in a log file instead of in
+    front of the person who just typed the command.
+    """
+    from .config import load_config
+    from .daemon_start import (
+        START_TIMEOUT_SECONDS,
+        open_browser,
+        render,
+        should_open_browser,
+        start_daemon,
+    )
+
+    try:
+        config = load_config(args.config)
+    except Exception as exc:  # noqa: BLE001 - a broken config is an expected caller
+        raise CliError(
+            f"the swe-mux config did not load ({type(exc).__name__}: {exc}), so there "
+            "is no daemon to start. Run `swemux doctor --local` for the local report.",
+            EXIT_LOCAL_FAIL,
+        ) from exc
+    timeout = START_TIMEOUT_SECONDS if args.timeout is None else args.timeout
+    outcome = start_daemon(config, url=base, timeout_seconds=timeout)
+    # The detached child has no terminal, so it will not open a browser itself -
+    # which is correct, and leaves the decision here, where a person demonstrably
+    # typed something. Only on a daemon this call actually started: opening a tab
+    # at somebody because their daemon was already up is the behaviour that gets
+    # a command removed from a login script.
+    if outcome.status == "started" and should_open_browser(
+        requested=not args.no_browser,
+        stdout_isatty=bool(sys.stdout is not None and sys.stdout.isatty()),
+        environ=os.environ,
+    ):
+        open_browser(outcome.url)
+    return outcome.as_dict(), lambda _: render(outcome)
+
+
 def install_shortcut_command(args: argparse.Namespace) -> tuple[Any, Any]:
     """Run `install-shortcut` here, without asking a daemon anything.
 
@@ -919,7 +1002,7 @@ def install_shortcut_command(args: argparse.Namespace) -> tuple[Any, Any]:
     except Exception as exc:  # noqa: BLE001 - a broken config is the expected caller
         raise CliError(
             f"the swe-mux config did not load ({type(exc).__name__}: {exc}), so there "
-            "is no data directory to anchor a shortcut in. Run `mux doctor` for the "
+            "is no data directory to anchor a shortcut in. Run `swemux doctor` for the "
             "local report.",
             EXIT_LOCAL_FAIL,
         ) from exc
@@ -1072,7 +1155,7 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
                     raise
                 raise CliError(
                     f"{exc} The export bundle is daemon state and has no local form; "
-                    "run `mux doctor` (without --export) for the local report.",
+                    "run `swemux doctor` (without --export) for the local report.",
                     EXIT_CONNECTION,
                 ) from exc
         try:
@@ -1100,6 +1183,8 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
         return request("GET", "/api/provider-accounts", base=base), None
     if args.command == "ui-overlay":
         return _ui_overlay_command(args, base)
+    if args.command == "start":
+        return start_command(args, base)
     if args.command == "install-shortcut":
         return install_shortcut_command(args)
     if args.command == "install-skill":
@@ -1126,7 +1211,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result, human = dispatch(args, base)
     except CliError as exc:
-        print(f"mux: {exc}", file=sys.stderr)
+        # The name that was typed, matching every usage line and argparse error
+        # this parser produces. A literal here was a fourth spelling of the
+        # command, and the one a user saw only when something had gone wrong.
+        print(f"{invoked_as()}: {exc}", file=sys.stderr)
         return exc.code
     _print(result, getattr(args, "json", False), human)
     if args.command == "install-skill" and isinstance(result, dict):
@@ -1134,6 +1222,12 @@ def main(argv: list[str] | None = None) -> int:
         # its job; only an attempted write or removal the filesystem rejected
         # exits non-zero.
         if not result.get("ok", True):
+            return EXIT_LOCAL_FAIL
+    if args.command == "start" and isinstance(result, dict):
+        # `starting` exits 0 beside `started`: the daemon is running and has not
+        # finished, which is a slow start rather than a failure, and a script
+        # that treated the two differently would flap on a cold cache.
+        if result.get("status") == "failed":
             return EXIT_LOCAL_FAIL
     if args.command == "install-shortcut" and isinstance(result, dict):
         # An unsupported host is not a failure - nothing was asked of it that it
@@ -1143,7 +1237,7 @@ def main(argv: list[str] | None = None) -> int:
         if result.get("supported") and not result.get("ok", True):
             return EXIT_LOCAL_FAIL
     # doctor is the one command whose exit code reflects the daemon's health, not
-    # just whether the request succeeded, so a script can gate on `mux doctor`.
+    # just whether the request succeeded, so a script can gate on `swemux doctor`.
     if args.command == "doctor" and not getattr(args, "export", False):
         if isinstance(result, dict):
             if not result.get("ok", True):

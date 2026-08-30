@@ -1378,7 +1378,7 @@ another agent can pick up mid-plan. Section links point to the design detail.
   `capture_capability()` distinguishes `extra_missing` from `browser_missing` from `ready` and
   hands back the command for that half alone; a launch that fails with Playwright's own
   missing-executable error is promoted to the same state; and the packaged app says plainly that
-  no command on that machine helps. `mux doctor` carries it as an `optional` row.
+  no command on that machine helps. `swemux doctor` carries it as an `optional` row.
   What is still true and deliberately unchanged: preview capture does not work in the frozen
   desktop app at all. That is a packaging decision, and it is now stated instead of silent.
 

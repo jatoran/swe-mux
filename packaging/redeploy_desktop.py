@@ -15,7 +15,7 @@ where a dead daemon means no way back in).
 2. Rebuild — frontend + app bundle into `dist/.staging` (old app still up).
    The supervisor bundle is rebuilt only if its sources changed AND no
    supervisor is running; otherwise it is skipped with a warning (refreshing
-   it requires ``muxd --shutdown`` first, which reaps sessions).
+   it requires ``swemuxd --shutdown`` first, which reaps sessions).
    ``--from-archive`` replaces this step and nothing else: a downloaded release
    archive is verified and staged into the same staging tree, and every step
    below runs identically. That is the whole of the frozen-app updater's use of
@@ -679,7 +679,7 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
             log(
                 "ABORT: the supervisor is running from dist/swe-mux (the "
                 "--supervisor-child fallback), so rebuilding would kill it and every "
-                "session. Run `muxd --shutdown`, rebuild once (this creates the "
+                "session. Run `swemuxd --shutdown`, rebuild once (this creates the "
                 "dedicated swe-mux-supervisor bundle), and relaunch; future redeploys "
                 "will then preserve sessions."
             )
@@ -716,7 +716,7 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
             log(
                 "WARNING: supervisor sources changed but a supervisor is running with "
                 "live sessions; keeping the OLD supervisor bundle. To refresh it: "
-                "`muxd --shutdown` (reaps sessions), then "
+                "`swemuxd --shutdown` (reaps sessions), then "
                 "`uv run python packaging/build_desktop.py --supervisor-only`."
             )
             skip_supervisor = True

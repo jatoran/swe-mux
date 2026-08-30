@@ -171,7 +171,7 @@ its port.
   So exclusivity is **checked and waited for, never assumed**: `_run_pending_maintenance` probes
   the heartbeat pid first and skips (keeping the request) while a predecessor is alive, and the
   operation itself connects with a 30s busy timeout for the race between the probe and the vacuum.
-  So maintenance is a durable **request** rather than a command. `mux compact-db` writes
+  So maintenance is a durable **request** rather than a command. `swemux compact-db` writes
   `<data_dir>/db-maintenance.json` and optionally triggers the ordinary session-preserving
   restart; the successor honours it in the `database-maintenance` phase, before the integrity
   probe and before any store opens the file.

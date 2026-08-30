@@ -6092,10 +6092,27 @@ here and does not there.
 
 ### Taken into 0.1.3
 
-- [ ] **Add `swemux` and `swemuxd` as the primary console scripts, keeping `mux` and `muxd` as
+- [x] **Add `swemux` and `swemuxd` as the primary console scripts, keeping `mux` and `muxd` as
   working aliases.** Purely additive, so nothing that exists stops working and no document that
   says `mux` becomes wrong - which is also what makes it safe without resolving the trademark
   question first.
+  **(Shipped 2026-08-29. The aliases were removed on 2026-08-30, and both halves of the argument
+  above turned out to be wrong in the same way.)**
+  "Purely additive, so nothing stops working" reads the cost as zero, but shipping a launcher
+  under the contested name is *what creates* the collision this section documents so carefully:
+  a machine with npm's `mux` installed resolves a typed `mux` by PATH order, and the loser is
+  whichever installed first. Keeping the alias does not survive that - it enters it. Not
+  occupying the name is what leaves nothing to shadow, and the residual case (a `swemux` PATH
+  cannot reach) is already diagnosed by `install_location.unreachable` rather than guessed at.
+  "No document that says `mux` becomes wrong" was true on the day and stopped being true by the
+  next one: the documents had not settled yet, and when the sweep was finally measured they
+  carried 180 `mux` and 35 `muxd` invocations against 21 `swemux`. The cheap direction and the
+  correct one had already diverged, and every day of delay widened the gap.
+  The generalisable form, and the reason this is recorded rather than quietly amended: **"purely
+  additive" is a claim about the code, not about the name.** A second name for one program is
+  additive in `[project.scripts]` and subtractive everywhere a reader has to choose between them.
+  `tests/test_launcher_names.py` now fails on any code span that names a removed launcher, so the
+  sweep is a property of the repository rather than an act somebody remembers finishing.
 - [x] ~~**The Windows installer puts the CLI on PATH.**~~ **Attempted, refuted, and the refutation
   is the finding.** There is no CLI in the frozen bundle to put on PATH. `packaging/swe_mux.spec`
   builds exactly one executable, `swe-mux.exe`, with `console=False` - a GUI-subsystem process has
@@ -6320,6 +6337,45 @@ the extra, so there is nothing to ask there either.
   sdist case is extract-never-build, enforced by refusal.)
 - [x] The control is absent on platforms that have no desktop app, rather than present and
   failing.
+
+### Superseded the same day, and the lesson is worth more than the phase
+
+The acquire-at-first-use closure shipped on 2026-08-30 and was removed on 2026-08-30. Nothing
+about it was wrong; it was a well-built repair for a defect one line above it in the stack.
+
+The question it never asked is **why the tray was optional at all.** Everything in the section
+above is framed as "a user who installed without the `desktop` extra", and the whole phase
+follows from accepting that as a given. Two facts that were available before the work started
+say it should not have been:
+
+- `[project.gui-scripts]` builds `swe-mux` into *every* install, extra or not. So a plain
+  `uv tool install swe-mux` shipped a console-free launcher whose only behaviour was to die on
+  `ImportError`. That is not "a capability the user did not choose", it is a broken entry point.
+- The closure is 2.4 MB. The phase measured this itself, in the paragraph above, and then used
+  it to argue the download would be *fast* rather than to ask whether a download was warranted.
+
+Both remedies the error printed also led back through a terminal - `uv sync --extra desktop`
+needs a checkout, and this phase's own Settings press needs a running daemon, which needed
+`muxd` held open in a console. So the first run of a desktop app was a modal error and a
+terminal, and the phase's exit criteria were all met while that stayed true, because none of
+them was about the first run.
+
+Moving both packages into base `dependencies` (`sys_platform == 'win32'`) deleted the
+condition instead: install, type `swe-mux`, get a tray. The store, the pin table, its generator
+and its parity test went with it, and the LGPL obligation `pystray` carries moved to a preflight
+over base dependencies (`build_desktop.missing_relinkable_distributions`).
+
+**The generalisable form: when a repair is this well-engineered, check that the thing it repairs
+is supposed to exist.** A press that can only ever report "already installed" is the tell, and it
+was visible from the acquire set's own definition - `closure(root + desktop) − closure(root)` is
+empty the moment the packages move, which is a one-line consequence nobody computed because
+nobody was asking that question.
+
+What survived is worth naming, because none of it was wasted: `wheel_closure.WheelClosureStore`
+(the extraction that gave the voice closure an audited home), the extract-never-build sdist rule
+and its refusals, and the Settings **Desktop integration** group - which kept the shortcut half,
+gained the `startup` slot it could previously report and remove but never create, and lost only
+the download button.
 
 ## Decision-gated capabilities
 

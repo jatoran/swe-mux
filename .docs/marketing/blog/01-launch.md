@@ -56,7 +56,7 @@ macOS is implemented and its CI leg runs the whole suite, but that leg is not ye
 
 ```
 uv tool install swe-mux
-mux doctor
+swemux doctor
 ```
 
 On Windows, `uv tool install "swe-mux[desktop]"` instead, for the native window and the tray icon.

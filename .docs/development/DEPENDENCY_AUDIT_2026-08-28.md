@@ -316,7 +316,7 @@ A PEP 508 direct-URL requirement is not a way out, because PyPI rejects distribu
 Three things follow, and each is independently worth fixing:
 
 - Every user-facing instruction that names the extra is currently unrunnable for an installed copy.
-  `mux doctor`'s remedy string for this row is `uv sync --extra voice-local`
+  `swemux doctor`'s remedy string for this row is `uv sync --extra voice-local`
   (`doctor_local._EXTRAS`), which is a source-checkout command and cannot be run by someone who
   installed from PyPI at all.
 - `RELEASE_MANUAL_TASKS.md` § 9 and `ROADMAP.md` state that "a downstream

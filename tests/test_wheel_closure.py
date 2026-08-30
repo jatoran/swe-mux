@@ -11,13 +11,11 @@ be handled cleverly.
 from __future__ import annotations
 
 import io
-import sys
 import tarfile
 from pathlib import Path
 
 import pytest
 
-from swe_mux.desktop_runtime import DesktopRuntimeStore
 from swe_mux.wheel_closure import ClosureAcquisitionError, _extract_sdist
 
 
@@ -113,30 +111,9 @@ def test_an_out_of_tree_member_is_refused(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.py").exists()
 
 
-def test_the_desktop_store_is_absent_off_windows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Windows only, by absence rather than failure: elsewhere the store
-    reports unsupported so the Settings surface draws nothing at all."""
-    monkeypatch.setattr(sys, "platform", "linux")
-    store = DesktopRuntimeStore(tmp_path)
-    state = store.status()
-    assert state["supported"] is False
-    assert "Windows" in (state["error"] or "")
-    assert store.start_download() is False
-
-
-def test_the_desktop_store_quotes_its_real_size_here(tmp_path: Path) -> None:
-    """On the platform it exists for, the closure is small - pure Python once
-    the base-reachable compiled packages are excluded by the set difference."""
-    if sys.platform != "win32":
-        pytest.skip("the desktop shell exists only on Windows")
-    store = DesktopRuntimeStore(tmp_path)
-    state = store.status()
-    assert state["supported"] is True
-    # The store's estimate equals the pinned selection's total - the property,
-    # not a host-measured magnitude.
-    from swe_mux.desktop_wheels import SDISTS, wheels_for_this_interpreter
-
-    pinned = sum(item.size for item in (*wheels_for_this_interpreter(), *SDISTS))
-    assert state["total_bytes"] == pinned
+# The two desktop-store tests that used to close this file went with the store
+# itself on 2026-08-30, when `pystray`/`pywebview` became base dependencies and
+# there was no longer a closure to acquire. What they covered - platform
+# gating and the "estimate equals the pinned selection" property - is still
+# covered for the one remaining store in `tests/test_voice_runtime.py`
+# (`supported` gating, and `total_bytes` asserted equal to the pinned selection).

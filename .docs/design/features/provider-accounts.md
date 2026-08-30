@@ -300,7 +300,7 @@ POST   /api/telemetry/quota-resets/review
 GET    /api/telemetry/quota-series?provider=&account=&since=&until=&resolution=raw|daily
 ```
 
-`mux accounts [list|verify|audit]` reaches the same surface from the CLI.
+`swemux accounts [list|verify|audit]` reaches the same surface from the CLI.
 
 ```ts
 type CurrentProviderAuth = {
@@ -352,7 +352,7 @@ type AccountConflict = {
 - Service: `src/swe_mux/provider_accounts.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Composition/routes: `src/swe_mux/server.py`
-- CLI: `src/swe_mux/cli.py` (`mux accounts`)
+- CLI: `src/swe_mux/cli.py` (`swemux accounts`)
 - UI: `frontend/src/ProviderAccounts.tsx`, `frontend/src/providerAccountDisplay.ts`,
   `frontend/src/style.css`
 - Tests: `tests/test_provider_accounts.py`,

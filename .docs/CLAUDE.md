@@ -204,6 +204,31 @@
 - Changing Windows desktop packaging, WebView, tray, login startup, or daemon shutdown:
   `design/features/desktop-shell.md`, `design/architecture.md`, `design/interfaces.md`,
   `design/features/remote-access.md`, `technical/backend/packages.md`
+- Changing how swe-mux is *started* without a terminal - the first-run shortcut offer
+  (`first_run.py`), the detached `swemux start` (`daemon_start.py`), the shortcut slots
+  (`shortcuts.py`, `routes/desktop_integration.py`), or which of the two run-at-login
+  mechanisms is written or read: `design/features/desktop-shell.md`, `design/interfaces.md`
+  (CLI and the desktop-integration endpoints), `development/OPERATOR_LIFECYCLE.md`,
+  `README.md`, `site/tools/docs_content.py` (then rebuild `site/`).
+  Two rules this area keeps, both learned the same day. **A capability the product is
+  started by is not an optional extra** - the tray's dependencies are base requirements
+  because `[project.gui-scripts]` ships the `swe-mux` launcher into every install regardless
+  (`development/ROADMAP.md` § Phase 24, "Superseded the same day"). And **run-at-login has
+  two mechanisms** - an `HKCU\...\Run` value and a `shell:startup` link - so anything that
+  reports the setting reads both, and anything that turns it off clears both.
+- Adding, renaming or removing a launcher (`[project.scripts]`, `[project.gui-scripts]`):
+  `pyproject.toml`, `src/swe_mux/install_location.py` (`SHIPPED_COMMANDS`, `CLIENT_COMMANDS`,
+  `DAEMON_COMMANDS`), `cli.LAUNCHER_NAMES`, `__main__.DAEMON_LAUNCHER_NAMES`,
+  `packaging/swe_mux_cli.spec` + `build_desktop.CLI_EXES`, `packaging/installer/swe-mux.iss`,
+  and then every document that names one.
+  **The commands are `swemux`, `swemuxd` and `swe-mux`, one per program, and there are no
+  aliases on purpose.** `mux`/`muxd` existed from 2026-08-29 to 2026-08-30; `pyproject.toml`
+  carries the argument and `development/ROADMAP.md` § "Taken into 0.1.3" carries the
+  correction, which is worth reading before adding a short name back - "purely additive" is
+  a claim about the code and not about the name.
+  `tests/test_launcher_names.py` fails on any code span that names a launcher this project
+  does not ship, over every markdown and source file including `site/tools/docs_content.py`,
+  whose string literals are published code blocks and are scanned specially.
 - Changing which static tree the daemon serves, the frontend overlay, its verification, its
   compatibility pin, or its revert: `design/features/desktop-shell.md`,
   `design/interfaces.md`, `technical/backend/packages/daemon-runtime.md`,
@@ -220,7 +245,7 @@
   follows, *an app update always supersedes an overlay*, is what makes a stale overlay
   self-clearing instead of a cleanup step somebody has to remember.
   **A revert must be reachable without the frontend**, because the failure mode being guarded
-  against is a frontend that will not load; `mux ui-overlay revert` is that path and the
+  against is a frontend that will not load; `swemux ui-overlay revert` is that path and the
   endpoint is the convenience.
   And the thing that will bite: **precompressed `.gz` sidecars are derived, not payload.**
   The daemon writes them into whatever tree it serves, so a verification rule that treated
@@ -243,15 +268,18 @@
   `license_audit.ACQUIRED_AT_FIRST_USE` names which packages are in which case, and
   `tests/test_license_audit.py` fails if an allowlisted package has no proof or two. No espeak-ng in any form, which is a dependency-review rule
   rather than a preference (`development/ROADMAP.md` Phase 10.5 holds the measurements).
-  After any dependency change: `uv sync --extra desktop --extra voice-local` then
+  After any dependency change: `uv sync --extra voice-local` then
   `uv run python packaging/license_audit.py --write`, and commit both generated files.
   **And `uv run python packaging/generate_voice_pins.py --write`** if the change touches the
   `voice-local` extra, the `g2p-model` group, or anything they resolve, because the desktop app
   downloads that closure at first use and the pin table is what says which bytes are acceptable.
-  **And `uv run python packaging/generate_desktop_pins.py --write`** if the change touches the
-  `desktop` extra or anything it resolves, for the same reason
-  (`tests/test_desktop_wheels.py` is the parity gate).
-  Both extras, because the closure walk is defined over `DISTRIBUTED_EXTRAS` and
+  There is no desktop pin table any more: `pystray` and `pywebview` became base dependencies on
+  2026-08-30, which emptied the `desktop` extra and deleted the closure that used to be acquired
+  from it (`desktop_wheels.py`, `generate_desktop_pins.py`, `tests/test_desktop_wheels.py`).
+  `pystray` is still LGPL, still walked (base requirements always are) and still proven
+  relinkable in the bundle - what changed is that `build_desktop.missing_relinkable_distributions`
+  is the preflight that guards it rather than the extras check.
+  The one extra, because the closure walk is defined over `DISTRIBUTED_EXTRAS` and
   `--write` reads licenses out of what is actually installed. `voice-local` is
   optional to install and mandatory to build from, and the reason inverted on 2026-08-29:
   the bundle no longer ships that closure, so the extra is what makes
@@ -713,7 +741,7 @@
   one string used verbatim everywhere.
 - Changing what an **installed** copy looks like from the operator's side - an install, upgrade,
   or uninstall path; what an uninstall leaves behind; where the data directory or any file under
-  it lives; what `mux doctor` answers in either mode, including its exit codes; a recovery
+  it lives; what `swemux doctor` answers in either mode, including its exit codes; a recovery
   procedure for a daemon that will not start, sessions that look lost, or a missing frontend
   bundle; or what is worth backing up: `development/OPERATOR_LIFECYCLE.md`, plus the source of
   the fact you changed - `src/swe_mux/config.py` (`default_data_dir`, the data-dir children),

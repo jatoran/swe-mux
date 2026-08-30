@@ -43,12 +43,12 @@ The operator's daemon owns **port 8765** and **`~/.mux`**, and both are process-
 `muxd` has no `--data-dir`. It has `--config`, and `supervisor.resolve_data_dir` falls back to the config file's parent directory, so naming the config inside the capture root is what puts the whole install - database, supervisor discovery, shims, logs - somewhere else. `--local-only` clears `tailnet_enabled`, which is what keeps this daemon from reaching for the operator's Tailscale Serve route on 443.
 
 ```
-uv run muxd --config D:/swemux-capture/data/config.toml --port 8799 --local-only
+uv run swemuxd --config D:/swemux-capture/data/config.toml --port 8799 --local-only
 ```
 
 Check the port first (`netstat -ano | grep 8799`) rather than assuming; override with `MUX_CAPTURE_PORT`.
 
-**Never** `muxd --shutdown`, and never a name-matched `taskkill`. Both reap every live session on the machine. `capture_env.py down` terminates only the PID `up` recorded.
+**Never** `swemuxd --shutdown`, and never a name-matched `taskkill`. Both reap every live session on the machine. `capture_env.py down` terminates only the PID `up` recorded.
 
 ### Where it lives
 

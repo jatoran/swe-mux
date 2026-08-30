@@ -19,7 +19,7 @@ Why membership and licenses come from different places
 and is readable with no environment at all. It does not record licenses. The
 installed `dist-info` records licenses but is only complete when every
 distributed extra is installed, and a bare `uv sync` installs no extras at all,
-so `pystray` and the `voice-local` closure behind it are absent from such a venv.
+so the `voice-local` closure is absent from such a venv.
 
 That asymmetry is why the closure walk is defined over `DISTRIBUTED_EXTRAS`
 rather than over whatever is installed: the answer must not depend on which
@@ -28,7 +28,7 @@ extras the machine running the audit happened to sync.
 So the split is:
 
 - ``--write`` needs the full distributed closure installed
-  (``uv sync --extra desktop --extra voice-local``). It reads licenses from
+  (``uv sync --extra voice-local``). It reads licenses from
   `dist-info`, writes the human-readable `THIRD-PARTY-NOTICES.md`, and writes
   the machine-readable sidecar `packaging/third_party_licenses.json`.
 - ``--check`` needs nothing installed. It reconciles the sidecar against
@@ -86,7 +86,15 @@ NOTICES = ROOT / "THIRD-PARTY-NOTICES.md"
 # `voice-edge` does NOT ship either: it is a convenience extra for source users
 # and the same LGPL client is external to a frozen install. The spec excludes it
 # explicitly and the artifact half rejects it if it appears under `_internal/`.
-DISTRIBUTED_EXTRAS = ("desktop", "voice-local")
+#
+# `desktop` was here until 2026-08-30 and is not any more, and its departure is
+# not a narrowing of the audit. `pystray` and `pywebview` moved into base
+# `dependencies` (`pyproject.toml` carries why), and the closure walk always
+# includes the base requirements - so the LGPL `pystray` is still walked, still
+# allowlisted, and still proven relinkable in the bundle. What changed is only
+# that reaching it no longer needs an extra named here, and the extra it used to
+# name is now empty.
+DISTRIBUTED_EXTRAS = ("voice-local",)
 
 # Dependency *groups* whose packages are redistributed in the desktop bundle.
 # Groups are normally the opposite of that - `pyinstaller` is GPL-2.0-with-
@@ -164,9 +172,14 @@ def owning_extra(name: str, lock_path: Path = UV_LOCK) -> str | None:
     """The distributed extra a package is reached through, if it is optional.
 
     Only used to tell a reader of the notices how to install a replacement:
-    `pystray` arrives with `--extra desktop` and `num2words` with
-    `--extra voice-local`, so a single hard-coded `uv sync` line would be wrong
-    for both once the voice closure moved behind an extra.
+    `num2words` arrives with `--extra voice-local`, so a single hard-coded
+    `uv sync` line would be wrong for it once the voice closure moved behind an
+    extra.
+
+    `None` is the answer for everything reached from the base requirements, and
+    since 2026-08-30 that includes `pystray` - a plain `uv sync` installs it, so
+    a plain `uv sync` is the correct replacement instruction and the caller
+    already renders that for `None`.
     """
     data = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     root = next(
@@ -641,7 +654,7 @@ def _source_replacement_lines(name: str) -> list[str]:
     extra = owning_extra(name)
     install = f"uv sync --extra {extra}" if extra else "uv sync"
     return [
-        f"Running from source (`{install} && uv run muxd`) replaces it the",
+        f"Running from source (`{install} && uv run swemuxd`) replaces it the",
         f"usual way, with `pip install {name}==<your build>`.",
     ]
 
