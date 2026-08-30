@@ -362,6 +362,103 @@ jobs:
         shell: bash
         run: uv run python packaging/install_smoke.py dist/*.whl
 
+  # The Windows installer's PATH handling, exercised rather than asserted about.
+  #
+  # `tests/test_windows_installer.py` reads the `.iss` as text because the suite
+  # cannot run ISCC, and every assertion there is that a string is present. That
+  # is worth having and it is not evidence: a `[Registry]` line naming the right
+  # key can still duplicate an entry on upgrade, flatten a `%USERPROFILE%` on
+  # uninstall, or remove a neighbour's directory. Only a real install → upgrade →
+  # uninstall cycle answers those, and this is that cycle.
+  #
+  # It is its own job rather than a step in `verify` because it needs Inno Setup
+  # and it rewrites `HKCU\Environment\Path` - which is safe here only because a
+  # GitHub runner is thrown away afterwards, and which the script itself refuses
+  # to do without `SWE_MUX_INSTALLER_CYCLE=1`.
+  #
+  # The **client bundle is real**, built by PyInstaller from its own spec: it is
+  # small (28 MiB, roughly a minute), and building it here means
+  # `verify_cli_bundle_contents` and `smoke_cli_bundle` run on every push, so the
+  # day something re-imports the daemon into the client is the day this goes red
+  # rather than the day somebody measures a release. The app and supervisor
+  # bundles are stubs, because this job asks nothing about them - the installer
+  # only copies their files, and building them for real is the multi-minute cost
+  # the release workflow already pays.
+  installer-cycle:
+    name: installer PATH cycle (windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # `package` is PyInstaller. No extras: the client's whole closure is the
+      # standard library plus base dependencies (`psutil` through
+      # `swe_mux.lifecycle`, `win32` through `logging.handlers`), so the bundle it
+      # produces here is the same one the release job produces from the full
+      # closure - and if that ever stops being true, the membership gate says so
+      # instead of a release growing quietly.
+      - name: Install the build closure
+        run: uv sync --group package
+
+      - name: Build the console client bundle
+        run: uv run python packaging/build_desktop.py --cli-only
+
+      # Stand-ins for the two bundles this job does not ask about. `bundle.json`
+      # is not optional even here: `build_installer` takes the version it stamps
+      # from the bundle it packs and refuses one that does not describe itself.
+      - name: Stub the app and supervisor bundles
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/swe-mux/_internal | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/swe-mux-supervisor | Out-Null
+          Set-Content -Path dist/swe-mux/swe-mux.exe -Value 'stub' -NoNewline
+          Set-Content -Path dist/swe-mux-supervisor/swe-mux-supervisor.exe -Value 'stub' -NoNewline
+          uv run python -c "import sys, pathlib; sys.path.insert(0, 'packaging'); import build_desktop; build_desktop.describe_bundle(pathlib.Path('dist/swe-mux'))"
+
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          if (Get-Command iscc -ErrorAction SilentlyContinue) {
+            iscc /? | Select-Object -First 2
+          } else {
+            Write-Host "Inno Setup is not on this image; installing it"
+            choco install innosetup --no-progress -y
+            "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Append
+          }
+
+      - name: Compile the installer
+        run: uv run python packaging/build_installer.py --dist dist --out dist/release
+
+      # The evidence. Captures HKCU\Environment\Path and its registry value kind,
+      # seeds a REG_EXPAND_SZ value holding `%USERPROFILE%\bin` and a deliberate
+      # `...\swe-mux-cli-old` prefix collision, then diffs the value after each
+      # step and restores the original in a `finally`.
+      - name: Install, upgrade, uninstall, and diff PATH
+        shell: pwsh
+        env:
+          SWE_MUX_INSTALLER_CYCLE: "1"
+        run: |
+          $setup = Get-ChildItem dist/release -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw "no installer was produced" }
+          & ./packaging/installer/verify_path_cycle.ps1 `
+              -Installer $setup.FullName `
+              -InstallDir (Join-Path $env:RUNNER_TEMP 'swe-mux-cycle')
+
+      - name: Upload the setup log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-cycle-log
+          path: ${{ runner.temp }}/swe-mux-install.log
+          if-no-files-found: ignore
   # swemux.dev, which until 2026-08-29 no CI job looked at in any way.
   #
   # The gap that produced this job: `site/changelog/index.html` is **committed

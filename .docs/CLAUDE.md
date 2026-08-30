@@ -694,7 +694,11 @@
   bundle; or what is worth backing up: `development/OPERATOR_LIFECYCLE.md`, plus the source of
   the fact you changed - `src/swe_mux/config.py` (`default_data_dir`, the data-dir children),
   `src/swe_mux/doctor.py` and `src/swe_mux/doctor_local.py` (the two reports),
-  `src/swe_mux/cli.py` (the exit-code contract), `pyproject.toml` (extras, entry points,
+  `src/swe_mux/install_location.py` (which install shape this is, which launchers it shipped,
+  and - since the console client became its own frozen bundle - which of the sibling bundles
+  under one `{app}` is running), `src/swe_mux/cli.py` (the exit-code contract),
+  `packaging/installer/swe-mux.iss` (what the Windows installer writes, including the one
+  `PATH` entry it adds and takes back), `pyproject.toml` (extras, entry points,
   `requires-python`), `README.md`, `RELEASING.md`, `SECURITY.md`.
   Two rules that document carries. **Every command, path, flag, and exit code in it is verified
   against the repository rather than plausible** - it is read by someone whose install is already
@@ -713,6 +717,12 @@
   a `tmp_path` data dir; it proves startup, a real shell session, and a clean exit, and it
   proves nothing about the wheel, the frozen app, an agent, or the operator's own data
   directory. Windows remains the only platform that proves the product running.
+  Since 2026-08-29 the `installer-cycle` job compiles the Windows installer and runs
+  install → upgrade → uninstall against a seeded `HKCU\Environment\Path`, so a claim about what
+  an install *does to PATH* is now measured on every push
+  (`packaging/installer/verify_path_cycle.ps1`). It still starts no daemon and packs stub app
+  and supervisor bundles, so it says nothing about the product running - which is exactly the
+  distinction this paragraph exists to keep.
   Note that clean-machine validation - a real machine, from the published artifacts, with no
   checkout - is a different act again, needs hardware this repository does not have, and stays with
   the operator (`development/RELEASE_MANUAL_TASKS.md` § 8).
