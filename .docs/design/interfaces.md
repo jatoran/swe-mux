@@ -2946,10 +2946,24 @@ exclusive ownership of the file, which no running daemon can give. So the comman
 request under `<data_dir>/db-maintenance.json` and the **next daemon start** performs it, in a
 `database-maintenance` phase before anything opens the database; `--now` triggers the ordinary
 session-preserving restart to bring that start forward, and `--cancel` withdraws a pending
-request. Live sessions are held by the PTY supervisor and survive it. The UI does not: expect
-several minutes of a starting daemon on a multi-gigabyte database, reported by
-`/api/health` as the phase in flight like any other. A copy is taken first unless `--no-backup`,
-and the command refuses when the disk cannot hold the copy plus the rewrite.
+request. Live sessions are held by the PTY supervisor and survive it. The UI does not, for as long
+as it takes, and it is reported by `/api/health` as the phase in flight like any other. A copy is
+taken first unless `--no-backup`, and the command refuses when the disk cannot hold the copy plus
+the rewrite.
+
+Measured 2026-08-30 against a copy of a real 3.36 GB `mux.db`:
+
+| operations | maintenance window | file after |
+| --- | --- | --- |
+| `--no-trigram-rebuild` (vacuum only) | 24.5s | 3.19 GB |
+| both | 21.9s | 2.23 GB, settling at **2.69 GB** |
+
+The settling is the trigram index coming back: dropping it is what lets the vacuum compact the
+file without it, and `history.py`'s existing search-maintenance path rebuilds it afterwards in
+about 20s of background work. Substring search over history is incomplete until that finishes,
+which the search surfaces report rather than showing as an empty result (`ready=0`). Most of the
+reclaim is that index being rebuilt dense rather than the vacuum itself - it had grown
+incrementally over months.
 There is deliberately no endpoint and no MCP tool for this (`technical/backend/sqlite.md`).
 
 `mux --skill` prints the swe-mux agent skill embedded in this release, and `mux install-skill`

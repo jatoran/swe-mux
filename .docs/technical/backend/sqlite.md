@@ -189,6 +189,31 @@ its port.
   the startup path" (`development/PERFORMANCE_RUNBOOK.md`), and the exception is kept narrow by
   those rules: an operator asked for it, it happens once, and the phase reports itself while it
   runs.
+  Measured 2026-08-30 against a copy of the real 3.36 GB `mux.db`: both operations in **21.9s**,
+  down to **2.23 GB** and settling at **2.69 GB** once the trigram index rebuilds, against
+  **3.19 GB** for a `VACUUM` alone. The file's `quick_check` fell from 12.38s to 2.01s with it.
+  **Most of the reclaim is the trigram index being rebuilt dense, not the vacuum.** That index had
+  grown incrementally over months and came back 58 MB smaller from one clean pass; dropping it
+  first is also what lets the vacuum compact the rest of the file without it in the way.
+  It was very nearly a much bigger win and is not, and the reason is recorded beside the schema in
+  `history.py` because the size number alone made the wrong answer look obvious: **`detail=none`
+  breaks this index.** FTS5 refuses a phrase query without position data, a trigram substring match
+  *is* a phrase query over trigrams, and `message_rows` issues `MATCH` and ranks with `bm25()` -
+  so `detail=none` and `detail=column` both turn every substring search into an error rather than
+  a smaller index (measured, SQLite 3.47.1). `LIKE` survives and is still trigram-accelerated, so
+  the saving is reachable by moving the substring path off `MATCH`/`bm25` and onto `LIKE` with a
+  different ordering - a search-behaviour change, which is why it was not done here.
+  **`PRAGMA page_size` is silently ignored on a WAL database**, and this is the trap the feature
+  shipped with for one commit. SQLite accepts the statement, reports no error, and changes
+  nothing, so the obvious implementation - set the pragma, `VACUUM` - left the 4 KiB file at
+  4 KiB. It passed its unit test because the fixture was in the default rollback mode rather than
+  in WAL, which is the shape of test that proves nothing about production; the fixture now carries
+  the journal mode and the case is parameterised over both. `_vacuum` leaves WAL, sets the size,
+  vacuums, and restores *the mode the caller had* on every path - restoring unconditionally to WAL
+  would be the function changing something it was not asked to change, and leaving `mux.db` in
+  rollback mode would silently cost every store WAL's concurrency. It returns the page size it
+  achieved rather than the one it asked for, because the first version could not tell the
+  difference.
 - Writes name their columns. A positional `INSERT ... VALUES(?,…)` breaks the moment a column
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.

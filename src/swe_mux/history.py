@@ -351,6 +351,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS history_messages_trigram USING fts5(
   text, content='history_messages', content_rowid='id', tokenize='trigram case_sensitive 0'
 );
 """
+# `detail=none` is the obvious way to shrink this - it was measured at 578 MB to
+# index 116 MB of messages, the largest object in `mux.db` - and it does not
+# work here. FTS5 refuses a phrase query without position data ("fts5: phrase
+# queries are not supported (detail!=full)"), and a trigram substring match *is*
+# a phrase query over trigrams, so `message_rows`' `MATCH ?` and its `bm25()`
+# ranking both stop working. `detail=column` fails identically. Measured against
+# SQLite 3.47.1 on 2026-08-30, after the change had been proposed and accepted
+# on the strength of the size number alone.
+# The one route that survives is `LIKE`, which the trigram tokenizer still
+# accelerates under `detail=none` - taking it would mean rewriting the substring
+# path off `MATCH`/`bm25` and onto `LIKE` with a different ordering, which is a
+# search-behaviour change rather than a storage one and is not smuggled in here.
 _MESSAGE_SEARCH_TRIGGER_SCHEMA = """
 CREATE TRIGGER history_messages_ai AFTER INSERT ON history_messages BEGIN
   INSERT INTO history_messages_fts(rowid,text) VALUES(new.id,new.text);
