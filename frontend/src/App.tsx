@@ -61,6 +61,7 @@ import { INSTALL_CONFIG_CHANGED } from './installSwitches'
 import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
+import { PaneRunTrigger } from './PaneRunTrigger'
 import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
   DRAWER_DEFAULT_WIDTH, DRAWER_MIN_WIDTH, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
@@ -415,7 +416,7 @@ type GrantsCatalogue={
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
-type RunMenuState={project:Project;x:number;y:number}
+type RunMenuState={project:Project;x:number;y:number;trigger?:string}
 type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
 type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
 
@@ -3667,9 +3668,9 @@ export function App() {
     setProjectMenu({project,x,y})
   }
 
-  const openRunMenu=(project:Project,element:HTMLElement)=>{
+  const openRunMenu=(project:Project,element:HTMLElement,trigger?:string)=>{
     const rect=element.getBoundingClientRect()
-    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50)})
+    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50),trigger})
     setProjectMenu(null);setMainMenuOpen(false)
   }
 
@@ -3680,9 +3681,9 @@ export function App() {
   // scrim was covering — a click right after a dismissal is that toggle closing,
   // not a fresh open. Sidebar project rows keep the plain open: clicking another
   // Project's ▶ while a menu is up should switch to it, never just close.
-  const toggleRunMenu=(project:Project,element:HTMLElement)=>{
-    if(runMenu?.project.id===project.id||Date.now()-runMenuClosedAt.current<350){setRunMenu(null);return}
-    openRunMenu(project,element)
+  const toggleRunMenu=(project:Project,element:HTMLElement,trigger='project-run')=>{
+    if((runMenu?.project.id===project.id&&runMenu.trigger===trigger)||Date.now()-runMenuClosedAt.current<350){setRunMenu(null);return}
+    openRunMenu(project,element,trigger)
   }
 
   const startWorktreeSession=async(targetProject:string,path:string,backend:string)=>{
@@ -6711,6 +6712,17 @@ export function App() {
       const previewIds=dragStackTab?.targetStackId===node.id&&dragStackTab.zone==='tabs'?dragStackTab.previewIds:node.children.map(child=>child.id)
       const paneDropClass=dragStackTab?.targetStackId===node.id?`tab-drop-active drop-zone-${dragStackTab.zone}`:''
       const focusedPane=!!focusedViewId&&node.children.some(child=>child.id===focusedViewId)
+      const runTrigger=<PaneRunTrigger
+        projectName={activeProject?.name}
+        mobile={mobileWorkspace}
+        expanded={runMenu?.project.id===activeProject?.id&&runMenu?.trigger===`pane:${node.id}`}
+        order={previewIds.length}
+        onOpen={element=>{
+          if(!activeProject)return
+          setFocusedViewId(activeChild.id)
+          toggleRunMenu(activeProject,element,`pane:${node.id}`)
+        }}
+      />
       const closeTab=(child:PaneLeaf,label:string,session?:Session)=>{
         const terminal=child.kind==='terminal'
         const confirming=terminal&&confirmKillId===child.id
@@ -6760,7 +6772,7 @@ export function App() {
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
           return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''} ${session&&isColdSession(session)?'cold':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
-        })}
+         })}{runTrigger}
       </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
         .map(child=>renderPaneNode(child,`${path}t`,true,child.id===activeChild.id))}</div></section>
@@ -6902,6 +6914,7 @@ export function App() {
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
       <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <PaneRunTrigger projectName={activeProject?.name} mobile={mobileWorkspace} expanded={runMenu?.project.id===activeProject?.id&&runMenu?.trigger===`pane:${id}`} order={1} onOpen={element=>{if(!activeProject)return;setFocusedViewId(id);toggleRunMenu(activeProject,element,`pane:${id}`)}}/>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -7288,7 +7301,7 @@ export function App() {
       <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginMobileTabDrag(event,leaf,label,openMobileTabMenu)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation()}}>{glyph}{visibleLabel}</button>
     </div>
   }
-  // With no new-tab button left in the rail, an empty projection would render a
+  // Mobile intentionally has no pane Run trigger, so an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
     {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
@@ -7437,7 +7450,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id&&runMenu?.trigger==='project-run'} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.static-preview-entry,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
@@ -7657,10 +7670,9 @@ export function App() {
           <ResourceUsageSummary compact snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
           <AccountSwitcher variant="rail" placement="up" onManage={()=>openSettings('Accounts')}/>
         </div>
-        {/* Run stays reachable while the sidebar is collapsed: the top-bar Run
-            has no room in the 40px rail column, and tab strips no longer carry
-            a new-tab button. */}
-        <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
+        {/* Run stays reachable while the sidebar is collapsed, including before a Project
+            has any pane tabs whose local + could open it. */}
+        <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id&&runMenu?.trigger==='project-run'} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
         {/* The footer's configurator button has to exist here too: collapsing the
             sidebar must not remove a control, and an expand round-trip to ask a
             question about the app is the round-trip this button exists to avoid. */}
