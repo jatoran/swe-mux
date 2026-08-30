@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Fragment, h as preactNode } from 'preact'
-import { domVNode, harvestSettings, matchIndex, normalizeSearchText, searchSettings, tabEntry } from '../src/settingsSearch.ts'
+import { domVNode, harvestHeadings, harvestSettings, matchIndex, normalizeSearchText, searchSettings, tabEntry } from '../src/settingsSearch.ts'
 
 // Stand-in for what the JSX transform produces: type plus props.children.
 const h = (type: string, props: Record<string, unknown>, ...children: unknown[]) =>
@@ -226,6 +226,28 @@ test('a mounted tab can be indexed from its DOM by the same rules', () => {
   assert.deepEqual(entries.map(entry => entry.label), ['Session notification sounds', 'Quiet from'])
   assert.equal(entries[1].section, 'Session notification sounds')
   assert.match(entries[1].keywords, /22:00/)
+})
+
+test('a tab s headings are readable from its vnodes, before it has mounted', () => {
+  // What lets the sidebar disclose a tab's sections on the first visit rather than the
+  // second: only the mounted tab has a DOM to read.
+  const Opaque = () => null
+  const tree = h('div', {},
+    h('section', {}, h('h3', {}, 'Rendering'), h('label', {}, 'Renderer')),
+    h('section', {}, h('h3', {}, 'Scrollback'), h('h4', {}, 'Limits')),
+    { type: Opaque, props: {} })
+  assert.deepEqual(harvestHeadings(tree), ['Rendering', 'Scrollback'])
+})
+
+test('a heading split across runs reads as one section, the way textContent does', () => {
+  // The live read is `textContent`; a preview that kept only the first run would name a
+  // different section and its id would not match the one the rail settles on.
+  assert.deepEqual(harvestHeadings(h('section', {}, h('h3', {}, 'Talk', ' & ', 'dictation'))),
+    ['Talk & dictation'])
+})
+
+test('an empty heading is not a section', () => {
+  assert.deepEqual(harvestHeadings(h('section', {}, h('h3', {}, ' '), h('h3', {}, 'Real'))), ['Real'])
 })
 
 test('a tab is findable by name even when its body is an opaque component', () => {

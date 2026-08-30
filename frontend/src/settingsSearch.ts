@@ -219,6 +219,40 @@ function walk(node: unknown, state: Harvest, tab: string, tabLabel: string, tabI
   if (enclosing) state.path = enclosing
 }
 
+/**
+ * Every `<h3>`'s text in a tree, in document order — the section list a tab *would*
+ * render, answerable before that tab has mounted.
+ *
+ * The sidebar draws a tab's sections as a disclosure, and the DOM cannot answer for a
+ * tab that is not on screen: reading it there is what made the chevron appear only
+ * after a tab had been visited once. Building vnodes allocates plain objects, so this
+ * costs what the index's own walk costs.
+ *
+ * Headings a child component renders are invisible here, exactly as they are to
+ * `harvestSettings` — a component vnode is a function reference, not markup — so this
+ * is a floor rather than the answer, and the live read replaces it on arrival.
+ * Text is joined across runs rather than taken from the first, because the live read
+ * is `textContent` and the two lists have to name the same sections.
+ */
+export function harvestHeadings(node: unknown, tag = 'h3'): string[] {
+  const found: string[] = []
+  collectHeadings(node, tag, found)
+  return found
+}
+
+function collectHeadings(node: unknown, tag: string, found: string[]): void {
+  if (Array.isArray(node)) { for (const child of node) collectHeadings(child, tag, found); return }
+  if (!isVNode(node)) return
+  if (typeof node.type === 'string' && node.type.toLowerCase() === tag) {
+    const runs: string[] = []
+    collectText(node, runs, false)
+    const text = runs.join(' ').trim()
+    if (text) found.push(text)
+    return
+  }
+  collectHeadings(childrenOf(node), tag, found)
+}
+
 /** Index one tab's rendered vnode tree. */
 export function harvestSettings(node: unknown, tab: string, tabLabel: string, tabIndex: number): SettingsSearchEntry[] {
   const state: Harvest = { entries: [], counts: new Map(), path: [], last: null }
