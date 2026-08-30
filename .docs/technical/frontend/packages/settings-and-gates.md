@@ -34,6 +34,18 @@ Search indexes the vnode tree of every tab: `Settings.tsx` renders each tab thro
 Ranking is not local to it.
 `fuzzyText.ts` owns the ladder - exact name, name prefix, word in name, substring, secondary text, then a span-bounded subsequence pass - and the sidebar filter scores by the same one, so a name typed in either box resolves the same way.
 
+An entry records its enclosing headings as a `path` (`<h3>` at level 1, `<h4>` at level 2) rather than as one nearest-heading string.
+A single slot is claimed by whichever heading rendered last, which is why every keyboard-shortcut row used to place itself as "Input · view" - its category - having overwritten the section it belongs to.
+Two rules make the path hold, and each fixes a defect the other does not.
+Levels are positional, so opening one closes every deeper one and a new `<h3>` cannot inherit the previous block's `<h4>`.
+And a heading is closed by the end of its `<section>`, which is what stops a group's `<h4>` from following the walk out and claiming the block's later controls - the "Reserved shortcut policy" disclosure filed itself under the last category rendered above it.
+`<strong>` emits an entry without claiming a level: it marks a labelled block inside a section rather than opening one.
+`section` is the joined path, and is what result identity de-duplicates on, so two same-named controls in different groups are two results.
+
+`settingsBreadcrumb` (in `settingsTabs.ts`, not here) turns a path into the line a result row shows.
+It lives with the page mapping because that is the fact it needs: a page is named only when a heading does not already name it, so Input's pages - which *are* its `<h3>`s - are not said twice, while Voice's several-headings-per-page grouping is.
+The index itself stays free of the tab registry and knows nothing about which tabs paginate.
+
 ### `settingsTabs.ts` - the navigation model
 
 Browser-free: the tabs and their four contiguous groups, declared subpages, deep-link name resolution, legacy id migration, and the remembered tab and per-tab remembered page.
@@ -44,7 +56,16 @@ A group is a run of the array rather than a declared membership, and `tabForSect
 
 `settingsSubpages` declares the pages of the genuinely long tabs (Accounts, Prompt queue, Input, Voice) before those tabs mount; every other tab is one scrolling column.
 `settingsSubpageId` maps related implementation headings to the user-facing page that owns them.
-The sidebar is the only in-tab navigation: the desktop column and the mobile slide-in drawer both list a paged tab's pages below it, and the *active* unpaged tab's rendered sections as scroll anchors (from `SECTION_RAIL_MIN` sections, scroll-spy highlighted).
+The sidebar is the only in-tab navigation: the desktop column and the mobile slide-in drawer both list a paged tab's pages below it, and an unpaged tab's rendered sections as scroll anchors (from `SECTION_RAIL_MIN` sections, scroll-spy highlighted).
+Sections are read from the live DOM while a tab is on screen and from `harvestHeadings` over its vnodes otherwise, so a tab's disclosure is decided by its section count rather than by whether it has been visited - reading only the DOM gave a tab its chevron on the second visit and not the first.
+The preview is built once per open (measured at 6.5ms cold, 1.1-2.4ms after, for the thirteen unpaged tabs) rather than keyed on the draft the way the search index is, because `change()` replaces the draft on every keystroke and thirteen vnode trees per keypress is the cost that index exists to avoid.
+What that gives up is bounded and checked: a heading a child component renders is invisible to the walk, and a heading whose rendering is conditional on a session edit is stale - the four that exist are on paged tabs or on a tab with six other headings, so neither can change whether a chevron is drawn, and the live read corrects the list on arrival.
+
+Drawing sections for tabs that are not active turned two latent misattributions into visible ones, and both are now structural rather than remembered.
+The live read carries the tab it was read from (`rail: {tab, sections}`), because it happens in an effect and the render between the click and that effect still holds the tab just left - a bare list cannot say so, and the sidebar drew the previous tab's sections as the new tab's own for that frame.
+And `.settings-content` is stamped with `data-settings-tab`, which the read checks before believing what it sees: its `MutationObserver` callback is a microtask while the effect cleanup that would retire it is not, so a read scheduled by the outgoing tab can run against the incoming tab's DOM.
+Both used to self-correct one render later and stopped being harmless the moment the sidebar kept the answer.
+`test/renderer/settings-layout.spec.ts` walks four tabs asserting the first one's list never changes, which is the only place either is observable.
 The content pane carries no duplicate row of page links.
 Arriving on a tab by any route expands its links; only the chevron collapses them, and never automatically.
 Clicking the tab navigates to its remembered page.

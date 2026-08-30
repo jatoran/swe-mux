@@ -30,6 +30,7 @@ from ..harness import (
     detect_installations_with_versions,
     public_harness_registry,
 )
+from ..host_platform import IS_WINDOWS
 from ..http_support import is_loopback_peer, json_response
 from ..lifecycle import planned_handoff
 from ..logsetup import current_log_level, set_log_level
@@ -47,11 +48,13 @@ from ..session import (
 )
 from ..startup_phases import StartupTimeline
 from ..subprocess_flags import background_creation_flags, popen_outside_job
+from ..tailscale import clear_status_cache as clear_tailscale_status_cache
 from ..tailscale import (
     enable_mobile_voice_serve,
     tailscale_ipv4,
     tailscale_status,
 )
+from ..tool_locations import refresh_search_path
 from ..ui_build import read_ui_build_id
 from ..windows_firewall import (
     firewall_supported,
@@ -814,9 +817,44 @@ async def enable_mobile_voice(request: web.Request) -> web.Response:
 
 
 async def prerequisites_status(request: web.Request) -> web.Response:
-    """Presence of Git, Node, npm, and Tailscale, each with what it backs and a next step."""
-    del request
-    return json_response({"prerequisites": await asyncio.to_thread(detect_prerequisites)})
+    """Presence of Git, Node, npm, uv, and Tailscale, each with a next step."""
+    config: Config = request.app[keys.CONFIG]
+    return json_response(
+        {"prerequisites": await asyncio.to_thread(detect_prerequisites, dict(config.tool_paths))}
+    )
+
+
+async def prerequisites_refresh(request: web.Request) -> web.Response:
+    """Re-run detection, first re-reading PATH from the OS. Explicit press only.
+
+    A plain re-detect would have been a button that returns the same wrong answer.
+    A daemon inherits its environment once at spawn, and every Windows installer
+    that edits PATH edits the registry and broadcasts a change only interactive
+    shells act on - so the tool the user just installed is invisible to this
+    process until it restarts. `refresh_search_path` is what closes that, and
+    `path_refreshed` says whether it found anything new, because "I looked again
+    and PATH really is the same" is a different answer from "I looked again".
+
+    POST rather than GET: it mutates this process's environment. It is idempotent
+    and touches nothing outside the daemon, so unlike the firewall repair it needs
+    no gesture header - the cost of an accidental call is one PATH re-read.
+    """
+    config: Config = request.app[keys.CONFIG]
+    refreshed = await asyncio.to_thread(refresh_search_path)
+    detected = await asyncio.to_thread(detect_prerequisites, dict(config.tool_paths))
+    # A tool that appeared behind a stale WSL/Tailscale answer should not keep
+    # being reported from a cache the user cannot see.
+    clear_wsl_status_cache()
+    clear_tailscale_status_cache()
+    return json_response(
+        {
+            "prerequisites": detected,
+            "path_refreshed": refreshed,
+            # False off Windows, where there is no out-of-band PATH to re-read and
+            # promising one would be a lie rather than a limitation.
+            "path_refresh_supported": IS_WINDOWS,
+        }
+    )
 
 
 async def firewall_status(request: web.Request) -> web.Response:
@@ -942,4 +980,5 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/wsl/bridge/install", wsl_bridge_install),
     web.post("/api/wsl/bridge/firewall/repair", wsl_bridge_firewall_repair),
     web.get("/api/diagnostics/prerequisites", prerequisites_status),
+    web.post("/api/diagnostics/prerequisites/refresh", prerequisites_refresh),
 )

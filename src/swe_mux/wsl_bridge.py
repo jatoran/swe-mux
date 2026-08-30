@@ -44,6 +44,7 @@ Four boundaries have to be crossed, and each is crossed by a different mechanism
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import re
 import shutil
@@ -148,13 +149,77 @@ def cached_bridge_status(distro: str, *, daemon_port: int | None = None) -> Brid
 
 
 def clear_status_cache() -> None:
-    """Drop the cached bridge status. For tests and for an explicit re-check."""
+    """Drop the cached bridge status. For tests and for an explicit re-check.
+
+    Clears the availability answer too: a user who installs WSL and then asks for
+    a re-check must not be told for the rest of the daemon's life that they have
+    not, and a test must be able to move the answer under a patched probe.
+    """
     _status_cache.clear()
+    wsl_available.cache_clear()
 
 
+#: Said whenever the host has no usable WSL. Names the subsystem rather than the
+#: binary on purpose: `wsl.exe` is present on every Windows 11 machine, so "wsl.exe
+#: is not available" was a sentence that could not be true where it was printed and
+#: sent anyone reading it looking for a missing file.
+_WSL_UNAVAILABLE_REASON = (
+    "the Windows Subsystem for Linux is not installed on this host "
+    "(`wsl.exe --install` installs it)"
+)
+
+#: Registry locations that only exist once WSL itself is installed. Any one of
+#: them is sufficient; all three are checked because they are registered by
+#: different halves of a moving target. `Lxss` is written per-user as distros are
+#: registered, `LxssManager` is the in-box optional feature's service, and
+#: `WslService` is the Store (MSIX) build's replacement for it. A machine with
+#: none of them has no subsystem, whatever `wsl.exe` claims.
+_WSL_REGISTRY_MARKERS: tuple[tuple[str, str], ...] = (
+    ("HKEY_CURRENT_USER", r"Software\Microsoft\Windows\CurrentVersion\Lxss"),
+    ("HKEY_LOCAL_MACHINE", r"SYSTEM\CurrentControlSet\Services\LxssManager"),
+    ("HKEY_LOCAL_MACHINE", r"SYSTEM\CurrentControlSet\Services\WslService"),
+)
+
+
+def _wsl_subsystem_registered() -> bool:
+    """Whether WSL is actually installed, as opposed to merely dispatchable.
+
+    A registry read rather than a probe command, because the probe is the thing
+    this exists to avoid: on a Windows 11 machine without WSL the shipped
+    `wsl.exe` is a stub that, spawned windowless with no console, blocks instead of
+    printing "not installed" and is tree-killed at the 8 s timeout - on every
+    status poll, forever. Never raises; an unreadable registry answers "no", which
+    degrades the bridge to unavailable rather than reintroducing the hang.
+    """
+    try:
+        import winreg
+    except ImportError:  # not Windows
+        return False
+    for root_name, subkey in _WSL_REGISTRY_MARKERS:
+        try:
+            with winreg.OpenKey(getattr(winreg, root_name), subkey):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+@functools.cache
 def wsl_available() -> bool:
-    """Whether this host can run `wsl.exe` at all."""
-    return IS_WINDOWS and shutil.which("wsl.exe") is not None
+    """Whether this host has a WSL that can actually answer.
+
+    Two conditions, and the second is load-bearing. `wsl.exe` on PATH used to be
+    the whole test, which is a guaranteed *false positive* on Windows 11: the OS
+    ships `C:\\Windows\\System32\\wsl.exe` whether or not the subsystem is
+    installed, so every such machine was treated as WSL-capable and paid an 8 s
+    blocked-then-tree-killed probe every 30 s status cycle for a feature it does
+    not have and did not ask for.
+
+    Cached, because it is asked on every bridge status read and the answer cannot
+    change without an install that the user must perform outside this process.
+    `clear_status_cache` drops it for tests and for an explicit re-check.
+    """
+    return IS_WINDOWS and shutil.which("wsl.exe") is not None and _wsl_subsystem_registered()
 
 
 # How long to spend reaping a timed-out tree before giving up on it. Bounded for
@@ -207,10 +272,17 @@ def _run_wsl(
     Raises `subprocess.TimeoutExpired` exactly as `subprocess.run` would, so
     callers keep their existing error handling - the difference is only that
     nothing survives the timeout.
+
+    `stdin` is never inherited. It used to be, for every call with no payload, and
+    the daemon spawns windowless (`background_creation_flags`) - so the child got
+    a handle to a console this process does not have, and a `wsl.exe` that wanted
+    to say something on it blocked there instead of exiting. That is the second
+    half of the Windows 11 stub hang: the same command run with a console attached
+    returns instantly. DEVNULL makes a read return EOF, which is an answer.
     """
     process = subprocess.Popen(
         argv,
-        stdin=subprocess.PIPE if stdin_payload is not None else None,
+        stdin=subprocess.PIPE if stdin_payload is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=text,
@@ -481,7 +553,7 @@ def bridge_status(distro: str, *, daemon_port: int | None = None) -> BridgeStatu
     surface that is only listing distributions need not.
     """
     if not wsl_available():
-        return BridgeStatus(distro, False, reasons=("wsl.exe is not available on this host",))
+        return BridgeStatus(distro, False, reasons=(_WSL_UNAVAILABLE_REASON,))
     reasons: list[str] = []
     home = distro_home(distro)
     if not home:
@@ -561,7 +633,13 @@ def running_distros() -> set[str]:
 
     Worth knowing before probing: inspecting a stopped distribution *starts* it,
     which takes seconds and is a surprise if the user only opened a settings page.
+
+    Gated on `wsl_available` and not on a bare PATH lookup, or this stays the one
+    call that spawns the Windows 11 stub on a machine with no WSL - which is
+    exactly what it did.
     """
+    if not wsl_available():
+        return set()
     executable = shutil.which("wsl.exe")
     if not executable:
         return set()
@@ -596,7 +674,7 @@ def setup_status(
         return {
             "supported": False,
             "enabled": enabled,
-            "reason": "wsl.exe is not available on this host",
+            "reason": _WSL_UNAVAILABLE_REASON,
             "distros": [],
         }
     running = running_distros()
