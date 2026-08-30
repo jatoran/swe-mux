@@ -6109,8 +6109,62 @@ here and does not there.
   `swe-mux-supervisor` already proves, which keeps the lock hazard off the app bundle;
   `swe_mux.cli` imports only the standard library plus `harness`, so it should be small. That
   needs a real build and a swap rehearsal, so it is post-release work rather than a release item.
-  Until then an installer user's answer is `uv tool install swe-mux` alongside the installer copy,
-  and `OPERATOR_LIFECYCLE.md` states the gap with its measurement.
+
+  **Built, on the remedy this refutation named, for 0.1.4.** `packaging/swe_mux_cli.spec`
+  produces `dist/swe-mux-cli` carrying `swemux.exe` and `mux.exe` (`console=True`, one
+  Analysis, two `EXE()` into one `COLLECT`), the installer lays it beside the other two under
+  `{app}`, and an opt-out `[Tasks]` entry adds that one directory to `HKCU\Environment\Path`.
+  Three measurements came out of it and each changed a decision:
+  - **143 MiB, then 28 MiB.** The first build carried the entire application, because
+    `cli install-shortcut` imports `swe_mux.shortcuts`, which reaches `swe_mux.desktop` for
+    `create_tray_image`, which imports `swe_mux.__main__`, which imports `swe_mux.server`.
+    Excluding those three by name leaves two 3.5 MB executables plus `psutil` and `win32`.
+    That number is also the answer to whether the bundle carries the daemon entry: it does
+    not, because `swemuxd` **is** that 143 MiB, beside an app bundle that already contains the
+    daemon and already runs it as `--daemon-child`.
+  - **`swemux ls` against a dead daemon exited 0.** `cli.main` *returns* its exit code because
+    `[project.scripts]` wraps it in `sys.exit(main())`; the frozen entry point called it bare.
+    Every script branching on the documented exit codes would have taken the success path.
+    Caught by the build's own smoke step, which asserts the code and not the output.
+  - **`swemux doctor` reported three critical failures on a correct install.**
+    `install.imports`, `install.frontend` and `install.pty` ask "can the daemon start here" of
+    an artifact that deliberately is not the daemon. They are `unavailable` rows naming the app
+    bundle beside them now, and `install.path` stopped saying "no scripts directory needs to be
+    on PATH" to the one artifact for which PATH is the point.
+
+  The PATH edit is proven by running it, not by reading the `.iss`: `ci.yml`'s
+  `installer-cycle` job compiles the installer and drives install → PATH → upgrade →
+  uninstall, diffing `HKCU\Environment\Path` and its registry value kind at each step against
+  a seeded REG_EXPAND_SZ value holding `%USERPROFILE%\bin`. Inno Setup is not installed on the
+  development host, so that cycle has never run locally and CI is where it is first executed.
+
+  **This owes a `CHANGELOG.md` entry at release time, and it is recorded here because it
+  cannot be written before then.** `test_verify_release_unit.py::
+  test_this_repository_simulated_as_its_own_release_is_coherent` simulates releasing whatever
+  version `pyproject.toml` names, so *any* content under `## [Unreleased]` fails the landing
+  gate: "`## [0.1.3]` is written, but `## [Unreleased]` still has content above it, so part of
+  this release is recorded as unreleased." Three branches have now written an entry, gone red,
+  and reverted it. The words, for whoever cuts 0.1.4:
+
+  > **The Windows installer now installs `swemux` and `mux`, and puts them on your PATH.**
+  > 0.1.3 added those names for people installing from PyPI and said plainly that the installer
+  > shipped no command-line program; it does now. The installer writes a third directory beside
+  > the app and the PTY supervisor, holding the two launchers and nothing else, and adds that
+  > one directory to your user PATH - no elevation prompt, because the whole install is
+  > per-user. Open a new terminal afterwards: Windows tells Explorer about the change, and a
+  > console that is already open never hears about it. It is a tickbox on the setup wizard, on
+  > by default, so a machine whose PATH you curate by hand can decline it; declining installs
+  > the commands anyway, and `swemux doctor` says where they are. Installing a newer version
+  > over the top leaves PATH exactly as it found it - one entry, never two - and uninstalling
+  > removes that entry and nothing near it, with a `%USERPROFILE%\bin` coming back as a
+  > variable rather than as whatever it meant at the time. `swemuxd`/`muxd` are deliberately
+  > not part of this: the application already is the daemon and starts one when you launch it.
+  >
+  > **Fixed: `swemux doctor` no longer reports three critical faults on a healthy install.**
+  > Run from the new command-line client, the checks that ask whether the daemon can start were
+  > asking it of the wrong program - the client deliberately contains no daemon, no browser UI
+  > and no terminal backend, all of which live in the application beside it. Those rows now say
+  > so and point at where the daemon actually is.
 
 ### Sequenced after it, in order
 
@@ -6155,6 +6209,14 @@ Recorded so they are not re-litigated.
 
 - [ ] A user who installed from the Windows installer and a user who installed from PyPI have the
   same commands available, and an uninstall leaves PATH as it found it.
+  **Half met in 0.1.4, and the remaining half is a decision rather than an omission.** The
+  installer ships `swemux` and `mux` and puts them on PATH, and the uninstall is proven to
+  restore PATH exactly (`ci.yml`'s `installer-cycle`). It does **not** ship `swemuxd`/`muxd`:
+  `swe_mux.__main__` imports `swe_mux.server`, so a daemon launcher measured as the whole
+  application a second time (143 MiB against the client's 28) beside an app bundle that already
+  contains the daemon and already runs it as `--daemon-child`. Close this criterion by deciding
+  that is the right answer and rewording it, or by finding a daemon launcher that is not a
+  second copy - not by shipping one.
 - [ ] No request that carries session identity can reach an operator-only route, and the gap is
   closed at the route rather than in any one client.
 - [ ] An agent in a pane with no MCP client has the same fleet capability, through the same gates,

@@ -216,6 +216,139 @@ def test_a_failing_import_reports_the_real_exception(monkeypatch: pytest.MonkeyP
     assert check["remedy"]
 
 
+def _as_console_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, app_present: bool = True
+) -> Path:
+    """Make `detect_install_location` describe the frozen console client bundle.
+
+    Built through the real derivation rather than by hand-constructing an
+    `InstallLocation`: `client_bundle` is decided inside `detect_install_location`
+    from the running executable's name, and a fixture that set the field directly
+    would keep passing if that rule changed.
+
+    Patched on `install_location` rather than on `doctor_local`, because the three
+    checks import it inside their own bodies - by design, so that a report can be
+    produced by a copy of swe-mux whose module graph is partly broken.
+    """
+    from swe_mux import install_location
+
+    bundle = tmp_path / "swe-mux-cli"
+    app = tmp_path / "swe-mux"
+    client = bundle / "swemux.exe"
+    present = {client}
+    if app_present:
+        present.add(app / "swe-mux.exe")
+    for path in present:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"MZ")
+    location = install_location.detect_install_location(
+        frozen=True,
+        executable=str(client),
+        package_dir=bundle / "_internal" / "swe_mux",
+        path="",
+        home=tmp_path,
+        environ={},
+        windows=True,
+    )
+    assert location.client_bundle is True
+    monkeypatch.setattr(install_location, "detect_install_location", lambda: location)
+    return app
+
+
+def test_the_console_client_reports_the_daemon_checks_as_unavailable_not_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The three checks that would otherwise call a correct install broken.
+
+    `packaging/swe_mux_cli.spec` excludes `swe_mux.server`, the frontend tree and
+    the pseudoterminal backend on purpose - that is what makes the client 28 MiB
+    rather than 143. Measured before this branch existed: `swemux doctor` on a
+    working install reported `install.imports`, `install.frontend` and
+    `install.pty` as **critical failures**, each with a remedy telling the user to
+    reinstall a package that was not broken.
+    """
+    app = _as_console_client(monkeypatch, tmp_path)
+    checks = [
+        doctor_local._imports_check(),
+        doctor_local._frontend_check(),
+        doctor_local._pty_check(),
+    ]
+    for check in checks:
+        assert check["status"] == "unavailable", check["id"]
+        assert check["remedy"] is None, check["id"]
+        # It says where the daemon actually is, so the answer is a direction and
+        # not a shrug.
+        assert str(app) in check["detail"], check["id"]
+    assert {check["id"] for check in checks} == {
+        "install.imports",
+        "install.frontend",
+        "install.pty",
+    }
+
+
+def test_the_console_client_still_answers_when_the_app_bundle_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A client copied out on its own names no path it cannot prove.
+
+    "The daemon is a separate bundle beside it" is true either way; inventing the
+    directory it would be in is the failure mode of every path guessed rather than
+    probed.
+    """
+    _as_console_client(monkeypatch, tmp_path, app_present=False)
+    check = doctor_local._imports_check()
+    assert check["status"] == "unavailable"
+    assert "separate bundle beside it" in check["detail"]
+    assert "swe-mux-cli" not in check["detail"]
+
+
+def test_the_console_client_is_told_whether_its_commands_are_on_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The one frozen artifact for which PATH is the entire point.
+
+    The frozen branch answers "no scripts directory needs to be on PATH", which is
+    right for the tray-launched app and would tell somebody whose `swemux` is not
+    found that nothing is wrong.
+    """
+    from swe_mux import install_location
+
+    bundle = tmp_path / "swe-mux-cli"
+    client = bundle / "swemux.exe"
+    client.parent.mkdir(parents=True)
+    client.write_bytes(b"MZ")
+
+    # Bound before patching: `described` is called *through* the patched
+    # attribute, so reading it off the module afterwards would recurse.
+    detect = install_location.detect_install_location
+
+    def described(*, on_path: bool) -> Any:
+        return detect(
+            frozen=True,
+            executable=str(client),
+            package_dir=bundle / "_internal" / "swe_mux",
+            path=str(bundle) if on_path else "",
+            home=tmp_path,
+            environ={},
+            windows=True,
+        )
+
+    monkeypatch.setattr(
+        install_location, "detect_install_location", lambda: described(on_path=False)
+    )
+    missing = doctor_local._install_path_check()
+    assert missing["status"] == "warn"
+    assert str(bundle) in missing["detail"]
+    assert missing["remedy"] and "PATH" in missing["remedy"]
+
+    monkeypatch.setattr(
+        install_location, "detect_install_location", lambda: described(on_path=True)
+    )
+    found = doctor_local._install_path_check()
+    assert found["status"] == "ok"
+    assert str(client) in found["detail"]
+
+
 def test_a_config_that_does_not_load_is_a_failing_check() -> None:
     check = doctor_local._config_check(None, "TOMLDecodeError: expected '='")
     assert check["status"] == "fail"
