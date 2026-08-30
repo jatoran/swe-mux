@@ -1487,6 +1487,26 @@ class Config:
         return self.data_dir / "mux.db"
 
     @property
+    def archive_database_path(self) -> Path:
+        """The cold half of the store: history, telemetry, and the code graph.
+
+        Split out because the growth is intrinsic rather than retained-too-long -
+        measured 2026-08-30, every archival table was already at or inside its
+        retention window while the file reached 3.36 GB, at 13.9k rows/day for
+        `status_timeline` alone. Pruning cannot catch that; separating what is
+        appended forever from what the daemon reads to answer a request can.
+
+        Attached to every store connection as `archive`, so an unqualified read
+        still resolves and cross-file joins still work. What must *not* happen is
+        one store writing both files in a single transaction: SQLite's
+        multi-database commit is not atomic while any of them is in WAL mode
+        (verified against 3.47.1 - the write succeeds, but a host crash mid-commit
+        can leave one file updated and the other not). Every store therefore owns
+        tables in exactly one schema, which is asserted rather than remembered.
+        """
+        return self.data_dir / "mux-archive.db"
+
+    @property
     def resolved_worktree_root(self) -> Path:
         configured = self.worktree_root.strip()
         root = Path(configured).expanduser() if configured else self.data_dir / "worktrees"

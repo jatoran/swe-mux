@@ -155,6 +155,40 @@ its port.
   corruption detection without a code review seeing it. `tests/test_startup_gate.py` pins all of
   it, including a real corrupted interior page carried through the whole three-step remediation
   (start passes → background check records → next start quarantines).
+- **Maintenance that needs exclusive ownership runs in the startup window** (`db_maintenance.py`,
+  2026-08-30). `VACUUM` is the only way to return freed pages to the filesystem and SQLite has no
+  online form of it; a cross-file table move has the same requirement. No running daemon can give
+  that, and stopping swe-mux to get it reaps every live session.
+  The window that does exist is the *successor's own start*: `__main__.wait_for_predecessor_exit`
+  waits for the predecessor process rather than just its port, so by the time the runtime is built
+  this process is the only holder of `mux.db` - and the PTY supervisor has the sessions throughout,
+  so nothing the operator is running dies for it.
+  So maintenance is a durable **request** rather than a command. `mux compact-db` writes
+  `<data_dir>/db-maintenance.json` and optionally triggers the ordinary session-preserving
+  restart; the successor honours it in the `database-maintenance` phase, before the integrity
+  probe and before any store opens the file.
+  Four rules, and each of them is a way this could have gone wrong:
+  **It is not reachable over HTTP or MCP.** The request is written locally by the CLI rather than
+  posted, which also keeps a minutes-long rewrite of the operator's database off a surface an
+  agent or a stray fetch can reach.
+  **An unreadable request is not a request.** This fails towards doing nothing, which is the
+  *opposite* of the verification record's rule two bullets up - and deliberately: an unreadable
+  integrity record means re-check, because checking is cheap and safe, while acting on an
+  unparseable maintenance request means rewriting a database on the strength of a file this
+  process could not read. An unknown operation refuses the whole pass rather than being skipped,
+  because a silently-dropped operation reports success for work that never happened.
+  **The request is consumed whether the pass succeeded or failed**, and a failed pass never stops
+  the daemon starting. An operation that fails once generally fails the same way twice, so a
+  standing request would turn one bad start into every start being slow; and a daemon that will
+  not come up because a compaction failed is strictly worse than one that starts uncompacted and
+  says so.
+  **The backup is a copy, not a rename**, and it is refused when the disk cannot hold it plus the
+  rewrite. A rename would leave the daemon with no database at all if the process died between it
+  and the rewrite.
+  This is a deliberate exception to "nothing that is not needed to serve the first request runs on
+  the startup path" (`development/PERFORMANCE_RUNBOOK.md`), and the exception is kept narrow by
+  those rules: an operator asked for it, it happens once, and the phase reports itself while it
+  runs.
 - Writes name their columns. A positional `INSERT ... VALUES(?,…)` breaks the moment a column
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.

@@ -350,6 +350,63 @@ def _render_doctor(result: Any) -> str:
     return "\n".join([*lines, "", f"{header} - {verdict}"])
 
 
+def _compact_db(args: Any, base: str) -> dict[str, Any]:
+    """Record a compaction request; optionally restart the daemon to perform it.
+
+    Writes the request locally rather than posting it, and that is the point
+    rather than an implementation detail: the work happens in the *next* daemon
+    start, so the request has to outlive the process that would have received
+    it. It also keeps a minutes-long rewrite of the operator's database off the
+    HTTP surface entirely, where an agent or a stray fetch could reach it.
+    """
+    from .config import load_config
+    from .db_maintenance import (
+        OPERATION_REBUILD_TRIGRAM,
+        OPERATION_VACUUM,
+        clear_request,
+        maintenance_summary,
+        write_request,
+    )
+
+    data_dir = load_config().data_dir
+    if args.cancel:
+        clear_request(data_dir)
+        return {"status": "cancelled", "pending": False}
+
+    operations: list[str] = []
+    if not args.no_trigram_rebuild:
+        operations.append(OPERATION_REBUILD_TRIGRAM)
+    if not args.no_vacuum:
+        operations.append(OPERATION_VACUUM)
+    if not operations:
+        raise CliError(
+            "nothing to do: --no-trigram-rebuild and --no-vacuum together leave no "
+            "operation to perform",
+            EXIT_LOCAL_FAIL,
+        )
+
+    write_request(data_dir, tuple(operations), backup=not args.no_backup)
+    answer: dict[str, Any] = {
+        "status": "requested",
+        **maintenance_summary(data_dir),
+        "note": (
+            "The next daemon start will perform this before it serves. Live sessions "
+            "are held by the PTY supervisor and survive it; the UI is unavailable "
+            "while it runs, which can be several minutes on a multi-gigabyte database."
+        ),
+    }
+    if args.now:
+        try:
+            answer["restart"] = request("POST", "/api/daemon/restart", {}, base=base)
+        except CliError as exc:
+            # The request is written and stands; only the restart failed, and the
+            # next ordinary start will still honour it. Saying so is the whole
+            # difference between a confusing failure and a deferred success.
+            answer["status"] = "requested-not-restarted"
+            answer["restart_error"] = str(exc)
+    return answer
+
+
 def _render_update(result: Any) -> str:
     """The two halves an operator needs: what exists, and what this install can do.
 
@@ -629,6 +686,37 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="restart even without the PTY supervisor (kills every session)",
+    )
+
+    compact = sub.add_parser(
+        "compact-db",
+        parents=[common],
+        help="reclaim space in mux.db during the next daemon start (sessions survive)",
+    )
+    compact.add_argument(
+        "--no-trigram-rebuild",
+        action="store_true",
+        help="keep the history trigram index as it is (it is the largest object in the file)",
+    )
+    compact.add_argument(
+        "--no-vacuum",
+        action="store_true",
+        help="free the pages but do not rewrite the file to return them to the filesystem",
+    )
+    compact.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="skip the pre-compaction copy (it needs the size of the database in free space)",
+    )
+    compact.add_argument(
+        "--cancel",
+        action="store_true",
+        help="withdraw a pending request instead of making one",
+    )
+    compact.add_argument(
+        "--now",
+        action="store_true",
+        help="restart the daemon immediately to perform it, rather than waiting for the next start",
     )
 
     sub.add_parser("history", parents=[common], help="list conversation history")
@@ -958,6 +1046,8 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
         )
     if args.command == "reload-daemon":
         return request("POST", "/api/daemon/restart", {"force": args.force}, base=base), None
+    if args.command == "compact-db":
+        return _compact_db(args, base), None
     if args.command == "history":
         return request("GET", "/api/history", base=base), None
     if args.command == "projects":

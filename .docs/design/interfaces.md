@@ -2901,6 +2901,7 @@ mux history
 mux history-duplicates [report|repair]
 mux accounts [list|verify|audit] [--limit N]
 mux reload-daemon [--force]
+mux compact-db [--now] [--cancel] [--no-trigram-rebuild] [--no-vacuum] [--no-backup]
 mux doctor [--export]
 mux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
 mux install-skill [--project DIR | --global] [--harness NAME]... [--remove] [--yes]
@@ -2937,6 +2938,19 @@ as JSON.
 rather than an optimisation: the person who needs the first is the one whose install produced no
 way to start a daemon, and the second writes plain files into directories this machine already
 owns.
+
+`mux compact-db` also writes rather than posts, for a different reason. It reclaims space in
+`mux.db` - dropping the history trigram index, which `history.py` rebuilds, and running the
+`VACUUM` that returns the freed pages to the filesystem at a 16 KiB page size - and both need
+exclusive ownership of the file, which no running daemon can give. So the command records a
+request under `<data_dir>/db-maintenance.json` and the **next daemon start** performs it, in a
+`database-maintenance` phase before anything opens the database; `--now` triggers the ordinary
+session-preserving restart to bring that start forward, and `--cancel` withdraws a pending
+request. Live sessions are held by the PTY supervisor and survive it. The UI does not: expect
+several minutes of a starting daemon on a multi-gigabyte database, reported by
+`/api/health` as the phase in flight like any other. A copy is taken first unless `--no-backup`,
+and the command refuses when the disk cannot hold the copy plus the rewrite.
+There is deliberately no endpoint and no MCP tool for this (`technical/backend/sqlite.md`).
 
 `mux --skill` prints the swe-mux agent skill embedded in this release, and `mux install-skill`
 writes it into the skill roots agent CLIs read (`design/features/agent-skill-delivery.md` holds
