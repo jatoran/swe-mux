@@ -152,3 +152,5 @@ Plain-text URLs (the web-links addon) and OSC 8 hyperlinks (`term.options.linkHa
 An agent gets Resume and a shell gets Restart, because replaying an agent's argv would start a fresh conversation while re-injecting the old one's `--session-id`.
 `EndedPaneBanner.tsx` renders it above the terminal; `App.tsx` owns the actions it invokes and the layout rule that keeps an ended session's leaf (`../../../design/features/session-recovery.md`).
 The same banner renders an inactive session as intentional, names that no process is running, and offers Resume for agents or Restart terminal for shells.
+`viewState.resolveActiveSession` keeps an explicit ended selection and only falls back when the selected identity disappears.
+The banner's transcript action opens the exact History run, while its Resume action uses the retained-session replacement endpoint and focuses the returned identity.

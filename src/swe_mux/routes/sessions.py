@@ -901,12 +901,15 @@ async def stand_down_session(request: web.Request) -> web.Response:
     return json_response(session.record.snapshot())
 
 
-async def resume_inactive_session(request: web.Request) -> web.Response:
-    """Replace an inactive identity with a proven new process in the same pane."""
+async def resume_retained_session(request: web.Request) -> web.Response:
+    """Replace an inactive session or ended agent with a proven process in its pane."""
+    started = time.monotonic()
     manager: SessionManager = request.app[keys.SESSIONS]
     old = manager.resolve(request.match_info["sid"])
-    if not old.record.inactive or old.record.state not in {"exited", "crashed"}:
-        raise ValueError("session is not inactive")
+    if old.record.state not in {"exited", "crashed"}:
+        raise ValueError("only an ended session can be resumed")
+    if old.record.backend == "shell" and not old.record.inactive:
+        raise ValueError("only an inactive shell can be restarted through resume")
     project = request.app[keys.PROJECTS].projects.get(old.record.project_id)
     if project is None:
         raise ValueError("the session's owning Project is unavailable")
@@ -976,12 +979,30 @@ async def resume_inactive_session(request: web.Request) -> web.Response:
     if recovery is not None:
         await recovery.discard(old.record.id)
     await _discard_session_media(request.app, old.record.id)
+    event_type = (
+        "session_resumed_from_inactive"
+        if old.record.inactive
+        else "session_resumed_from_ended"
+    )
+    duration_ms = round((time.monotonic() - started) * 1000)
     await request.app[keys.EVENTS].emit(
-        "session_resumed_from_inactive",
+        event_type,
         session_id=session.record.id,
         source="http",
         replaced=old.record.id,
         backend=session.record.backend,
+        agent_run_id=session.record.agent_run_id or session.record.id,
+        recovered=bool(old.record.cold),
+        duration_ms=duration_ms,
+    )
+    log.info(
+        "retained session resumed session_id=%s replaced=%s backend=%s recovered=%s "
+        "duration_ms=%d",
+        session.record.id,
+        old.record.id,
+        session.record.backend,
+        bool(old.record.cold),
+        duration_ms,
     )
     return json_response({"session": session.record.snapshot(), "replaced": old.record.id}, 201)
 
@@ -1189,7 +1210,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/sessions/{sid}/approvals/approve-once", approve_pending_request),
     web.delete("/api/sessions/{sid}", delete_session),
     web.post("/api/sessions/{sid}/stand-down", stand_down_session),
-    web.post("/api/sessions/{sid}/resume", resume_inactive_session),
+    web.post("/api/sessions/{sid}/resume", resume_retained_session),
     web.post("/api/sessions/{sid}/relaunch", relaunch_session),
     web.post("/api/sessions/{sid}/attachments", upload_session_attachment),
     web.post("/api/sessions/{sid}/media", upload_session_media),
