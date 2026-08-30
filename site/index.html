@@ -274,6 +274,9 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
          font-size: 10px; letter-spacing: .14em; }
 .ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
 .ic-os span.on { color: var(--cyan); }
+/* Sits beside the command, and only the installer sets it. */
+.ic-qual { color: var(--fg-3); font-size: 12px; white-space: nowrap; margin-left: auto;
+           padding-right: 12px; }
 .ic-os span.on::before { content: "▸ "; color: var(--green); }
 .ic-os span.qual em { font-style: normal; color: var(--fg-4);
                       text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
@@ -565,15 +568,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     <h1>A multiplexer for coding agents.<span class="cur"></span></h1>
     <p class="sub"><b>Real terminals, persistent sessions, Tailscale-native.</b><br />
       Optimized for mobile: <span class="go">ship from anywhere.</span></p>
-    <div class="lede">
-      <p>It owns the pseudoterminals, so Claude Code, Codex, opencode and any other CLI run
-      exactly as they do outside it. Around them: <b>one status vocabulary</b> telling you
-      which agent is working, which is blocked and which is waiting on you; sessions that
-      outlive the browser, the daemon and app updates; and the same interface on your phone
-      over your own tailnet, with nothing turned off. Underneath, a record taken from the
-      work rather than from the agent's account of it, and finished branches landed one at a
-      time behind a check you approved.</p>
-    </div>
     <div class="ic">
       <div class="ic-head">
         <div class="ic-tabs" role="tablist" aria-label="Install method">
@@ -581,23 +575,20 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
           <button class="ic-tab" role="tab" type="button" data-m="pipx" aria-selected="false">pipx</button>
           <button class="ic-tab" role="tab" type="button" data-m="pip" aria-selected="false">pip</button>
           <button class="ic-tab" role="tab" type="button" data-m="source" aria-selected="false">source</button>
+          <button class="ic-tab" role="tab" type="button" data-m="installer" aria-selected="false">installer</button>
         </div>
         <div class="ic-os" aria-hidden="true">
           <span data-os="windows" class="on">WINDOWS</span>
           <span data-os="linux" class="on">LINUX</span>
-          <span data-os="macos" class="on qual">MACOS <em>unproven</em></span>
         </div>
       </div>
       <div class="ic-body">
         <span class="p">$</span>
         <code id="iccmd">uv tool install swe-mux</code>
+        <span class="ic-qual" id="icqual" hidden></span>
         <button class="ic-copy" type="button" id="iccopy">copy</button>
       </div>
     </div>
-    <p class="ic-note" id="icnote">Isolated environment, and <code>mux</code>, <code>muxd</code>,
-    <code>swe-mux</code> on your PATH globally. No desktop shortcut - no Python install makes one.
-    On Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the
-    tray.</p>
 
 
     <!-- The hero film is a GitHub release asset rather than a committed file: it is 4.4 MB,
@@ -1165,35 +1156,45 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
   var M = {
     uv: {
       cmd: 'uv tool install swe-mux',
-      os: ['windows', 'linux', 'macos'],
-      note: 'Isolated environment, and <code>mux</code>, <code>muxd</code>, <code>swe-mux</code> on your PATH globally. No desktop shortcut - no Python install makes one. On Windows, <code>uv tool install "swe-mux[desktop]"</code> adds the native window and the tray.'
+      os: ['windows', 'linux'],
     },
     pipx: {
       cmd: 'pipx install swe-mux',
-      os: ['windows', 'linux', 'macos'],
-      note: 'The same isolated, on-PATH install without <a href="https://docs.astral.sh/uv/">uv</a>. On Windows, <code>pipx install "swe-mux[desktop]"</code> for the window and the tray.'
+      os: ['windows', 'linux'],
     },
     pip: {
       cmd: 'pip install swe-mux',
-      os: ['windows', 'linux', 'macos'],
-      note: 'Into whichever environment is active. This one does <b>not</b> put <code>mux</code> on your PATH globally - only inside that environment, on Windows in the <code>Scripts</code> folder pip names in the warning you scrolled past. <code>python -m swe_mux</code> runs the daemon either way.'
+      os: ['windows', 'linux'],
     },
     source: {
       cmd: 'git clone https://github.com/jatoran/swe-mux',
-      os: ['windows', 'linux', 'macos'],
-      note: 'Then <code>uv sync --extra desktop</code> and <code>npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build</code>. Needs Node; the published wheel does not. Full steps below.'
+      os: ['windows', 'linux'],
+    },
+    installer: {
+      cmd: 'https://github.com/jatoran/swe-mux/releases/latest',
+      os: ['windows'],
+      qual: 'windows-only',
+      href: true,
     }
   };
   var cmdEl = document.getElementById('iccmd');
-  var noteEl = document.getElementById('icnote');
   var osEls = document.querySelectorAll('.ic-os span');
   var tabs = document.querySelectorAll('.ic-tab');
+
+  var qualEl = document.getElementById('icqual');
 
   function select(name) {
     var m = M[name];
     if (!m) return;
-    cmdEl.textContent = m.cmd;
-    noteEl.innerHTML = m.note;
+    // The installer is a page you open, not a line you paste, so it renders as a
+    // link and the prompt and copy button step aside for it.
+    if (m.href) {
+      cmdEl.innerHTML = '<a href="' + m.cmd + '">' + m.cmd + '</a>';
+    } else {
+      cmdEl.textContent = m.cmd;
+    }
+    qualEl.textContent = m.qual || '';
+    qualEl.hidden = !m.qual;
     tabs.forEach(function (t) { t.setAttribute('aria-selected', String(t.dataset.m === name)); });
     osEls.forEach(function (s) { s.classList.toggle('on', m.os.indexOf(s.dataset.os) !== -1); });
   }

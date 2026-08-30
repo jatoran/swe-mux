@@ -503,10 +503,13 @@ await p.goto(url(PAGES[0]), { waitUntil: 'networkidle' })
 // per-method set a weak assertion on its own, which is why the two below it are
 // the ones carrying weight now.
 const EXPECT = {
-  uv: ['windows', 'linux', 'macos'],
-  pipx: ['windows', 'linux', 'macos'],
-  pip: ['windows', 'linux', 'macos'],
-  source: ['windows', 'linux', 'macos'],
+  uv: ['windows', 'linux'],
+  pipx: ['windows', 'linux'],
+  pip: ['windows', 'linux'],
+  source: ['windows', 'linux'],
+  // The one method that is not a command you paste: it opens the releases page,
+  // and it is the only entry carrying a qualifier.
+  installer: ['windows'],
 }
 
 // Hosts an install command is allowed to name. The callout shipped
@@ -523,14 +526,15 @@ for (const [method, os] of Object.entries(EXPECT)) {
   await p.click(`.ic-tab[data-m="${method}"]`)
   const r = await p.evaluate(() => ({
     cmd: document.getElementById('iccmd').textContent,
-    note: document.getElementById('icnote').textContent.trim(),
+    qual: document.getElementById('icqual').textContent.trim(),
     on: [...document.querySelectorAll('.ic-os span.on')].map((s) => s.dataset.os),
     sel: [...document.querySelectorAll('.ic-tab[aria-selected="true"]')].map((t) => t.dataset.m),
   }))
   if (r.sel.length !== 1 || r.sel[0] !== method) fail(`${method}: selected tab is ${r.sel}`)
   if (r.on.join() !== os.join()) fail(`${method}: platforms lit ${r.on}, expected ${os}`)
   if (!r.cmd || r.cmd === lastCmd) fail(`${method}: command did not change`)
-  if (!r.note) fail(`${method}: note is empty`)
+  const wantQual = method === 'installer' ? 'windows-only' : ''
+  if (r.qual !== wantQual) fail(`${method}: qualifier is "${r.qual}", expected "${wantQual}"`)
   for (const url of r.cmd.match(/https?:\/\/[^\s|'"]+/g) ?? []) {
     const host = new URL(url).host
     if (!INSTALL_HOSTS.has(host)) {
@@ -540,26 +544,26 @@ for (const [method, os] of Object.entries(EXPECT)) {
   lastCmd = r.cmd
 }
 
-// macOS is lit on every method, because the wheel installs there and CI proves
-// it. It carries a qualifier anyway, because its CI leg is still
-// `continue-on-error` and no CI job on any host starts a daemon. Both halves are
-// asserted: dropping the light would understate a platform that works, and
-// dropping the marker would overstate one that is not required to pass.
-const macos = await p.evaluate(() => {
-  const el = document.querySelector('.ic-os span[data-os="macos"]')
-  return el && { lit: el.classList.contains('on'), qualifier: el.querySelector('em')?.textContent }
-})
-if (!macos) fail('the macos platform indicator is gone from the install callout')
-else {
-  if (!macos.lit) fail('macos is unlit, but the wheel installs there and CI smokes it')
-  if (!macos.qualifier) fail('macos is lit with no qualifier, but its CI leg is still unproven')
+// macOS is deliberately not shown in this callout as of 2026-08-30. The wheel does
+// install there and CI smokes it every push, so the light is *understating* a
+// platform that works - that is an accepted editorial call, not an oversight, and
+// it is asserted here so it stays a decision rather than becoming a drift. If
+// macOS is ever restored to the callout it must come back lit and qualified
+// together: lit alone overstates a leg that is still `continue-on-error`, and
+// qualified alone understates one that genuinely installs. README.md and
+// `docs/` remain the place the platform claim is made in full.
+const macos = await p.evaluate(() =>
+  document.querySelector('.ic-os span[data-os="macos"]') !== null
+)
+if (macos) {
+  fail('macos is back in the install callout; restore its qualifier assertion with it')
 }
 // Phrased as what was inspected rather than as a verdict: `fail()` only counts,
 // it does not stop, so a summary that claimed "no foreign install hosts" would
 // print directly under the FAIL saying otherwise.
 console.log(
-  `  ${Object.keys(EXPECT).length} methods, their install hosts, and the macos ` +
-    `indicator (lit, marked "${macos?.qualifier}") inspected`,
+  `  ${Object.keys(EXPECT).length} methods, their install hosts, their platform ` +
+    `lights and the installer's qualifier inspected`,
 )
 await p.close()
 
