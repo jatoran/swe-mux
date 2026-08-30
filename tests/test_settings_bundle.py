@@ -110,20 +110,19 @@ async def test_the_default_bundle_is_what_first_paint_needs_and_nothing_else(
     assert set(payload) == {
         "config",
         "keybindings",
-        "profiles",
         "projects",
-        "automation",
         "project_config",
         "errors",
     }
-    assert "usage" not in payload
-    assert "provider" not in payload
+    # Each of these is read inside exactly one tab, and each cost more than the
+    # config the panel renders from: provider 177.3 KiB, usage 319.8 KiB,
+    # profiles 42.0ms (it stats executables), automation 30.0ms.
+    for deferred in ("usage", "provider", "profiles", "automation"):
+        assert deferred not in payload
     assert payload["errors"] == {}
     assert payload["config"]["scrollback_bytes"] == 5 * 1024 * 1024
     assert payload["keybindings"]["bindings"]
-    assert isinstance(payload["profiles"]["detected"], list)
     assert payload["projects"] == []
-    assert payload["automation"]["repository_rules"] == []
     # No cwd supplied, so the per-project part is intentionally absent.
     assert payload["project_config"] is None
 
@@ -139,6 +138,12 @@ async def test_a_tab_asks_for_its_own_part_and_gets_only_that(tmp_path: Path) ->
     payload = json.loads(response.text or "")
     assert set(payload) == {"config", "provider", "errors"}
     assert payload["provider"]["secret"]["configured"] is False
+
+    response = await settings_bundle(cast(Any, _request(tmp_path, parts="profiles,automation")))
+    payload = json.loads(response.text or "")
+    assert set(payload) == {"config", "profiles", "automation", "errors"}
+    assert isinstance(payload["profiles"]["detected"], list)
+    assert payload["automation"]["repository_rules"] == []
 
 
 async def test_an_unknown_part_is_refused_rather_than_dropped(tmp_path: Path) -> None:

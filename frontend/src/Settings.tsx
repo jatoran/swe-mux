@@ -237,9 +237,12 @@ type SettingsApplyResult = SettingsApplyResponse<Config>
 type SettingsBundle = {
   config:Config
   keybindings:KeybindingsResponse|null
-  profiles:{profiles:LaunchProfile[];detected:LaunchProfile[]}|null
+  /** Deferred. Requested by the Terminals tab (`?parts=profiles`); it stats
+   *  executables to detect shells, which made it the slowest paint part. */
+  profiles?:{profiles:LaunchProfile[];detected:LaunchProfile[]}|null
   projects:Project[]|null
-  automation:AutomationStatus|null
+  /** Deferred. Requested by the Automation tab (`?parts=automation`). */
+  automation?:AutomationStatus|null
   /** Deferred. Absent from the paint response; requested by the Accounts tab
    *  (`?parts=provider`) because it is 177 KiB of model catalogue. */
   provider?:ProviderStatus|null
@@ -531,8 +534,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       // Both halves of the profile payload are kept. `detected` seeds "restore
       // detected"; `profiles` carries the daemon's *derived* capabilities, which
       // /api/config does not (it returns the stored list, which is now vestigial).
-      if(bundle.profiles){setDetectedProfiles(bundle.profiles.detected);setSavedProfiles(bundle.profiles.profiles)}
-      setAutomation(bundle.automation)
       if(bundle.projects)setProjectParentHint(commonestParent(bundle.projects.map(row=>row.root||'')))
     }).catch(error => setStatus(error.message))
   }, [])
@@ -570,6 +571,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(activeTab==='diagnostics'&&first('diagnostics'))
       api<{prerequisites:Prerequisite[]}>('GET','/api/diagnostics/prerequisites')
         .then(p=>setPrerequisites(p.prerequisites)).catch(()=>setPrerequisites(null))
+    if(activeTab==='terminals'&&first('terminals'))
+      api<SettingsBundle>('GET','/api/settings/bundle?parts=profiles')
+        .then(bundle=>{if(bundle.profiles){setDetectedProfiles(bundle.profiles.detected);setSavedProfiles(bundle.profiles.profiles)}}).catch(()=>{})
+    if(activeTab==='automation'&&first('automation'))
+      api<SettingsBundle>('GET','/api/settings/bundle?parts=automation')
+        .then(bundle=>setAutomation(bundle.automation??null)).catch(()=>{})
     if(activeTab==='usage'&&first('usage'))
       api<SettingsBundle>('GET','/api/settings/bundle?parts=usage')
         .then(bundle=>setUsage(bundle.usage??null)).catch(()=>{})
