@@ -118,7 +118,8 @@ The desktop bundle carried 277.1 MiB of spaCy, thinc, blis, CTranslate2, onnxrun
 
 Since ROADMAP Phase 24 the store's mechanism - state file, streaming verification, staged unpack and swap, `sys.path` activation - lives in `wheel_closure.py` as `WheelClosureStore`, parameterized by a `ClosureSpec`, because the desktop shell closure (`desktop_runtime.py`) needed the identical path and a second copy of it would be a second thing to audit.
 `voice_runtime.py` keeps everything voice-specific: the two capability module sets, `closure_importable(capability)`, the num2words relink declaration, and the spec.
-`wheel_closure._extract_sdist` is the one Phase 24 addition to the mechanism: a spec may pin an sdist (the desktop closure's `proxy-tools` publishes no wheel), under the non-negotiable **extract-never-build** rule - nothing from the archive is executed, only the already-importable package source is copied out, and an sdist whose package would need building is refused loudly (`tests/test_wheel_closure.py`).
+`wheel_closure._extract_sdist` is the one Phase 24 addition to the mechanism, because the desktop closure's `proxy-tools` publishes no wheel: a spec may pin an sdist, under the non-negotiable **extract-never-build** rule.
+Nothing from the archive is executed, only the already-importable package source is copied out, and an sdist whose package would need building is refused loudly (`tests/test_wheel_closure.py`).
 
 `VoiceRuntimeStore` fetches the pinned wheels for **this interpreter**, verifies each against its size and SHA-256 while streaming, unpacks them into `<data_dir>/voice-runtime/site` beside the live tree and swaps, then puts that directory on `sys.path`.
 The mechanism is `SpacyModelStore`'s, widened from one wheel to a closure, and it borrows that store's two hard-won properties verbatim.
