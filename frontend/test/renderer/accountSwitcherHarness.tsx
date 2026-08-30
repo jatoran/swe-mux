@@ -10,6 +10,7 @@
 // `useProviderAccounts` poll against the real component - including the fact that the
 // login state arrives on an ordinary accounts read rather than on the login's own response.
 import { render } from 'preact'
+import { useState } from 'preact/hooks'
 import { AccountSwitcher } from '../../src/ProviderAccounts'
 import '../../src/style.css'
 
@@ -79,6 +80,16 @@ const snapshot = () => ({
   refreshing: false,
   login,
   login_commands: { claude: 'claude auth login --claudeai', codex: 'codex login' },
+  // Live sessions by the account they were spawned under. `account-claude` is the
+  // selected one; the other two rows are what a switch left behind, which is the
+  // whole reason the count is drawn.
+  sessions: many
+    ? {
+        by_account: { 'account-claude': 5, 'account-claude-2': 2 },
+        unsaved: { claude: 1 },
+        unattributed: {},
+      }
+    : { by_account: {}, unsaved: {}, unattributed: {} },
 })
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -110,15 +121,24 @@ document.documentElement.style.setProperty('--ui-scale', '1')
 // The status block sits at the *bottom* of the sidebar in the real shell, and the full
 // switcher's popover opens upward from wherever its trigger is. Rendered against the top of
 // the viewport it would be placed off-screen, so the column is given its real height.
-render(
-  <div class="app-shell" style="height:100vh">
+// The invitation's dismissal is machine config in the real shell, so the host owns it
+// here too - which is exactly the property the spec presses: `hide` has to remove the
+// block through the host rather than by the component remembering anything.
+function Harness() {
+  const [dismissed, setDismissed] = useState(params.get('prompt') === 'hidden')
+  return <div class="app-shell" style="height:100vh">
     <div class="sidebar" style="height:100vh;display:flex;flex-direction:column">
       <div class="sidebar-status">
-        <AccountSwitcher onManage={() => { calls.push({ method: 'UI', url: 'manage' }) }}/>
+        <AccountSwitcher
+          onManage={() => { calls.push({ method: 'UI', url: 'manage' }) }}
+          promptDismissed={dismissed}
+          onDismissPrompt={() => { calls.push({ method: 'UI', url: 'dismiss-prompt' }); setDismissed(true) }}
+        />
       </div>
     </div>
-  </div>,
-  document.querySelector('#root')!,
-)
+  </div>
+}
+
+render(<Harness />, document.querySelector('#root')!)
 
 Object.assign(window as unknown as Record<string, unknown>, { __calls: calls })

@@ -132,6 +132,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "experience_tier": "",
   "quests_dismissed": [],
   "harness_setup_complete": false,
+  "provider_accounts_prompt_dismissed": false,
   "history_limit": 200,
   "host": "127.0.0.1",
   "land_hold_timeout_seconds": 1800.0,
