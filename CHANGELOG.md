@@ -15,6 +15,22 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Changed
+
+- **The daemon starts tens of seconds faster when its database has grown large.**
+  Every start used to re-verify the whole of `mux.db` before serving anything - a full-file
+  read whose cost is the size of the file, measured at 60-84 seconds of every cold start
+  against a 3.36 GB database, more than the entire rest of the startup sequence. The full
+  verification now runs only when it can tell you something new: after the previous daemon
+  died uncleanly (a crash or an external kill - the one signal that says the file's history
+  is suspect), or when the last passing check is more than 24 hours old. Every other start
+  runs a milliseconds header-and-schema probe instead, which still catches the
+  gross-corruption class that used to stop the daemon coming up at all, and still quarantines
+  a bad file before anything opens it. The trade, stated plainly: a corrupted page deep
+  inside a cleanly-managed file can now go unnoticed for up to a day rather than until the
+  next restart. Each start logs which check it ran and why, and deleting
+  `mux.db.last-verified.json` beside the database forces a full check on the next start.
+
 ## [0.1.4] - 2026-08-30
 
 ### Added

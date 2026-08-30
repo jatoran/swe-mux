@@ -723,12 +723,16 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     config: Config = app[keys.CONFIG]
     # Death forensics first: report a predecessor that vanished without a clean
     # shutdown while this daemon is still barely started, then keep our own
-    # heartbeat fresh so the next daemon can do the same for us.
-    daemon_started(config.data_dir, log)
+    # heartbeat fresh so the next daemon can do the same for us. The verdict
+    # also decides how hard the database-integrity phase must look: an
+    # unplanned death forces the full probe.
+    predecessor_died_uncleanly = daemon_started(config.data_dir, log)
     timeline = StartupTimeline(log, ledger=lambda message: ledger(config.data_dir, message))
     app[keys.STARTUP] = timeline
     watchdog = asyncio.create_task(timeline.watchdog(), name="startup-watchdog")
-    build = asyncio.create_task(_build_runtime(app, timeline), name="daemon-runtime-build")
+    build = asyncio.create_task(
+        _build_runtime(app, timeline, predecessor_died_uncleanly), name="daemon-runtime-build"
+    )
     app[keys.RUNTIME_BUILD] = build
     try:
         yield
@@ -740,7 +744,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         await _teardown_runtime(app)
 
 
-async def _build_runtime(app: web.Application, timeline: StartupTimeline) -> None:
+async def _build_runtime(
+    app: web.Application, timeline: StartupTimeline, predecessor_died_uncleanly: bool = False
+) -> None:
     """Build the runtime, and stop the daemon if it cannot be built.
 
     The failure path is the reason this wrapper exists. While the build ran
@@ -753,7 +759,7 @@ async def _build_runtime(app: web.Application, timeline: StartupTimeline) -> Non
     stop through the same event a restart uses.
     """
     try:
-        await _build_runtime_handles(app, timeline)
+        await _build_runtime_handles(app, timeline, predecessor_died_uncleanly)
     except asyncio.CancelledError:
         raise
     except BaseException as error:  # noqa: BLE001 - re-raised after being reported
@@ -844,7 +850,7 @@ def _precompress_frontend(frontend_dir: Path) -> None:
 
 
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
-    app: web.Application, timeline: StartupTimeline
+    app: web.Application, timeline: StartupTimeline, predecessor_died_uncleanly: bool = False
 ) -> None:
     config: Config = app[keys.CONFIG]
     background.start(LIFECYCLE_HEARTBEAT_LOOP, lambda: _lifecycle_heartbeat_loop(config.data_dir))
@@ -863,17 +869,33 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # per pass against a measured 2.73 GB file, ~126s per start, logged nowhere.
     # It is answered once now (`sqlite_store.verify_database` caches per file),
     # off the loop so the startup watchdog and the health endpoint keep running
-    # while it happens, and under a name so its growth is visible.
+    # while it happens, and under a name so its growth is visible. Since
+    # 2026-08-30 even the once is conditional: a full check whose cost is the
+    # size of the file (60-84s against a 3.36 GB `mux.db`, the largest number
+    # in the whole start) runs only when the previous daemon died uncleanly or
+    # the last passing check has aged out; every other start runs the
+    # milliseconds header-and-schema probe. `prepare_database` owns the
+    # decision and both probes feed the same quarantine path.
     timeline.mark("database-integrity")
-    probe_seconds = await asyncio.to_thread(prepare_database, config.database_path)
-    if probe_seconds >= 1.0:
-        log.info(
-            "database integrity probe took %.1fs for %s (%.2f GB); this cost is the size "
-            "of the file and is now paid once per start rather than once per store",
-            probe_seconds,
-            config.database_path,
-            _database_size_gb(config.database_path),
-        )
+    preparation = await asyncio.to_thread(
+        prepare_database,
+        config.database_path,
+        predecessor_died_uncleanly=predecessor_died_uncleanly,
+    )
+    # Always one line, both modes: when corruption surfaces later, which starts
+    # skipped the full check - and why - is the first forensic question. A found
+    # problem is a WARNING here; the quarantine itself still logs its own ERROR
+    # from `connect_or_quarantine` when the first store opens the file.
+    log.log(
+        logging.WARNING if preparation.problem else logging.INFO,
+        "database integrity: %s check of %s (%.2f GB) took %.2fs because %s%s",
+        preparation.mode,
+        config.database_path,
+        _database_size_gb(config.database_path),
+        preparation.seconds,
+        preparation.reason,
+        f"; found: {preparation.problem}" if preparation.problem else "",
+    )
     timeline.mark("stores")
     history = HistoryIndex(config.database_path)
     events = EventBus(history.append_event)

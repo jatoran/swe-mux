@@ -87,8 +87,35 @@ its port.
   there would quarantine the fresh file too.
   The daemon pays for it under its own startup phase, `database-integrity`, on a worker thread
   (`asyncio.to_thread`) so the health endpoint and the startup watchdog keep answering while it
-  runs, and logs the elapsed seconds and the file size whenever it exceeds a second — this cost
-  grows with the database and is meant to stay visible as it does.
+  runs, and logs one line for every start — which probe ran, why, what it cost, and what it
+  found — because when corruption surfaces later, which starts skipped the full check is the
+  first forensic question.
+- **Even the once is conditional** (2026-08-30). The full `quick_check` grew with the file to
+  60-84s of every cold start against a 3.36 GB `mux.db` — 5.8x the entire rest of the startup
+  sequence — on a host that restarts the daemon several times a day. `prepare_database` now runs
+  it only when the file's history is suspect or the last passing check has aged out:
+  `lifecycle.daemon_started` reports whether the predecessor died *unplanned* (no clean exit, no
+  recorded handoff intent, pid gone — a planned session-preserving restart is deliberately not
+  that signal), and a passing full check is recorded durably beside the file
+  (`<db>.last-verified.json`, atomic write, trusted for `FULL_VERIFICATION_INTERVAL_SECONDS` =
+  24h). Every other start runs `_light_integrity_problem` instead: a milliseconds header-and-schema
+  read that still catches the gross-corruption class the quarantine was built for (a truncated or
+  overwritten file, an unparseable schema — the class that used to crash-loop the daemon). Both
+  probes feed the same verdict cache, so a problem found by either sends the first store through
+  the quarantine-and-recreate path unchanged, and the quarantine's replacement writes a fresh
+  record because it is known-good by construction.
+  The guarantee this trades, written down rather than implied: "every page of `mux.db` was read
+  clean before the first request" became "every page was read clean within the last 24h or since
+  the last unclean daemon death, and the header and schema were read clean before the first
+  request". A mangled interior page on a cleanly-managed file can now ride until the window
+  expires, the daemon crashes, or a query touches it (SQLite raises `DatabaseError` at that
+  moment regardless). Anything unreadable in the record — missing, mangled, future-dated (a
+  clock rolled back) — fails towards the full check, and deleting the record file is the
+  operator's lever for forcing one. Deliberately a constant rather than a `Config` field: an
+  interval knob would be a way to quietly weaken corruption detection without a code review
+  seeing it. `tests/test_startup_gate.py` pins all of it, including a real corrupted interior
+  page that the light probe passes and the full check quarantines — the accepted boundary,
+  asserted rather than left implicit.
 - Writes name their columns. A positional `INSERT ... VALUES(?,…)` breaks the moment a column
   is added, and the redeploy flow keeps a roll-back-able previous bundle whose copy of the
   code would then fail on every write.

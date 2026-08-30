@@ -295,7 +295,13 @@ What the two stretches actually were, measured rather than guessed:
 
 - `PRAGMA quick_check`, run by `connect_or_quarantine` once per **store**, at 11.5s per pass
   against the 2.73 GB `mux.db` — and eleven stores share that file, so ~126s. It is answered once
-  per file now (`technical/backend/sqlite.md`).
+  per file now, and since 2026-08-30 the full check is conditional: the once-per-file pass had
+  itself grown to 60-84s per cold start against a 3.36 GB file, so it runs only after an unclean
+  daemon death or when its last pass is older than 24h, and every other start runs a milliseconds
+  header-and-schema probe instead (`technical/backend/sqlite.md` holds the decision rule, the
+  durable record, and the guarantee this trades). A `database-integrity` phase in the tens of
+  seconds is therefore *expected* on the first start of the day and after a crash, and a defect
+  on every other start.
 - A full psutil sweep in `ProcessInspector.restore()`: 20.7s cold, 6.0s warm, over 482 processes.
   Deferred to a background task.
 

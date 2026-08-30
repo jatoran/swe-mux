@@ -26,7 +26,8 @@ def read_ledger(tmp_path: Path) -> str:
 
 
 def test_daemon_start_writes_heartbeat_and_ledger(tmp_path: Path) -> None:
-    lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
+    # A first start has no predecessor, so it cannot report an unclean death.
+    assert lifecycle.daemon_started(tmp_path, logging.getLogger("test")) is False
     record = lifecycle.read_heartbeat(tmp_path)
     assert record is not None
     assert record["pid"] == os.getpid()
@@ -47,7 +48,7 @@ def test_unclean_predecessor_death_is_reported(
         encoding="utf-8",
     )
     with caplog.at_level(logging.WARNING, logger="test"):
-        lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
+        assert lifecycle.daemon_started(tmp_path, logging.getLogger("test")) is True
     assert any("died without a clean shutdown" in r.message for r in caplog.records)
     assert "died without a clean shutdown" in read_ledger(tmp_path)
     record = lifecycle.read_heartbeat(tmp_path)
@@ -66,7 +67,7 @@ def test_clean_exit_suppresses_the_death_report(
     record["pid"] = 4_000_000_000
     (tmp_path / lifecycle.HEARTBEAT_NAME).write_text(json.dumps(record), encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="test"):
-        lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
+        assert lifecycle.daemon_started(tmp_path, logging.getLogger("test")) is False
     assert not any("died without a clean shutdown" in r.message for r in caplog.records)
 
 

@@ -892,7 +892,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.4...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Changed</span> <span class="sep">1 entry</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 1 entry</summary>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span><b>The daemon starts tens of seconds faster when its database has grown large.</b> Every start used to re-verify the whole of <code>mux.db</code> before serving anything - a full-file read whose cost is the size of the file, measured at 60-84 seconds of every cold start against a 3.36 GB database, more than the entire rest of the startup sequence. The full verification now runs only when it can tell you something new: after the previous daemon died uncleanly (a crash or an external kill - the one signal that says the file's history is suspect), or when the last passing check is more than 24 hours old. Every other start runs a milliseconds header-and-schema probe instead, which still catches the gross-corruption class that used to stop the daemon coming up at all, and still quarantines a bad file before anything opens it. The trade, stated plainly: a corrupted page deep inside a cleanly-managed file can now go unnoticed for up to a day rather than until the next restart. Each start logs which check it ran and why, and deleting <code>mux.db.last-verified.json</code> beside the database forces a full check on the next start.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">
