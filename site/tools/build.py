@@ -891,15 +891,15 @@ def build_changelog(up: str) -> str:
     blocks = parse_markdown(body_md)
 
     first = _first_release(blocks)
-    preamble = [b for b in blocks[1:first] if b.kind == "p"]
+    # `CHANGELOG.md`'s preamble is deliberately not rendered here. It states the
+    # Keep a Changelog contract, the semver caveat, what counts as an entry, and
+    # points at `RELEASING.md` - all of which a contributor reading that file in the
+    # repository needs and a visitor reading this page does not. They came for what
+    # changed, so the releases start immediately under the heading.
     out: list[str] = []
     out.append('<section class="page">\n  <div class="wrap">')
     out.append('    <div class="kick">what changed, and when</div>')
     out.append("    <h1>Changelog</h1>")
-    out.append('    <div class="lede">')
-    for b in preamble:
-        out.append(f'      <p>{inline(b.text, base="")}</p>')
-    out.append("    </div>")
 
     i = first
     while i < len(blocks):
