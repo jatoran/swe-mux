@@ -248,6 +248,12 @@ responsive controls.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
+- A provider row appears only once that provider has a credential on the daemon host, so a
+  machine signed in to neither draws an invitation rather than two rows reporting "signed out"
+  and two `—` chips on each condensed surface. It is derived, not remembered: signing in brings
+  the row back by itself. The invitation is the expanded sidebar's alone - the rail and the
+  phone toolbar render nothing rather than a call to action neither has room for. Rules and the
+  dismissal flag: `design/features/provider-accounts.md`.
 - That status block is pinned in the mobile drawer too, at touch height. The toolbar's quota
   chips answer "how much is left" in a glance a drawer cannot give; the drawer rows answer
   "on which account, and what is this machine doing" — the selected account per provider, its
@@ -784,7 +790,14 @@ Its rules, and what each one is defending:
 - **The sidebar is the panel's only in-tab navigation, and only genuinely long tabs are pages.**
   A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Input, Voice).
   A page holding two controls costs a navigation step to show less than a glance would - which is how the Projects tab briefly grew a "Project resources" page that rendered two sentences and no control.
-  Every other tab renders as one scrolling column, and while it is the *active* tab the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
+  Every other tab renders as one scrolling column, and the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
+  **A tab discloses what it contains whether or not it has been opened**, so the sidebar describes one kind of tab rather than two: the section count is the rule, never the visit.
+  Pages come from the declaration and sections come from the tab's own markup - read from the live DOM while the tab is on screen and from its vnodes otherwise, which is the same walk the settings search index uses to reach an unmounted tab.
+  Reading only the DOM is what used to give a tab its chevron on the second visit and not the first.
+  A section link on a tab that is not on screen selects that tab first and scrolls once its own rail exists, because the heading it names is not in the document until then.
+  Two limits are deliberate and neither can change whether a chevron is drawn.
+  The vnode read cannot see headings a child component renders (`<AccountSettings/>`, the Alerts panel), so a preview is a floor that the live read replaces on arrival; and it is built once per open rather than per render, so a heading whose rendering is conditional on an edit made in this session is corrected by visiting the tab.
+  Tabs with a single section - Git, Automation, Alerts - are given no disclosure at all, which is `SECTION_RAIL_MIN` doing its job: listing one section is a row spent saying what one glance already shows.
   There is no second copy of this navigation in the content pane: the horizontal row it used to carry wrapped or overflowed the moment a tab had real pages, and it duplicated a sidebar one glance away.
   For paged tabs only the selected page is visible; `settingsSubpageId` maps related implementation headings to one user-facing capability page, and search and deep links select the owning page before revealing a control, so hidden pages remain fully addressable.
   **Arriving on a tab by any route - sidebar click, search result, deep link - expands its page links in the sidebar.**
@@ -902,6 +915,32 @@ Its rules, and what each one is defending:
   The index and the jump's candidate scan both cover only `.settings-content`, so the
   sidebar's page and section links — which repeat every heading — can never duplicate a
   result or shift the occurrence a recorded result points at.
+- A result says where it lives as a breadcrumb: its tab, the page that owns it when a heading
+  does not already name that page, then the headings enclosing it, nearest two.
+  The index records those headings as a **path** rather than a nearest-heading string, which is
+  what makes a nested tab describable at all: a single slot is claimed by whichever heading
+  rendered last, so every keyboard-shortcut row read "Input · view" — its category — and never
+  named the section it sits in.
+  Levels are positional, so opening one closes every deeper one, and a heading is closed by the
+  end of its `<section>`; without the second rule a group's `<h4>` follows the walk out and
+  claims the block's later controls.
+  `settingsBreadcrumb` in `settingsTabs.ts` builds the line, because which page owns a heading
+  is a navigation fact and the index knows nothing about pagination.
+- The shortcut table on Input carries **its own** filter, separate from the panel-wide search,
+  as the note editor's chord table does on Text editor.
+  The two answer different questions: the panel search asks where a setting lives and navigates
+  away, while this one narrows a 110-row table already on screen.
+  It matches the label, the command id, the category, and the chord in both its stored
+  (`ctrl+shift+p`) and displayed (`Ctrl Shift P`) spellings, so "what owns this chord" is
+  answerable; an unbound row answers to `not set`, exactly as it reads.
+  Filtered rows are **hidden, not unmounted**, because the panel-wide index is harvested from
+  the mounted tab's live DOM and kept for the page session — a dropped row would leave that
+  index and stay gone, letting a filter set in one corner of one tab decide what the whole
+  panel can find. Hiding also preserves document order, and with it the occurrence a recorded
+  search result navigates by. Picking a search result clears the filter, since a hidden row
+  cannot be scrolled to.
+  The box is inert while a chord is being recorded: that recorder listens on the window in
+  capture phase and would eat the filter text and bind it.
 - Every OpenRouter model setting uses the same filtering combobox, wherever it lives.
   It accepts typed queries and filters the cached catalog live by model name or exact ID, and its
   listbox scrolls inside a bounded desktop or mobile height instead of expanding to the height of
@@ -977,6 +1016,9 @@ Its rules, and what each one is defending:
   inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
   Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
   binding cannot compete with browser zoom suppression or leak the same input into xterm.
+  Rows group by command category, and the group heading is the category rendered as a word
+  (`commandCategoryLabel`) rather than the id it is stored as — the settings search index reads
+  the *text* of the heading it files a row under, so a raw `view` reached the result list.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from

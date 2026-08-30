@@ -86,6 +86,10 @@ It is in two halves, split by what each depends on:
 `searchCommands` fuzzy-scores the whole registry - a string build and a sort over hundreds of entries - and its only consumer is the palette's result list, yet it used to run on every render of the shell.
 The gate lives in `commands.ts` rather than at the call site so the renderer harness exercises the same function the app does (`test/renderer/palette-gating.spec.ts` counts the label reads the scorer makes).
 
+Two presentation helpers sit beside it because they are properties of a command rather than of the panel that draws it.
+`commandCategoryLabel` renders a category as a word instead of the id it is stored as; it takes a string and asserts no membership, because the daemon's `KEYBINDING_COMMANDS` and the `CommandCategory` union do not agree on the set (the daemon has `notes`, the union has `git` and `history`).
+`shortcutMatches` is the predicate behind Settings' shortcut filter: every term must match, and the haystack is the label, the id, the category, and the chord in both its stored and displayed spellings, so a reader who types either form of a chord finds what owns it (`test/shortcutFilter.test.ts`).
+
 ## Connection liveness
 
 `liveness.ts`, `api.ts`

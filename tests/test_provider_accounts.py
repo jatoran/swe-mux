@@ -692,8 +692,9 @@ async def test_switching_proceeds_while_live_sessions_hold_the_current_login(
         sessions={"s1": SimpleNamespace(record=SimpleNamespace(backend="claude", state="working"))}
     )
 
-    # Live sessions re-read the shared credential file, so they follow the
-    # switch; refusing it only ever cost the user a confirmation.
+    # Never refused, live sessions or not. It is not retroactive either - a CLI
+    # already running keeps the credential it read at startup - but a confirmation
+    # dialog does not help with that, and `session_counts` does.
     snapshot = await manager.select("claude", first)
     assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
         "one"
@@ -1342,3 +1343,151 @@ def test_account_commands_resolve_npm_batch_shims(
         r"C:\npm\codex.cmd",
         "login",
     ]
+
+
+def _live(backend: str, **stamp: Any) -> SimpleNamespace:
+    """One live session record carrying whatever spawn stamp the test is about."""
+    fields: dict[str, Any] = {
+        "backend": backend,
+        "state": "working",
+        "spawn_provider": None,
+        "spawn_provider_account_id": None,
+        "spawn_provider_account_uuid": None,
+    }
+    fields.update(stamp)
+    return SimpleNamespace(record=SimpleNamespace(**fields))
+
+
+@pytest.mark.asyncio
+async def test_spawn_attribution_names_the_account_a_new_session_would_use(
+    tmp_path: Path,
+) -> None:
+    """Read at spawn because that is the only moment it is knowable.
+
+    A provider CLI reads its credential file when the process starts, so nothing
+    later can say which account a session already running is on.
+    """
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+
+    # Signed out: nothing to stamp, and a record with no stamp is honest about it.
+    manager.snapshot()
+    assert manager.spawn_attribution("claude") is None
+    # Never a harness without a managed provider, whatever else is going on.
+    assert manager.spawn_attribution("shell") is None
+    assert manager.spawn_attribution("opencode") is None
+
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    saved = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    stamp = manager.spawn_attribution("claude")
+    assert stamp is not None
+    assert stamp["provider"] == "claude"
+    assert stamp["account_id"] == saved
+
+    # An external login is a real state a fresh install sits in, and its sessions
+    # still have to be counted somewhere: the provider is stamped without a slot.
+    await manager.remove("claude", saved)
+    manager.snapshot()
+    external = manager.spawn_attribution("claude")
+    assert external is not None
+    assert external["provider"] == "claude"
+    assert external["account_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_session_counts_group_live_sessions_by_the_account_they_started_on(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    second = (await manager.capture_current("claude", label="second"))["selected"]["claude"]
+
+    manager.sessions = SimpleNamespace(
+        sessions={
+            "a": _live("claude", spawn_provider="claude", spawn_provider_account_id=first),
+            "b": _live("claude", spawn_provider="claude", spawn_provider_account_id=first),
+            "c": _live("claude", spawn_provider="claude", spawn_provider_account_id=second),
+            # Started while the live login was one mux had not saved.
+            "d": _live("claude", spawn_provider="claude"),
+            # Adopted from a daemon predating the stamp, or started signed out.
+            "e": _live("claude"),
+            # An ended session is not still spending anything.
+            "f": SimpleNamespace(
+                record=SimpleNamespace(
+                    backend="claude",
+                    state="exited",
+                    spawn_provider="claude",
+                    spawn_provider_account_id=first,
+                    spawn_provider_account_uuid=None,
+                )
+            ),
+            # A harness with no managed provider never lands in these buckets.
+            "g": _live("shell", spawn_provider="claude", spawn_provider_account_id=first),
+        }
+    )
+
+    counts = manager.session_counts()
+    assert counts["by_account"] == {first: 2, second: 1}
+    assert counts["unsaved"] == {"claude": 1}
+    assert counts["unattributed"] == {"claude": 1}
+    # The same numbers reach every client on the ordinary payload rather than being
+    # joined to the session list in a browser.
+    assert manager.snapshot()["sessions"] == counts
+
+
+@pytest.mark.asyncio
+async def test_session_counts_follow_the_verified_account_not_the_slot(
+    tmp_path: Path,
+) -> None:
+    """A slot that changed hands must not inherit its predecessor's sessions.
+
+    The same rule the durable quota samples follow: identity is what survives a
+    slot being renamed, removed, or re-authenticated into a different account.
+    """
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    slot = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    account = next(entry for entry in manager._accounts() if entry["id"] == slot)
+    account["provider_account_id"] = "uuid-one"
+    manager._write()
+
+    manager.sessions = SimpleNamespace(
+        sessions={
+            # Started on this account and named by identity, so it counts even
+            # though the slot it was filed under is gone.
+            "a": _live(
+                "claude",
+                spawn_provider="claude",
+                spawn_provider_account_id="a-slot-that-is-gone",
+                spawn_provider_account_uuid="uuid-one",
+            ),
+            # Started on the account this slot used to hold. It is not on the one
+            # the slot holds now, so it is not this row's session.
+            "b": _live(
+                "claude",
+                spawn_provider="claude",
+                spawn_provider_account_id=slot,
+                spawn_provider_account_uuid="uuid-two",
+            ),
+        }
+    )
+
+    counts = manager.session_counts()
+    assert counts["by_account"] == {slot: 1}
+    assert counts["unsaved"] == {"claude": 1}

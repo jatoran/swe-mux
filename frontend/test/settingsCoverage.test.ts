@@ -108,6 +108,7 @@ const CONFIG_ONLY: Record<string, string> = {
   session_recovery_enabled: 'The recovery store is built once at daemon start; switching it off with sessions tracked leaves their rows open forever. Its bounds are on Terminals - Scrollback.',
   harness_setup_complete: 'Whether the first-run harness panel has been dismissed. Written by that panel, read by nothing else.',
   quests_dismissed: 'Written by each quest row\'s own dismiss control on the empty workspace stage; dismissal is permanent by design, so a Settings control to re-open one would contradict the feature.',
+  provider_accounts_prompt_dismissed: 'Written by the "hide" control on the sidebar\'s empty account block. It puts away an invitation, not a feature: the block is derived from whether a credential exists on this host, so signing in brings the rows back whatever this says, and an un-hide control would offer to restore something that restores itself.',
   notes_default_open: 'Retired by workspace layout v6 and stripped from public_dict, so the browser never receives it.',
   pinned_directories: 'Written by the directory picker as you pin a folder, which is the control.',
   observer_titler_enabled: "Owned by the Automation dashboard's built-in rule rows, which is where a rule is enabled or disabled.",
