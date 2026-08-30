@@ -1338,6 +1338,10 @@ It is the only timestamp that dates a request whose harness has handed off to ba
 that hand-off is a real turn end, so `turn_started_at` is absent and `last_turn_ms` describes only
 the turn that dispatched the work. A client rendering "how long has this been going" must prefer
 it over both while `standing_activity` holds a `subagents` or `background_tasks` entry.
+Rows also carry `worked_ms`, the run's cumulative accepted root-turn time. It excludes the turn
+running now, so a client wanting a live total adds `now - turn_started_at` itself rather than the
+daemon writing a field on every tick. Like `last_turn_ms` it is root-turn time only and reads low on
+a harness that hands off to background agents.
 Rows also carry nullable `interrupt_pending_at` and `interrupt_pending_source`; these expose exact operator interrupt intent without claiming completion or changing delivery readiness.
 Rows carry nullable `agent_loaded_at`, the start of the current Claude or Codex process generation.
 Unlike `agent_run_started_at`, it survives an in-process conversation rollover and daemon adoption.

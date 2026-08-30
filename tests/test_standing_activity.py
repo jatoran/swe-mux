@@ -239,8 +239,14 @@ def test_provider_observation_reset_drops_the_anchor() -> None:
 
     record = agent_record()
     record.running_work_since = 1.0
+    record.last_turn_ms = 72_000.0
+    # Same run scope, at a longer range: a total carried past the replacement
+    # would report the new conversation as hours old on its first turn.
+    record.worked_ms = 900_000.0
     SessionManager._reset_provider_observation(record)
     assert record.running_work_since is None
+    assert record.last_turn_ms is None
+    assert record.worked_ms == 0.0
 
 
 # ------------------------------------------------------------ axis separation

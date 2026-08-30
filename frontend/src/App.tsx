@@ -254,7 +254,7 @@ import {
 import { serverNow } from './serverClock.ts'
 import {
   deriveRowFleetFacts, sessionContextArc,
-  sessionStandingMark,
+  sessionStandingMark, type ContextGauge,
 } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
@@ -361,7 +361,7 @@ const sessionGlyph=(session:Session|undefined)=>{
 const sessionStateDot=(
   session:Session|undefined,
   shape:DotShape,
-  gauge?:{pct:number;peak:number}|null,
+  gauge?:ContextGauge|null,
   standing?:{label:string}|null,
 )=>{
   if(!session||(isAgent(session)&&!isObservedHarness(session.backend)))return null

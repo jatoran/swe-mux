@@ -101,7 +101,10 @@ function TokenView({ token, session, config }: { token: RowToken; session: Sessi
   }
   if (token.kind === 'gauge' && token.gauge) {
     const pct = token.gauge.pct
-    const tone = pct >= 0.9 ? ' crit' : pct >= 0.7 ? ' hot' : ''
+    // The band is carried on the token rather than recomputed from `pct`: the
+    // ramp is configurable now, and the copy that used to live here is what
+    // would leave the cells and the arc a shade apart at the moved boundary.
+    const tone = token.gauge.band === 'calm' ? '' : ` ${token.gauge.band}`
     return <span class={`row-gauge${tone}`} title={token.title} role="img" aria-label={token.text}>
       {gaugeCells(pct, token.gauge.peak).map((cell, index) =>
         <i key={index} class={`${cell.on ? 'on' : ''}${cell.peak ? ' peak' : ''}`} />)}

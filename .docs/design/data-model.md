@@ -54,6 +54,12 @@
   `turn_started_at` and freezes `last_turn_ms`, leaving nothing on the record that dates a request
   still in flight. Released only when a root turn closes with nothing running, so it spans both the
   hand-off and the gaps between a workflow's phases.
+- `SessionRecord.worked_ms`: volatile, run-scoped. The sum of every accepted completed root turn,
+  accumulated from the same measurement and behind the same plausibility gate as `last_turn_ms`.
+  It counts root-turn time only, so a harness that hands off to background agents under-reports here
+  rather than being estimated at. A replay pass zeroes it before rebuilding it from the transcript,
+  because the observer re-reads from byte 0 on every attach and a restored record that then extended
+  its own total would double the figure on each daemon restart.
 - `SessionRecord.interrupt_pending_at` and `interrupt_pending_source` expose operator interrupt intent separately from lifecycle proof.
   They freeze the user-visible timer and status wording while delivery remains blocked, clear on terminal evidence or a new root generation, and expire when an interrupt cannot be confirmed.
 - `SessionRecord.requested_end_reason`: the end reason to persist when this session terminates,
