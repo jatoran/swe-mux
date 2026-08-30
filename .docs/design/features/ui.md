@@ -248,6 +248,12 @@ responsive controls.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
+- A provider row appears only once that provider has a credential on the daemon host, so a
+  machine signed in to neither draws an invitation rather than two rows reporting "signed out"
+  and two `—` chips on each condensed surface. It is derived, not remembered: signing in brings
+  the row back by itself. The invitation is the expanded sidebar's alone - the rail and the
+  phone toolbar render nothing rather than a call to action neither has room for. Rules and the
+  dismissal flag: `design/features/provider-accounts.md`.
 - That status block is pinned in the mobile drawer too, at touch height. The toolbar's quota
   chips answer "how much is left" in a glance a drawer cannot give; the drawer rows answer
   "on which account, and what is this machine doing" — the selected account per provider, its
