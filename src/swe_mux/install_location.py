@@ -15,7 +15,7 @@ surfaces read it - the first-run hint ``muxd`` prints, ``python -m swe_mux
 ``mux install-shortcut``'s target resolution - so all four agree by construction
 rather than by four separate guesses at the same filesystem.
 
-Two rules it keeps.
+Three rules it keeps.
 
 **Every input is an argument with a live default.** A platform branch whose
 non-development side is never asserted is exactly the class of bug this package
@@ -39,6 +39,16 @@ legs of the first public CI runs while the Windows gate stayed green;
 from the scripts directory and a launcher that is present but unreachable are
 different faults with different fixes, so a command carries both its own location
 and what the bare name resolves to, and the two are never collapsed.
+
+**A frozen install is more than one bundle, and this describes the install.**
+The Windows installer lays three sibling directories under one ``{app}`` - the
+application, the PTY supervisor, and the console client that goes on ``PATH`` -
+so the launcher that happens to be running is not the whole answer.
+`FROZEN_SIBLING_BUNDLES` is what makes ``swemux`` find the ``swe-mux`` beside it,
+and `InstallLocation.client_bundle` is what lets a reader tell which of the two
+is asking: they share a package, a version and a parent, and they differ in that
+the client deliberately contains no daemon. Anything that asks "can the daemon
+start here" has to know that, or it calls a correct install broken.
 """
 
 from __future__ import annotations
@@ -72,6 +82,22 @@ SHIPPED_COMMANDS: tuple[tuple[str, str], ...] = (
 #: printing a command that is not on that machine is the failure this avoids.
 CLIENT_COMMANDS: tuple[str, ...] = ("swemux", "mux")
 DAEMON_COMMANDS: tuple[str, ...] = ("swemuxd", "muxd")
+
+#: The bundle directories a frozen install lays out as siblings under one parent,
+#: in the order a launcher is looked for. `dist/` has exactly this shape and the
+#: Windows installer reproduces it under ``{app}``, because
+#: `supervisor_client.dedicated_supervisor_exe` resolves the PTY supervisor as
+#: ``<exe>\..\..\swe-mux-supervisor\`` and would find nothing if the bundles were
+#: flattened (`packaging/installer/swe-mux.iss`).
+#:
+#: Searching them is what lets each bundle describe the *install* rather than
+#: itself. The console client (`swe-mux-cli`, ROADMAP Phase 23) ships two
+#: launchers and no desktop shell, so without this a `swemux install-shortcut`
+#: would report that this install has no ``swe-mux`` to point a shortcut at -
+#: which is false about the install and true only about the directory it happened
+#: to be looking in. `swe-mux-supervisor` is deliberately absent: it ships no
+#: command a user types.
+FROZEN_SIBLING_BUNDLES: tuple[str, ...] = ("swe-mux", "swe-mux-cli")
 
 INSTALL_FROZEN = "frozen"
 INSTALL_UV_TOOL = "uv-tool"
@@ -150,6 +176,14 @@ class InstallLocation:
     #: Where `uv` or `pipx` re-exposed them, when one of ours is actually there.
     shim_dir: Path | None
     commands: tuple[CommandLocation, ...]
+    #: True when this frozen process is the console client bundle rather than the
+    #: application. The two are separate artifacts on purpose - the app bundle is
+    #: a GUI-subsystem executable with no stdout and the client is a console one
+    #: (`packaging/swe_mux_cli.spec`) - and the client deliberately carries no
+    #: daemon, no frontend and no pseudoterminal backend. Anything that asks "can
+    #: the daemon start here" has to know that, or it reports a correct install as
+    #: three critical faults; `doctor_local` is the reader.
+    client_bundle: bool
     path_entries: tuple[str, ...]
     #: The exact command that fixes ``PATH``, or "" when there is nothing to fix
     #: or no single command that does it (see `path_fix_lines`).
@@ -327,6 +361,24 @@ def _shim_dir(
     return None
 
 
+def _sibling_bundles(scripts: Path, *, frozen: bool, windows: bool) -> tuple[Path, ...]:
+    """The other bundle directories beside `scripts`, for a frozen install.
+
+    Returned unprobed: the caller already tests each candidate launcher with the
+    injected `exists`, so a layout that has no siblings - a `dist/` with only the
+    app bundle built, a bundle a user copied somewhere on its own - simply finds
+    nothing there and is described exactly as it was before this existed.
+    """
+    if not frozen:
+        return ()
+    parent = scripts.parent
+    return tuple(
+        parent / name
+        for name in FROZEN_SIBLING_BUNDLES
+        if not _same_path(parent / name, scripts, windows=windows)
+    )
+
+
 def _quote(value: str, *, windows: bool) -> str:
     """Quote a path for the shell the user is actually in, when it needs it."""
     if not any(character.isspace() for character in value):
@@ -385,10 +437,15 @@ def detect_install_location(
     filenames = [_script_filename(name, windows=is_windows) for name, _ in SHIPPED_COMMANDS]
     shim = _shim_dir(kind, filenames, home=user_home, environ=environment, exists=probe)
 
+    siblings = _sibling_bundles(scripts, frozen=is_frozen, windows=is_windows)
     commands: list[CommandLocation] = []
     for (name, launcher), filename in zip(SHIPPED_COMMANDS, filenames, strict=True):
         own: Path | None = None
-        for directory in (shim, scripts):
+        # This bundle first, then the ones beside it: an install that ships two
+        # bundles must describe itself as one install, and the copy in the
+        # directory we are actually running from is the one to name when both
+        # have it.
+        for directory in (shim, scripts, *siblings):
             if directory is None:
                 continue
             candidate = directory / filename
@@ -420,6 +477,14 @@ def detect_install_location(
         scripts_dir=scripts,
         shim_dir=shim,
         commands=tuple(commands),
+        # Decided by the name of the executable that is running, which is the
+        # only thing that actually distinguishes the two frozen artifacts: they
+        # share a package, a version and a parent directory, and differ in that
+        # one is `swemux`/`mux` and the other is `swe-mux`. Read from
+        # `interpreter` rather than from `sys.executable` directly so a caller
+        # can describe either bundle from a test on any host.
+        client_bundle=is_frozen
+        and interpreter.stem.casefold() in {name.casefold() for name in CLIENT_COMMANDS},
         path_entries=entries,
         path_fix_command=fix_command,
         module_fallback=f"{_quote(str(interpreter), windows=is_windows)} -m swe_mux",
@@ -572,6 +637,7 @@ def render_where(location: InstallLocation, *, version: str | None) -> str:
 __all__ = [
     "CLIENT_COMMANDS",
     "DAEMON_COMMANDS",
+    "FROZEN_SIBLING_BUNDLES",
     "INSTALL_FROZEN",
     "INSTALL_PIPX",
     "INSTALL_SYSTEM",

@@ -194,6 +194,45 @@ def _package_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _client_bundle_detail(subject: str) -> str | None:
+    """A sentence for a daemon-shaped check running inside the console client.
+
+    The Windows installer ships two frozen artifacts under one directory: the
+    application (`{app}\\swe-mux`, a GUI-subsystem executable) and the console
+    client (`{app}\\swe-mux-cli`, which is what goes on ``PATH``). The client is
+    deliberately not the daemon - `packaging/swe_mux_cli.spec` excludes
+    `swe_mux.server`, the frontend tree and the pseudoterminal backend, which is
+    what makes it 28 MiB rather than 143 - so three checks that ask "can the
+    daemon start here" are asking the wrong artifact.
+
+    Measured before this existed: `swemux doctor` on a correct install reported
+    ``install.imports``, ``install.frontend`` and ``install.pty`` as **critical
+    failures**, each with a remedy telling the user to reinstall a package that
+    was not broken. A diagnostic is read by someone whose install is already
+    confusing them, so three confident false failures are worse than the silence
+    they replace.
+
+    ``None`` when this is not the client bundle, so every other install shape -
+    source checkout, wheel, uv tool, the frozen app itself - keeps the answer it
+    had. The app bundle beside this one is named when it is actually there, and
+    `install_location` finds it through the sibling layout the installer
+    guarantees rather than by joining a path here.
+    """
+    from .install_location import detect_install_location
+
+    location = detect_install_location()
+    if not location.client_bundle:
+        return None
+    app = location.executable("swe-mux")
+    where = f" It is the bundle at {app.parent}." if app is not None else ""
+    return (
+        f"This is the swe-mux command-line client, which deliberately ships no "
+        f"{subject}: the daemon and the desktop shell are a separate bundle "
+        f"beside it.{where} Run this check from there, or from a source or wheel "
+        "install, to learn anything about the daemon."
+    )
+
+
 def _extra_probe() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Each optional extra, with the modules of it that did not resolve.
 
@@ -255,9 +294,54 @@ def _install_path_check() -> dict[str, Any]:
     absent entirely *is* a fault, and is reported as one, because that is a
     different thing from an unreachable one.
     """
-    from .install_location import INSTALL_FROZEN, detect_install_location
+    from .install_location import CLIENT_COMMANDS, INSTALL_FROZEN, detect_install_location
 
     location = detect_install_location()
+    if location.client_bundle:
+        # The one frozen artifact for which PATH is the entire point: the Windows
+        # installer adds `{app}\swe-mux-cli` (optionally - it is a [Tasks] entry a
+        # user can untick) so that `swemux` and `mux` answer by name, exactly as a
+        # `pip install` puts them in a scripts directory. Answering "no scripts
+        # directory needs to be on PATH" here, which is what the frozen branch
+        # below used to say, would tell somebody whose command is not found that
+        # nothing is wrong.
+        client = next(
+            (
+                command
+                for command in location.commands
+                if command.name in CLIENT_COMMANDS and command.path is not None
+            ),
+            None,
+        )
+        if client is not None and client.on_path:
+            return _check(
+                id="install.path",
+                category="install",
+                title="Commands on PATH",
+                status="ok",
+                severity="info",
+                detail=f"{client.name} resolves from PATH to {client.path}.",
+            )
+        # `client.path` is not None by construction - the comprehension above
+        # selects on it - but the type does not carry that, and re-testing costs a
+        # clause rather than a `cast` that would outlive the reason for it.
+        where = client.path.parent if client is not None and client.path else location.bin_dir
+        return _check(
+            id="install.path",
+            category="install",
+            title="Commands on PATH",
+            status="warn",
+            severity="info",
+            detail=(
+                f"The swe-mux command-line client is installed in {where} but is "
+                "not reachable by name from this PATH. It still works when named "
+                "in full, which is how you are reading this."
+            ),
+            remedy=(
+                f"Add {where} to your PATH, or re-run the swe-mux installer and "
+                "tick the PATH task."
+            ),
+        )
     if location.kind == INSTALL_FROZEN:
         return _check(
             id="install.path",
@@ -393,6 +477,16 @@ def _imports_check() -> dict[str, Any]:
     to run `muxd` to see, which is the thing they came here because they could not
     do.
     """
+    absent = _client_bundle_detail("daemon")
+    if absent is not None:
+        return _check(
+            id="install.imports",
+            category="install",
+            title="Package imports",
+            status="unavailable",
+            severity="critical",
+            detail=absent,
+        )
     try:
         importlib.import_module("swe_mux.server")
     except BaseException as exc:  # noqa: BLE001 - any import-time failure is the answer
@@ -428,6 +522,16 @@ def _frontend_check() -> dict[str, Any]:
     publish such a wheel; this is the same fact self-reported by the copy that is
     already on the machine.
     """
+    absent = _client_bundle_detail("browser UI")
+    if absent is not None:
+        return _check(
+            id="install.frontend",
+            category="install",
+            title="Frontend bundle",
+            status="unavailable",
+            severity="critical",
+            detail=absent,
+        )
     from .ui_build import read_ui_build_id
 
     static = _package_root() / "static"
@@ -687,6 +791,16 @@ def _pty_check() -> dict[str, Any]:
     is the one compiled dependency in the runtime closure, and a wheel/ABI mismatch
     or a missing VC++ runtime shows up as an ImportError nothing else surfaces.
     """
+    absent = _client_bundle_detail("pseudoterminal backend")
+    if absent is not None:
+        return _check(
+            id="install.pty",
+            category="install",
+            title="Pseudoterminal backend",
+            status="unavailable",
+            severity="critical",
+            detail=absent,
+        )
     from .pty_backend import pty_backend_name
 
     module = "swe_mux.pty_backend_windows" if IS_WINDOWS else "swe_mux.pty_backend_posix"

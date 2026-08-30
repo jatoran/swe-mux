@@ -309,6 +309,99 @@ def test_a_frozen_bundle_reports_its_own_directory_as_the_launcher_home() -> Non
     assert location.executable("swe-mux") == launcher
 
 
+#: The console client's bundle, laid out beside the app's exactly as `dist/` and
+#: the Windows installer's `{app}` both have it.
+_CLI_BUNDLE = _BUNDLE.parent / "swe-mux-cli"
+
+
+def test_the_console_client_bundle_describes_the_install_not_its_own_directory() -> None:
+    """A `swemux` shipped by the installer must find the app bundle beside it.
+
+    The installer lays three sibling bundles under one `{app}` because
+    `supervisor_client.dedicated_supervisor_exe` resolves the supervisor that way.
+    Without searching them, `swemux install-shortcut` would report that this
+    install has no `swe-mux` to point a shortcut at - false about the install and
+    true only about the directory it happened to be looking in.
+    """
+    client = _CLI_BUNDLE / f"swemux{_EXE}"
+    alias = _CLI_BUNDLE / f"mux{_EXE}"
+    app = _BUNDLE / f"swe-mux{_EXE}"
+    location = detect_install_location(
+        frozen=True,
+        executable=str(client),
+        package_dir=_CLI_BUNDLE / "_internal" / "swe_mux",
+        path="",
+        home=_HOME,
+        environ={},
+        exists=_layout({str(client), str(alias), str(app)}),  # type: ignore[arg-type]
+    )
+    assert location.client_bundle is True
+    assert location.executable("swemux") == client
+    assert location.executable("mux") == alias
+    assert location.executable("swe-mux") == app
+    # The daemon launchers are console scripts a wheel install ships and no frozen
+    # bundle does; reporting them as present would be an invented capability.
+    assert location.executable("swemuxd") is None
+
+
+def test_the_app_bundle_is_not_the_console_client() -> None:
+    """`client_bundle` is decided by which executable is running, not by layout.
+
+    Both bundles share a package, a version and a parent directory. What
+    distinguishes them is that one is `swemux`/`mux` and the other is `swe-mux`,
+    and `doctor` branches on the answer to avoid reporting a correct install as
+    three critical faults.
+    """
+    client = _CLI_BUNDLE / f"swemux{_EXE}"
+    app = _BUNDLE / f"swe-mux{_EXE}"
+    location = detect_install_location(
+        frozen=True,
+        executable=str(app),
+        package_dir=_BUNDLE / "_internal" / "swe_mux",
+        path="",
+        home=_HOME,
+        environ={},
+        exists=_layout({str(client), str(app)}),  # type: ignore[arg-type]
+    )
+    assert location.client_bundle is False
+    # It still sees the client beside it, which is what lets the app's own doctor
+    # report whether the commands a user types are installed at all.
+    assert location.executable("swemux") == client
+
+
+def test_a_client_bundle_standing_alone_invents_no_sibling() -> None:
+    """Copied somewhere on its own, it describes what is there and nothing more.
+
+    The sibling directories are candidates, not claims: each launcher is still
+    proven by the existence probe, so an absent app bundle reports as absent
+    rather than as a path that would be right if it existed.
+    """
+    client = _CLI_BUNDLE / f"swemux{_EXE}"
+    location = detect_install_location(
+        frozen=True,
+        executable=str(client),
+        package_dir=_CLI_BUNDLE / "_internal" / "swe_mux",
+        path="",
+        home=_HOME,
+        environ={},
+        exists=_layout({str(client)}),  # type: ignore[arg-type]
+    )
+    assert location.client_bundle is True
+    assert location.executable("swe-mux") is None
+
+
+def test_an_installed_wheel_is_never_a_client_bundle() -> None:
+    """`client_bundle` is a fact about a frozen artifact, so nothing else may claim it.
+
+    A `uv tool` install ships `swemux` too, and its `swemux` is not a bundle that
+    deliberately omits the daemon - `swe_mux.server` is right there beside it. If
+    this were decided by the launcher name alone, `doctor` would report every
+    wheel install's daemon checks as unavailable.
+    """
+    location = _uv_tool_install(path=str(_UV_SHIMS))
+    assert location.client_bundle is False
+
+
 def test_a_uv_tool_shim_directory_can_be_relocated_by_its_variable() -> None:
     present = {
         str(_UV_ROOT / "uv-receipt.toml"),

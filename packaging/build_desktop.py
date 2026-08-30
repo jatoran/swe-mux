@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,25 @@ SUPERVISOR_SOURCES = (
 SUPERVISOR_DIST = ROOT / "dist" / "swe-mux-supervisor"
 SUPERVISOR_EXE = SUPERVISOR_DIST / "swe-mux-supervisor.exe"
 SUPERVISOR_HASH_FILE = SUPERVISOR_DIST / ".source-hash"
+
+# The console client's bundle (ROADMAP Phase 23). A third artifact for the same
+# reason there is a second: a distinct lifecycle unit gets its own directory, so
+# a process from one cannot lock the tree of another. Here the process is a
+# `swemux` sitting in a task terminal and the tree is `dist/swe-mux`, which both
+# the redeploy's staged swap and the installer's `[InstallDelete]` rename or
+# delete out from under it.
+#
+# Always `dist/`, never a staging path, and that is why `--skip-cli` exists: a
+# staged redeploy builds the app into `dist/.staging` precisely so it touches
+# nothing live, and building the client into `dist/` during one would put a fresh
+# write into the tree the swap is about to rename. `packaging/redeploy_desktop.py`
+# passes the flag; the installer build and CI do not.
+CLI_DIST = ROOT / "dist" / "swe-mux-cli"
+#: Both launchers `packaging/swe_mux_cli.spec` collects, primary spelling first.
+#: Named here rather than derived from `install_location.CLIENT_COMMANDS` because
+#: this is the *build's* claim about what it produced, and a verification that
+#: reads its subject's own definition proves nothing.
+CLI_EXES = ("swemux.exe", "mux.exe")
 
 
 def supervisor_source_hash() -> str:
@@ -125,6 +145,30 @@ def build_frontend() -> None:
     subprocess.run([node, "scripts/compress-static.mjs"], cwd=frontend, check=True)
 
 
+#: The icon every bundle's executables and the installer's shortcuts share. It is
+#: gitignored build output rather than a checked-in asset, so a fresh clone or
+#: worktree has none until something renders it - and there is exactly one
+#: renderer, because a second would be a second icon that starts to differ
+#: (`packaging/build_installer.py` refuses rather than rendering its own).
+ICON = ROOT / "packaging" / "swe-mux.ico"
+
+
+def ensure_icon() -> Path:
+    """Render `ICON` from the tray mark, for whichever bundle asked first.
+
+    Called by both bundle builds because either may run alone: `--supervisor-only`
+    has always had the app bundle's copy to rely on, but a `swe-mux-cli` build in
+    a fresh checkout has not, and ISCC's failure for a missing `SetupIconFile` is
+    a bare "The system cannot find the file specified" naming a line number.
+    """
+    create_tray_image(256).save(
+        ICON,
+        format="ICO",
+        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (256, 256)],
+    )
+    return ICON
+
+
 def build_app_bundle(distpath: Path | None = None) -> None:
     """Build the app bundle; ``distpath`` overrides PyInstaller's output root.
 
@@ -133,11 +177,7 @@ def build_app_bundle(distpath: Path | None = None) -> None:
     finished bundle in after stopping it.
     """
     verify_build_extras_installed()
-    create_tray_image(256).save(
-        ROOT / "packaging" / "swe-mux.ico",
-        format="ICO",
-        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (256, 256)],
-    )
+    ensure_icon()
     output_root = distpath or (ROOT / "dist")
     # `--clean` is unconditional, and since 2026-08-29 that is a measured decision
     # rather than an unexplained default. ROADMAP Phase 21 named it the prime
@@ -788,6 +828,206 @@ def build_supervisor_bundle(*, force: bool = False) -> bool:
     return True
 
 
+# Every top-level package directory the *client* bundle is expected to carry, and
+# nothing else. Measured on 2026-08-29 in the closure CI uses (`uv sync --extra
+# desktop --extra voice-local --group package`): 2 packages, 0.3 MB under
+# `_internal/`, in a 28 MiB bundle whose two 3.5 MB executables are most of the
+# rest.
+#
+# The number that makes this list worth having is the one *before* it. The first
+# build of this spec produced **143 MiB**, carrying `ctranslate2`, `hf_xet`,
+# `mypy`, `regex`, `setuptools`, `watchfiles`, `yaml` and `cryptography` - the
+# whole application, because `cli install-shortcut` imports `swe_mux.shortcuts`,
+# which reaches `swe_mux.desktop` for `create_tray_image`, which imports
+# `swe_mux.__main__`, which imports `swe_mux.server`. One lazy import inside one
+# subcommand, and PyInstaller follows every one of them. Nothing about that is
+# visible in a diff; it is visible in a size.
+#
+# The two that remain arrive by different routes, and the second is worth knowing
+# about. `psutil` is a real edge: `swe_mux.lifecycle` imports it and `shortcuts`
+# imports `lifecycle` for the ledger every command writes to. `win32` (pywin32)
+# is reached from the **standard library** - `logging.handlers` defines
+# `NTEventLogHandler`, which imports `win32evtlogutil`, and PyInstaller follows
+# the import whether or not the handler is ever constructed. Together they are
+# 0.3 MB, so both ship rather than being chased out.
+#
+# Windows-measured, like `EXPECTED_BUNDLE_PACKAGES`, and the same rule applies: a
+# platform this was never measured on records its own set rather than widening
+# this one. Only Windows has an installer, so only Windows builds this today.
+EXPECTED_CLI_BUNDLE_PACKAGES = frozenset({"psutil", "win32"})
+
+
+def verify_cli_bundle_contents(
+    bundle_root: Path,
+    expected: Collection[str] = EXPECTED_CLI_BUNDLE_PACKAGES,
+) -> None:
+    """Fail the build when the client bundle grew a dependency it does not declare.
+
+    The same gate as `verify_bundle_contents` and for a sharper reason: this
+    bundle's whole justification is that it is small enough to ship beside a 120
+    MB app bundle, and the way it stops being small is a new module-level import
+    somewhere in the package that nobody connected to the CLI. The failure is
+    silent - the build succeeds, the installer grows, and only a measurement
+    would ever say so.
+    """
+    sizes = bundle_top_level_packages(bundle_root)
+    total = sum(sizes.values())
+    tree = sum(item.stat().st_size for item in bundle_root.rglob("*") if item.is_file())
+    print(
+        f"CLI bundle: {len(sizes)} top-level packages, "
+        f"{total / 1_000_000:.1f} MB under _internal/, {tree / 1_000_000:.0f} MB total"
+    )
+    unexpected = sorted((size, name) for name, size in sizes.items() if name not in expected)
+    if unexpected:
+        listing = "\n  ".join(
+            f"{name} ({size / 1_000_000:.1f} MB)" for size, name in reversed(unexpected)
+        )
+        raise SystemExit(
+            "CLI bundle membership regression: the client collected a top-level "
+            "package it does not declare:\n  "
+            + listing
+            + "\nThe client is the standard library plus a handful of this package's "
+            "own modules; anything else arrived through an import chain that reaches "
+            "out of the client and into the daemon. Find it with the `xref-*.html` "
+            "PyInstaller writes into the workpath, then either cut the import or "
+            "exclude the module in packaging/swe_mux_cli.spec. Add a name here only "
+            "when the client genuinely needs it, with a line saying why."
+        )
+    missing = sorted(name for name in expected if name not in sizes)
+    if missing:
+        raise SystemExit(
+            "CLI bundle membership regression: an expected top-level package is "
+            "absent:\n  "
+            + "\n  ".join(missing)
+            + "\n`psutil` backs `swe_mux.lifecycle`'s ledger, which every command "
+            "writes to, and `win32` is pulled in by the standard library's "
+            "`logging.handlers`. Either one going absent is an ImportError at "
+            "first use, in the frozen client, not at build time."
+        )
+
+
+def smoke_cli_bundle(
+    bundle_root: Path,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> None:
+    """Run the built launchers, because membership does not prove they start.
+
+    `packaging/swe_mux_cli.spec` excludes `swe_mux.desktop`, `swe_mux.__main__`
+    and `swe_mux.server` deliberately, and an exclude turns a *reachable* import
+    into a runtime `ModuleNotFoundError` that no static check here would see. So
+    the gate is to execute the thing: `--help` builds the whole parser (and
+    therefore reads the harness registry), and a request against a closed port
+    exercises the client's real request path down to the socket.
+
+    The exit code is the assertion, not the output, and that is what this caught
+    on its first run. `swe_mux.cli.main` *returns* its code because
+    `[project.scripts]` wraps it in `sys.exit(main())`; the frozen entry point
+    called it bare, so `swemux ls` against a dead daemon printed "cannot reach"
+    and exited **0**. Every script branching on the documented exit codes would
+    have taken the success path. `packaging/cli_entry.py` carries the fix and
+    this is what proves it is still there.
+
+    Port 1 is the unreachable address rather than an ephemeral one this function
+    binds and releases: binding anything from a build script is exactly the class
+    of thing that collides with a live daemon, and nothing has ever listened on
+    tcpmux on a machine that builds this.
+
+    `MUX_DATA_DIR` points at a throwaway directory so the smoke test cannot read
+    or write the operator's real `~/.mux`.
+
+    `run` is a parameter for the same reason every other input in this file is
+    one, and here it is load-bearing rather than tidy: a test that reached in and
+    replaced `subprocess.run` would be replacing it for the whole interpreter, and
+    an xdist worker runs several thousand other tests in that interpreter.
+    """
+    import tempfile
+
+    from swe_mux.cli import EXIT_CONNECTION
+
+    for name in CLI_EXES:
+        executable = bundle_root / name
+        if not executable.is_file():
+            raise SystemExit(
+                f"{executable} was not built. packaging/swe_mux_cli.spec collects "
+                f"{', '.join(CLI_EXES)}; a missing one means an EXE() entry was dropped."
+            )
+    executable = bundle_root / CLI_EXES[0]
+    with tempfile.TemporaryDirectory(prefix="swe-mux-cli-smoke-") as scratch:
+        environment = {**os.environ, "MUX_DATA_DIR": scratch}
+        for arguments, expected_code, why in (
+            (["--help"], 0, "the parser did not build"),
+            (
+                ["ls", "--url", "http://127.0.0.1:1"],
+                EXIT_CONNECTION,
+                "an unreachable daemon did not produce the documented exit code",
+            ),
+        ):
+            completed = run(
+                [str(executable), *arguments],
+                capture_output=True,
+                text=True,
+                env=environment,
+                cwd=scratch,
+            )
+            if completed.returncode != expected_code:
+                raise SystemExit(
+                    f"CLI bundle smoke test failed: `{executable.name} "
+                    f"{' '.join(arguments)}` exited {completed.returncode}, expected "
+                    f"{expected_code} - {why}.\n"
+                    f"stdout: {completed.stdout.strip()[:2000]}\n"
+                    f"stderr: {completed.stderr.strip()[:2000]}"
+                )
+    print(f"Smoked {executable} (--help, and exit {EXIT_CONNECTION} on a dead daemon)")
+
+
+def build_cli_bundle() -> None:
+    """Build dist/swe-mux-cli, the console client the installer puts on PATH.
+
+    Unconditional, with no source-hash gate of the kind the supervisor has. The
+    gate exists there because rebuilding the supervisor reaps every live session,
+    so it must never happen incidentally; nothing here is ever running when this
+    is rebuilt, and a stale client is simply a wrong answer.
+    """
+    ensure_icon()
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            "--noconfirm",
+            "--clean",
+            "--distpath",
+            str(CLI_DIST.parent),
+            str(ROOT / "packaging" / "swe_mux_cli.spec"),
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    verify_cli_bundle_contents(CLI_DIST)
+    # The copyleft half of the license gate, run on this bundle too because it is
+    # a *shipped artifact* and the project's rule is that a declared license does
+    # not describe what a wheel contains. Only the payload half applies:
+    # `verify_bundle_licenses` also asserts that every `RELINKABLE_LGPL` package
+    # is present as readable source, and the client correctly carries none of them
+    # - so calling it here would fail on an absence that is the point.
+    # `verify_cli_bundle_contents` above is already stricter than
+    # `FORBIDDEN_ARTIFACTS` for whole packages; this covers the loose shared
+    # libraries that a package manifest cannot see.
+    verify_no_gpl_av(CLI_DIST)
+    offenders = [
+        str(path)
+        for pattern, _ in FORBIDDEN_BINARY_GLOBS
+        for path in sorted((CLI_DIST / "_internal").glob(pattern))[:3]
+    ]
+    if offenders:
+        raise SystemExit(
+            "Copyleft regression: a forbidden shared library entered the client "
+            "bundle:\n  " + "\n  ".join(offenders)
+        )
+    smoke_cli_bundle(CLI_DIST)
+    print(f"Built {CLI_DIST / CLI_EXES[0]}")
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Build the swe-mux desktop distribution")
     result.add_argument(
@@ -804,6 +1044,18 @@ def parser() -> argparse.ArgumentParser:
         "--skip-supervisor",
         action="store_true",
         help="never touch the supervisor bundle in this run",
+    )
+    result.add_argument(
+        "--cli-only",
+        action="store_true",
+        help="build only the console client bundle (dist/swe-mux-cli)",
+    )
+    result.add_argument(
+        "--skip-cli",
+        action="store_true",
+        help="never touch the console client bundle in this run; a staged redeploy "
+        "passes this because that bundle always goes to dist/ and a redeploy must "
+        "write nothing there until the swap",
     )
     result.add_argument(
         "--skip-frontend",
@@ -826,11 +1078,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.supervisor_only:
         build_supervisor_bundle(force=args.force_supervisor)
         return
+    if args.cli_only:
+        build_cli_bundle()
+        return
     if not args.skip_frontend:
         build_frontend()
     build_app_bundle(distpath=args.app_distpath)
     if not args.skip_supervisor:
         build_supervisor_bundle(force=args.force_supervisor)
+    if not args.skip_cli:
+        build_cli_bundle()
 
 
 if __name__ == "__main__":
