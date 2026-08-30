@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>swe-mux</title>
-<meta name="description" content="A terminal multiplexer for the coding agents you already run. It records what each agent actually did and lands finished branches behind checks you approved. Windows-first, on your own machine, no vendor backend and no relay." />
+<meta name="description" content="A multiplexer for coding agents. Real terminals, persistent sessions, Tailscale-native, and the same interface on your phone. Runs on your own machine: no vendor backend, no relay, no account." />
 <meta name="color-scheme" content="dark" />
 <!-- Dark Reader's documented opt-out. This page ships its own dark theme, defaults to the
      visitor's `prefers-color-scheme`, and gates every text token on tools/contrast.py - so an
@@ -304,6 +304,9 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
              max-width: 72ch; margin-bottom: 24px; padding-left: 14px;
              border-left: 1px solid var(--line-2); text-wrap: pretty; }
 .hero .sub b { color: var(--fg); font-weight: 600; }
+/* The one coloured phrase above the fold. --green is the palette's only accent and is
+   contrast-audited in both themes by tools/contrast.py, so this needs no exception. */
+.hero .sub .go { color: var(--green); font-weight: 600; }
 .hero .lede { color: var(--fg-2); max-width: 68ch; font-size: clamp(15px, 1.7vw, 16.5px);
               line-height: 1.66; }
 .hero .lede b { color: var(--fg); }
@@ -563,17 +566,18 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
          else. "Mission control for your coding-agent fleet" survives as a brand tagline in
          the footer and is deliberately not the explanatory claim here. -->
     <div class="kick">for the coding agents you already run</div>
-    <!-- Three lines rather than two: at 1440 the second line reaches the measure and
-         pushes the block cursor onto a line of its own, which reads as a stray mark. -->
-    <h1>See what each agent actually did.<br />
-      Land finished branches<br />
-      behind checks you approved.<span class="cur"></span></h1>
-    <p class="sub"><b>Evidence taken from the work, not from the agent's account of it.</b></p>
+    <h1>A multiplexer for coding agents.<span class="cur"></span></h1>
+    <p class="sub"><b>Real terminals, persistent sessions, Tailscale-native.</b><br />
+      Optimized for mobile: <span class="go">ship from anywhere.</span></p>
     <div class="lede">
-      <p>A terminal multiplexer for the agent CLIs you already run, on your own machine. Every
-      file write hashed on the bytes actually written, every commit attributed to the session
-      that produced it, and finished worktree branches landed one at a time behind a
-      verification command you approved.</p>
+      <p>It owns the pseudoterminals, so Claude Code, Codex, opencode and any other CLI run
+      exactly as they do outside it - including whatever shipped yesterday. Around them:
+      <b>one status vocabulary</b> telling you which agent is working, which is blocked and
+      which is waiting on you; sessions that outlive the browser, the daemon and app updates;
+      and the same interface on your phone over your own tailnet, with nothing turned off.</p>
+      <p>Underneath, a record taken from the work rather than from the agent's account of it,
+      and finished worktree branches landed one at a time behind a verification command you
+      approved.</p>
     </div>
     <div class="ic">
       <div class="ic-head">

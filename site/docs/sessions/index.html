@@ -296,6 +296,9 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
              max-width: 72ch; margin-bottom: 24px; padding-left: 14px;
              border-left: 1px solid var(--line-2); text-wrap: pretty; }
 .hero .sub b { color: var(--fg); font-weight: 600; }
+/* The one coloured phrase above the fold. --green is the palette's only accent and is
+   contrast-audited in both themes by tools/contrast.py, so this needs no exception. */
+.hero .sub .go { color: var(--green); font-weight: 600; }
 .hero .lede { color: var(--fg-2); max-width: 68ch; font-size: clamp(15px, 1.7vw, 16.5px);
               line-height: 1.66; }
 .hero .lede b { color: var(--fg); }
