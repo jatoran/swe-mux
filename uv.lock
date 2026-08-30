@@ -2683,7 +2683,7 @@ wheels = [
 
 [[package]]
 name = "swe-mux"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

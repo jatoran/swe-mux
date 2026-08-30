@@ -15,6 +15,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-30
+
 ### Added
 
 - **swe-mux now ships an agent skill, embedded in every install.** `swemux --skill` prints
@@ -71,6 +73,24 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   writes without deleting anything.
 
 ### Changed
+
+- **A session row now reports the whole time that session has worked**, not just the length of
+  its current turn - the sum of every completed turn the record was willing to report, so a
+  measurement it refused as "the last turn" is not quietly admitted into the total either.
+  Context is also coloured on a finer ramp: the old one's first step arrived at 70%, by which
+  point the decision it exists to inform - carry on in this thread or start a fresh one - has
+  already been made for you.
+- **The account switcher's quota figures line up.** Each provider's rows now sit under one set
+  of headed columns rather than being printed as a sentence per account, so several accounts can
+  actually be compared against each other. The Git drawer's refresh also shows that it is
+  reading rather than appearing to have finished.
+
+### Fixed
+
+- **A transcript's Copy and Select controls no longer sit on top of the timestamp they were
+  meant to clear.** They were drawn at rest on every reply, sized against a gutter that predated
+  the read-aloud markers. They now appear when asked for: on hover or keyboard focus with a
+  pointer, and one at a time by tapping with a finger, which has no hover.
 
 - **The daemon starts tens of seconds faster when its database has grown large.**
   Every start used to re-verify the whole of `mux.db` before serving anything - a full-file
@@ -489,7 +509,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.5
 [0.1.4]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.4
 [0.1.3]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.3
 [0.1.2]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.2
