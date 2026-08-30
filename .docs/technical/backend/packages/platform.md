@@ -90,7 +90,14 @@ What deliberately stays with each caller is the *presentation*: `harness.probe_c
 
 ## `path_identity.py`
 
-"Same file?" and "inside?" answered per filesystem: `os.path.samefile` when both paths exist, then NFC plus platform-correct case folding with a read-only per-directory case-sensitivity probe, and component-wise containment so `project-old` is never inside `project`.
+"Same file?" and "inside?" answered per filesystem, in three tiers: equal lexical spellings settle it with no syscall at all, then device and inode from one `stat` per side, then NFC plus platform-correct case folding with a read-only per-directory case-sensitivity probe.
+Containment is component-wise, so `project-old` is never inside `project`.
+
+Every filesystem call it makes is bounded and remembered per *provider* - `\\server\share` or a drive on Windows, the first two components on POSIX.
+A provider that has not returned quickly before runs under a watchdog thread and is abandoned at `PROBE_DEADLINE_SECONDS`; the negative result is then cached for `PROBE_BLOCK_SECONDS`, so one unreachable location costs one deadline rather than one block per comparison.
+An abandoned probe raises `UnreachableLocation`, which is an `OSError` so the fallbacks already written for a deleted directory catch it, and the answer degrades from exact to lexical rather than becoming wrong.
+This is not a micro-optimization: a single `os.path.exists` on `//wsl.localhost/<distro>` with the distro stopped was measured at 80.1 s, and `agent_environment` was paying it inside a request.
+`same_path_lexically` exposes the first tier alone, for a caller that must not touch the filesystem at all.
 
 **Not:** the code-graph and doc-debt storage key (`deterministic_consumers.normalize_target`), which is deliberately a platform-neutral repo-relative form.
 
