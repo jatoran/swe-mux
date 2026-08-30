@@ -53,10 +53,20 @@ python site/tools/check_changelog.py  # every released version has a dated entry
 grep -rn data-todo site/       # unfilled placeholder URLs
 ```
 
-All four exit non-zero on failure and take no arguments.
+All four exit non-zero on failure, and none of them needs an argument.
 `tools/logo.py`, `tools/placeholders.py`, and `tools/ideas.py` are generators rather than gates, so they are not in that list; run them when their inputs move, not every ship.
 `tools/ideas.py` in particular is run by a scheduled workflow rather than by a person (section 12), and `build.py` renders whatever it last wrote.
 `build.py --check` is the exception: it fails instead of writing when a generated page is stale, which is how you find out that a source moved without touching the tree.
+
+**CI runs all four on every push**, in `ci.yml`'s `site` job, and did not until 2026-08-29.
+That gap is what let the 0.1.3 release commit stale `/changelog/` for a day: the pages here are committed build output, `pages.yml` deploys `site/` verbatim without ever running the generator, and nothing anywhere asked whether the artifact still matched its source.
+Every gate that existed passed correctly throughout, `check_changelog.py` included - it asks whether `CHANGELOG.md` carries an entry per released version, which it did.
+`build.py --check` is the question none of them was asking, so it is the first step in that job.
+The job is deliberately **not** path-filtered the way `pages.yml` is, because a `site/**` filter is precisely what would have missed this: the commit that staled the page touched `CHANGELOG.md`.
+It runs `check_changelog.py --require-tags`, because `actions/checkout` fetches no tags at all by default and the tolerant reading of that - a note, the package version alone, exit 0 - is a pass earned by asking almost nothing.
+`tests/test_site_artifacts.py` runs the staleness half in the landing gate as well, so a branch that edits a source and forgets to regenerate fails `.worktree-verify` rather than reddening master.
+
+What none of this checks is worth stating, because the coverage is narrower than "the site is correct": `index.html` is hand-authored and has no generator, so nothing can tell a stale hand-edit from an intended one, and a file in `site/` that `build.py` does not write is invisible to `--check` entirely.
 
 `check.mjs` covers the things that have actually broken here before, and it covers them on **every** page.
 It discovers the pages from the directory rather than listing them, so a page cannot be added without also being checked.
@@ -66,6 +76,7 @@ It discovers the pages from the directory rather than listing them, so a page ca
 `/changelog/` is generated straight out of `CHANGELOG.md`, so a released version with no entry publishes as a version that never happened, and `build.py` cannot notice: a changelog missing a section renders perfectly.
 It checks each `v*` tag and the version in `pyproject.toml` for a section, a real `YYYY-MM-DD` date, content under the heading, a link reference resolving to that tag's release, and no surviving `TODO(release)` marker.
 `--tag vX.Y.Z` narrows it to one version, which is the form a release workflow wants: the tag exists, the release does not, and the check should fail before the artifacts go out.
+`--require-tags` is the opposite adjustment and exists for CI: it turns "no `v*` tag is visible" from a note into a failure, so a checkout that fetched none cannot report a pass.
 It found a real defect the day it was written, which is what section 11 records.
 
 ---

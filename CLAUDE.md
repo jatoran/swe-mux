@@ -104,8 +104,20 @@ not for secrets - a gitignore rule is one `git add -f` away from not protecting 
 keys live in a password manager.
 
 **A red badge is the first thing a visitor sees.** CI (`.github/workflows/ci.yml`) runs on
-every push to `master`: the full Windows gate, plus Ubuntu and macOS legs. macOS is
-`continue-on-error` until it passes cleanly; Ubuntu and Windows block.
+every push to `master`: the full Windows gate, plus Ubuntu and macOS legs, plus a `site` job.
+macOS is `continue-on-error` until it passes cleanly; Ubuntu, Windows and `site` block.
+
+**The site's pages are committed build output, and the release commit is where that bites.**
+`site/tools/build.py` writes `site/changelog/index.html` and thirty siblings out of
+`CHANGELOG.md`, `site/tools/docs_content.py`, `THIRD-PARTY-NOTICES.md` and
+`packaging/third_party_licenses.json`; `pages.yml` uploads `site/` verbatim and never runs the
+generator, which is what keeps the deploy a twenty-second file copy. So a commit that edits a
+source and not the page publishes a stale page - 0.1.3 did exactly that, and `swemux.dev/changelog/`
+showed 0.1.2 for a day while 0.1.3 was live on PyPI, on GitHub Releases and in `version.json`.
+**If you touch any of those sources, run `python site/tools/build.py` and commit `site/`.**
+`.worktree-verify` fails on a stale page (`tests/test_site_artifacts.py`, about 0.1s) and so does
+the `site` job, which also runs `check.mjs`, `contrast.py` and `check_changelog.py`. None of them
+can see a hand-edit to `site/index.html`, which has no generator.
 
 ### Landing is yours; pushing depends on which session you are
 

@@ -2419,7 +2419,10 @@ def main() -> int:
 
     if stale:
         print("\nSTALE: " + ", ".join(stale))
-        print("Their sources changed. Run: python site/tools/build.py")
+        print("Their sources changed, and the pages beside them are committed build output,")
+        print("so the deploy would publish the old ones. Regenerate and commit the result:")
+        print("    python site/tools/build.py")
+        print("    git add site/ && git commit")
         return 1
     print("\nall pages current" if args.check else "\ndone")
     return 0
