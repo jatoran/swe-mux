@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from swe_mux import agent_environment, path_identity
 from swe_mux.agent_environment import (
+    _project_scoped_mcp_tables,
     capture_config_baseline,
     clear_cache,
     discover_agent_environment,
@@ -581,3 +583,101 @@ def test_new_conversation_run_does_not_reuse_stale_runtime_metadata(
 def test_shell_backend_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="registered agent sessions"):
         _discover("shell", tmp_path)
+
+
+# `~/.claude.json` keeps one `projects` entry per directory Claude has ever run
+# in, and reading that map used to be the most expensive thing the inventory did.
+# Every key was handed to `same_path`, which stats both sides - and a key can name
+# anywhere the user has ever worked, including a provider that is not there. On
+# the development host that map had 183 entries, one of them a UNC path into a
+# stopped WSL distro, and this file's Claude inventory test cost 367.7s because of
+# it. The tests below pin both halves of the fix: entries that carry no server are
+# dropped before any path is compared, and what remains is matched on the strings
+# before the filesystem is asked.
+
+
+def _project_map(cwd: Path, *, extra: int = 200) -> dict[str, object]:
+    """A realistic map: mostly stale keys with empty tables, one live entry."""
+    projects: dict[str, object] = {
+        f"/gone/project-{index}": {"mcpServers": {}, "history": []} for index in range(extra)
+    }
+    projects["//no-such-host/no-such-share/elsewhere"] = {"mcpServers": {}}
+    projects[str(cwd).replace(os.sep, "/")] = {"mcpServers": {"local": {"command": "python"}}}
+    return projects
+
+
+def test_the_project_map_finds_this_directorys_servers(tmp_path: Path) -> None:
+    tables = _project_scoped_mcp_tables(_project_map(tmp_path), tmp_path)
+    assert tables == [({"local": {"command": "python"}}, "local")]
+
+
+def test_entries_carrying_no_server_are_dropped_before_any_path_is_compared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty table contributes no rows, so comparing its key is pure cost.
+
+    Dropping it first is what takes the paths this has to consider from 183 to 2
+    on the host the defect was measured on, and it is behaviour-preserving: the
+    previous code appended the empty table and then iterated it to nothing.
+    """
+    compared: list[str] = []
+
+    def recording(left: str, right: object) -> bool:
+        compared.append(left)
+        return path_identity.same_path_lexically(left, right)
+
+    monkeypatch.setattr(agent_environment, "same_path_lexically", recording)
+    projects = _project_map(tmp_path)
+    tables = _project_scoped_mcp_tables(projects, tmp_path)
+
+    assert tables == [({"local": {"command": "python"}}, "local")]
+    assert len(projects) == 202
+    assert compared == [str(tmp_path).replace(os.sep, "/")]
+
+
+def test_no_recorded_project_path_is_stated_when_one_matches_on_its_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening the Agent tab is documented to probe nothing.
+
+    A stat against a recorded path is a probe, and it is the one that blocked:
+    `os.path.exists` on `//wsl.localhost/<distro>` with the distro stopped was
+    measured at 80.1 seconds. A directory the CLI is running in matches its own
+    recorded spelling, so nothing has to be stat'ed to find it.
+    """
+
+    def refuse(path: object) -> os.stat_result:
+        raise AssertionError(f"the inventory stat'ed a recorded project path: {path}")
+
+    monkeypatch.setattr(path_identity, "_stat", refuse)
+    tables = _project_scoped_mcp_tables(_project_map(tmp_path), tmp_path)
+    assert tables == [({"local": {"command": "python"}}, "local")]
+
+
+def test_the_filesystem_is_still_asked_when_no_spelling_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lexical pass may only add answers, never remove one.
+
+    A recorded key can name this directory through a symlink or a junction and
+    share no components with it, and only the filesystem knows. So a sweep that
+    matched nothing escalates - bounded per provider by `path_identity`, but it
+    escalates.
+    """
+    projects: dict[str, object] = {
+        "/gone/empty": {"mcpServers": {}},
+        "/an/alias/of/this/directory": {"mcpServers": {"aliased": {"command": "python"}}},
+        "/gone/other": {"mcpServers": {"other": {"command": "python"}}},
+    }
+    asked: list[str] = []
+
+    def matching(left: str, right: object) -> bool:
+        asked.append(left)
+        return left == "/an/alias/of/this/directory"
+
+    monkeypatch.setattr(agent_environment, "same_path", matching)
+    tables = _project_scoped_mcp_tables(projects, tmp_path)
+
+    assert tables == [({"aliased": {"command": "python"}}, "local")]
+    # Only the entries that carry a server, and the empty one is not among them.
+    assert asked == ["/an/alias/of/this/directory", "/gone/other"]
