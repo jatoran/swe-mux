@@ -374,6 +374,60 @@ WHEELS: tuple[VoiceWheel, ...] = (
 
 FOOTER = '''
 
+def _supported_python_range(wheels: tuple[VoiceWheel, ...] = WHEELS) -> str:
+    """The CPython versions the pinned closure actually carries wheels for.
+
+    Derived from the table rather than written down beside it, because a written
+    range is a second source of truth and the copy is what goes stale - the exact
+    shape of the bug this message exists to explain.
+
+    Only distributions whose wheels are *all* version-specific constrain anything.
+    One `py3-none-any` or `cp38-abi3` wheel makes a distribution loadable on every
+    interpreter in range, and treating its version-specific siblings as limits is
+    how a first attempt at this reported "CPython 3.14 only" for a closure that
+    resolves cleanly on 3.12, 3.13 and 3.14: `hf-xet` ships both a `cp314-cp314`
+    wheel and a `cp38-abi3` one, and the abi3 wheel is the whole answer.
+
+    A diagnostic, not a gate. It reports min-through-max of the intersection and
+    so would over-claim on a genuinely non-contiguous set; the thing that actually
+    proves the closure loads is
+    `packaging/check_voice_closure_interpreters.py`, which runs the real selector
+    inside each interpreter.
+    """
+    from packaging.utils import parse_wheel_filename
+
+    constrained: dict[str, set[tuple[int, int]]] = {}
+    unconstrained: set[str] = set()
+    for wheel in wheels:
+        try:
+            _, _, _, tags = parse_wheel_filename(wheel.filename)
+        except Exception:  # noqa: BLE001 - not a candidate, and not this function's problem
+            continue
+        for tag in tags:
+            if not (tag.interpreter.startswith("cp") and tag.abi.startswith("cp")):
+                # `py3-none-any`, `cp38-abi3`: loads on anything in range.
+                unconstrained.add(wheel.distribution)
+                continue
+            try:
+                version = (int(tag.interpreter[2]), int(tag.interpreter[3:]))
+            except ValueError:
+                continue
+            constrained.setdefault(wheel.distribution, set()).add(version)
+    common: set[tuple[int, int]] | None = None
+    for distribution, versions in constrained.items():
+        if distribution in unconstrained:
+            continue
+        common = versions if common is None else (common & versions)
+    if common is None:
+        return "any CPython this project supports"
+    if not common:
+        return "no single CPython version"
+    low, high = min(common), max(common)
+    if low == high:
+        return f"CPython {low[0]}.{low[1]} only"
+    return f"CPython {low[0]}.{low[1]} through {high[0]}.{high[1]}"
+
+
 def wheels_for_this_interpreter(
     wheels: tuple[VoiceWheel, ...] = WHEELS,
 ) -> tuple[VoiceWheel, ...]:
@@ -386,10 +440,13 @@ def wheels_for_this_interpreter(
     wheel whose deployment target is older than the running system's.
 
     Raises `LookupError` naming the distributions this interpreter has no wheel
-    for. That is a refusal rather than a partial install: a closure missing one
-    native package fails at import time, much later, with an error that names the
-    wrong thing.
+    for, the interpreter itself, and the range the closure does support. That is a
+    refusal rather than a partial install: a closure missing one native package
+    fails at import time, much later, with an error that names the wrong thing.
     """
+    import sys
+    import sysconfig
+
     from packaging.tags import sys_tags
     from packaging.utils import parse_wheel_filename
 
@@ -410,9 +467,21 @@ def wheels_for_this_interpreter(
 
     missing = sorted(set(DISTRIBUTIONS) - set(best))
     if missing:
+        # Name the interpreter and the range the closure covers, not just the
+        # package. The bare version of this message read as a broken or missing
+        # dependency and sent a tester looking for one, when the actual cause was
+        # that `uv tool install` had put swe-mux on a CPython newer than any wheel
+        # spaCy had published - a version mismatch, and a completely different
+        # thing to do about it. `packaging/check_voice_closure_interpreters.py` is
+        # what stops this reaching a user again.
         raise LookupError(
-            "the pinned voice closure has no wheel this interpreter can load for: "
-            + ", ".join(missing)
+            "the pinned voice closure has no wheel that CPython "
+            f"{sys.version_info.major}.{sys.version_info.minor} on "
+            f"{sysconfig.get_platform()} can load, for: {', '.join(missing)}. "
+            f"The closure supports {_supported_python_range(wheels)}. This is an "
+            "interpreter-version mismatch rather than a missing or broken package: "
+            "run swe-mux on a Python in that range, or upgrade swe-mux to a release "
+            "whose pins cover this one."
         )
     return tuple(wheel for _, wheel in sorted(best.values(), key=lambda item: item[1].filename))
 

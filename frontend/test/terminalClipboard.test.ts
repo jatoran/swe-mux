@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import type { ClipboardSelectionType } from '@xterm/addon-clipboard'
-import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, claimTerminalTextPaste, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing } from '../src/terminalClipboard.ts'
+import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, claimTerminalTextPaste, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing, strayPasteBelongsToPane, type StrayPasteContext } from '../src/terminalClipboard.ts'
 
 // xterm declares `ClipboardSelectionType` as an ambient `const enum`, which
 // `isolatedModules` forbids reading at runtime, so the member cannot be named here.
@@ -83,27 +83,28 @@ test('manual copy fallback runs synchronously while mobile activation is live', 
   assert.deepEqual(calls.slice(0,5), ['modern', 'focus', 'select', 'range:0:11', 'legacy'])
 })
 
-test('a multi-line paste into an agent with a stale mode is bracketed by hand', () => {
+test('a multi-line paste into an agent is bracketed by hand', () => {
   // The regression: unwrapped, xterm turns each newline into Enter and the CLI submits
   // the paste line by line, leaving only the text after the last newline.
   assert.equal(
     pasteNeedsManualBracketing({
       text: 'line one\nline two\nline three',
       agentBackend: true,
-      bracketedPasteMode: false,
     }),
     true,
   )
 })
 
-test('xterm is trusted to wrap once it knows the mode is on', () => {
+test('xterm’s belief about the child’s mode is not part of the decision', () => {
+  // It used to be, in one direction only: the wrapper was applied when the mirror said
+  // "off". A mirror stale the other way - set by a child that has since been replaced, or
+  // by a CLI that has left its TUI - made xterm wrap bytes the child then ignored, and the
+  // carriage returns submitted the paste a line at a time. Same symptom, opposite cause,
+  // and no repair. The mode is now not an input at all, which is what the arity asserts.
+  assert.equal(pasteNeedsManualBracketing.length, 1)
   assert.equal(
-    pasteNeedsManualBracketing({
-      text: 'line one\nline two',
-      agentBackend: true,
-      bracketedPasteMode: true,
-    }),
-    false,
+    pasteNeedsManualBracketing({ text: 'line one\nline two', agentBackend: true }),
+    true,
   )
 })
 
@@ -112,18 +113,17 @@ test('a plain shell is never sent wrapper bytes it would print literally', () =>
     pasteNeedsManualBracketing({
       text: 'line one\nline two',
       agentBackend: false,
-      bracketedPasteMode: false,
     }),
     false,
   )
 })
 
 test('single-line text is left alone, since the bug needs a newline', () => {
+  // Also what keeps a short paste from becoming a `[Pasted text]` placeholder in Codex.
   assert.equal(
     pasteNeedsManualBracketing({
       text: 'just one line',
       agentBackend: true,
-      bracketedPasteMode: false,
     }),
     false,
   )
@@ -134,7 +134,6 @@ test('a bare carriage return counts as multi-line', () => {
     pasteNeedsManualBracketing({
       text: 'first\rsecond',
       agentBackend: true,
-      bracketedPasteMode: false,
     }),
     true,
   )
@@ -150,6 +149,38 @@ test('native text paste is claimed before xterm and handed to the pane paste pat
 
   assert.equal(claimTerminalTextPaste(event as unknown as ClipboardEvent, text => calls.push(text)), true)
   assert.deepEqual(calls, ['prevent', 'stop', 'first\nsecond'])
+})
+
+const strayPaste = (overrides: Partial<StrayPasteContext> = {}): StrayPasteContext => ({
+  paneHidden: false,
+  targetInTerminalHost: false,
+  inDialog: false,
+  focusHeldByOtherField: false,
+  focusedTerminalSessionId: 'session-a',
+  sessionId: 'session-a',
+  ...overrides,
+})
+
+test('Ctrl+V on a rail button reaches the terminal the operator was last typing into', () => {
+  // The gap this closes: the pane's own listener is on its host, so a paste dispatched to a
+  // focusable-but-not-editable element is heard by nobody and lands nowhere at all.
+  assert.equal(strayPasteBelongsToPane(strayPaste()), true)
+})
+
+test('a stray paste is adopted by exactly one pane, whatever else is on screen', () => {
+  // Every mounted pane runs this, so the rule has to be single-valued rather than merely
+  // plausible: routing on visibility would have a split answer yes twice and paste twice.
+  assert.equal(strayPasteBelongsToPane(strayPaste({ sessionId: 'session-b' })), false)
+  assert.equal(strayPasteBelongsToPane(strayPaste({ focusedTerminalSessionId: null })), false)
+  assert.equal(strayPasteBelongsToPane(strayPaste({ paneHidden: true })), false)
+})
+
+test('anything that will legitimately receive the paste itself keeps it', () => {
+  // A terminal host owns its own event - and the document listener runs first, so adopting
+  // one would paste it twice. A text field and a dialog are the operator pasting elsewhere.
+  assert.equal(strayPasteBelongsToPane(strayPaste({ targetInTerminalHost: true })), false)
+  assert.equal(strayPasteBelongsToPane(strayPaste({ focusHeldByOtherField: true })), false)
+  assert.equal(strayPasteBelongsToPane(strayPaste({ inDialog: true })), false)
 })
 
 test('an empty native paste remains available to non-text handlers', () => {

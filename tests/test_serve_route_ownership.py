@@ -42,7 +42,7 @@ def test_the_loopback_target_port_is_readable() -> None:
 
 async def test_a_running_swemux_keeps_its_route(monkeypatch: pytest.MonkeyPatch) -> None:
     """The case that broke mobile access: a second daemon must not take the address."""
-    monkeypatch.setattr(tailscale.shutil, "which", lambda _name: "tailscale")
+    monkeypatch.setattr(tailscale, "tailscale_executable", lambda: "tailscale")
 
     async def status(_exe: str, command: str) -> tuple[Any | None, str]:
         return (_serve(8765), "") if command == "serve" else (None, "not configured")
@@ -68,7 +68,7 @@ async def test_an_abandoned_route_is_still_reclaimable(monkeypatch: pytest.Monke
 
     Losing it would strand the route forever after any unclean daemon exit.
     """
-    monkeypatch.setattr(tailscale.shutil, "which", lambda _name: "tailscale")
+    monkeypatch.setattr(tailscale, "tailscale_executable", lambda: "tailscale")
 
     # Stateful, because the function verifies the route stuck after configuring it.
     # A mock frozen on the old config would fail that check and hide whether the
@@ -112,7 +112,7 @@ async def test_an_abandoned_route_is_still_reclaimable(monkeypatch: pytest.Monke
 
 async def test_a_foreign_route_is_never_touched(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unchanged, and the reason is unchanged: it is somebody else's service."""
-    monkeypatch.setattr(tailscale.shutil, "which", lambda _name: "tailscale")
+    monkeypatch.setattr(tailscale, "tailscale_executable", lambda: "tailscale")
     foreign = {
         "Web": {
             "desktop.taild42d36.ts.net": {"Handlers": {"/": {"Proxy": "http://10.0.0.5:3000"}}}
@@ -132,7 +132,7 @@ async def test_a_daemon_reconfiguring_its_own_route_is_not_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Repairing your own route must not be mistaken for stealing someone else's."""
-    monkeypatch.setattr(tailscale.shutil, "which", lambda _name: "tailscale")
+    monkeypatch.setattr(tailscale, "tailscale_executable", lambda: "tailscale")
 
     async def status(_exe: str, command: str) -> tuple[Any | None, str]:
         return (_serve(8765), "") if command == "serve" else (None, "not configured")
