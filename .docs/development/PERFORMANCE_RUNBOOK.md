@@ -283,6 +283,7 @@ Reference measurements:
 | 2026-08-06 warm | 6-8 sessions | 879 MB | ~8s |
 | 2026-08-06 post-redeploy (cold page cache) | 6-8 sessions | 879 MB | 27-31s |
 | 2026-08-21, before this work | 30 sessions | 2.73 GB | 135-227s |
+| 2026-08-30 post-reboot, before the deferral | 1 session | 3.36 GB | 85.7s (77.7s of it `database-integrity`) |
 
 **The 2026-08-21 incident, because its shape recurs.** A 226.6s start was ~170s of two stretches
 that logged *nothing at all*: 98.6s between the predecessor-death warning and
@@ -294,14 +295,13 @@ bundle.
 What the two stretches actually were, measured rather than guessed:
 
 - `PRAGMA quick_check`, run by `connect_or_quarantine` once per **store**, at 11.5s per pass
-  against the 2.73 GB `mux.db` — and eleven stores share that file, so ~126s. It is answered once
-  per file now, and since 2026-08-30 the full check is conditional: the once-per-file pass had
-  itself grown to 60-84s per cold start against a 3.36 GB file, so it runs only after an unclean
-  daemon death or when its last pass is older than 24h, and every other start runs a milliseconds
-  header-and-schema probe instead (`technical/backend/sqlite.md` holds the decision rule, the
-  durable record, and the guarantee this trades). A `database-integrity` phase in the tens of
-  seconds is therefore *expected* on the first start of the day and after a crash, and a defect
-  on every other start.
+  against the 2.73 GB `mux.db` — and eleven stores share that file, so ~126s. It became
+  once-per-file, then conditional, and since 2026-08-30 it is **off this path entirely**:
+  `database-integrity` is now the milliseconds header-and-schema probe plus the decision to
+  schedule the full walk behind the ready daemon. **A `database-integrity` phase over a second
+  is now a defect on every start, with no exceptions** — that is the whole point of the
+  paragraph below, and the exception list the previous version of this line carried is what let
+  a 77.7s phase read as expected.
 - A full psutil sweep in `ProcessInspector.restore()`: 20.7s cold, 6.0s warm, over 482 processes.
   Deferred to a background task.
 
@@ -312,11 +312,37 @@ work being done. **Measure before moving anything here** — the obvious suspect
 database) was innocent, and the actual cost was an integrity check nobody had ever timed because
 it logs nothing when it passes.
 
-Three rules this path earns:
+**The 2026-08-30 reboot, because it is the failure the first fix left standing.** The conditional
+check above kept one blocking trigger — "the previous daemon died uncleanly" — and a reboot is
+exactly that, so the first reboot after it shipped produced an 85.7s start that was 77.67s of
+`database-integrity` and 8s of everything else. Three things are worth taking from it:
+
+- **A signal that correlates with nothing is not a cheap safety net, it is a cost.** `mux.db` runs
+  `journal_mode=wal` with `synchronous=FULL`, under which a process kill and an OS crash both
+  leave the file consistent by SQLite's own atomic-commit contract. So the trigger was spending
+  77.7s of the operator's attention answering a question the storage layer had already answered.
+  The check now runs behind the ready daemon and the unclean-death signal moves it to the front
+  of that queue instead (`technical/backend/sqlite.md`).
+- **Cold and warm differ by 6.7x here, and the gap was the access pattern rather than the disk.**
+  The same check was 11.55s warm and 77.67s cold: an effective 43 MB/s on an NVMe SSD rated in
+  gigabytes per second, because `quick_check` walks 4 KiB pages one at a time through a 2 MB
+  cache with no readahead. Reading the file once sequentially first (`prefetch_database`) is what
+  closes it. **When a number is two orders of magnitude off the hardware, measure the pattern
+  before believing the device.**
+- **A phase's own log line is not enough to notice this.** The 77.67s line was an INFO with a
+  reason attached and read as working-as-intended, because the doc above said it was. What
+  actually surfaced it was the operator saying the app took minutes to start.
+
+Four rules this path earns:
 
 - **Nothing may run unlogged for minutes.** A phase is named and timed, and a phase still running
   is reported while it runs. Completion lines alone would have reproduced the exact failure above,
   because both silent stretches were work still in flight.
+- **Nothing whose answer is not needed to serve the first request may run here.** Not "is it
+  fast", not "is it justified" — is it needed *now*. Verifying every page of a multi-gigabyte
+  file is the case that taught it, and the tell is that the work answers a question about the
+  machine rather than about this start. Housekeeping was already covered by the rule below; this
+  one covers work that is genuinely important and still does not belong in front of a person.
 - **Housekeeping must never gate readiness.**
   Retention prunes are scans whose cost tracks database size and cache state, and they used to run
   on this path for four stores.
