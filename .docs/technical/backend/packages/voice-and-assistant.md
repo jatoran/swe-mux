@@ -62,6 +62,18 @@ Spoken text reaches the bridge through a bounded temporary file and never throug
 The install checks reachability **before** the multi-minute work (`_preflight_index_reachable`, one HEAD against the index) and separates "cannot connect" from "cannot verify", which are one line apart in a traceback and completely different problems.
 Before that it spent 44.8s creating an environment and 36s installing a package, then reported the failure at the step furthest from its cause.
 
+**`select_provision_plan` picks how the environment gets built, and uv is preferred rather than required.**
+uv is tried first and is not a preference: `uv venv --python 3.12` provisions the *interpreter* as well as the environment, which is the only thing that works on the audience this integration is aimed at - a clean machine, or the frozen desktop app, where `sys.executable` is the PyInstaller bundle and `python -m venv` does not exist.
+The `venv` fallback covers the case uv cannot be assumed for: a source install on a machine with a real Python and no uv.
+It is safe for this package specifically because `edge-tts` is `py3-none-any`, so the daemon's own interpreter version raises no wheel-tag question.
+The frozen guard is load-bearing - offering the bundle as an interpreter would re-enter swe-mux under `-m` rather than run Python, which is a second daemon rather than an error.
+`install_method` (`"uv"`, `"venv"`, or `null`) is what the UI's install button gates on; `uv_available` is still reported but deciding on it alone would keep offering the manual-only path to exactly the users the fallback covers.
+`_classify_environment_failure` names the one failure with a specific remedy: Debian and Ubuntu ship `venv` without `ensurepip` unless `python3-venv` is installed, which is the most likely way this path fails and whose apt command can otherwise be lost to the stderr tail slice.
+
+Note the injection shape in `select_provision_plan`: it takes a `which` **resolver**, not a `uv_path`.
+A `uv_path: str | None = None` parameter cannot express "there is no uv here" because `None` also means "you did not tell me", and the first version of this silently consulted the developer's own uv - every test that meant to exercise the fallback exercised the uv path instead.
+Its default is `None` rather than `shutil.which` for the same class of reason: a callable default binds once at definition, so a monkeypatched `shutil.which` would never be seen.
+
 **The verify step makes no network request, and its message has to say so.**
 It was budgeted at 20s and failed there on a clean Windows 11 laptop, rolling back everything it had just built; the natural reading was a network or TLS fault, and the sibling Kokoro download on the same machine really was one - so the diagnosis went to the wrong place.
 `status` imports `edge_tts` and reads its version out of installed metadata (`assets/integrations/edge_tts_bridge.py`).

@@ -11,6 +11,8 @@ import shutil
 import sys
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +87,125 @@ class EdgeTtsError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionPlan:
+    """How this host can build the isolated environment edge-tts installs into.
+
+    Two implementations, and the order between them is not a preference: uv is
+    strictly more capable and is tried first.
+
+    **uv** provisions the *interpreter* as well as the environment
+    (`uv venv --python 3.12` downloads CPython when the machine has none), which
+    is the only thing that works on the audience this whole integration is aimed
+    at - a clean machine, or the frozen desktop app, where `sys.executable` is the
+    PyInstaller bundle and `python -m venv` does not exist at all.
+
+    **venv** covers the case uv cannot be assumed for: a source install on a
+    machine that has a real Python but no uv. It builds the environment with the
+    daemon's own interpreter, which is safe here for a reason specific to this
+    package - `edge-tts` is `py3-none-any`, so it loads on whatever version that
+    interpreter happens to be and there is no wheel-tag question to get wrong.
+    """
+
+    kind: str
+    executable: str
+
+    def create_argv(self, staging: Path) -> list[str]:
+        if self.kind == "uv":
+            return [self.executable, "venv", "--python", "3.12", str(staging)]
+        return [self.executable, "-m", "venv", str(staging)]
+
+    def install_argv(self, staging_python: Path) -> list[str]:
+        if self.kind == "uv":
+            return [
+                self.executable,
+                "pip",
+                "install",
+                "--python",
+                str(staging_python),
+                "--default-index",
+                PYPI_SIMPLE_INDEX,
+                EDGE_TTS_REQUIREMENT,
+            ]
+        # `--index-url` is pip's spelling of the same simple index uv is given, so
+        # both paths install the same pinned artifact from the same place. The
+        # created environment's *own* python runs it, never the daemon's, so
+        # nothing can land outside the staging directory.
+        return [
+            str(staging_python),
+            "-m",
+            "pip",
+            "install",
+            "--index-url",
+            PYPI_SIMPLE_INDEX,
+            "--disable-pip-version-check",
+            "--no-input",
+            EDGE_TTS_REQUIREMENT,
+        ]
+
+
+def _classify_environment_failure(plan: ProvisionPlan, failure: EdgeTtsError) -> EdgeTtsError:
+    """Name the one environment-creation failure that has a specific remedy.
+
+    Debian and Ubuntu ship `venv` without `ensurepip` unless `python3-venv` is
+    installed, so `python -m venv` fails there on a machine that looks perfectly
+    healthy - and the raw message is long enough that the apt command in it can be
+    lost. It is the single most likely way the non-uv path fails, so it gets a
+    sentence rather than a passed-through stderr tail. Every other failure keeps
+    its original classification: guessing at causes is what this file is trying
+    to stop doing.
+    """
+    if plan.kind != "venv":
+        return failure
+    text = str(failure).casefold()
+    if "ensurepip" not in text and "python3-venv" not in text:
+        return failure
+    return EdgeTtsError(
+        "install_venv_incomplete",
+        "this Python cannot create a virtual environment with pip in it, which on "
+        "Debian and Ubuntu means the `python3-venv` package is not installed "
+        "(`sudo apt install python3-venv`). Installing uv avoids the whole "
+        f"question. Original error: {failure}",
+    )
+
+
+def select_provision_plan(
+    *,
+    which: Callable[[str], str | None] | None = None,
+    interpreter: str | None = None,
+    frozen: bool | None = None,
+) -> ProvisionPlan | None:
+    """The best available way to build the environment, or None when there is none.
+
+    Every input is injectable because the answer is about the *host*, and an
+    assertion about behaviour must not be derived from the machine checking it.
+    The uv lookup is taken as a **resolver** rather than as a path for exactly
+    that reason: a `uv_path: str | None = None` parameter cannot express "there is
+    no uv here", because `None` also means "you did not tell me", so the first
+    version of this silently consulted the developer's own uv and every test that
+    meant to exercise the fallback exercised the uv path instead.
+
+    The frozen guard is the other load-bearing half. In the desktop app
+    `sys.executable` is the PyInstaller bundle: it has no `venv` module, and
+    running it with `-m` re-enters swe-mux rather than Python. Offering it as a
+    fallback would produce a confusing failure at best and a second daemon at
+    worst.
+
+    `which` defaults to `None` rather than to `shutil.which` itself: a callable
+    default is bound once, when this function is *defined*, so a caller or a test
+    that replaces `shutil.which` afterwards would never be consulted.
+    """
+    resolved_uv = (which or shutil.which)("uv")
+    if resolved_uv:
+        return ProvisionPlan("uv", resolved_uv)
+    if frozen if frozen is not None else bool(getattr(sys, "frozen", False)):
+        return None
+    executable = interpreter if interpreter is not None else sys.executable
+    if not executable:
+        return None
+    return ProvisionPlan("venv", executable)
 
 
 class EdgeVoiceCatalog:
@@ -307,6 +428,12 @@ class EdgeTtsProvider:
             "python": str(python),
             "requirement": EDGE_TTS_REQUIREMENT,
             "uv_available": shutil.which("uv") is not None,
+            # `uv_available` is kept because it is still the *preferred* method and
+            # the UI names it, but it is no longer what decides whether the button
+            # works: a source install with a real Python and no uv can build the
+            # environment with `venv`. Deciding on `uv_available` alone would keep
+            # offering the manual-only path to someone the fallback covers.
+            "install_method": plan.kind if (plan := select_provision_plan()) else None,
             "installed_at": state.get("installed_at"),
             "updated_at": state.get("updated_at"),
             "last_install_error": state.get("last_install_error"),
@@ -553,11 +680,15 @@ class EdgeTtsProvider:
         previous: Path | None = None
         activated = False
         try:
-            uv = shutil.which("uv")
-            if uv is None:
+            plan = select_provision_plan()
+            if plan is None:
                 raise EdgeTtsError(
-                    "uv_not_found",
-                    "uv is required for the managed Edge TTS installation",
+                    "provisioner_not_found",
+                    "the managed Edge TTS installation needs either uv, or a real "
+                    "Python interpreter it can build a virtual environment with. "
+                    "The frozen desktop app has no usable interpreter of its own, so "
+                    "install uv - or point Settings at an external Python that "
+                    "already has edge-tts.",
                 )
             # Before the multi-minute part, not after it. An install that spends
             # 80 seconds building an environment and only then discovers it cannot
@@ -572,30 +703,25 @@ class EdgeTtsProvider:
                 shutil.rmtree(staging)
             async with self._operation_lock:
                 self._install_phase(operation_id, "creating_environment")
-                await self._run_install_command(
-                    [uv, "venv", "--python", "3.12", str(staging)],
-                    label="Edge TTS environment creation",
-                    operation_id=operation_id,
-                )
+                try:
+                    await self._run_install_command(
+                        plan.create_argv(staging),
+                        label=f"Edge TTS environment creation ({plan.kind})",
+                        operation_id=operation_id,
+                    )
+                except EdgeTtsError as exc:
+                    raise _classify_environment_failure(plan, exc) from exc
                 staging_python = self.managed_python(staging)
                 if not staging_python.is_file():
                     raise EdgeTtsError(
                         "install_invalid",
-                        "uv completed without creating the managed Python interpreter",
+                        f"{plan.kind} completed without creating the managed Python "
+                        "interpreter",
                     )
                 self._install_phase(operation_id, "installing_package")
                 await self._run_install_command(
-                    [
-                        uv,
-                        "pip",
-                        "install",
-                        "--python",
-                        str(staging_python),
-                        "--default-index",
-                        PYPI_SIMPLE_INDEX,
-                        EDGE_TTS_REQUIREMENT,
-                    ],
-                    label="Edge TTS package installation",
+                    plan.install_argv(staging_python),
+                    label=f"Edge TTS package installation ({plan.kind})",
                     operation_id=operation_id,
                 )
                 self._install_phase(operation_id, "verifying")
