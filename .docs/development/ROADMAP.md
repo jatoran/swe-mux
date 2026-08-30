@@ -6229,6 +6229,67 @@ Recorded so they are not re-litigated.
 - [ ] Adding an MCP tool requires no CLI change, and a test proves the two cannot drift.
 - [ ] All four toggle states are reachable and enforced server-side, including "neither".
 
+## Phase 24 - Desktop integration a PyPI install can turn on later
+
+Recorded 2026-08-30. Sequenced **after** the first-run experience work (tiers, tier-driven
+surface density, the guided voice setup, and the quest log), because it belongs on the same
+Settings surface that work builds and should not widen its charter mid-flight.
+
+### The gap
+
+A PyPI install and an installer install are not the same product, and one of the differences is
+recoverable only by reinstalling.
+
+- **The shortcut is already solvable and is only unwired.** `swemux install-shortcut` exists and
+  is deliberately local - it asks no daemon anything - so surfacing it is wiring rather than
+  mechanism.
+- **The tray and the native window are not.** They need `pystray` and `pywebview` importable by
+  the daemon's *own* interpreter: `desktop.py` imports them in-process rather than shelling out,
+  so the isolated-managed-Python trick that carries Edge TTS does not apply. They arrive through
+  the `desktop` extra, which is an install-time decision.
+- **`uv tool upgrade` does not preserve an extra**, so a user who installed without it and later
+  wants the tray has no upgrade path - only a reinstall they have to know to spell correctly.
+
+### Why it is now cheap
+
+Workstream D built exactly the mechanism this needs and shipped it in 0.1.4: `voice_runtime`
+fetches pinned wheels, verifies them against pinned SHA-256s, unpacks into a data-dir site
+directory, and activates it on `sys.path`. The tray closure is a strictly easier case than the one
+already working - `pystray` and `pywebview` are pure Python over ctypes and COM, with no compiled
+extensions, no abi3 forwarder to collect, and no model to download.
+
+So "enable the tray and the desktop window" becomes a press, on the acquisition path that already
+exists, rather than a reinstall.
+
+### Candidate work
+
+- [ ] A **Desktop integration** group in Settings carrying both controls: install or remove the
+  shortcut, and acquire or remove the tray closure.
+- [ ] Acquire `pystray` and `pywebview` through `voice_runtime`'s pinned-wheel path, or a sibling
+  of it, rather than a second downloader.
+- [ ] **Say plainly that the tray needs a restart.** The voice closure activates for a lazy
+  import; the tray is started inside `desktop.main`, so acquiring it mid-run almost certainly
+  means "installed, restart to use". Stating that is better than a user discovering it.
+- [ ] **Windows only, by absence rather than by failure.** Both packages carry
+  `sys_platform == 'win32'` markers and there is no Linux desktop app by design, so on other
+  platforms the control should not be drawn at all.
+
+### Deliberately not in first run
+
+A new user opening the browser UI has not yet earned an opinion about tray icons, and asking
+produces a guess. This belongs in Settings, surfaced from the quest log only when the chosen tier
+suggests it. The one place it does belong up front is the installer path - and that already ships
+the extra, so there is nothing to ask there either.
+
+### Phase 24 exit criteria
+
+- [ ] A user who installed from PyPI without the `desktop` extra can obtain the tray, the native
+  window and a shortcut without reinstalling, and without being told a command to type.
+- [ ] Nothing is fetched without an explicit press, verified against a pinned hash, on the path
+  that already carries the speech closure rather than a second one.
+- [ ] The control is absent on platforms that have no desktop app, rather than present and
+  failing.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
