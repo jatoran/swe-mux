@@ -887,7 +887,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.3...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Fixed</span> <span class="sep">1 entry</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 1 entry</summary>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b>Opening the Agent tab no longer stalls when a recorded directory is on a filesystem that is not reachable.</b> Claude's <code>~/.claude.json</code> keeps an entry for every directory it has ever run in, and finding the one for your session used to ask the filesystem about each of them in turn. A recorded directory can name anywhere you have ever worked - a drive that is no longer attached, a share on a machine that is off, a WSL distribution that is stopped - and Windows does not answer for those quickly, it retries. On one machine with 183 recorded directories, one of them a stopped WSL distribution, a single request took 367 seconds. Path comparison now settles the ordinary case from the directory names alone, and any question it does put to the filesystem is given a deadline and its failure remembered, so an unreachable location costs a moment once instead of a minute per entry. Sessions starting up were on the same path and were delayed the same way.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">
