@@ -26,6 +26,16 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   releases. Installing into the per-user skill roots, which reach every agent you run
   anywhere, prints the exact paths first and proceeds only under `--yes`; `--remove` takes
   back only files the installer can recognize as its own.
+- **Agents can be handed the skill automatically, per harness.** A new "Fleet access"
+  control in Settings → Harnesses phrases the choice as capability - may agents in this
+  harness's sessions see the fleet, and how do they learn they can - with MCP tools, the
+  skill file, both, or neither. The two routes are deliberately not symmetric and the
+  control says so: for Claude the skill travels as a session-scoped plugin from the mux
+  data directory and nothing is written into your Projects, while for codex, pi, omp, and
+  opencode it is written into the Project's `.agents/skills/` at session start, because
+  those CLIs read skills from nowhere else. Automatic delivery is off by default -
+  swe-mux does not write into your checkout unasked - and turning it off later stops the
+  writes without deleting anything.
 
 ### Changed
 

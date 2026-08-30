@@ -244,3 +244,81 @@ def test_the_wheel_and_bundles_carry_the_asset() -> None:
     `assets/**` artifact globs would strand every frozen install."""
     asset = Path(skill_install.__file__).with_name("assets") / "skills" / SKILL_DIR_NAME
     assert (asset / "SKILL.md").is_file()
+
+
+# --------------------------------------------------------------------------- #
+# Automatic delivery (harness_skill_enabled)
+# --------------------------------------------------------------------------- #
+
+
+def test_claude_delivery_is_a_data_dir_plugin_on_the_argv(tmp_path: Path) -> None:
+    """Claude's automatic route writes nothing into any checkout: a data-dir
+    plugin named per session via `--plugin-dir`, the `--mcp-config` shape."""
+    from swe_mux.adapters import ClaudeAdapter, SpawnOptions
+
+    adapter = ClaudeAdapter(data_dir=tmp_path, skill=True)
+    plugin = tmp_path / "agent-skill" / "claude-plugin"
+    manifest = json.loads(
+        (plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    assert manifest["name"] == SKILL_DIR_NAME
+    assert (plugin / "skills" / SKILL_DIR_NAME / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == skill_text()
+    project = tmp_path / "checkout"
+    project.mkdir()
+    argv = list(adapter.spawn_spec("new-id", SpawnOptions(project)).argv)
+    assert argv[argv.index("--plugin-dir") + 1] == str(plugin)
+    assert not (project / ".agents").exists(), "claude delivery must not touch the checkout"
+    assert not (project / ".claude").exists()
+
+
+def test_the_claude_plugin_carries_the_skill_and_nothing_else(tmp_path: Path) -> None:
+    """swe-mux already delivers hooks by its own route (`--settings`); a plugin
+    that grew hooks, commands, or agents would be a second path to the same
+    thing that can disagree. Deliberate, so pinned."""
+    from swe_mux.skill_install import materialize_claude_plugin
+
+    base = materialize_claude_plugin(tmp_path / "plug")
+    assert base is not None
+    entries = sorted(item.name for item in base.iterdir())
+    assert entries == [".claude-plugin", "skills"]
+
+
+def test_claude_without_the_toggle_passes_no_plugin_dir(tmp_path: Path) -> None:
+    from swe_mux.adapters import ClaudeAdapter, SpawnOptions
+
+    adapter = ClaudeAdapter(data_dir=tmp_path)
+    argv = adapter.spawn_spec("new-id", SpawnOptions(tmp_path)).argv
+    assert "--plugin-dir" not in argv
+    assert not (tmp_path / "agent-skill").exists()
+
+
+def test_non_claude_delivery_writes_the_shared_root_at_spawn(tmp_path: Path) -> None:
+    from swe_mux.adapters import CodexAdapter, SpawnOptions
+
+    project = tmp_path / "checkout"
+    project.mkdir()
+    off = CodexAdapter()
+    off.spawn_spec("sid", SpawnOptions(project))
+    assert not (project / ".agents").exists(), "default off writes nothing"
+    on = CodexAdapter(skill=True)
+    on.spawn_spec("sid", SpawnOptions(project))
+    copy = project / ".agents" / "skills" / SKILL_DIR_NAME / "SKILL.md"
+    assert copy.read_text(encoding="utf-8") == skill_text()
+    # Resume refreshes the same file rather than duplicating anything.
+    before = copy.stat().st_mtime_ns
+    on.resume_spec("native", SpawnOptions(project))
+    assert copy.stat().st_mtime_ns == before
+
+
+def test_every_non_claude_harness_declares_the_shared_project_root() -> None:
+    """`deliver_project_skill` writes only `.agents/skills/`, so a non-Claude
+    harness that stopped declaring `project-agents` would get writes its CLI
+    never reads. Claude is exempt because its delivery is the plugin dir."""
+    from swe_mux.harness import HARNESSES
+
+    for name, harness in HARNESSES.items():
+        if harness.adapter_family == "claude":
+            continue
+        assert "project-agents" in harness.skill_install_roots, name

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..harness import descriptor
-from .base import BackendAdapter, SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec, deliver_project_skill
 
 _TITLE_SLOT_BYTES = 256
 _SESSION_ID_FROM_NAME = re.compile(r"_(?P<id>[^_]+)\.jsonl$")
@@ -140,10 +140,14 @@ class OmpAdapter(BackendAdapter):
         data_dir: Path | None = None,
         mcp_url: str | None = None,
         instrument: bool = True,
+        skill: bool = False,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
+        # Spawn-time write of the shared project skill root; off by default
+        # because it writes into the user's checkout (see `deliver_project_skill`).
+        self.skill = skill
         self._extension_root = data_dir / "omp-extensions" if data_dir else None
         self._mcp_url = mcp_url
         # "Launch clean": the OMP extension carries both the lifecycle hook and the
@@ -152,6 +156,7 @@ class OmpAdapter(BackendAdapter):
         self._model_context_windows: dict[tuple[str, str], int] | None = None
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
+        deliver_project_skill(self.skill, opts)
         if not self.instrument:
             return SpawnSpec(
                 opts.exe or self.default_exe,
@@ -166,6 +171,7 @@ class OmpAdapter(BackendAdapter):
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        deliver_project_skill(self.skill, opts)
         if not self.instrument:
             return SpawnSpec(
                 opts.exe or self.default_exe,

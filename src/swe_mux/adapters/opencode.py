@@ -10,7 +10,7 @@ from typing import Any
 
 from ..harness import descriptor
 from ..opencode_store import session_measurements
-from .base import BackendAdapter, SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec, deliver_project_skill
 
 
 def _as_int(value: Any) -> int:
@@ -151,10 +151,14 @@ class OpenCodeAdapter(BackendAdapter):
         mcp_url: str | None = None,
         command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
         instrument: bool = True,
+        skill: bool = False,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
+        # Spawn-time write of the shared project skill root; off by default
+        # because it writes into the user's checkout (see `deliver_project_skill`).
+        self.skill = skill
         self._config_root = data_dir / "opencode-configs" if data_dir else None
         self._mcp_url = mcp_url
         # "Launch clean": the opencode config carries both the plugin (lifecycle
@@ -208,6 +212,7 @@ class OpenCodeAdapter(BackendAdapter):
         return {"OPENCODE_CONFIG": str(config)} if config is not None else {}
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
+        deliver_project_skill(self.skill, opts)
         executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
             executable,
@@ -216,6 +221,7 @@ class OpenCodeAdapter(BackendAdapter):
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        deliver_project_skill(self.skill, opts)
         executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
             executable,

@@ -467,6 +467,7 @@ def test_every_browser_read_trait_travels_in_the_public_payload() -> None:
         "measurement",
         "lifecycle_hooks",
         "mcp",
+        "skill_delivery",
         "pty_delivery",
         "provider_accounts",
         "repaints_scrollback",

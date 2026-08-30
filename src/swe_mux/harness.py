@@ -2499,6 +2499,16 @@ def public_harness_registry(
                     # gating the per-harness MCP toggle in Settings. pi has no MCP
                     # client, so its toggle is not offered.
                     "mcp": harness.adapter_family != "pi",
+                    # How the automatic swe-mux skill delivery reaches this
+                    # harness, so the browser states the difference instead of
+                    # implying the two routes are symmetric: "session" attaches
+                    # a data-dir plugin per session (Claude's `--plugin-dir`)
+                    # and writes nothing into any checkout; "project" writes
+                    # `.agents/skills/` into the session's project tree at
+                    # spawn, because that CLI accepts no per-session route.
+                    "skill_delivery": (
+                        "session" if harness.adapter_family == "claude" else "project"
+                    ),
                     "pty_delivery": harness.submission == "terminal_line",
                     "provider_accounts": harness.provider_account_management,
                     "repaints_scrollback": harness.repaints_scrollback,

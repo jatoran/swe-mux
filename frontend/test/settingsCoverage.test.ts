@@ -66,6 +66,9 @@ const BESPOKE_CONTROLS: Record<string, string> = {
   harness_args: 'setHarnessArgs(current=>',
   harness_mcp_enabled: "setHarnessDict('harness_mcp_enabled'",
   harness_instrument_enabled: "setHarnessDict('harness_instrument_enabled'",
+  // Edited through the per-harness Fleet access control, which writes the MCP
+  // and skill maps together from one capability choice.
+  harness_skill_enabled: "change('harness_skill_enabled',next)",
   // Written straight through rather than into the draft: one switch with its own
   // explanation, whose neighbours act on state the daemon must already hold.
   wsl_bridge_enabled: '{wsl_bridge_enabled:enabled}',

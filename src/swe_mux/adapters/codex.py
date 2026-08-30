@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..codex_tui import with_scrollback_safe_tui
 from ..harness import descriptor
-from .base import BackendAdapter, SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec, deliver_project_skill
 
 # Shared across every live Codex session: they all scan the same tree on the same
 # cadence, so one pass per window instead of one per session per tick.
@@ -84,8 +84,14 @@ class CodexAdapter(BackendAdapter):
         name: str = "codex",
         data_home_resolver: Callable[[], Path] | None = None,
         rollout_file_prefix: str = "rollout-",
+        skill: bool = False,
     ) -> None:
         self.name = name
+        # Automatic skill delivery is a spawn-time write of the shared project
+        # root, because Codex accepts no per-session skills directory by flag,
+        # env var, or config key (measured 2026-08-30; `codex plugin add` is
+        # marketplace-only). Off by default: it writes into the user's checkout.
+        self.skill = skill
         self._data_home_resolver = data_home_resolver or descriptor(name).data_home
         self.rollout_file_prefix = rollout_file_prefix
         family = descriptor(name)
@@ -196,6 +202,7 @@ class CodexAdapter(BackendAdapter):
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
         del sid
+        deliver_project_skill(self.skill, opts)
         executable = opts.exe or self.default_exe
         resolved, prefix = (
             self.command_resolver(executable) if self.command_resolver else (executable, ())
@@ -206,6 +213,7 @@ class CodexAdapter(BackendAdapter):
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        deliver_project_skill(self.skill, opts)
         executable = opts.exe or self.default_exe
         resolved, prefix = (
             self.command_resolver(executable) if self.command_resolver else (executable, ())

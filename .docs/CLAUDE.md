@@ -176,14 +176,20 @@
 - Changing agent-skill discovery (which CLI directories are scanned, the metadata read from
   them, or how the Actions tab lists them): `design/features/ui.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
-- Changing the shipped swe-mux agent skill, `swemux --skill`, or the skill installer
-  (`install-skill`, its roots, or the removal recognition rule):
-  `design/features/agent-skill-delivery.md`, `design/interfaces.md` (CLI section),
+- Changing the shipped swe-mux agent skill, `swemux --skill`, the skill installer
+  (`install-skill`, its roots, or the removal recognition rule), or the automatic
+  per-harness delivery (`harness_skill_enabled`, `skill_install_roots`, the `skill_delivery`
+  capability, the Claude plugin dir, or `deliver_project_skill`):
+  `design/features/agent-skill-delivery.md`, `design/features/backends.md`,
+  `design/interfaces.md` (CLI section),
   `technical/backend/packages/daemon-runtime.md` (`cli.py`), `packaging/swe_mux_cli.spec`.
-  Two rules the feature turns on: the skill enumerates no commands (the binary's `--help` is
-  the authority, so the skill cannot go stale), and a global skill root is written only by
+  Three rules the feature turns on: the skill enumerates no commands (the binary's `--help`
+  is the authority, so the skill cannot go stale); a global skill root is written only by
   the explicit command after printing its plan - project scope is the widest anything
-  automatic may ever reach.
+  automatic may ever reach, and automatic project writes are off by default because they
+  land in the user's checkout; and the two delivery routes are never presented as symmetric,
+  because Claude's is a session-scoped plugin that touches no checkout while every other
+  CLI's is a tree write that exists only because no flag/env/config route does.
 - Changing clipboard capture, the clipboard-history ring/panel, or where inserted text lands:
   `design/features/ui.md`, `design/interfaces.md`, `design/data-model.md`,
   `technical/frontend/packages.md`, `technical/backend/packages.md`,

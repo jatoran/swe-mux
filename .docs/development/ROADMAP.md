@@ -6181,11 +6181,20 @@ here and does not there.
   shell call), and neither - which is currently unreachable and is the one worth designing for
   deliberately, because an untrusted or contributor branch should be able to hold a pane with no
   fleet access at all.
-- [ ] **W5 - ship a skill, embedded in the binary**, so `--skill` prints a release-matched copy and
+- [x] **W5 - ship a skill, embedded in the binary**, so `--skill` prints a release-matched copy and
   guidance cannot drift from the code. The frontmatter description tuned to suppress over-firing,
   the first instruction an in-session environment check, and the body pointing at `--help` rather
   than enumerating flags. The skill resolving transport at runtime - prefer MCP tools when visible,
   otherwise shell out - is what makes W4's four states work with no per-user configuration.
+  **Shipped 2026-08-30** (`design/features/agent-skill-delivery.md`): the embedded skill,
+  `swemux --skill`, the explicit `install-skill` command, and automatic per-harness delivery
+  behind `harness_skill_enabled` (default off). One measured deviation from the sketch above:
+  the skill does not tell an agent to "shell out" as a peer transport - the CLI's
+  session-acting verbs stay operator surface until W1/W2 land - so today it teaches MCP when
+  visible and read-only CLI use otherwise. Claude's delivery is a data-dir plugin on
+  `--plugin-dir` (no checkout write); the other four harnesses get the shared
+  `.agents/skills/` project write, because measurement found no flag, env var, or config key
+  naming a skills directory for any of them.
 - [ ] **W7 - measure the resident context cost of the MCP tool schemas** before it is used as an
   argument. It has been asserted and not measured, and it is the main justification for the
   CLI-only state, so it should be a number.

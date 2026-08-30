@@ -16,6 +16,7 @@ from pathlib import Path
 from ..approvals import DECISION_HOOK_EVENTS
 from ..harness import HARNESSES, descriptor
 from ..mcp_contract import claude_read_permissions
+from ..skill_install import materialize_claude_plugin
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
 
 log = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ class ClaudeAdapter(BackendAdapter):
         user_home_resolver: Callable[[], Path] | None = None,
         instrument: bool = True,
         approval_hook_timeout: float = 5.0,
+        skill: bool = False,
     ) -> None:
         self.name = name
         self.shim_name = f"{name}.cmd"
@@ -144,6 +146,17 @@ class ClaudeAdapter(BackendAdapter):
         )
         self.mcp_config_path = (
             self._write_mcp_config(data_dir, mcp_url) if data_dir and mcp_url else None
+        )
+        # The skill travels as a data-dir plugin on the spawn argv, never as a
+        # write into the project tree - the same shape as the MCP registration
+        # above, and for the same reason: the session-private delivery leaves
+        # the user's checkout and their own plugin set untouched. `--plugin-dir`
+        # is additive (it loads one plugin *for this session*; installed plugins
+        # keep loading). None when materialization failed, which drops the flag.
+        self.skill_plugin_dir = (
+            materialize_claude_plugin(data_dir / "agent-skill" / f"{script_base_name}-plugin")
+            if skill and data_dir
+            else None
         )
 
     def _write_mcp_config(self, data_dir: Path, mcp_url: str) -> Path:
@@ -234,6 +247,8 @@ class ClaudeAdapter(BackendAdapter):
         args = [action, native_id]
         if self.mcp_config_path:
             args.extend(["--mcp-config", str(self.mcp_config_path)])
+        if self.skill_plugin_dir:
+            args.extend(["--plugin-dir", str(self.skill_plugin_dir)])
         settings = self._session_settings(opts)
         if settings:
             args.extend(["--settings", str(settings)])

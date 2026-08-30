@@ -23,6 +23,13 @@ export interface HarnessCapabilities {
    *  toggle is offered. Absent from older daemon payloads; default a missing value
    *  to true for agent harnesses. */
   mcp?: boolean
+  /** How the automatic swe-mux skill delivery reaches this harness: 'session'
+   *  attaches a data-dir plugin per session and writes nothing into any
+   *  checkout; 'project' writes `.agents/skills/` into the session's project
+   *  tree at spawn, because that CLI accepts no per-session route. The two are
+   *  deliberately not presented as symmetric. Absent from older daemon
+   *  payloads; default a missing value to 'project', the disclosing side. */
+  skill_delivery?: 'session' | 'project'
   pty_delivery: boolean
   provider_accounts: boolean
   /** The TUI rewrites content already in xterm scrollback (Codex reflows its
