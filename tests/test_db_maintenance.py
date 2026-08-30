@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import sqlite3
-import time
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +35,6 @@ from swe_mux.db_maintenance import (
     run_maintenance,
     write_request,
 )
-from swe_mux.lifecycle import HEARTBEAT_NAME
 from swe_mux.server import _run_pending_maintenance
 from swe_mux.sqlite_store import VerificationControl
 
@@ -384,39 +382,67 @@ async def test_a_terminal_failure_consumes_the_request(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_live_predecessor_keeps_the_request_instead_of_burning_it(
-    tmp_path: Path, caplog: Any
+async def test_a_live_predecessor_that_never_exits_keeps_the_request(
+    tmp_path: Path, caplog: Any, monkeypatch: Any
 ) -> None:
     """The bug this feature shipped with, asserted.
 
     `wait_for_predecessor_exit` is bounded at 20s and a timeout is deliberately
     a warning rather than a refusal, so the startup window is *not* guaranteed
-    exclusive. Against the real `mux.db` the gate gave up, this ran 74ms later,
-    and `VACUUM` failed with `database is locked` - and the first version then
-    consumed the request, so the operator's compaction silently never happened.
+    exclusive - on the development host the predecessor exceeded that gate on
+    every measured restart, and `VACUUM` then failed `database is locked`. The
+    first version consumed the request on that failure, so the operator's
+    compaction silently never happened.
     """
     config = Config(data_dir=tmp_path)
     _database_with_slack(config.database_path)
-    # A heartbeat naming a live process that is *not* this one. The parent is
-    # alive for the whole test and is not us, which is exactly the predecessor's
-    # shape; using `heartbeat()` here would write our own pid and the probe would
-    # correctly read it as self.
-    (tmp_path / HEARTBEAT_NAME).write_text(
-        json.dumps({"pid": os.getppid(), "heartbeat_at": time.time(), "clean_exit": False}),
-        encoding="utf-8",
-    )
     write_request(tmp_path, (OPERATION_VACUUM,))
     before = config.database_path.stat().st_size
+    # A predecessor that is alive and stays alive, without the wait costing the
+    # test three minutes.
+    monkeypatch.setattr("swe_mux.server.MAINTENANCE_PREDECESSOR_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr("swe_mux.server.pid_running", lambda _pid: True)
 
     with caplog.at_level(logging.WARNING, logger="swe_mux.server"):
-        await _run_pending_maintenance(config)
+        await _run_pending_maintenance(config, predecessor_pid=os.getppid())
 
     # Kept, untouched, and said out loud.
     assert read_request(tmp_path) is not None
     assert config.database_path.stat().st_size == before
-    assert "still running" in caplog.text
+    assert "did not exit" in caplog.text
     # And it did not pay for a backup it could not use.
     assert not list(tmp_path.glob("*.pre-compact"))
+
+
+@pytest.mark.asyncio
+async def test_a_predecessor_that_exits_lets_the_pass_proceed(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The other side of the same gate: the wait is a wait, not a refusal."""
+    config = Config(data_dir=tmp_path)
+    _database_with_slack(config.database_path)
+    write_request(tmp_path, (OPERATION_VACUUM,))
+    alive = iter([True, True, False])
+    monkeypatch.setattr("swe_mux.server.MAINTENANCE_PREDECESSOR_WAIT_SECONDS", 10.0)
+    monkeypatch.setattr("swe_mux.server.pid_running", lambda _pid: next(alive, False))
+
+    await _run_pending_maintenance(config, predecessor_pid=os.getppid())
+
+    assert read_request(tmp_path) is None  # consumed, because it succeeded
+    probe = sqlite3.connect(config.database_path)
+    try:
+        assert int(probe.execute("PRAGMA page_size").fetchone()[0]) == VACUUM_PAGE_SIZE
+    finally:
+        probe.close()
+
+
+@pytest.mark.asyncio
+async def test_no_predecessor_needs_no_wait(tmp_path: Path) -> None:
+    config = Config(data_dir=tmp_path)
+    _database_with_slack(config.database_path)
+    write_request(tmp_path, (OPERATION_VACUUM,))
+    await _run_pending_maintenance(config, predecessor_pid=-1)
+    assert read_request(tmp_path) is None
 
 
 @pytest.mark.asyncio
