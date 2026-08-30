@@ -2875,6 +2875,8 @@ mux accounts [list|verify|audit] [--limit N]
 mux reload-daemon [--force]
 mux doctor [--export]
 mux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
+mux install-skill [--project DIR | --global] [--harness NAME]... [--remove] [--yes]
+mux --skill           # print the embedded agent skill and exit
 
 muxd --where          # also: python -m swe_mux --where
 ```
@@ -2903,9 +2905,17 @@ do what was asked.
 Delivery diagnostics); `mux doctor --export` prints the full `GET /api/diagnostics/export` bundle
 as JSON.
 
-`mux install-shortcut` is the only subcommand that reaches no daemon at all, and that is the point
-of it rather than an optimisation: the person who needs it is the one whose install produced no way
-to start one.
+`mux install-shortcut` and `mux install-skill` reach no daemon at all, and that is the point
+rather than an optimisation: the person who needs the first is the one whose install produced no
+way to start a daemon, and the second writes plain files into directories this machine already
+owns.
+
+`mux --skill` prints the swe-mux agent skill embedded in this release, and `mux install-skill`
+writes it into the skill roots agent CLIs read (`design/features/agent-skill-delivery.md` holds
+the root table and the rules).
+Project scope is the default; `--global` prints the exact per-user paths first and writes only
+under `--yes`, and `--remove` takes back only files carrying the `managed-by: swe-mux` marker -
+declining a foreign file exits `0` because that is the command working.
 
 ### Finding an install that produced no reachable command
 

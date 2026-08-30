@@ -555,6 +555,10 @@ def test_the_smoke_test_never_reads_the_operators_data_directory(tmp_path: Path)
     def record(command: list[str], **kwargs: Any) -> Any:
         environment = kwargs.get("env") or {}
         seen.append(str(environment.get("MUX_DATA_DIR")))
+        if command[1] == "--skill":
+            return subprocess_module.CompletedProcess(
+                command, 0, stdout="MUX_SESSION_ID", stderr=""
+            )
         code = 0 if command[1] == "--help" else 3
         return subprocess_module.CompletedProcess(command, code, stdout="", stderr="")
 
@@ -563,6 +567,21 @@ def test_the_smoke_test_never_reads_the_operators_data_directory(tmp_path: Path)
 
     assert seen and all(value not in {"None", ""} for value in seen)
     assert all(Path(value).name.startswith("swe-mux-cli-smoke-") for value in seen)
+
+
+def test_the_smoke_test_fails_when_the_embedded_skill_prints_empty(tmp_path: Path) -> None:
+    """The skill is a data file, so a dropped spec datas entry is invisible to
+    membership checks and can even exit 0 (an empty file reads fine). Only the
+    content assertion catches that shape."""
+    import subprocess as subprocess_module
+
+    def hollow(command: list[str], **_: object) -> Any:
+        code = 3 if command[1] == "ls" else 0
+        return subprocess_module.CompletedProcess(command, code, stdout="", stderr="")
+
+    bundle = _cli_bundle(tmp_path, {"psutil": 1})
+    with pytest.raises(SystemExit, match="agent skill did not print"):
+        build_desktop.smoke_cli_bundle(bundle, run=hollow)
 
 
 def test_a_staged_redeploy_never_builds_the_client_bundle() -> None:

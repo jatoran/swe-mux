@@ -346,6 +346,10 @@ Its exit code composes the existing two rather than adding a scheme - `1` for a 
 
 `install-shortcut` is the one subcommand that reaches no daemon, because the person who needs it is the one whose install produced no way to start one.
 
+`install-skill` is the other local one: it writes the embedded agent skill (`skill_install.py`, printed by the top-level `--skill` flag) into the skill roots agent CLIs read.
+Global scope prints its plan and writes only under `--yes`; removal takes only files carrying the `managed-by: swe-mux` marker; a policy refusal exits `0` and only a filesystem failure exits `1` (`design/features/agent-skill-delivery.md`).
+`skill_install.py` itself imports only `harness` (for the data-home resolvers) plus the standard library, because it is part of the frozen CLI bundle's closure and that bundle's value is its size.
+
 `ui-overlay` exists as a command rather than only as an endpoint for the mirror-image reason: a frontend overlay's own failure mode is a UI that will not load, so its revert must be reachable without one.
 `status` and `revert` are the two that matter there; `install` classifies what was typed - an https URL (which then requires `--sha256`), a directory, or an archive - and sends an absolute path, because the daemon resolves it in its own process and a relative one would mean something different there.
 It is also the one call that raises `request`'s timeout above the default 10s, since the handler hashes and extracts a whole frontend tree and a client that gave up while the daemon succeeded would report a failure that did not happen.
