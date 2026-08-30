@@ -88,7 +88,8 @@ import {
 } from './sidebarResize'
 import { normalizeDrawerTabOrder } from './drawerTabOrder'
 import {
-  DRAWER_HIDDEN_KEY, canHideDrawerTab, drawerTabVisible, parseHiddenDrawerTabs,
+  DRAWER_HIDDEN_KEY, canHideDrawerTab, defaultHiddenDrawerTabs, drawerTabVisible, parseHiddenDrawerTabs,
+  type ExperienceTierChoice,
   serializeHiddenDrawerTabs, withDrawerTabHidden,
 } from './drawerVisibility'
 import {
@@ -165,6 +166,9 @@ import type { ApprovalMode, DeliveryReadiness, Project, ProjectGroup, Session, L
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { HarnessSetup } from './HarnessSetup'
+import { VoiceSetup } from './VoiceSetup'
+import { QuestLog } from './QuestLog'
+import { withQuestDismissed, type QuestId, type QuestSignals } from './questRegistry.ts'
 import { ActionEditorModal } from './ActionEditorModal'
 import { GuidedTutorial } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, firstRunSurface, mobileTutorialChrome, resetTutorial, shouldStartTutorial, type TutorialStepId } from './tutorial'
@@ -690,6 +694,21 @@ export function App() {
   const [settingsNavOpen, setSettingsNavOpen] = useState(false)
   const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
   const [experienceTierUnchosen, setExperienceTierUnchosen] = useState(false)
+  const [voiceSetupOpen, setVoiceSetupOpen] = useState(false)
+  const [questSignals, setQuestSignals] = useState<QuestSignals>({})
+  const questAction = (id: QuestId): void => {
+    if (id === 'voice') setVoiceSetupOpen(true)
+    else if (id === 'worktrees') showDrawerTab('git')
+    else openSettings('Remote')
+  }
+  // Optimistic and machine-side: the dismissal writes through so it never
+  // resurfaces on another device, and a lost write costs one reappearance
+  // rather than a phantom quest.
+  const dismissQuest = (id: QuestId): void => {
+    const next = withQuestDismissed(questSignals.quests_dismissed, id)
+    setQuestSignals(current => ({ ...current, quests_dismissed: next }))
+    void api('PATCH', '/api/config', { quests_dismissed: next }).catch(() => {})
+  }
   // False until the first `/api/config` call settles, either way. Whether the first-run
   // harness panel is going to lead is a fact only the daemon holds, and it arrives after
   // the first paint - so the tour waits for it rather than painting a card that a dialog
@@ -1774,6 +1793,17 @@ export function App() {
     // not reappear on another. False (or a daemon predating the flag) shows it once.
     setHarnessSetupNeeded(config.harness_setup_complete===false)
     setExperienceTierUnchosen(config.experience_tier==='')
+    // Density follows the tier, but only until the user chooses: a device with
+    // no stored visibility set re-derives its default from the tier on every
+    // config arrival (so applying a tier in Settings takes effect live), while
+    // a stored choice - including the empty set - is never overwritten.
+    if(localStorage.getItem(DRAWER_HIDDEN_KEY)===null)
+      setHiddenDrawerTabs(defaultHiddenDrawerTabs((config.experience_tier??'') as ExperienceTierChoice))
+    setQuestSignals({
+      tts_enabled: config.tts_enabled === true,
+      stt_enabled: config.stt_enabled === true,
+      quests_dismissed: Array.isArray(config.quests_dismissed) ? config.quests_dismissed as string[] : [],
+    })
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
     applyRailDensity(config)
@@ -5588,6 +5618,12 @@ export function App() {
     { id: 'tutorial.start', label: 'Take the guided tour', category: 'view', available: true, run: () => startTutorial(), voice:{
       phrases:['take the tour','start the tour','run the tutorial','show me around','start the guided tour'],
     } },
+    // The guided voice setup gets its own command for the same reason the tour
+    // did: a setup surface reachable only from inside Settings is invisible to
+    // the person who needs it most.
+    { id: 'voice.setup', label: 'Set up voice (guided)', category: 'voice', available: true, run: () => setVoiceSetupOpen(true), voice:{
+      phrases:['set up voice','voice setup','guided voice setup','configure voice'],
+    } },
     // One per topic, so a surface is reachable by its own name from the palette and by
     // voice - the same rule `drawerSegments.ts` enforces for a folded-in segment.
     ...HELP_TOPICS.map(topic => ({
@@ -7217,7 +7253,7 @@ export function App() {
     {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
       {mobileProjection.tabs.map(mobileTab)}
     </OverflowRail>}
-    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
+    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p><QuestLog signals={questSignals} onAction={questAction} onDismiss={dismissQuest}/></div>}</div>
   </section>
 
   // Where the keyboard cursor is, over the rows the filter left drawn in sidebar order.
@@ -7726,7 +7762,7 @@ export function App() {
         <div class="project-workspace unified-workspace">
           <div class="terminal-workspace">
             {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section data-tutorial="workspace-pane" class="pane-stack empty-workspace-pane">
-              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>
+              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p><QuestLog signals={questSignals} onAction={questAction} onDismiss={dismissQuest}/></div>
             </section></div>}
           </div>
         </div>
@@ -8232,7 +8268,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so
         "exactly one of them, ever" is a property of the function rather than of two
@@ -8246,6 +8282,8 @@ export function App() {
       // complete: declining the harness panel is not declining the tour, and silently
       // consuming a first-run walk the user never saw is the more expensive mistake.
       onConfigureMore={()=>{setHarnessSetupNeeded(false); setTutorialOpen(false); openSettings('Agents')}}
+    />}
+    {voiceSetupOpen && <VoiceSetup onClose={()=>setVoiceSetupOpen(false)}
     />}
 
     {actionEditorOpen && <ActionEditorModal projectId={active?.project_id || activeProject?.id} onClose={() => setActionEditorOpen(false)} />}

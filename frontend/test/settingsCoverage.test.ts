@@ -107,6 +107,7 @@ const CONFIG_ONLY: Record<string, string> = {
   pty_supervisor_enabled: 'Whether live sessions outlive the daemon. Flipping it reaps or strands PTYs, so it is a deliberate config edit plus a restart.',
   session_recovery_enabled: 'The recovery store is built once at daemon start; switching it off with sessions tracked leaves their rows open forever. Its bounds are on Terminals - Scrollback.',
   harness_setup_complete: 'Whether the first-run harness panel has been dismissed. Written by that panel, read by nothing else.',
+  quests_dismissed: 'Written by each quest row\'s own dismiss control on the empty workspace stage; dismissal is permanent by design, so a Settings control to re-open one would contradict the feature.',
   notes_default_open: 'Retired by workspace layout v6 and stripped from public_dict, so the browser never receives it.',
   pinned_directories: 'Written by the directory picker as you pin a folder, which is the control.',
   observer_titler_enabled: "Owned by the Automation dashboard's built-in rule rows, which is where a rule is enabled or disabled.",

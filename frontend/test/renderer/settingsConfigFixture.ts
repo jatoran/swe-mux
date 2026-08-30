@@ -130,6 +130,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "harness_mcp_enabled": {},
   "harness_skill_enabled": {},
   "experience_tier": "",
+  "quests_dismissed": [],
   "harness_setup_complete": false,
   "history_limit": 200,
   "host": "127.0.0.1",
