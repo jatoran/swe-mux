@@ -217,10 +217,10 @@ responsive controls.
   Each harness launch row is marked with that harness's own mark (`harnessMark`, `harnessIcons.tsx`) rather than a play triangle, and a launch profile wears its harness's mark because it launches that harness.
   Every row in the section starts a session, so a triangle on all of them distinguished nothing; which CLI a row starts is the fact that separates them.
   The Project Action rows keep `▶`/`▷`, which there is not decoration but the file's trust state.
-- Run is the only always-present launcher, since tab strips carry no new-tab button
-  (`workspace-layout.md`). The header Run is styled as an accent chip rather than a faint label,
-  and because it has no room in the 40 px collapsed header column, the collapsed rail carries an
-  equivalent `▶` button. Mobile's toolbar Run is the same surface.
+- Run is the one launcher surface, reached from several contextual triggers (`workspace-layout.md`).
+  Desktop pane tab rails end with `+`, which focuses that pane and opens the same Run menu as the active-Project header.
+  The header Run is styled as an accent chip rather than a faint label, and because it has no room in the 40 px collapsed header column, the collapsed rail carries an equivalent `▶` button.
+  Mobile omits the pane `+`; its toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
   It is reachable from two places on purpose: the sidebar's `PROJECTS` header, beside the
@@ -406,8 +406,8 @@ Its rules, and what each one is defending:
   header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
   Project-scoped Fleet Queue approval rows — live on the Project itself: right-click a
   sidebar row, or tap the Project title in the mobile top bar (both open the same menu).
-- Starting work is the Run menu's job alone (active-Project header, every Project row, mobile
-  rail). Neither the app menu nor the Project context menu carries "New terminal": Run already
+- Starting work is the Run menu's job alone (active-Project header, desktop pane tab rails, every Project row, mobile rail).
+  Neither the app menu nor the Project context menu carries "New terminal": Run already
   offers the same backends plus the Project's imported tasks, and a second door only split the
   affordance.
 - Broadcast input stays in the app menu because it is an app-wide input mode, not a Project
@@ -1292,8 +1292,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   provider CLI they have not installed - otherwise leaves abandonment as the only way past it.
   The spotlight and the gate stay for the user who does want to do the thing now; the wording of
   the skip is per-step where the generic one reads wrongly ("I'll do this later" on accounts).
-- Both the Run step and the second-tab step drive the real Run menu, since tab strips have no
-  new-tab button to point at; the second-tab step's spotlight returns to Run.
+- Both the Run step and the second-tab step drive the real Run menu.
+  On desktop the second-tab step spotlights the pane `+`; on mobile it returns to toolbar Run.
 - Run requires opening the actual menu and selecting Shell.
   Account setup **offers** either **sign in + save** or **save current login** and is skippable,
   because the first-run harness panel one surface earlier calls CLI login a later step and two

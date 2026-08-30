@@ -13,13 +13,16 @@ Design: `../../../design/features/workspace-layout.md`, `../../../design/feature
 
 ## Horizontal overflow rails
 
-`RailScroller.tsx` (exporting `OverflowRail`), `railOverflow.ts`, `wheelScroll.ts`
+`RailScroller.tsx` (exporting `OverflowRail`), `railOverflow.ts`, `wheelScroll.ts`, `PaneRunTrigger.tsx`
 
 Shared endpoint detection, passive arrow glows, wheel translation, and separate selection/focus reveal triggers for workspace tabs, utility tabs, and the terminal Action rail.
 Callers retain tablist semantics and drag targets.
 Native touch and trackpad scrolling remains the default; keyboard-translated Action rails opt into explicit pointer scrolling plus IME-focus preservation, so the first focused drag cannot be lost to visual-viewport arbitration.
 The pan begins on any child, with no button excluded: `railOverflow.ts` exports `RAIL_PAN_SLOP_PX` as the one travel threshold both the pan and `railKeyRepeat.ts` decide on, and the click a real drag suppresses is what settles whether the button it started on activated.
 Edge glows are `aria-hidden` spans with `pointer-events:none`; they indicate hidden content but never page or capture input.
+Desktop workspace rails append `PaneRunTrigger.tsx` after the ordered tab shells.
+The trigger opens the shared Project Run menu and receives the drag preview's terminal order, so it cannot move between tabs while a reorder is previewed.
+App assigns each pane trigger a stable `pane:<stack-id>` identity and focuses the pane's active view before opening the menu.
 
 ## Pinned rail and overflow popover
 

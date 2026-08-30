@@ -152,15 +152,19 @@ PaneLeaf = terminal | note | preview | history | queue
   Trackpad swipes, touch panning, and events already carrying horizontal intent remain native rather than being applied twice.
   Selection and keyboard focus reveal the target tab automatically, including a newly launched tab and an already-selected tab in a pane that just received workspace focus.
   A strip that fits shows no affordance or consumes no wheel event.
+- Every desktop pane tab rail ends with a fixed-width `+` after its last tab.
+  The control scrolls with the tab sequence, stays last during drag previews, and opens the Project Run menu rather than assuming a backend.
+  Opening it focuses that pane's active view first, so an unsplit launch returns to the pane whose `+` was used.
+  Distinct pane trigger identities keep `aria-expanded` on only the control that opened the menu.
+  The mobile unified rail omits the control because toolbar Run already occupies the device's contextual launch position.
 - The active tab carries an accent outline, a thick accent underline, and a tinted fill. A bare
   background swap is not enough: the previous treatment moved only `--panel` to `--bg`, a few
   RGB points that vanish on a phone screen in daylight and is easy to miss on desktop too. The
   active fill is published as `--tab-active-bg` so the close button's fade overlay tracks the
   same colour instead of blending toward a background the tab no longer uses.
-- Tab strips carry no new-tab button on any platform. The Project Run menu is the single
-  launcher (desktop top bar, collapsed-rail `▶`, mobile toolbar, sidebar project row); an
-  unsplit launch lands as a tab in the focused pane, which is what the old `+` did minus the
-  backend choice. Explicit placement is **drag or the command palette**; no context menu
+- The Project Run menu is the single launcher behind the desktop pane `+`, desktop top bar, collapsed-rail `▶`, mobile toolbar, and sidebar Project row.
+  The pane `+` is a menu trigger rather than a backend shortcut; an unsplit launch lands as a tab in the pane it focused.
+  Explicit placement is **drag or the command palette**; no context menu
   carries it (see `ui.md` § context menus). A tab strip with nothing in it is not rendered,
   so an empty workspace shows only its stage.
 - Layout changes update the local `layoutValues` ref and rendered map immediately, then serialize
