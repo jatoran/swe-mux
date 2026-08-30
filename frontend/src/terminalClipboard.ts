@@ -44,9 +44,14 @@ type TerminalTextPasteEvent = Pick<ClipboardEvent, 'clipboardData' | 'preventDef
 /**
  * Claim a native text paste before xterm's DOM listener handles it.
  *
- * Every terminal paste surface must converge on the pane's paste function because that
- * function repairs stale bracketed-paste mode. Letting xterm own Ctrl+V while the command
- * rail uses the pane path makes the two controls observably different after a reconnect.
+ * Every terminal paste surface must converge on the pane's paste function, because that
+ * function - not xterm - decides the bracketing and lifts a leading newline run out of a
+ * Codex paste. Letting xterm own Ctrl+V while the command rail uses the pane path makes
+ * the two controls observably different, and the difference only shows up on the pastes
+ * that matter: multi-line ones, into an agent, submitted a line at a time.
+ *
+ * A paste that reaches xterm's own handler anyway is reported (`PASTE_UNCLAIMED_PHASE`),
+ * because nothing downstream of here can tell that it did.
  */
 export function claimTerminalTextPaste(
   event: TerminalTextPasteEvent,
@@ -58,6 +63,42 @@ export function claimTerminalTextPaste(
   event.stopPropagation()
   paste(text)
   return true
+}
+
+/** What a pane knows about a paste that was dispatched outside its terminal host. */
+export type StrayPasteContext = {
+  /** This pane is not on screen, so it is not what the operator was pasting into. */
+  paneHidden: boolean
+  /** The event landed inside some terminal host - that host's own capture listener
+   *  owns it, and the document listener runs first, so this must not double-handle it. */
+  targetInTerminalHost: boolean
+  /** The event, or the keyboard, is inside an open dialog, which owns the interaction. */
+  inDialog: boolean
+  /** A real text field elsewhere in the app holds the keyboard and will receive the
+   *  paste natively - including the mobile input bridge, which sits beside the host. */
+  focusHeldByOtherField: boolean
+  /** The last-focused insertable surface, when it is a terminal (`insertTarget.ts`). */
+  focusedTerminalSessionId: string | null
+  sessionId: string
+}
+
+/**
+ * Whether this pane should adopt a paste that was dispatched somewhere else.
+ *
+ * Ctrl+V pressed while the keyboard sits on something focusable but not editable - a rail
+ * button just clicked, a session tab - is dispatched to that element. The pane's own
+ * listener is on its host and never hears it, xterm never hears it, and the paste goes
+ * silently nowhere, which reads to the operator as the same defect as a paste that went
+ * out wrong.
+ *
+ * Routing on the last-focused terminal rather than on visibility is what keeps this
+ * single-valued: several panes can be on screen at once, and every one of them runs this,
+ * so a rule any two of them could answer yes to would paste twice.
+ */
+export function strayPasteBelongsToPane(context: StrayPasteContext): boolean {
+  if (context.paneHidden || context.targetInTerminalHost || context.inDialog) return false
+  if (context.focusHeldByOtherField) return false
+  return context.focusedTerminalSessionId === context.sessionId
 }
 
 function browserClipboard(): ClipboardAccess {
@@ -148,21 +189,34 @@ export async function copyPreparedText(
 /**
  * Whether a paste must be bracketed by hand instead of trusting xterm to do it.
  *
- * xterm wraps a paste only once it has seen the child enable bracketed paste, and an
- * agent CLI enables it exactly once at startup. A pane that reset its terminal on
- * reconnect can therefore believe the mode is off while the CLI still has it on.
- * Unwrapped, xterm rewrites every newline to a carriage return, so the CLI submits the
- * paste a line at a time and keeps only the text after the final newline.
+ * xterm wraps a paste only once it has *seen* the child enable bracketed paste. That
+ * mirror is a guess about the child, and it is wrong in both directions:
  *
- * Deliberately narrow. Single-line text is unaffected by the bug, and a child that
- * genuinely has no bracketed paste (a plain shell) must never be sent the wrapper
- * bytes, so it only fires for multi-line text going into an agent session.
+ *  * stale **off** - an agent CLI enables the mode exactly once at startup, so a pane
+ *    that reset its terminal on reconnect believes it is off while the CLI still has
+ *    it on. Unwrapped, xterm rewrites every newline to a carriage return, the CLI
+ *    submits the paste a line at a time, and only the text after the final newline
+ *    survives.
+ *  * stale **on** - the mirror was set by a child that has since been replaced (a
+ *    shell promoted into an agent, a resumed pane), or by a CLI that has dropped out
+ *    of its TUI. xterm wraps, the child ignores the wrapper, and the CRs submit line
+ *    by line exactly as above.
+ *
+ * The mirror is therefore not consulted at all: an agent CLI holds bracketed paste on
+ * for its whole life, so the wrapper is always the right bytes for one, and the two
+ * branches produce *identical* bytes when the mirror happens to be right - `term.paste`
+ * and `bracketedPaste` do the same `\n`→`\r` rewrite inside the same wrapper. Removing
+ * the condition can only change what happens when the mirror was lying.
+ *
+ * Deliberately still narrow on the other two axes. Single-line text is unaffected by
+ * the bug and wrapping it would turn a short paste into a `[Pasted text]` placeholder
+ * in Codex, and a child that genuinely has no bracketed paste (a plain shell) must
+ * never be sent the wrapper bytes it would print literally.
  */
 export function pasteNeedsManualBracketing(input: {
   text: string
   agentBackend: boolean
-  bracketedPasteMode: boolean
 }): boolean {
-  if (!input.agentBackend || input.bracketedPasteMode) return false
+  if (!input.agentBackend) return false
   return /[\r\n]/.test(input.text)
 }

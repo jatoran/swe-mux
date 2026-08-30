@@ -107,3 +107,19 @@ test('a paste is recognized by its native event source or by its wrapper alone',
   assert.equal(inputIsTraceablePaste('x', 'keydown'), false)
   assert.equal(inputIsTraceablePaste('x', null), false)
 })
+
+test('a write the pane’s own paste path produced says so, whatever the bytes look like', () => {
+  // Exact where the heuristic could only guess: a single-line rail paste carries no
+  // wrapper and raises no native event, and used to be traced by neither.
+  assert.equal(inputIsTraceablePaste('one line', null, { origin: 'rail', kind: 'payload' }), true)
+  assert.equal(inputIsTraceablePaste('one line', 'keydown', { origin: 'native', kind: 'payload' }), true)
+})
+
+test('the newline keys lifted out ahead of a Codex paste are not a paste of their own', () => {
+  // Both writes reach onData with the native capture source still set, and both reports
+  // would land 600 ms later microseconds apart - where the durable sink's one-per-second
+  // window per phase drops the second. Tracing the leading write therefore does not add a
+  // useless report, it replaces the real one.
+  assert.equal(inputIsTraceablePaste('\x1b\r', 'paste', { origin: 'native', kind: 'leading' }), false)
+  assert.equal(inputIsTraceablePaste('\x1b\r', null, { origin: 'insert', kind: 'leading' }), false)
+})

@@ -2370,14 +2370,15 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The registry is written immediately to `localStorage`, limits each draft to 64 KiB, retains at most 50 sessions for 30 days, and falls back to memory if browser storage is unavailable.
   A green dot on the keyboard control and every tab for that terminal discloses saved text without exposing its content.
 - Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Insert** button appends the exact draft text to the live agent composer without submitting it.
-  Agent multiline insertion uses bracketed paste, including the stale-mode fallback, so newlines and leading or trailing spaces remain composer text rather than becoming Enter key submissions.
+  Agent multiline insertion uses bracketed paste, written by the pane rather than by xterm, so newlines and leading or trailing spaces remain composer text rather than becoming Enter key submissions.
   The Draft path never emits a trailing carriage return.
   A successful insertion clears the saved draft and returns to live input for review; a rejected insertion leaves the text editable and reports the error in the composer.
   Insertion appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
   Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
   target.
-  Native terminal paste and the rail action use the same pane-owned text path, including the agent multiline stale-mode repair, so Ctrl+V cannot submit clipboard lines individually while the rail keeps them composed.
+  Native terminal paste and the rail action use the same pane-owned text path, which brackets multi-line agent text itself rather than trusting xterm's mirror of the child's mode, so Ctrl+V cannot submit clipboard lines individually while the rail keeps them composed.
+  Ctrl+V pressed while the keyboard sits on something focusable but not editable - a rail button, a session tab - is routed to the last-focused terminal instead of going nowhere.
   Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
   than typing `/copy` or waiting for OSC 52. Reply extraction walks back to the newest turn with
