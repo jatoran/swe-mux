@@ -2195,17 +2195,26 @@ body {
 .automation-matrix-grid .project-automation-group{display:flex;align-items:baseline;gap:8px;margin:0;padding:7px 8px 4px;color:var(--accent);border-top:1px solid var(--line)}
 .automation-matrix-grid .project-automation-group span{color:var(--muted);font-weight:400}
 .automation-matrix-grid .project-automation-deps{margin:2px 0 0;color:var(--muted);font-size:10px}
-/* The authority rows hold a level rather than an on/off, so their two editable
-   cells are dropdowns and need real width where the automation rows need 64px of
-   checkbox. Same grid, different track sizes, and the cells left-align because a
-   centred dropdown reads as a mistake next to a label. */
+/* Authority keeps Global and Project aligned, but gives both controls enough room to
+   show their value. On a phone the name takes a full row and those two columns sit below
+   it, so the same comparison survives without squeezing the name into the leftover edge. */
 .automation-authority-grid{margin-top:10px}
-.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(0,1fr) 190px 190px 74px}
+.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(220px,1fr) minmax(220px,240px) minmax(220px,240px) 58px;gap:8px}
 .automation-authority-row .automation-matrix-cell{flex-direction:column;align-items:stretch;justify-content:flex-start;gap:3px}
-.automation-authority-global .check{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted)}
-.automation-authority-global small{color:var(--muted);font-size:9px;line-height:1.3}
+.automation-authority-row .dropdown-trigger{width:100%}
+.automation-authority-meta{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:5px}
+.automation-authority-meta .check{display:flex;align-items:center;gap:4px;padding:0;font-size:9px;color:var(--muted);white-space:nowrap}
+.automation-authority-meta small{min-width:0;color:var(--muted);font-size:9px;line-height:1.3;text-align:right;white-space:nowrap}
 .automation-authority-overridden{color:var(--warn,var(--accent));font-size:9px}
-@media(max-width:760px){.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(0,1fr) 130px 130px}}
+@media(max-width:760px){
+  .automation-authority-grid .automation-matrix-head{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
+  .automation-authority-grid .automation-matrix-head span:first-child,.automation-authority-grid .automation-matrix-head span:nth-child(4){display:none}
+  .automation-authority-grid .automation-matrix-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .automation-authority-grid .automation-authority-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"name name" "global project";gap:5px 6px;padding:7px 8px}
+  .automation-authority-row .automation-matrix-name{grid-area:name;padding-left:0}
+  .automation-authority-row .automation-authority-global{grid-area:global}
+  .automation-authority-row>.automation-matrix-cell:not(.automation-authority-global){grid-area:project}
+}
 .project-authority-summary{margin:6px 0 8px;display:grid;gap:3px}
 .project-authority-summary>div{display:flex;justify-content:space-between;gap:10px}
 .project-authority-summary dt{color:var(--muted)}
