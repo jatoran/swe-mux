@@ -8,7 +8,7 @@
      public commitment, and a reader looking for "can it do X yet" would have to read
      an engineering plan to find out.
 
-     Four rules this page holds, and the reason for each:
+     Three rules this page holds, and the reason for each:
 
      1. **No dates, ever.** A public roadmap that names a month is a promise made by
         someone who cannot keep it, and it ages into a liability the week it slips.
@@ -18,11 +18,9 @@
         with a misleading name, and the landing page and `README.md` already carry
         that. The `changelog` is the record of what shipped and the only page here
         that is a commitment; everything on this one is direction.
-     4. **The boundaries are the argument.** `Deliberately not on the roadmap` is not
-        a list of gaps, and it is the cheapest instrument this page has: it turns a
-        request that will never be built into a reason rather than into silence. It
-        is linked from the lede and from the section that invites requests, because
-        inviting them is exactly what makes it load-bearing.
+
+     One item per line, one sentence each. When the list grows past a couple of
+     screens, the answer is fewer items, not a longer page.
 
      The vote-ranked block is generated. The MOST-REQUESTED marker comment below (written
      without its delimiters here, because `build.py` requires exactly one of it in this
@@ -32,71 +30,33 @@
      workflow: it owns the data, this repository owns the markup, and below the vote
      floor the marker's own line is dropped so the page is byte-identical to one that
      never had the block. Do not hand-write rows there.
-
-     Keep it to a few screens. When it grows past that, the answer is fewer themes,
-     not a longer page.
 -->
 <section class="page">
   <div class="wrap">
     <div class="kick">direction, not dates</div>
     <h1>Roadmap</h1>
     <div class="lede">
-      <p>This is a projection of the internal plan, not a copy of it, and it carries no
-      dates. <b>Everything on this page is direction, and direction changes.</b> What has
-      already shipped is deliberately not here: the <a href="../changelog/">changelog</a>
-      is the record of that, and it is the only one of the two that is a commitment.</p>
-      <p>Some of what gets asked for will never be built, and the reasons are specific
-      rather than a shortage of time. <a href="#not-planned">Deliberately not on the
-      roadmap</a> is that list, and it is worth reading before
-      <a href="#asking">asking for something</a>.</p>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Being built now</h2><span class="fill"></span></div>
-      <p class="prose">One theme at a time, and this is the current one.</p>
-      <ul class="flat">
-        <li><b>Getting it installable</b><span>Published wheel and desktop artifacts, an update check against a static manifest with a staged swap that preserves live sessions, clean-machine install and upgrade testing, and this site.</span></li>
-        <li><b>The first ten minutes</b><span>A first run that works on a phone as well as a desktop, an in-app help surface that links here rather than restating things, and inline controls for the gates that quietly stop a new install from doing anything.</span></li>
-      </ul>
+      <p>Everything here is direction, and direction changes. The
+      <a href="../changelog/">changelog</a> is the record of what actually shipped.</p>
     </div>
 
     <div class="rel">
       <div class="relhead"><h2>Next</h2><span class="fill"></span></div>
-      <p class="prose">Direction, in rough order of how settled it is. None of it is dated,
-      and anything here can be reordered by what the first users actually hit.</p>
+      <p class="prose">In rough order of how settled it is. Anything here can be reordered
+      by what people actually hit.</p>
       <ul class="flat">
-        <li><b>More harnesses</b><span>The registry was built so that a new agent CLI costs a descriptor and an adapter instead of a branch through every feature. The candidate study exists; spending that abstraction is the work.</span></li>
-        <li><b>macOS</b><span>Implemented behind the same platform seams as Linux and typechecked on every gate run, but it has never been executed. It becomes a supported platform when somebody runs the suite on real hardware, not before.</span></li>
+        <li><b>More harnesses</b><span>The registry was built so a new agent CLI costs a descriptor and an adapter instead of a branch through every feature. The candidate study exists; spending that abstraction is the work.</span></li>
+        <li><b>macOS</b><span>Implemented behind the same platform seams as Linux and typechecked on every gate run, but never executed. It becomes a supported platform when somebody runs the suite on real hardware, not before.</span></li>
+        <li><b>The tray and the desktop window without a reinstall</b><span>A PyPI install without the desktop extra has no upgrade path to the tray, the native window or a shortcut. All three should be a press in Settings, on the same pinned-wheel path that already fetches the speech stack.</span></li>
+        <li><b>Agent reach without MCP, and an authenticated loopback</b><span>The local API authenticates nothing today, which is the gate on everything else: identify session-originated requests server-side, then let an agent reach the daemon through the CLI as well as MCP, through the same authority matrix.</span></li>
+        <li><b>Updates that only transfer what changed</b><span>An update already rewrites only the files that moved. It still ships the whole archive to do it.</span></li>
+        <li><b>Git operations from the Git tab</b><span>Commit with a message, manage the ignore file, and see failures plainly rather than dropping to a shell. The commit message is worth generating from the diff and the session record behind it.</span></li>
+        <li><b>Session restore after a restart or a crash</b><span>Sessions already outlive the browser, the daemon and app updates. They should also survive the machine going down, and offer to reopen what was open.</span></li>
+        <li><b>Hooks on swe-mux's own signals</b><span>Harness-neutral hooks that fire on PTY events, status transitions and the scan timeline, so a workflow built around them keeps working when you change agent CLI.</span></li>
         <li><b>Deeper code analysis</b><span>Joining the structural graph to the behavioral record at the symbol level: cross-session conflict prediction, entity-level change facts, and stale-caller detection. swe-mux is the only observer that sees every parallel session's edits as they happen, which is what makes the first of those possible at all.</span></li>
         <li><b>A portable verification contract</b><span>The setup and verify scripts a worktree needs are already repository-neutral, and the land queue is worth nothing without them. Making that pair reachable and adoptable from inside any repository is the gap.</span></li>
-        <li><b>A shared browser surface</b><span>Recorded, and gated on an authorization decision that has not been made. Today's previews are safe precisely because they cannot navigate anywhere and no agent can drive them; letting either of those change is a product decision about trust, not a feature.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel">
-      <div class="relhead"><h2>Recorded, not scheduled</h2><span class="fill"></span></div>
-      <p class="prose">Written down so the reasoning survives, with no commitment to build
-      them.</p>
-      <ul class="bullets">
-        <li><span><b>Subagent visibility.</b> Nested rows for a session's subagents and a read-only pane per subagent. There is no way to attach a terminal to a specific subagent from outside its session, so a reader over the on-disk sidecar files is the only path.</span></li>
-        <li><span><b>Following a forked conversation.</b> When a CLI replaces its own conversation underneath a pane, that pane should be followed rather than abandoned, and a pane swe-mux has demonstrably lost track of should say so instead of freezing on its last reading.</span></li>
-      </ul>
-    </div>
-
-    <div class="rel boundary" id="not-planned">
-      <div class="relhead"><h2>Deliberately not on the roadmap</h2><span class="fill"></span></div>
-      <p class="prose">These are not oversights and they are not "later". Each would need a
-      new decision about authorization, confirmation, audit, and failure behaviour before
-      it could be scheduled at all, and none of those decisions has been made. <b>A request
-      for one of them is closed with a link back to this section</b>, which is a boundary
-      rather than a judgement about whether the idea is a good one. No number of votes
-      moves anything out of this list; only one of those decisions would.</p>
-      <ul class="bullets">
-        <li><span><b>Autonomous actuation.</b> Model-authored action selection, unrestricted terminal writes, auto-approval, or arbitrary command execution. Observers structurally cannot type, approve, or spawn, and that is the property the rest of the design rests on.</span></li>
-        <li><span><b>Killing processes it merely suspects.</b> swe-mux finds hung and orphaned processes and shows them to you. It does not terminate them on its own judgement.</span></li>
-        <li><span><b>A cloud service.</b> No account, no relay, no server, no telemetry. The phone reaches your machine over your own tailnet, and there is no third party in the path because there is no third party.</span></li>
-        <li><span><b>A chat-bot control adapter.</b> Web push covers outbound alerting and the mobile browser covers inbound control, so a bot would buy "reply without opening the UI" at the cost of a second confirmation surface to keep safe.</span></li>
-        <li><span><b>Remote execution hosts.</b> Treating machines over SSH as execution targets, with a remote filesystem provider and a deployed relay. A host already on your tailnet can reach the daemon directly, which is the cheaper answer to most of what this would buy.</span></li>
+        <li><b>Model routing in the assistant</b><span>A small request should not cost a large model. Route simple asks cheaply and escalate the ones that need reasoning or several tool calls in a row.</span></li>
+        <li><b>A shared browser surface</b><span>Gated on an authorization decision that has not been made. Today's previews are safe precisely because they cannot navigate anywhere and no agent can drive them; letting either change is a product decision about trust, not a feature.</span></li>
       </ul>
     </div>
 
@@ -105,23 +65,12 @@
       <p class="prose">Feature requests are
       <a href="https://github.com/jatoran/swe-mux/discussions/categories/ideas">GitHub
       Discussions in the Ideas category</a>, and a thumbs-up on one is a vote. The issue
-      tracker stays for bugs. A request that is accepted becomes an issue at that point and
-      carries its discussion and its votes across with it.</p>
+      tracker stays for bugs.</p>
       <p class="prose"><b>Describe the problem, not the fix.</b> What you were trying to do,
-      what you did instead, and what made it hard. Two proposed implementations cannot be
-      weighed against each other, and a request that arrives as one hides the thing that
-      would actually be built for; the form asks for it in that shape. Read
-      <a href="#not-planned">deliberately not on the roadmap</a> first, because a request
-      that lands inside one of those boundaries gets a reason rather than a queue place.</p>
-      <p class="prose"><b>A vote is a signal, not a commitment.</b> Votes say what to look at
-      first and nothing more. Nothing is scheduled by being voted for, and no count obliges
-      anybody to build anything.</p>
+      what you did instead, and what made it hard. A vote says what to look at first and
+      nothing more; nothing is scheduled by being voted for.</p>
     </div>
 
     <!--MOST-REQUESTED-->
-
-    <p class="note">The internal plan this projects from lives in the repository under
-    <code>.docs/development/</code>, along with the audits and incident runbooks it cites.
-    It is written for the people building swe-mux and reads like it.</p>
   </div>
 </section>

@@ -2872,9 +2872,7 @@ TROUBLESHOOTING = Page(
             "p",
             f'Bugs go to <a href="{REPO}/issues">the issue tracker</a>, with the export attached. '
             f'Feature requests go to <a href="{REPO}/discussions/categories/ideas">the Ideas '
-            "discussions</a>, where a thumbs-up is a vote - and it is worth checking "
-            '<a href="../../roadmap/#not-planned">deliberately not on the roadmap</a> first, '
-            "because some things are answered with a reason rather than with silence.",
+            "discussions</a>, where a thumbs-up is a vote.",
         ),
     ],
 )

@@ -324,11 +324,11 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
 }
-/* The two facts that used to be a caption under the hero film. Above 620px the
-   phone overlay hangs up to 46px below `.herovis` and this has to clear it;
-   below 620px the phone is back in flow and the same margin is dead space. */
-.shotnote { margin-top: clamp(56px, 8vw, 80px); max-width: 72ch; }
-@media (max-width: 620px) { .shotnote { margin-top: 22px; } }
+/* Whatever follows the hero visual has to clear the phone overlay, which above
+   620px hangs up to 46px below `.herovis`. Below 620px the phone is back in
+   flow and the same margin is dead space, so it drops back to the normal one. */
+.shotgap { margin-top: clamp(56px, 8vw, 80px); }
+@media (max-width: 620px) { .shotgap { margin-top: clamp(34px, 5vw, 56px); } }
 
 /* --------------------------------------------------------------- two halves */
 .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
@@ -511,16 +511,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
 .rel { margin-top: clamp(40px, 6vw, 64px); }
 
-/* The anti-roadmap is drawn as a panel rather than as a fourth run of bullets
-   that happens to be last. It is the cheapest instrument this site has for
-   answering a request that will never be built with a reason instead of with
-   silence, and the roadmap page now invites requests, which makes that job much
-   larger than it was. A panel is the whole treatment: no colour of its own, no
-   warning register, and the same hairline the rest of the page uses. */
-.boundary { border: 1px solid var(--line-2); background: var(--panel);
-            padding: 2px clamp(14px, 3vw, 26px) clamp(16px, 2.4vw, 22px); }
-.boundary .relhead { padding-top: clamp(14px, 2.4vw, 20px); }
-
 /* Vote rows. A count is a number, so it takes the mono face and a fixed column;
    the row itself is a link rather than a description, which is what separates
    this list from the themed ones above it. `overflow-wrap` because a title is
@@ -674,9 +664,10 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 /* -------------------------------------------------- the agent-onboarding block
 
    Prominent by position rather than by colour: it sits directly under the lede,
-   above the section nav, and takes the panel treatment the roadmap's boundary
-   panel already uses. It is the first thing on the page because the reader most
-   likely to act on it is the one who has not decided to read anything yet. */
+   above the section nav, as a panel with no colour of its own, no warning
+   register, and the same hairline the rest of the page uses. It is the first
+   thing on the page because the reader most likely to act on it is the one who
+   has not decided to read anything yet. */
 .agentbox { border: 1px solid var(--line-2); background: var(--panel);
             padding: clamp(15px, 2.6vw, 22px); margin-top: clamp(20px, 3vw, 28px); }
 .agentbox h2 { font-size: clamp(15px, 2vw, 17px); }
@@ -1148,9 +1139,9 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         registry, that is the row that decides it. Every CLI still runs in swe-mux as an
         ordinary terminal program; what it does not get is the layer on top.</span></li>
         <li><b>Not built is not the same as not yet built</b><span>swe-mux has no hosted
-        runners and no team features, and both are
-        <a href="../roadmap/#not-planned">deliberately not on the roadmap</a> rather than
-        pending. If you want either, two of the tools above have them today.</span></li>
+        runners and no team features, and neither is planned rather than pending: there is
+        no swe-mux account, server or relay by design. If you want either, two of the tools
+        above have them today.</span></li>
       </ul>
       <p class="note">Nothing on this page is a benchmark. No tool here was run
       side by side against another, and none of the rows measure speed, reliability, or
