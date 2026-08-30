@@ -1077,7 +1077,7 @@
     },
     {
       "name": "spacy",
-      "version": "3.8.15",
+      "version": "3.8.16",
       "license": "MIT",
       "ecosystem": "python"
     },

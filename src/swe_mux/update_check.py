@@ -73,6 +73,7 @@ import aiohttp
 from . import __version__
 from .background_tasks import background
 from .config import Config
+from .tls_trust import trusting_connector
 
 log = logging.getLogger(__name__)
 
@@ -465,7 +466,7 @@ async def http_fetch(url: str, *, headers: Mapping[str, str] | None = None) -> t
     """
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(
-        timeout=timeout, cookie_jar=aiohttp.DummyCookieJar()
+        timeout=timeout, cookie_jar=aiohttp.DummyCookieJar(), connector=trusting_connector()
     ) as session:
         async with session.get(url, headers=dict(headers or {}), allow_redirects=True) as response:
             body = await response.content.read(MAX_RESPONSE_BYTES + 1)

@@ -102,6 +102,21 @@ dependencies = [
   # `py_vapid` at module scope for the VAPID claim signing.
   "py-vapid>=1.9",
   "pywebpush>=2.0",
+  # Verifies outbound TLS against the platform's own certificate verifier
+  # (`tls_trust.py`). Not a nicety: on a clean Windows 11 machine Python's own
+  # reading of the ROOT store is genuinely missing issuers, because Windows fetches
+  # most roots on demand through CryptoAPI and `ssl.enum_certificates` only lists
+  # what has already been fetched - so the voice model download failed with
+  # `unable to get local issuer certificate` against github.com on a host whose
+  # browser reached the same URL (2026-08-30, first run on hardware that is not the
+  # development host).
+  #
+  # Declared rather than left transitive for exactly the reason `cryptography` and
+  # `packaging` are. It arrives today through `mcp` -> `httpx` and is therefore
+  # already installed everywhere at no size cost, but that is an assumption about
+  # somebody else's dependency graph, and the failure mode of it changing is a
+  # daemon that cannot download anything on the machines that need this most.
+  "truststore>=0.10",
   # The tray and the native window. Windows-only by marker, because there is no
   # Linux or macOS desktop app by design (`design/features/desktop-shell.md`), and
   # a *base* dependency on Windows since 2026-08-30 rather than the `desktop`

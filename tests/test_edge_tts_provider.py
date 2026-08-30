@@ -161,6 +161,10 @@ def test_provider_startup_sweeps_only_its_abandoned_text_inputs(tmp_path: Path) 
     assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
+async def _no_preflight() -> None:
+    """Stand in for the reachability preflight so the suite makes no network call."""
+
+
 async def test_managed_install_stages_verifies_and_activates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -190,6 +194,10 @@ async def test_managed_install_stages_verifies_and_activates(
         return {"ok": True, "version": "7.2.8"}
 
     monkeypatch.setattr(provider, "_run_install_command", run)
+    # The gate must never dial PyPI. Stubbed rather than left to succeed on a
+    # connected host, which is what made these tests silently make a real
+    # request the first time the preflight was added.
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
     monkeypatch.setattr(provider, "_invoke_unlocked", invoke)
     assert provider.start_managed_install() is True
     assert provider.start_managed_install() is False
@@ -250,6 +258,10 @@ async def test_failed_repair_keeps_the_working_managed_environment(
         raise EdgeTtsError("install_failed", "registry unavailable")
 
     monkeypatch.setattr(provider, "_run_install_command", run)
+    # The gate must never dial PyPI. Stubbed rather than left to succeed on a
+    # connected host, which is what made these tests silently make a real
+    # request the first time the preflight was added.
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
     assert provider.start_managed_install() is True
     await provider.wait_install()
     managed = provider.managed_status()
@@ -298,6 +310,10 @@ async def test_a_failure_after_activation_restores_the_previous_environment(
         write_state(state)
 
     monkeypatch.setattr(provider, "_run_install_command", run)
+    # The gate must never dial PyPI. Stubbed rather than left to succeed on a
+    # connected host, which is what made these tests silently make a real
+    # request the first time the preflight was added.
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
     monkeypatch.setattr(provider, "_invoke_unlocked", invoke)
     monkeypatch.setattr(provider, "_write_install_state", refuse_the_first_success_write)
     assert provider.start_managed_install() is True
@@ -412,3 +428,88 @@ async def test_automatic_failures_back_off_without_calling_or_falling_back(
     assert calls == 1
     assert not (tmp_path / "one.mp3").exists()
     assert not (tmp_path / "two.mp3").exists()
+
+
+async def test_connectivity_is_checked_before_the_multi_minute_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An install that cannot reach PyPI must fail in seconds, not after 80 of them.
+
+    The observed failure spent 44.8s creating an environment and 36s installing a
+    package before anything went wrong, then reported at the step furthest from
+    the cause. Nothing may run before the preflight.
+    """
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
+    order: list[str] = []
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        order.append(argv[1])
+
+    async def refuse() -> None:
+        order.append("preflight")
+        raise EdgeTtsError("install_index_unreachable", "could not reach PyPI")
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_preflight_index_reachable", refuse)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    assert order == ["preflight"]
+    managed = provider.managed_status()
+    assert managed["status"] == "error"
+    assert "could not reach" in str(managed["error"])
+    assert not (tmp_path / "integrations" / "edge-tts" / "current").exists()
+
+
+async def test_a_verify_timeout_says_what_that_step_actually_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Edge TTS status timed out" sent a reader hunting a network fault.
+
+    That step imports the package and reads its version; it makes no request at
+    all. The message has to say so, or the next person spends the same hour on
+    TLS and proxies.
+    """
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        if argv[1] == "venv":
+            python = provider.managed_python(Path(argv[-1]))
+            python.parent.mkdir(parents=True)
+            python.write_bytes(b"python")
+
+    async def time_out(*_args: Any, **_options: Any) -> dict[str, Any]:
+        raise EdgeTtsError("timeout", "Edge TTS status timed out")
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
+    monkeypatch.setattr(provider, "_invoke_unlocked", time_out)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    error = str(provider.managed_status()["error"])
+    assert "makes no network request" in error
+    assert "120s" in error
+
+
+def test_the_verify_budget_is_larger_than_a_cold_import(tmp_path: Path) -> None:
+    """20s was the budget and a cold venv on a slow machine blew straight through it.
+
+    The steady-state call budget is deliberately separate: a slow answer there is a
+    real fault, whereas here it is a first-ever import with a scanner reading every
+    new file.
+    """
+    from swe_mux.edge_tts_provider import (
+        EDGE_BRIDGE_TIMEOUT_SECONDS,
+        EDGE_VERIFY_TIMEOUT_SECONDS,
+    )
+
+    del tmp_path
+    assert EDGE_VERIFY_TIMEOUT_SECONDS >= 120.0
+    assert EDGE_VERIFY_TIMEOUT_SECONDS > EDGE_BRIDGE_TIMEOUT_SECONDS
