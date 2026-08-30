@@ -15,6 +15,22 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Opening the Agent tab no longer stalls when a recorded directory is on a filesystem that
+  is not reachable.**
+  Claude's `~/.claude.json` keeps an entry for every directory it has ever run in, and finding
+  the one for your session used to ask the filesystem about each of them in turn.
+  A recorded directory can name anywhere you have ever worked - a drive that is no longer
+  attached, a share on a machine that is off, a WSL distribution that is stopped - and Windows
+  does not answer for those quickly, it retries.
+  On one machine with 183 recorded directories, one of them a stopped WSL distribution, a
+  single request took 367 seconds.
+  Path comparison now settles the ordinary case from the directory names alone, and any
+  question it does put to the filesystem is given a deadline and its failure remembered, so an
+  unreachable location costs a moment once instead of a minute per entry.
+  Sessions starting up were on the same path and were delayed the same way.
+
 ## [0.1.3] - 2026-08-29
 
 ### Added

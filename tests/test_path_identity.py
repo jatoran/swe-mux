@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -55,16 +54,24 @@ def _unreachable_location() -> str:
 class _BlockingProber:
     """Stands in for a filesystem whose provider never answers.
 
-    Calls against ``blocked`` wait until the test releases them, which is what an
+    Calls against ``blocked`` park until the test releases them, which is what an
     unreachable UNC path does for tens of seconds. Everything else is answered
     immediately by the real implementation, so a test can watch one dead provider
     without pretending the whole filesystem is dead.
+
+    It records not just that a blocked call was *made* but whether it has
+    *finished*, and that difference is what lets these tests assert the deadline
+    without a stopwatch. A parked call finishes only when this test releases it,
+    so `same_path` returning while `parked` is still outstanding is proof that it
+    did not wait for the provider - on any host, at any load.
     """
 
     def __init__(self, blocked: str) -> None:
         self.blocked = os.path.normcase(os.path.normpath(blocked))
         self.released = threading.Event()
+        self.entered = threading.Event()
         self.calls: list[str] = []
+        self.finished: list[str] = []
 
     def _is_blocked(self, path: str | os.PathLike[str]) -> bool:
         text = os.path.normcase(os.path.normpath(os.fspath(path)))
@@ -73,19 +80,33 @@ class _BlockingProber:
     def stat(self, path: str | os.PathLike[str]) -> os.stat_result:
         self.calls.append(os.fspath(path))
         if self._is_blocked(path):
-            self.released.wait(30)
+            self.entered.set()
+            # Long enough that no scheduling delay can let it return by itself,
+            # so "still parked" always means the deadline fired. Bounded anyway,
+            # so a regression fails rather than hanging the worker.
+            self.released.wait(5.0)
+            self.finished.append(os.fspath(path))
             raise OSError("the provider finally gave up")
         return os.stat(path)
 
     def blocked_calls(self) -> list[str]:
         return [call for call in self.calls if self._is_blocked(call)]
 
+    @property
+    def parked(self) -> int:
+        """Blocked calls that started and have not returned."""
+        return len(self.blocked_calls()) - len(self.finished)
+
 
 @pytest.fixture
 def blocking_prober(monkeypatch: pytest.MonkeyPatch) -> Iterator[_BlockingProber]:
     prober = _BlockingProber(_unreachable_location())
+    # A short deadline keeps the one abandoned probe cheap. Nothing asserts on
+    # either number - they are the fake's configuration, not the measurement.
     monkeypatch.setattr(path_identity, "PROBE_DEADLINE_SECONDS", 0.05)
-    monkeypatch.setattr(path_identity, "PROBE_BLOCK_SECONDS", 30.0)
+    # Far longer than any test body, so "the negative result was cached" cannot
+    # decay into "the block expired and it probed again and got the same answer".
+    monkeypatch.setattr(path_identity, "PROBE_BLOCK_SECONDS", 3600.0)
     monkeypatch.setattr(path_identity, "_stat", prober.stat)
     try:
         yield prober
@@ -171,7 +192,7 @@ def test_a_symlinked_directory_still_gets_the_exact_answer(tmp_path: Path) -> No
     assert is_within(link / "inner", real)
 
 
-def test_an_unreachable_provider_costs_the_deadline_once_and_nothing_after(
+def test_an_unreachable_provider_is_probed_once_and_never_again(
     tmp_path: Path, blocking_prober: _BlockingProber
 ) -> None:
     """One dead provider must cost a bounded amount once, not per comparison.
@@ -179,28 +200,34 @@ def test_an_unreachable_provider_costs_the_deadline_once_and_nothing_after(
     This is the shape of the defect: the caller that found it made this
     comparison 183 times in one request, and the real measured cost of the single
     blocking call was 80.1 seconds.
+
+    Asserted by counting probes rather than by timing them. An earlier version of
+    this test bounded the wall clock, missed a 50 ms budget by 12 ms on a shared
+    runner, and reddened the blocking Windows leg - measuring the host instead of
+    the code, which is the mistake `CLAUDE.md` records from the voice work. The
+    two properties below are true on an idle laptop and on a runner with fifteen
+    other workers on it, and unlike a duration they actually distinguish the
+    defect from a regression: a `same_path` that probed per entry again would
+    fail them however fast the machine was.
     """
-    deadline = path_identity.PROBE_DEADLINE_SECONDS
     unreachable = _unreachable_location()
     live = tmp_path / "repo"
     live.mkdir()
 
-    started = time.monotonic()
     assert not same_path(unreachable, live)
-    first = time.monotonic() - started
-    # Generous against a loaded worker, and still two orders below the
-    # unbounded call it replaces.
-    assert first < deadline * 20
+    # The deadline fired: the probe was started and `same_path` came back while
+    # it was still parked. Nothing but the watchdog can produce that, and it
+    # needs no clock to say so - a parked call returns only when this test
+    # releases it, which has not happened yet.
+    assert blocking_prober.entered.is_set()
+    assert blocking_prober.parked == 1
 
-    started = time.monotonic()
     for _ in range(200):
         assert not same_path(unreachable, live)
-    repeated = time.monotonic() - started
-    # The negative result is cached per provider, so 200 further comparisons
-    # cost less than one deadline between them.
-    assert repeated < deadline
-    # Exactly one call was ever handed to the filesystem for that provider.
+    # ...and the negative result is cached per provider, so none of those 200
+    # reached the filesystem at all.
     assert len(blocking_prober.blocked_calls()) == 1
+    assert blocking_prober.parked == 1
 
 
 def test_a_blocked_provider_degrades_to_a_lexical_answer_not_a_wrong_one(
@@ -228,7 +255,15 @@ def test_a_provider_that_answers_quickly_is_not_run_through_a_watchdog_twice(
     The watchdog exists for a provider that has not proved itself. Once one has
     returned inside the deadline it is called inline, so the ordinary local
     comparison pays a set lookup rather than a thread.
+
+    The deadline is raised out of reach first, and that is not decoration. Left
+    at its production value this test would quietly be asserting that fifty-one
+    stats of a temporary directory each complete within one second on whatever
+    machine is running it - true almost always, and a host measurement wearing a
+    property's clothes. What is under test is the trust cache, so the clock is
+    taken off the table rather than given a bigger budget.
     """
+    monkeypatch.setattr(path_identity, "PROBE_DEADLINE_SECONDS", 3600.0)
     left = tmp_path / "one"
     right = tmp_path / "two"
     left.mkdir()
