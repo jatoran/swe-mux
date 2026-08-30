@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +33,13 @@ from swe_mux import app_keys as keys
 from swe_mux.config import Config
 from swe_mux.server import STARTUP_OPEN_PATHS, create_app, publish, startup_open, wait_runtime_ready
 from swe_mux.sqlite_store import (
+    FULL_VERIFICATION_INTERVAL_SECONDS,
+    _light_integrity_problem,
     connect_or_quarantine,
     prepare_database,
+    record_database_verified,
     reset_integrity_cache,
+    verification_record_path,
     verify_database,
 )
 from swe_mux.startup_phases import UNNAMED_PHASE, StartupTimeline
@@ -178,8 +183,13 @@ def test_the_integrity_probe_answers_once_per_file(tmp_path: Path, monkeypatch: 
 
     assert len(probes) == 1
     # And a caller may pay for it up front, by name and off the event loop.
+    # With no passing check on record, that up-front payment is the full probe.
     reset_integrity_cache()
-    assert prepare_database(database) >= 0.0
+    preparation = prepare_database(database)
+    assert preparation.mode == "full"
+    assert preparation.reason == "no passing full check is on record"
+    assert preparation.problem is None
+    assert preparation.seconds >= 0.0
     assert len(probes) == 2
     assert verify_database(database) is None
     assert len(probes) == 2
@@ -211,6 +221,159 @@ def test_a_quarantined_database_is_remembered_as_the_healthy_replacement(
     assert verify_database(database) is None
     connect_or_quarantine(database, lambda: sqlite3.connect(database)).close()
     assert len(list(tmp_path.glob("mux.db.corrupt-*"))) == 1
+
+
+# ----------------------------------------------- the conditional full check
+
+
+def _populated_database(path: Path) -> None:
+    """A real database large enough that its data pages are far from its schema."""
+    db = sqlite3.connect(path)
+    try:
+        db.execute("CREATE TABLE payload(id INTEGER PRIMARY KEY, body TEXT)")
+        db.executemany(
+            "INSERT INTO payload(body) VALUES(?)", [("x" * 512,) for _ in range(2000)]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _corrupt_an_interior_page(path: Path) -> None:
+    """Overwrite one data page, leaving the header and the schema intact."""
+    probe = sqlite3.connect(path)
+    try:
+        page_size = int(probe.execute("PRAGMA page_size").fetchone()[0])
+    finally:
+        probe.close()
+    with path.open("r+b") as handle:
+        handle.seek(page_size * 10)
+        handle.write(b"\xff" * page_size)
+
+
+def test_a_start_inside_the_verification_window_skips_the_full_check(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The point of the change: a fresh passing record spares the full-file read.
+
+    The full probe's cost is the size of the file - measured 60-84s of every
+    cold start against a 3.36 GB `mux.db` - so a start whose predecessor exited
+    cleanly and whose last passing check is inside the window pays the
+    milliseconds header-and-schema probe instead.
+    """
+    reset_integrity_cache()
+    database = tmp_path / "mux.db"
+    sqlite3.connect(database).close()
+    record_database_verified(database)
+    monkeypatch.setattr(
+        "swe_mux.sqlite_store._integrity_problem",
+        lambda _path: pytest.fail("the full probe ran inside the verification window"),
+    )
+    preparation = prepare_database(database)
+    assert preparation.mode == "light"
+    assert preparation.problem is None
+    # The light verdict feeds the same per-file cache, so no store re-probes.
+    for _ in range(11):
+        connect_or_quarantine(database, lambda: sqlite3.connect(database)).close()
+
+
+def test_an_unclean_predecessor_death_forces_the_full_check(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A crash or an external kill distrusts the record, however fresh it is."""
+    reset_integrity_cache()
+    database = tmp_path / "mux.db"
+    sqlite3.connect(database).close()
+    record_database_verified(database)
+    probes: list[Path] = []
+    monkeypatch.setattr(
+        "swe_mux.sqlite_store._integrity_problem", lambda path: probes.append(path)
+    )
+    preparation = prepare_database(database, predecessor_died_uncleanly=True)
+    assert preparation.mode == "full"
+    assert preparation.reason == "the previous daemon died uncleanly"
+    assert len(probes) == 1
+
+
+def test_a_stale_record_forces_the_full_check_and_a_pass_renews_it(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    reset_integrity_cache()
+    database = tmp_path / "mux.db"
+    sqlite3.connect(database).close()
+    record_database_verified(database, now=time.time() - 2 * FULL_VERIFICATION_INTERVAL_SECONDS)
+    probes: list[Path] = []
+    monkeypatch.setattr(
+        "swe_mux.sqlite_store._integrity_problem", lambda path: probes.append(path)
+    )
+    preparation = prepare_database(database)
+    assert preparation.mode == "full"
+    assert len(probes) == 1
+    # The pass renewed the record, so the next start is back inside the window.
+    reset_integrity_cache()
+    assert prepare_database(database).mode == "light"
+
+
+def test_a_future_dated_record_is_distrusted(tmp_path: Path, monkeypatch: Any) -> None:
+    """A clock rolled backwards must fail towards checking, not towards skipping."""
+    reset_integrity_cache()
+    database = tmp_path / "mux.db"
+    sqlite3.connect(database).close()
+    record_database_verified(database, now=time.time() + FULL_VERIFICATION_INTERVAL_SECONDS)
+    probes: list[Path] = []
+    monkeypatch.setattr(
+        "swe_mux.sqlite_store._integrity_problem", lambda path: probes.append(path)
+    )
+    assert prepare_database(database).mode == "full"
+    assert len(probes) == 1
+    # And a disabled window (interval 0) is the old behaviour: full, every start.
+    reset_integrity_cache()
+    preparation = prepare_database(database, full_verification_interval_seconds=0.0)
+    assert preparation.mode == "full"
+    assert preparation.reason == "the verification interval is disabled"
+
+
+def test_gross_corruption_is_quarantined_even_on_a_skipped_start(tmp_path: Path) -> None:
+    """The light probe is not a free pass: a file that cannot serve its own
+    schema is caught and quarantined before any store opens it, exactly the
+    crash-loop class `connect_or_quarantine` was built for."""
+    reset_integrity_cache()
+    database = tmp_path / "mux.db"
+    sqlite3.connect(database).close()
+    record_database_verified(database)
+    database.write_bytes(b"this is not a database at all")
+    preparation = prepare_database(database)
+    assert preparation.mode == "light"
+    assert preparation.problem is not None
+    connect_or_quarantine(database, lambda: sqlite3.connect(database)).close()
+    assert list(tmp_path.glob("mux.db.corrupt-*"))
+
+
+def test_deep_corruption_is_caught_by_the_full_check_and_quarantined(tmp_path: Path) -> None:
+    """A deliberately corrupted interior page, against the real probes.
+
+    This is the boundary the conditional check accepts, stated as assertions
+    rather than left implicit: the light probe passes this file, the full check
+    does not - so a mangled data page rides until the window expires or the
+    daemon dies uncleanly, and is then quarantined exactly as before.
+    """
+    reset_integrity_cache()
+    database = tmp_path / "mux.db"
+    _populated_database(database)
+    _corrupt_an_interior_page(database)
+    assert _light_integrity_problem(database) is None
+    preparation = prepare_database(database)  # no record, so the full check runs
+    assert preparation.mode == "full"
+    assert preparation.problem is not None
+    # A failing check never writes the record.
+    assert not verification_record_path(database).exists()
+    connect_or_quarantine(database, lambda: sqlite3.connect(database)).close()
+    assert list(tmp_path.glob("mux.db.corrupt-*"))
+    # The quarantine's replacement is recorded verified: this process created
+    # it, so the next start need not re-scan a file that was born healthy.
+    assert verification_record_path(database).exists()
+    reset_integrity_cache()
+    assert prepare_database(database).mode == "light"
 
 
 # ------------------------------------------------------------ the bound socket
@@ -248,12 +411,12 @@ async def test_the_daemon_answers_its_phase_while_the_runtime_is_still_building(
     release = asyncio.Event()
     real_prepare = prepare_database
 
-    def blocking_prepare(path: Path) -> float:
+    def blocking_prepare(path: Path, **kwargs: Any) -> Any:
         # Runs inside `asyncio.to_thread`, so waiting here holds the build at a
         # named phase while leaving the event loop free to serve - which is the
         # property that makes a staged health answer possible at all.
         asyncio.run_coroutine_threadsafe(release.wait(), loop).result(timeout=10)
-        return real_prepare(path)
+        return real_prepare(path, **kwargs)
 
     monkeypatch.setattr("swe_mux.server.prepare_database", blocking_prepare)
     loop = asyncio.get_running_loop()
@@ -325,7 +488,7 @@ async def test_a_build_that_fails_stops_the_daemon(tmp_path: Path, monkeypatch: 
     """
     monkeypatch.setattr(
         "swe_mux.server.prepare_database",
-        lambda _path: (_ for _ in ()).throw(RuntimeError("disk is on fire")),
+        lambda _path, **_kwargs: (_ for _ in ()).throw(RuntimeError("disk is on fire")),
     )
     stop_event = asyncio.Event()
     app = create_app(

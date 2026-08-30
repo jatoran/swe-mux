@@ -510,6 +510,10 @@ def test_a_write_lost_to_a_foreign_lock_is_loud(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The D2 finding: ten writes vanished across a restart and said nothing."""
+    # The drain deadline is process-global and armed by every in-process daemon
+    # teardown (8s), so a worker that just closed one would otherwise read
+    # `draining=true` here for reasons that have nothing to do with this test.
+    end_shutdown_drain()
     path = tmp_path / "mux.db"
     db = _store(path)
     try:
@@ -612,7 +616,9 @@ def test_a_planned_handoff_is_not_reported_as_a_crash(
     _predecessor_record(tmp_path)
 
     with caplog.at_level(logging.DEBUG, logger="test"):
-        lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
+        # A planned handoff is also not the signal that forces the full
+        # database check - it happens on every session-preserving restart.
+        assert lifecycle.daemon_started(tmp_path, logging.getLogger("test")) is False
     assert not any("died without a clean shutdown" in r.message for r in caplog.records)
     handoff = [r for r in caplog.records if "planned detach handoff" in r.message]
     assert handoff and handoff[0].levelno == logging.INFO
@@ -625,7 +631,8 @@ def test_an_unannounced_death_is_still_reported_as_one(
     lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
     _predecessor_record(tmp_path)
     with caplog.at_level(logging.WARNING, logger="test"):
-        lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
+        # The one verdict that forces the full database check at the next start.
+        assert lifecycle.daemon_started(tmp_path, logging.getLogger("test")) is True
     crash = [r for r in caplog.records if "died without a clean shutdown" in r.message]
     assert crash and crash[0].levelno == logging.WARNING
 
@@ -670,6 +677,6 @@ def test_a_clean_exit_still_suppresses_everything(
     lifecycle.daemon_clean_exit(tmp_path, "detach")
     _predecessor_record(tmp_path, clean_exit=True)
     with caplog.at_level(logging.DEBUG, logger="test"):
-        lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
+        assert lifecycle.daemon_started(tmp_path, logging.getLogger("test")) is False
     assert not any("died without a clean shutdown" in r.message for r in caplog.records)
     assert not any("planned detach handoff" in r.message for r in caplog.records)

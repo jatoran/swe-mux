@@ -143,8 +143,20 @@ def _planned_intent(record: dict[str, object]) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else ""
 
 
-def daemon_started(data_dir: Path, log: logging.Logger) -> None:
-    """Record this daemon's start; report a predecessor that died uncleanly."""
+def daemon_started(data_dir: Path, log: logging.Logger) -> bool:
+    """Record this daemon's start; report a predecessor that died uncleanly.
+
+    Returns whether the predecessor died *unplanned* - no clean exit, no
+    recorded handoff intent, pid gone. That verdict feeds the startup database
+    check: an external kill or a hard crash is the one cross-restart signal
+    that says the file's history is suspect, so it forces the full integrity
+    probe regardless of when the last one passed. A planned handoff is
+    deliberately not that signal - the restart terminates the predecessor
+    before its drain finishes on every session-preserving restart, so treating
+    it as a crash would re-run the full probe on exactly the frequent path the
+    conditional check exists to spare.
+    """
+    died_uncleanly = False
     previous = read_heartbeat(data_dir)
     if previous is not None and not bool(previous.get("clean_exit")):
         pid = _record_pid(previous)
@@ -162,6 +174,7 @@ def daemon_started(data_dir: Path, log: logging.Logger) -> None:
                 )
                 log.info(message)
             else:
+                died_uncleanly = True
                 message = (
                     f"previous daemon pid {pid} died without a clean shutdown; last "
                     f"heartbeat {age} before this start (external kill or hard crash "
@@ -183,6 +196,7 @@ def daemon_started(data_dir: Path, log: logging.Logger) -> None:
         },
     )
     ledger(data_dir, f"daemon pid {os.getpid()} started")
+    return died_uncleanly
 
 
 def heartbeat(data_dir: Path) -> None:

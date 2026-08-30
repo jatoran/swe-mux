@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -8,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,10 @@ _DATABASE_LOCKS: dict[str, Any] = {}
 # session-preserving restart is the one window where it competes with a *second
 # daemon*, and that daemon's own startup can hold the file for far longer than
 # five seconds - a measured 12-61s of `PRAGMA quick_check` over a 2.7 GB
-# `mux.db` before it serves anything.
+# `mux.db` before it serves anything. The conditional full check makes that
+# hold milliseconds on most planned restarts, but the budget stays sized for
+# the starts that still run it: after an unclean death, and when the last
+# passing check has aged out.
 #
 # Deliberately a *whole-drain* budget rather than a per-statement one: the
 # predecessor does not get to choose how long it lives. The redeploy terminates
@@ -48,6 +53,21 @@ _DRAIN_DEADLINE: float | None = None
 # recording the replacement (`_remember_integrity`).
 _INTEGRITY_GUARD = threading.Lock()
 _INTEGRITY_RESULTS: dict[str, str | None] = {}
+
+# How long a passing `PRAGMA quick_check` stays trusted across daemon starts.
+# The full probe reads every page, so its cost is the size of the file - a
+# measured 60-84s of every cold start against this host's 3.36 GB `mux.db`,
+# 5.8x the entire rest of the startup sequence - and this host restarts the
+# daemon several times a day, so re-answering it per *start* re-verified a file
+# that had passed hours earlier. A start inside this window runs the
+# milliseconds-scale `_light_integrity_problem` instead; a start after an
+# unclean daemon death always runs the full probe regardless of the window,
+# because that is the one signal that says the file's history is suspect.
+# A constant rather than a `Config` field on purpose: the record file beside
+# the database (`<db>.last-verified.json`) is the operator's lever - deleting
+# it forces a full probe on the next start - and an interval knob would be a
+# way to quietly weaken corruption detection without a code review seeing it.
+FULL_VERIFICATION_INTERVAL_SECONDS = 24 * 3600.0
 
 _SCHEMA_VERSIONS = (
     "CREATE TABLE IF NOT EXISTS schema_versions("
@@ -128,8 +148,11 @@ def connect_or_quarantine(
             raise
     # The file behind this path is now a fresh one the probe has never seen.
     # Recording it healthy is what stops each remaining store re-probing (and
-    # potentially re-quarantining) a database that was just replaced.
+    # potentially re-quarantining) a database that was just replaced. The
+    # durable record follows for the same reason across starts: the replacement
+    # is known-good by construction, so the next start need not re-scan it.
     _remember_integrity(path, None)
+    record_database_verified(path)
     return connect()
 
 
@@ -163,23 +186,150 @@ def verify_database(path: Path) -> str | None:
         return problem
 
 
-def prepare_database(path: Path) -> float:
-    """Answer the integrity question up front; returns the seconds it took.
+def verification_record_path(path: Path) -> Path:
+    """Where a database's last passing full check is recorded, beside the file."""
+    return Path(str(path) + ".last-verified.json")
+
+
+def _last_verified_at(path: Path) -> float | None:
+    """Epoch seconds of the last passing full check, or None without a record.
+
+    Anything unreadable - a missing file, mangled JSON, a wrong shape - reads
+    as "never verified", which fails safe: the full probe runs.
+    """
+    try:
+        raw = json.loads(verification_record_path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = raw.get("verified_at") if isinstance(raw, dict) else None
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def record_database_verified(path: Path, now: float | None = None) -> None:
+    """Durably record that the file behind `path` passed a full check just now.
+
+    Written atomically (temp + replace) so a crash mid-write leaves either the
+    old record or none, both of which force a full probe. Best-effort: on a
+    filesystem that refuses the write, every start pays the full probe, which
+    is the pre-existing behaviour rather than a new failure mode.
+    """
+    record = verification_record_path(path)
+    temporary = record.with_name(record.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps({"verified_at": time.time() if now is None else now}),
+            encoding="utf-8",
+        )
+        os.replace(temporary, record)
+    except OSError:
+        log.warning(
+            "could not record the integrity verification for %s; "
+            "the next start will run the full check again",
+            path,
+            exc_info=True,
+        )
+
+
+def _verification_plan(
+    path: Path, predecessor_died_uncleanly: bool, interval_seconds: float
+) -> tuple[str, str]:
+    """Decide which probe this start owes the file: ("full" | "light", why)."""
+    if predecessor_died_uncleanly:
+        return "full", "the previous daemon died uncleanly"
+    if interval_seconds <= 0:
+        return "full", "the verification interval is disabled"
+    verified_at = _last_verified_at(path)
+    if verified_at is None:
+        return "full", "no passing full check is on record"
+    age = time.time() - verified_at
+    if age < 0:
+        return "full", "the last full check is recorded in the future (the clock moved)"
+    if age > interval_seconds:
+        return "full", (
+            f"the last passing full check was {age / 3600:.1f}h ago, "
+            f"beyond the {interval_seconds / 3600:.1f}h window"
+        )
+    return "light", (
+        f"the last passing full check was {age / 3600:.1f}h ago, "
+        f"within the {interval_seconds / 3600:.1f}h window"
+    )
+
+
+@dataclass(frozen=True)
+class DatabasePreparation:
+    """What the startup integrity phase did to one database, and why."""
+
+    seconds: float
+    mode: str  # "full" ran `PRAGMA quick_check`; "light" read the header and schema
+    reason: str
+    problem: str | None
+
+
+def prepare_database(
+    path: Path,
+    *,
+    predecessor_died_uncleanly: bool = False,
+    full_verification_interval_seconds: float = FULL_VERIFICATION_INTERVAL_SECONDS,
+) -> DatabasePreparation:
+    """Answer the integrity question up front; says what it did and what it cost.
 
     Called once from the daemon's startup path, off the event loop, so the
     per-file cost is paid where it can be named and timed instead of inside the
     first store constructor that happens to touch the file - which is where it
     used to hide, on the event loop, eleven times over.
+
+    The full `PRAGMA quick_check` reads every page and its cost is the size of
+    the file, so it runs only when the file's history is suspect (the previous
+    daemon died uncleanly) or its last passing check has aged out
+    (`FULL_VERIFICATION_INTERVAL_SECONDS`). Every other start runs the light
+    header-and-schema probe instead. Both probes feed the same verdict cache,
+    so a problem found by either one sends the first store through
+    `connect_or_quarantine`'s quarantine-and-recreate path exactly as before -
+    what the light probe cannot see is a mangled interior page, which the next
+    full check within the window is what bounds.
     """
     start = time.monotonic()
-    verify_database(path)
-    return time.monotonic() - start
+    mode, reason = _verification_plan(
+        path, predecessor_died_uncleanly, full_verification_interval_seconds
+    )
+    if mode == "full":
+        problem = verify_database(path)
+        if problem is None and path.exists():
+            record_database_verified(path)
+    else:
+        problem = _light_integrity_problem(path) if path.exists() else None
+        _remember_integrity(path, problem)
+    return DatabasePreparation(time.monotonic() - start, mode, reason, problem)
 
 
 def reset_integrity_cache() -> None:
     """Forget every cached verdict. For tests that rewrite a database file."""
     with _INTEGRITY_GUARD:
         _INTEGRITY_RESULTS.clear()
+
+
+def _light_integrity_problem(path: Path) -> str | None:
+    """A milliseconds-scale probe for gross corruption: the header and the schema.
+
+    Not a substitute for `PRAGMA quick_check` - a mangled interior page passes
+    here - but it catches the class that used to take the daemon down at
+    startup (a truncated or overwritten file, an unparseable schema), which is
+    the class `connect_or_quarantine` exists to remediate. Same throwaway
+    connection discipline as `_integrity_problem`, for the same Windows rename
+    reason.
+    """
+    probe: sqlite3.Connection | None = None
+    try:
+        probe = sqlite3.connect(path)
+        probe.execute("PRAGMA schema_version").fetchone()
+        probe.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        return None
+    except sqlite3.DatabaseError as exc:
+        return str(exc)
+    finally:
+        if probe is not None:
+            with suppress(sqlite3.Error):
+                probe.close()
 
 
 def _integrity_problem(path: Path) -> str | None:
