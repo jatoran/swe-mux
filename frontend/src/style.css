@@ -4321,12 +4321,25 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .transcript-message.user{background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .transcript-copy-anchor{position:sticky;top:8px;z-index:3;height:20px;margin-bottom:-20px;display:flex;justify-content:flex-end;gap:4px;pointer-events:none}
 .transcript-message>header{display:flex;align-items:center;gap:6px;margin-bottom:4px;padding-right:100px}
+/* The reader's own gutter, sized to the chip row that floats over this header rather than
+   to a number that predates it: two icon buttons, plus the audio pair on a reply while
+   read aloud is on. The flat 100px is what the four-chip row overran, which is how the
+   controls came to sit on top of the timestamp they were meant to clear. History's column
+   keeps it - one text Copy button is all that ever floats there. */
+.transcript-tab .transcript-message>header{padding-right:52px}
+.transcript-tab .transcript-message.has-audio>header{padding-right:176px}
 .transcript-speaker{flex:1;min-width:0;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
 .transcript-message.user .transcript-speaker{color:var(--accent)}
 .transcript-message>header time{flex:none;color:var(--muted);font-size:8px}
 .transcript-copy{pointer-events:auto;flex:none;min-height:20px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .transcript-copy:hover{color:var(--text)}
 .transcript-copy.copied{border-color:var(--accent);color:var(--accent)}
+/* Copy and Select are icon-only here: their two words cost more width than the whole
+   header they float over, and this row hovers on top of somebody's prose rather than
+   sitting in chrome of its own. The audio chips keep their words - `♪ summary` and
+   `♪ verbatim` differ in what they *spend*, which no pair of glyphs can say. */
+.transcript-copy-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;padding:0}
+.transcript-copy-icon svg{width:12px;height:12px;display:block}
 /* The per-message read-aloud markers, in the same hovering chip row as Copy and Select.
    Four states, and only one of them is a play button: `ready` is the clip that already
    exists (the whole point of anchoring one to its message), `generating` is disabled
@@ -4409,6 +4422,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   /* Two controls now float here, so the header's reserved gutter widens with them. */
   .transcript-message>header{padding-right:118px}
   .transcript-copy{min-height:28px;padding:0 10px}
+  /* Thumb-sized and square. The words are gone, not the target. */
+  .transcript-copy-icon{width:28px;padding:0}
+  .transcript-copy-icon svg{width:14px;height:14px}
+  /* The reader reserves for the icon pair only. A phone has no width to hold the audio
+     chips' gutter open as well - 200px of it would push the timestamp into the speaker
+     label on every reply - and unlike the desktop column this row is not up unless the
+     reader tapped for it, so the chips overlaying the stamp is a moment they asked for
+     rather than the resting state they complained about. */
+  .transcript-tab .transcript-message>header,
+  .transcript-tab .transcript-message.has-audio>header{padding-right:72px}
   /* Four chips in the row on a phone instead of two, so the audio pair takes the
      tighter padding and lets Copy and Select keep their thumb width. */
   .transcript-copy.transcript-audio{padding:0 7px}
@@ -4426,6 +4449,34 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 @media(hover:none){
   .transcript-copy-anchor{-webkit-touch-callout:none}
   .transcript-tab.transcript-selecting .transcript-copy-anchor{opacity:0;pointer-events:none}
+}
+
+/* The chip row is chrome laid over what somebody said, so it is not in the column at rest.
+   Two reveals, because the two inputs have nothing in common:
+   a mouse gets the row on hover of the message it belongs to, which costs a pointer reader
+   nothing and keeps the resting column to prose and a timestamp;
+   a finger has no hover, so a tap on the entry opens that entry's row and a second tap
+   closes it (`TranscriptTab.tsx`, `openActions`). One at a time - a phone has no room for
+   a row of controls above every reply, which is the shape this replaces.
+   Hidden with `opacity` rather than `visibility` or `display`: a keyboard reader tabs to
+   these buttons, and neither of the other two can be focused into, so `:focus-within`
+   would never fire and the controls would be unreachable without a mouse. `pointer-events`
+   is what makes the invisible row unclickable meanwhile - opacity alone leaves it live. */
+.transcript-tab .transcript-copy-anchor{opacity:0;transition:opacity .12s ease}
+.transcript-tab .transcript-copy-anchor .transcript-copy{pointer-events:none}
+@media(prefers-reduced-motion:reduce){.transcript-tab .transcript-copy-anchor{transition:none}}
+@media(hover:hover){
+  .transcript-tab .transcript-message:hover>.transcript-copy-anchor,
+  .transcript-tab .transcript-copy-anchor:focus-within{opacity:1}
+  .transcript-tab .transcript-message:hover>.transcript-copy-anchor .transcript-copy,
+  .transcript-tab .transcript-copy-anchor:focus-within .transcript-copy{pointer-events:auto}
+}
+/* `:not(.transcript-selecting)` rather than a later override: the rule that clears this row
+   out of a selection handle's path is two classes lighter than the reveal, so it would lose
+   on specificity wherever it sat. */
+@media(hover:none){
+  .transcript-tab:not(.transcript-selecting) .transcript-message.actions-open>.transcript-copy-anchor{opacity:1}
+  .transcript-tab:not(.transcript-selecting) .transcript-message.actions-open>.transcript-copy-anchor .transcript-copy{pointer-events:auto}
 }
 
 /* Agent Context: an inventory and viewer, never an editor. Mutations are isolated to the
