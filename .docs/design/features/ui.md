@@ -980,6 +980,12 @@ Its rules, and what each one is defending:
   An operator who deliberately chose `dark` and one who never touched the setting are the same fact on disk, and neither is a request for whatever the current build prefers.
   A theme reachable this way is held to a higher contrast bar than one somebody picked: `railGlassContrast.test.ts` requires 4.5:1 through the rail's glass over both a white and a black terminal buffer for every palette a fresh install can land on, where the rest of the catalogue keeps the 3:1 large-text floor.
   Every option shows the same six fixed-width color swatches, so palette comparison does not depend on label length.
+  The initial browser document declares `color-scheme: only dark` before any executable script and carries Dark Reader's documented `darkreader-lock` opt-out.
+  A selected theme is already a complete, contrast-governed palette, so browser or extension auto-recolouring is corruption rather than adaptation.
+  `applyTheme` keeps the root `color-scheme`, the document `color-scheme` metadata, and browser/PWA `theme-color` synchronized with every committed or previewed palette.
+  Light/dark treatment is derived from the palette's actual background, so custom themes receive matching native controls and browser chrome without adding a second configuration field.
+  The opt-out is scoped to the swe-mux document; preview documents keep their own colour policy.
+  Forced-colors accessibility remains browser-controlled: the app does not set `forced-color-adjust: none` or otherwise suppress an operator's high-contrast palette.
   The custom listbox supports pointer selection, Up/Down/Home/End navigation, Enter/Space selection, and layered Escape dismissal.
   **Highlighting a theme applies it to the whole window immediately**, by arrow key or by
   hover, so a catalogue of twenty-eight can be walked and seen instead of chosen blind,
