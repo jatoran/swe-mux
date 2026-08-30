@@ -127,6 +127,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
     "pi": "pi"
   },
   "harness_instrument_enabled": {},
+  "tool_paths": {},
   "harness_mcp_enabled": {},
   "harness_skill_enabled": {},
   "experience_tier": "",

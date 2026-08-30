@@ -840,11 +840,21 @@ Its rules, and what each one is defending:
   unsupported case rather than leaving a heading with nothing under it.
 - "Connect a phone" opens a modal (`ConnectPhone.tsx`) with a scannable QR of the connection URL
   (the `.ts.net` MagicDNS name, secure Serve address when up), a system-prerequisites checklist
-  (Git, Node, npm, Tailscale, each with a next step), and a security-posture line stating that any
-  tailnet device reaches the daemon with no login.
+  (Git, Node, npm, uv, Tailscale, each with a next step), and a security-posture line stating that
+  any tailnet device reaches the daemon with no login.
 - The Diagnostics tab holds the standing system-prerequisites checklist, the three
   session-preserving reload actions (`ui.reload`, `daemon.reload`, `app.redeploy`), and an Export
   diagnostics button that copies one bundle to the clipboard with a selectable textarea fallback.
+  Each prerequisite row renders **three** states, not two. `present` (green), `off_path` (amber -
+  found at a known install location, so the remedy names PATH rather than an install command), and
+  `missing` (red, with the install command and download link). Collapsing the middle state is what
+  told a user with Git and a connected Tailscale to `winget install` both of them.
+  Every row carries a path override, and the section has a Re-scan button. Re-scan is a `POST`
+  rather than a re-fetch on purpose: the daemon inherited its PATH once at spawn, so a button that
+  only re-ran detection would return the same answer for a tool the user had just installed and
+  teach them the feature does not work. It reports which of the three things happened - PATH
+  changed and was re-read, PATH re-read and unchanged, or (off Windows) no out-of-band PATH exists
+  and a daemon restart is needed.
   The reload buttons dispatch the app's own command registry rather than re-implementing the
   paths, so a change to what "reload daemon" means reaches this panel for free, and a command the
   host does not offer disables its button instead of failing when pressed.
@@ -2370,14 +2380,15 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The registry is written immediately to `localStorage`, limits each draft to 64 KiB, retains at most 50 sessions for 30 days, and falls back to memory if browser storage is unavailable.
   A green dot on the keyboard control and every tab for that terminal discloses saved text without exposing its content.
 - Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Insert** button appends the exact draft text to the live agent composer without submitting it.
-  Agent multiline insertion uses bracketed paste, including the stale-mode fallback, so newlines and leading or trailing spaces remain composer text rather than becoming Enter key submissions.
+  Agent multiline insertion uses bracketed paste, written by the pane rather than by xterm, so newlines and leading or trailing spaces remain composer text rather than becoming Enter key submissions.
   The Draft path never emits a trailing carriage return.
   A successful insertion clears the saved draft and returns to live input for review; a rejected insertion leaves the text editable and reports the error in the composer.
   Insertion appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
   Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
   target.
-  Native terminal paste and the rail action use the same pane-owned text path, including the agent multiline stale-mode repair, so Ctrl+V cannot submit clipboard lines individually while the rail keeps them composed.
+  Native terminal paste and the rail action use the same pane-owned text path, which brackets multi-line agent text itself rather than trusting xterm's mirror of the child's mode, so Ctrl+V cannot submit clipboard lines individually while the rail keeps them composed.
+  Ctrl+V pressed while the keyboard sits on something focusable but not editable - a rail button, a session tab - is routed to the last-focused terminal instead of going nowhere.
   Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
   than typing `/copy` or waiting for OSC 52. Reply extraction walks back to the newest turn with
