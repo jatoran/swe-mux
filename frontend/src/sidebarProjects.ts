@@ -78,6 +78,33 @@ export function projectOpenWork(
   return { liveSessions: liveSessionsFor(sessions, projectId), previewIds }
 }
 
+/** What the Project list should draw: four states, not two. */
+export type SidebarProjectsView = 'loading' | 'none-registered' | 'none-shown' | 'list'
+
+/**
+ * Decide what the sidebar's Project list draws, from one place.
+ *
+ * The state this exists for is `loading`. `projects` starts as an empty array
+ * and the first read takes a moment, so "no Projects have arrived yet" and
+ * "this install has no Projects" were the same value — and the sidebar drew the
+ * second, telling an operator with a full workspace to "Create your first
+ * Project" for the first second of every load and every browser refresh.
+ *
+ * It is a function rather than a conditional in the JSX for the same reason
+ * `firstRunSurface` is: exactly one of these may be drawn, and that is a
+ * property worth being able to test. An empty list must say which kind of empty
+ * it is — the rule the Agent Environment catalog already carries.
+ */
+export function sidebarProjectsView(state: {
+  loaded: boolean
+  registered: number
+  visible: number
+}): SidebarProjectsView {
+  if (!state.loaded) return 'loading'
+  if (state.visible > 0) return 'list'
+  return state.registered > 0 ? 'none-shown' : 'none-registered'
+}
+
 /** A project may be hidden from the sidebar only once nothing live is attached
  *  to it — otherwise hiding would strand running terminals and previews. */
 export function canHideProject(work: ProjectOpenWork): boolean {
