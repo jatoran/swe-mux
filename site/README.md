@@ -214,6 +214,7 @@ The rules it lives under:
 - **Fixtures are invented.** Same rule as the screenshots (section 8): no name, path, or number in `frontend/src/demo/fixtures.ts` may come from a real install.
 - The landing page's frame loader promotes `data-src` to `src` only near the viewport and only for visible frames, so visitors who never reach it download none of its ~700 KB gz.
   The desktop/phone/both toggle is three views of the same build; "both" shows the two frames sharing one simulated fleet over a BroadcastChannel, and "reset demo" clears the demo's localStorage namespaces and reloads the frames.
+  The head row also observes the stage and tells the frames when the demo is actually on screen, because a frame cannot work that out for itself: an `IntersectionObserver` inside an iframe measures against the *iframe's* viewport, so it would report "visible" for a demo eight screens below the fold.
 - Everything in the visitor-facing demo copy obeys section 5, including the no-em-dash rule - the style block is inherited by every generated page, so an em dash in a demo CSS comment fails `build.py`.
 - **An unmatched route must never answer `{}`.**
   This is the one rule here written from a failure rather than from a preference.
@@ -235,12 +236,107 @@ What the demo populates, and why those and not others:
 - **Pinned to the bottom of the pane.** The pad that achieves it is written *above* the transcript, not below: real agent CLIs anchor the box at the foot of the terminal, and the only way to do that while the conversation is still short - without a scroll region, which would keep the transcript out of the terminal's own scrollback - is to push the transcript down to meet it. Once the conversation is longer than the pane the pad is zero and the screen simply scrolls, which leaves the box at the bottom for free.
 - **The caret is the terminal's own.** `composerBlock` ends on the status line three rows below the input row, so `composerCaret` walks it back up and places it by absolute column. Before that the box drew a `▏` glyph of its own while the real cursor blinked on the line underneath, which is the one part of a composer nobody can mistake for cosmetic.
 - A shell pane has neither, and the contrast is deliberate: it echoes at a prompt exactly as the real one does.
-- Deliberately *not* populated: automation firings, provider accounts, schedules, and the prompt queue. They answer with their real empty shape. A demo that invented model spend would be claiming something about a product that never called a model.
+- Deliberately *not* populated: automation firings and schedules. They answer with their real empty shape (`supportPayloads.ts`). A demo that invented model spend would be claiming something about a product that never called a model.
+- The prompt queue, the notification history, the fleet queue and the land queue **used to be** on that list and are not any more. They start genuinely empty, which is still the honest state, and a scenario fills them - which is what makes the arrival visible, where a seeded queue would only show a list. Nothing there invents spend either; a queued prompt and a delivery are acts the demo owns both sides of.
 
-**The coach** (`DemoCoach.tsx`) is a short walkthrough that flashes one piece of real chrome at a time and advances when the visitor performs the act against the real interface - never by simulating it.
+## The scenario director
+
+**One thing drives the demo, and the walkthrough is its first scenario** (`director.ts`, `scenarios.ts`, `DemoDirector.tsx`).
+The walkthrough came first and was the only thing that moved the interface; the moment a second thing wanted to, the obvious design was two of them.
+It is the wrong one.
+A visitor cannot tell a tour from a script - both are "something is driving the UI" - and two drivers on one screen do not take turns, they interleave.
+So there is one runner, and the tour is `SCENARIOS[0]`.
+
+A scenario is a flat timeline of beats, and a beat has exactly **two levers**, which is the whole design:
+
+- **`mutate`** is something the *daemon* did. It reaches the demo store, so it mirrors to the other frame, appears in the event stream, and is indistinguishable from a real backend act - because here it is one.
+- **`command` / `click` / `type` / `key`** are things the *user* did, driven through the app's own command bus and its own controls (`drive.ts`, factored out of `mirror.ts`, which already had a working drive layer). Never through app internals: a scripted act can only do what a visitor could.
+
+`at` is milliseconds on the scenario's own clock, and that clock **pauses while a gate is open** - which is what lets one shape serve both a timed run (no gates, so `at` is simply the timeline) and the walkthrough (all gates, so `at` is the pause before each card appears).
+`tests/demoDirector.test.ts` asserts both halves of that: every walkthrough beat has a gate, and no scripted beat does.
+A gated beat with no gate would advance past the visitor mid-instruction; a scripted beat with one would hang forever, because nobody is being asked to do anything.
+
+**It runs in exactly one frame**, elected over the mirror's channel (the same election the walkthrough already used, renamed).
+Two copies of a script racing one shared fixture drift within a beat or two and look broken; the view mirror carries the winner's acts to the other frame instead, which demonstrates more than a second copy would.
+Measured in "both": the wide frame draws the card and runs the beats, the narrow one draws nothing and follows.
+The lead is **released on stop**, which the walkthrough never needed - it ran once and was over - and a director that held it forever would answer every later claim with "taken", so the other frame could never lead again.
+
+**Nothing plays by itself except one nudge.**
+The demo's pitch is "this is the real app, touch it", and something moving on its own converts that into "wait and watch"; a script that fights a click is worse than no script.
+Scenarios are chosen from the page's own **scenarios** menu, which replaced the separate "replay tour" control - three buttons beside a menu of scripts was one too many, and the tour is the menu's first entry.
+The one exception: a demo that has been on screen and untouched for ten seconds plays one short scenario, once.
+**Any** real `pointerdown`, `keydown` or `touchstart` ends a playing scenario instantly, leaves the state where it got to, and does not restart it.
+`isTrusted` is the discriminator and it is exact: a scripted press is `element.click()`, which is untrusted and produces no `pointerdown` at all, so a scenario can never abort itself.
+A gated scenario is exempt, because its gates *are* real input - aborting on the act it is waiting for would make the walkthrough impossible to finish.
+
+**Highlights are split by origin, and the split is the point.**
+A scripted act gets a ghost cursor, a ripple at the point of action and a caption, because without them the interface appears to move on its own - the single worst thing a demo of a *tool* can look like.
+A real visitor's act gets **nothing**: people can see their own cursor, and a UI that flashes while you use it is noise.
+The one exception is `?highlightInput=1`, which only the capture rig sets, so a recorded interaction is legible as one.
+
+The five scenarios, and why those:
+
+| Scenario | What it demonstrates |
+|---|---|
+| `tour` | The interface itself. All gates; it waits for the visitor and never simulates the act. |
+| `queue` | A turn ends, a prompt queued behind it delivers itself as keystrokes, and an alert fires. The cheapest, and it shows the control plane rather than the terminal - the part that is not commodity. Also the idle nudge. |
+| `orchestrate` | One session drafts two spawn requests, a human approves, the two report back into the requester's queue. The highest pitch value, and it draws the boundary: an agent can ask, only a person can start. |
+| `preview` | A shell starts a dev server and its listener opens as a preview pane. Mostly built already, and the most visual. |
+| `land` | Reconcile, verify, fast-forward, one branch at a time - the state machine, not a finished row. |
+
+**The four control-plane surfaces are state now** (`controlPlane.ts`), where they were correctly-shaped constants.
+That was right while nothing could fill them, and wrong the moment a scenario needed one to move: a surface that cannot change cannot demonstrate anything, and a payload builder mutating a module-level value would not reach the other frame.
+The prompt queue, the notification history, the fleet queue's spawn requests and the land queue are all reducers over the demo store, with the mutating routes a visitor can actually press (`send-next`, arm, cancel, dismiss, approve) implemented rather than falling through to `{ok:true}`.
+The land queue's one seeded row moved out of `gitFixtures.ts` with them.
+
+**A scripted turn goes through the same plumbing a typed one does** (`scriptedTurn` / `scriptedCompletion` in `fakeSocket.ts`, both over the extracted `runTurn`).
+A scenario that appended its own bytes would leave the composer holding whatever had been typed, never open or close a turn on the session row, and leave the Transcript tab and the scan timeline telling a different story from the pane beside them.
+The leading `\x03` is not decoration: the composer buffer is shared state every attached frame draws from, so a scripted turn that cleared only its own copy would leave the phone showing a box full of text nobody is going to send.
+
+## Deterministic mode, and the capture rig
+
+`?deterministic=1` (or the `swemux-demo-deterministic` localStorage key) makes the whole demo a function of a seed.
+It is the prerequisite for both of the things above it: a scenario whose beats must land on the same fixture twice, and a capture whose value is that it cannot drift from the product.
+
+Two overrides, and the shape of each was paid for:
+
+- **The clock is rebased onto a fixed epoch and keeps running.** Freezing `Date.now()` outright was tried and is wrong: real code measures *elapsed* time against it, and a clock whose deltas are always zero disables every one of those - the view mirror would never leave its post-converge quiet window, and the leader election would treat every rival claim as permanently fresh. Rebasing keeps deltas honest while making the absolute values, which every fixture offset and every "3 minutes ago" label derives from, identical on every run.
+- **`Math.random` becomes a seeded PRNG, and that is necessary but not sufficient.** This is the trap, and only a determinism test found it. A seeded global is reproducible only if the *sequence of draws* is, and the app draws from it too (`randomId.ts` mints ids on boot and on interaction) at times decided by real timers and real fetches. So the demo's Nth draw was not the same value twice, which surfaced as a spawned session getting a different pid on the second run of one scenario and nothing else being wrong. Anything that becomes **fixture data** now draws from `demoRandom()`, a stream only the demo touches; the app keeps the seeded global.
+
+Three things are deliberately *outside* determinism, each for a reason:
+
+- **Frame identity** (`trueRandom`). Both frames use their id to ignore their own echoes on the BroadcastChannel, so a shared seed would have them mint the same one and each discard everything the other said - two frames that agree perfectly and mirror nothing. The leader election's tiebreak is the same requirement.
+- **The process wobble** (`fleetFixtures.ts`) is stilled to zero. It is a function of the wall clock by design, and with a rebased clock a capture would read a different CPU figure depending on how long the page had been open.
+- **Persistence is off.** A deterministic run that started from a visitor's saved fleet would be a function of their history, and writing an epoch-stamped one back would leave the *next* visitor with sessions dated 2026-03-14.
+
+`frontend/scripts/capture-demo.mjs` drives it: a static server over `site/`, headless Chromium, video and one still per beat, and a `manifest.json` recording the seed and the fixture it produced.
+
+```
+node scripts/capture-demo.mjs --scenario queue                 # video + stills
+node scripts/capture-demo.mjs --scenario orchestrate --surface phone
+node scripts/capture-demo.mjs --scenario queue --check         # the CI form
+```
+
+It exists to delete a risk class rather than to save time.
+The hero film and the landing stills are captured from a *real* install (`trailer/capture_env.py`), so every one of them has to be checked by a person for a path or a name or a number that came from a real machine, and every re-capture checked again.
+Here there is nothing to check: the install is invented by construction, it talks to no network, and the run is a function of a seed.
+It also drives the **committed** `site/demo/` bundle rather than a dev server, which is the same artifact Pages uploads - so a still that disagrees with the product means the bundle is stale, and rebuilding is the fix.
+
+`--check` plays the scenario twice and compares `demoFingerprint()`, a projection of the *store* rather than of the pixels.
+Two runs at one seed must produce the same ids, timestamps, queue and land trail, and that is a claim a diff can settle; comparing screenshots would fail on a cursor blink and prove nothing about the fixture.
+It runs on every push (`ci.yml`, the Windows leg) and needs no encoder.
+
+Three traps paid for while building this, worth not rediscovering:
+
+- **The renderer suite drives `/demo.html` on the dev server, and the committed bundle's base is `/demo/`.** They are different questions and both are asked: `test/renderer/demo-director.spec.ts` covers the engine against the app's source, and `capture-demo.mjs` covers the artifact.
+- **A `waitForFunction(running === false)` passes instantly on a scenario that has not started yet**, because the director waits out the app's first paint. Wait for `true` and then `false`, or the test asserts nothing in under a second - which it did.
+- **Node has a `BroadcastChannel`, and opening one keeps the event loop alive.** `typeof BroadcastChannel === 'function'` was not the right guard: importing the store in the unit suite hung the run forever. `typeof window !== 'undefined'` says what was meant.
+
+**The walkthrough itself** is unchanged in intent: it flashes one piece of real chrome at a time and advances when the visitor performs the act against the real interface, never by simulating it.
 It is not the product's own `GuidedTutorial`: that one teaches an install (create a Project, sign in to a CLI, start a session) and none of those acts exist here.
 The phone list is different from the desktop one and is mostly gestures, because the panels being on the ends of a swipe is the one thing nothing on screen can say for itself.
-It renders beside `<App/>` rather than inside it, so the product build cannot accidentally ship it, and it is dismissible for good; the landing page's **replay tour** control dispatches `swemux-demo:coach` into the same-origin frames to bring it back.
+It renders beside `<App/>` rather than inside it, so the product build cannot accidentally ship it, and it is dismissible for good.
+Its copy is plain strings rather than JSX, and that is not cosmetic: the first cut made `scenarios` a `.tsx`, Node's type stripping does not handle JSX, and the unit suite could not import the catalogue at all - so the invariants above had nothing asserting them. Markup in a data file bought nothing and cost the tests.
 
 **The two frames behave as one app** (`mirror.ts`). The demo store already mirrored the *fleet* over a BroadcastChannel, because that is the fake daemon's state and both frames read the same copy; what it could not mirror is everything the app keeps in its own head - which modal is open, whether the navigation sidebar is out, which side-panel tab is selected, which Project and session are focused. "Both" was therefore two independent apps sharing a database.
 
@@ -255,7 +351,8 @@ Four rules paid for by failures, all of them worth keeping:
 - **The sidebar's resting state differs by layout** (a desktop column that starts open, a phone overlay that starts shut), so a frame says nothing about it until its own value has moved. Without that, the first load had the phone silently collapsing the desktop's fleet column.
 - **A forced value is not an opinion.** A phone showing the side panel has its sidebar shut because it must; reporting that made the constraint travel back to the desktop.
 
-The walkthrough elects a single leader over the same channel (widest frame wins, random tiebreak), because two cards flashing two different controls is noise - and the mirror means the winner's steps visibly drive the other frame, which demonstrates more than a second tour would.
+The director elects a single leader over the same channel (widest frame wins, random tiebreak), because two scripts driving two different controls is noise - and the mirror means the winner's steps visibly drive the other frame, which demonstrates more than a second copy would.
+The reusable half of the convergence pass - dispatch a named command, press a real control, read what is on screen - is `drive.ts`, factored out so the director reaches the app exactly the way the mirror does rather than growing a second, subtly different copy.
 
 Some of the demo's seeding is there to defeat first-run app behaviour that a returning user never meets.
 `main.tsx` writes `mux.drawer.projects.v3`, `mux.drawer.layout.v1` and `mux.drawer.note.v1` before boot: without the last of those, the always-mounted Notes body opens the Project's first note *and selects its own tab* on first mount, so the very first press of Git or Transcript opened the panel on Notes.
