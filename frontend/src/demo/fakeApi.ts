@@ -32,6 +32,7 @@ import {
   queueSummaryPayload,
 } from './controlPlane.ts'
 import { KEYMAP_FIXTURE } from './keymapFixture.ts'
+import { DETERMINISTIC, fixtureSeconds } from './determinism.ts'
 import { apply, demoId, nowSeconds, project, session, state } from './store.ts'
 import { composerInfo, spawnScrollback } from './terminalSim.ts'
 
@@ -209,7 +210,7 @@ export function spawnSession(body: Record<string, unknown>): unknown {
   const target = project(projectId)
   if (!target) return error(404, 'Unknown project.')
   const id = demoId('s')
-  const created = nowSeconds()
+  const created = DETERMINISTIC ? fixtureSeconds(id) : nowSeconds()
   const newSession: Session = {
     id, name: backend === 'shell' ? 'shell' : `${backend} session`,
     project_id: projectId, backend,

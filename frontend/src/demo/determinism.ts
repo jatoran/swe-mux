@@ -8,7 +8,7 @@
  * cannot drift from the product. So `?deterministic=1` (or the `swemux-demo-deterministic`
  * localStorage key) replaces both sources at the root rather than at each call site.
  *
- * Two overrides, and the reasoning for each shape:
+ * Two global overrides and one fixture-time rule, with a different reason for each:
  *
  * - **`Math.random` becomes a seeded PRNG.** Overriding the global rather than threading a
  *   `demoRandom()` through nine modules is deliberate: the demo's non-determinism is
@@ -23,6 +23,10 @@
  *   permanently fresh. Rebasing keeps deltas honest while making the *absolute* values - which is
  *   what every fixture offset and every "3 minutes ago" label is derived from - identical
  *   on every run.
+ * - **Generated fixture timestamps come from identity, not elapsed time.** The rebased
+ *   clock is still a running clock, so two twenty-five-second scenarios can finish on
+ *   adjacent seconds under runner load. A timestamp persisted into the simulated daemon
+ *   is therefore derived from the minted id's deterministic ordinal instead.
  *
  * What determinism does NOT buy is pixel-identical video: the scenario runner drives real
  * timers and a recorder samples real frames. What it buys is that every id, every fixture
@@ -36,6 +40,20 @@
 
 /** The demo's fixed "now" under determinism: 2026-03-14 09:41:00 UTC. */
 export const DEMO_EPOCH_MS = Date.UTC(2026, 2, 14, 9, 41, 0)
+
+/**
+ * A stable second for fixture data minted under a deterministic `demoId`.
+ *
+ * The running demo clock is for elapsed-time behavior. Persisted fixture data needs a
+ * pure answer, or two equally correct runs whose timers settle one second apart produce
+ * different stores. The id already carries the deterministic creation order, so it is
+ * the timestamp's complete input rather than another mutable counter.
+ */
+export function fixtureSeconds(identity: string): number {
+  const match = /-d(\d+)$/.exec(identity)
+  if (!match) throw new Error(`deterministic fixture id has no ordinal: ${identity}`)
+  return Math.floor(DEMO_EPOCH_MS / 1000) + Number(match[1])
+}
 
 const FLAG_KEY = 'swemux-demo-deterministic'
 const DEFAULT_SEED = 0x5eed1234
