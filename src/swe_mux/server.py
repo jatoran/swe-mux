@@ -124,6 +124,7 @@ from .network_usage import (
 from .openrouter import OpenRouterClient
 from .operational_telemetry import OperationalTelemetryStore
 from .path_identity import same_path
+from .plugins import PluginManager
 from .preview_store import PreviewStore
 from .preview_transport import PREVIEW_HTTP_CONCURRENCY, PREVIEW_WS_CONCURRENCY
 from .process_reaper import create_reaper
@@ -441,9 +442,7 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         # traceback that names the line. The request id is on this record too
         # (the correlation filter), so the 500 the caller saw and the traceback
         # that explains it can be matched without guessing from timestamps.
-        log.exception(
-            "unhandled request error method=%s path=%s", request.method, request.path
-        )
+        log.exception("unhandled request error method=%s path=%s", request.method, request.path)
         return json_response({"error": "internal server error"}, 500)
 
 
@@ -804,9 +803,7 @@ async def _build_runtime(
         raise
 
 
-async def _hydrate_llm_capabilities(
-    capabilities: CapabilityStore, store: AutomationStore
-) -> None:
+async def _hydrate_llm_capabilities(capabilities: CapabilityStore, store: AutomationStore) -> None:
     """Load what each provider's endpoint was last measured to be capable of.
 
     Runs before the first completion can, so nothing observes the store in its
@@ -830,8 +827,10 @@ async def _restore_durable_sessions(
     projects: ProjectManager,
 ) -> None:
     """Restore explicit inactive rows, then optional unexpected-loss rows."""
+
     def project_exists(project_id: str) -> bool:
         return project_id in projects.projects
+
     try:
         inactive = await sessions.restore_inactive_sessions(project_exists=project_exists)
         if inactive:
@@ -957,9 +956,7 @@ async def _run_pending_maintenance(config: Config, predecessor_pid: int = -1) ->
     )
     control = VerificationControl()
     try:
-        result = await asyncio.to_thread(
-            run_maintenance, config.database_path, request, control
-        )
+        result = await asyncio.to_thread(run_maintenance, config.database_path, request, control)
     except asyncio.CancelledError:
         control.cancel()
         # Kept, not consumed: being asked to stop is not the operation failing,
@@ -1066,8 +1063,7 @@ def _precompress_frontend(frontend_dir: Path) -> None:
     result = precompress_static(frontend_dir)
     if result.failed:
         log.warning(
-            "could not precompress %d static asset(s) under %s; they will be served "
-            "uncompressed",
+            "could not precompress %d static asset(s) under %s; they will be served uncompressed",
             result.failed,
             frontend_dir,
         )
@@ -1343,6 +1339,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         status_timeline=status_timeline,
         recovery=session_recovery,
     )
+
     # The observer decides an approval; this is the only way it can deliver one.
     # Installed as a factory rather than called from `observation.py` directly
     # because `terminal_routes._record_operator_input` owns the evidence accounting every human
@@ -1356,6 +1353,17 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         return write
 
     sessions.operator_input_sink_factory = _operator_input_sink
+
+    plugins = PluginManager(
+        data_dir=config.data_dir,
+        database_path=config.database_path,
+        events=events,
+        sessions=sessions,
+        projects=projects,
+        port=config.port,
+    )
+    publish(app, {keys.PLUGINS: plugins})
+    await plugins.start()
     # Bounds the observer reads off the session rather than importing config,
     # matching how the approval stabilization window is already published.
     sessions.session_defaults.update(
@@ -1469,9 +1477,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         cadence=config.ghost_window_poll_seconds,
         enabled=config.ghost_window_sweep_enabled,
     )
-    previews = PreviewRegistry(
-        process_inspector, sessions, store=PreviewStore(config.data_dir)
-    )
+    previews = PreviewRegistry(process_inspector, sessions, store=PreviewStore(config.data_dir))
     fleet = FleetIntelligence(
         sessions, events, automation_store, process_inspector, previews, config
     )
@@ -1850,28 +1856,20 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             raise ValueError("unknown project")
         return await _assistant_note_summaries(project)
 
-    async def _assistant_resolve_note(
-        project: Any, note_reference: str | None
-    ) -> dict[str, Any]:
+    async def _assistant_resolve_note(project: Any, note_reference: str | None) -> dict[str, Any]:
         """Note id for a spoken/typed title — exact casefold first, then a
         unique substring; ambiguity is answered with candidates, never a guess."""
         if not note_reference:
             return {"note_id": project.id}
         summaries = await _assistant_note_summaries(project)
         needle = note_reference.strip().casefold()
-        exact = [
-            item for item in summaries
-            if str(item.get("title") or "").casefold() == needle
-        ]
+        exact = [item for item in summaries if str(item.get("title") or "").casefold() == needle]
         matches = exact or [
-            item for item in summaries
-            if needle in str(item.get("title") or "").casefold()
+            item for item in summaries if needle in str(item.get("title") or "").casefold()
         ]
         if len(matches) != 1:
             return {
-                "error": "note did not resolve"
-                if not matches
-                else "more than one note matches",
+                "error": "note did not resolve" if not matches else "more than one note matches",
                 "candidates": [str(item.get("title") or "") for item in matches[:6]],
             }
         return {"note_id": str(matches[0]["note_id"])}
@@ -2270,6 +2268,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     timeline.mark("provider-accounts-reconcile")
     await provider_accounts.reconcile_startup()
     provider_accounts.start()
+
     # Deferred: a full psutil sweep of every process on the machine, measured at
     # 20.7s cold and 6.0s warm across 482 processes, and it was the second silent
     # stretch of a 226.6s start. Nothing that serves a request depends on it -
@@ -2598,6 +2597,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     # narrows the loop variable to the first tuple's union and rejects the rest.
     key: web.AppKey[Any]
     for key in (
+        keys.PLUGINS,
         keys.HISTORY_BACKFILLS,
         keys.HISTORY_SCAN,
         keys.HOOKS,

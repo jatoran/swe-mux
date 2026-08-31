@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from .network_usage import NetworkUsage
     from .openrouter import OpenRouterClient
     from .operational_telemetry import OperationalTelemetryStore
+    from .plugins import PluginManager
     from .process_reaper import ProcessReaper
     from .processes import PreviewRegistry, ProcessInspector
     from .project_actions import ProjectActionService
@@ -137,9 +138,7 @@ MCP_RATE_WINDOWS: web.AppKey[dict[str, deque[float]]] = web.AppKey("mcp_rate_win
 MCP_TOOLS_WINDOWS: web.AppKey[dict[str, deque[float]]] = web.AppKey("mcp_tools_windows")
 #: Keyed by (attachment workspace root, session id): one lock per workspace a
 #: session writes into, not one per session.
-ATTACHMENT_LOCKS: web.AppKey[dict[tuple[str, str], asyncio.Lock]] = web.AppKey(
-    "attachment_locks"
-)
+ATTACHMENT_LOCKS: web.AppKey[dict[tuple[str, str], asyncio.Lock]] = web.AppKey("attachment_locks")
 
 # --- core runtime handles ----------------------------------------------------
 
@@ -182,6 +181,7 @@ LAND_STORE: web.AppKey[LandStore] = web.AppKey("land_store")
 OPENROUTER: web.AppKey[OpenRouterClient] = web.AppKey("openrouter")
 PREVIEWS: web.AppKey[PreviewRegistry] = web.AppKey("previews")
 PROCESS_INSPECTOR: web.AppKey[ProcessInspector] = web.AppKey("process_inspector")
+PLUGINS: web.AppKey[PluginManager] = web.AppKey("plugins")
 PROJECT_ACTIONS: web.AppKey[ProjectActionService] = web.AppKey("project_actions")
 PROJECT_CONTEXTS: web.AppKey[ProjectContextService] = web.AppKey("project_contexts")
 PROJECT_WATCHER: web.AppKey[ProjectFileWatcher] = web.AppKey("project_watcher")
@@ -243,9 +243,7 @@ GRAVEYARD_TASKS: web.AppKey[set[asyncio.Task[Any]]] = web.AppKey("graveyard_task
 #: phase has to know whether the predecessor is still holding `mux.db` and a
 #: probe taken later reads this process.
 PREDECESSOR_PID: web.AppKey[int] = web.AppKey("predecessor_pid")
-STARTUP_DEFERRED_TASKS: web.AppKey[list[asyncio.Task[Any]]] = web.AppKey(
-    "startup_deferred_tasks"
-)
+STARTUP_DEFERRED_TASKS: web.AppKey[list[asyncio.Task[Any]]] = web.AppKey("startup_deferred_tasks")
 RECONCILE_TASK: web.AppKey[asyncio.Task[Any] | None] = web.AppKey("reconcile_task")
 HISTORY_SEARCH_MAINTENANCE_TASK: web.AppKey[asyncio.Task[Any] | None] = web.AppKey(
     "history_search_maintenance_task"

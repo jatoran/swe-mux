@@ -899,6 +899,17 @@ export function App() {
   // The Queue drawer tab's deliberate-open counter focuses the composer even when the
   // same chip is clicked twice.
   const [queueOpenToken,setQueueOpenToken]=useState(0)
+  type PluginContribution={id:string;title:string;description:string;contexts:string[]}
+  type CommandPlugin={id:string;name:string;enabled:boolean;manifest:null|{actions:PluginContribution[];panes:PluginContribution[]}}
+  const [commandPlugins,setCommandPlugins]=useState<CommandPlugin[]>([])
+  const loadCommandPlugins=useCallback(()=>api<{plugins:CommandPlugin[]}>('GET','/api/plugins')
+    .then(result=>setCommandPlugins(result.plugins.filter(plugin=>plugin.enabled&&plugin.manifest)))
+    .catch(()=>{}),[])
+  useEffect(()=>{
+    void loadCommandPlugins()
+    window.addEventListener('focus',loadCommandPlugins)
+    return()=>window.removeEventListener('focus',loadCommandPlugins)
+  },[loadCommandPlugins])
   // The utility workspace has one device-local split tree shared by every Project. Selection
   // and desktop expansion remain device-local per Project. Mobile visibility is transient.
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
@@ -5635,6 +5646,19 @@ export function App() {
     { id: 'history.openProject', label: 'Browse selected project’s session history', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => void showHistory(commandProject||null) },
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
+    { id: 'plugins.open', label: 'Manage plugins', category: 'view', available: true, run: () => openSettings('Plugins') },
+    ...commandPlugins.flatMap(plugin=>[
+      ...(plugin.manifest?.actions||[]).map(action=>{
+        const context=active&&action.contexts.includes('session')
+          ?{context:'session',project_id:active.project_id,session_id:active.id}
+          :activeProject&&action.contexts.includes('project')
+            ?{context:'project',project_id:activeProject.id}
+            :{context:'global'}
+        const available=action.contexts.includes(context.context)
+        return {id:`plugin.${plugin.id}.action.${action.id}`,label:`${plugin.name}: ${action.title}`,category:'input' as const,available,disabledReason:'Select a supported Project or session context',run:()=>void api('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,context).catch(error=>setError(error instanceof Error?error.message:String(error)))}
+      }),
+      ...(plugin.manifest?.panes||[]).map(pane=>({id:`plugin.${plugin.id}.pane.${pane.id}`,label:`${plugin.name}: Open ${pane.title}`,category:'pane' as const,available:!!activeProject&&pane.contexts.includes('project'),disabledReason:'Select a Project first',run:()=>{if(activeProject)void api('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,{context:'project',project_id:activeProject.id}).then(()=>refresh()).catch(error=>setError(error instanceof Error?error.message:String(error)))}})),
+    ]),
     // The palette is where someone looks who does not yet know the footer button
     // exists, which is exactly the person this launches something for. The
     // disabled reason is the same sentence the button's tooltip carries, so the
@@ -8322,7 +8346,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false); void loadCommandPlugins() }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so
         "exactly one of them, ever" is a property of the function rather than of two

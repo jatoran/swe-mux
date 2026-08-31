@@ -6384,10 +6384,15 @@ the download button.
 Recorded 2026-08-30 and scheduled.
 The evidence and architectural decisions are in `PLUGIN_SYSTEM_FINDINGS.md`; this phase is the authoritative implementation checklist and acceptance contract.
 
+Implementation candidate completed 2026-08-30 on `worktree-plugin-system` and intentionally remains unlanded for operator review.
+The branch gate passes 6,480 backend tests plus ruff, full and per-platform mypy, frontend source and test typechecks, and 2,302 frontend tests.
+Three high-utility test plugins live as independent Git repositories under the primary checkout's ignored `.private/plugin-lab`; no plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
+Checkboxes remain open until review and landing make the implementation part of `master`.
+
 ### Outcome
 
 A user can install, inspect, enable, update, disable, and remove third-party extensions without changing the swe-mux repository or application bundle.
-A plugin can contribute actions, terminal/TUI panes, and bounded event-triggered commands through stable public host capabilities.
+A plugin can contribute actions, terminal/TUI panes, bounded event-triggered commands, one-shot startup restoration, and terminal link handlers through stable public host capabilities.
 Ordinary swe-mux updates preserve plugin source, config, state, trust, and logs, and an incompatible or broken plugin cannot block daemon readiness or session recovery.
 
 This phase is sequenced after Phase 23 W1, the server-side distinction between operator-originated, session-originated, and other delegated callers.
@@ -6412,7 +6417,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 ### Workstream A - manifest and host capability contract
 
 - [ ] Define and version `swe-mux-plugin.toml` with required `manifest_version`, namespaced `id`, `name`, semantic `version`, `min_swe_mux_version`, `platforms`, optional architectures, required host capabilities, API permissions, runtime requirements, and contribution arrays.
-- [ ] Define `plugin.actions.v1`, `plugin.panes.v1`, and `plugin.events.v1` as independently negotiable host capabilities.
+- [ ] Define `plugin.actions.v1`, `plugin.panes.v1`, `plugin.events.v1`, `plugin.startup.v1`, and `plugin.links.v1` as independently negotiable host capabilities.
   `min_swe_mux_version` supplies an actionable compatibility message but is not the load authority.
 - [ ] Validate plugin and contribution identifiers, duplicate IDs, semantic versions, platform and architecture values, capability names, permission names, command size, argument count, environment size, and every relative path before registration.
 - [ ] Represent every command as executable plus argv, cwd, and bounded environment additions.
@@ -6529,6 +6534,17 @@ The plugin contract becomes a compatibility commitment once the first third-part
 - [ ] Make an event hook one-shot.
   A command that remains alive past its declared bound is terminated; persistent services and automatic startup hooks are not smuggled through the event surface.
 
+### Workstream G.5 - startup restoration and terminal links
+
+- [ ] Add manifest-declared startup hooks as bounded one-shot commands scheduled after daemon runtime construction.
+  A hook restores plugin-owned state and exits; it cannot become an invisible persistent daemon or block readiness.
+- [ ] Run startup hooks when an approved plugin is enabled and once after a daemon adopts its runtime.
+  Failure is isolated to the plugin command ledger and never disables session recovery.
+- [ ] Add manifest-declared terminal link handlers that bind a validated regular expression to an action in the same plugin.
+- [ ] Publish enabled handlers to the browser and route Control-clicks from both literal xterm URLs and OSC 8 hyperlinks through one cached matcher.
+  An unmatched URL retains ordinary Preview or browser behavior.
+- [ ] Include clicked URL, link-handler ID, Project ID, and session ID in bounded callback context without granting browser navigation authority.
+
 ### Workstream H - management surfaces and recovery
 
 - [ ] Add typed daemon operations and `swemux plugin` commands for validate, link, install, inspect, list, enable, disable, update, rollback, uninstall, purge, config-dir, state-dir, action list and invoke, pane list and open, event subscriptions, and bounded logs.
@@ -6578,8 +6594,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 ### Deliberately deferred beyond v1
 
 - Install-time builds and package-manager execution.
-- Automatic startup hooks or invisible persistent plugin daemons.
-- Terminal link handlers, until contributed actions and the existing terminal link detector have a stable shared contract.
+- Invisible persistent plugin daemons.
 - Native React components, CSS, arbitrary DOM, backend routes, middleware, and database migrations.
 - Hosted web plugins, until an isolated origin, navigation policy, authentication boundary, storage policy, and mobile behavior are designed with Phase 13.
 - Dynamic Settings forms or plugin-defined schemas rendered as trusted host UI.
@@ -6592,7 +6607,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 - [ ] A user can install a community plugin from an ordinary GitHub repository, inspect and approve immutable content, use it, update or roll it back, and remove it without cloning or modifying swe-mux.
 - [ ] A local author can link a working directory, validate it, invoke an action, open a pane, receive a fixture event, inspect logs, and publish through documented tooling.
-- [ ] Actions, panes, and event hooks all use stable versioned host capabilities, one caller-authorization core, one bounded command runner, and existing session and EventBus primitives.
+- [ ] Actions, panes, event hooks, startup hooks, and link handlers all use stable versioned host capabilities, one caller-authorization core, one bounded command runner, and existing session and EventBus primitives.
 - [ ] No plugin code is imported into the daemon or frontend, no plugin requires an application-bundle mutation, and no new supervisor protocol message is introduced for plugin panes.
 - [ ] A malformed, incompatible, disabled, crashing, hanging, flooding, or missing plugin cannot block daemon readiness, session recovery, a core update, or management of other plugins.
 - [ ] A plugin update executes no new bytes before immutable inspection and approval, and every failed update path leaves the prior enabled version, config, and state usable.

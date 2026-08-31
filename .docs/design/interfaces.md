@@ -3138,3 +3138,37 @@ A failing local check is still `1`, because a named broken check is the more act
 local report with nothing failing is `3`, which is exactly what `3` already meant.
 A degraded report therefore never exits `0`, and a script gating on `swemux doctor` keeps working
 unchanged.
+
+## Plugin API
+
+Lifecycle endpoints:
+
+```text
+GET    /api/plugins
+POST   /api/plugins/inspect
+POST   /api/plugins/link
+POST   /api/plugins/install
+POST   /api/plugins/execution
+POST   /api/plugins/{id}/approve
+POST   /api/plugins/{id}/enable
+POST   /api/plugins/{id}/update
+POST   /api/plugins/{id}/rollback
+DELETE /api/plugins/{id}[?purge=1]
+GET    /api/plugins/logs[?plugin_id=...]
+GET    /api/plugins/marketplace
+```
+
+Contribution endpoints:
+
+```text
+POST /api/plugins/{id}/actions/{action_id}
+POST /api/plugins/{id}/panes/{pane_id}
+GET  /api/plugins/link-handlers
+POST /api/plugins/{id}/links/{handler_id}
+```
+
+`POST /api/plugins/callback` requires a runtime token in `Authorization: Bearer` or `X-Swemux-Plugin-Token`.
+The body names one of `projects.list`, `sessions.list`, `terminal.write`, `session.stop`, `notify`, or `self.describe`.
+The token's manifest-approved permission is checked before the operation and plugin identity is injected from the token rather than accepted from the body.
+
+Plugin errors use `{error, code}` and distinguish missing plugins, stale approval, incompatibility, source conflict, in-use panes, invalid or expired tokens, and denied permissions.
