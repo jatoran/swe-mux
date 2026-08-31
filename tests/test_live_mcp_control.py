@@ -67,6 +67,9 @@ def test_every_write_tool_is_covered_by_a_live_wire_test() -> None:
         "request_spawn",
         "interrupt",
         "end_session",
+        # Driven by the land canary from a session whose host process remains on
+        # trunk, which is the Codex execution model this write exists for.
+        "use_worktree",
         "request_land",
         # Driven in the land canary, from the same worktree and the same session: the
         # two share every bound and differ only in which step the pipeline stops at, so
@@ -91,9 +94,10 @@ async def _spawn_agent(
 ) -> tuple[str, int, str]:
     """Spawn a real agent and return (session id, pid, recovered MCP token).
 
-    ``cwd`` is the checkout the agent is spawned into. It matters for exactly one
-    tool: `request_land` reads the caller's own live cwd rather than a target
-    argument, so a canary for it has to be able to put the agent in a worktree.
+    ``cwd`` is the checkout the agent is spawned into. It proves the native
+    linked-worktree path request_land still prefers for Claude-style sessions;
+    the same canary also binds a worktree from a trunk-hosted session to prove
+    the Codex path.
     """
     snapshot = await daemon.spawn(project_id, backend, seed, name, cwd=cwd)
     sid = str(snapshot["id"])
@@ -301,10 +305,10 @@ async def test_request_land_enqueues_the_callers_own_worktree(
 ) -> None:
     """A granted request_land enqueues the checkout the caller is actually in.
 
-    The wire fact this proves is the one the tool's shape depends on: there is no
-    target argument, so the branch comes from the caller's own live cwd. An agent
-    spawned into a worktree lands *that* worktree, and a caller sitting in the
-    primary checkout is refused rather than landing the trunk into itself.
+    The dangerous tools remain targetless under both execution models. An agent
+    spawned into a worktree lands its live checkout (Claude); a session whose
+    host process stays on trunk first binds one exact linked worktree, then lands
+    that run-bound selection (Codex).
     """
     async with isolated_daemon(tmp_path) as daemon:
         await asyncio.to_thread(
@@ -329,6 +333,19 @@ async def test_request_land_enqueues_the_callers_own_worktree(
             cwd=worktree,
             check=True,
         )
+        codex_worktree = tmp_path / "wt-codex"
+        await asyncio.to_thread(
+            subprocess.run,
+            ["git", "worktree", "add", "-b", "worktree-codex", str(codex_worktree)],
+            cwd=daemon.root,
+            check=True,
+        )
+        await asyncio.to_thread(
+            subprocess.run,
+            ["git", "commit", "-q", "--allow-empty", "-m", "codex branch work"],
+            cwd=codex_worktree,
+            check=True,
+        )
         project_id = await daemon.register_project()
         _sid, pid, token = await _spawn_agent(
             daemon, project_id, backend, "brancher", _IDLE_SEED, cwd=str(worktree)
@@ -348,24 +365,32 @@ async def test_request_land_enqueues_the_callers_own_worktree(
         cancelled = await daemon.client.delete(f"/api/land/{checked['id']}")
         assert cancelled.status == 200, await cancelled.text()
 
-        payload, is_error = await daemon.call_tool(
-            token, "request_land", {"reason": "wire canary"}
-        )
-        assert not is_error, payload
-        assert payload["state"] == "queued", payload
-        assert payload["kind"] == "land", payload
-        assert payload["branch"] == "worktree-alpha", payload
-
-        # The same call from the trunk itself has nothing to land into.
+        # A trunk-hosted session gets an actionable context refusal rather than
+        # asking the queue to land master into itself.
         _trunk_sid, _trunk_pid, trunk_token = await _spawn_agent(
             daemon, project_id, backend, "in-trunk", _IDLE_SEED
         )
+        context, context_error = await daemon.call_tool(trunk_token, "worktree_context", {})
+        assert not context_error, context
+        assert context["source"] == "primary_cwd", context
+        assert context["code"] == "worktree_context_required", context
         refused, refused_error = await daemon.call_tool(
             trunk_token, "request_land", {"reason": "wire canary"}
         )
         assert refused_error, refused
-        # Typed, because a refusal is an answer the agent has to act on. This
-        # arrived as `500 internal server error` until the service's refusals were
-        # translated on this path the way both HTTP routes already translated them.
-        assert refused.get("error") == "already_landed", refused
-        assert refused.get("message"), refused
+        assert refused.get("error") == "worktree_context_required", refused
+        assert "use_worktree" in str(refused.get("message") or ""), refused
+
+        selected, selection_error = await daemon.call_tool(
+            trunk_token, "use_worktree", {"worktree_root": str(codex_worktree)}
+        )
+        assert not selection_error, selected
+        assert selected["source"] == "bound", selected
+        assert selected["branch"] == "worktree-codex", selected
+
+        codex_land, codex_land_error = await daemon.call_tool(
+            trunk_token, "request_land", {"reason": "bound wire canary"}
+        )
+        assert not codex_land_error, codex_land
+        assert codex_land["state"] == "queued", codex_land
+        assert codex_land["branch"] == "worktree-codex", codex_land

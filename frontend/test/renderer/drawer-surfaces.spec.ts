@@ -32,20 +32,19 @@ test('Actions exposes three named views and one body at a time', async ({ page }
   await expect(page.locator('[data-setting="drawer.actions.clipboard"]')).toBeVisible()
 })
 
-test('the Actions tab names the session no more often than the pane heading does', async ({ page }) => {
-  await page.setViewportSize({ width: 400, height: 1000 })
+test('Actions removes the pane heading and keeps its target only where the terminal is covered', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 1000 })
   await page.goto('/drawer-surfaces-harness.html')
   await page.waitForSelector('.actions-view-tabs')
 
-  // The heading immediately above this tab already says which session it is scoped to, in
-  // more words. A second line saying it again pushed every section down by a row and made
-  // the sticky headers stack against it.
+  await expect(page.locator('.drawer-pane-heading')).toHaveCount(0)
   await expect(page.locator('.actions-tab > .drawer-status')).toHaveCount(0)
-  const mentions = await page.evaluate(() =>
-    [...document.querySelectorAll('.utility-drawer *')]
-      .filter(el => !el.children.length && /Schedule Session Resume/.test(el.textContent || '')).length)
-  expect(mentions).toBe(1)
+  await expect(page.locator('.actions-target')).toBeHidden()
   expect(await page.evaluate(() => getComputedStyle(document.querySelector('.actions-view-tabs')!).top)).toBe('0px')
+
+  await page.setViewportSize({ width: 400, height: 1000 })
+  await expect(page.locator('.actions-target')).toBeVisible()
+  await expect(page.locator('.actions-target')).toHaveText('Target: Schedule Session Resume')
 })
 
 test('the instruction viewer is a labelled region, selected or not', async ({ page }) => {

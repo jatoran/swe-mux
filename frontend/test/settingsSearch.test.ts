@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Fragment, h as preactNode } from 'preact'
-import { domVNode, harvestSettings, matchIndex, normalizeSearchText, searchSettings, tabEntry } from '../src/settingsSearch.ts'
+import { domVNode, harvestHeadings, harvestSettings, matchIndex, normalizeSearchText, searchSettings, tabEntry } from '../src/settingsSearch.ts'
 
 // Stand-in for what the JSX transform produces: type plus props.children.
 const h = (type: string, props: Record<string, unknown>, ...children: unknown[]) =>
@@ -82,6 +82,59 @@ test('repeated labels within a tab are distinguished by occurrence', () => {
   assert.equal(first.occurrence, 0)
   assert.equal(second.occurrence, 1)
   assert.equal(second.section, 'Second block')
+})
+
+test('a control under an h4 group names the h3 block above it too', () => {
+  // The whole point of a path: "Input · view" told a reader nothing about where the
+  // row lives, because the category heading had overwritten the section heading.
+  const [, , row] = tab(
+    h('h3', {}, 'Keyboard shortcuts'),
+    h('section', {}, h('h4', {}, 'View'), h('button', {}, 'Open global Scratchpad')))
+  assert.deepEqual(row.path, ['Keyboard shortcuts', 'View'])
+  assert.equal(row.section, 'Keyboard shortcuts · View')
+})
+
+test('a group heading closes with its section, so what follows keeps the block', () => {
+  // The disclosure after the shortcut table used to file itself under whichever
+  // category rendered last.
+  const entries = tab(
+    h('h3', {}, 'Keyboard shortcuts'),
+    h('div', {},
+      h('section', {}, h('h4', {}, 'View'), h('button', {}, 'Open Settings')),
+      h('section', {}, h('h4', {}, 'History'), h('button', {}, 'Browse history'))),
+    h('details', {}, h('summary', {}, 'Reserved shortcut policy')))
+  const policy = entries.find(entry => entry.label === 'Reserved shortcut policy')
+  assert.deepEqual(policy?.path, ['Keyboard shortcuts'])
+  assert.deepEqual(entries.find(entry => entry.label === 'Browse history')?.path,
+    ['Keyboard shortcuts', 'History'], 'a sibling group replaces the previous one')
+})
+
+test('a new h3 drops the h4 under the block it closed', () => {
+  const [, , , field] = tab(
+    h('h3', {}, 'Touch gestures'), h('h4', {}, 'Swipes'),
+    h('h3', {}, 'Keyboard shortcuts'), h('label', {}, 'Enabled'))
+  assert.deepEqual(field.path, ['Keyboard shortcuts'])
+})
+
+test('a heading is filed under its block rather than under itself', () => {
+  const [, group] = tab(h('h3', {}, 'Keyboard shortcuts'), h('h4', {}, 'View'))
+  assert.equal(group.label, 'View')
+  assert.deepEqual(group.path, ['Keyboard shortcuts'])
+})
+
+test('a labelled block inside a section does not claim the section', () => {
+  // `<strong>` marks a sub-block ("EDITOR::CHORDS") without opening one; letting it
+  // take a level would file the controls after it under a shouted phrase.
+  const [, , field] = tab(
+    h('h3', {}, 'Editor shortcuts'), h('strong', {}, 'EDITOR::CHORDS'), h('label', {}, 'Policy'))
+  assert.deepEqual(field.path, ['Editor shortcuts'])
+})
+
+test('the enclosing headings are keywords, so a block name narrows a search', () => {
+  const entries = tab(
+    h('h3', {}, 'Keyboard shortcuts'),
+    h('section', {}, h('h4', {}, 'View'), h('button', {}, 'Open global Scratchpad')))
+  assert.equal(searchSettings(entries, 'keyboard scratchpad')[0]?.label, 'Open global Scratchpad')
 })
 
 const entries = [
@@ -173,6 +226,28 @@ test('a mounted tab can be indexed from its DOM by the same rules', () => {
   assert.deepEqual(entries.map(entry => entry.label), ['Session notification sounds', 'Quiet from'])
   assert.equal(entries[1].section, 'Session notification sounds')
   assert.match(entries[1].keywords, /22:00/)
+})
+
+test('a tab s headings are readable from its vnodes, before it has mounted', () => {
+  // What lets the sidebar disclose a tab's sections on the first visit rather than the
+  // second: only the mounted tab has a DOM to read.
+  const Opaque = () => null
+  const tree = h('div', {},
+    h('section', {}, h('h3', {}, 'Rendering'), h('label', {}, 'Renderer')),
+    h('section', {}, h('h3', {}, 'Scrollback'), h('h4', {}, 'Limits')),
+    { type: Opaque, props: {} })
+  assert.deepEqual(harvestHeadings(tree), ['Rendering', 'Scrollback'])
+})
+
+test('a heading split across runs reads as one section, the way textContent does', () => {
+  // The live read is `textContent`; a preview that kept only the first run would name a
+  // different section and its id would not match the one the rail settles on.
+  assert.deepEqual(harvestHeadings(h('section', {}, h('h3', {}, 'Talk', ' & ', 'dictation'))),
+    ['Talk & dictation'])
+})
+
+test('an empty heading is not a section', () => {
+  assert.deepEqual(harvestHeadings(h('section', {}, h('h3', {}, ' '), h('h3', {}, 'Real'))), ['Real'])
 })
 
 test('a tab is findable by name even when its body is an opaque component', () => {

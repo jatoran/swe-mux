@@ -10,6 +10,7 @@
 // `?notes=one` renders a Project with a single note — the collection the daemon refuses to
 // empty — so the menu's disabled delete can be measured as drawn rather than as intended.
 import { render } from 'preact'
+import { useState } from 'preact/hooks'
 import { NotesTab, type ProjectNoteSummary } from '../../src/NotesTab'
 import type { Project } from '../../src/types'
 import '../../src/style.css'
@@ -17,6 +18,7 @@ import '../../src/style.css'
 const NOW = 1_770_000_000
 const params = new URLSearchParams(location.search)
 const single = params.get('notes') === 'one'
+const scratchpadStartsEnabled = params.get('scratchpad') !== 'off'
 
 const note = (index: number): ProjectNoteSummary => ({
   note_id: `note-${index}`,
@@ -48,7 +50,10 @@ window.fetch = (async (input: RequestInfo | URL) => {
 
 const project = { id: 'p1', name: 'Project One' } as unknown as Project
 
-render(
+function Harness(){
+  const [scratchpadEnabled,setScratchpadEnabled]=useState(scratchpadStartsEnabled)
+  ;(globalThis as unknown as {__scratchpadEnabled?:boolean}).__scratchpadEnabled=scratchpadEnabled
+  return <>
   <div class="utility-drawer" style="width:320px;height:440px;display:flex;flex-direction:column">
     <NotesTab
       project={project}
@@ -56,11 +61,18 @@ render(
       onAllProjects={() => {}}
       onOpenNote={() => {}}
       onOpenScratchpad={() => {}}
+      scratchpadEnabled={scratchpadEnabled}
+      onScratchpadEnabled={async enabled=>setScratchpadEnabled(enabled)}
       onDone={() => {}}
       selectedResourceId={`note:${ITEMS[0].note_id}`}
       editor={<div class="notes-state">editor</div>}
       onPopSelected={() => {}}
     />
-  </div>,
+  </div>
+  </>
+}
+
+render(
+  <Harness/>,
   document.querySelector('#root')!,
 )

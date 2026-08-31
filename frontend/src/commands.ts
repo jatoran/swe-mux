@@ -104,4 +104,55 @@ export function searchCommands(commands: Command[], query: string): Command[] {
 // command→chord lookup belongs with the trie that holds them (`keymap.ts`).
 // Re-exported here because this is where every consumer already looks.
 export { bindingFor } from './keymap.ts'
-export { displayChord } from './keys.ts'
+// Imported as well as re-exported: `shortcutMatches` below needs it in local scope,
+// which `export … from` does not provide.
+import { displayChord } from './keys.ts'
+export { displayChord }
+
+/**
+ * A command category as a heading rather than as the id it is stored as.
+ *
+ * Both catalogs spell a category as one lowercase word, so capitalising is the whole
+ * rule and a table of ten entries would only be a second place to forget one. It is a
+ * function rather than a CSS `text-transform` because the Settings search index reads
+ * the *text* of the heading it files a shortcut under, and "Input · view" is not a
+ * place a reader recognises. The two catalogs do not agree on the set — the daemon's
+ * `KEYBINDING_COMMANDS` has `notes`, `CommandCategory` has `git` and `history` — which
+ * is why this takes a string and never asserts membership.
+ */
+export function commandCategoryLabel(category: string): string {
+  return category ? category[0].toUpperCase() + category.slice(1) : ''
+}
+
+/** What the Settings shortcut row shows when nothing is bound to its command. */
+export const UNBOUND_CHORD = 'not set'
+
+/**
+ * Whether one keyboard-shortcut row survives Settings' shortcut filter.
+ *
+ * The haystack is everything the row shows plus the ids behind it, so the filter
+ * answers both questions a reader brings to a 200-row table: "where is the shortcut
+ * for X" and "what owns this chord". The chord is matched in both spellings — stored
+ * (`ctrl+shift+p`) and displayed (`Ctrl+Shift+P`) — so neither typing habit misses,
+ * and an unbound row matches `not set` exactly as it reads on screen.
+ *
+ * `platform` because the displayed half is platform-dependent: a macOS reader sees
+ * `⌘⇧P` and would otherwise be searching a spelling their screen never shows.
+ *
+ * Every term must match, so extra words narrow, which is the rule the panel's own
+ * search already follows.
+ */
+export function shortcutMatches(
+  command: { id: string; label: string; category: string },
+  chord: string | undefined,
+  query: string,
+  platform = 'win',
+): boolean {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!terms.length) return true
+  const haystack = [
+    command.label, command.id, commandCategoryLabel(command.category),
+    chord || UNBOUND_CHORD, displayChord(chord, platform),
+  ].join(' ').toLowerCase()
+  return terms.every(term => haystack.includes(term))
+}

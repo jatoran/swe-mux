@@ -1159,11 +1159,12 @@ history metadata write.
 The row and layout leaf remain present.
 The operation emits `session_stood_down {session_id, backend, duration_ms}`.
 
-`POST /sessions/{id}/resume` accepts no body and is valid only for an inactive session.
-An agent delegates to the shared conversation-resume authority; a shell replays its recorded executable, argv, cwd, environment, and completion mode.
-The daemon proves the replacement live, replaces the old terminal identity in the Project layout, discards the inactive recovery row, and returns `201 {session, replaced}`.
-Failure before layout replacement leaves the inactive session intact.
-Success emits `session_resumed_from_inactive {session_id, replaced, backend}`.
+`POST /sessions/{id}/resume` accepts no body and is valid for an inactive session or a retained ended agent.
+An agent delegates to the shared conversation-resume authority; an inactive shell replays its recorded executable, argv, cwd, environment, and completion mode.
+The daemon proves the replacement live, replaces the old terminal identity in the Project layout, discards the old session identity and recovery row, and returns `201 {session, replaced}`.
+Failure before layout replacement leaves the retained session intact.
+Inactive success emits `session_resumed_from_inactive {session_id, replaced, backend, agent_run_id, recovered, duration_ms}`.
+Other ended-agent success emits `session_resumed_from_ended` with the same payload.
 
 `POST /sessions/{id}/standing-activity/clear` takes an optional
 `{kind?: 'loop'|'cron'|'background_tasks'|'subagents'}` (the whole set when omitted or when the
@@ -2607,8 +2608,11 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
-The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, `list_models`, `watch_session`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
-The write tools are `notify`, `revoke_message`, `request_spawn`, `run_action`, and the two Phase 7.6 session-control tools `interrupt` and `end_session`.
+The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, `list_models`, `provenance`, `verified_status`, `prior_resolutions`, `dead_ends`, `doc_debt`, `scan_timeline`, `scan_search`, `blast_radius`, `find_definition`, `find_callers`, `find_references`, `code_context`, `test_gap`, `watch_session`, and `worktree_context`.
+The write tools are `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, `use_worktree`, `request_land`, and `request_verify`.
+`worktree_context` reports the checkout the targetless land tools would resolve.
+`use_worktree(worktree_root?)` selects an exact linked worktree for the current agent run, or clears the selection when the argument is omitted; live linked-worktree cwd remains authoritative, so native Claude worktrees need no selection while trunk-hosted Codex sessions can bind one without moving their process cwd.
+Every selection and later use revalidates Git registration, branch identity, trunk and detached exclusions, current run, and exclusive live-session occupancy (`features/mux-mcp.md`, `features/land-queue.md`).
 `request_spawn` takes an optional `model` in the target harness's own spelling; `list_models` answers what that harness has on this machine by running its own listing command, and reports having no such command apart from having no models (`features/backends.md`).
 A session that was launched on a model carries `model_requested` and `model_status` (`agreed` | `divergent` | `pending` | `unverifiable`) on `get_session` and `list_sessions`; both keys are absent for a session that named none, so a caller that never asked is never handed a verdict.
 `notify(dry_run=true)` runs every bound and returns the same verdict - including `target_delivery` and `would_arm` - having staged nothing and spent no budget, so an unreachable peer is chosen rather than discovered after the item is armed.

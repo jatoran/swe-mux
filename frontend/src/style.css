@@ -1,4 +1,4 @@
-:root { color-scheme: dark; font-family: 'DM Sans', system-ui, sans-serif; --bg:#090b0e; --panel:#101318; --panel2:#151920; --line:#252b34; --muted:#7f8998; --text:#e7eaf0; --green:#9fe870; --green2:#6dbf42; --amber:#e7c768; --red:#f07178; --blue:#72a7ff;
+:root { color-scheme: only dark; font-family: 'DM Sans', system-ui, sans-serif; --bg:#090b0e; --panel:#101318; --panel2:#151920; --line:#252b34; --muted:#7f8998; --text:#e7eaf0; --green:#9fe870; --green2:#6dbf42; --amber:#e7c768; --red:#f07178; --blue:#72a7ff;
   /* Alias, not a second palette entry: ~60 rules across rails, tabs, menus, and
      the settings panel were written against `--accent`, which nothing ever
      defined, so every one of them was invalid at computed-value time and fell
@@ -304,6 +304,25 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
    so the per-provider control is a text button on the heading line and the empty state
    is the full-width row it replaces - the one screen a new install always sees. */
 .account-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:7px}.account-section-head h4{margin:0}.account-popover .account-signin{color:var(--green)}.account-popover .account-signin:disabled{opacity:.45;cursor:default}.account-popover button.account-empty-cta{width:100%;display:block;padding:9px 7px;color:var(--muted);text-align:left}.account-popover button.account-empty-cta strong{color:var(--green);font-weight:400}.account-popover button.account-empty-cta:hover{background:var(--panel2)}
+/* Live sessions spawned under an account, and the ones a switch left behind.
+   The count rides in the row's own `small` as a second track, so the quota columns
+   above it keep the `ch` geometry `.quota-row` depends on: its first two tracks are
+   fixed, and only the flexible one carrying the refresh age gives up the width. */
+.account-popover section>button small{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:0 6px}
+.account-popover .account-session-count{justify-self:end;padding:0 4px;border:1px solid var(--line);color:var(--muted);font-style:normal;white-space:nowrap}
+.account-popover section>button.active .account-session-count{border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green)}
+.account-popover .account-session-notice{margin:5px 2px 2px;padding:5px 7px;border-left:3px solid var(--amber,#e5c07b);background:#735f3722;color:var(--amber,#e5c07b);font-size:8px;line-height:1.5}
+/* The empty state of the sidebar's status block: an invitation, not a row of dashes
+   for a provider this machine has never signed in to. It is the expanded sidebar's
+   alone - the 40px rail and the phone's toolbar render nothing at all rather than a
+   call to action neither has room for. */
+.account-prompt{display:grid;gap:7px;padding:8px}
+.account-prompt>div>strong{display:block;color:var(--green);font-weight:400}
+.account-prompt>div>small{display:block;margin-top:3px;color:var(--muted);line-height:1.5}
+.account-prompt-actions{display:flex;flex-wrap:wrap;gap:5px}
+.account-prompt-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
+.account-prompt-actions button.primary{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
+.account-prompt-actions button:hover{background:var(--panel2)}
 /* A sign-in the daemon is running. It reports the same three states wherever it is
    drawn, because the state is the daemon's rather than this component's. */
 .account-login{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 7px;margin:5px 2px;padding:7px;border:1px solid var(--line);background:var(--panel2)}.account-login strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.account-login small{grid-column:1;color:var(--muted);font-size:8px;line-height:1.5;overflow-wrap:anywhere}.account-login button{grid-row:1/3;align-self:center;min-height:25px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}.account-login button:disabled{opacity:.45;cursor:not-allowed}.account-login.running{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}.account-login.running strong{color:var(--accent)}.account-login.succeeded{border-color:color-mix(in srgb,var(--green) 55%,var(--line))}.account-login.succeeded strong{color:var(--green)}.account-login.failed{border-color:color-mix(in srgb,var(--red) 60%,var(--line))}.account-login.failed strong{color:var(--red)}
@@ -322,33 +341,33 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 @media(max-width:760px){.account-switcher.compact{position:static;justify-self:end;border:0}.mobile-toolbar>.account-switcher.compact{flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}.mobile-toolbar>.account-switcher.compact::-webkit-scrollbar{display:none}.account-add{flex-direction:column;align-items:stretch}.account-add>button{min-height:44px}.account-popover .account-signin{min-height:36px;padding:0 6px}.account-popover button.account-empty-cta{min-height:46px}.account-login button{min-height:38px}.account-list article{grid-template-columns:72px minmax(0,1fr);gap:6px}.account-list article>small,.account-quota,.account-actions{grid-column:2}.account-actions{flex-wrap:wrap}}
 
 /* Semantic themes and the Phase 1 terminal-style Settings surface. */
-:root[data-theme="dark"] { color-scheme:dark;--bg:#090a0c;--panel:#0d0f12;--panel2:#13161a;--line:#2a2e34;--muted:#848b94;--text:#d9dde2;--green:#8bd450;--green2:#72b94c;--amber:#e7c768;--red:#f07178;--blue:#72a7ff }
-:root[data-theme="light"] { color-scheme:light;--bg:#f5f2e9;--panel:#ebe8df;--panel2:#dedbd1;--line:#b8b6ae;--muted:#686b65;--text:#252821;--green:#3f7625;--green2:#558d34;--amber:#8c6810;--red:#b7323c;--blue:#315b9c }
-:root[data-theme="solarized-dark"] { color-scheme:dark;--bg:#002b36;--panel:#073642;--panel2:#0b3f4b;--line:#31545b;--muted:#839496;--text:#eee8d5;--green:#859900;--green2:#859900;--amber:#b58900;--red:#dc322f;--blue:#268bd2 }
-:root[data-theme="tokyo-night"] { color-scheme:dark;--bg:#1a1b26;--panel:#1f2335;--panel2:#24283b;--line:#3b4261;--muted:#787c99;--text:#c0caf5;--green:#9ece6a;--green2:#9ece6a;--amber:#e0af68;--red:#f7768e;--blue:#7aa2f7 }
-:root[data-theme="gruvbox-dark"] { color-scheme:dark;--bg:#282828;--panel:#32302f;--panel2:#3c3836;--line:#504945;--muted:#a89984;--text:#ebdbb2;--green:#b8bb26;--green2:#98971a;--amber:#fabd2f;--red:#fb4934;--blue:#83a598 }
-:root[data-theme="catppuccin-mocha"] { color-scheme:dark;--bg:#1e1e2e;--panel:#181825;--panel2:#313244;--line:#45475a;--muted:#9399b2;--text:#cdd6f4;--green:#a6e3a1;--green2:#94e2d5;--amber:#f9e2af;--red:#f38ba8;--blue:#89b4fa }
-:root[data-theme="catppuccin-latte"] { color-scheme:light;--bg:#eff1f5;--panel:#e6e9ef;--panel2:#ccd0da;--line:#bcc0cc;--muted:#6c6f85;--text:#4c4f69;--green:#40a02b;--green2:#179299;--amber:#df8e1d;--red:#d20f39;--blue:#1e66f5 }
-:root[data-theme="nord"] { color-scheme:dark;--bg:#2e3440;--panel:#3b4252;--panel2:#434c5e;--line:#4c566a;--muted:#a8b1c2;--text:#eceff4;--green:#a3be8c;--green2:#8fbcbb;--amber:#ebcb8b;--red:#bf616a;--blue:#88c0d0 }
-:root[data-theme="dracula"] { color-scheme:dark;--bg:#282a36;--panel:#21222c;--panel2:#343746;--line:#44475a;--muted:#7f8fbe;--text:#f8f8f2;--green:#50fa7b;--green2:#69ff94;--amber:#f1fa8c;--red:#ff5555;--blue:#8be9fd }
-:root[data-theme="everforest-dark"] { color-scheme:dark;--bg:#2d353b;--panel:#232a2e;--panel2:#343f44;--line:#475258;--muted:#9da9a0;--text:#d3c6aa;--green:#a7c080;--green2:#83c092;--amber:#dbbc7f;--red:#e67e80;--blue:#7fbbb3 }
-:root[data-theme="rose-pine"] { color-scheme:dark;--bg:#191724;--panel:#1f1d2e;--panel2:#26233a;--line:#403d52;--muted:#908caa;--text:#e0def4;--green:#9ccfd8;--green2:#31748f;--amber:#f6c177;--red:#eb6f92;--blue:#c4a7e7 }
-:root[data-theme="kanagawa"] { color-scheme:dark;--bg:#1f1f28;--panel:#16161d;--panel2:#2a2a37;--line:#54546d;--muted:#9d9c86;--text:#dcd7ba;--green:#98bb6c;--green2:#7aa89f;--amber:#e6c384;--red:#ff5d62;--blue:#7e9cd8 }
-:root[data-theme="ayu-dark"] { color-scheme:dark;--bg:#0b0e14;--panel:#0d1017;--panel2:#131721;--line:#242b38;--muted:#8a9199;--text:#bfbdb6;--green:#aad94c;--green2:#95e6cb;--amber:#e6b450;--red:#f07178;--blue:#59c2ff }
-:root[data-theme="tron"] { color-scheme:dark;--bg:#061014;--panel:#08181f;--panel2:#0b2029;--line:#17414f;--muted:#6fa8bd;--text:#b8e6ff;--green:#37e6ff;--green2:#22d3a0;--amber:#ff9d2e;--red:#ff4d3d;--blue:#2ea8ff }
-:root[data-theme="synthwave-84"] { color-scheme:dark;--bg:#262335;--panel:#1f1c2c;--panel2:#34294f;--line:#4b3f72;--muted:#a793d1;--text:#f4f4f8;--green:#72f1b8;--green2:#36f9f6;--amber:#fede5d;--red:#fe4450;--blue:#ff7edb }
-:root[data-theme="cyberpunk-neon"] { color-scheme:dark;--bg:#000b1e;--panel:#04122b;--panel2:#0a1c3d;--line:#123e7c;--muted:#5b8bbf;--text:#0abdc6;--green:#00ff9f;--green2:#0abdc6;--amber:#ffa23e;--red:#ff2e6b;--blue:#ea00d9 }
-:root[data-theme="amber-crt"] { color-scheme:dark;--bg:#140d00;--panel:#1c1200;--panel2:#241800;--line:#4a3200;--muted:#b37b00;--text:#ffb000;--green:#ffc300;--green2:#ffa000;--amber:#ffd966;--red:#ff5a1f;--blue:#ffc270 }
-:root[data-theme="green-phosphor"] { color-scheme:dark;--bg:#001100;--panel:#001a00;--panel2:#012301;--line:#0a4a0a;--muted:#1f9e1f;--text:#33ff33;--green:#4dff4d;--green2:#22cc22;--amber:#a6ff4d;--red:#00ff88;--blue:#00e0c0 }
-:root[data-theme="borland-dos"] { color-scheme:dark;--bg:#0000a8;--panel:#00008c;--panel2:#1414b4;--line:#5454fe;--muted:#b0b0ff;--text:#e6e6ff;--green:#54fe54;--green2:#54fefe;--amber:#ffff54;--red:#fe5454;--blue:#54fefe }
-:root[data-theme="phosphor-blue"] { color-scheme:dark;--bg:#020817;--panel:#050f24;--panel2:#091a36;--line:#173d69;--muted:#6a9bcb;--text:#9dd7ff;--green:#45b8ff;--green2:#2e8fd8;--amber:#c5e5ff;--red:#ff6b8a;--blue:#57c7ff }
-:root[data-theme="phosphor-purple"] { color-scheme:dark;--bg:#0b0312;--panel:#13071f;--panel2:#1d0b2e;--line:#4a2065;--muted:#9a6ab3;--text:#dda6ff;--green:#c45cff;--green2:#9a40d0;--amber:#f0c0ff;--red:#ff6da8;--blue:#a97cff }
-:root[data-theme="commodore-64"] { color-scheme:dark;--bg:#40318d;--panel:#352987;--panel2:#4b3aa0;--line:#7569c9;--muted:#aaa5df;--text:#bbb7f2;--green:#75cec8;--green2:#56ac4d;--amber:#edf171;--red:#c46c71;--blue:#706deb }
-:root[data-theme="amiga-workbench"] { color-scheme:dark;--bg:#0050a4;--panel:#075dae;--panel2:#1671c1;--line:#7fa9d8;--muted:#b1c9e2;--text:#ffffff;--green:#55cccc;--green2:#00aa88;--amber:#ff8800;--red:#ff6655;--blue:#55aaff }
-:root[data-theme="cga"] { color-scheme:dark;--bg:#000000;--panel:#090909;--panel2:#171717;--line:#555555;--muted:#aaaaaa;--text:#ffffff;--green:#55ffff;--green2:#55ff55;--amber:#ffff55;--red:#ff5555;--blue:#ff55ff }
-:root[data-theme="macintosh-system-6"] { color-scheme:light;--bg:#f5f5ed;--panel:#ffffff;--panel2:#deded6;--line:#6b6b66;--muted:#676762;--text:#111111;--green:#285f9e;--green2:#34747a;--amber:#8a6410;--red:#a32323;--blue:#285f9e }
-:root[data-theme="game-boy"] { color-scheme:dark;--bg:#0f380f;--panel:#1d4a1d;--panel2:#306230;--line:#5f7f18;--muted:#8bac0f;--text:#b6d44a;--green:#d5ef68;--green2:#9bbc0f;--amber:#d4d058;--red:#d4774e;--blue:#78a85a }
-:root[data-theme="virtual-boy"] { color-scheme:dark;--bg:#000000;--panel:#100002;--panel2:#210004;--line:#5e000b;--muted:#b02635;--text:#ff3045;--green:#ff3045;--green2:#d71932;--amber:#ff7584;--red:#ff1830;--blue:#d35f6e }
+:root[data-theme="dark"] { color-scheme:only dark;--bg:#090a0c;--panel:#0d0f12;--panel2:#13161a;--line:#2a2e34;--muted:#848b94;--text:#d9dde2;--green:#8bd450;--green2:#72b94c;--amber:#e7c768;--red:#f07178;--blue:#72a7ff }
+:root[data-theme="light"] { color-scheme:only light;--bg:#f5f2e9;--panel:#ebe8df;--panel2:#dedbd1;--line:#b8b6ae;--muted:#686b65;--text:#252821;--green:#3f7625;--green2:#558d34;--amber:#8c6810;--red:#b7323c;--blue:#315b9c }
+:root[data-theme="solarized-dark"] { color-scheme:only dark;--bg:#002b36;--panel:#073642;--panel2:#0b3f4b;--line:#31545b;--muted:#839496;--text:#eee8d5;--green:#859900;--green2:#859900;--amber:#b58900;--red:#dc322f;--blue:#268bd2 }
+:root[data-theme="tokyo-night"] { color-scheme:only dark;--bg:#1a1b26;--panel:#1f2335;--panel2:#24283b;--line:#3b4261;--muted:#787c99;--text:#c0caf5;--green:#9ece6a;--green2:#9ece6a;--amber:#e0af68;--red:#f7768e;--blue:#7aa2f7 }
+:root[data-theme="gruvbox-dark"] { color-scheme:only dark;--bg:#282828;--panel:#32302f;--panel2:#3c3836;--line:#504945;--muted:#a89984;--text:#ebdbb2;--green:#b8bb26;--green2:#98971a;--amber:#fabd2f;--red:#fb4934;--blue:#83a598 }
+:root[data-theme="catppuccin-mocha"] { color-scheme:only dark;--bg:#1e1e2e;--panel:#181825;--panel2:#313244;--line:#45475a;--muted:#9399b2;--text:#cdd6f4;--green:#a6e3a1;--green2:#94e2d5;--amber:#f9e2af;--red:#f38ba8;--blue:#89b4fa }
+:root[data-theme="catppuccin-latte"] { color-scheme:only light;--bg:#eff1f5;--panel:#e6e9ef;--panel2:#ccd0da;--line:#bcc0cc;--muted:#6c6f85;--text:#4c4f69;--green:#40a02b;--green2:#179299;--amber:#df8e1d;--red:#d20f39;--blue:#1e66f5 }
+:root[data-theme="nord"] { color-scheme:only dark;--bg:#2e3440;--panel:#3b4252;--panel2:#434c5e;--line:#4c566a;--muted:#a8b1c2;--text:#eceff4;--green:#a3be8c;--green2:#8fbcbb;--amber:#ebcb8b;--red:#bf616a;--blue:#88c0d0 }
+:root[data-theme="dracula"] { color-scheme:only dark;--bg:#282a36;--panel:#21222c;--panel2:#343746;--line:#44475a;--muted:#7f8fbe;--text:#f8f8f2;--green:#50fa7b;--green2:#69ff94;--amber:#f1fa8c;--red:#ff5555;--blue:#8be9fd }
+:root[data-theme="everforest-dark"] { color-scheme:only dark;--bg:#2d353b;--panel:#232a2e;--panel2:#343f44;--line:#475258;--muted:#9da9a0;--text:#d3c6aa;--green:#a7c080;--green2:#83c092;--amber:#dbbc7f;--red:#e67e80;--blue:#7fbbb3 }
+:root[data-theme="rose-pine"] { color-scheme:only dark;--bg:#191724;--panel:#1f1d2e;--panel2:#26233a;--line:#403d52;--muted:#908caa;--text:#e0def4;--green:#9ccfd8;--green2:#31748f;--amber:#f6c177;--red:#eb6f92;--blue:#c4a7e7 }
+:root[data-theme="kanagawa"] { color-scheme:only dark;--bg:#1f1f28;--panel:#16161d;--panel2:#2a2a37;--line:#54546d;--muted:#9d9c86;--text:#dcd7ba;--green:#98bb6c;--green2:#7aa89f;--amber:#e6c384;--red:#ff5d62;--blue:#7e9cd8 }
+:root[data-theme="ayu-dark"] { color-scheme:only dark;--bg:#0b0e14;--panel:#0d1017;--panel2:#131721;--line:#242b38;--muted:#8a9199;--text:#bfbdb6;--green:#aad94c;--green2:#95e6cb;--amber:#e6b450;--red:#f07178;--blue:#59c2ff }
+:root[data-theme="tron"] { color-scheme:only dark;--bg:#061014;--panel:#08181f;--panel2:#0b2029;--line:#17414f;--muted:#6fa8bd;--text:#b8e6ff;--green:#37e6ff;--green2:#22d3a0;--amber:#ff9d2e;--red:#ff4d3d;--blue:#2ea8ff }
+:root[data-theme="synthwave-84"] { color-scheme:only dark;--bg:#262335;--panel:#1f1c2c;--panel2:#34294f;--line:#4b3f72;--muted:#a793d1;--text:#f4f4f8;--green:#72f1b8;--green2:#36f9f6;--amber:#fede5d;--red:#fe4450;--blue:#ff7edb }
+:root[data-theme="cyberpunk-neon"] { color-scheme:only dark;--bg:#000b1e;--panel:#04122b;--panel2:#0a1c3d;--line:#123e7c;--muted:#5b8bbf;--text:#0abdc6;--green:#00ff9f;--green2:#0abdc6;--amber:#ffa23e;--red:#ff2e6b;--blue:#ea00d9 }
+:root[data-theme="amber-crt"] { color-scheme:only dark;--bg:#140d00;--panel:#1c1200;--panel2:#241800;--line:#4a3200;--muted:#b37b00;--text:#ffb000;--green:#ffc300;--green2:#ffa000;--amber:#ffd966;--red:#ff5a1f;--blue:#ffc270 }
+:root[data-theme="green-phosphor"] { color-scheme:only dark;--bg:#001100;--panel:#001a00;--panel2:#012301;--line:#0a4a0a;--muted:#1f9e1f;--text:#33ff33;--green:#4dff4d;--green2:#22cc22;--amber:#a6ff4d;--red:#00ff88;--blue:#00e0c0 }
+:root[data-theme="borland-dos"] { color-scheme:only dark;--bg:#0000a8;--panel:#00008c;--panel2:#1414b4;--line:#5454fe;--muted:#b0b0ff;--text:#e6e6ff;--green:#54fe54;--green2:#54fefe;--amber:#ffff54;--red:#fe5454;--blue:#54fefe }
+:root[data-theme="phosphor-blue"] { color-scheme:only dark;--bg:#020817;--panel:#050f24;--panel2:#091a36;--line:#173d69;--muted:#6a9bcb;--text:#9dd7ff;--green:#45b8ff;--green2:#2e8fd8;--amber:#c5e5ff;--red:#ff6b8a;--blue:#57c7ff }
+:root[data-theme="phosphor-purple"] { color-scheme:only dark;--bg:#0b0312;--panel:#13071f;--panel2:#1d0b2e;--line:#4a2065;--muted:#9a6ab3;--text:#dda6ff;--green:#c45cff;--green2:#9a40d0;--amber:#f0c0ff;--red:#ff6da8;--blue:#a97cff }
+:root[data-theme="commodore-64"] { color-scheme:only dark;--bg:#40318d;--panel:#352987;--panel2:#4b3aa0;--line:#7569c9;--muted:#aaa5df;--text:#bbb7f2;--green:#75cec8;--green2:#56ac4d;--amber:#edf171;--red:#c46c71;--blue:#706deb }
+:root[data-theme="amiga-workbench"] { color-scheme:only dark;--bg:#0050a4;--panel:#075dae;--panel2:#1671c1;--line:#7fa9d8;--muted:#b1c9e2;--text:#ffffff;--green:#55cccc;--green2:#00aa88;--amber:#ff8800;--red:#ff6655;--blue:#55aaff }
+:root[data-theme="cga"] { color-scheme:only dark;--bg:#000000;--panel:#090909;--panel2:#171717;--line:#555555;--muted:#aaaaaa;--text:#ffffff;--green:#55ffff;--green2:#55ff55;--amber:#ffff55;--red:#ff5555;--blue:#ff55ff }
+:root[data-theme="macintosh-system-6"] { color-scheme:only light;--bg:#f5f5ed;--panel:#ffffff;--panel2:#deded6;--line:#6b6b66;--muted:#676762;--text:#111111;--green:#285f9e;--green2:#34747a;--amber:#8a6410;--red:#a32323;--blue:#285f9e }
+:root[data-theme="game-boy"] { color-scheme:only dark;--bg:#0f380f;--panel:#1d4a1d;--panel2:#306230;--line:#5f7f18;--muted:#8bac0f;--text:#b6d44a;--green:#d5ef68;--green2:#9bbc0f;--amber:#d4d058;--red:#d4774e;--blue:#78a85a }
+:root[data-theme="virtual-boy"] { color-scheme:only dark;--bg:#000000;--panel:#100002;--panel2:#210004;--line:#5e000b;--muted:#b02635;--text:#ff3045;--green:#ff3045;--green2:#d71932;--amber:#ff7584;--red:#ff1830;--blue:#d35f6e }
 :root[data-theme] body,:root[data-theme] .app-shell,:root[data-theme] .main-stage,:root[data-theme] .terminal-pane { background:var(--bg);color:var(--text) }
 :root[data-theme] .topbar,:root[data-theme] .sidebar,:root[data-theme] .sidebar-footer,:root[data-theme] .pane-bar,:root[data-theme] .context-menu,:root[data-theme] .modal { background:var(--panel);border-color:var(--line) }
 
@@ -1529,7 +1548,7 @@ body {
 .usage-panel>header{min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)}.usage-panel>header>div:first-child{min-width:0;display:grid;gap:4px}.usage-panel>header span{color:var(--accent)}.usage-panel>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.usage-header-actions{display:flex;gap:5px}.usage-header-actions button:last-child{border:0;background:transparent}
 .usage-actions{position:relative;display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid var(--line)}.usage-actions>span{color:var(--muted)}.usage-actions>label{display:flex;align-items:center;gap:6px;color:var(--muted)}.usage-actions>label select,.usage-actions>label .dropdown-trigger{min-height:29px}.usage-actions>div:last-child{display:flex;gap:5px;margin-left:auto}.usage-actions details{position:relative}.usage-actions summary{min-height:29px;display:flex;align-items:center;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);cursor:pointer;list-style:none}.usage-actions summary::-webkit-details-marker{display:none}.usage-source-picker>div,.usage-overflow>div{position:absolute;top:calc(100% + 5px);z-index:8;border:1px solid var(--line);background:var(--panel);box-shadow:5px 7px #0008}.usage-source-picker>div{left:0;width:min(330px,calc(100vw - 30px));max-height:390px;overflow:auto;padding:8px}.usage-source-picker>div>header{display:grid;gap:3px;padding:2px 2px 8px}.usage-source-picker>div>header small,.usage-source-picker label small{color:var(--muted)}.usage-source-picker>div>button{margin-bottom:5px}.usage-source-picker label{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;min-height:32px;padding:3px 4px;cursor:pointer}.usage-source-picker label:hover{background:var(--panel2)}.usage-source-picker label input{margin:0}.usage-source-picker>div>p{margin:6px 3px 2px;color:var(--red)}.usage-overflow>div{right:0;display:grid;min-width:150px;padding:5px}.usage-overflow>div button{text-align:left}
 .usage-status-stack{min-height:0}.usage-progress{min-height:34px;display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid var(--line);color:var(--muted)}.usage-progress>span{width:12px;color:var(--accent)}.usage-progress.running>span{animation:usage-spin 1s steps(8) infinite}.usage-progress strong{font-weight:inherit}.usage-error{padding:7px 10px;border-bottom:1px solid var(--line);color:var(--red)}
-.usage-panel>main{min-height:0;overflow:auto;overscroll-behavior:contain;padding:10px}.usage-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border:1px solid var(--line)}.usage-summary article{min-width:0;display:grid;gap:5px;padding:10px}.usage-summary article+article{border-left:1px solid var(--line)}.usage-summary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.usage-summary strong{font-weight:700}
+.usage-panel>main{--usage-main-padding:10px;min-height:0;overflow:auto;overscroll-behavior:contain;padding:var(--usage-main-padding)}.usage-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border:1px solid var(--line)}.usage-summary article{min-width:0;display:grid;gap:5px;padding:10px}.usage-summary article+article{border-left:1px solid var(--line)}.usage-summary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.usage-summary strong{font-weight:700}
 /* The Resources dialog hosts four surfaces with four different row counts, so it is a flex
    column rather than the fixed `grid-template-rows` its single-surface predecessors could
    afford. Everything is intrinsic height except the scroller, which takes the rest. */
@@ -1660,9 +1679,8 @@ body {
 @media(max-width:760px){.folder-picker-layer{padding:0}.folder-picker{width:100%;height:100dvh;border:0;box-shadow:none}.folder-picker>footer>span{display:none}.folder-picker-path{grid-template-columns:auto minmax(0,1fr) auto}}
 
 /* Project Run is a project-level launcher. Imported tasks never impose pane geometry. */
-/* Desktop's primary launcher. Tab strips have no new-tab button, so this is the
-   one always-visible way to start a session — styled as a real chip rather than
-   a faint label. Talk sits directly before it. When the sidebar collapses there
+/* Desktop's active-Project launcher, styled as a real chip rather than a faint label.
+   Pane rails add a contextual + for the same Run menu. Talk sits directly before it. When the sidebar collapses there
    is no room for either control in the 40px header column, and the collapsed
    rail's ▶ button takes over Run. */
 .app-identity .project-run-header{flex:none;width:auto;min-width:56px;height:calc(21px*var(--ui-scale));padding:0 8px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));background:color-mix(in srgb,var(--accent) 11%,transparent);color:var(--accent);font-size:9px;white-space:nowrap}
@@ -1783,9 +1801,10 @@ body {
    of blending toward a background the tab no longer uses. */
 .stack-tabs{--tab-active-bg:color-mix(in srgb,var(--green) 12%,var(--bg))}
 .stack-tabs button.active{color:var(--text);background:var(--tab-active-bg);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 52%,transparent),inset 0 -3px var(--green)}.stack-tabs button.awaiting{color:var(--amber)}
-/* Tab strips carry no new-tab button on any platform: the Project Run menu
-   (top bar, collapsed rail, mobile toolbar, sidebar project row) is the single
-   launcher, and it lands a new session as a tab in the focused pane. */
+.stack-tabs>.pane-run-trigger{flex:0 0 34px;width:34px;min-width:34px;max-width:34px;justify-content:center;padding:0;color:var(--accent);font-size:16px;font-weight:400;cursor:pointer}
+.stack-tabs>.pane-run-trigger:hover,.stack-tabs>.pane-run-trigger:focus-visible,.stack-tabs>.pane-run-trigger[aria-expanded="true"]{background:color-mix(in srgb,var(--green) 10%,var(--panel));color:var(--text);outline:0;box-shadow:inset 0 -2px var(--green)}
+/* The desktop pane + opens the Project Run menu and does not assume a backend.
+   Mobile keeps that shared launcher in its toolbar instead. */
 .projects-layer{position:fixed;inset:0;z-index:85;background:#030407cc;display:grid;place-items:center;padding:18px}.projects-panel{width:min(1120px,96vw);height:min(760px,92vh);background:var(--bg);border:1px solid var(--line);display:flex;flex-direction:column;box-shadow:8px 10px #0009}.projects-panel>header{height:calc(52px*var(--ui-scale));flex:none;display:flex;align-items:center;gap:14px;padding:0 14px;border-bottom:1px solid var(--line)}.projects-panel>header>div{flex:1}.projects-panel h2,.projects-panel h3,.projects-panel h4{margin:0;font:inherit;font-weight:700}.projects-panel>header span{color:var(--muted)}.projects-body{display:grid;grid-template-columns:minmax(280px,35%) 1fr;min-height:0;flex:1}.projects-body>aside{overflow:auto;border-right:1px solid var(--line)}.projects-body>aside>button{width:100%;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;text-align:left;padding:11px 13px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text)}.projects-body>aside>button.active,.projects-body>aside>button:hover{background:var(--panel2)}.projects-body>aside small,.projects-body>aside em{grid-column:2;color:var(--muted);font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.projects-body>main{overflow:auto;padding:16px}.projects-body main>section{padding:14px 0;border-top:1px solid var(--line)}.project-detail-heading{display:flex;gap:8px;align-items:start;padding-bottom:15px}.project-detail-heading>div{flex:1;display:flex;flex-direction:column}.project-detail-heading span,.project-detail-heading small{color:var(--muted)}.project-anchor-row{display:grid;grid-template-columns:180px 1fr;gap:10px;align-items:center;margin:8px 0}.project-anchor-row select,.project-anchor-row .dropdown-trigger{width:100%}.projects-body article{display:flex;flex-direction:column;padding:7px 0}.projects-body article span,.projects-placeholder{color:var(--muted)}.projects-error{padding:8px 14px;color:var(--red);border-bottom:1px solid var(--line)}
 .anchor-picker{width:min(620px,94vw)}.anchor-picker>p{padding:0 16px;color:var(--muted)}.anchor-options{max-height:340px;overflow:auto;padding:8px 16px}.anchor-options button{width:100%;display:flex;flex-direction:column;text-align:left;margin-bottom:7px;padding:10px;background:transparent;color:var(--text);border:1px solid var(--line)}.anchor-options button:hover{background:var(--panel2)}.anchor-options span{color:var(--muted)}
 @media(max-width:700px){.project-row{grid-template-columns:12px minmax(0,1fr)}.anchor-badge{display:none}.projects-layer{padding:0}.projects-panel{width:100vw;height:100dvh;border:0}.projects-body{grid-template-columns:1fr}.projects-body>aside{max-height:42vh;border-right:0;border-bottom:1px solid var(--line)}.stack-tabs button{max-width:160px}.project-anchor-row{grid-template-columns:1fr}}
@@ -2109,7 +2128,14 @@ body {
 .theme-actions{flex-wrap:wrap}.settings-panel>footer{overflow-x:auto}.settings-panel>footer button{white-space:nowrap}
 .keybinding-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-top:12px;padding:10px 0;border-top:1px solid var(--line)}.keybinding-heading strong{color:var(--accent)}.keybinding-heading p{margin:3px 0 0}.keybinding-heading button{flex:none}
 .keybinding-capture{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px;min-height:42px;margin-bottom:7px;padding:6px 8px;border:1px solid var(--accent);background:var(--bg)}.keybinding-capture>span{color:var(--accent)}.keybinding-capture>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.keybinding-error{max-width:none!important;margin:0 0 7px!important;padding:7px 8px;border:1px solid var(--red);color:var(--red)!important;background:color-mix(in srgb,var(--red) 8%,var(--panel))}
-.keybinding-list{border:1px solid var(--line);background:var(--bg)}.keybinding-group{padding:0!important;background:transparent!important}.keybinding-group+.keybinding-group{border-top:1px solid var(--line)}.keybinding-group h4{margin:0;padding:7px 9px;color:var(--accent);text-transform:uppercase;background:var(--panel2)}.keybinding-group article{display:grid;grid-template-columns:minmax(0,1fr) 155px 32px;align-items:stretch;min-height:42px;border-top:1px solid var(--line)}.keybinding-group article.capturing{outline:1px solid var(--accent);outline-offset:-1px}.keybinding-group article>button{min-width:0;height:100%;border:0;border-left:1px solid var(--line);background:transparent}.keybinding-group article>button:first-child{border-left:0}.keybinding-group article>button:hover{background:var(--panel2)}
+.keybinding-list{border:1px solid var(--line);background:var(--bg)}.keybinding-group{padding:0!important;background:transparent!important}
+/* Filtered-out rows are hidden rather than unmounted, so the panel-wide search index -
+   harvested from this tab's live DOM - still sees every shortcut. `[hidden]` is a UA
+   rule and loses to any class that sets `display`, so the two that do say so here. The
+   separator is a general sibling so that hiding the first group does not leave the next
+   one drawing a second line against the list's own border. */
+.keybinding-list[hidden],.keybinding-group[hidden],.keybinding-group article[hidden]{display:none}
+.keybinding-group:not([hidden])~.keybinding-group:not([hidden]){border-top:1px solid var(--line)}.keybinding-group h4{margin:0;padding:7px 9px;color:var(--accent);text-transform:uppercase;background:var(--panel2)}.keybinding-group article{display:grid;grid-template-columns:minmax(0,1fr) 155px 32px;align-items:stretch;min-height:42px;border-top:1px solid var(--line)}.keybinding-group article.capturing{outline:1px solid var(--accent);outline-offset:-1px}.keybinding-group article>button{min-width:0;height:100%;border:0;border-left:1px solid var(--line);background:transparent}.keybinding-group article>button:first-child{border-left:0}.keybinding-group article>button:hover{background:var(--panel2)}
 .keybinding-command{display:grid!important;align-content:center;justify-items:start;text-align:left}.keybinding-command span,.keybinding-command small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.keybinding-command small{color:var(--muted)}.keybinding-chord{text-align:left}.keybinding-chord kbd,.keybinding-policy kbd{font:inherit;color:var(--text)}.keybinding-chord kbd{color:var(--accent)}.keybinding-clear:disabled{opacity:.25;cursor:default}.keybinding-policy{margin-top:10px;border:1px solid var(--line);padding:8px}.keybinding-policy summary{cursor:pointer;color:var(--accent)}.keybinding-policy ul{padding-left:20px;color:var(--muted)}.keybinding-policy>div{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.keybinding-policy>div>strong{min-width:calc(90px*var(--ui-scale));color:var(--muted)}.keybinding-policy>div>kbd{padding:2px 5px;border:1px solid var(--line);background:var(--bg)}
 /* Keymap presets: cards rather than a dropdown, because the thing being chosen is a
    paragraph (what it costs you) rather than a name, and a select cannot carry one. */
@@ -2165,8 +2191,11 @@ body {
 .palette-scopes button.active{border-color:var(--accent)!important;color:var(--accent)!important}
 .palette-scopes kbd{color:inherit;font:inherit}
 
-/* Notes tab: the note editor's chord table is long, so it filters and scrolls inside its section. */
-.note-chord-filter{width:100%;min-height:32px;margin-top:8px;border:1px solid var(--line);border-radius:0;padding:0 8px;background:var(--bg);color:var(--text);font:inherit}
+.keybinding-empty{margin:0!important;padding:11px 9px;border:1px solid var(--line);color:var(--muted)!important;background:var(--bg)}
+/* Both long chord tables filter in place: the note editor's on the Text editor tab, the
+   app's own on Input. One rule, because they are the same control. */
+.note-chord-filter,.keybinding-filter{width:100%;min-height:32px;margin-top:8px;border:1px solid var(--line);border-radius:0;padding:0 8px;background:var(--bg);color:var(--text);font:inherit}
+.keybinding-filter{margin-bottom:8px}.keybinding-filter:disabled{opacity:.5;cursor:default}
 .note-chord-list{max-height:min(46dvh,340px);overflow-y:auto;margin-top:7px;border:1px solid var(--line);background:var(--bg)}
 .note-chord-list article{display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) 188px;align-items:center;gap:9px;padding:5px 9px;border-top:1px solid var(--line)}.note-chord-list article:first-child{border-top:0}
 .note-chord-list small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
@@ -2238,7 +2267,9 @@ body {
 .automation-matrix-legend{margin:8px 2px;color:var(--muted)}
 .automation-matrix-grid{border:1px solid var(--line);background:var(--panel)}
 .automation-matrix-head,.automation-matrix-row{display:grid;grid-template-columns:minmax(0,1fr) 64px 84px 74px;gap:6px;align-items:center;padding:5px 8px}
-.automation-matrix-head{position:sticky;top:0;z-index:1;background:var(--panel);border-bottom:1px solid var(--line);color:var(--muted);text-transform:uppercase;font-size:9px;letter-spacing:.05em}
+/* Consume the scroller's top padding only after the header sticks. Without the negative
+   inset, rows remain visible through a padding-sized strip between the header and top bar. */
+.automation-matrix-head{position:sticky;top:calc(0px - var(--usage-main-padding,0px));z-index:1;background:var(--panel);border-bottom:1px solid var(--line);color:var(--muted);text-transform:uppercase;font-size:9px;letter-spacing:.05em}
 .automation-matrix-head span:not(:first-child),.automation-matrix-fleet{text-align:center}
 .automation-matrix-row{border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
 .automation-matrix-row.globally-off .automation-matrix-name{opacity:.45}
@@ -2249,17 +2280,26 @@ body {
 .automation-matrix-grid .project-automation-group{display:flex;align-items:baseline;gap:8px;margin:0;padding:7px 8px 4px;color:var(--accent);border-top:1px solid var(--line)}
 .automation-matrix-grid .project-automation-group span{color:var(--muted);font-weight:400}
 .automation-matrix-grid .project-automation-deps{margin:2px 0 0;color:var(--muted);font-size:10px}
-/* The authority rows hold a level rather than an on/off, so their two editable
-   cells are dropdowns and need real width where the automation rows need 64px of
-   checkbox. Same grid, different track sizes, and the cells left-align because a
-   centred dropdown reads as a mistake next to a label. */
+/* Authority keeps Global and Project aligned, but gives both controls enough room to
+   show their value. On a phone the name takes a full row and those two columns sit below
+   it, so the same comparison survives without squeezing the name into the leftover edge. */
 .automation-authority-grid{margin-top:10px}
-.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(0,1fr) 190px 190px 74px}
+.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(220px,1fr) minmax(220px,240px) minmax(220px,240px) 58px;gap:8px}
 .automation-authority-row .automation-matrix-cell{flex-direction:column;align-items:stretch;justify-content:flex-start;gap:3px}
-.automation-authority-global .check{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted)}
-.automation-authority-global small{color:var(--muted);font-size:9px;line-height:1.3}
+.automation-authority-row .dropdown-trigger{width:100%}
+.automation-authority-meta{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:5px}
+.automation-authority-meta .check{display:flex;align-items:center;gap:4px;padding:0;font-size:9px;color:var(--muted);white-space:nowrap}
+.automation-authority-meta small{min-width:0;color:var(--muted);font-size:9px;line-height:1.3;text-align:right;white-space:nowrap}
 .automation-authority-overridden{color:var(--warn,var(--accent));font-size:9px}
-@media(max-width:760px){.automation-authority-grid .automation-matrix-head,.automation-authority-row{grid-template-columns:minmax(0,1fr) 130px 130px}}
+@media(max-width:760px){
+  .automation-authority-grid .automation-matrix-head{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}
+  .automation-authority-grid .automation-matrix-head span:first-child,.automation-authority-grid .automation-matrix-head span:nth-child(4){display:none}
+  .automation-authority-grid .automation-matrix-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .automation-authority-grid .automation-authority-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"name name" "global project";gap:5px 6px;padding:7px 8px}
+  .automation-authority-row .automation-matrix-name{grid-area:name;padding-left:0}
+  .automation-authority-row .automation-authority-global{grid-area:global}
+  .automation-authority-row>.automation-matrix-cell:not(.automation-authority-global){grid-area:project}
+}
 .project-authority-summary{margin:6px 0 8px;display:grid;gap:3px}
 .project-authority-summary>div{display:flex;justify-content:space-between;gap:10px}
 .project-authority-summary dt{color:var(--muted)}
@@ -3288,6 +3328,7 @@ body {
      so the only thing to buy is height. */
   .sidebar-status>.account-switcher .account-summary>button{min-height:46px}
   .sidebar-status .resource-usage-summary{min-height:46px}
+.sidebar-status .account-prompt-actions button{min-height:44px}
   .sidebar-footer{height:auto;min-height:54px;padding:5px 6px}
   .sidebar-footer button.menu-trigger{display:flex;min-height:44px;align-items:center;justify-content:center}
   .sidebar-footer .notes-shelf-trigger{height:44px;min-height:44px}
@@ -4248,10 +4289,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-tabs-rail.overflow-rail-touch-drag{touch-action:none}
 .drawer-tabs::-webkit-scrollbar{display:none}
 /* Icon-only tabs. They share the strip evenly but are capped, because a 17px mark centred in
-   a very wide cell reads as an accident rather than a control. The
-   cap leaves slack, which the close button takes by sitting at the far end. */
+   a very wide cell reads as an accident rather than a control. */
 /* Nine tabs do not fit the 300px minimum drawer at a legible width. The tablist therefore
-   scrolls on one row while the close control stays fixed; selection auto-scrolls into view. */
+   scrolls on one row; selection auto-scrolls into view. */
 .drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px;min-width:32px;max-width:58px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
 .drawer-tabs button svg{width:17px;height:17px;display:block}
 .drawer-tabs button:hover{color:var(--text)}
@@ -4266,11 +4306,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-body{position:relative}
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
-.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-/* Files is not in this list any more: it draws its segments inline, so there is no title to
-   clear, and its browser now sits inside a `.drawer-segment-body` that the old direct-child
-   selector could not have reached anyway. */
-.drawer-body-agent .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-schedule .schedule-filters,.drawer-body-schedule .schedule-editor header,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-notifications>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+/* Files has no pane heading; its browser sits inside a `.drawer-segment-body`, so it needs
+   no title-clearance inset. */
+.drawer-body-processes .processes-filters,.drawer-body-schedule .schedule-filters,.drawer-body-schedule .schedule-editor header,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}
 
 /* The dock owns one persistent layout tree. Each leaf is a tab stack and every internal
@@ -4292,31 +4331,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-pane-heading{position:relative;z-index:6;flex:none;min-height:27px;display:flex;align-items:center;gap:6px;padding:3px 7px;border-bottom:1px solid var(--line);background:var(--panel)}
 .drawer-pane-heading .drawer-panel-title{position:static;flex:0 1 auto;width:auto;max-width:55%;cursor:help}
 .drawer-scope-context{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:7px}
-/* Segments inline in the heading row (Git, Files), replacing a heading that only ever
-   repeated the selected segment's own label. Content-sized buttons, not the full-width
-   strip: this shares the row with the Project name, so it takes the width its labels need
-   and no more.
-   `flex:0 0 auto`, NOT `0 1 auto`: these are the row's navigation, and the scope beside them
-   is a caption. Letting them shrink is what ellipsised Git's three subtabs on a phone into
-   unreadable stubs while the Project name beside them stayed whole. The scope is the item
-   that gives - it already has `min-width:0` and its own ellipsis, and the Project it names
-   is also in the toolbar title and the sidebar, which the subtabs are not. */
-.drawer-pane-heading .drawer-segmented-inline{flex:0 0 auto;min-width:0;border-bottom:0;background:transparent}
-.drawer-pane-heading .drawer-segmented-inline button{flex:0 0 auto;min-height:21px;padding:0 7px;overflow:visible;text-overflow:clip;font-size:9px;letter-spacing:.02em}
-/* The title is what reserved this inset; a heading row that draws the segments instead has no
-   absolutely-positioned title to clear. */
-.drawer-body-git>.drawer-pane-heading.with-segments~.drawer-status{padding-left:9px}
-/* One per drawer, on the pane holding its top-right corner, because the drawer collapses as
-   a whole. It replaces the launcher rail's toggle, which is not on screen while the drawer is
-   open. Sized for touch on the mobile overlay, where it is the only close control besides the
-   scrim; `flex:none` so a long scope string never squeezes it out of the row. */
-.drawer-collapse{flex:none;width:19px;height:19px;display:grid;place-items:center;padding:0;border:1px solid transparent;background:transparent;color:var(--muted);font:13px 'Cascadia Mono',Consolas,monospace;line-height:1;cursor:pointer}
-.drawer-collapse:hover,.drawer-collapse:focus-visible{border-color:var(--accent);color:var(--text);outline:0}
-@media(max-width:760px){.drawer-collapse{width:34px;height:34px;border-color:var(--line);background:var(--panel2);font-size:15px}}
-/* The in-context help control. Same box as the collapse button beside it, because they are
-   the same kind of thing - one chrome affordance each, at the end of the heading row - and
-   two different sizes there would read as two importances. Only drawn for a tab that has a
-   registered help topic (`helpTopics.ts`), so it is never a control that explains nothing. */
+/* The in-context help control for headered panes. Content-first tabs expose the same topic
+   through their tab context menu. Only a registered topic (`helpTopics.ts`) gets a control,
+   so it is never an affordance that explains nothing. */
 .drawer-help{flex:none;width:19px;height:19px;display:grid;place-items:center;padding:0;border:1px solid transparent;background:transparent;color:var(--muted);font:12px 'Cascadia Mono',Consolas,monospace;line-height:1;cursor:pointer}
 .drawer-help:hover,.drawer-help:focus-visible{border-color:var(--accent);color:var(--text);outline:0}
 @media(max-width:760px){.drawer-help{width:34px;height:34px;border-color:var(--line);background:var(--panel2);font-size:14px}}
@@ -4379,6 +4396,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-segment-body[hidden]{display:none}
 .drawer-segment-body>.scan-timeline-panel,.drawer-segment-body>.findings-pane,.drawer-segment-body>.change-map-pane,.drawer-segment-body>.agent-environment,.drawer-segment-body>.agent-context,.drawer-segment-body>.project-resource{flex:1;min-height:0}
 @media(max-width:760px){.segmented-tabs button{min-height:38px}}
+/* Every view switch inside the utility drawer uses the Actions rail's full-width treatment.
+   Notes keeps its scrollable resource-tab rail because those tabs are documents, not views. */
+.utility-drawer .drawer-view-tabs{position:sticky;top:0;z-index:7;flex:none;display:grid;grid-template-columns:repeat(var(--drawer-view-count),minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--bg)}
+.utility-drawer .drawer-view-tabs>button{min-width:0;min-height:34px;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.utility-drawer .drawer-view-tabs>button:hover{color:var(--text);background:var(--panel2)}
+.utility-drawer .drawer-view-tabs>button.active{border-bottom-color:var(--green);color:var(--text);background:color-mix(in srgb,var(--green) 7%,var(--panel))}
+@media(max-width:760px){.utility-drawer .drawer-view-tabs>button{min-height:40px}}
 .drawer-pane[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--green) 13%,transparent)}
 .drawer-pane[data-pointer-drop-indicator="join"]:after{inset:34px 0 0}
 .drawer-pane[data-pointer-drop-indicator="split-left"]:after{inset:34px 76% 0 0}
@@ -4686,41 +4710,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .skill-flag.warn{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));color:var(--amber)}
 .drawer-skill-note{margin:0;padding:8px 9px;color:var(--muted);font-size:8px;line-height:1.45}
 .actions-tab{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
-.actions-view-tabs{position:sticky;top:0;z-index:7;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--bg)}
-.actions-view-tabs>button{min-height:34px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.actions-view-tabs>button:hover{color:var(--text);background:var(--panel2)}.actions-view-tabs>button.active{border-bottom-color:var(--green);color:var(--text);background:color-mix(in srgb,var(--green) 7%,var(--panel))}
+.actions-target{display:none;margin:0;padding:5px 9px;border-bottom:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
+@media(max-width:760px){.actions-target{display:block}}
 .actions-view{min-height:0}.actions-skills-view{height:calc(100% - 35px)}.actions-skills-view>.drawer-skills{height:100%;border-top:0}.drawer-skill-row.compact{display:block;border-bottom:1px solid var(--line)}.drawer-skill-row.compact>button:first-child{width:100%;padding:7px 9px;border:0;background:transparent;text-align:left}.drawer-skill-row.compact.selected>button:first-child{background:var(--panel2);box-shadow:inset 2px 0 var(--green)}
 .drawer-skill-detail{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 8px;padding:8px 9px;border-top:1px solid var(--line);background:color-mix(in srgb,var(--green) 5%,var(--bg))}.drawer-skill-detail p{grid-column:1/-1;margin:0;color:var(--muted);line-height:1.4}.drawer-skill-detail small{align-self:center;color:var(--muted)}.drawer-skill-detail>button{min-height:28px;padding:2px 8px}
 .actions-tab-toolbar{display:flex;justify-content:flex-end;padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--line)}
 .actions-tab-toolbar>button{min-height:calc(28px*var(--ui-scale));padding:3px 9px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 @media(hover:hover){.actions-tab-toolbar>button:hover{border-color:var(--accent)}}
-/* One hue per section, because this tab is three catalogs stacked in a single scroller and
-   the headers that separate them are sticky - so a reader mid-scroll sees a header without
-   seeing the boundary it belongs to, and "which of the three am I in" was answerable only by
-   reading the word. Carried on a variable rather than written three times: the rules below
-   are one set, and a fourth section added without a hue falls back to the muted spine it has
-   now instead of inheriting a neighbour's colour.
-   Green / blue / amber is the widest spread this palette has that avoids `--red`, which is
-   the one token in it that means something. Amber is safe here for the same reason: this tab
-   has no warn or error vocabulary of its own for a 3px spine to be confused with. A
-   single-hue theme (game-boy, virtual-boy) collapses all three, which is inherent to those
-   themes - the spine, the rule between sections, and the caret all still draw. */
-.actions-section{--section-hue:var(--muted)}
-.actions-section-skills{--section-hue:var(--green)}
-.actions-section-prompts{--section-hue:var(--blue)}
-.actions-section-clipboard{--section-hue:var(--amber)}
-.actions-section+.actions-section{border-top:2px solid color-mix(in srgb,var(--section-hue) 38%,var(--line))}
-/* The tint stays a *gradient* rather than becoming a colour: this header is sticky, and the
-   flat `background` it replaces is what keeps content from showing through as it scrolls
-   under. It is deliberately weak - 7% - so the hue reads as an edge marking rather than as a
-   coloured band, and so the uppercase title above it keeps its contrast. */
-.actions-section-header{position:sticky;top:0;z-index:5;display:flex;align-items:stretch;min-height:34px;background:linear-gradient(color-mix(in srgb,var(--section-hue) 7%,var(--bg)),color-mix(in srgb,var(--section-hue) 7%,var(--bg)));box-shadow:inset 3px 0 color-mix(in srgb,var(--section-hue) 78%,transparent);border-bottom:1px solid var(--line)}
-.actions-section:not(.expanded)>.actions-section-header{border-bottom-color:transparent}
-.actions-section.expanded>.actions-section-header>.actions-section-toggle>strong{color:var(--text)}
-.actions-section:not(.expanded)>.actions-section-header>.actions-section-toggle>strong{color:var(--muted)}
-.actions-section-body{background:var(--panel)}
-.actions-section-toggle{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-areas:'caret title' 'caret detail';align-items:center;gap:0 4px;padding:5px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.actions-section-toggle>span{grid-area:caret;color:color-mix(in srgb,var(--section-hue) 62%,var(--muted))}.actions-section-toggle>strong{grid-area:title;font-size:9px;text-transform:uppercase;letter-spacing:.06em}.actions-section-toggle>small{grid-area:detail;color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.actions-section-action{flex:none;margin:5px 7px 5px 0;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}.actions-section-action:hover,.actions-section-action:focus-visible{border-color:var(--accent);color:var(--text)}.actions-section-body{min-width:0;padding-bottom:4px}.actions-section-body>.drawer-skills{border-top:0}.actions-section-body .drawer-skill-list,.actions-section-body>.clipboard-entries{overflow:visible}.actions-section-prompts .drawer-status{padding-left:9px}.actions-section-prompts .clipboard-entry-body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:2px;padding:8px 9px}.actions-section-prompts .clipboard-entry-body>span,.actions-section-prompts .clipboard-entry-body>small{grid-area:auto}.actions-section-prompts .prompt-template-excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:color-mix(in srgb,var(--text) 68%,var(--muted));line-height:1.35;white-space:normal}
 .agent-environment{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.agent-environment-header{flex:0 0 auto;min-height:28px;padding:4px 7px 4px calc(var(--drawer-panel-title-width) + 13px);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.agent-environment-header{flex:0 0 auto;min-height:28px;padding:4px 7px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:var(--panel2)}
 .agent-environment-header>div{min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}
 .agent-environment-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
 .agent-environment-header span{flex:0 0 auto;color:var(--muted);font-size:8px}

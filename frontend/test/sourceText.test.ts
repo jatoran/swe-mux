@@ -144,6 +144,9 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   //: unit tests for each of their pure helpers stayed green.
   'terminalPaneInputBackend.test.ts': ['negative-invariant'],
   'terminalViewport.test.ts': ['composition-root', 'component-jsx'],
+  //: The initial metadata is the HTML build input itself and must precede executable
+  //: scripts, while the fixed-palette assertions treat the stylesheet as the artifact.
+  'theme.test.ts': ['build-artifact', 'stylesheet'],
   //: The one entry a renderer harness is *not* owed. The assertion compares prose in one
   //: component against chrome another component renders - the tour saying "Utilities"
   //: against `App.tsx`'s menu rows - and the two are never mounted together, because

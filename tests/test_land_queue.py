@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from swe_mux import land_preconditions
 from swe_mux.land_preconditions import evaluate_preconditions, read_repository_facts
 from swe_mux.land_queue import LandQueueService, LandRefusal, handback_excerpt
 from swe_mux.land_store import LandConflict, LandStore
@@ -207,6 +208,25 @@ async def test_a_working_session_holds_rather_than_refusing(trunk: Path) -> None
     )
     assert result.disposition == "hold"
     assert (result.detail or {})["sessions"] == ["sess_1"]
+
+
+async def test_repository_safety_reads_have_a_contention_tolerant_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deadlines: list[float] = []
+
+    async def fake_read_git(
+        _cwd: str, *_args: str, timeout_seconds: float
+    ) -> tuple[int, str]:
+        deadlines.append(timeout_seconds)
+        return 0, ""
+
+    monkeypatch.setattr(land_preconditions, "read_git", fake_read_git)
+
+    await land_preconditions._read_land_git("checkout", "status", "--porcelain")
+
+    assert deadlines == [land_preconditions.LAND_GIT_TIMEOUT_SECONDS]
+    assert land_preconditions.LAND_GIT_TIMEOUT_SECONDS > 4.0
 
 
 async def test_a_dirty_worktree_holds_but_untracked_files_do_not(trunk: Path) -> None:

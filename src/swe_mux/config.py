@@ -715,6 +715,14 @@ class Config:
     # Skipping sets only this flag and writes no `harness_enabled` entries, so a
     # harness installed next week is still picked up by detection.
     harness_setup_complete: bool = False
+    # Whether the sidebar's "add a provider account" invitation has been put away.
+    # It dismisses the *invitation*, not the feature: the status block draws itself
+    # from whether a credential exists on this host, so signing in later brings the
+    # quota rows back whatever this says, and there is deliberately no control to
+    # un-hide an invitation that answers itself. Machine-side for the same reason as
+    # the two flags above - the credentials it invites you to add are the daemon
+    # host's, so hiding it at the desk must also hide it on the phone.
+    provider_accounts_prompt_dismissed: bool = False
     scrollback_bytes: int = 5 * 1024 * 1024
     # What a *fresh attach* replays, as opposed to what the daemon retains. The
     # client has to parse every replayed byte before it can render anything, and
@@ -916,6 +924,9 @@ class Config:
     clipboard_history_retention_hours: int = 24
     clipboard_history_redact_secrets: bool = True
     notes_default_open: str = "dock"
+    # Visibility only. The global Scratchpad file is retained while disabled and returns
+    # unchanged when the setting is enabled again.
+    note_scratchpad_enabled: bool = True
     # Note editor (the vendored Continuity Markdown editor). Only what the
     # editor genuinely exposes is here: element properties/attributes
     # (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`,

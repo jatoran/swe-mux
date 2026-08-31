@@ -13,13 +13,16 @@ Design: `../../../design/features/workspace-layout.md`, `../../../design/feature
 
 ## Horizontal overflow rails
 
-`RailScroller.tsx` (exporting `OverflowRail`), `railOverflow.ts`, `wheelScroll.ts`
+`RailScroller.tsx` (exporting `OverflowRail`), `railOverflow.ts`, `wheelScroll.ts`, `PaneRunTrigger.tsx`
 
 Shared endpoint detection, passive arrow glows, wheel translation, and separate selection/focus reveal triggers for workspace tabs, utility tabs, and the terminal Action rail.
 Callers retain tablist semantics and drag targets.
 Native touch and trackpad scrolling remains the default; keyboard-translated Action rails opt into explicit pointer scrolling plus IME-focus preservation, so the first focused drag cannot be lost to visual-viewport arbitration.
 The pan begins on any child, with no button excluded: `railOverflow.ts` exports `RAIL_PAN_SLOP_PX` as the one travel threshold both the pan and `railKeyRepeat.ts` decide on, and the click a real drag suppresses is what settles whether the button it started on activated.
 Edge glows are `aria-hidden` spans with `pointer-events:none`; they indicate hidden content but never page or capture input.
+Desktop workspace rails append `PaneRunTrigger.tsx` after the ordered tab shells.
+The trigger opens the shared Project Run menu and receives the drag preview's terminal order, so it cannot move between tabs while a reorder is previewed.
+App assigns each pane trigger a stable `pane:<stack-id>` identity and focuses the pane's active view before opening the menu.
 
 ## Pinned rail and overflow popover
 
@@ -121,7 +124,7 @@ What crosses the boundary is one `data-rail-density` attribute on the root eleme
 
 ## Utility drawer
 
-`drawerLayout.ts`, `drawerTransient.ts`, `drawerVisibility.ts`, `UtilityDrawer.tsx`, `drawerTabs.ts`,
+`drawerLayout.ts`, `drawerTransient.ts`, `drawerVisibility.ts`, `UtilityDrawer.tsx`, `drawerTabs.ts`, `DrawerViewTabs.tsx`,
 `drawerNotes.ts`, `noteTabs.ts`, `sidebarResize.ts`, and feature-named tab bodies
 
 - `drawerLayout.ts` owns the JSX-free device-local recursive tree and per-Project presentation algebra.
@@ -131,6 +134,8 @@ What crosses the boundary is one `data-rail-density` attribute on the root eleme
   Every strip, the desktop launcher rail, and the Settings mirror read it rather than repeating the rule.
 - `App.tsx` owns migration, atomic persistence, independent drawer-tab and right-rail display preferences, transient-state lifetime, and collapse routing.
 - `UtilityDrawer.tsx` owns desktop recursion plus the flat mobile projection, tab long-press, and singleton body dispatch, delegating rail overflow mechanics to `OverflowRail`.
+- `UtilityDrawer.tsx` omits pane headings for Notes, Files, Actions, Git, Activity, and Agent, while preserving the header contract for Transcript, Schedule, Alerts, Queue, and Processes.
+- `DrawerViewTabs.tsx` owns the full-width secondary-rail markup, roving tab stop, arrow-key selection, and shared Actions-derived presentation.
 - `drawerTabs.ts` is the tab registry.
 - `drawerNotes.ts` remembers the selected Notes sub-tab per Project.
 - `noteTabs.ts` owns deterministic tab ordering, deletion fallback, and the per-Project note count behind the last-note delete guard.
@@ -138,7 +143,7 @@ What crosses the boundary is one `data-rail-density` attribute on the root eleme
 
 ## Drawer segments and sections
 
-`drawerSegments.ts`, `DrawerSegmentControl.tsx`
+`drawerSegments.ts`, `DrawerSegmentControl.tsx`, `DrawerViewTabs.tsx`
 
 The drawer's second axis: what a tab is *showing*, once a tab shows more than one thing.
 Two kinds are deliberately kept apart.
@@ -148,9 +153,10 @@ A **section** is a co-visible region of one scroller reached by scroll-and-flash
 `drawerSegments.ts` stays JSX-free and unit-testable like `drawerTabs.ts`, so availability is a predicate over a small context of booleans (`hasTranscript`, `isAgentSession`) rather than over a `Session`.
 `resolveDrawerSegment` falls back to the first available segment.
 
-`DrawerSegmentControl.tsx` is the single control every segmented tab draws, in the same place, from the same registry.
+`DrawerSegmentControl.tsx` adapts registered segments into `DrawerViewTabs.tsx`.
+`ActionsTab.tsx` reads its registered section labels into the same component while retaining its device-local catalog selection.
 Unavailable segments are **omitted rather than disabled**, because a greyed-out "Timeline" promises a surface that does not exist, and a tab with one available segment draws no control at all.
-It paints from one shared `.segmented-tabs` rule that the Resources dialog and the Automation dashboard also use, so "these are views of this surface" reads as the same statement everywhere.
+The drawer rail uses `.drawer-view-tabs`; Resources and Automation retain `.segmented-tabs` because they are modal-scale controls rather than utility-drawer chrome.
 
 The registry exists so `App.tsx` can generate a palette command and a voice phrase per segment and per section: without it, folding a tab into a segment would delete the surface's command *and* its spoken navigation.
 `RETIRED_DRAWER_SEGMENTS` is the same obligation in reverse, and is a row rather than a deletion.
@@ -159,15 +165,18 @@ Section targets reuse `settingReveal.ts` under a `drawer.<tab>.<id>` namespace r
 
 ## Appearance
 
-`theme.ts`, `ThemePicker.tsx`, `uiScale.ts`, `style.css`
+`index.html`, `theme.ts`, `ThemePicker.tsx`, `uiScale.ts`, `style.css`
 
 Pure config to root custom properties.
 
-- `theme.ts` owns the selectable catalog, xterm palette tokens, and preview-color projection.
+- `index.html` declares the pre-script `only dark` default and Dark Reader opt-out.
+- `theme.ts` owns the selectable catalog, xterm palette tokens, preview-color projection, and document presentation metadata.
+  `applyTheme` derives light/dark browser treatment from the effective canvas and atomically updates the root scheme, `color-scheme` metadata, and `theme-color`; every theme preview therefore moves native controls and browser chrome with the app palette and reverts through the same path.
 - `ThemePicker.tsx` owns the keyboard-accessible fixed-column swatch listbox.
   It is the design `Dropdown` is modelled on and stays its own component: every row carries a swatch strip, and highlighting one *applies* the theme without committing it, which is a preview contract no generic picker has.
 - `uiScale.ts` owns `--ui-scale`, per-device-class resolution, discrete step movement, fixed keyboard classification, and high-resolution wheel accumulation.
 - `style.css` owns shared theme-derived chrome, including compact scrollbars and the one `--check-size` rule that sizes every native checkbox and radio.
+  Every fixed palette declares `color-scheme: only light|dark`, forbidding user-agent auto-transformation without opting out of forced-colors accessibility.
   That rule is fixed px, not `--ui-scale`, because that property multiplies type and the rows holding a line of type, never glyph-sized controls.
   A container rule shaped `<panel> input { width/height … }` must exclude `[type=checkbox]`, or it stretches the ticks inside that panel into full-width text-field boxes.
 - `App.tsx` is the one scale controller: it captures fixed scale inputs before browser and xterm handling, updates chrome and the numeric xterm prop together, reports through `InteractionHud`, and debounces persistence outside the Settings draft.
