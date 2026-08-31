@@ -145,6 +145,13 @@ _FRONTEND_ALLOWLIST: dict[str, str] = {
     # is a model id, not the Codex CLI, and compacting it is a display concern with
     # no harness capability behind it.
     "modelDisplay.ts": "model family names, not harnesses",
+    # The marketing-site demo (`vite.demo.config.ts` only; never in the product
+    # bundle). Its whole job is to impersonate two specific harnesses with invented
+    # data, so the names are the fixture, not a behaviour a new harness could
+    # silently miss: a harness absent from the demo simply is not demonstrated.
+    "fixtures.ts": "demo fixtures impersonating two named harnesses",
+    "terminalSim.ts": "demo fixtures: canned transcripts per named harness",
+    "fakeApi.ts": "demo fake daemon marking its two fixture harnesses installed",
 }
 
 _NAMES = frozenset(HARNESSES)

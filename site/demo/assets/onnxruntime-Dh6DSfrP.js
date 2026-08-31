@@ -1,0 +1,1 @@
+const e=()=>{throw new Error("onnxruntime is not part of the demo build")},o={wasm:{numThreads:1,proxy:!1,wasmPaths:void 0},logLevel:"error"},n={create:e};class r{constructor(){e()}}const t={env:o,InferenceSession:n,Tensor:r};export{n as InferenceSession,r as Tensor,t as default,o as env};

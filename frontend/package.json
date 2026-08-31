@@ -12,6 +12,8 @@
     "prebuild": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "build": "tsc && vite build",
     "postbuild": "node scripts/compress-static.mjs && node scripts/verify-bundle.mjs",
+    "prebuild:demo": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
+    "build:demo": "tsc && vite build --config vite.demo.config.ts",
     "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "check": "tsc --noEmit",
     "check:tests": "tsc --noEmit -p tsconfig.test.json",

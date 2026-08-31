@@ -315,6 +315,62 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 .hero .lede b { color: var(--fg); }
 
 
+/* -------------------------------------------------------------- live demo */
+/* The interactive demo: the real UI (committed build under `demo/`, see
+   `frontend/vite.demo.config.ts`) in an iframe against an in-page simulated
+   daemon. Iframed rather than inlined so its 500 KB of app CSS cannot fight
+   this page's, and loaded lazily (`data-src`, promoted on approach) so a
+   visitor who never scrolls to it downloads none of it. The phone frame is the
+   same build at a phone's width - the app's own breakpoint does the rest - and
+   in the side-by-side view the two frames share one simulated fleet through a
+   BroadcastChannel, which is the closest a static page can get to the
+   multi-device story the screenshots only assert. */
+.demo { margin-top: clamp(30px, 5vw, 52px); }
+.demo-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  border: 1px solid var(--line-2); border-bottom: 0; background: var(--panel);
+  padding: 7px 12px; font-family: var(--mono); font-size: 12px; }
+.demo-kick { color: var(--fg-3); letter-spacing: 0.16em; }
+.demo-tabs { display: flex; gap: 4px; }
+.demo-tab { font: inherit; background: none; border: 1px solid transparent;
+  color: var(--fg-3); padding: 3px 11px; cursor: pointer; }
+.demo-tab:hover { color: var(--fg); }
+.demo-tab[aria-selected="true"] { color: var(--green); border-color: var(--line-2); background: var(--panel-2); }
+.demo-reset { margin-left: auto; font: inherit; background: none; border: 1px solid transparent;
+  color: var(--fg-4); padding: 3px 8px; cursor: pointer; }
+.demo-reset:hover { color: var(--fg); border-color: var(--line-2); }
+.demo-stage { border: 1px solid var(--line-2); background: var(--panel-2);
+  display: flex; align-items: stretch; justify-content: center; gap: 16px; }
+.demo-frame { overflow: hidden; }
+.demo-frame iframe { display: block; border: 0; width: 100%; height: 100%; background: #0b0d10; }
+.demo-desktop { flex: 1 1 auto; min-width: 0; height: clamp(430px, 52vw, 680px); }
+.demo-phone { flex: none; width: min(348px, calc(100vw - 2 * var(--pad) - 14px));
+  height: clamp(430px, 52vw, 680px); align-self: center;
+  border: 1px solid var(--line-2); border-radius: 12px; margin: 14px 0; background: var(--panel); }
+.demo-stage[data-view="desktop"] .demo-phone { display: none; }
+.demo-stage[data-view="phone"] .demo-desktop { display: none; }
+.demo-stage[data-view="phone"] { padding: 0 12px; }
+.demo-stage[data-view="both"] { padding-right: 14px; }
+.demo-stage[data-view="both"] .demo-phone { width: min(320px, 34vw); }
+/* Beside the phone the desktop frame's box drops under the app's own 760px
+   mobile breakpoint and would render the phone layout twice. Render it at
+   ~1150 CSS px and scale down instead, so "both" really shows both surfaces. */
+.demo-stage[data-view="both"] .demo-desktop iframe {
+  width: calc(100% / 0.7); height: calc(100% / 0.7);
+  transform: scale(0.7); transform-origin: 0 0;
+}
+.demo-note { color: var(--fg-3); font-size: 13px; margin-top: 10px; max-width: 76ch; }
+.demo-note b { color: var(--fg-2); }
+/* Below the app's own mobile breakpoint a "desktop" iframe would render the
+   phone layout anyway, so the toggle loses the pretense and only the phone
+   frame is offered. */
+@media (max-width: 700px) {
+  .demo-tabs { display: none; }
+  .demo-stage .demo-desktop { display: none !important; }
+  .demo-stage .demo-phone { display: block !important; width: 100% !important;
+    margin: 8px 0; height: min(74vh, 640px); border-radius: 8px; align-self: auto; }
+  .demo-stage { padding: 0 8px; }
+}
+
 /* ------------------------------------------------------------- hero visual */
 /* Two real captures rather than the dashed frames that stood here: the desktop
    workspace at full width, with the phone overlapping its lower right. Both are
@@ -590,6 +646,32 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
       </div>
     </div>
 
+
+    <!-- The interactive demo. Everything inside the iframes is `demo/` - the real frontend
+         compiled against an in-page fake daemon (fixtures, canned terminals, joke replies),
+         so a visitor can click around the actual product without installing anything and
+         without anything being sent anywhere. Frames load lazily on approach; "reset"
+         clears the demo's localStorage state and reloads the frames. -->
+    <div class="demo" id="demo">
+      <div class="demo-head">
+        <span class="demo-kick">TRY IT</span>
+        <div class="demo-tabs" role="tablist" aria-label="Demo surface">
+          <button class="demo-tab" type="button" role="tab" data-view="desktop" aria-selected="true">desktop</button>
+          <button class="demo-tab" type="button" role="tab" data-view="phone" aria-selected="false">phone</button>
+          <button class="demo-tab" type="button" role="tab" data-view="both" aria-selected="false">both</button>
+        </div>
+        <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset demo</button>
+      </div>
+      <div class="demo-stage" id="demostage" data-view="desktop">
+        <div class="demo-frame demo-desktop"><iframe title="Interactive swe-mux demo, desktop layout. Simulated sessions; nothing connects to a real daemon." data-src="demo/" loading="lazy"></iframe></div>
+        <div class="demo-frame demo-phone"><iframe title="Interactive swe-mux demo, phone layout. The same simulated fleet as the desktop frame." data-src="demo/" loading="lazy"></iframe></div>
+      </div>
+      <p class="demo-note">The real UI, live in your browser against a <b>simulated</b> daemon:
+      click around, split and re-stack panes, open the notes and git drawers, launch sessions
+      and previews, type at the agents - they answer, but only with pre-written jokes. Nothing
+      is installed and nothing is sent anywhere. Pick <b>both</b> and the two surfaces share
+      one simulated fleet: act on the desktop and watch the phone follow.</p>
+    </div>
 
     <!-- The hero film is a GitHub release asset rather than a committed file: it is 4.4 MB,
          `.git` is already large, and it is the asset most likely to be re-cut. That makes it
@@ -1421,6 +1503,62 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(render)
     .catch(function () { /* no manifest is the empty state, already drawn */ });
+})();
+
+/* The interactive demo's frame loader. Frames carry `data-src` and are promoted
+   to `src` only for views the visitor can see, the first time the stage comes
+   near the viewport - so the ~700 KB app download is paid only by visitors who
+   reach it, and "both" pays for its second copy only when chosen. Under file://
+   (the layout gate) nothing loads at all, same posture as version.json above. */
+(function () {
+  var stage = document.getElementById('demostage');
+  if (!stage || location.protocol === 'file:') return;
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.demo-tab'));
+  var armed = false;
+  var phoneOnly = window.matchMedia('(max-width: 700px)');
+  function visibleFrames() {
+    var view = phoneOnly.matches ? 'phone' : stage.getAttribute('data-view');
+    if (view === 'both') return ['.demo-desktop', '.demo-phone'];
+    return [view === 'phone' ? '.demo-phone' : '.demo-desktop'];
+  }
+  function promote() {
+    if (!armed) return;
+    visibleFrames().forEach(function (sel) {
+      var frame = stage.querySelector(sel + ' iframe');
+      if (frame && !frame.src) frame.src = frame.getAttribute('data-src');
+    });
+  }
+  function setView(view) {
+    stage.setAttribute('data-view', view);
+    tabs.forEach(function (tab) { tab.setAttribute('aria-selected', String(tab.getAttribute('data-view') === view)); });
+    promote();
+  }
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function () { armed = true; setView(tab.getAttribute('data-view')); });
+  });
+  phoneOnly.addEventListener('change', promote);
+  if ('IntersectionObserver' in window) {
+    var watcher = new IntersectionObserver(function (entries) {
+      if (!entries.some(function (entry) { return entry.isIntersecting; })) return;
+      watcher.disconnect();
+      armed = true;
+      promote();
+    }, { rootMargin: '400px' });
+    watcher.observe(stage);
+  } else { armed = true; promote(); }
+  document.getElementById('demoreset').addEventListener('click', function () {
+    /* The demo persists its fleet (and the app its presentation) in this
+       origin's localStorage; discard both namespaces and restart the frames. */
+    var doomed = [];
+    for (var i = 0; i < localStorage.length; i += 1) {
+      var key = localStorage.key(i);
+      if (/^(mux\.|swemux-demo|continuity-editor\.)/.test(key)) doomed.push(key);
+    }
+    doomed.forEach(function (key) { localStorage.removeItem(key); });
+    stage.querySelectorAll('iframe').forEach(function (frame) {
+      if (frame.src) frame.contentWindow.location.reload();
+    });
+  });
 })();
 
 document.querySelectorAll('.copy').forEach(function (b) {
