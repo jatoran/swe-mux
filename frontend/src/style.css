@@ -259,7 +259,7 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .quota-window.usage-warn{color:var(--amber,#e5c07b)}
 .quota-window.usage-critical{color:var(--red)}
 .account-popover{position:fixed;z-index:96;width:340px;max-width:calc(100vw - 16px);overflow:auto;border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #0009;color:var(--text)}
-.account-popover>header,.account-popover>footer{display:flex;align-items:center;justify-content:space-between;padding:7px;border-bottom:1px solid var(--line)}.account-popover>header div{display:grid;gap:2px}.account-popover>header span{color:var(--muted);font-size:8px}.account-popover button{border:0;background:transparent;color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.account-popover>section{padding:6px;border-bottom:1px solid var(--line)}.account-popover h4{margin:0 0 4px;color:var(--green);font-size:9px;text-transform:uppercase}.account-popover section>button{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 6px;padding:7px;text-align:left}.account-popover section>button:hover,.account-popover section>button.active{background:var(--panel2)}.account-popover section>button span{color:var(--green)}.account-popover section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.account-popover section>button small{grid-column:1/-1;color:var(--muted);white-space:normal;line-height:1.5}.account-popover section>button small .account-refresh-age{color:var(--muted);opacity:.65;font-style:normal}.account-popover section>p,.account-error{margin:5px;color:var(--muted);font-size:8px}.account-error{color:var(--red)}.account-popover>footer{justify-content:flex-end;gap:5px;border:0}.account-popover>footer button{min-height:27px;padding:0 7px;border:1px solid var(--line)}
+.account-popover>header,.account-popover>footer{display:flex;align-items:center;justify-content:space-between;padding:7px;border-bottom:1px solid var(--line)}.account-popover>header div{display:grid;gap:2px}.account-popover>header span{color:var(--muted);font-size:8px}.account-popover button{border:0;background:transparent;color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.account-popover>section{padding:6px;border-bottom:1px solid var(--line)}.account-popover h4{margin:0 0 4px;color:var(--green);font-size:9px;text-transform:uppercase}.account-popover section>button{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 6px;padding:7px;text-align:left}.account-popover section>button:hover,.account-popover section>button.active{background:var(--panel2)}.account-popover section>button span{color:var(--green)}.account-popover section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.account-popover section>button>.account-refresh-age{justify-self:end;color:var(--muted);opacity:.65;font-style:normal;white-space:nowrap}.account-popover section>button small{grid-column:1/-1;color:var(--muted);white-space:normal;line-height:1.5}.account-popover section>p,.account-error{margin:5px;color:var(--muted);font-size:8px}.account-error{color:var(--red)}.account-popover>footer{justify-content:flex-end;gap:5px;border:0}.account-popover>footer button{min-height:27px;padding:0 7px;border:1px solid var(--line)}
 .account-popover .account-current-notice{margin:4px 2px 7px;padding:6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted)}.account-popover .account-current-notice.external{border-color:#735f37;color:var(--amber)}.account-popover .account-current-notice.unreadable{border-color:#73373c;color:var(--red)}
 .account-popover>section.account-reset-alert{border-left:3px solid #a855f7;background:#6b21a81c}.account-popover>section.account-reset-alert h4{color:#d8b4fe}.account-popover>section.account-reset-alert p{margin:4px 0 7px;color:var(--text)}.account-reset-alert>ul{margin:0 0 7px;padding:0;list-style:none;display:grid;gap:3px}.account-reset-alert>ul li{color:var(--muted)}.account-reset-alert>ul strong{color:var(--text)}.account-reset-alert>div{display:flex;flex-wrap:wrap;gap:5px}.account-reset-alert>div button{min-height:27px;padding:0 7px;border:1px solid #a855f777}.account-reset-alert>div button.danger{border-color:color-mix(in srgb,var(--red) 65%,var(--line));color:var(--red)}
 .account-settings{grid-column:1/-1!important}.account-provider-settings{margin:0 0 13px;border:1px solid var(--line);background:var(--bg)}.account-provider-settings>header{display:flex;align-items:center;justify-content:space-between;padding:9px;border-bottom:1px solid var(--line)}.account-provider-settings>header div{display:grid;gap:3px}.account-provider-settings>header strong{color:var(--green)}.account-provider-settings>header small{color:var(--muted)}.account-settings-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px}.account-settings-head h3{margin:0}.account-explainer{margin:0 0 11px;border:1px solid var(--line);background:var(--bg)}.account-explainer>summary{padding:7px 9px;color:var(--muted);font-size:9px;cursor:pointer}.account-explainer>summary:hover{color:var(--text)}.account-explainer>p{margin:0;padding:0 9px 9px;color:var(--muted);font-size:9px;line-height:1.6}
@@ -267,26 +267,18 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-conflict{grid-column:1/-1;margin:6px 0 0;padding:6px 7px;border-left:3px solid var(--red);background:#73373c22;color:var(--red);font-size:8px}
 .account-list article.conflicted{box-shadow:inset 3px 0 var(--red)}
 .account-popover button.conflicted strong{color:var(--red)}
-/* Quota as columns, not as a sentence per account.
-   Every width here is in `ch` against one pinned font, which is the whole mechanism: the
-   headings live in a `div` and the figures in a `small` inside a `button`, so they are
-   separate formatting contexts and no `auto` track could ever line them up with each
-   other. The content is bounded and monospace - a percentage is at most `100%` and a
-   reset at most `6d23h` - so fixed tracks cost nothing and are the only thing that makes
-   one account's 5h figure sit above the next one's. Keep the two templates and the font
-   identical between `.quota-columns` and `.quota-row`, or the columns silently drift. */
-.account-popover .quota-columns,.account-popover .quota-row{display:grid;grid-template-columns:10ch 10ch minmax(0,1fr);gap:0 8px;align-items:baseline;font:9px 'Cascadia Mono',Consolas,monospace}
-.account-popover .quota-columns.has-fable,.account-popover .quota-row.has-fable{grid-template-columns:10ch 10ch 10ch minmax(0,1fr)}
-/* The rows are buttons with 7px of padding; this heading is a plain child of the section,
-   so it has to pay the same inset by hand to sit over the column it names. */
-.account-popover .quota-columns{padding:2px 7px 3px;color:var(--muted);opacity:.7;text-transform:uppercase}
-.account-popover .quota-cell{display:grid;grid-template-columns:4ch minmax(0,1fr);gap:0 4px}
-.account-popover .quota-cell b{color:var(--text);font-weight:400;text-align:right}
+/* Each quota value names its own period, so the provider sections need no detached heading
+   row. Fixed tracks keep stacked accounts comparable while the visible bullets let a row
+   read naturally as one compact line. */
+.account-popover .quota-row{display:grid;grid-template-columns:12ch 14ch minmax(0,1fr);gap:0 2ch;align-items:baseline;font:9px 'Cascadia Mono',Consolas,monospace}
+.account-popover .quota-row.has-fable{grid-template-columns:12ch 14ch minmax(8ch,1fr)}
+.account-popover .quota-cell{position:relative;display:flex;align-items:baseline;min-width:0;white-space:nowrap}
+.account-popover .quota-separator{position:absolute;right:calc(100% + .1ch);color:var(--muted);opacity:.55}
+.account-popover .quota-cell b{flex:0 0 4ch;color:var(--text);font-weight:400;text-align:right}
 .account-popover .quota-cell i{overflow:hidden;color:var(--muted);font-style:normal;white-space:nowrap}
-/* A failed poll invalidates the whole account, so it takes the window columns with it and
-   leaves the refresh age in its own column still saying when that failure was measured. */
-.account-popover .quota-row .quota-row-note{grid-column:1/-2;color:var(--muted);font-style:normal}
-.account-popover .quota-row .account-refresh-age{justify-self:end;white-space:nowrap}
+.account-popover .quota-window-label{opacity:.55}
+/* A failed poll invalidates the whole account, so it replaces every window in the row. */
+.account-popover .quota-row .quota-row-note{grid-column:1/-1;color:var(--muted);font-style:normal}
 /* Sign-in inside the switcher. The popover is 340px and every row in it is a target,
    so the per-provider control is a text button on the heading line and the empty state
    is the full-width row it replaces - the one screen a new install always sees. */
