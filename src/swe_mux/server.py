@@ -24,6 +24,7 @@ from aiohttp import web
 
 from . import (
     __version__,
+    agent_surfaces,
     git_init,
     git_review,
     mcp_tools,
@@ -1343,6 +1344,12 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         attach_replay_bytes=config.attach_replay_bytes,
         status_timeline=status_timeline,
         recovery=session_recovery,
+        # Stamped into agent panes as MUX_SURFACES; restart-scoped like the
+        # per-harness toggles it is computed from (`agent_surfaces.py`).
+        agent_surfaces={
+            name: agent_surfaces.surfaces_env_value(config, name)
+            for name in HARNESSES
+        },
     )
     # The observer decides an approval; this is the only way it can deliver one.
     # Installed as a factory rather than called from `observation.py` directly
@@ -1821,7 +1828,15 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # half of an exchange it opened, so its grant must not lapse while the pipeline is
     # still computing the answer. Registered here rather than injected at construction
     # because the controller is built well before the land service exists.
-    auto_delivery.set_solicited_requests(land_queue_service.origin_windows)
+    # Two request pipes can leave a session as the waiting half of an exchange
+    # it opened: a land/verify request (the daemon owes the handback) and an
+    # armed settle watch (the daemon owes the notice). Land last: its window
+    # runs from the pipeline's last recorded step, the narrower claim.
+    auto_delivery.set_solicited_requests(
+        AutoDeliveryController.merge_solicited_sources(
+            session_watch.origin_windows, land_queue_service.origin_windows
+        )
+    )
 
     # Phase 10.6 Mux assistant: daemon-owned dialogs behind the voice grammar's
     # tier-3 fallback and the workspace chat surface. Reuses the identical
@@ -2444,6 +2459,16 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
                 # session the daemon itself launched as a configurator; every other
                 # caller is never shown the tools and is refused if it guesses a name.
                 configurator=configurator_routes.build_configurator_service(app),
+                # Phase 23 W4: refuse tokens from sessions of a harness whose
+                # capability surfaces are all off - enforced at the endpoint
+                # both transports (MCP client, agent CLI) share.
+                surface_gate=agent_surfaces.surface_gate(config),
+                # An authenticated tool call is the same "somebody is reading
+                # the deliveries" evidence a written reply is, so it refreshes
+                # the caller's consecutive-send budget (`auto-delivery.md`).
+                attention_credit=lambda session_id: prompt_queue.store.credit_auto_attention(
+                    session_id, by="mcp-activity"
+                ),
             ),
             keys.REAPER: reaper,
             keys.SUPERVISOR: supervisor_client,

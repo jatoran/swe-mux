@@ -152,6 +152,10 @@ export interface Session {
   created_at: number; state: SessionState; state_detail?: string; tokens_in: number
   /** Epoch seconds of the transition into `state`; 0 when the daemon never dated it. */
   state_since?: number
+  /** One-shot pane-placement ask from an agent spawn ("split_horizontal" or
+   *  "split_vertical", else empty). Claimed and cleared atomically through the
+   *  pane-hint claim route, so exactly one device acts on it. */
+  pane_hint?: string
   /** Wall-clock length of the last completed root turn, milliseconds. Run-scoped. */
   last_turn_ms?: number | null
   /** Sum of every accepted completed root turn on this run, milliseconds.

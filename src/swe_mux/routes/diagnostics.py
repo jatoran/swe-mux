@@ -12,7 +12,7 @@ from typing import Any
 
 from aiohttp import web
 
-from .. import __version__
+from .. import __version__, agent_surfaces
 from .. import (
     app_keys as keys,
 )
@@ -725,6 +725,10 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
             now=now,
             instrumented=lambda backend: config.harness_instrument_enabled.get(backend, True),
         ),
+        surface_warnings=[
+            {"backend": warning.backend, "code": warning.code, "message": warning.message}
+            for warning in agent_surfaces.coherence_warnings(config)
+        ],
     )
     return report
 

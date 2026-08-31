@@ -131,6 +131,28 @@ WORKING_STATES = frozenset({"working"})
 DEFAULT_TIMEOUT_MINUTES = 30
 MIN_TIMEOUT_MINUTES = 1
 
+#: Bounds for the synchronous `await_session` read. The default sits under the
+#: MCP tool-call timeout every targeted harness ships (60 s is the tightest
+#: measured), because a wait that outlives the caller's own tool timeout
+#: answers nobody: the harness kills the call and the agent reads an error
+#: where a timeout *result* would have told it the state and invited another
+#: call. The ceiling exists for a caller that raised its own tool timeout and
+#: knows it; anything longer belongs to `watch_session`, whose notice does not
+#: hold an HTTP request open. Constants rather than config keys: they bound a
+#: read, and a read's bounds are the service's to state.
+AWAIT_DEFAULT_TIMEOUT_SECONDS = 50.0
+AWAIT_MIN_TIMEOUT_SECONDS = 5.0
+AWAIT_MAX_TIMEOUT_SECONDS = 600.0
+#: Concurrent awaiters one session may hold. More than a couple means the
+#: caller is fanning out blocking reads it should be arming watches for.
+AWAIT_MAX_PER_SESSION = 4
+
+#: The cases an `await_session` call can resolve with. `already_settled` is the
+#: immediate answer for a target that is settled *and has held it* at call
+#: time - returning it beats holding the caller's turn open to re-learn a fact
+#: the transition ledger already holds.
+AWAIT_CASES = ("settled", "already_settled", "ended", "timeout", "daemon_stopped")
+
 #: The case that resolved a watch, on the notice and on the event.
 CASES = ("settled", "ended", "timeout", "daemon_stopped")
 
@@ -205,6 +227,36 @@ class Watch:
 
 
 @dataclass(slots=True)
+class _Awaiter:
+    """One in-flight synchronous wait. The answer travels in-band on `future`.
+
+    The structural difference from a `Watch` is the sink: a watch matures into
+    a queue message, an awaiter fulfils the caller's own blocked tool call, so
+    nothing here touches the prompt queue, arming, or delivery at all - the
+    caller is mid-turn holding the HTTP request open, which is exactly the one
+    moment the delivery machinery does not apply to it.
+    """
+
+    id: str
+    caller_session_id: str
+    target_session_id: str
+    target_name: str
+    #: Which positive outcomes resolve it ("settled" and/or "ended"). An ended
+    #: target always resolves whatever this says, because nothing further can
+    #: ever happen to it and holding the caller for the timeout would be a
+    #: promise about a corpse.
+    until: frozenset[str]
+    created_at: float
+    deadline: float
+    #: Created with `asyncio.get_running_loop().create_future()` by
+    #: `await_settle`, which is the only constructor - so the future always
+    #: belongs to the loop the sweep resolves it on.
+    future: asyncio.Future[dict[str, Any]]
+    observed_working: bool = False
+    settled_since: float | None = None
+
+
+@dataclass(slots=True)
 class _Counters:
     armed: int = 0
     resolved: dict[str, int] = field(default_factory=dict)
@@ -214,6 +266,8 @@ class _Counters:
     #: the two diverging is the quiet failure: watches maturing while nothing is
     #: delivered looks, from every other counter, like a working service.
     armed_notices: int = 0
+    awaits: int = 0
+    await_resolved: dict[str, int] = field(default_factory=dict)
 
 
 def running_work(record: Any) -> bool:
@@ -299,6 +353,7 @@ class SessionWatchService:
         self._queue_message = queue_message
         self._clock = clock
         self._watches: dict[str, Watch] = {}
+        self._awaiters: dict[str, _Awaiter] = {}
         self._counters = _Counters()
 
     # -- lifecycle ------------------------------------------------------------
@@ -319,6 +374,12 @@ class SessionWatchService:
         await background.stop(WATCH_LOOP)
         for watch in tuple(self._watches.values()):
             await self._resolve(watch, "daemon_stopped")
+        # In-flight synchronous waits get a result, not an abandoned future: the
+        # HTTP connection is dying with the daemon anyway, but a pending future
+        # nobody resolves raises "exception was never retrieved" from a
+        # finalizer at some later test's expense.
+        for awaiter in tuple(self._awaiters.values()):
+            self._finish_await(awaiter, "daemon_stopped", record=None)
 
     async def _run(self) -> None:
         while True:
@@ -452,6 +513,297 @@ class SessionWatchService:
         )
         return {**self._view(watch, record, scope), "status": "watching"}
 
+    # -- synchronous waits ----------------------------------------------------
+
+    def _resolve_await_timeout(self, requested: Any) -> float:
+        if requested is None or requested == "":
+            return AWAIT_DEFAULT_TIMEOUT_SECONDS
+        try:
+            seconds = float(requested)
+        except (TypeError, ValueError) as exc:
+            raise WatchRefusal(
+                "invalid_timeout",
+                "timeout_seconds must be a number of seconds",
+                status=400,
+            ) from exc
+        if (
+            seconds < AWAIT_MIN_TIMEOUT_SECONDS
+            or seconds > AWAIT_MAX_TIMEOUT_SECONDS
+        ):
+            raise WatchRefusal(
+                "invalid_timeout",
+                f"timeout_seconds must be between {AWAIT_MIN_TIMEOUT_SECONDS:g} "
+                f"and {AWAIT_MAX_TIMEOUT_SECONDS:g} seconds; for anything "
+                "longer, arm watch_session instead - its notice does not hold "
+                "your tool call open.",
+                status=400,
+            )
+        return seconds
+
+    @staticmethod
+    def _resolve_until(requested: Any) -> frozenset[str]:
+        if requested is None or requested == "" or requested == []:
+            return frozenset({"settled", "ended"})
+        values = requested if isinstance(requested, (list, tuple)) else [requested]
+        cleaned = {str(value).strip() for value in values}
+        unknown = cleaned - {"settled", "ended"}
+        if unknown or not cleaned:
+            raise WatchRefusal(
+                "invalid_until",
+                'until entries must be "settled" or "ended"',
+                status=400,
+            )
+        return frozenset(cleaned)
+
+    async def await_settle(
+        self,
+        caller: Any,
+        *,
+        target: str,
+        until: Any = None,
+        timeout_seconds: Any = None,
+        project: str = "",
+    ) -> dict[str, Any]:
+        """Block until the target settles, ends, or the bounded timeout elapses.
+
+        The synchronous sibling of `watch()`, sharing its settle rules and its
+        sweep: same working-edge requirement, same `SETTLE_HOLD_SECONDS`, same
+        "an ended target answers unconditionally". What differs is the sink -
+        the answer fulfils this call instead of maturing into a queue message -
+        so nothing here stages, arms, or delivers anything, and no grant or
+        readiness machinery applies. A timeout is a *result* carrying the
+        target's state, not an error: the caller re-calls to keep waiting,
+        which is what keeps each call inside the harness's own tool timeout.
+
+        A target that is already settled and has *held* it for the settle
+        window answers immediately (`already_settled`), read from the record's
+        own `state_since` - that is what lets the re-call loop converge on a
+        worker that finished between two polls, where the edge rule alone
+        would wait forever for a working edge that already passed.
+        """
+        if not self._enabled():
+            raise WatchRefusal(
+                "session_watch_disabled",
+                "session watches are disabled on this mux install.",
+                status=403,
+            )
+        wanted = self._resolve_until(until)
+        seconds = self._resolve_await_timeout(timeout_seconds)
+        watched, scope = self._resolve_target(caller, target, project, allow_ended=True)
+        record = watched.record
+        now = self._clock()
+        base = {
+            "target_session_id": str(record.id),
+            "target_name": str(getattr(record, "name", "") or record.id),
+            "project_scope": scope.requested,
+            "settle_hold_seconds": int(SETTLE_HOLD_SECONDS),
+        }
+        if str(record.state) in ENDED_STATES:
+            self._counters.awaits += 1
+            self._count_await("ended")
+            return {
+                **base,
+                "case": "ended",
+                "target_state": describe_state(record),
+                "waited_seconds": 0,
+                "note": (
+                    "The session had already ended when you asked. Its record "
+                    "stays readable through get_session, "
+                    "list_sessions(include_ended), and history."
+                ),
+            }
+        if "settled" in wanted:
+            state_since = float(getattr(record, "state_since", 0.0) or 0.0)
+            held = now - state_since if state_since else 0.0
+            if (
+                str(record.state) in SETTLED_STATES
+                and not running_work(record)
+                and held >= SETTLE_HOLD_SECONDS
+            ):
+                self._counters.awaits += 1
+                self._count_await("already_settled")
+                return {
+                    **base,
+                    "case": "already_settled",
+                    "target_state": describe_state(record),
+                    "waited_seconds": 0,
+                    "note": (
+                        "The session was already settled and had held it for "
+                        f"{_humanize(held)} when you asked, so this answered "
+                        "immediately. Settled means it stopped working, not "
+                        "that it succeeded - read the session before acting "
+                        "on it."
+                    ),
+                }
+        open_awaits = sum(
+            1
+            for awaiter in self._awaiters.values()
+            if awaiter.caller_session_id == str(caller.record.id)
+        )
+        if open_awaits >= AWAIT_MAX_PER_SESSION:
+            raise WatchRefusal(
+                "await_limit_reached",
+                f"this session already holds {open_awaits} open waits "
+                f"(limit {AWAIT_MAX_PER_SESSION}). Use watch_session to be "
+                "told about many sessions at once.",
+                status=429,
+            )
+        awaiter = _Awaiter(
+            id=f"await_{uuid.uuid4().hex[:12]}",
+            caller_session_id=str(caller.record.id),
+            target_session_id=str(record.id),
+            target_name=str(getattr(record, "name", "") or record.id),
+            until=wanted,
+            created_at=now,
+            deadline=now + seconds,
+            future=asyncio.get_running_loop().create_future(),
+            observed_working=str(record.state) in WORKING_STATES,
+        )
+        self._awaiters[awaiter.id] = awaiter
+        self._counters.awaits += 1
+        log.info(
+            "session_await_started await_id=%s caller=%s target=%s timeout_s=%s state=%s",
+            awaiter.id,
+            awaiter.caller_session_id,
+            awaiter.target_session_id,
+            seconds,
+            record.state,
+        )
+        try:
+            result = await awaiter.future
+        finally:
+            self._awaiters.pop(awaiter.id, None)
+        return {**base, **result}
+
+    def _advance_awaiter(self, awaiter: _Awaiter, now: float) -> None:
+        if awaiter.future.done():
+            self._awaiters.pop(awaiter.id, None)
+            return
+        target = self._sessions.sessions.get(awaiter.target_session_id)
+        if target is None:
+            self._finish_await(awaiter, "ended", record=None)
+            return
+        record = target.record
+        state = str(record.state)
+        if state in ENDED_STATES:
+            # Unconditional whatever `until` says: nothing further can happen.
+            self._finish_await(awaiter, "ended", record=record)
+            return
+        if state in WORKING_STATES:
+            awaiter.observed_working = True
+            awaiter.settled_since = None
+        elif (
+            "settled" in awaiter.until
+            and state in SETTLED_STATES
+            and awaiter.observed_working
+            and not running_work(record)
+        ):
+            if awaiter.settled_since is None:
+                awaiter.settled_since = now
+            elif now - awaiter.settled_since >= SETTLE_HOLD_SECONDS:
+                self._finish_await(awaiter, "settled", record=record)
+                return
+        else:
+            awaiter.settled_since = None
+        if now >= awaiter.deadline:
+            self._finish_await(awaiter, "timeout", record=record)
+
+    def _finish_await(self, awaiter: _Awaiter, case: str, *, record: Any) -> None:
+        self._awaiters.pop(awaiter.id, None)
+        self._count_await(case)
+        state = describe_state(record) if record is not None else "ended (session gone)"
+        waited = max(0, int(self._clock() - awaiter.created_at))
+        notes = {
+            "settled": (
+                "Settled means it stopped working, not that it succeeded - "
+                "read the session before acting on it. `awaiting` in the "
+                "state above means it is blocked on a person, not finished."
+            ),
+            "ended": (
+                "The session is gone. Its record stays readable through "
+                "get_session, list_sessions(include_ended), and history."
+            ),
+            "timeout": (
+                "The wait's own bound elapsed, which is a normal result, not "
+                "an error: the state above is current, and calling "
+                "await_session again continues waiting from here. For waits "
+                "measured in many minutes, arm watch_session instead."
+            ),
+            "daemon_stopped": (
+                "The daemon stopped before this wait resolved. Re-call "
+                "await_session once it is back."
+            ),
+        }
+        result = {
+            "case": case,
+            "target_state": state,
+            "waited_seconds": waited,
+            "note": notes.get(case, ""),
+        }
+        if not awaiter.future.done():
+            awaiter.future.set_result(result)
+        log.info(
+            "session_await_resolved await_id=%s caller=%s target=%s case=%s state=%r waited_s=%s",
+            awaiter.id,
+            awaiter.caller_session_id,
+            awaiter.target_session_id,
+            case,
+            state,
+            waited,
+        )
+
+    def _count_await(self, case: str) -> None:
+        self._counters.await_resolved[case] = (
+            self._counters.await_resolved.get(case, 0) + 1
+        )
+
+    # -- the open-request evidence auto-delivery reads ------------------------
+
+    #: How long past a watch's own deadline the watcher's grant stays held: the
+    #: notice is staged at resolution and still has to travel the queue's
+    #: stability window, so cutting the hold exactly at the deadline would lapse
+    #: the grant in the seconds between staging and delivery.
+    WINDOW_GRACE_SECONDS = 300.0
+
+    async def origin_windows(
+        self, session_ids: Any, since: float
+    ) -> dict[str, dict[str, Any]]:
+        """Open watches per watcher session, as reply-window evidence.
+
+        The second half of the consent `watch_session` records (the first is
+        the armed notice): a session holding an open watch is the waiting half
+        of an exchange it opened - it asked to be told, and the answer arrives
+        through its own queue - so its auto-delivery grant must not lapse for
+        idleness while it waits, or the notice arms with nothing to deliver it
+        (`auto-delivery.md` tracks this as the watch half of the land queue's
+        same gap). Bounded by the watch's own deadline plus a delivery grace,
+        never by the reply-window span, because the watch's timeout is the
+        request's own clock. `since` is deliberately unused: an open watch is
+        live evidence however long ago it was armed, and every watch already
+        carries a hard deadline.
+        """
+        del since
+        wanted = {str(session_id) for session_id in session_ids}
+        windows: dict[str, dict[str, Any]] = {}
+        for watch in self._watches.values():
+            watcher = watch.watcher_session_id
+            if watcher not in wanted:
+                continue
+            expires = watch.deadline + self.WINDOW_GRACE_SECONDS
+            current = windows.get(watcher)
+            if current is not None and float(current["expires_at"]) >= expires:
+                continue
+            windows[watcher] = {
+                "kind": "watch",
+                "updated_at": watch.created_at,
+                "expires_at": expires,
+                "watch_id": watch.id,
+                "target_session_id": watch.target_session_id,
+                "target_name": watch.target_name,
+                "timeout_minutes": watch.timeout_minutes,
+            }
+        return windows
+
     def _existing(self, watcher_id: str, target_id: str) -> Watch | None:
         for watch in self._watches.values():
             if (
@@ -469,7 +821,7 @@ class SessionWatchService:
         )
 
     def _resolve_target(
-        self, caller: Any, identity: str, project: str
+        self, caller: Any, identity: str, project: str, *, allow_ended: bool = False
     ) -> tuple[Any, ProjectScope]:
         text = str(identity or "").strip()
         if not text:
@@ -517,9 +869,11 @@ class SessionWatchService:
                 "settled state to leave.",
                 status=400,
             )
-        if str(found.record.state) in ENDED_STATES:
+        if str(found.record.state) in ENDED_STATES and not allow_ended:
             # Answered here rather than as a notice half a second later: there is
             # nothing left to watch, and the caller can act on the final state now.
+            # `await_settle` passes allow_ended because for it an ended target IS
+            # the immediate answer rather than a refusal.
             raise WatchRefusal(
                 "target_ended",
                 f"{found.record.name} has already ended "
@@ -555,7 +909,7 @@ class SessionWatchService:
 
     async def tick(self) -> list[dict[str, Any]]:
         """Advance every open watch once. Returns whatever resolved this pass."""
-        if not self._watches:
+        if not self._watches and not self._awaiters:
             return []
         now = self._clock()
         resolved: list[dict[str, Any]] = []
@@ -563,6 +917,8 @@ class SessionWatchService:
             outcome = await self._advance(watch, now)
             if outcome is not None:
                 resolved.append(outcome)
+        for awaiter in tuple(self._awaiters.values()):
+            self._advance_awaiter(awaiter, now)
         return resolved
 
     async def _advance(self, watch: Watch, now: float) -> dict[str, Any] | None:
@@ -850,6 +1206,9 @@ class SessionWatchService:
             "dropped": dict(self._counters.dropped),
             "notice_failures": self._counters.notice_failures,
             "armed_notices": self._counters.armed_notices,
+            "awaits_open": len(self._awaiters),
+            "awaits": self._counters.awaits,
+            "await_resolved": dict(self._counters.await_resolved),
             "settle_hold_seconds": int(SETTLE_HOLD_SECONDS),
             "enabled": self._enabled(),
         }
