@@ -195,6 +195,24 @@ A note explaining that the captures are real, or that the film is a deferred fet
 The facts still hold - every capture is the real application in a synthetic install with invented projects, and the film is `preload="none"` so nothing is fetched until a visitor presses play - they are just not narrated to the reader.
 What survives is the spacing: `.shotgap` on the block after `.herovis` clears the phone overlay, which hangs up to 46px below it above 620px and returns to flow below it, so the margin drops back to the normal section gap at that breakpoint rather than being left as dead space.
 
+## The interactive demo
+
+Since 2026-08-31 an interactive demo sits between the install callout and the hero film - a deliberate amendment to the hard limit above, because a clickable product outranks a film of one.
+
+What it is: `site/demo/` is the **committed build output** of the real frontend compiled against an in-page simulated daemon - `frontend/vite.demo.config.ts` plus `frontend/src/demo/` (fixtures, a localStorage-persisted store, fake `fetch`/`WebSocket`, canned terminals whose replies are pre-written jokes).
+Nothing in it talks to any network; the page copy says so out loud, which is why the no-caption rule above does not apply to it - "these are simulated sessions" is a claim about what the visitor is touching, not meta-commentary.
+`site/preview/*/` are the static pages its preview panes load in iframes, reachable at the absolute `/preview/<id>/` path the app hardcodes.
+
+The rules it lives under:
+
+- **Rebuild with `npm run build:demo`** (in `frontend/`) after any frontend change you want the demo to carry, and commit `site/demo/`.
+  It is the same committed-build-output posture as the generated pages: `pages.yml` uploads it verbatim and never builds it.
+- **It is an application, not a marketing page.** `check.mjs` and `contrast.py` both skip `demo/` and `preview/`; its gates are the frontend's own (`tsc`, the unit suite).
+- **Fixtures are invented.** Same rule as the screenshots (section 8): no name, path, or number in `frontend/src/demo/fixtures.ts` may come from a real install.
+- The landing page's frame loader promotes `data-src` to `src` only near the viewport and only for visible frames, so visitors who never reach it download none of its ~700 KB gz.
+  The desktop/phone/both toggle is three views of the same build; "both" shows the two frames sharing one simulated fleet over a BroadcastChannel, and "reset demo" clears the demo's localStorage namespaces and reloads the frames.
+- Everything in the visitor-facing demo copy obeys section 5, including the no-em-dash rule - the style block is inherited by every generated page, so an em dash in a demo CSS comment fails `build.py`.
+
 ## Rejected, so they are not re-proposed
 
 Sub-headlines:

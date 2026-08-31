@@ -3,8 +3,8 @@
  * and a joke responder that streams a reply when the visitor presses Enter.
  *
  * Nothing here talks to a real CLI. The transcripts *approximate* what Claude
- * Code / Codex / a shell look like inside swe-mux — enough to demonstrate the
- * chrome around them (status, tabs, panes, drawer) — and every reply is a
+ * Code / Codex / a shell look like inside swe-mux - enough to demonstrate the
+ * chrome around them (status, tabs, panes, drawer) - and every reply is a
  * pre-written gag, which the site copy says out loud.
  */
 
@@ -41,7 +41,7 @@ export function promptFor(kind: DemoBackendKind): string {
 export function claudeScrollback(): string {
   return (
     line(`${ORANGE}╭──────────────────────────────────────────────────╮${RESET}`) +
-    line(`${ORANGE}│${RESET} ${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo — nothing here is real)${RESET}     ${ORANGE}│${RESET}`) +
+    line(`${ORANGE}│${RESET} ${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo - nothing here is real)${RESET}     ${ORANGE}│${RESET}`) +
     line(`${ORANGE}╰──────────────────────────────────────────────────╯`) + RESET +
     line(`${DIM}  cwd: /code/rocket-shop${RESET}`) +
     line() +
@@ -62,7 +62,7 @@ export function claudeScrollback(): string {
     line(`${GREEN}●${RESET} ${BOLD}Bash${RESET}${DIM}(npm test)${RESET}`) +
     line(`  ${DIM}⎿ 12 passed, 0 flaked (30 runs)${RESET}`) +
     line() +
-    line(`${GREEN}●${RESET} Done — the test now awaits the confirmation screen instead of`) +
+    line(`${GREEN}●${RESET} Done - the test now awaits the confirmation screen instead of`) +
     line(`  betting on the fetch losing a footrace. Anything else?`) +
     line() +
     CLAUDE_PROMPT
@@ -71,7 +71,7 @@ export function claudeScrollback(): string {
 
 export function codexScrollback(): string {
   return (
-    line(`${CYAN}${BOLD}◆ Codex${RESET} ${DIM}v0.0.0-demo — simulated session${RESET}`) +
+    line(`${CYAN}${BOLD}◆ Codex${RESET} ${DIM}v0.0.0-demo - simulated session${RESET}`) +
     line(`${DIM}  model: gpt-demo · cwd: /code/rocket-shop${RESET}`) +
     line() +
     line(`${CODEX_PROMPT}profile the /api/cart endpoint, it feels slow`) +
@@ -94,7 +94,7 @@ export function codexScrollback(): string {
 
 export function shellScrollback(): string {
   return (
-    line(`${DIM}demo shell — commands are canned, nothing executes${RESET}`) +
+    line(`${DIM}demo shell - commands are canned, nothing executes${RESET}`) +
     line() +
     line(`${SHELL_PROMPT}git status`) +
     line(`On branch ${GREEN}feature/faster-cart${RESET}`) +
@@ -119,17 +119,17 @@ export function spawnScrollback(backend: string): string {
   const kind = demoBackendKind(backend)
   if (kind === 'claude') {
     return (
-      line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) — ask me anything, I only tell jokes${RESET}`) +
+      line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - ask me anything, I only tell jokes${RESET}`) +
       line() + CLAUDE_PROMPT
     )
   }
   if (kind === 'codex') {
     return (
-      line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) — simulated, replies are pre-written${RESET}`) +
+      line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - simulated, replies are pre-written${RESET}`) +
       line() + CODEX_PROMPT
     )
   }
-  return line(`${DIM}demo shell — try 'git status', 'ls', 'npm test', 'whoami'${RESET}`) + line() + SHELL_PROMPT
+  return line(`${DIM}demo shell - try 'git status', 'ls', 'npm test', 'whoami'${RESET}`) + line() + SHELL_PROMPT
 }
 
 // ---------------------------------------------------------------- responders

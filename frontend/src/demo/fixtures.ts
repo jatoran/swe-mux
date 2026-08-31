@@ -18,7 +18,7 @@ const now = Math.floor(Date.now() / 1000)
 export const DEMO_PROJECT_ID = 'p-rocket'
 export const DEMO_PROJECT2_ID = 'p-garden'
 export const DEMO_PREVIEW_ID = 'demo-preview'
-/** Static pages committed under site/preview/<id>/ — the iframe target of a
+/** Static pages committed under site/preview/<id>/ - the iframe target of a
  *  preview pane is the absolute path `/preview/<id>/`, so every preview the
  *  demo can ever mint must map to one of these. */
 export const PREVIEW_PAGE_IDS = [DEMO_PREVIEW_ID, 'demo-preview-2'] as const
