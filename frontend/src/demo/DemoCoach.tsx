@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { placeTutorialCard } from '../tutorial.ts'
+import { requestCoachLead } from './mirror.ts'
 
 const STORAGE_KEY = 'swemux-demo-coach-v1'
 const DONE = 'done'
@@ -260,9 +261,16 @@ export function DemoCoach() {
     try { localStorage.setItem(STORAGE_KEY, DONE) } catch { /* private mode */ }
   }
 
+  // One tour across every frame. With the desktop and phone shown together they are two
+  // copies of one app, and two cards flashing two different controls is noise; the
+  // mirror means the winner's steps visibly drive the other frame anyway.
+  const startIfLeading = (): void => {
+    void requestCoachLead(mobile).then(lead => { if (lead) setLive(true) })
+  }
+
   useEffect(() => {
     if (stored() === DONE) return
-    const timer = window.setTimeout(() => setLive(true), START_DELAY_MS)
+    const timer = window.setTimeout(startIfLeading, START_DELAY_MS)
     return () => window.clearTimeout(timer)
   }, [])
 
@@ -270,7 +278,7 @@ export function DemoCoach() {
   // finished the walk (or a returning one) can ask for it again without clearing
   // storage - which would also throw away the fleet they have been playing with.
   useEffect(() => {
-    const replay = () => { setIndex(0); setLive(true) }
+    const replay = () => { setIndex(0); startIfLeading() }
     window.addEventListener('swemux-demo:coach', replay)
     return () => window.removeEventListener('swemux-demo:coach', replay)
   }, [])

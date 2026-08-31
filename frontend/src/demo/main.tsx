@@ -10,12 +10,17 @@
 import { Component, render, type ComponentChildren } from 'preact'
 import { installFakeFetch } from './fakeApi.ts'
 import { installFakeWebSocket } from './fakeSocket.ts'
+import { installViewMirror } from './mirror.ts'
 import { DemoCoach } from './DemoCoach.tsx'
 import '../style.css'
 import './demoCoach.css'
 
 installFakeFetch()
 installFakeWebSocket()
+// The fleet already mirrors across frames through the demo store; this mirrors what the
+// store cannot see - which modal is open, which panel and tab, which session is focused
+// - so the desktop and phone shown side by side behave as one app rather than two.
+installViewMirror()
 
 /**
  * Device-local presentation defaults for the embed.
