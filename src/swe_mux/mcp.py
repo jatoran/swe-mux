@@ -1722,7 +1722,10 @@ TOOLS: list[dict[str, Any]] = [
             "resolved for you. By default this is not granted, and the call writes "
             "an inert request a human approves. A live linked-worktree cwd is used "
             "automatically. If this session started on trunk and created a worktree "
-            "later, call use_worktree first; request_land itself remains targetless."
+            "later, call use_worktree first; request_land itself remains targetless. "
+            "A land is otherwise silent when it works - it announces itself by the "
+            "trunk moving, which you will not see while you wait - so pass "
+            "report_success when you have work that starts once it lands."
         ),
         "inputSchema": {
             "type": "object",
@@ -1730,6 +1733,17 @@ TOOLS: list[dict[str, Any]] = [
                 "reason": {
                     "type": "string",
                     "description": "Why the branch is ready (recorded, shown to a human)",
+                },
+                "report_success": {
+                    "type": "boolean",
+                    "description": (
+                        "Be told when this lands, not only when it does not. Off by "
+                        "default: a queue whose promise is that many branches land "
+                        "while a human touches only the one that conflicted must not "
+                        "interrupt every requester to say so. Ask for it when "
+                        "something of yours is waiting on the land - otherwise let it "
+                        "land quietly."
+                    ),
                 },
             },
             "additionalProperties": False,
@@ -5383,6 +5397,9 @@ class McpService:
                 origin_session_id=str(record.id),
                 origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
                 reason=str(args.get("reason") or ""),
+                # Only `request_land` offers it; a verify-only pass already reports,
+                # and its schema refuses the key rather than accepting a no-op.
+                report_success=bool(args.get("report_success")),
             )
         except LandRefusal as refusal:
             # The service's refusals are the ordinary answers here — the branch is

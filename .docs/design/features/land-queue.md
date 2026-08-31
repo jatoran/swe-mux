@@ -440,6 +440,22 @@ A refusal ended the request without running anything and told nobody, so an agen
 Observed twice in one evening, 2026-08-21.
 It is the same authority under the same five bounds below, for the same reason: it is the bounded, deterministic, daemon-authored answer to a request that session made.
 
+**And a land that *worked* rides it only when its author asked** (`report_success`, 2026-08-31).
+Every failure answered its author and the one success did not, on the argument quoted above: a land announces itself by the trunk moving.
+That is true for a human at the Git drawer and false for the session that asked, which is by definition not watching - it is waiting - and has no pull either, since there is no MCP read of a request's state to poll.
+It is the same argument the refusal was fixed under, one outcome over, and the same tell was already in the row: `landed` is in `ANSWERING_STATES`, so the reply window a request holds open *for an answer* closed on success without one ever being sent.
+
+It is **opt-in rather than always-on**, and that is the design rather than caution.
+The queue's promise is that N branches land while the operator touches only the one that genuinely conflicted; a fleet landing six would otherwise deliver six prompts into six agents that have moved on, and a delivered prompt into a live agent is not free.
+Only the requester knows whether it has work gated on the land, which is exactly the shape of every other bound here: the request is the consent.
+So it grants nothing new - the reply rides `_solicited_reply` under all five bounds below and spends the same single armed reply, which a land that succeeded has no other use for.
+
+The body says that the branch landed, names the trunk it landed on and the two OIDs it moved between, and names the gate the same way a verify-only pass does - "it landed" and "it landed without the gate being run" are different statements and the second is the one worth reading.
+The flag is inert for `verify`, whose pass already reports, so `request_verify` does not offer it and its schema refuses the key rather than accepting a no-op.
+
+Three places carry it because a request outlives its call: it is a column on the row (the answer is written minutes later, by the pipeline, possibly across a daemon restart), it travels with a **drafted** request so approving enqueues the request the session actually made rather than a similar one, and it is **inherited by a resume**, because a session that asked to be told and was told only that its land was refused is owed the answer once the block is cleared.
+An operator's Land does not offer it and could not use it: there is no origin session to answer, which is the same reason an operator's handback is a draft and an operator's verify writes no message at all.
+
 The template's job is to keep the reader from re-reading their own branch.
 A refusal is a statement about the *setup*, and an agent told only "your land was refused" goes looking for the defect in its own diff, which is the one place it is not.
 So the message names the cause, and for the two causes that are nobody's code - `unapproved`, `not_configured` - it says outright that this is not a problem with the branch, that nothing was run against it, that approving is a human act against the exact bytes in the Git tab's landing strip, and that the agent cannot approve it itself.
@@ -541,6 +557,7 @@ Every step re-checks the repository from scratch, so re-running one is safe and 
 A handback additionally records whether its message was **armed**, and when it was not, why not - a draft nobody delivered is otherwise indistinguishable in the trail from an answer that arrived, which is the defect the arming rule exists to fix.
 `classify` is written on both of its outcomes and `verify` is written even when it was skipped - as `skipped` for a documentation-only change set, and as `reused` *with its key* (the tree, the digest, and the request whose run produced the verdict) when a standing verdict was accepted - so "which gate ran" is answerable from the trail alone for every request that reached the gate, and a reused verdict is checkable rather than merely asserted.
 A verify-only request's result additionally records a `verify`/`reported` row carrying whether its answer reached its author armed, for the same reason a handback does.
+A `land`/`landed` row does the same **when the request asked to be reported**, and carries nothing of the sort when it did not - so a land that was deliberately silent cannot be mistaken from the trail for one whose message went missing, and the opening `request` row records the `report_success` the pipeline is answerable to rather than a default that may have changed since.
 A step is additionally mirrored into Tier 0 when the request has an originating session, so a land appears beside that run's other facts; an operator-initiated land has no session and simply has no such row.
 
 **A state change and its trail entry are one commit.** `LandStore.transition` and `LandStore.enqueue`
