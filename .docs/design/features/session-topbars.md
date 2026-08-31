@@ -44,6 +44,7 @@ The overflow menu stays at the first row's right edge on every layout.
 ## Settings and navigation
 
 The editor has its own Appearance subpage and a sticky live preview on desktop and mobile.
+The preview fills the current device's available Settings width and has no separate width control.
 The preview renders one hypothetical active session and updates from local editor state before persistence finishes.
 Right-clicking a pane top bar and choosing **Configure appearance** deep-links to this page.
 The same row from sidebar, tab, and mobile session menus continues to target Appearance → Session rows.

@@ -23,6 +23,7 @@ import {
   clampSidebarWidth,
   dragCollapsedAtWidth,
   navigationSidebarCommandState,
+  storedSidebarWidth,
 } from '../src/sidebarResize.ts'
 
 test('navigation sidebar commands target the active responsive presentation',()=>{
@@ -154,6 +155,9 @@ test('desktop sidebar drags collapse reversibly beyond their minimum widths', ()
   assert.equal(clampSidebarWidth(100), SIDEBAR_MIN_WIDTH)
   assert.equal(clampSidebarWidth(900), SIDEBAR_MAX_WIDTH)
   assert.equal(clampSidebarWidth(Number.NaN), SIDEBAR_DEFAULT_WIDTH)
+  assert.equal(storedSidebarWidth('333'), 333)
+  assert.equal(storedSidebarWidth('0'), SIDEBAR_DEFAULT_WIDTH)
+  assert.equal(storedSidebarWidth(null), SIDEBAR_DEFAULT_WIDTH)
 
   assert.equal(dragCollapsedAtWidth(SIDEBAR_COLLAPSE_WIDTH + 1, false, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_REOPEN_WIDTH), false)
   assert.equal(dragCollapsedAtWidth(SIDEBAR_COLLAPSE_WIDTH, false, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_REOPEN_WIDTH), true)

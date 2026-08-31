@@ -192,6 +192,7 @@ The stylesheet is the only consumer of the *property* but not the only consumer 
 `sessionTopbarPrefs.ts` pins the shared layout to the canonical desktop profile and republishes settings changes.
 `SessionTopbar.tsx` combines the shared session-row metric engine with target-aware actions supplied by `App.tsx`.
 `SessionTopbarSettings.tsx` owns the dedicated Appearance page and sticky realtime preview.
+The session-row and top-bar previews derive width from the current device instead of maintaining inspection-only slider state.
 The fixed overflow menu is outside the model by design.
 CSS gives `.terminal-pane` an intrinsic header track followed by the flexible terminal surface, so persistent row count is the only top-bar edit that changes terminal height.
 

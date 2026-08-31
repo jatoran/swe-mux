@@ -86,8 +86,8 @@ import {
 import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS, resolveDrawerSegment } from './drawerSegments'
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
-  SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
-  dragCollapsedAtWidth, navigationSidebarCommandState,
+  SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, SIDEBAR_WIDTH_KEY,
+  clampSidebarWidth, dragCollapsedAtWidth, navigationSidebarCommandState, storedSidebarWidth,
 } from './sidebarResize'
 import { normalizeDrawerTabOrder } from './drawerTabOrder'
 import {
@@ -679,10 +679,7 @@ export function App() {
   // Raw setters; every caller uses the mobile-exclusive wrappers defined below.
   const [sidebarOpen, setSidebarOpenState] = useState(false)
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>localStorage.getItem('mux.sidebar.collapsed.v1')==='true')
-  const [sidebarWidth,setSidebarWidth]=useState(()=>{
-    const stored=Number(localStorage.getItem('mux.sidebar.width.v1'))
-    return Number.isFinite(stored)&&stored>=SIDEBAR_MIN_WIDTH&&stored<=SIDEBAR_MAX_WIDTH?stored:SIDEBAR_DEFAULT_WIDTH
-  })
+  const [sidebarWidth,setSidebarWidth]=useState(()=>storedSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY)))
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const renameInput = useRef<HTMLInputElement>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -1768,7 +1765,7 @@ export function App() {
   }
   const persistSidebarWidth=(value:number)=>{
     const next=clampSidebarWidth(value)
-    setSidebarWidth(next);localStorage.setItem('mux.sidebar.width.v1',String(Math.round(next)))
+    setSidebarWidth(next);localStorage.setItem(SIDEBAR_WIDTH_KEY,String(Math.round(next)))
   }
 
   const beginSidebarResize=(event:JSX.TargetedPointerEvent<HTMLDivElement>)=>{
