@@ -275,9 +275,12 @@ async def test_manifest_change_revokes_enablement(tmp_path: Path) -> None:
     )
     listing = await manager.list()
     changed = listing["plugins"][0]
+    assert changed["name"] == "Changed utility"
     assert changed["enabled"] is False
     assert changed["lifecycle"] == "changed"
     assert changed["approval_current"] is False
+    approved = await manager.approve("tests.utility")
+    assert approved["name"] == "Changed utility"
     await manager.stop()
 
 

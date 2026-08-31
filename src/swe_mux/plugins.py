@@ -205,6 +205,10 @@ class PluginManager:
                 record["id"], enabled=False, lifecycle="changed", diagnostic=diagnostic
             )
             raise PluginError("manifest_changed", diagnostic)
+        if manifest.name != record["name"] or manifest.version != record["version"]:
+            await self.store.set_state(
+                record["id"], name=manifest.name, version=manifest.version
+            )
         content_digest = await asyncio.to_thread(plugin_content_digest, manifest.path.parent)
         approval_digest = self._approval_digest(manifest, content_digest)
         if approval_digest != record["approved_digest"] and record["enabled"]:
@@ -222,7 +226,11 @@ class PluginManager:
                 content_digest = await asyncio.to_thread(
                     plugin_content_digest, manifest.path.parent
                 )
-                changes: dict[str, Any] = {"diagnostic": ""}
+                changes: dict[str, Any] = {
+                    "name": manifest.name,
+                    "version": manifest.version,
+                    "diagnostic": "",
+                }
                 if (
                     manifest.digest != record["manifest_digest"]
                     or content_digest != record["content_digest"]
@@ -466,6 +474,8 @@ class PluginManager:
             raise PluginError("incompatible", diagnostic)
         updated = await self.store.set_state(
             plugin_id,
+            name=manifest.name,
+            version=manifest.version,
             approved_digest=self._approval_digest(manifest, content_digest),
             security_digest=manifest.security_digest,
             manifest_digest=manifest.digest,
