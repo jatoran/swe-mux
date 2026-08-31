@@ -4,9 +4,8 @@
  * `store.ts` already mirrors the *fleet* - sessions, layouts, notes, config, terminal
  * bytes - because all of that is the fake daemon's state and both frames read the same
  * copy. What it cannot mirror is everything the app keeps in its own head: which modal
- * is open, whether the navigation sidebar is out, which side-panel tab is selected,
- * which session is focused. Those are per-frame, so the "both" view used to be two
- * independent apps sharing a database.
+ * is open, which side-panel tab is selected, which session is focused. Those are
+ * per-frame, so the "both" view used to be two independent apps sharing a database.
  *
  * The mechanism is deliberately a **state** mirror rather than an event mirror. Each
  * frame reads its own view state out of the DOM it already renders, broadcasts it, and
@@ -20,9 +19,13 @@
  *  - It degrades to nothing. A surface this module does not know how to open simply is
  *    not mirrored; it never closes something it cannot reopen.
  *
- * Pane geometry is out of scope on purpose, and needs nothing: the pane tree lives in
- * the Project record, so a split made on the desktop is already in the phone's copy -
- * it just draws it as a tab rail, which is what the phone layout is *for*.
+ * Two things are out of scope on purpose, both for the same reason: the two layouts do
+ * not draw them as the same surface, so one field cannot name one thing.
+ *
+ *  - Pane geometry, which needs nothing: the pane tree lives in the Project record, so a
+ *    split made on the desktop is already in the phone's copy - it just draws it as a tab
+ *    rail, which is what the phone layout is *for*.
+ *  - The navigation sidebar, which needs an explicit gate; see `sidebarMirrors`.
  */
 import { trueRandom } from './determinism.ts'
 import {
@@ -57,15 +60,12 @@ type ViewState = {
   /** `aria-label` of the topmost open modal, or '' when none is. */
   overlay: string
   menuOpen: boolean
-  /**
-   * Whether the navigation sidebar is on screen, or `null` for "this frame cannot say".
-   *
-   * A phone showing the side panel has its sidebar shut *because* the panel is open,
-   * not because anyone chose that. Reporting the forced value made the constraint
-   * travel: the desktop, told the sidebar was closed, collapsed its own - so opening a
-   * panel on the wide frame quietly cost it the fleet column.
-   */
-  sidebarOpen: boolean | null
+  /** The publishing frame's layout, so a receiver can tell which of its fields describe
+   *  the same surface it draws. Only the sidebar reads it; see `sidebarMirrors`. */
+  narrow: boolean
+  /** Whether the navigation sidebar is on screen, by whichever presentation this
+   *  frame's layout gives it. Only meaningful to a frame of the same layout. */
+  sidebarOpen: boolean
   /** Selected side-panel tab, or '' when the panel is shut. */
   drawerTab: string
   drawerSegment: string
@@ -112,27 +112,31 @@ const isModal = (element: Element): boolean =>
   visible(element) && !element.classList.contains('utility-drawer')
 
 /**
- * The sidebar is the one surface whose *resting* state differs by layout: a desktop
- * draws it as a column that is open by default, a phone as an overlay that is shut by
- * default. Mirrored naively, the two frames disagree the moment they boot, and whoever
- * publishes last wins - which on the first load meant the phone silently collapsing the
- * desktop's fleet column before the visitor had touched anything.
+ * The sidebar does not mirror between layouts, because across them it is not one surface.
  *
- * So a frame stays quiet about its sidebar until the value has actually moved. After
- * that it has an opinion, and every later toggle mirrors.
+ * A desktop draws it as a column in the flow: opening it costs nothing else on screen, and
+ * it stays out until the visitor puts it away, so its state is a standing layout choice. A
+ * phone draws it as a modal overlay over the whole workspace, which is the only way to see
+ * the fleet there and which the app closes again the instant it has been used - selecting a
+ * session, a Project or a preview all shut it, as does opening the side panel.
+ *
+ * So the two frames read the same field and mean opposite things by it, and mirroring it
+ * turned each layout's constraint into the other's instruction. Both directions were wrong
+ * and both were reachable in the "both" view:
+ *
+ *  - The phone's overlay closing - usually because the visitor *navigated*, not because
+ *    they chose to hide anything - told the desktop to collapse its fleet column.
+ *  - The desktop opening its column threw a full-screen overlay over the phone's terminal,
+ *    which the phone visitor then had to dismiss.
+ *
+ * A "publish only once it has moved from its resting value" rule used to sit here. It
+ * suppressed the disagreement at boot and nothing after it, so both failures above survived
+ * it. The honest reading is that this is layout-local state, in the same way pane geometry
+ * is: mirrored between frames that draw it the same way, left alone otherwise. Two phones
+ * or two desktops still follow each other exactly as before.
  */
-let sidebarBaseline: boolean | null = null
-let sidebarIntent = false
-
-function sidebarReading(raw: boolean, panelForcesItShut: boolean): boolean | null {
-  if (sidebarBaseline === null) sidebarBaseline = raw
-  if (raw !== sidebarBaseline) sidebarIntent = true
-  // A phone showing the side panel has its sidebar shut *because* the panel is open,
-  // not because anyone chose that. Reporting the forced value made the constraint
-  // travel: the desktop, told the sidebar was closed, collapsed its own.
-  if (panelForcesItShut) return null
-  return sidebarIntent ? raw : null
-}
+const sidebarMirrors = (senderNarrow: boolean, receiverNarrow: boolean): boolean =>
+  senderNarrow === receiverNarrow
 
 function readView(): ViewState {
   const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"][aria-label]')]
@@ -157,16 +161,14 @@ function readView(): ViewState {
   return {
     overlay: dialogs.length ? dialogs[dialogs.length - 1].getAttribute('aria-label') || '' : '',
     menuOpen: Boolean(document.querySelector('[data-tutorial="main-menu"]')),
-    // One reading for two layouts: the phone slides the sidebar in over the workspace,
-    // the desktop collapses it to a rail. "Is the fleet on screen" is the same question,
-    // asked through `sidebarReading` because the two layouts disagree about the answer
-    // at rest.
-    sidebarOpen: sidebarReading(
-      narrow()
-        ? Boolean(document.querySelector('.sidebar.open'))
-        : Boolean(workspace) && !workspace!.classList.contains('sidebar-collapsed'),
-      Boolean(narrow() && drawerTab),
-    ),
+    narrow: narrow(),
+    // Two readings for two presentations of one control: the phone slides the sidebar in
+    // over the workspace, the desktop collapses it to a rail. Published together with
+    // `narrow` rather than reconciled here, because only a frame drawing the same
+    // presentation can act on the answer - see `sidebarMirrors`.
+    sidebarOpen: narrow()
+      ? Boolean(document.querySelector('.sidebar.open'))
+      : workspace !== null && !workspace.classList.contains('sidebar-collapsed'),
     drawerTab,
     drawerSegment: segment ? segment.slice('drawer-segment-'.length) : '',
     // The app rewrites `?project=&session=` on every focus change, which makes the URL
@@ -216,14 +218,15 @@ function applyOneDifference(mine: ViewState, want: ViewState, tried: Set<string>
   }
   if (mine.menuOpen !== want.menuOpen && once('menu', () => { run('menu.toggle'); return true })) return true
 
-  // A phone cannot hold both panels, so a desktop frame showing both has to be
-  // reduced. The side panel wins: it is the surface the visitor selected a tab in,
-  // whereas the sidebar is navigation they have already finished using.
-  const wantSidebar = want.sidebarOpen !== null && want.sidebarOpen && !(narrow() && want.drawerTab)
-  if (want.sidebarOpen !== null && mine.sidebarOpen !== wantSidebar && once('sidebar', () => {
-    run(wantSidebar ? 'sidebar.open' : 'sidebar.close')
-    return true
-  })) return true
+  // Only between frames of the same layout: across them the field names two different
+  // surfaces, and converging on it made each layout's constraint the other's instruction.
+  // A same-layout sender has already applied its own "the side panel closed the sidebar"
+  // rule to the value, so nothing needs re-deriving here.
+  if (sidebarMirrors(want.narrow, narrow()) && mine.sidebarOpen !== want.sidebarOpen
+    && once('sidebar', () => {
+      run(want.sidebarOpen ? 'sidebar.open' : 'sidebar.close')
+      return true
+    })) return true
 
   if (!want.drawerTab && mine.drawerTab && once('drawer', () => { run('drawer.close'); return true })) return true
   if (want.drawerTab && mine.drawerTab !== want.drawerTab && once('drawer', () => {

@@ -343,14 +343,23 @@ Its copy is plain strings rather than JSX, and that is not cosmetic: the first c
 
 It is a **state** mirror, not an event mirror, and the distinction is the whole design. Each frame reads its own view state out of the DOM it already renders, broadcasts it, and a frame receiving someone else's drives itself toward it through the app's own command bus (`mux:command`) and its own controls. Converging on a state is idempotent, where replaying a click could spawn two sessions out of one press; it is indifferent to how the act happened, so a modal opened by a menu row, a chord, the palette or a voice phrase all read alike; and it degrades to nothing, because a surface with no command in `OVERLAY_COMMANDS` is simply not mirrored rather than closed and never reopened.
 
-Pane geometry is deliberately excluded and needs nothing: the pane tree lives in the Project record, so a split made on the desktop is already in the phone's copy, which draws it as a tab rail because that is what the phone layout is for.
+Two things are deliberately excluded, on the same principle: they are **layout-local**, meaning the two frames draw them differently enough that the same field does not name the same surface.
 
-Four rules paid for by failures, all of them worth keeping:
+Pane geometry needs nothing to exclude it: the pane tree lives in the Project record, so a split made on the desktop is already in the phone's copy, which draws it as a tab rail because that is what the phone layout is for.
+
+The **navigation sidebar** does, and it took two tries to see why.
+On a desktop it is a column in the flow: opening it costs nothing else on screen and it stays out until the visitor puts it away, so its state is a standing layout choice.
+On a phone it is a modal overlay over the whole workspace, it is the only way to see the fleet there, and the app closes it again the instant it has been used - selecting a session, a Project or a preview all shut it, as does opening the side panel.
+Mirrored across the two, each layout's constraint became the other's instruction, and both directions were reachable in the "both" view: the phone's overlay closing (usually because the visitor *navigated*, not because they chose to hide anything) collapsed the desktop's fleet column, and the desktop opening its column threw a full-screen overlay over the phone's terminal.
+The first fix was a "publish only once it has moved from its resting value" rule, which suppressed the disagreement at boot and nothing after it - so both failures above survived it, and it read as the two frames fighting over one control.
+What the field carries now is the publishing frame's layout alongside its value, and only a frame of the same layout acts on it (`sidebarMirrors`). Two phones, or two desktops, still follow each other exactly as before.
+`test/renderer/demo-mirror.spec.ts` is where that lives, because it only exists with two live copies of the app in one browsing context: both cross-layout directions, the same-layout case that tells "gated" apart from "deleted", and a modal plus a drawer tab still crossing layouts so the carve-out stays a carve-out.
+
+Three rules paid for by failures, all of them worth keeping:
 
 - **One attempt per field per received state.** A frame can be told to reach something it cannot - a Project row inside a collapsed group, a control the other layout does not draw. Retrying inside the convergence pass made the two frames take turns undoing each other.
 - **The phone's side panel is a `role="dialog"`, and is not a modal.** Counting it as one made the frames permanently disagree about "which modal is open": the phone naming a drawer the desktop docks.
-- **The sidebar's resting state differs by layout** (a desktop column that starts open, a phone overlay that starts shut), so a frame says nothing about it until its own value has moved. Without that, the first load had the phone silently collapsing the desktop's fleet column.
-- **A forced value is not an opinion.** A phone showing the side panel has its sidebar shut because it must; reporting that made the constraint travel back to the desktop.
+- **A surface whose *presentation* differs by layout is not one surface.** That is the sidebar rule above, stated generally: check it before mirroring the next field, because the failure does not look like a mirroring bug - it looks like the app changing its mind.
 
 The director elects a single leader over the same channel (widest frame wins, random tiebreak), because two scripts driving two different controls is noise - and the mirror means the winner's steps visibly drive the other frame, which demonstrates more than a second copy would.
 The reusable half of the convergence pass - dispatch a named command, press a real control, read what is on screen - is `drive.ts`, factored out so the director reaches the app exactly the way the mirror does rather than growing a second, subtly different copy.
