@@ -151,7 +151,7 @@ CONFIGURATOR_READ_TOOL_NAMES = (
 #: committed `.swe-mux/config.toml` through `write_project_config`, which is
 #: revision-guarded and validates against a closed field set that *refuses* the
 #: daemon-authority keys outright. `edit_device_settings` is the odd one and its
-#: shape reflects that: five of the seven device-settings domains are stored
+#: shape reflects that: seven of the nine device-settings domains are stored
 #: opaquely because the browser owns their schema, so it takes path-scoped
 #: operations rather than a document - everything an operation did not name is
 #: untouched by construction, which is the only safety available when nothing in

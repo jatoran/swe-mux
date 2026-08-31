@@ -59,7 +59,7 @@ const subpages = (...labels:string[]):SettingsSubpage[] => labels.map(label=>({i
 export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
   accounts:subpages('Provider accounts','Model provider','Models'),
   queue:subpages('Overview','Auto-delivery','Approvals','Agent messaging','Agent actuation','Queue history'),
-  appearance:subpages('Interface','Session rows'),
+  appearance:subpages('Interface','Session rows','Session top bars'),
   input:subpages('Pointer','Mobile terminal','Clipboard history','Touch gestures','Keyboard shortcuts'),
   voice:subpages('Read aloud','Talk & dictation','Voice commands','Mux assistant','Diagnostics'),
 }
@@ -68,6 +68,7 @@ const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
   appearance:{
     'Theme':'interface','Right sidebar':'interface','Interface scale':'interface','Action rail':'interface',
     'Session rows':'session-rows',
+    'Session top bars':'session-top-bars',
   },
   // The OpenRouter block (the API key, and the catalogue it fetches) is a second
   // section on the Model provider page, rendered only while that provider is

@@ -19,6 +19,7 @@ test('every settings target names a control that exists in the panel it points a
   const settingsSources = [
     source('Settings.tsx'),
     source('SessionRowSettings.tsx'),
+    source('SessionTopbarSettings.tsx'),
     source('NotificationPushSettings.tsx'),
     source('ModelRoutingSummary.tsx'),
   ].join('\n')

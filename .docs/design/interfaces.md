@@ -2160,7 +2160,7 @@ The MCP tools that marker unlocks are listed only to such a session (`features/c
 
 - `configurator_apply_settings` runs the same `update_config` path as `PATCH /api/config`, reporting `hot_applied` and `restart_required` separately.
 - `configurator_apply_project_settings` runs the same revision-guarded `write_project_config` path as the whole-document half of `PUT /api/project/config`, merging over the existing file and refusing the forbidden project fields.
-- `configurator_edit_device_settings` writes one per-device settings domain through **path-scoped operations** rather than a document, because five of the seven domains are stored opaquely and nothing in the daemon can validate one. It is guarded by a content digest the caller must have read, backs the previous file up, and emits `settings_changed` so every attached browser repaints.
+- `configurator_edit_device_settings` writes one per-device settings domain through **path-scoped operations** rather than a document, because seven of the nine domains are stored opaquely and nothing in the daemon can validate one. It is guarded by a content digest the caller must have read, backs the previous file up, and emits `settings_changed` so every attached browser repaints.
 
 All three refuse as typed results that change nothing, rather than as protocol errors: the agent has to be able to tell "bad value" from "server broke".
 

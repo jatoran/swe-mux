@@ -30,7 +30,7 @@ test('tab context-menu openers target without activating',()=>{
   assert.doesNotMatch(menu,/runNamedCommand\('pane\.stackNew'\)|spawnTerminal\(/, 'no session menu spawns a terminal: new work is the Run button, and a menu opened on some other session makes the landing pane a guess')
 })
 
-test('session menus act on the session and expose only the row-appearance settings shortcut',()=>{
+test('session menus act on the session and expose only the source-appropriate appearance shortcut',()=>{
   const menu=section('{contextMenu && <div', '{projectMenu && <div')
   // Copy working directory is the one pane-only row left, and it stays gated: sidebar,
   // desktop-tab and mobile-tab menus are opened to rename or kill.
@@ -42,10 +42,8 @@ test('session menus act on the session and expose only the row-appearance settin
   // session row, so it is the only place where the consequence is already under the pointer.
   assert.doesNotMatch(menu,/setPromptLibraryOpen/, 'the session menu must not open the prompt library')
   assert.doesNotMatch(menu,/processes\.open/, 'the session menu must not open the Resources dialog')
-  assert.deepEqual(
-    [...menu.matchAll(/openSettingTarget\('([^']+)'\)/g)].map(match=>match[1]),
-    ['appearance.sessionRows'],
-  )
+  assert.match(menu,/openSettingTarget\(contextMenu\.source==='pane'\?'appearance\.sessionTopbar':'appearance\.sessionRows'\)/)
+  assert.equal(menu.split('openSettingTarget(').length-1,1)
   assert.match(menu,/>Configure appearance<\/span>/)
   // Clicking the row already opens the session; a row saying so was a second way to click.
   assert.doesNotMatch(menu,/runNamedCommand\('session\.open'\)/)

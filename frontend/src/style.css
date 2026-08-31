@@ -40,21 +40,8 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
 .main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
-/* A shell header is [name] [cwd] [tools]; an agent header omits cwd, and a touch header hides it
-   for every backend. `grid-auto-flow:column` keeps every variant on one row. Without it an item
-   beyond the declared column count auto-places into a second row, which is how a variable-length
-   control set would silently wrap the pane tools under the name.
-   The name track is `fit-content(35%)`, NOT `auto`: it sizes to the name while one fits, but a
-   long generated title is clamped at just over a third of the bar. An `auto` track takes its
-   max-content size before the flexible track is expanded, so a wordy title would have eaten the
-   cwd and squeezed the tools down to their 50px floor — the controls are what the header
-   is for, and a name is still readable truncated (the whole of it is in the title attribute).
-   Three tracks are declared for every variant deliberately, rather than one template per
-   variant. The path is the item that comes and goes, so a two-item header puts the tools in the
-   flexible track and leaves the trailing `auto` track empty — and an `auto` track holding
-   nothing is zero wide, so it costs no gap at the right edge. That is what lets the same
-   template serve [name][cwd][tools] and [name][tools] without counting children, which is a
-   count that already depends on pointer type as well as on backend. */
+/* Baseline for the fixed pending-session header. Live sessions use `.session-topbar` near
+   the end of this file, where persistent configured rows replace this one-row template. */
 .pane-bar { grid-auto-flow:column;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }
 /* Right-aligned from inside, so the group sits at the bar's right edge whether it landed in the
    trailing `auto` track (where this is a no-op) or in the flexible one. */
@@ -797,16 +784,11 @@ body {
 .pane-grid {
   background:var(--line);
 }
-/* Header, then the terminal surface, and nothing else — the pane carries no voice
-   surface at all now, and anything added here later must float from a zero-height anchor
-   rather than take a track: a pane whose row count changes with a toggle resizes the PTY
-   under a live agent, and the agent's TUI does not reflow back when it closes.
-   This declaration wins over the one in the base layer, so the two must list the SAME
-   number of tracks: the surface is placed by row index, and a template short one track
-   leaves it in an `auto` implicit row while the real `1fr` track stays empty — which
-   reads as a band of dead black space eating the terminal's height. */
+/* Header, then the terminal surface, and nothing else. The header's configured row count
+   is persistent and intrinsic; transient features still float rather than take a track,
+   because state-driven rows would repeatedly resize the PTY under a live agent. */
 .terminal-pane {
-  grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr);
+  grid-template-rows:auto minmax(0,1fr);
 }
 /* A recently-viewed terminal kept mounted behind the active tab (warmPanes.ts), so
    returning to it costs no buffer replay. Keep its box measurable while removing it
@@ -3317,13 +3299,9 @@ body {
      definite remaining height after the in-flow session/voice headers. */
   .mobile-unified-active{height:100%;min-height:0;overflow:hidden}
   .mobile-unified-active>.terminal-pane{display:flex!important;flex-direction:column;height:100%;min-height:0;overflow:hidden}
-  /* The session header is one row on a phone: the session name at the left, appr/queue/
-     transcript/⋯ at the right. The cwd column is dropped here — it is the pane's least useful
-     field on a narrow screen, and as an extra item it was silently wrapping the tools onto a
-     second row. `.pane-bar>div` (0,1,1) also out-specifies the legacy `.pane-path{display:none}`
-     mobile rule (0,1,0), which is why the path showed at all, so hide it from the bar itself.
-     With the path gone the tools take the flexible column and right-align inside it; the name
-     track is capped so it cannot squeeze the group out of the bar. */
+  /* The configured session header keeps the same one-to-three-row layout on a phone.
+     Each row remains a no-wrap left/right pair, and the title keeps a narrower yielding cap
+     so configured shortcuts cannot be pushed off the edge. */
   .pane-bar>.pane-path{display:none}
   .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:fit-content(45%) minmax(0,1fr) auto;padding:5px 6px 1px 10px}
   .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
@@ -3337,11 +3315,8 @@ body {
   /* Font size only — the min/max that bound the auto-grow are in `em`, so they follow it
      without being restated. 16px keeps mobile browsers from zooming the viewport on focus. */
   .dictation-draft{padding:6px 7px;font-size:16px;user-select:text;-webkit-user-select:text;touch-action:auto}
-  /* No touch override for the pane tools. `appr:` is one of them now rather than a voice chip
-     with its own metrics, and the group's job on a phone is to fit unscrolled at 390–412 px
-     (where phones actually are) beside the capped name track — three labelled chips plus the
-     overflow menu is already the width the bar can hold there. Sizing them up would ellipsize
-     `transcript` to buy touch height the bar has no room for. */
+  /* Configured top-bar shortcuts keep compact metrics on a phone rather than adopting the
+     general 44px control floor, because several persistent rows must leave room for xterm. */
   .mobile-unified-active>.terminal-pane>.terminal-surface{flex:1 1 0;height:auto;min-height:0;overflow:hidden}
   .mobile-unified-active .terminal-host{height:auto;min-height:0}
   .terminal-host .xterm{touch-action:none}
@@ -5883,6 +5858,36 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-field-pool button{padding:2px 6px;border:1px dashed var(--line);border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;font-size:9px}
 .row-field-pool button:hover{border-style:solid;color:var(--text)}
 @media(max-width:760px){.session-row-preview-sticky{margin-inline:0;padding:7px}.row-section-grid{grid-template-columns:minmax(0,1fr)}}
+
+/* Configurable session pane top bars. Their row count is persistent layout state, so the
+   terminal gives the bar its intrinsic height and keeps the remaining track for xterm. */
+.terminal-pane{grid-template-rows:auto minmax(0,1fr)}
+.pane-bar.session-topbar{--topbar-row-h:calc(34px*var(--ui-scale));height:auto;min-height:var(--topbar-row-h);display:grid;grid-auto-flow:row;grid-template-columns:minmax(0,1fr);align-content:start;padding:0}
+.pane-bar.session-topbar[data-density=compact]{--topbar-row-h:calc(28px*var(--ui-scale))}
+.pane-bar.session-topbar[data-density=comfortable]{--topbar-row-h:calc(40px*var(--ui-scale))}
+.pane-bar.session-topbar>.session-topbar-row{container-type:inline-size;min-width:0;min-height:var(--topbar-row-h);display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:7px;padding:0 6px 0 10px}
+.pane-bar.session-topbar>.session-topbar-row+.session-topbar-row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.pane-bar.session-topbar>.session-topbar-row:first-child:before{content:none}
+.session-topbar-section{min-width:0;display:flex;align-items:center;gap:0;overflow:hidden;white-space:nowrap}
+.session-topbar-section.right{justify-content:flex-end}.session-topbar-item{min-width:0;display:flex;align-items:center}.session-topbar-separator{flex:none;margin:0 5px;color:var(--muted)}
+.session-topbar-metric{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}.session-topbar-metric .row-title{color:var(--text)}
+.session-topbar .pane-identity{min-width:0;max-width:35cqw;display:flex;align-items:center;gap:5px}.session-topbar .pane-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-topbar-section .pane-tool-label,.session-topbar-menu>button{width:auto;min-width:28px;height:calc(21px*var(--ui-scale));padding:0 4px;border:0;background:transparent;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.session-topbar-section .pane-tool-label:hover:not(:disabled),.session-topbar-menu>button:hover{background:var(--panel2);color:var(--text)}
+.session-topbar-section .pane-tool-label:disabled{opacity:.38;cursor:not-allowed}.session-topbar-section .has-pending{color:var(--accent)}
+.session-topbar .approval-chip-wrap{min-width:0}.session-topbar .approval-chip.approval-on{color:var(--amber)}
+.session-topbar-menu{display:flex;align-items:center}
+@media(max-width:760px){.mobile-unified-active>.terminal-pane>.pane-bar.session-topbar{min-height:0;display:grid;grid-template-columns:minmax(0,1fr);padding:0}.pane-bar.session-topbar>.session-topbar-row{padding-inline:7px 5px}.session-topbar .pane-identity{max-width:45cqw}.session-topbar-section .pane-tool-label{min-width:34px}}
+
+/* Settings → Appearance → Session top bars. */
+.session-topbar-settings h4{margin:0}.session-topbar-settings h5{margin:0 0 4px;color:var(--muted);text-transform:uppercase}
+.session-topbar-preview-sticky{position:sticky;top:0;z-index:3;display:grid;gap:7px;margin:8px 0 12px;padding:8px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 96%,var(--green));box-shadow:0 6px 12px #0008}
+.session-topbar-preview{max-width:100%;border:1px solid var(--line);background:var(--bg);overflow:hidden}.session-topbar-preview .session-topbar{width:100%}
+.topbar-row-editor{margin:10px 0;padding:9px;border:1px solid var(--line);background:var(--bg)}.topbar-row-editor>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}.topbar-row-editor>header>button{min-height:26px;color:var(--red)}
+.topbar-section-editor ul{list-style:none;display:grid;gap:4px;margin:0;padding:0}.topbar-section-editor>p{margin:0;color:var(--muted)}
+.topbar-slot{display:grid;grid-template-columns:minmax(80px,1fr) minmax(90px,auto) minmax(72px,auto) auto;align-items:center;gap:5px;padding:4px;border:1px solid var(--line);background:var(--panel2)}.topbar-slot>em{color:var(--muted);font-style:normal}.topbar-slot-actions{display:flex;gap:2px}.topbar-slot-actions button{width:22px;height:22px;padding:0;border:1px solid var(--line);background:var(--panel);color:var(--muted)}.topbar-slot-actions button.danger{color:var(--red)}
+.topbar-add-items{margin-top:8px;border:1px solid var(--line)}.topbar-add-items>summary{padding:7px;cursor:pointer}.topbar-add-items>div{display:flex;flex-wrap:wrap;gap:4px;padding:7px;border-top:1px solid var(--line)}.topbar-add-items strong{flex-basis:100%;color:var(--muted)}.topbar-add-items button{min-height:26px;padding:0 7px}.topbar-add-row{min-height:31px;padding:0 10px}
+@media(max-width:760px){.session-topbar-preview-sticky{padding:7px}.topbar-slot{grid-template-columns:minmax(0,1fr) minmax(88px,auto) auto;grid-template-areas:"name mode actions" "name row actions"}.topbar-slot>span:first-child{grid-area:name}.topbar-slot>.dropdown-trigger:nth-of-type(1){grid-area:mode}.topbar-slot>.dropdown-trigger:nth-of-type(2){grid-area:row}.topbar-slot-actions{grid-area:actions;flex-wrap:wrap;width:48px}}
 
 /* Ended and recovered sessions keep their tab and their pane, so both need to
    read as inert at a glance. Same 0.62 the sidebar row already used, applied to

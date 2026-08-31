@@ -108,6 +108,10 @@ export const SETTING_TARGETS = {
     surface: 'settings', section: 'Appearance', setting: 'session_rows',
     label: 'Configure session row appearance', where: 'Settings → Appearance → Session rows',
   },
+  'appearance.sessionTopbar': {
+    surface: 'settings', section: 'Appearance', setting: 'session_topbar',
+    label: 'Configure session top bar appearance', where: 'Settings → Appearance → Session top bars',
+  },
   'projects.newProjectParent': {
     surface: 'settings', section: 'Projects', setting: 'new_project_parent',
     label: 'Default parent folder for new projects', where: 'Settings → Projects',

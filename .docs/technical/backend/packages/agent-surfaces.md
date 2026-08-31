@@ -74,7 +74,7 @@ Path-scoped edits to a JSON document whose schema this process does not hold.
 Four operations - `set`, `remove`, `remove_values`, `insert` - over JSON Pointer paths with one addition: `[key=value]` selects the element of an array whose field matches, so a row is named by its own id rather than by a position that a reorder invalidates.
 A batch applies to a private deep copy and is all-or-nothing, because half-edited is the worst outcome available on a document nothing downstream can validate.
 
-The reason it exists rather than a whole-document write: five of the seven device-settings domains are opaque, so anything replaced wholesale is unvalidatable, and an operation cannot touch what it did not name.
+The reason it exists rather than a whole-document write: seven of the nine device-settings domains are opaque, so anything replaced wholesale is unvalidatable, and an operation cannot touch what it did not name.
 `remove_values` is the load-bearing one and its justification is correctness rather than ergonomics - four positional deletes composed against one reading remove the wrong things after the first, because each shifts the indices after it.
 
 **Not:** storage, digests, backups, or any knowledge of what a rail, a sound map, or a drawer-tab order means.

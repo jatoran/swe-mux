@@ -808,6 +808,7 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     the markers are drawn at all.
     """
     app = source("App.tsx")
+    topbar = source("sessionTopbarConfig.ts")
     drawer = source("UtilityDrawer.tsx")
     tab = source("TranscriptTab.tsx")
     view = source("transcriptView.ts")
@@ -838,14 +839,16 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     opener = app[opener_start : app.index("/** Pop one target's queue", opener_start)]
     assert "if (session) await selectSession(session)" in opener
     assert "openDrawerTab('transcript',session?.project_id||projectId)" in opener
-    tools_start = app.index('<div class="pane-tools">')
-    tools = app[tools_start : app.index('</div>', tools_start)]
+    tools_start = app.index("renderAction={(actionId:SessionTopbarActionId)=>")
+    tools = app[tools_start : app.index("menu={<button", tools_start)]
     assert "hasHarnessTranscript(session.backend)" in tools
-    assert 'class="pane-tool-label transcript-chip"' in tools
-    assert "openQueueForSession(session.id)" in tools
-    assert "openTranscriptForSession(session.id)" in tools
-    assert tools.index("openQueueForSession(session.id)") < tools.index(
-        "openTranscriptForSession(session.id)"
+    assert "deliversHarnessPrompts(session.backend)" in tools
+    assert "openQueueForSession(id)" in tools
+    assert "openTranscriptForSession(id)" in tools
+    default_start = topbar.index("export function defaultSessionTopbarConfig")
+    default = topbar[default_start : topbar.index("const METRIC_IDS", default_start)]
+    assert default.index("action',id:'drawer:queue'") < default.index(
+        "action',id:'drawer:transcript'"
     )
 
     # The drawer unmounts a tab body on every tab switch, so anything that has to

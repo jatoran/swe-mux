@@ -507,7 +507,7 @@ work any session is doing - which is why they are a separate contract list rathe
 additions to the read/write sets here.
 
 The device-settings write is the one whose *shape* is unusual and worth knowing here: it
-takes path-scoped operations rather than a document, because five of the seven device
+takes path-scoped operations rather than a document, because seven of the nine device
 domains are stored opaquely and nothing in this process can tell a valid one from a mangled
 one. Everything an operation did not name is untouched by construction, which is the only
 safety available where validation is not.

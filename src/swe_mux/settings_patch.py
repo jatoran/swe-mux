@@ -1,6 +1,6 @@
 """Path-scoped edits to a JSON document whose schema this process does not know.
 
-The device-settings store keeps five of its seven domains **opaquely**: the
+The device-settings store keeps seven of its nine domains **opaquely**: the
 browser owns their schema, normalizes them, and is the only thing that can say
 whether a given arrangement means anything (`settings_store.py`). That was fine
 while the browser was the only editor. The configurator agent is a second one,

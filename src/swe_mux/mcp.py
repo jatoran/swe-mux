@@ -1992,7 +1992,8 @@ CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
         "name": "configurator_device_settings",
         "description": (
             "The per-device UI settings - the command rail, sounds, alerts, push "
-            "notifications, drawer tabs, sidebar rows, the file tree. A different "
+            "notifications, drawer tabs, sidebar rows, session top bars, the file tree. "
+            "A different "
             "store from install-wide config, and where most 'change how the UI is "
             "arranged' questions actually live. "
             "With no arguments it answers the index: which profiles hold which "
@@ -2013,14 +2014,15 @@ CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "alerts, sounds, notifications, commandRail, fileTree, "
-                        "drawerTabs, or sessionRows. Omit for the index."
+                        "drawerTabs, sessionRows, or sessionTopbar. Omit for the index."
                     ),
                 },
                 "profile": {
                     "type": "string",
                     "description": (
                         "desktop or mobile. Omit and the right one is chosen - "
-                        "notably `commandRail` is always under `desktop`."
+                        "notably `commandRail`, `sessionRows`, and `sessionTopbar` "
+                        "are always under `desktop`."
                     ),
                 },
             },

@@ -63,6 +63,7 @@
 - Remote access and browser boundary: `features/remote-access.md`
 - Windows desktop and tray lifecycle: `features/desktop-shell.md`
 - Browser UI: `features/ui.md`
+- Configurable session pane top bars: `features/session-topbars.md`
 - Launch profiles: `features/launch-profiles.md`
 - Provider accounts: `features/provider-accounts.md`
 - Usage analytics: `features/usage.md`

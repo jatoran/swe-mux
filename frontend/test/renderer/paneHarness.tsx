@@ -3,10 +3,15 @@ import { useState } from 'preact/hooks'
 import { MobileTerminalDraft } from '../../src/TerminalDraftComposer'
 import { PaneRunTrigger } from '../../src/PaneRunTrigger'
 import { OverflowRail } from '../../src/RailScroller'
+import { SessionTopbar } from '../../src/SessionTopbar'
+import { defaultSessionRowConfig } from '../../src/sessionRowConfig'
+import { deriveRowFleetFacts } from '../../src/sessionRowFields'
+import { addSessionTopbarRow, defaultSessionTopbarConfig, placeSessionTopbarItem } from '../../src/sessionTopbarConfig'
+import type { Session } from '../../src/types'
 import '../../src/style.css'
 
 // The pane's own layout, with the real components and the real stylesheet. What it exists
-// to pin is the geometry contract in `ui.md`: a pane is two rows — header and surface —
+// to pin is the geometry contract in `ui.md`: an intrinsic configured header and one flexible surface,
 // and the surface owns every pixel of the second one. Two shipped regressions came from
 // breaking that in CSS alone — a phantom track that left dead black space, then a missing
 // `grid-column` that auto-placed the terminal into an implicit second column and halved
@@ -27,23 +32,25 @@ const draft = parameters.get('draft') === '1'
 // a name too long for the bar, which is the case where a fixed-size glyph is easiest to lose.
 const fault = parameters.get('fault') === '1'
 const tabs = parameters.get('tabs') === '1'
+const topbarRows = Math.max(1,Math.min(3,Number(parameters.get('rows')||1)))
+
+const session={
+  id:'pane-harness',project_id:'p1',name:'claude-1ee230 · refactor the scrollback ring so it keeps bracketed paste mode across replay',
+  backend:'claude',state:'working',state_since:Date.now()/1000-300,created_at:Date.now()/1000-3600,
+  model:'claude-sonnet-5',cwd:'D:/PROJECTS/swe-mux',spawn_cwd:'D:/PROJECTS/swe-mux',runtime_cwd:'D:/PROJECTS/swe-mux',
+  git:{branch:'ui-settings',dirty:3,ahead:1,behind:0},provider_account_hashes:{},
+} as unknown as Session
+let topbarConfig=defaultSessionTopbarConfig()
+for(let index=1;index<topbarRows;index++)topbarConfig=addSessionTopbarRow(topbarConfig)
+if(topbarRows>1)topbarConfig=placeSessionTopbarItem(topbarConfig,{kind:'metric',id:'model',mode:'always'},1,'left')
+if(topbarRows>2)topbarConfig=placeSessionTopbarItem(topbarConfig,{kind:'metric',id:'branch',mode:'always'},2,'left')
+const topbarFacts=deriveRowFleetFacts([session],{[session.id]:0})
 
 const pane = <section class="terminal-pane focused">
-  <div class="pane-bar agent-pane-bar">
-    {/* Deliberately longer than any pane is wide: the header's contract is that a generated
-        title ellipsizes rather than taking width from the pane tools. */}
-    <div class="pane-identity"><span class="pane-title">claude-1ee230 · refactor the scrollback ring so it keeps bracketed paste mode across replay</span>{fault && <span class="pane-fault" role="img" aria-label="Session fault: observation stale">⚠</span>}</div>
-    {/* The real bar's right-aligned group, in its shipped order: the standing `appr:` mode
-        first, then the two chips that open a surface, then the overflow menu. Mirrored as
-        plain markup rather than mounting `ApprovalChip` because the geometry contract is
-        what this harness pins, and the real chip would put a fetch behind every load. */}
-    <div class="pane-tools">
-      <div class="approval-chip-wrap"><button class="pane-tool-label approval-chip">appr:wait</button></div>
-      <button class="pane-tool-label queue-chip">queue</button>
-      <button class="pane-tool-label transcript-chip">transcript</button>
-      <button>⋯</button>
-    </div>
-  </div>
+  <SessionTopbar preview session={session} config={topbarConfig} rowConfig={defaultSessionRowConfig()} facts={topbarFacts}
+    title={<div class="pane-identity"><span class="pane-title">{session.name}</span>{fault&&<span class="pane-fault" role="img" aria-label="Session fault: observation stale">⚠</span>}</div>}
+    renderAction={id=>id==='approvals'?<div class="approval-chip-wrap"><button class="pane-tool-label approval-chip">appr:wait</button></div>:<button class={`pane-tool-label ${id.slice('drawer:'.length)}-chip`}>{id.slice('drawer:'.length)}</button>}
+    menu={<button aria-label="More actions">⋯</button>}/>
   <div class="terminal-surface">
     <div class="terminal-host" />
     {draft&&<MobileTerminalDraft sessionName="harness" text="A persistent message that has not reached the terminal." busy={false} error="" onInput={()=>{}} onInsert={()=>{}} onClear={()=>{}} onClose={()=>{}}/>}

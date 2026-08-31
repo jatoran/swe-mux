@@ -62,6 +62,7 @@ import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
 import { PaneRunTrigger } from './PaneRunTrigger'
+import { SessionTopbar } from './SessionTopbar'
 import { SCRATCHPAD_TAB_ID } from './noteTabs'
 import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
@@ -267,6 +268,8 @@ import { isFieldPlaced, type DotShape, type StandingRender } from './sessionRowC
 import {
   applySessionDotSize, useRowBudget, useSessionRowConfig, watchSessionDotProfile,
 } from './sessionRowPrefs'
+import { useSessionTopbarConfig } from './sessionTopbarPrefs'
+import type { SessionTopbarActionId } from './sessionTopbarConfig'
 import { serverNow } from './serverClock.ts'
 import {
   deriveRowFleetFacts, sessionContextArc,
@@ -591,6 +594,7 @@ export function App() {
   // deliberately NOT read here: it lives in `SessionRowLive`, so a five-second tick
   // re-renders the rows that age rather than the whole shell around them.
   const rowConfig=useSessionRowConfig()
+  const sessionTopbarConfig=useSessionTopbarConfig()
   const rowQueueDepth=useMemo(
     ()=>Object.fromEntries(Object.entries(queueSummary).map(([id,target])=>[id,target.pending])),
     [queueSummary],
@@ -7290,30 +7294,11 @@ export function App() {
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div class="pane-identity"><span class="pane-title" title={sessionName(session)||id}>{sessionName(session)||id}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
       <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>{session.pending_label||'Starting terminal'}</strong><small>{session.pending_detail||'Resolving the project and opening the shell…'}</small></div>
     </section>
-    const remoteBoundary=session.runtime_boundary==='remote'
-    const boundaryUnknown=session.runtime_boundary==='unknown'
-    const nonLocalBoundary=remoteBoundary||boundaryUnknown
-    const displayedCwd=remoteBoundary
-      ?`ssh://${session.remote_authority||'remote'}`
-      :boundaryUnknown?'unavailable':session.runtime_cwd||session.spawn_cwd||session.cwd
-    const cwdIsLive=session.runtime_cwd_live&&!nonLocalBoundary
     const openPaneMenu=(event:{clientX:number;clientY:number;preventDefault?:()=>void;stopPropagation?:()=>void})=>{event.preventDefault?.();event.stopPropagation?.();openSessionMenu(session,event.clientX,event.clientY,'pane')}
-    // The pane carries no read-aloud surface at all — no chip group, and no player strip.
-    // Both were per-session controls repeated once per *drawn pane*, answering the same
-    // question on whichever panes happened to be on screen, and a split with four agents
-    // drew four of them. Everything they did now lives in one place that follows focus:
-    // the voice panel's `tts` tab (mode, content, on-demand generate, transport, the clip
-    // list), reached from the one voice control in the top bar. The pane's remaining
-    // per-session controls — `appr:`, `queue`, `transcript` — are in the pane tools.
-    //
-    // What replaced the strip on the pane is *nothing*, deliberately: which sessions speak
-    // is reported by a mark on the sidebar row and the tab (`voice` row field), which costs
-    // no pane space and is legible for every session at once rather than one at a time.
-    // The header names the session and nothing else. Its state is on the tab, on the sidebar
-    // row, and in the terminal the reader is already looking at, whereas the *name* is the one
-    // thing those surfaces crop: a tab is only as wide as the strip allows. The name therefore
-    // takes the column the status line used to hold, bounded by `fit-content()` in the
-    // stylesheet so a long generated title cannot squeeze the path, voice chips, or tools.
+    // The pane header is persistent user layout: one to three rows of the sidebar field
+    // vocabulary plus approvals or any drawer shortcut. It never grows a transient row from
+    // session state, because that would resize the PTY every time the state changed.
+    // The overflow menu stays outside the configurable catalog as the recovery path.
     const paneTitle=sessionName(session)||id
     // Faults are not state, and they have no other pane-level surface — an agent header draws
     // no path chip, which is where the boundary warning otherwise lives — so they keep a marker
@@ -7339,26 +7324,18 @@ export function App() {
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
     const terminalPane=<section key={id} class={`terminal-pane ${session.plugin_id?'plugin-utility-pane ':''}${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
-      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
-        <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
-        {session.plugin_id
-          ?<div class="pane-path plugin-utility-label" title={`${session.plugin_id} · ${session.plugin_entrypoint_id||'pane'}`}>plugin tool · {session.plugin_id}</div>
-          :!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
-        {/* `appr:` leads the tools group. It is a standing *mode* rather than a one-shot
-            action, so it reads first and the two surfaces that open a panel (`queue`,
-            `transcript`) follow it, with the overflow menu last. It stays on every agent
-            pane, including ones where no mode can be selected: a control that disappears
-            when unavailable teaches the operator it does not exist, while one that stays
-            and says why teaches them what would make it work. It does not cycle on click —
-            the three positions are not a ladder you want to pass *through* (`allow_all` is
-            not a step on the way back to `wait`) — so it opens a menu and each mode is
-            chosen directly. `ApprovalChip` renders nothing on a shell backend, which is
-            what lets this one group serve both header variants. */}
-        <div class="pane-tools"><ApprovalChip session={session}/>{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
-            on a phone it cost 40px of a bar that also has to fit the session name and path. What it
-            opened is now the drawer's Processes tab, which pins this session's row first, and the
-            session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
-      </div>
+      <SessionTopbar session={session} config={sessionTopbarConfig} rowConfig={rowConfig} facts={rowFacts}
+        onContextMenu={openPaneMenu} onDblClick={()=>setZoomedId(current=>current===id?null:id)}
+        title={<div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>}
+        renderAction={(actionId:SessionTopbarActionId)=>{
+          if(actionId==='approvals')return agentSession?<ApprovalChip session={session}/>:null
+          const tabId=actionId.slice('drawer:'.length) as DrawerTabId
+          const tab=drawerTab(tabId)
+          const available=tabId==='queue'?deliversHarnessPrompts(session.backend):tabId==='transcript'?hasHarnessTranscript(session.backend):tabId==='agent'?agentSession:true
+          const pending=tabId==='queue'?(queueSummary[session.id]?.pending||0):0
+          return <button class={`pane-tool-label topbar-shortcut ${tabId}-chip${pending?' has-pending':''}`} disabled={!available} aria-label={`Open ${tab.label} for ${sessionName(session)}`} title={available?tab.title:`${tab.label} is unavailable for this session`} onClick={()=>{if(tabId==='queue'){void openQueueForSession(id);return}if(tabId==='transcript'){void openTranscriptForSession(id);return}setActiveId(id);setFocusedViewId(id);openDrawerTab(tabId,session.project_id)}}>{tabId==='queue'&&pending?`queue:${pending}`:tab.label.toLowerCase()}</button>
+        }}
+        menu={<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button>}/>
       {isEndedSession(session)&&<EndedPaneBanner
         session={session}
         onResume={isAgent(session)?()=>void resumeSession(session):undefined}
@@ -8400,7 +8377,7 @@ export function App() {
           from a menu whose other rows all act on the session immediately, and both are
           a command and a drawer tab away in the place you already are. */}
       {contextMenu.source==='pane'&&<button class="menu-row" onClick={() => runNamedCommand('session.copyCwd')}><span class="menu-row-icon" aria-hidden="true"><CopyPathIcon/></span><span class="menu-row-label">Copy working directory</span></button>}
-      <button class="menu-row" onClick={()=>openSettingTarget('appearance.sessionRows')}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">Configure appearance</span></button>
+      <button class="menu-row" onClick={()=>openSettingTarget(contextMenu.source==='pane'?'appearance.sessionTopbar':'appearance.sessionRows')}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">Configure appearance</span></button>
       {/* No context menu touches tab order or pane geometry on any platform — not split,
           stack, dissolve, or move. They answer "how is the workspace laid out", which is
           not the question a menu opened on a session or a tab is asked, and the direction
