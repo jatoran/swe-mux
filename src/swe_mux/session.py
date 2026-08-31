@@ -2967,6 +2967,7 @@ class SessionManager:
         shell_profile_id: str | None = None,
         profile_env: dict[str, str] | None = None,
         extra_env: dict[str, str] | None = None,
+        retain_extra_env: bool = True,
         project_label: str | None = None,
         project: ProjectIdentity | None = None,
         startup_started_at: float | None = None,
@@ -3065,7 +3066,7 @@ class SessionManager:
         record.spawn_backend = backend
         record.spawn_native_session_id = native_id
         record.spawn_agent_run_id = adopt_run_id
-        record.spawn_env = dict(extra_env or {})
+        record.spawn_env = dict(extra_env or {}) if retain_extra_env else {}
         # Stamped here because this is the only moment it is knowable: the CLI
         # about to start reads its credential file once, and a switch made later
         # does not reach back into it. Never allowed to fail a spawn - an account

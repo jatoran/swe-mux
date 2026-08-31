@@ -217,6 +217,8 @@ async def test_manager_link_approval_action_pane_event_and_uninstall(tmp_path: P
     )
     assert pane["placement"] == "split"
     assert pane["session"]["plugin_id"] == "tests.utility"
+    assert pane["session"]["spawn_env"] == {}
+    assert sessions.spawn_args["retain_extra_env"] is False
     assert sessions.spawn_args["exe"] == sys.executable
     await events.emit("project_created", source="tests", project_id="p1")
     event_file = manager.states / "tests.utility" / "event.json"

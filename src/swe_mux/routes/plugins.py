@@ -264,9 +264,12 @@ async def plugin_callback(request: web.Request) -> web.Response:
             [project.snapshot() for project in request.app[keys.PROJECTS].projects.values()]
         )
     if operation == "sessions.list":
-        return web.json_response(
-            [session.record.snapshot() for session in request.app[keys.SESSIONS].sessions.values()]
-        )
+        snapshots = []
+        for item in request.app[keys.SESSIONS].sessions.values():
+            snapshot = item.record.snapshot()
+            snapshot["spawn_env"] = {}
+            snapshots.append(snapshot)
+        return web.json_response(snapshots)
     if operation == "self.describe":
         return web.json_response(
             {
