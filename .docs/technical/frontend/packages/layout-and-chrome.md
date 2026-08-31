@@ -58,7 +58,7 @@ It returns the panel's bottom *edge* rather than a CSS inset, which is what make
 
 `RailOverflowPopover.tsx` is the panel, and it is deliberately not a `RailDropup`: a drop-up is a picker that closes on selection, this is the rail folded, and a rail does not close when you press a key on it.
 The panel has no header.
-Its close control is an absolutely positioned top-right overlay, and its bottom-right footer control closes the panel before opening the full Configure Actions modal.
+Its close control is an absolutely positioned top-right overlay, and its bottom-right footer control closes the panel before opening Settings → Actions.
 Three consequences are behaviours rather than details, and all three are covered by `test/renderer/rail-overflow.spec.ts`:
 a drop-up opened from a chip inside it is outside its DOM, so the pointer that opens one is exempted from outside-dismissal;
 Escape reaches both listeners on `window`, where `stopPropagation` stops neither and this one is registered first, so the panel stands aside while any `.rail-dropup` exists;

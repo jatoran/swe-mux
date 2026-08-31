@@ -666,14 +666,14 @@ Its rules, and what each one is defending:
   It is the one control in the panel that rewrites the whole saved configuration on a single click, is not staged behind Save, discards unsaved edits, and cannot be undone.
   The confirmation is an `alertdialog` and its own dismiss level, so back, Escape, and the scrim all back out of it before they reach the panel; the click that opens it sends nothing.
   Its failure is visible for the same reason every other write's is - a refused reset used to be an unhandled rejection, leaving the panel showing a draft the daemon no longer held with no indication that anything had gone wrong.
-- **One tab names one subsystem.** Eighteen tabs are grouped into four runs, declared once
+- **One tab names one subsystem.** Nineteen tabs are grouped into four runs, declared once
   in `settingsTabs.ts` and rendered from that single order by both layouts:
 
   | Group | Tabs |
   | --- | --- |
   | Workspace | General, Projects, Terminals, Git, Processes |
   | Agents | Harnesses, Accounts, Prompt queue, Automation, Plugins, Usage |
-  | Interface | Appearance, Input, Notes, Voice |
+  | Interface | Appearance, Actions, Input, Notes, Voice |
   | System | Alerts, Remote, Diagnostics |
 
   A group is a contiguous *run* of the array, not a declared membership list, so a tab that
@@ -1010,10 +1010,10 @@ Its rules, and what each one is defending:
   (restoring defaults rewrites the entire saved config immediately, outside the draft/Save
   cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones.
   Per-section resets that genuinely are scoped, such as gesture defaults and shortcut defaults, stay with their own section.
-- Action layout is not a Settings section.
-  **Configure Actions** opens as a standalone modal from the main menu, command palette, or a rail-row popover.
+- Action layout and rail policy share Settings → Actions.
+  **Configure Actions** opens that tab from the main menu, command palette, or a rail-row popover.
   The Actions drawer does not link to configuration because its job is using actions, not arranging the command rail.
-  This surface owns the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
+  The Settings tab owns the rail master switches and density beside the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
 - Keyboard shortcuts are a rule list rather than a chord map, and the Input tab edits
   the list: the preset picker, the per-command recorder, and the report of what this
   host cannot receive. `design/features/keybindings.md` owns the design; three things
@@ -2002,7 +2002,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
-  **The rail has a per-device-class master switch** (`rail_enabled_desktop` / `rail_enabled_mobile`, Settings → Appearance → Action rail, both on by default, hot-applied).
+  **The rail has a per-device-class master switch** (`rail_enabled_desktop` / `rail_enabled_mobile`, Settings → Actions → Action rail, both on by default, hot-applied).
   Off suppresses the whole rail block for that device class - on mobile that includes the pinned Send button, which the control's copy states - while the catalog, layouts, and per-Project overrides are retained untouched, so turning it back on restores exactly what was there.
   It is also one of the first-run Customize switches (`first-run.md`).
   **No message of any kind is drawn inside a rail row.**
@@ -2033,7 +2033,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Dismissal is always deliberate: an outside press, Escape, or the small absolutely positioned close control at the panel's top-right corner.
   The panel has no heading bar and no `stays open` copy.
   It is capped in width and height, right-aligned to the drawer cluster, and grows upward.
-  A Configure Actions icon sits in the bottom-right footer on every row's panel and opens the full modal directly.
+  A Configure Actions icon sits in the bottom-right footer on every row's panel and opens Settings → Actions directly.
   The panel closes during that handoff.
 - **Every command-rail overlay is glass: the popover and each of the drop-ups.**
   Panel, chips, and rows are translucent over a backdrop blur, with borders and text at full opacity.
@@ -2206,7 +2206,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The compass names the first pads shipped with are still read forever when loading a layout, the same durability rule the retired-id table exists for: a layout is device-local, per-Project and arbitrarily old, and an unrecognised key is silently a binding the operator loses.
 - Configured chips — a skill, a slash command, a prompt template, a literal — **size to their own label** with symmetric padding, and their `min-width` is a floor for a short one rather than a width every one of them is stretched to.
   The rail's shared 74px minimum stays right for the built-in labelled buttons, whose wording is fixed and whose even widths are the row's rhythm; it was wrong for a label the user chose, and it padded a five-character skill out to the width of `Copy resume`.
-  The row popover's Configure Actions control opens the full modal directly.
+  The row popover's Configure Actions control opens Settings → Actions directly.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
   The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
   It keeps its 44px tap height and its accessible name; only the width fell.
@@ -2308,8 +2308,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   What a delta cannot express is named on the plan with the global value that wins: a renamed shared row, a reordered set of shared rows, a project row interleaved between them, and an action whose definition the fork edited.
   A row that survives none of that is redone with every id floated, which always reproduces it at the cost of no longer tracking global changes to that row.
   It is user-invoked and never automatic: a fork is somebody's arrangement, and a migration that happens to you is one you could not review first.
-- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) is the only rail editor.
-  It opens from the main menu, command palette, and every row popover rather than replacing the live rail inline or living inside Settings.
+- **Settings → Actions** (`ActionEditorModal.tsx`, `RailEditor.tsx`, and `Settings.tsx`) is the only rail editor.
+  It opens from the Settings sidebar, main menu, command palette, and every row popover rather than replacing the live rail inline.
   It discloses progressively: one device's rail layout first (defaulting to the device this browser is, with a Desktop/Mobile switch at every width), custom-action creation collapsed below it, and the complete catalog collapsed at the bottom behind a filterable "All actions" disclosure.
   The former permanent two-column device view is gone: it doubled the visual load for the rare cross-device drag that the catalog's placement checkboxes already cover.
   A dismissible first-open callout carries the orientation (per-device rails, the drawer popover, and the catalog) instead of a standing paragraph.

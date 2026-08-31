@@ -272,6 +272,19 @@ test('the active Settings tab adds no marker or indentation', async ({ page }) =
   expect(after[0].textLeft).toBe(after[1].textLeft)
 })
 
+test('Actions owns rail policy and the embedded layout editor',async({page})=>{
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  await page.locator('.settings-tabs [role="tab"]',{hasText:/^Actions$/}).click()
+  await expect(page.locator('.settings-content h3',{hasText:/^Action rail$/})).toBeVisible()
+  await expect(page.locator('.settings-content h3',{hasText:/^Action layout$/})).toBeVisible()
+  await expect(page.locator('.settings-content .commandrail-settings')).toBeVisible()
+  await expect(page.locator('.action-editor-modal,.action-editor-layer')).toHaveCount(0)
+
+  await page.locator('.settings-tabs [role="tab"]',{hasText:/^Appearance$/}).click()
+  await expect(page.locator('.settings-content h3',{hasText:/^Action rail$/})).toHaveCount(0)
+})
+
 test('every paged Settings tab exposes working page links in the sidebar', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')
@@ -541,7 +554,7 @@ test('every tab renders, and every marked control is really in its DOM', async (
   // fails to register vanishes loudly rather than being silently skipped by the
   // walk below.
   const tabs = await page.locator('.settings-tabs [role="tab"]').allTextContents()
-  expect(tabs.length).toBe(18)
+  expect(tabs.length).toBe(settingsTabs.length)
 
   const marked = new Set<string>()
   for (const label of tabs) {

@@ -6,7 +6,8 @@ Design: `../../../design/features/setting-links.md`, `../../../design/features/b
 ## Settings
 
 `Settings.tsx`, `settingsTabs.ts`, `settingsDraft.ts`, `settingsSave.ts`, `settingsSearch.ts`,
-`fuzzyText.ts`, `AutomationPolicyView.tsx`, `HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
+`fuzzyText.ts`, `ActionEditorModal.tsx`, `RailEditor.tsx`, `AutomationPolicyView.tsx`,
+`HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
 
 Global non-automation options only, including the machine-wide worktree root.
 Global and per-Project automation policy belongs to the Automation workspace.

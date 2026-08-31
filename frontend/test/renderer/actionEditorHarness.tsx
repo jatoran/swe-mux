@@ -1,11 +1,11 @@
-// The real Configure Actions modal against a stubbed daemon.
+// The real Settings → Actions panel against a stubbed daemon.
 //
 // Everything the editor persists goes through the device-settings cache, which
 // is updated synchronously before the PUT — so a stub that just answers 200 is
 // enough for the full edit loop: scope switching, delta creation, placement
 // checkboxes, custom-action creation, and reset all round-trip in-page.
 import { render } from 'preact'
-import { ActionEditorModal } from '../../src/ActionEditorModal'
+import { ActionEditorPanel } from '../../src/ActionEditorModal'
 import { defaultRailConfig, writeRailConfigBlob } from '../../src/commandRail'
 import { loadSettings } from '../../src/deviceSettings'
 import '../../src/style.css'
@@ -63,4 +63,8 @@ if (new URLSearchParams(location.search).get('seen') === '1') {
 // The editor reads the rail through the device-settings cache synchronously at
 // render, so the cache is populated first - which is also the app's own order.
 await loadSettings()
-render(<ActionEditorModal onClose={() => {}} />, document.querySelector('#root')!)
+document.documentElement.style.height='100%'
+document.body.style.height='100%'
+const root=document.querySelector('#root')!
+root.setAttribute('style','height:100%;min-height:0')
+render(<main class="settings-content" style="height:100%;overflow:auto"><section><h3>Action layout</h3><ActionEditorPanel /></section></main>,root)

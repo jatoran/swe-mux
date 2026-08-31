@@ -67,7 +67,7 @@ test('a held chip lifts through the jitter of a resting finger, then reorders', 
   const finger = await touch(page)
   const first = await pressPoint(page, 0)
   const second = await centreOf(page, 1)
-  const scrollBefore = await page.evaluate(() => document.querySelector('.action-editor-body')!.scrollTop)
+  const scrollBefore = await page.evaluate(() => document.querySelector('.settings-content')!.scrollTop)
 
   await finger.down(first.x, first.y)
   // Past Chrome's own 8px touch slop and well inside the drag's 16px: a finger resting on a
@@ -84,7 +84,7 @@ test('a held chip lifts through the jitter of a resting finger, then reorders', 
   await expect(ghost(page)).toHaveCount(0)
   expect(await order(page)).toEqual([before[1], before[0], ...before.slice(2)])
   expect(
-    await page.evaluate(() => document.querySelector('.action-editor-body')!.scrollTop),
+    await page.evaluate(() => document.querySelector('.settings-content')!.scrollTop),
     'the hold must not have scrolled the editor under the finger',
   ).toBe(scrollBefore)
 })

@@ -45,7 +45,7 @@ type Props = {
   /** The fixed drawer cluster that supplies the panel's trailing-edge anchor. */
   anchor: HTMLElement | null
   onClose: () => void
-  /** Opens the full Configure Actions modal. */
+  /** Opens the full editor in Settings → Actions. */
   onConfigure: () => void
   children: ComponentChildren
 }

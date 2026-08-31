@@ -57,11 +57,11 @@ Nothing calls it on its own - it is reached only from the fork scope's "Reattach
 ### The rest of the layer
 
 - `railLayout.ts` is the editing algebra for placing, moving, rowing, copying a device rail, catalog add and delete, and two-dimensional drop indexing.
-- `railDrag.ts` is the DOM drag controller the modal editor mounts: the `data-rail-row`/`data-reorder-id` contract, committed-config preview recompute, nearest-row drop resolution within `DROP_ROW_MARGIN`, and pointer capture on `document.body`.
+- `railDrag.ts` is the DOM drag controller the Settings editor mounts: the `data-rail-row`/`data-reorder-id` contract, committed-config preview recompute, nearest-row drop resolution within `DROP_ROW_MARGIN`, and pointer capture on `document.body`.
   Its gesture layer is imported from `dragReorder.ts` rather than restated - activation constants, the touch-scroll cancel, and the native-`contextmenu` suppression all match `beginPointerDrag` in `App.tsx`, and drifting from them is what made the editor's mobile reorder unreliable (`design/features/workspace-layout.md` § pointer drag contract).
   Its `canDrop` gate is unset now that a delta can express a project action in a shared row; it stays because refusing-as-off-every-row is the drag's own vocabulary, not the scope rule that needed it.
-- `ActionEditorModal.tsx` owns the standalone Configure Actions surface.
-  It opens on Global unless the focused Project is already detached, and passes the focused Project separately so Global can offer a one-step detach-and-edit action.
+- `ActionEditorModal.tsx` now exports the Settings-owned `ActionEditorPanel`; it has no modal or dismiss boundary.
+  The panel opens on Global unless the focused Project is already detached, and receives the focused Project separately so Global can offer a one-step detach-and-edit action.
 - `RailEditor.tsx` renders one device's rail layout first, collapsed custom-action creation next, then the collapsed filterable catalog.
   Every catalog row expands into placement, appearance, backend visibility, and any custom behavior fields.
   Appearance uses the live icon registry and supports a visible-label override plus Automatic, Icon only, Label only, and Icon + label modes where an icon exists.
@@ -71,7 +71,7 @@ Nothing calls it on its own - it is reached only from the fork scope's "Reattach
   Only one catalog is mounted at a time and the selected view is remembered on the device.
   Its labels come from `drawerSegments.ts`, and `DrawerViewTabs.tsx` gives it the same full-width rail used by Files, Git, Activity, and Agent.
   A compact target line is mobile-only because the overlay covers the focused terminal these views can mutate.
-  Command-rail configuration stays in the standalone editor and has no button in this usage surface.
+  Command-rail configuration stays in Settings → Actions and has no button in this usage surface.
   Skills and template rows insert or edit; they do not create a second pinning state.
 
 ### Arrow-key repeat

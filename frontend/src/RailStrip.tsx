@@ -13,7 +13,7 @@ import { RailDrawerIcon } from './railIcons'
 interface RailStripProps {
   /** The row's chips, in configured order. The popover receives a cloned complete list. */
   chips: VNode[]
-  /** Opens the full Configure Actions modal. */
+  /** Opens the full editor in Settings → Actions. */
   onConfigure: () => void
   /** Accessible name for this row's overflow popover. */
   label: string
