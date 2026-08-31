@@ -19,7 +19,10 @@ import type { Session } from './types'
 export interface TerminalPaneMemoProps {
   session: Session
   broadcast: boolean
-  keybindings: Record<string, string>
+  // The keymap is deliberately NOT a prop. The pane asks `keymapDispatch` whether a
+  // chord is claimed, because with multi-chord sequences the answer depends on state
+  // no prop can carry (whether a leader is armed). Passing the map here also
+  // re-attached xterm's key handler on every keymap change for no benefit.
   scrollback: number
   rendererPreference: string
   windowsPty?: unknown
@@ -67,7 +70,6 @@ export function terminalPanePropsEqual(
     a.session.relaunchable === b.session.relaunchable &&
     a.broadcast === b.broadcast &&
     a.scrollback === b.scrollback &&
-    a.keybindings === b.keybindings &&
     // Omitting this blocked a renderer change from ever reaching an existing pane;
     // it only appeared to work because unrelated prop churn re-rendered anyway.
     a.rendererPreference === b.rendererPreference &&

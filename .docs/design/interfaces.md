@@ -2719,14 +2719,15 @@ The provider section supplies the cached structured-output model catalog used by
 tab's live-filtered cheap and standard model pickers.
 
 ```text
-POST /api/settings/apply   {config?: {...}, keybindings?: {...} | {bindings: {...}}, _revision?: int}
+POST /api/settings/apply?host=<desktop|browser>&platform=<win|mac|linux>
+                           {config?: {...}, keybindings?: {preset, rules: [...]}, _revision?: int}
 ```
 
 The Settings panel's Save, as one transaction.
 Save used to be a `PATCH /api/config` and a `PUT /api/keybindings` fired together, either of which could fail alone, with the panel reporting both outcomes as "invalid · nothing was changed" - a claim about the daemon's disk that the client was in no position to make.
 A `_revision` conflict raised by another device produced exactly that message *after* the keybindings file had already been rewritten.
 
-`config` is the same field delta `PATCH /api/config` takes; `keybindings` is a full chord → command map, accepted either bare or under a `bindings` key as `PUT /api/keybindings` accepts it.
+`config` is the same field delta `PATCH /api/config` takes; `keybindings` is the whole binding document - `{preset, rules}` - exactly as `PUT /api/keybindings` takes it.
 Both are optional, and an absent `keybindings` leaves the file untouched rather than blanking it.
 The revision is read from `If-Match` or from `_revision` in the body, and a mismatch is the same `409 {error, revision}` as the PATCH.
 
@@ -2742,6 +2743,43 @@ One `configuration_changed` is emitted for the transaction, carrying `changed` a
 
 `POST /api/experience-tier` takes `{tier}` (`terminal` | `deterministic` | `automations`) and applies that tier's absolute key assignment through the same `update_config` path, answering like a `PATCH /api/config` (`public_dict` plus `hot_applied` and `restart_required`).
 The key sets are daemon policy (`experience_tiers.py`), never computed in a client; an unknown tier is a 422 (`design/features/first-run.md`).
+
+```text
+GET  /api/keybindings?host=<desktop|browser>&platform=<win|mac|linux>
+PUT  /api/keybindings[?validate=1]   {preset, rules: [{keys, command, host?, platform?, when?, note?}]}
+POST /api/keymap-preset              {preset}
+```
+
+The keyboard (`design/features/keybindings.md`). **The host descriptor is not optional
+context, it is the question**: a chord the desktop app receives is one a browser tab
+keeps for itself, so the daemon resolves the rule list for the keyboard that is asking
+and an absent or unknown value falls back to the most restrictive real combination (a
+browser tab on Windows) rather than the most permissive - a wrong permissive answer
+draws a dead chord as though it were live.
+
+`GET` answers with the durable `rules`, the `resolved` map this host dispatches on
+(`sequence -> [{command, when}]`, most specific last), the `prefixes` that arm rather
+than fire, `undeliverable` and `contested` naming what was dropped or shadowed and why,
+the shipped `presets`, the bindable `commands`, the closed `when_flags`, the chord
+`policy`, and `rejected` for saved rules this build cannot use. Resolution runs in the
+daemon rather than the browser for the reason the experience-tier assignment does: a
+browser-computed answer would be a second copy of the policy, and the copy is what
+drifts.
+
+A rule is refused only for a syntax error, an unknown command, host, platform or
+`when` flag, or a UI-scale chord - **never for being "reserved"**. Everything else is
+accepted and reported per host, because the reserved table is a claim about somebody
+else's software and was demonstrably wrong (it refused `ctrl+f` while the Settings
+panel was intercepting Ctrl+F in the same browser). A measurement taken in the live
+browser and stored in the per-device settings store's `keyboard` domain overrides that
+table, and only a *tested* chord moves it.
+
+`POST /api/keymap-preset` rewrites `keybindings.json` from one shipped preset -
+absolute, never a merge, so applying twice is idempotent and switching is deterministic
+whatever came before - stamps `keymap_preset`, and answers `{config, keybindings}`. An
+unknown preset is a 422 naming the known ids. The preset table is data
+(`src/swe_mux/assets/keymaps/*.json`) and is daemon policy for the same reason the tier
+key sets are.
 
 `GET /api/automation/dashboard` includes recent observer-call diagnostics without response
 content: requested and resolved model, generation, provider, finish reason, HTTP status,

@@ -933,52 +933,67 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <article class="dsbody">
       <div class="kick">reference</div>
       <h1>Keyboard and the command palette</h1>
-      <div class="lede"><p>Two entry points cover almost everything: <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> for a terminal at the Project root, and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd> for the command palette, which reaches every command in the application including the ones with no default chord.</p></div>
+      <div class="lede"><p>Three entry points cover everything: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> for a terminal at the Project root, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> for the command palette, and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> as a leader key that puts all 214 commands behind one chord and tells you what to press next.</p></div>
       <nav class="toc" aria-label="On this page">
-        <a href="#the-defaults">the defaults</a>
-        <a href="#commands-with-no-default-chord">commands with no default chord</a>
+        <a href="#the-flat-defaults">the flat defaults</a>
+        <a href="#the-leader-key-reaches-everything-else">the leader key reaches everything else</a>
+        <a href="#presets-if-you-already-know-another-tool">presets, if you already know another tool</a>
         <a href="#rebinding">rebinding</a>
-        <a href="#what-the-terminal-keeps">what the terminal keeps</a>
+        <a href="#why-not-ctrl-alt">why not ctrl+alt</a>
+        <a href="#what-the-terminal-the-browser-and-your-desktop-keep">what the terminal, the browser and your desktop keep</a>
         <a href="#mobile-gestures">mobile gestures</a>
         <a href="#voice-reaches-the-same-registry">voice reaches the same registry</a>
       </nav>
-      <div class="docsec" id="the-defaults">
-        <div class="head"><span class="n">#</span><h2>The defaults</h2><span class="fill"></span></div>
+      <div class="docsec" id="the-flat-defaults">
+        <div class="head"><span class="n">#</span><h2>The flat defaults</h2><span class="fill"></span></div>
+        <p class="prose">Everything below is on <kbd>Ctrl</kbd>+<kbd>Shift</kbd>, which is what every terminal emulator claims for itself, because bare <kbd>Ctrl</kbd>+letter belongs to the shell running inside the pane. On macOS the same set is mirrored onto <kbd>Cmd</kbd>+<kbd>Shift</kbd>; both work.</p>
         <div class="tablewrap"><table>
           <thead><tr><th>Chord</th><th>Command</th></tr></thead>
           <tbody>
-            <tr><td>Ctrl+Alt+T</td><td>New terminal in the current Project</td></tr>
-            <tr><td>Ctrl+Alt+O</td><td>New terminal, custom</td></tr>
-            <tr><td>Ctrl+Alt+P</td><td>Open the command palette</td></tr>
-            <tr><td>Ctrl+Alt+S</td><td>Open Settings</td></tr>
-            <tr><td>Ctrl+Alt+N</td><td>Open the current Project's notes</td></tr>
-            <tr><td>Ctrl+Alt+J</td><td>Jump to a heading in the focused note</td></tr>
-            <tr><td>Ctrl+Alt+H</td><td>Split the focused pane right</td></tr>
-            <tr><td>Ctrl+Alt+V</td><td>Split the focused pane below</td></tr>
-            <tr><td>Ctrl+Alt+Z</td><td>Toggle focused pane zoom</td></tr>
-            <tr><td>Ctrl+Alt+D</td><td>Detach the focused pane</td></tr>
-            <tr><td>Ctrl+Alt+Right</td><td>Focus the next pane</td></tr>
-            <tr><td>Ctrl+Alt+Left</td><td>Focus the previous pane</td></tr>
-            <tr><td>Ctrl+Tab</td><td>Focus the next workspace tab</td></tr>
-            <tr><td>Ctrl+Shift+Tab</td><td>Focus the previous workspace tab</td></tr>
+            <tr><td>Ctrl+Shift+Enter</td><td>New terminal in the current Project</td></tr>
+            <tr><td>Ctrl+Shift+P, or F1</td><td>Open the command palette</td></tr>
+            <tr><td>Ctrl+Shift+Space</td><td>The leader key (see below)</td></tr>
+            <tr><td>Ctrl+Shift+\</td><td>Split the focused pane right</td></tr>
+            <tr><td>Ctrl+Shift+-</td><td>Split the focused pane below</td></tr>
+            <tr><td>Ctrl+Shift+Arrows</td><td>Focus the pane in that direction</td></tr>
+            <tr><td>Ctrl+Shift+Z</td><td>Toggle focused pane zoom</td></tr>
+            <tr><td>Ctrl+Shift+X</td><td>Close the focused pane</td></tr>
+            <tr><td>Ctrl+Shift+[ and ]</td><td>Previous and next tab in the focused pane</td></tr>
             <tr><td>Ctrl+Shift+F</td><td>Find in the focused terminal</td></tr>
-            <tr><td>Ctrl+Alt+1 .. 9</td><td>Activate the first nine Projects, in sidebar order</td></tr>
-            <tr><td>Ctrl+Alt+Space (held)</td><td>Push to talk, with no endpoint detection</td></tr>
+            <tr><td>Ctrl+Shift+L</td><td>Toggle the side panel</td></tr>
+            <tr><td>Ctrl+Shift+E / G / U / K</td><td>Side panel: files, Git, queue, transcript</td></tr>
+            <tr><td>Ctrl+Shift+S</td><td>Toggle the Projects sidebar</td></tr>
+            <tr><td>Ctrl+Shift+H</td><td>Browse session history</td></tr>
+            <tr><td>Ctrl+Shift+,</td><td>Open Settings</td></tr>
+            <tr><td>Ctrl+Shift+1 .. 9</td><td>Activate the first nine Projects, in sidebar order</td></tr>
+            <tr><td>Ctrl+Tab, Ctrl+Shift+Tab</td><td>Next and previous tab (desktop app only)</td></tr>
           </tbody>
         </table></div>
       </div>
-      <div class="docsec" id="commands-with-no-default-chord">
-        <div class="head"><span class="n">#</span><h2>Commands with no default chord</h2><span class="fill"></span></div>
-        <p class="prose">Many commands ship unbound on purpose, because they already have a button in view and a chord for them would be a shortcut to something you can already see. They are all in the palette, and all of them are bindable. Among them: browsing history, opening the Projects registry, the global Scratchpad, the usage and quota views, the Automation dashboard, session rename and kill, broadcast input, pane stacking and tab movement, the sidebar filter, the application menu, and the pinned note outline.</p>
+      <div class="docsec" id="the-leader-key-reaches-everything-else">
+        <div class="head"><span class="n">#</span><h2>The leader key reaches everything else</h2><span class="fill"></span></div>
+        <p class="prose">Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> and an overlay names what the next keystroke can be, grouped one letter per area: <kbd>p</kbd> panes, <kbd>s</kbd> sessions, <kbd>w</kbd> Projects, <kbd>v</kbd> views, <kbd>n</kbd> notes, <kbd>t</kbd> terminal, <kbd>g</kbd> Git, <kbd>d</kbd> the side panel, <kbd>f</kbd> focus, and a few more. So a new terminal is leader, <kbd>s</kbd>, <kbd>n</kbd>; the pane to the left is leader, <kbd>p</kbd>, <kbd>h</kbd>. <kbd>Escape</kbd> cancels.</p>
+        <p class="note">A leader is not decoration. Every keystroke after it is a plain keypress that no browser and no window manager competes for, so one reservation buys the whole tree where a flat map would need one per command.</p>
+      </div>
+      <div class="docsec" id="presets-if-you-already-know-another-tool">
+        <div class="head"><span class="n">#</span><h2>Presets, if you already know another tool</h2><span class="fill"></span></div>
+        <p class="prose">Settings, Input, Keyboard preset. Five ship: swe-mux, tmux, VS Code, Vim-flavoured, and Emacs. Each adds its own prefix and its own letters, and each also keeps the swe-mux leader tree, so choosing one never removes the route to a command that tool has no opinion about. You can pick one during first-time setup too.</p>
+        <p class="note">swe-mux is an outer shell, so any chord it claims is claimed from whatever runs inside a pane. The tmux preset takes <kbd>Ctrl</kbd>+<kbd>B</kbd> from a tmux running in a pane; Vim's takes <kbd>Ctrl</kbd>+<kbd>W</kbd>. Each preset says so before you choose it, and each can be rebound afterwards.</p>
       </div>
       <div class="docsec" id="rebinding">
         <div class="head"><span class="n">#</span><h2>Rebinding</h2><span class="fill"></span></div>
-        <p class="prose">Settings, Input, Keyboard shortcuts. A binding needs <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, or <kbd>Meta</kbd> plus a non-modifier key; <kbd>Shift</kbd> alone is refused, because it shadows typing.</p>
-        <p class="note">Overrides are stored in <code>keybindings.json</code> in the data directory. A binding for a command that was later renamed is migrated forward rather than dropped, so a chord you set does not silently stop working after an upgrade.</p>
+        <p class="prose">Settings, Input, Keyboard shortcuts. A binding is one to three chords; only the first needs <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or <kbd>Meta</kbd> (or a function key), because everything after it is read while the shortcut is already armed. <kbd>Shift</kbd> alone is refused, because it shadows typing.</p>
+        <p class="note">Chords name the physical key rather than the character your layout produces, so a shortcut means the same key on QWERTY, AZERTY and Dvorak. Overrides are stored in <code>keybindings.json</code> in the data directory, and a binding for a command that was later renamed is migrated forward rather than dropped.</p>
       </div>
-      <div class="docsec" id="what-the-terminal-keeps">
-        <div class="head"><span class="n">#</span><h2>What the terminal keeps</h2><span class="fill"></span></div>
-        <p class="prose">swe-mux deliberately does not intercept the chords a shell or a TUI needs. <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>, <kbd>Ctrl</kbd>+<kbd>R</kbd>, <kbd>Ctrl</kbd>+<kbd>L</kbd> and their neighbours reach the process, which is why the application's own chords are behind <kbd>Ctrl</kbd>+<kbd>Alt</kbd> rather than bare <kbd>Ctrl</kbd>.</p>
+      <div class="docsec" id="why-not-ctrl-alt">
+        <div class="head"><span class="n">#</span><h2>Why not Ctrl+Alt</h2><span class="fill"></span></div>
+        <p class="prose">Because on most non-US keyboards <kbd>AltGr</kbd> produces exactly <kbd>Ctrl</kbd>+<kbd>Alt</kbd>. swe-mux used to default to that namespace, which meant a German, French, Polish, Spanish or Nordic user fired application shortcuts while typing ordinary characters. No shipped preset uses it, and choosing one yourself is allowed but says so.</p>
+      </div>
+      <div class="docsec" id="what-the-terminal-the-browser-and-your-desktop-keep">
+        <div class="head"><span class="n">#</span><h2>What the terminal, the browser and your desktop keep</h2><span class="fill"></span></div>
+        <p class="prose">swe-mux deliberately does not intercept the chords a shell or a TUI needs. <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>, <kbd>Ctrl</kbd>+<kbd>R</kbd>, <kbd>Ctrl</kbd>+<kbd>L</kbd> and their neighbours reach the process, which is why the application's own chords are on <kbd>Ctrl</kbd>+<kbd>Shift</kbd> rather than bare <kbd>Ctrl</kbd>.</p>
+        <p class="prose">Two other layers get there first, and Settings names both. A browser tab keeps <kbd>Ctrl</kbd>+<kbd>T</kbd>, <kbd>Ctrl</kbd>+<kbd>W</kbd> and a handful more for itself, while the desktop app hands them to swe-mux - so a shortcut can be live in one and absent in the other, and the editor says which. Your window manager takes more still: on GNOME and KDE, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+arrows switch workspace and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> opens a terminal.</p>
+        <p class="note">The list of chords a browser keeps is a guess about your browser, and browsers disagree. Settings, Input has a short test that measures it on the browser you are actually using, and the measurement overrides the guess. A chord you never test stays untested rather than being recorded as blocked.</p>
       </div>
       <div class="docsec" id="mobile-gestures">
         <div class="head"><span class="n">#</span><h2>Mobile gestures</h2><span class="fill"></span></div>

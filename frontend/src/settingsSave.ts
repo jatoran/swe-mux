@@ -14,9 +14,12 @@
 import type { ApiError } from './api'
 
 /** The daemon's answer to `POST /api/settings/apply`, over whatever config shape the caller holds. */
-export type SettingsApplyResponse<C> = {
+export type SettingsApplyResponse<C, K = unknown> = {
   config: C & { hot_applied: string[]; restart_required: string[] }
-  keybindings?: { bindings: Record<string, string> } | null
+  /** The keybindings payload as re-read after the commit. Generic because its shape
+   *  belongs to `/api/keybindings` and is owned by the panel that renders it; this
+   *  module only cares that it either came back or did not. */
+  keybindings?: K | null
   committed: string[]
 }
 

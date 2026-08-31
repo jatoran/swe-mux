@@ -117,6 +117,10 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'railGlassContrast.test.ts': ['stylesheet'],
   'railOverflow.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'railPadModel.test.ts': ['component-jsx'],
+  //: The tokenizer exists in two languages - `keys.ts` records a chord and
+  //: `keychords.py` validates and resolves it - and a table that disagrees with
+  //: itself produces bindings that can never fire, which neither side can see alone.
+  'keys.test.ts': ['cross-language-contract'],
   'scanTimeline.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'schedules.test.ts': ['component-jsx', 'negative-invariant'],
   'scrollbackRepaint.test.ts': ['component-jsx'],

@@ -1,4 +1,29 @@
-export type CommandCategory = 'session' | 'pane' | 'project' | 'terminal' | 'view' | 'input' | 'clipboard' | 'git' | 'history' | 'voice'
+// Kept in step with `COMMAND_GROUPS` in `swe_mux/keybindings.py`, which decides
+// both the Settings grouping and the leader tree's group letters.
+export type CommandCategory = 'session' | 'pane' | 'project' | 'terminal' | 'view' | 'input' | 'clipboard' | 'git' | 'history' | 'voice' | 'notes'
+
+/**
+ * Palette prefixes: one palette, four scopes.
+ *
+ * Typing `@` in the palette narrows to sessions, `#` to Projects, `:` to files and
+ * `>` back to commands. It is VS Code's model and it exists because the palette
+ * scored only command label/id/category, so "go to that session" - the single most
+ * common navigation in a fleet UI - could not be answered by the palette at all.
+ */
+export type PaletteScope = 'commands' | 'sessions' | 'projects' | 'files'
+
+export const PALETTE_PREFIXES: Record<string, PaletteScope> = {
+  '>': 'commands',
+  '@': 'sessions',
+  '#': 'projects',
+  ':': 'files',
+}
+
+/** The scope a query asks for, and the query with its prefix removed. */
+export function paletteScope(query: string, fallback: PaletteScope = 'commands'): { scope: PaletteScope; term: string } {
+  const scope = PALETTE_PREFIXES[query[0]]
+  return scope ? { scope, term: query.slice(1) } : { scope: fallback, term: query }
+}
 
 export type VoiceCommandResult = {
   detail: string
@@ -74,13 +99,15 @@ export function searchCommands(commands: Command[], query: string): Command[] {
     .map(item => item.command)
 }
 
-export function bindingFor(commandId: string, bindings: Record<string, string>): string | undefined {
-  return Object.entries(bindings).find(([, id]) => id === commandId)?.[0]
-}
-
-export function displayChord(chord?: string): string {
-  return chord?.split('+').map(part => part === 'ctrl' ? 'Ctrl' : part === 'alt' ? 'Alt' : part === 'shift' ? 'Shift' : part === 'meta' ? 'Meta' : part.length === 1 ? part.toUpperCase() : part).join(' ') || ''
-}
+// Both moved out when bindings stopped being a flat chord→command map: chord
+// spelling belongs with the tokenizer that produces chords (`keys.ts`) and the
+// command→chord lookup belongs with the trie that holds them (`keymap.ts`).
+// Re-exported here because this is where every consumer already looks.
+export { bindingFor } from './keymap.ts'
+// Imported as well as re-exported: `shortcutMatches` below needs it in local scope,
+// which `export … from` does not provide.
+import { displayChord } from './keys.ts'
+export { displayChord }
 
 /**
  * A command category as a heading rather than as the id it is stored as.
@@ -104,22 +131,28 @@ export const UNBOUND_CHORD = 'not set'
  * Whether one keyboard-shortcut row survives Settings' shortcut filter.
  *
  * The haystack is everything the row shows plus the ids behind it, so the filter
- * answers both questions a reader brings to a 110-row table: "where is the shortcut
+ * answers both questions a reader brings to a 200-row table: "where is the shortcut
  * for X" and "what owns this chord". The chord is matched in both spellings — stored
- * (`ctrl+shift+p`) and displayed (`Ctrl Shift P`) — so neither typing habit misses,
+ * (`ctrl+shift+p`) and displayed (`Ctrl+Shift+P`) — so neither typing habit misses,
  * and an unbound row matches `not set` exactly as it reads on screen.
+ *
+ * `platform` because the displayed half is platform-dependent: a macOS reader sees
+ * `⌘⇧P` and would otherwise be searching a spelling their screen never shows.
  *
  * Every term must match, so extra words narrow, which is the rule the panel's own
  * search already follows.
  */
 export function shortcutMatches(
-  command: { id: string; label: string; category: string }, chord: string | undefined, query: string,
+  command: { id: string; label: string; category: string },
+  chord: string | undefined,
+  query: string,
+  platform = 'win',
 ): boolean {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (!terms.length) return true
   const haystack = [
     command.label, command.id, commandCategoryLabel(command.category),
-    chord || UNBOUND_CHORD, displayChord(chord),
+    chord || UNBOUND_CHORD, displayChord(chord, platform),
   ].join(' ').toLowerCase()
   return terms.every(term => haystack.includes(term))
 }

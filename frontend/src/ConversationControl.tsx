@@ -375,7 +375,11 @@ export function useConversation(
       captureRef.current?.endPushToTalk()
     }
     const down=(event:KeyboardEvent)=>{
-      if(event.code!=='Space'||!event.ctrlKey||!event.altKey||event.repeat)return
+      // Alt+Shift, not Ctrl+Alt: AltGr synthesises Ctrl+Alt on most non-US layouts,
+      // so the old chord began capture whenever such a user typed AltGr+Space. This
+      // is a *hold* rather than a command, so it cannot be an ordinary binding - the
+      // rule model has no press-and-hold - which is why it is fixed here.
+      if(event.code!=='Space'||!event.altKey||!event.shiftKey||event.ctrlKey||event.repeat)return
       if(!enabledRef.current||!captureRef.current)return
       event.preventDefault();event.stopPropagation()
       begin()
@@ -383,7 +387,7 @@ export function useConversation(
     const up=(event:KeyboardEvent)=>{
       // Any part of the chord releasing ends the phrase; the modifiers and the key
       // are rarely released in the same order twice.
-      if(event.code==='Space'||event.key==='Control'||event.key==='Alt')end()
+      if(event.code==='Space'||event.key==='Shift'||event.key==='Alt')end()
     }
     window.addEventListener('keydown',down,true)
     window.addEventListener('keyup',up,true)
@@ -1367,10 +1371,10 @@ export function VoiceDock({
   const phaseHint=!dictating
     ? `${conversation.detail?conversation.detail+' · ':''}The dictation draft is not on screen, so the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the draft. Wake-word commands keep their normal meaning.`
     : `${conversation.detail}${conversation.detail?' · ':''}${conversation.detector===null
-      ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
+      ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Alt+Shift+Space to talk with no pause detection at all.'
       : conversation.detector==='silero'
-        ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
-        : 'Energy-based detection: an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'}`
+        ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Alt+Shift+Space to talk with no pause detection at all.'
+        : 'Energy-based detection: an utterance needs a longer pause to end. Hold Alt+Shift+Space to talk with no pause detection at all.'}`
   return <section
     class={`voice-dock ${dock} ${read?'read-mode':chat?'chat-mode':'talk-mode'} ${conversation.phase}${landed?' landed':''}`}
     aria-label="Voice panel"
