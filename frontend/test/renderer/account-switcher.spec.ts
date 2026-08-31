@@ -53,6 +53,46 @@ test('several accounts stack into quota columns rather than into sentences of di
   await expect(page.locator('.account-popover .quota-row-note')).toHaveText('unavailable')
 })
 
+test('only providers with a credential on this host draw a row', async ({ page }) => {
+  // `providers` is two entries in every payload; `accounts` here holds Claude only,
+  // and Codex is signed out. One row, not two, and no `—` for the one nobody uses.
+  await page.goto('/account-switcher-harness.html?saved=1')
+  await expect(page.locator('.account-summary > button')).toHaveCount(1)
+  await expect(page.locator('.account-summary .provider-glyph.claude')).toHaveCount(1)
+  await expect(page.locator('.account-summary .provider-glyph.codex')).toHaveCount(0)
+  await expect(page.locator('.account-prompt')).toHaveCount(0)
+
+  // The popover still offers both, because a provider with no credential is exactly
+  // the one you might be opening this to add.
+  await page.click('.account-summary > button >> nth=0')
+  await expect(page.locator('.account-popover .account-section-head h4')).toHaveText(['claude', 'codex'])
+})
+
+test('the popover counts live sessions per account and names the ones a switch left behind', async ({ page }) => {
+  await page.goto('/account-switcher-harness.html?accounts=multi')
+  await page.click('.account-summary > button >> nth=0')
+
+  // The selected account carries its count like any other; the badge is a fact about
+  // the row, not a warning about it.
+  const counts = page.locator('.account-popover .account-session-count')
+  await expect(counts).toHaveText(['5×', '2×'])
+
+  // The point of the count. A switch reaches the next process, not the ones already
+  // running, so each non-selected login still being spent is named - and the unsaved
+  // one is named too, or the numbers would not add up.
+  const notices = page.locator('.account-popover .account-session-notice')
+  await expect(notices).toHaveCount(2)
+  await expect(notices.nth(0)).toContainText('2 live sessions on personal')
+  await expect(notices.nth(0)).toContainText('Switching is not retroactive')
+  await expect(notices.nth(1)).toContainText('1 live session on a login that is not saved here')
+
+  // The badge rides in the row's own `small`, so the quota columns above it keep the
+  // geometry `quota-row` depends on: adding it must not move a percentage.
+  const cells = await page.locator('.account-popover .quota-cell-session b').evaluateAll(nodes =>
+    nodes.map(node => Math.round(node.getBoundingClientRect().left)))
+  expect(new Set(cells).size).toBe(1)
+})
+
 test('the codex section carries two quota columns, not an empty fable one', async ({ page }) => {
   await page.goto('/account-switcher-harness.html?accounts=multi')
   await page.click('.account-summary > button >> nth=0')
@@ -62,9 +102,32 @@ test('the codex section carries two quota columns, not an empty fable one', asyn
   await expect(page.locator('.account-popover .quota-columns.has-fable')).toHaveCount(1)
 })
 
+test('a machine signed in to nothing is invited, not reported at', async ({ page }) => {
+  await page.goto('/account-switcher-harness.html')
+
+  // No provider has a credential on this host, so there are no rows: two entries
+  // reading "signed out" is a feature advertising itself to a user who may never
+  // adopt it. What is here instead is one way in and one way out.
+  await expect(page.locator('.account-summary')).toHaveCount(0)
+  const prompt = page.locator('.account-prompt')
+  await expect(prompt).toBeVisible()
+  await expect(prompt.locator('button')).toHaveText(['add provider', 'hide'])
+
+  // `hide` goes through the host, because the flag is machine config rather than
+  // anything this component remembers.
+  await prompt.locator('button', { hasText: 'hide' }).click()
+  await expect(page.locator('.account-prompt')).toHaveCount(0)
+  await expect(page.locator('.account-summary')).toHaveCount(0)
+  const ui = await page.evaluate(() =>
+    (window as unknown as { __calls: { method: string; url: string }[] }).__calls
+      .filter(call => call.method === 'UI'))
+  expect(ui).toEqual([{ method: 'UI', url: 'dismiss-prompt' }])
+})
+
 test('an empty popover offers the sign-in it used to only describe the absence of', async ({ page }) => {
   await page.goto('/account-switcher-harness.html')
-  await page.click('.account-summary > button >> nth=0')
+  // The invitation is the way in now that there are no provider rows to click.
+  await page.click('.account-prompt button >> nth=0')
 
   const cta = page.locator('.account-empty-cta').first()
   await expect(cta).toBeVisible()

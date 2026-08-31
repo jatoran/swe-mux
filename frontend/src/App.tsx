@@ -707,6 +707,13 @@ export function App() {
   const [experienceTierUnchosen, setExperienceTierUnchosen] = useState(false)
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false)
   const [questSignals, setQuestSignals] = useState<QuestSignals>({})
+  // The sidebar's "add a provider account" invitation, which the status block shows
+  // only while no provider has a credential on this host. Machine-side like the
+  // quest dismissals above and for the same reason: it invites you to add a login
+  // to the daemon host, so putting it away at the desk must also put it away on
+  // the phone. Undefined until `/api/config` settles, which is what keeps the
+  // invitation from flashing on an install that has already dismissed it.
+  const [accountPromptDismissed, setAccountPromptDismissed] = useState<boolean | undefined>(undefined)
   const questAction = (id: QuestId): void => {
     if (id === 'voice') setVoiceSetupOpen(true)
     else if (id === 'worktrees') showDrawerTab('git')
@@ -719,6 +726,13 @@ export function App() {
     const next = withQuestDismissed(questSignals.quests_dismissed, id)
     setQuestSignals(current => ({ ...current, quests_dismissed: next }))
     void api('PATCH', '/api/config', { quests_dismissed: next }).catch(() => {})
+  }
+  // Optimistic and machine-side, exactly like the quest dismissal above. There is
+  // deliberately no control to bring it back: it answers itself the moment a
+  // credential exists, because the status block is derived rather than remembered.
+  const dismissAccountPrompt = (): void => {
+    setAccountPromptDismissed(true)
+    void api('PATCH', '/api/config', { provider_accounts_prompt_dismissed: true }).catch(() => {})
   }
   // False until the first `/api/config` call settles, either way. Whether the first-run
   // harness panel is going to lead is a fact only the daemon holds, and it arrives after
@@ -1842,6 +1856,7 @@ export function App() {
       stt_enabled: config.stt_enabled === true,
       quests_dismissed: Array.isArray(config.quests_dismissed) ? config.quests_dismissed as string[] : [],
     })
+    setAccountPromptDismissed(config.provider_accounts_prompt_dismissed === true)
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
     applyRailDensity(config)
@@ -7595,7 +7610,11 @@ export function App() {
             </>}
         </div>
         <div class="sidebar-status">
-          <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
+          {/* The one surface that carries the empty-state invitation. `firstRun` holds
+              it back while the harness panel or the tour is on screen: the tour has an
+              account step of its own, and two invitations to the same thing at once is
+              the overwhelm the first-run work exists to remove. */}
+          <AccountSwitcher onManage={()=>openSettings('Accounts')} promptDismissed={accountPromptDismissed!==false} promptSuppressed={firstRun!=='none'} onDismissPrompt={dismissAccountPrompt}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
         <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button

@@ -83,11 +83,21 @@ const MATRIX = {
     { id: 'cross_session_interlocks', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false, spends: false, globally_allowed: true, install_switch: null },
   ],
   projects: [
-    { project_id: 'p1', project_name: 'swe-mux', status: 'ready', revision: 'r1', requested: { raw_store: true, tier0: true, loop_detection: true, doc_debt: true }, enabled: ['loop_detection', 'raw_store', 'tier0', 'session_control'], blocked: {}, unverified: [], globally_disabled: ['doc_debt'], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false },
-    { project_id: 'p2', project_name: 'orca', status: 'ready', revision: 'r2', requested: {}, enabled: ['session_control'], blocked: {}, unverified: [], globally_disabled: [], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false },
+    { project_id: 'p1', project_name: 'swe-mux', status: 'ready', revision: 'r1', requested: { raw_store: true, tier0: true, loop_detection: true, doc_debt: true }, enabled: ['loop_detection', 'raw_store', 'tier0', 'session_control'], blocked: {}, unverified: [], globally_disabled: ['doc_debt'], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false, authority: { session_control_grant: 'draft' }, authority_effective: { session_control_grant: 'draft', spawn_grant: 'granted', land_grant: 'draft', land_verify_grant: 'granted', interject_grant: 'granted', message_envelope: 'compact' } },
+    { project_id: 'p2', project_name: 'orca', status: 'ready', revision: 'r2', requested: {}, enabled: ['session_control'], blocked: {}, unverified: [], globally_disabled: [], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false, authority: {}, authority_effective: { session_control_grant: 'granted', spawn_grant: 'granted', land_grant: 'draft', land_verify_grant: 'granted', interject_grant: 'granted', message_envelope: 'compact' } },
   ],
   global_allow: { doc_debt: false },
   install_switches: { automation_enabled: true, scan_timeline_enabled: true, scheduled_runs_enabled: true, land_queue_enabled: true },
+  authority_fields: [
+    { field: 'session_control_grant', label: 'Interrupt and end sessions', levels: ['draft', 'granted'], builtin: 'granted', gated_by: 'session_control' },
+    { field: 'spawn_grant', label: 'Start new sessions here', levels: ['draft', 'granted'], builtin: 'granted', gated_by: 'session_control' },
+    { field: 'land_grant', label: 'Land a branch onto the trunk', levels: ['draft', 'granted'], builtin: 'draft', gated_by: 'land_queue' },
+    { field: 'land_verify_grant', label: 'Change the verification command', levels: ['draft', 'granted'], builtin: 'granted', gated_by: 'land_queue' },
+    { field: 'interject_grant', label: 'Write into a running turn', levels: ['off', 'granted'], builtin: 'granted', gated_by: null },
+    { field: 'message_envelope', label: 'Metadata on delivered agent messages', levels: ['full', 'compact', 'bare'], builtin: 'compact', gated_by: null },
+  ],
+  authority_default: {},
+  authority_ceiling: {},
 }
 
 const GRANTS = {

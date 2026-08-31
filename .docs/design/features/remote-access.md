@@ -94,9 +94,21 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   to the name, and it prefers the secure Serve address when one is up. The QR is a self-contained
   inline SVG (the `qrcode-generator` dependency), rendered on a white plate so it scans in either
   theme.
-- `GET /api/diagnostics/prerequisites` reports the presence of Git, Node, npm, and Tailscale, each
-  with what it backs and a next step, so a feature that needs an absent tool reads as unconfigured
-  rather than broken. It is surfaced in Settings → Remote.
+- `GET /api/diagnostics/prerequisites` reports the presence of Git, Node, npm, uv, and Tailscale,
+  each with what it backs and a next step, so a feature that needs an absent tool reads as
+  unconfigured rather than broken. It is surfaced in Settings → Diagnostics.
+  Each row is in one of **three** states, and the middle one is why: `present`, `off_path`
+  (found at a known install location, so the remedy is a PATH entry rather than an install), and
+  `missing`.
+  Detection was PATH-only until 2026-08-30 and reported Git and a *connected* Tailscale as absent
+  on the first machine that was not the development host, then offered `winget install` for both.
+  Tailscale's Windows MSI never adds its directory to PATH, so that was every GUI install of it.
+  `POST /api/diagnostics/prerequisites/refresh` re-runs detection, and re-reads PATH from the
+  Windows registry first - a daemon inherits its environment once at spawn, so without that the
+  button would return the same answer for a tool the user had just installed. It reports
+  `path_refreshed` so the UI can distinguish "nothing changed" from "nothing was checked", and
+  `path_refresh_supported` is false off Windows, where there is no out-of-band PATH to re-read.
+  `config.tool_paths` holds a per-tool absolute-path override, consulted ahead of both.
 - The tailnet-only, no-login posture is stated in the UI, not only in this doc: Settings → Remote
   and the Connect-a-phone modal both carry a line that any tailnet device reaches the daemon with
   full terminal and code-execution authority and no login, so the listener must not be enabled on a

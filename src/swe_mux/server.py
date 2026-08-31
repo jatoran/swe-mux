@@ -1454,6 +1454,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         turn_refresh_enabled=config.provider_quota_turn_refresh_enabled,
         turn_refresh_min_seconds=config.provider_quota_turn_refresh_min_minutes * 60,
     )
+    # Late-wired, in this direction only: the account manager already holds the
+    # session manager, so a session asking it for the current account at spawn
+    # has to arrive as a callable rather than as a second reference.
+    sessions.provider_attribution = provider_accounts.spawn_attribution
     process_inspector = ProcessInspector(
         sessions,
         events,
