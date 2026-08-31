@@ -667,8 +667,14 @@ Both leave an audit record (`land_verify_command_changed`, `land_verify_approved
 
 ## The agent surface
 
-`request_land` and `request_verify` (`mux-mcp.md`), two callers over the same service.
-Neither has a **target argument**: the checkout comes from the caller's own live cwd, so "an agent acts on the checkout it is working in, and no other" is true by construction rather than by a check something could be routed around.
+`request_land` and `request_verify` (`mux-mcp.md`) are two targetless callers over the same service.
+A live linked-worktree cwd is authoritative, which keeps the native Claude worktree flow unchanged.
+When a Codex session creates a worktree after startup while its host cwd remains on the primary checkout, `use_worktree` establishes a separate run-bound selection and `worktree_context` reports it.
+The selection accepts only an exact linked worktree from the Project's Git registry, rejects trunk, detached, changed-branch, and live-session-owned targets, persists across daemon restart, and expires across conversation rollover.
+The land calls themselves still accept no checkout path.
+
+Busy-session detection includes both live cwd and the current run's selection.
+A Codex session still working in its selected checkout therefore holds the request exactly as a Claude session whose process lives there does.
 
 They are **two tools rather than one tool with a flag**, and the reason is which call is the default spelling.
 A flag would make the request that moves a repository's trunk the plain form of the request that moves nothing, so a caller that omitted it would land; and it would put both under one grant, when the grant exists for the trunk.
