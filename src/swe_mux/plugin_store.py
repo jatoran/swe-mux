@@ -207,6 +207,7 @@ class PluginStore:
             "manifest_digest",
             "content_digest",
             "security_digest",
+            "name",
             "version",
             "resolved_ref",
         }

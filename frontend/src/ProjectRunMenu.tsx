@@ -11,6 +11,7 @@ import { isAbsolutePath } from './gitWorktrees'
 import { normalizeWorktreeBranchInput, worktreePathForBranch } from './worktreeLaunch'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
+import { projectPluginPanes, type InstalledPlugin } from './pluginCatalog.ts'
 
 type Anchor={x:number;y:number}
 type Props={
@@ -23,6 +24,8 @@ type Props={
   onCustom:()=>void
   onSessions:(sessions:Session[])=>void
   onWorktreeCreated:(path:string,backend:ProjectBackend)=>void
+  plugins:InstalledPlugin[]
+  onPluginPane:(pluginId:string,paneId:string)=>void
   onError:(message:string)=>void
 }
 
@@ -35,7 +38,7 @@ type WorktreeCreateResult={ok:true;path:string}
 type ActionsSource={path:string;exists:boolean;text:string;revision:string;starter:boolean}
 type ActionsSaved=ActionsSource&{diagnostics:string[];catalog:ProjectActionCatalog}
 
-export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeCreated,onError}:Props){
+export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeCreated,plugins,onPluginPane,onError}:Props){
   const harnesses=promptDeliveryHarnesses()
   // A harness plus its launch profiles, so "Claude" and "Claude (plan)" sit together
   // rather than in a separate list where the relationship is lost.
@@ -216,6 +219,7 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
     finally{setBusy('')}
   }
   const groups=(['native','vscode','package'] as const).map(source=>({source,items:catalog?.actions.filter(item=>item.source===source)||[]})).filter(group=>group.items.length)
+  const pluginPanes=projectPluginPanes(plugins)
   const left=Math.min(anchor.x,Math.max(6,window.innerWidth-306))
   const top=Math.min(anchor.y,Math.max(6,window.innerHeight-460))
   return <>
@@ -256,6 +260,7 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
         <button role="menuitem" aria-label="Open custom terminal launcher" disabled={!!busy} onClick={onCustom}><span aria-hidden="true">⋯</span><div><strong>Custom terminal…</strong></div></button>
       </div>
       <div class="run-menu-section"><small>ISOLATED CHECKOUT</small><button role="menuitem" aria-label="Create a worktree and start a session" disabled={!!busy} onClick={openWorktree}><span aria-hidden="true">⑂</span><div><strong>New worktree session…</strong></div></button></div>
+      {!!pluginPanes.length&&<div class="run-menu-section"><small>PLUGIN TOOLS</small>{pluginPanes.map(item=><button role="menuitem" key={`${item.pluginId}:${item.pane.id}`} disabled={!!busy} title={item.pane.description} onClick={()=>{onClose();onPluginPane(item.pluginId,item.pane.id)}}><span aria-hidden="true">◇</span><div><strong>{item.pane.title}</strong><em>{item.pluginName}</em></div></button>)}</div>}
       {loading?<p>Reading Project tasks…</p>:groups.map(group=><div class="run-menu-section" key={group.source}><small>{sourceLabel[group.source]}</small>{group.items.map(action=>{
     /* Only the run shape sits beside the title. The description is agent-facing prose
        and it is laid out `flex:none`, so it took the whole row and ellipsised the name

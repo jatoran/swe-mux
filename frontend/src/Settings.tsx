@@ -350,10 +350,10 @@ function VerificationBadge({entry}:{entry:LlmProviderEntry}){
 }
 
 
-export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, onStartVoiceSetup, onLaunchConfigurator, initialSection, initialSetting, revealToken, voiceCommands=[], navOpen=false, onNavOpenChange, drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void;onStartVoiceSetup?:()=>void;
+export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, onStartVoiceSetup, onLaunchConfigurator, focusedProjectId, initialSection, initialSetting, revealToken, voiceCommands=[], navOpen=false, onNavOpenChange, drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void;onStartVoiceSetup?:()=>void;
   /** Start the configurator agent. Owned by the composition root, like the tutorial:
    *  a launch places a pane in the workspace, which this panel does not have. */
-  onLaunchConfigurator?:(harness?:string)=>void; initialSection?:string;
+  onLaunchConfigurator?:(harness?:string)=>void;focusedProjectId?:string;initialSection?:string;
   /** `data-setting` id of one control to scroll to and flash on arrival (`settingTargets.ts`). */
   initialSetting?:string;
   /** Changes per deep-link request, so the same link twice reveals twice. */
@@ -2352,7 +2352,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="settings-status-grid"><article><strong>Engine</strong><span>{draft.automation_enabled?'On':'Off'}</span></article><article><strong>Rules</strong><span>{automation?.rules.length||0} custom</span></article><article><strong>Queue</strong><span>{automation?.queue.size||0}/{automation?.queue.capacity||0}</span></article><article><strong>Runtime</strong><span>{automation?.diagnostic?'Needs review':'Healthy'}</span></article></div>
           <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation workspace</button></div>
         </section>}
-        {activeTab==='plugins'&&<PluginsSettings/>}
+        {activeTab==='plugins'&&<PluginsSettings focusedProjectId={focusedProjectId}/>}
 
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
