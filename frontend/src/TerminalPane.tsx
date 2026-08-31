@@ -108,7 +108,7 @@ import {
   type TerminalInputSource,
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
-import { SOFT_KEYBOARD_EVENT, clampPeekOffset, deepActiveElement, hiddenOutputDeservesPeek, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, shouldHoldBridgeFocus, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, touchCompatMouseEvent, type PeekTrigger } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, clampPeekOffset, deepActiveElement, hiddenOutputDeservesPeek, holdSoftKeyboard, inputEndsPeek, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, shouldHoldBridgeFocus, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, touchCompatMouseEvent, type PeekTrigger } from './mobileKeyboard'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { RESERVE_INTENT_WINDOW_MS, nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
@@ -2522,7 +2522,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // Typing is the reader saying they have stopped reading, so a pane peeking at the top
       // of its grid returns to the composer. Deliberately on input rather than on writes:
       // snapping back on output would fight the reader for the whole of a streaming reply.
-      applyPeekRef.current('input')
+      // Wheel reports are excluded (`inputEndsPeek`): a drag that pans the peek to its end
+      // chains into forwarded scroll reports through this same path, and counting those as
+      // typing snapped the peek back mid-gesture for as long as the keyboard stayed up.
+      if(inputEndsPeek(data))applyPeekRef.current('input')
       // The same sentence, one viewport further in. A submission moves the *application's*
       // own viewport to its newest output, and that is the one movement the pane forwards
       // nothing for and can never total, so the running estimate has to be dropped rather

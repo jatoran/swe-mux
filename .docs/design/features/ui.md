@@ -1736,8 +1736,9 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   forwarded for the pane to total, so the running estimate describes a position the reader has
   already left - which is what kept a chip up over a viewport sitting exactly where its own tap
   would have sent them, on the most common thing anyone does after reading back.
-  It is decided by `inputResetsAppTail` at the single `onData` chokepoint, beside the peek
-  pan's identical reset, and reads the harness's declaration rather than the harness's name.
+  It is decided by `inputResetsAppTail` at the single `onData` chokepoint, beside the peek's
+  own input reset (`inputEndsPeek`), and reads the harness's declaration rather than the
+  harness's name.
   Three things are deliberately not submissions: the declared `composer_newline`, which is the
   one CR-bearing sequence that keeps a composer open and is what a phone's Enter key sends; the
   payload of a bracketed paste, except the leading newline on a harness declaring
@@ -3108,10 +3109,16 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   trapdoor: the control that reveals the top is still on screen and still takes you back.
   Measured with a 415px keyboard over a 48-row grid: the first visible row moves 27 → 0 → 27
   across toggle presses while the rail holds at 447..500 and the chip at 400..438.
-- `nextPeekState` owns when peeking ends. Typing returns to the composer (the caret is there and a
+- `nextPeekOffset` owns when peeking ends. Typing returns to the composer (the caret is there and a
   reader who types has stopped reading) and losing the keyboard ends it outright (the whole grid
   fits again). Output deliberately does **not** end it: a streaming reply is exactly when a reader
   is peeking, so snapping back on writes would make the toggle useless when it is most needed.
+  "Typing" is judged at the `onData` chokepoint by `inputEndsPeek`, which excludes plain wheel
+  reports on the pacer's own classification (`isWheelReportBurst`): a drag that pans the peek to
+  its end chains the leftover travel into forwarded scroll reports through that same path, and
+  counting those as typing snapped the peek back to the composer mid-gesture — scrolling up while
+  the keyboard was open kept reverting until the keyboard went down. Non-wheel mouse reports still
+  end the peek, because a tap is the reader acting on the composer's half of the grid.
 - The one output that *does* move the pane is `hiddenOutput`, and it is narrow on purpose
   (`hiddenOutputDeservesPeek`). It exists for a reader parked at the composer **with nothing to
   look at** — a first message and its reply both landing in the half the keyboard hides — so it
