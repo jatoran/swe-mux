@@ -88,10 +88,49 @@ type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<stri
 const fileDrafts=new Map<string,FileDraft>()
 const browserStates=new Map<string,BrowserState>()
 
+/** Save states whose text is not on disk. `saving` is deliberately not one: the queue is
+ *  module-scoped and completes whether or not this editor is still mounted, so treating an
+ *  in-flight write as unsaved work would arm a confirmation nobody needs. */
+const UNSAVED_STATES=new Set(['modified','error'])
+const draftUnsaved=(draft:FileDraft|undefined)=>!!draft&&UNSAVED_STATES.has(draft.saveState)
+
+/** Fired when a file gains or loses unsaved edits. The draft cache is a plain module map, so
+ *  a surface outside this component (the drawer's file rail, which marks its chips and guards
+ *  their close) has no other way to notice. Only *transitions* are announced, not keystrokes. */
+export const FILE_DRAFT_EVENT='mux:file-draft-changed'
+
+/**
+ * Project-relative paths of this Project's files with edits that are not on disk.
+ *
+ * Project-root files only: a `worktree-file` belongs to an exact checkout and is never one of
+ * the drawer's own tabs, so folding it in here would protect a path the caller cannot close.
+ */
+export function unsavedFilePaths(projectId:string):Set<string>{
+  const paths=new Set<string>()
+  for(const [key,draft] of fileDrafts){
+    if(!draftUnsaved(draft))continue
+    const [scope,kind,worktree,id]=key.split('\0')
+    if(scope===projectId&&kind==='file'&&!worktree&&id)paths.add(id)
+  }
+  return paths
+}
+
+/**
+ * Where a picked file should be shown.
+ *
+ * `default` lets the host decide, and the drawer's Files tab decides "here, as a tab in my own
+ * rail" - the whole point of the change, since opening a file used to close the panel and
+ * cover the terminal underneath. `pane` is the explicit ask for a workspace pane, and it has
+ * to stay one gesture away: mod+click on a row, "Open in a pane" in the row menu, the same
+ * item on an open file's rail chip, and the row drag that has always worked. A pane host
+ * (`kind:'file'` in the layout) treats both the same, because it is already a pane.
+ */
+export type FileOpenIntent='default'|'pane'
+
 type Props={
   project:Project
   resource:ProjectResourceIdentity
-  onOpenFile:(path:string)=>void
+  onOpenFile:(path:string,intent?:FileOpenIntent)=>void
   onFileDragStart?:(path:string,event:JSX.TargetedPointerEvent<HTMLElement>)=>void
   /** Opens the send-to-agent dialog. Only the Continuity-backed views (notes and markdown
    *  files) offer it: they are the surfaces that own a real selection. */
@@ -439,8 +478,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     // identical to what a refetch would produce, and keeping every file ever
     // opened accumulated megabytes of strings for the page's lifetime (this app
     // is designed to stay open for days).
-    if(text===baseline&&saveState!=='error'){fileDrafts.delete(resourceKey);return}
-    fileDrafts.set(resourceKey,{revision,text,baseline,status,size:fileSize,presentation,saveState,error})
+    const before=draftUnsaved(fileDrafts.get(resourceKey))
+    if(text===baseline&&saveState!=='error')fileDrafts.delete(resourceKey)
+    else fileDrafts.set(resourceKey,{revision,text,baseline,status,size:fileSize,presentation,saveState,error})
+    const after=draftUnsaved(fileDrafts.get(resourceKey))
+    // Only the transition, so typing into an already-dirty file costs nothing.
+    if(before!==after)window.dispatchEvent(new CustomEvent(FILE_DRAFT_EVENT,{detail:{projectId:resourceScope,path:resource.id,worktree:worktree||'',unsaved:after}}))
   },[resource.kind,resourceKey,revision,text,baseline,status,fileSize,presentation,saveState,error])
 
   useEffect(()=>{
@@ -1250,6 +1293,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     if(suppressTreeClick.current){suppressTreeClick.current=false;return}
     action()
   }
+  /**
+   * Opening a row, and the one modifier that changes where it lands.
+   *
+   * A plain click asks the host for its default placement, which in the drawer is now a tab in
+   * the Files rail rather than a workspace pane. Mod-click is the fast way back to the old
+   * behaviour and is one of four - the row menu, the rail chip's menu, and the row drag are the
+   * others - because a default that changed with no escape hatch is a regression however good
+   * the new default is. Ctrl on Windows and Linux, Cmd on macOS, where Ctrl-click is the
+   * secondary click and never reaches this handler at all.
+   */
+  const openRow=(path:string,event:JSX.TargetedMouseEvent<HTMLElement>)=>
+    runTreeClick(()=>onOpenFile(path,event.ctrlKey||event.metaKey?'pane':'default'))
+  const ROW_HINT='ctrl/cmd-click for a pane · right-click or long-press for actions'
 
   useEffect(()=>()=>cancelTreeLongPress(),[])
 
@@ -1373,7 +1429,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     return <>{directory.items.map(item=>item.kind==='directory'?<div class="file-tree-branch" key={item.path}>
       <button class="file-tree-row directory" style={{paddingLeft:`${9+depth*15}px`}} title="Open folder · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>toggleDirectory(item.path))} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}/</strong></button>
       {expanded.has(item.path)&&tree(item.path,depth+1)}
-    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} title="Open file · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>onOpenFile(item.path))} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
+    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} title={`Open file · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(item.path,event)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
   }
 
   const searchModes:SearchMode[]=['names','contents','both']
@@ -1428,7 +1484,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
         ?<div class="file-results" role="list" aria-busy={searching} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
           {searching&&!results.length?<p class="file-tree-loading" role="status" aria-live="polite">Searching for “{query.trim()}”…</p>
             :!results.length?<p class="file-tree-loading">No matches.</p>
-            :<>{results.map(hit=>{const item:DirectoryItem={name:hit.name,path:hit.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={hit.path} title="Open file · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>onOpenFile(hit.path))} onContextMenu={event=>openTreeMenu(item,event)}>
+            :<>{results.map(hit=>{const item:DirectoryItem={name:hit.name,path:hit.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={hit.path} title={`Open file · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(hit.path,event)} onContextMenu={event=>openTreeMenu(item,event)}>
                 <span class="file-result-line"><span>·</span><strong>{hit.name}</strong><small>{hit.path}</small></span>
                 {hit.match==='content'&&hit.snippet&&<em class="file-result-snippet">{hit.line!=null?`${hit.line}: `:''}{hit.snippet}</em>}
               </button>})}
@@ -1442,15 +1498,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
             // for the first would be a lie the reader cannot see through.
             :recent&&!recent.available?<p class="file-tree-loading">{recent.reason||'Recent files are unavailable here.'}</p>
             :recent&&!recent.items.length?<p class="file-tree-loading">Nothing changed recently in this Project.</p>
-            :<>{(recent?.items||[]).map(entry=>{const item:DirectoryItem={name:entry.name,path:entry.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={entry.path} title={`${entry.path} · ${recentEntryTitle(entry)} · right-click or long-press for actions`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>onOpenFile(entry.path))} onContextMenu={event=>openTreeMenu(item,event)}>
+            :<>{(recent?.items||[]).map(entry=>{const item:DirectoryItem={name:entry.name,path:entry.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={entry.path} title={`${entry.path} · ${recentEntryTitle(entry)} · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(entry.path,event)} onContextMenu={event=>openTreeMenu(item,event)}>
                 <span class="file-result-line"><span class={`file-recent-mark file-recent-${entry.origin}`} aria-hidden="true">{entry.origin==='working'?'●':'·'}</span><strong>{entry.name}</strong><small>{entry.path}</small></span>
                 <em class="file-recent-when">{recentEntryTitle(entry)}</em>
               </button>})}</>}
         </div>
         :<div class="file-tree" role="tree" onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>{tree('')}</div>}
     </div>
-    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-(treeMenu.item.kind==='file'?320:290)))}} onMouseDown={event=>event.stopPropagation()} onClickCapture={event=>{if(treeMenuOpenedByTouch.current&&performance.now()-treeMenuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}>
+    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-(treeMenu.item.kind==='file'?350:290)))}} onMouseDown={event=>event.stopPropagation()} onClickCapture={event=>{if(treeMenuOpenedByTouch.current&&performance.now()-treeMenuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}>
       <div class="context-title"><strong>{treeMenu.item.name}</strong></div>
+      {/* First, and named rather than implied: a plain click now opens into whichever host asked
+          (the drawer's own rail, in the Files tab), so the pane placement needs somewhere it is
+          spelled out. Mod-click and the row drag do the same thing without opening this menu. */}
+      {treeMenu.item.kind==='file'&&<button role="menuitem" title="Open this file as a workspace pane tab" onClick={()=>{const path=treeMenu.item.path;setTreeMenu(null);onOpenFile(path,'pane')}}>Open in a pane</button>}
       <button role="menuitem" onClick={()=>beginCreateResource('file')}>New file…</button>
       <button role="menuitem" onClick={()=>beginCreateResource('directory')}>New folder…</button>
       <div class="context-rule"/>

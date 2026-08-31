@@ -113,7 +113,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   {
     id: 'project-resources',
     title: 'Files and notes',
-    blurb: 'The Project’s own tree and its working documents - browse or search here, then open into a pane beside the terminal.',
+    blurb: 'The Project’s own tree and its working documents - browse or search here, open what you find as a tab in this panel, and move it into a pane beside the terminal when you want the width.',
     anchor: { tab: 'files' },
     docs: 'notes-files',
   },

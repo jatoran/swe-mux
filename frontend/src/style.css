@@ -4307,10 +4307,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
 .drawer-body-notifications>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-/* Files has no pane heading; its browser sits inside a `.drawer-segment-body`, so it needs
+/* Files has no pane heading; its browser sits inside `.drawer-files-host`, so it needs
    no title-clearance inset. */
 .drawer-body-processes .processes-filters,.drawer-body-schedule .schedule-filters,.drawer-body-schedule .schedule-editor header,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-.drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}
+.drawer-body-files .drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}
 
 /* The dock owns one persistent layout tree. Each leaf is a tab stack and every internal
    node is a keyboard and pointer resizable split. */
@@ -4402,7 +4402,45 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer .drawer-view-tabs>button{min-width:0;min-height:34px;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 .utility-drawer .drawer-view-tabs>button:hover{color:var(--text);background:var(--panel2)}
 .utility-drawer .drawer-view-tabs>button.active{border-bottom-color:var(--green);color:var(--text);background:color-mix(in srgb,var(--green) 7%,var(--panel))}
+/* Standing down: the Files tab with a file showing, where the rail below owns the selection.
+   The index this would return to is still marked, faintly, because it is still true - but two
+   fully lit chips over one body is the ambiguity `DrawerViewTabs`'s `selected` exists to end. */
+.utility-drawer .drawer-view-tabs.standing-down>button.active{border-bottom-color:color-mix(in srgb,var(--green) 34%,transparent);background:transparent;color:var(--muted)}
 @media(max-width:760px){.utility-drawer .drawer-view-tabs>button{min-height:40px}}
+
+/* The Files tab's second rail: the files open in this panel.
+   A scrollable document rail like the Notes one rather than the even grid above it, because
+   these are documents and there is no useful width to divide equally between four of them. */
+.drawer-file-subtabs-row{position:relative;flex:none;min-width:0;display:flex;height:calc(31px*var(--ui-scale));border-bottom:1px solid var(--line);background:var(--panel2)}
+.drawer-file-subtabs-rail{--overflow-rail-bg:var(--panel2);--overflow-rail-accent:var(--green);flex:1 1 auto;min-width:0}
+.drawer-file-subtabs{height:100%;display:flex;overflow-x:auto;overflow-y:hidden}
+.drawer-file-tab-shell{flex:0 0 auto;min-width:0;max-width:190px;height:100%;display:flex;align-items:stretch;border-right:1px solid var(--line)}
+.drawer-file-tab-shell.active{background:var(--bg);box-shadow:inset 0 -2px var(--green)}
+.drawer-file-tab{min-width:0;height:100%;padding:0 4px 0 9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;background:transparent;color:var(--muted);font:inherit;font-size:9px;cursor:pointer}
+.drawer-file-tab-shell:hover .drawer-file-tab,.drawer-file-tab:focus-visible{color:var(--text)}
+.drawer-file-tab.active{color:var(--text)}
+/* Unsaved work, marked on the chip rather than only in the close confirmation, so the state is
+   legible before the reader reaches for the control that would discard it. */
+.drawer-file-dirty{margin-right:4px;color:var(--amber);font-style:normal}
+.drawer-file-close{flex:none;width:20px;height:100%;padding:0;border:0;background:transparent;color:var(--muted);font:inherit;font-size:11px;cursor:pointer}
+.drawer-file-close:hover,.drawer-file-close:focus-visible{background:var(--panel);color:var(--text)}
+.drawer-file-close.confirming{width:26px;color:var(--red);font-size:9px}
+.drawer-file-subtabs-row>.drawer-file-pop{flex:none;width:31px;height:100%;padding:0;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:13px;cursor:pointer}
+.drawer-file-subtabs-row>.drawer-file-pop:hover,.drawer-file-subtabs-row>.drawer-file-pop:focus-visible{background:var(--panel);color:var(--text)}
+.drawer-file-subtabs-row>.drawer-file-pop:disabled{opacity:.4;cursor:not-allowed}
+/* Absolutely positioned so a transient copy confirmation never reflows the rail under the
+   pointer that is still hovering it. */
+.drawer-file-notice{position:absolute;z-index:9;top:100%;right:0;margin:0;padding:3px 8px;border:1px solid var(--line);border-top:0;background:var(--panel);color:var(--muted);font-size:8px;white-space:nowrap}
+
+/* The Files workspace, kept mounted for the reasons `.drawer-note-host` is - it hosts editors
+   now, and `hidden` has to beat this rule's own `display:flex`. */
+.drawer-files-host{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.drawer-files-host[hidden]{display:none}
+.drawer-files-browser{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.drawer-files-browser[hidden]{display:none}
+.drawer-files-host>.project-resource,.drawer-files-browser>.project-resource{flex:1 1 auto;height:auto;min-height:0}
+.utility-drawer .drawer-files-host .project-resource.file-editor>header{min-height:26px;padding:4px 9px}
+.utility-drawer .drawer-files-host .resource-actions button{min-width:0;padding:0 6px;font-size:9px}
 .drawer-pane[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--green) 13%,transparent)}
 .drawer-pane[data-pointer-drop-indicator="join"]:after{inset:34px 0 0}
 .drawer-pane[data-pointer-drop-indicator="split-left"]:after{inset:34px 76% 0 0}

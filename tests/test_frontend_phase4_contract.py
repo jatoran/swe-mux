@@ -279,7 +279,12 @@ def test_notes_tab_manages_the_project_owned_collection() -> None:
     set_open = app[app.index("const setClipboardOpen=") : app.index("const selectDrawerTab=")]
     assert "releaseDrawerNote" not in set_open
     assert "selectedResourceId={props.drawerNoteId}" in drawer
-    assert "selected !== 'notes' && renderSegmentedBody(stack.id, selected, segment)" in drawer
+    # Notes is dispatched outside the segmented body so its editor is never unmounted by a
+    # tab switch. Files joined it there for the same reason once it began hosting editors too.
+    assert (
+        "selected !== 'notes' && selected !== 'files' "
+        "&& renderSegmentedBody(stack.id, selected, segment)"
+    ) in drawer
 
     # Scope follows how you arrived. Every scope-less entry point (rail, strip, drawer.notes)
     # goes through showDrawerTab and means "this Project"; only the app menu's unscoped
@@ -293,7 +298,7 @@ def test_notes_tab_manages_the_project_owned_collection() -> None:
 
 
 def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
-    """Files opens documents into panes, so it costs a drawer tab, not a permanent one.
+    """Files hosts what it opens, so it costs a drawer tab, not a permanent one.
 
     The layout used to carry a Files leaf and route every placement rule around it. That
     special-casing is gone with the leaf: a persisted `files:` leaf is pruned on read.
@@ -322,6 +327,55 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
     # Dragging a file row onto a pane survives the move, but only on desktop: the mobile
     # drawer is an overlay with no visible pane to drop onto.
     assert "onFileDragStart={mobileWorkspace?undefined:" in app
+
+
+def test_the_files_tab_hosts_the_files_it_opens() -> None:
+    """A picked file opens in the Files tab, and its pane placement stays one gesture away.
+
+    Two claims here are cross-file and cannot be reached from either side alone.
+
+    The first is a correctness rule and is why this is not merely an ergonomic change. A file
+    is edited through the module-scoped save queue a note is, so two mounted editors on one
+    file discard one side's text with no conflict the daemon can see. The drawer therefore
+    claims a file from its pane exactly as it claims a note, and only the *showing* chip is
+    mounted - the other open chips are rail entries with no editor at all.
+
+    The second is why the state is device-local rather than layout state: `project.layout` is
+    persisted server-side and shared, so the old behaviour let a phone rearrange the desktop's
+    panes just by browsing files.
+    """
+    app = source("App.tsx")
+    drawer = source("UtilityDrawer.tsx")
+    resource = source("ProjectResource.tsx")
+    files = source("drawerFiles.ts")
+
+    # The Files tab hosts editors now, so its body is dispatched outside the segmented switch
+    # and kept mounted, exactly as the Notes host is and for the same two failures.
+    assert "const renderFilesHost" in drawer
+    assert "{filesHere && renderFilesHost(selected === 'files')}" in drawer
+    assert "resource={{ kind: 'file', id: activeDrawerFile }}" in drawer
+
+    # Device-local, per Project, and never written into the shared layout.
+    assert "mux.drawer.files.v1" in files
+    assert "DRAWER_FILES_KEY" in app and "serializeDrawerFiles" in app
+    assert "pruneDrawerFiles" in app
+    for layout_writer in ("updateLayout", "resourceLeaf", "openTab"):
+        assert layout_writer not in files, layout_writer
+
+    # One live editor per file per browser: the pane leaf stands down while the drawer shows
+    # it, the same way a claimed note's leaf does.
+    assert "isDrawerFileOwned(drawerFiles,activeProject.id,identity.id,clipboardOpen)" in app
+    assert "workspace-leaf-placeholder note-in-drawer" in app
+
+    # The pane placement is named rather than implied, because it stopped being the default.
+    assert "type FileOpenIntent='default'|'pane'" in resource
+    assert "event.ctrlKey||event.metaKey?'pane':'default'" in resource
+    assert "Open in a pane" in resource
+    assert "onOpenInPane" in source("DrawerFilesRail.tsx")
+
+    # Unsaved work is a refusal the cap honours, not a warning it prints afterwards.
+    assert "keep:unsavedFilePaths(targetProject)" in app
+    assert "export function unsavedFilePaths" in resource
 
 
 def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:

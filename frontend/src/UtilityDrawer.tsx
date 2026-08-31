@@ -10,7 +10,9 @@ import { ScanTimelineTab } from './ScanTimelineTab'
 import { FindingsPane } from './FindingsPane'
 import { LazyChangeMap } from './LazyChangeMap'
 import { GitTab, type GitView } from './GitTab'
-import { ProjectResource } from './ProjectResource'
+import { ProjectResource, type FileOpenIntent } from './ProjectResource'
+import { DrawerFilesRail } from './DrawerFilesRail'
+import type { DrawerFileState } from './drawerFiles'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, type DrawerTabId } from './drawerTabs'
 import {
@@ -100,8 +102,26 @@ type Props = {
   onOpenHistoryEntry: (historyId: string) => void
   onOpenSettings: (section: string) => void
   onManagePrompts: () => void
-  /** Files: open a Project-relative path as a pane tab. */
+  /** Files: open a Project-relative path as a pane tab. Used by every surface *other* than the
+   *  Files tab itself, which opens into its own rail (`onOpenDrawerFile`). */
   onOpenFile: (path: string) => void
+  /** Files: this Project's open file tabs and which of them is showing. Device-local, because
+   *  the drawer holding a file also claims it from its pane, and the layout is shared across
+   *  devices (`drawerFiles.ts`). */
+  drawerFiles: DrawerFileState
+  /** Files: paths with edits that are not on disk, so the rail can mark them and guard their
+   *  close. Recomputed from the module-level draft cache on `mux:file-draft-changed`. */
+  unsavedFiles: ReadonlySet<string>
+  /** Files: show a file in this panel, opening a tab for it if it has none. */
+  onOpenDrawerFile: (path: string) => void
+  onCloseDrawerFile: (path: string) => void
+  onCloseOtherDrawerFiles: (path: string) => void
+  /** Files: stop showing a file and draw the index (Explorer or Recent) again, without
+   *  closing anything. */
+  onShowFilesIndex: () => void
+  /** Files: hand a file back to a workspace pane and close its drawer tab. One live editor per
+   *  file per browser, exactly as for a note. */
+  onPopDrawerFileToPane: (path: string) => void
   /** Serves an HTML document in the active Project as a Preview leaf. `worktree` is the
    *  exact checkout it came from; the drawer's own file surfaces are all Project-root
    *  scoped, so it is the Git tab's worktree rows that will supply one. */
@@ -335,6 +355,24 @@ export function UtilityDrawer(props: Props) {
       />
     </div>
 
+  const activeDrawerFile = props.drawerFiles.active
+
+  /**
+   * The Files tab's body, kept mounted for the reasons the Notes host is kept mounted.
+   *
+   * A file opened here is edited, and a markdown one is edited in Continuity through the same
+   * autosave queue a note uses. So the two failures `renderNoteHost` documents apply verbatim:
+   * unmounting on a tab switch throws away cursor and undo history, and `insertTarget` refuses
+   * a detached editor handle, which would silently route a paste meant for this file into a
+   * terminal - into an agent's prompt. Keeping it mounted is what makes hosting an editor here
+   * safe, and it is why the browser's search query, scroll position, and expanded folders also
+   * survive a visit to Actions and back.
+   *
+   * The browser and the showing file are two bodies rather than one switched body, so opening a
+   * file does not tear down the tree you found it in. Only the *showing* file is mounted: the
+   * other rail chips are entries and nothing more, which is what keeps a set of open files from
+   * becoming a set of live editors racing for one save queue.
+   */
   // One body per tab *and segment*. A flat dispatch rather than the nested ternary this
   // grew out of: several branches deep, every added surface used to reindent the ones below
   // it. `segment` is null for a tab with no segments, and otherwise already resolved to
@@ -411,22 +449,10 @@ export function UtilityDrawer(props: Props) {
         if (segment === 'tools') return <AgentToolsTab session={session} />
         return <AgentContextTab project={project} session={session} />
       case 'files':
-        // Two readings of one Project, chosen by the segment strip rather than by a
-        // pressed icon inside the search row (`drawerSegments.ts`). The tree state
-        // survives the remount a segment switch causes: `ProjectResource` keeps its
-        // directory cache in a module-level map for exactly this.
-        return project
-          ? <ProjectResource
-            key={`drawer-files:${project.id}`}
-            project={project}
-            resource={{ kind: 'files', id: project.id }}
-            filesView={segment === 'recent' ? 'recent' : 'explorer'}
-            onOpenFile={path => { props.onOpenFile(path); onDone() }}
-            onFileDragStart={props.onFileDragStart}
-            onSendToAgent={props.onSendToAgent}
-            onPreviewFile={path => { props.onPreviewFile(path); onDone() }}
-          />
-          : <p class="drawer-empty">Select a Project to browse its files.</p>
+        // Rendered outside this switch, like Notes and for the same reason: the tab hosts
+        // editors now, and an editor that unmounts on a tab switch loses its cursor and its
+        // claim on the insertion target. See `renderFilesHost`.
+        return null
       case 'notes':
         // The persistent Notes workspace is rendered outside this switch so its editor,
         // cursor, and undo history survive visits to other utility tabs.
@@ -488,6 +514,70 @@ export function UtilityDrawer(props: Props) {
    * render: a segment enters the set in the same pass that first renders it.
    */
   const mountedSegments = useRef(new Set<string>())
+
+  /**
+   * Whether the Files tab has ever been on screen in this drawer.
+   *
+   * Same idea as `mountedSegments` and for the same cost: the host below is kept mounted, so
+   * without this the file browser would fetch a directory listing - and, on the Recent reading,
+   * a Git status and log - every time the drawer opened on some other tab, for a surface nobody
+   * had asked for. A ref rather than state because it only ever grows and never needs to
+   * *cause* a render: the tab enters the set in the same pass that first shows it.
+   */
+  const filesVisited = useRef(false)
+
+  /**
+   * The Files tab's body, kept mounted for the reasons the Notes host is kept mounted.
+   *
+   * A file opened here is edited, and a markdown one is edited in Continuity through the same
+   * autosave queue a note uses. So the two failures `renderNoteHost` documents apply verbatim:
+   * unmounting on a tab switch throws away cursor and undo history, and `insertTarget` refuses
+   * a detached editor handle, which would silently route a paste meant for this file into a
+   * terminal - into an agent's prompt. Keeping it mounted is what makes hosting an editor here
+   * safe, and it is why the browser's search query, scroll position, and expanded folders also
+   * survive a visit to Actions and back.
+   *
+   * The browser and the showing file are two bodies rather than one switched body, so opening a
+   * file does not tear down the tree you found it in. Only the *showing* file is mounted: the
+   * other rail chips are entries and nothing more, which is what keeps a set of open files from
+   * becoming a set of live editors racing for one save queue.
+   */
+  const renderFilesHost = (visible: boolean) => {
+    if (visible) filesVisited.current = true
+    const openFileHere = (path: string, intent?: FileOpenIntent) => {
+      if (intent === 'pane') { props.onPopDrawerFileToPane(path); return }
+      props.onOpenDrawerFile(path)
+    }
+    return <div class="drawer-files-host" hidden={!visible}>
+      {project
+        ? <>
+          <div class="drawer-files-browser" hidden={!!activeDrawerFile}>
+            {filesVisited.current && <ProjectResource
+              key={`drawer-files:${project.id}`}
+              project={project}
+              resource={{ kind: 'files', id: project.id }}
+              filesView={segmentFor('files') === 'recent' ? 'recent' : 'explorer'}
+              // No `onDone`. Opening a file used to close the drawer and cover the terminal
+              // with a new pane tab; it now lands in the rail above and the panel stays exactly
+              // where it was. `pane` is the explicit ask, and that one still gets out of the way.
+              onOpenFile={openFileHere}
+              onFileDragStart={props.onFileDragStart}
+              onSendToAgent={props.onSendToAgent}
+              onPreviewFile={path => { props.onPreviewFile(path); onDone() }}
+            />}
+          </div>
+          {activeDrawerFile && <ProjectResource
+            key={`drawer-file:${project.id}:${activeDrawerFile}`}
+            project={project}
+            resource={{ kind: 'file', id: activeDrawerFile }}
+            onOpenFile={openFileHere}
+            onSendToAgent={props.onSendToAgent}
+            onPreviewFile={path => { props.onPreviewFile(path); onDone() }}
+          />}
+        </>
+        : <p class="drawer-empty">Select a Project to browse its files.</p>}
+    </div>
+  }
 
   /**
    * Arriving at a *section*.
@@ -636,6 +726,10 @@ export function UtilityDrawer(props: Props) {
     const heading = active.heading
     const contentFirst = CONTENT_FIRST_TABS.includes(selected)
     const notesHere = stack.tabs.includes('notes')
+    const filesHere = stack.tabs.includes('files')
+    // While a file is showing, the Files tab's second rail owns the selection and the segment
+    // control stands down rather than highlighting an index the body is not drawing.
+    const filesShowing = selected === 'files' && !!activeDrawerFile
     return <section
       key={stack.id}
       class={`drawer-pane ${focusedTab === selected ? 'focused' : ''}`}
@@ -670,10 +764,28 @@ export function UtilityDrawer(props: Props) {
           tab={selected}
           active={segment}
           context={segmentContext}
-          onSelect={id => props.onSegment(selected, id)}
+          selected={!filesShowing}
+          onSelect={id => {
+            // Picking an index while a file is showing means "back to the index", not just a
+            // change of which one. Selecting it without returning would leave the reader
+            // clicking a rail that visibly does nothing.
+            if (selected === 'files' && activeDrawerFile) props.onShowFilesIndex()
+            props.onSegment(selected, id)
+          }}
         />
+        {selected === 'files' && project && <DrawerFilesRail
+          projectRoot={project.root}
+          files={props.drawerFiles.open}
+          active={activeDrawerFile}
+          unsaved={props.unsavedFiles}
+          onSelect={props.onOpenDrawerFile}
+          onClose={props.onCloseDrawerFile}
+          onCloseOthers={props.onCloseOtherDrawerFiles}
+          onOpenInPane={props.onPopDrawerFileToPane}
+        />}
         {notesHere && renderNoteHost(selected === 'notes')}
-        {selected !== 'notes' && renderSegmentedBody(stack.id, selected, segment)}
+        {filesHere && renderFilesHost(selected === 'files')}
+        {selected !== 'notes' && selected !== 'files' && renderSegmentedBody(stack.id, selected, segment)}
       </div>
     </section>
   }

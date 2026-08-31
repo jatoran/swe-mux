@@ -21,9 +21,12 @@ type Props = {
   active: string | null
   context: DrawerSegmentContext
   onSelect: (segment: string) => void
+  /** False while a second rail below this one owns the panel's selection - the Files tab
+   *  with a file open. See `DrawerViewTabs`. */
+  selected?: boolean
 }
 
-export function DrawerSegmentControl({ tab, active, context, onSelect }: Props) {
+export function DrawerSegmentControl({ tab, active, context, onSelect, selected = true }: Props) {
   const segments = availableDrawerSegments(tab, context)
   // One available segment is not a choice, so it is not drawn as one. This is the Agent tab
   // on a shell session (Instructions alone) rather than a hypothetical.
@@ -34,5 +37,6 @@ export function DrawerSegmentControl({ tab, active, context, onSelect }: Props) 
     active={active || segments[0].id}
     items={segments}
     onSelect={onSelect}
+    selected={selected}
   />
 }

@@ -9,10 +9,12 @@
 // then the remaining Project-scoped surfaces, with Notifications last.
 //
 // Notes and Files are project-scoped indexes over documents — narrow-column surfaces
-// that used to cost a permanent workspace tab each. Files opens what you pick into a
-// pane; Notes hosts the editor itself and opens into a pane only on request, because
-// reading or adding to a note without leaving the session on screen is what the tab is
-// for on a phone. They lead because they are the two surfaces that are useful before a
+// that used to cost a permanent workspace tab each. Both host what you pick and open
+// into a pane only on request, because reading a note or a file without leaving the
+// session on screen is what the tabs are for on a phone. Files was the last surface
+// that did not: it inserted a leaf into the shared layout, so opening a file on a
+// phone rearranged the desktop's panes (`drawerFiles.ts`). They lead because they are
+// the two surfaces that are useful before a
 // single session exists — a fresh workspace has notes to write and files to open while
 // every session tab still has nothing to act on — and because they are the pair reached
 // most often mid-work without reference to the focused terminal.
@@ -88,7 +90,7 @@ export type DrawerTab = {
 // same identity. The longer heading is drawn once inside the active content surface.
 export const DRAWER_TABS: DrawerTab[] = [
   { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
-  { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
+  { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open here or in a pane', scope: 'project' },
   { id: 'actions', label: 'Actions', heading: 'Actions', title: 'Actions - quick shortcuts, skills, prompt templates, and clipboard history', scope: 'session' },
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },

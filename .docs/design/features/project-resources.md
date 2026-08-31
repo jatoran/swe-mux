@@ -473,6 +473,19 @@ include a registered Project nested below another Git root.
   names the per-Project half that composes with it.
 - The tab has **two subtabs**: `File Explorer` (the tree) and `Recent`. See `ui.md` for why these
   are registered segments rather than the pressed icon they replaced.
+- **Opening a file opens it in this tab**, as a chip in a second rail below those subtabs, and not
+  as a workspace pane tab. The tab is a host as well as an index, the way Notes is.
+  The rail's state is device-local and per Project (`drawerFiles.ts`, `mux.drawer.files.v1`); it is
+  deliberately not layout state, because `project.layout` is shared across devices and opening a
+  file on a phone must not rearrange the desktop's panes.
+  Only the *showing* chip is mounted, so only it can be the second editor on a file - the same
+  one-live-editor-per-browser rule notes follow, for the same shared save queue
+  (`fileSaveTarget` in `noteSaveQueue.ts`). A pane leaf whose file the drawer is showing renders
+  the "open in the panel" placeholder.
+  The pane placement stays one gesture away: `⇥` beside the rail, `Open in a pane` on the chip's
+  menu and on the tree row menu, mod-click on a row, and the row drag that already worked.
+  The open set caps at eight, evicts by least-recent selection, and never evicts a file with
+  unsaved edits; closing one that has unsaved edits asks once. See `ui.md` for the full argument.
 - A debounced search box at the top of the Files tab filters recursively by file name, file
   content, or both (a scope toggle). A non-empty query replaces the lazy tree with a flat,
   path-ordered result list (content matches show the first matching line); clearing it restores
