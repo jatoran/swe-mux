@@ -12,7 +12,7 @@ from typing import Any
 
 from aiohttp import web
 
-from .. import __version__
+from .. import __version__, agent_surfaces
 from .. import (
     app_keys as keys,
 )
@@ -452,6 +452,7 @@ async def get_background_health(request: web.Request) -> web.Response:
             # A watch service that stopped resolving is indistinguishable from a
             # fleet nobody is watching, so its counters and open count are here.
             "session_watch": request.app[keys.SESSION_WATCH].status(),
+            "plugins": await request.app[keys.PLUGINS].status(),
         }
     )
 
@@ -725,6 +726,10 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
             now=now,
             instrumented=lambda backend: config.harness_instrument_enabled.get(backend, True),
         ),
+        surface_warnings=[
+            {"backend": warning.backend, "code": warning.code, "message": warning.message}
+            for warning in agent_surfaces.coherence_warnings(config)
+        ],
     )
     return report
 

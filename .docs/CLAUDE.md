@@ -81,6 +81,7 @@
   `technical/frontend/packages.md`.
   The boundary is subprocess-only, and plugin event commands are separately approved EventBus
   consumers rather than legacy meta-hooks or a widening of canonical Universal hooks.
+  Current shipped behavior and implementation paths are in `design/features/plugins.md`.
   **`.swe-mux/` and `.vscode/` are untracked as of 2026-08-28** and `.gitignore` now ignores
   each of them whole. Nothing under either - including the repository-authored
   `actions.toml`, `project-context.md`, and `prompts/`, which used to be deliberate
@@ -221,9 +222,11 @@
   them, or how the Actions tab lists them): `design/features/ui.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing the shipped swe-mux agent skill, `swemux --skill`, the skill installer
-  (`install-skill`, its roots, or the removal recognition rule), or the automatic
+  (`install-skill`, its roots, or the removal recognition rule), the automatic
   per-harness delivery (`harness_skill_enabled`, `skill_install_roots`, the `skill_delivery`
-  capability, the Claude plugin dir, or `deliver_project_skill`):
+  capability, the Claude plugin dir, or `deliver_project_skill`), or the agent-surface
+  pair the skill teaches (`harness_mcp_enabled`/`harness_cli_enabled`, `MUX_SURFACES`,
+  `agent_surfaces.py`, the `swemux agent` transport):
   `design/features/agent-skill-delivery.md`, `design/features/backends.md`,
   `design/interfaces.md` (CLI section),
   `technical/backend/packages/daemon-runtime.md` (`cli.py`), `packaging/swe_mux_cli.spec`.

@@ -124,6 +124,7 @@
     "leader w 9": "project.activate(9)",
 
     "leader v s": "settings.open",
+    "leader v g": "plugins.open",
     "leader v u": "usage.open",
     "leader v q": "usage.quota",
     "leader v h": "hooks.open",

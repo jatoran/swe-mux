@@ -6183,23 +6183,41 @@ here and does not there.
 
 ### Sequenced after it, in order
 
-- [ ] **W1 - distinguish operator-originated from session-originated requests, server-side.**
+- [x] **W1 - distinguish operator-originated from session-originated requests, server-side.**
   The prerequisite for everything below, and it stands on its own merits as a pre-existing gap
   even if the CLI work never happens. Without it a CLI toggle is decorative, because a capability
   the daemon honours from anyone cannot be turned off.
-- [ ] **W2 - agent mode in the CLI.** Read `MUX_SESSION_ID`/`MUX_MCP_TOKEN` from the pane
+  **Shipped 2026-08-30, scoped honestly.** The CLI stamps its calling session onto every request
+  (`X-Mux-Caller-Session`/`X-Mux-Caller-Token`, from the pane env), and the session-acting
+  operator routes - terminal input, broadcast, kill, spawn - refuse an identity that resolves to
+  a live agent-backed session, naming `swemux agent` instead
+  (`routes/support.py::refuse_agent_session_caller`). A shell pane's operator passes (the check
+  is the session's backend, not the headers' presence), `reload-daemon` deliberately stays
+  reachable (the session-preserving reload is a documented agent flow), and the same-host trust
+  decision stands: this closes the gap for honest clients at the route, which is what the item
+  asked for - a *boundary* against a hostile caller remains the OS-isolation future decision
+  recorded in `agent-messaging.md`.
+- [x] **W2 - agent mode in the CLI.** Read `MUX_SESSION_ID`/`MUX_MCP_TOKEN` from the pane
   environment; when present, authenticate as that session, expose the identity-bound verbs through
   the same gates the MCP tools use, and refuse the operator verbs. Same authority model, second
-  transport.
-- [ ] **W3 - generate the agent verbs from the MCP tool registry** rather than hand-writing
+  transport. **Shipped 2026-08-30** as `swemux agent` (`cli.py`), speaking JSON-RPC to `/mcp`
+  with the pane's own bearer token; the operator-verb refusal is W1's route guard.
+- [x] **W3 - generate the agent verbs from the MCP tool registry** rather than hand-writing
   thirty-five subcommands: either codegen or one passthrough (`tools` to list, `tool <name>
   --json` to call). Adding an MCP tool then costs zero CLI work and the two cannot drift.
-- [ ] **W4 - two independent per-harness toggles in the existing authority matrix**, with install
-  default and ceiling, the same shape as `land_verify_grant`. Four states, all valid: both
-  (default), MCP only (today's behaviour), CLI only (`pi`, or trading tool-schema context for a
-  shell call), and neither - which is currently unreachable and is the one worth designing for
-  deliberately, because an untrusted or contributor branch should be able to hold a pane with no
-  fleet access at all.
+  **Shipped 2026-08-30** as the passthrough: `swemux agent tools` / `agent call <tool>
+  key=value|key:=json ... [--input JSON]`, results verbatim, typed refusals exit 1.
+- [x] **W4 - two independent per-harness toggles**, with the "neither" state enforced
+  server-side. **Shipped 2026-08-30** as `harness_cli_enabled` beside `harness_mcp_enabled`
+  (both absent-key ON; `agent_surfaces.py` computes the set, stamps it into agent panes as
+  `MUX_SURFACES`, and gates `/mcp`: a harness with both maps off has session tokens that
+  authenticate nothing). One deliberate deviation from the sketch: config maps beside the
+  existing harness toggles rather than authority-matrix fields - the matrix's rows are
+  per-*Project* grants with an ordering, and a per-*harness* capability pair is the same kind
+  of thing as `harness_mcp_enabled` already was, so a second home would have been a second
+  place for the same shape. All four states are reachable in Settings -> Harnesses -> Fleet
+  access, and the incoherent skill combinations warn there and in `swemux doctor`
+  (`agent-skill-delivery.md`).
 - [x] **W5 - ship a skill, embedded in the binary**, so `--skill` prints a release-matched copy and
   guidance cannot drift from the code. The frontmatter description tuned to suppress over-firing,
   the first instruction an in-session environment check, and the body pointing at `--help` rather
@@ -6225,6 +6243,9 @@ Recorded so they are not re-litigated.
 - **Do not build a second surface.** One authority core, three transports - browser, MCP, CLI -
   all reading through the same services.
 - **Do not copy herdr's synchronous `--wait` model.** The queue here is asynchronous by design.
+  (`await_session`, added 2026-08-30, is not this: it blocks on *state* - the settle rules
+  `watch_session` already owns - and touches no queue, no reply route, and no delivery. The
+  decision this item records is about messaging, and messaging stays asynchronous.)
 - **Do not add a new settings page for W4.** The authority matrix already has the shape.
 - **Do not make a legal determination about the name.** The additive rename is correct under
   either answer, which is precisely why it was chosen.
@@ -6241,12 +6262,19 @@ Recorded so they are not re-litigated.
   contains the daemon and already runs it as `--daemon-child`. Close this criterion by deciding
   that is the right answer and rewording it, or by finding a daemon launcher that is not a
   second copy - not by shipping one.
-- [ ] No request that carries session identity can reach an operator-only route, and the gap is
-  closed at the route rather than in any one client.
-- [ ] An agent in a pane with no MCP client has the same fleet capability, through the same gates,
-  as one with it.
-- [ ] Adding an MCP tool requires no CLI change, and a test proves the two cannot drift.
-- [ ] All four toggle states are reachable and enforced server-side, including "neither".
+- [x] No request that carries session identity can reach an operator-only route, and the gap is
+  closed at the route rather than in any one client. (2026-08-30: `refuse_agent_session_caller`
+  on input/broadcast/kill/spawn; identity is self-declared per the standing same-host decision,
+  so "carries session identity" is exactly the scope.)
+- [x] An agent in a pane with no MCP client has the same fleet capability, through the same gates,
+  as one with it. (2026-08-30: `swemux agent` is a client of `/mcp` itself, so parity is by
+  construction rather than by parallel implementation.)
+- [x] Adding an MCP tool requires no CLI change, and a test proves the two cannot drift.
+  (The CLI names no tool at all - `tests/test_cli.py`'s agent-mode tests pin the passthrough
+  shape, and there is no per-tool code for a drift test to guard.)
+- [x] All four toggle states are reachable and enforced server-side, including "neither".
+  (2026-08-30: `agent_surfaces.surface_gate` at `/mcp`; `tests/test_agent_surfaces.py`,
+  `tests/test_mcp.py`.)
 
 ## Phase 24 - Desktop integration a PyPI install can turn on later
 
@@ -6384,10 +6412,15 @@ the download button.
 Recorded 2026-08-30 and scheduled.
 The evidence and architectural decisions are in `PLUGIN_SYSTEM_FINDINGS.md`; this phase is the authoritative implementation checklist and acceptance contract.
 
+Implementation candidate completed 2026-08-30 on `worktree-plugin-system` and intentionally remains unlanded for operator review.
+The branch gate passes 6,535 backend tests plus ruff, full and per-platform mypy, frontend source and test typechecks, and 2,335 frontend tests.
+Three high-utility test plugins live as independent Git repositories under the primary checkout's ignored `.private/plugin-lab`; no plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
+Checkboxes remain open until review and landing make the implementation part of `master`.
+
 ### Outcome
 
 A user can install, inspect, enable, update, disable, and remove third-party extensions without changing the swe-mux repository or application bundle.
-A plugin can contribute actions, terminal/TUI panes, and bounded event-triggered commands through stable public host capabilities.
+A plugin can contribute actions, terminal/TUI panes, bounded event-triggered commands, one-shot startup restoration, and terminal link handlers through stable public host capabilities.
 Ordinary swe-mux updates preserve plugin source, config, state, trust, and logs, and an incompatible or broken plugin cannot block daemon readiness or session recovery.
 
 This phase is sequenced after Phase 23 W1, the server-side distinction between operator-originated, session-originated, and other delegated callers.
@@ -6412,7 +6445,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 ### Workstream A - manifest and host capability contract
 
 - [ ] Define and version `swe-mux-plugin.toml` with required `manifest_version`, namespaced `id`, `name`, semantic `version`, `min_swe_mux_version`, `platforms`, optional architectures, required host capabilities, API permissions, runtime requirements, and contribution arrays.
-- [ ] Define `plugin.actions.v1`, `plugin.panes.v1`, and `plugin.events.v1` as independently negotiable host capabilities.
+- [ ] Define `plugin.actions.v1`, `plugin.panes.v1`, `plugin.events.v1`, `plugin.startup.v1`, and `plugin.links.v1` as independently negotiable host capabilities.
   `min_swe_mux_version` supplies an actionable compatibility message but is not the load authority.
 - [ ] Validate plugin and contribution identifiers, duplicate IDs, semantic versions, platform and architecture values, capability names, permission names, command size, argument count, environment size, and every relative path before registration.
 - [ ] Represent every command as executable plus argv, cwd, and bounded environment additions.
@@ -6510,7 +6543,8 @@ The plugin contract becomes a compatibility commitment once the first third-part
 - [ ] Define restart behavior explicitly.
   A live supervisor-owned plugin pane survives a daemon restart, but an exited pane is not automatically relaunched and plugin v1 has no hidden startup daemon.
 - [ ] Add `swemux plugin pane open`, the equivalent typed daemon operation, and browser controls in the plugin detail view.
-- [ ] Keep popup, overlay, drawer-hosted terminal, and native web placements out of v1 unless the existing layout gains those placements independently.
+- [ ] Add a modal popup placement that renders the same ordinary plugin session without writing it into the durable workspace layout and stops the session when closed.
+- [ ] Keep overlay, drawer-hosted terminal, and native web placements out of v1 unless the existing layout gains those placements independently.
   The manifest cannot promise a host surface the application does not already own.
 
 ### Workstream G - event-triggered commands
@@ -6528,6 +6562,17 @@ The plugin contract becomes a compatibility commitment once the first third-part
   A queue overflow or disabled plugin produces a diagnostic rather than back-pressuring the EventBus.
 - [ ] Make an event hook one-shot.
   A command that remains alive past its declared bound is terminated; persistent services and automatic startup hooks are not smuggled through the event surface.
+
+### Workstream G.5 - startup restoration and terminal links
+
+- [ ] Add manifest-declared startup hooks as bounded one-shot commands scheduled after daemon runtime construction.
+  A hook restores plugin-owned state and exits; it cannot become an invisible persistent daemon or block readiness.
+- [ ] Run startup hooks when an approved plugin is enabled and once after a daemon adopts its runtime.
+  Failure is isolated to the plugin command ledger and never disables session recovery.
+- [ ] Add manifest-declared terminal link handlers that bind a validated regular expression to an action in the same plugin.
+- [ ] Publish enabled handlers to the browser and route Control-clicks from both literal xterm URLs and OSC 8 hyperlinks through one cached matcher.
+  An unmatched URL retains ordinary Preview or browser behavior.
+- [ ] Include clicked URL, link-handler ID, Project ID, and session ID in bounded callback context without granting browser navigation authority.
 
 ### Workstream H - management surfaces and recovery
 
@@ -6578,8 +6623,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 ### Deliberately deferred beyond v1
 
 - Install-time builds and package-manager execution.
-- Automatic startup hooks or invisible persistent plugin daemons.
-- Terminal link handlers, until contributed actions and the existing terminal link detector have a stable shared contract.
+- Invisible persistent plugin daemons.
 - Native React components, CSS, arbitrary DOM, backend routes, middleware, and database migrations.
 - Hosted web plugins, until an isolated origin, navigation policy, authentication boundary, storage policy, and mobile behavior are designed with Phase 13.
 - Dynamic Settings forms or plugin-defined schemas rendered as trusted host UI.
@@ -6592,7 +6636,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 - [ ] A user can install a community plugin from an ordinary GitHub repository, inspect and approve immutable content, use it, update or roll it back, and remove it without cloning or modifying swe-mux.
 - [ ] A local author can link a working directory, validate it, invoke an action, open a pane, receive a fixture event, inspect logs, and publish through documented tooling.
-- [ ] Actions, panes, and event hooks all use stable versioned host capabilities, one caller-authorization core, one bounded command runner, and existing session and EventBus primitives.
+- [ ] Actions, panes, event hooks, startup hooks, and link handlers all use stable versioned host capabilities, one caller-authorization core, one bounded command runner, and existing session and EventBus primitives.
 - [ ] No plugin code is imported into the daemon or frontend, no plugin requires an application-bundle mutation, and no new supervisor protocol message is introduced for plugin panes.
 - [ ] A malformed, incompatible, disabled, crashing, hanging, flooding, or missing plugin cannot block daemon readiness, session recovery, a core update, or management of other plugins.
 - [ ] A plugin update executes no new bytes before immutable inspection and approval, and every failed update path leaves the prior enabled version, config, and state usable.

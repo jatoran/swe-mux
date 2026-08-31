@@ -384,6 +384,18 @@ The `mux` control surface: config-based URL resolution with `MUX_URL` precedence
 Its local-only preamble, `[????]` mark, and `unchecked` tally are each conditioned on a field the daemon payload does not carry, so the bytes that path prints are unchanged.
 Its exit code composes the existing two rather than adding a scheme - `1` for a failing local check, `3` for a clean degraded one, never `0`.
 
+`agent` is the CLI's second identity (ROADMAP Phase 23 W2/W3): with `MUX_MCP_URL` and
+`MUX_MCP_TOKEN` from the pane environment it authenticates as the calling session against
+`/mcp` and passes tool calls through verbatim - `agent tools` lists, `agent call <tool>
+key=value|key:=json ... [--input JSON]` calls, results are the tool's own JSON, a typed
+refusal exits `1`.
+No per-tool subcommand exists on purpose, so adding an MCP tool costs zero CLI work; the
+grammar and env refusals are `_agent_env` / `_mcp_rpc` / `_parse_tool_args`, all standard
+library, because the frozen CLI bundle's value is its size.
+Inside a pane, `request` also stamps `X-Mux-Caller-Session`/`X-Mux-Caller-Token` onto every
+operator-route call, which is what lets the daemon's session-acting routes refuse an agent
+pane and name the agent surface (`routes/support.py::refuse_agent_session_caller`).
+
 `install-shortcut` is the one subcommand that reaches no daemon, because the person who needs it is the one whose install produced no way to start one.
 
 `install-skill` is the other local one: it writes the embedded agent skill (`skill_install.py`, printed by the top-level `--skill` flag) into the skill roots agent CLIs read.

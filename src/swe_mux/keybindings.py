@@ -92,6 +92,7 @@ KEYBINDING_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("history.open", "Browse session history", "history"),
     ("history.openProject", "Browse selected project's session history", "history"),
     ("settings.open", "Open Settings", "view"),
+    ("plugins.open", "Manage plugins", "view"),
     ("usage.open", "Open usage analytics", "view"),
     ("usage.quota", "Open provider quota windows", "view"),
     ("networkUsage.open", "Open bandwidth usage", "view"),

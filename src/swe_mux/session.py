@@ -2795,6 +2795,7 @@ class SessionManager:
         attach_replay_bytes: int | None = None,
         status_timeline: StatusTimelineStore | None = None,
         recovery: SessionRecoveryStore | None = None,
+        agent_surfaces: dict[str, str] | None = None,
     ) -> None:
         self.adapters, self.reaper, self.history, self.events = adapters, reaper, history, events
         # Durable sink for the per-session transition ledgers; None in tests
@@ -2814,6 +2815,13 @@ class SessionManager:
         self.attach_replay_bytes = attach_replay_bytes
         self.ingress_url = ingress_url.rstrip("/")
         self.child_env = child_env or {}
+        # Per-harness `MUX_SURFACES` values ("mcp,cli", "mcp", "cli", or ""),
+        # computed once at daemon start from the two capability maps
+        # (`agent_surfaces.py`) and stamped into every agent pane's environment
+        # so the shipped skill can read what this session actually holds.
+        # Restart-scoped like every other per-harness toggle. None (tests,
+        # minimal wiring) stamps nothing.
+        self.agent_surfaces = agent_surfaces
         self.hook_spool_dir = hook_spool_dir
         if hook_spool_dir is not None:
             hook_spool_dir.mkdir(parents=True, exist_ok=True)
@@ -2967,6 +2975,7 @@ class SessionManager:
         shell_profile_id: str | None = None,
         profile_env: dict[str, str] | None = None,
         extra_env: dict[str, str] | None = None,
+        retain_extra_env: bool = True,
         project_label: str | None = None,
         project: ProjectIdentity | None = None,
         startup_started_at: float | None = None,
@@ -3065,7 +3074,7 @@ class SessionManager:
         record.spawn_backend = backend
         record.spawn_native_session_id = native_id
         record.spawn_agent_run_id = adopt_run_id
-        record.spawn_env = dict(extra_env or {})
+        record.spawn_env = dict(extra_env or {}) if retain_extra_env else {}
         # Stamped here because this is the only moment it is knowable: the CLI
         # about to start reads its credential file once, and a switch made later
         # does not reach back into it. Never allowed to fail a spawn - an account
@@ -3147,6 +3156,15 @@ class SessionManager:
             "MUX_RUNTIME_URL": f"{self.ingress_url}/api/sessions/{sid}/runtime-inventory",
             "MUX_MCP_URL": f"{self.ingress_url}/mcp",
             "MUX_MCP_TOKEN": mcp_token,
+            # Which fleet surfaces this pane's harness holds ("mcp,cli", "mcp",
+            # "cli", or "" for neither) - what lets the one shared skill teach
+            # the capability that is actually present instead of guessing.
+            # Agent panes only: a shell has no fleet surface set to advertise.
+            **(
+                {"MUX_SURFACES": self.agent_surfaces.get(backend, "")}
+                if self.agent_surfaces is not None and backend in AGENT_BACKENDS
+                else {}
+            ),
             **({"MUX_HOOK_SPOOL": hook_spool} if hook_spool is not None else {}),
         }
         pty_started_at = time.perf_counter()

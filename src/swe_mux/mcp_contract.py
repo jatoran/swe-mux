@@ -62,6 +62,12 @@ READ_TOOL_NAMES = (
     # Permission-gating it would put an approval prompt in front of the
     # monitoring call an orchestrator makes most often, buying nothing.
     "watch_session",
+    # The synchronous sibling: block inside the call until the target settles
+    # or ends, under a bounded timeout, sharing watch_session's settle rules.
+    # A read in the same sense - it addresses nobody and actuates nothing -
+    # and even narrower, because unlike a watch it never produces a message
+    # at all: the answer is the call's own return value.
+    "await_session",
     # Which checkout the targetless land tools would use. A pure read over the
     # caller's live cwd and its run-bound selection; it changes neither.
     "worktree_context",

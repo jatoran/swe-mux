@@ -662,6 +662,16 @@ class Config:
     # built once at daemon start, so a change takes effect on the next daemon
     # restart (sessions survive it).
     harness_mcp_enabled: dict[str, bool] = field(default_factory=dict)
+    # Per-harness "the swemux CLI's agent mode may act as this harness's
+    # sessions" choice; absent key means on, like the MCP map: the agent mode
+    # grants nothing the MCP surface does not already grant (same endpoint, same
+    # token, same bounds), so the two capability defaults match. Turning it off
+    # removes the second transport for that harness: `swemux agent ...` refuses
+    # in its panes, MUX_SURFACES stops advertising "cli", and - with the MCP map
+    # also off - the daemon refuses that session's token entirely, which is the
+    # deliberately reachable "neither" state (ROADMAP Phase 23 W4). Restart-scoped
+    # like the MCP toggle, because the surface set is stamped into the spawn env.
+    harness_cli_enabled: dict[str, bool] = field(default_factory=dict)
     # Per-harness "deliver the swe-mux agent skill automatically" choice; absent
     # key means OFF - the opposite default from the MCP map, deliberately. For
     # Claude the delivery is a data-dir plugin named on the spawn argv
@@ -1114,7 +1124,14 @@ class Config:
     # `agent_message_max_chars`, ring detection, expiry, and the kill switches
     # are not rate limits and bind regardless.
     agent_message_limits_enabled: bool = False
-    agent_message_max_chars: int = 4000
+    # 8000 (raised from 4000, 2026-08-30): a real task brief with acceptance
+    # criteria measures 6-9k characters, and the 4k cap forced exactly the
+    # wrong split - the sender trimmed the constraints, not the padding. It is
+    # deliberately not larger: the receiver can read_transcript /
+    # read_project_note / scan_search, so beyond a brief, a reference beats a
+    # payload, and the envelope plus body still has to fit a prompt a human
+    # can review in the queue.
+    agent_message_max_chars: int = 8000
     agent_message_hourly_budget: int = 20
     agent_message_pending_per_target: int = 5
     # Two separate relay bounds, because they answer different questions.
@@ -2129,6 +2146,7 @@ def _validate(config: Config) -> None:
     for bool_map in (
         "harness_enabled",
         "harness_mcp_enabled",
+        "harness_cli_enabled",
         "harness_instrument_enabled",
         "harness_skill_enabled",
     ):
@@ -2149,6 +2167,7 @@ def _validate(config: Config) -> None:
         "harness_args",
         "harness_enabled",
         "harness_mcp_enabled",
+        "harness_cli_enabled",
         "harness_instrument_enabled",
         "harness_skill_enabled",
     ):

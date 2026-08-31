@@ -30,6 +30,15 @@ LEGACY_AUTOMATION_IDS = frozenset({"project_card"})
 PROJECT_CONFIG_FIELDS = {
     "default_shell_profile",
     "default_agent_profiles",
+    # Per-harness *model* defaults, in each CLI's own spelling, applied when a
+    # spawn into this Project names no model. This is what makes "omit model to
+    # take the Project's default" true for agent spawns: without an entry the
+    # CLI's own sticky default applies, which is whatever it last ran. A value
+    # is a request, not an authority - model flags carry no permissions - and
+    # an entry that has gone stale (the CLI retired the name) degrades to a
+    # logged warning at spawn rather than a failed session, because a default
+    # must never be the thing that stops work an explicit request would not.
+    "default_agent_models",
     "preferred_backend",
     "resource_open_mode",
     "prompt_library_scope",
@@ -1556,6 +1565,31 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
                 f"default_agent_profiles names unregistered harnesses: "
                 f"{', '.join(unknown_backends)}"
             )
+    if "default_agent_models" in parsed:
+        # Shape-validated only: a model *name* is deliberately not checked
+        # against the vocabulary here, because parse runs on every read and a
+        # CLI's catalogue moves under a committed file - a name gone stale must
+        # degrade at spawn time, not brick the whole config.
+        agent_models = parsed["default_agent_models"]
+        if not isinstance(agent_models, dict) or not all(
+            isinstance(key, str)
+            and isinstance(value, str)
+            and value.strip()
+            and len(value) <= 100
+            for key, value in agent_models.items()
+        ):
+            raise ValueError(
+                "default_agent_models must be a table of backend to a model "
+                "name of at most 100 characters"
+            )
+        unknown_model_backends = sorted(
+            key for key in agent_models if not is_agent_harness(key)
+        )
+        if unknown_model_backends:
+            raise ValueError(
+                f"default_agent_models names unregistered harnesses: "
+                f"{', '.join(unknown_model_backends)}"
+            )
     preferred_backend = parsed.get("preferred_backend")
     if (
         preferred_backend is not None
@@ -1677,6 +1711,12 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
             for key, value in sorted(agent_profiles.items())
         )
         lines.append(f"default_agent_profiles = {{ {pairs} }}")
+    if agent_models := values.get("default_agent_models"):
+        pairs = ", ".join(
+            f"{json.dumps(str(key))} = {json.dumps(str(value))}"
+            for key, value in sorted(agent_models.items())
+        )
+        lines.append(f"default_agent_models = {{ {pairs} }}")
     if patterns := values.get("ignore_patterns"):
         encoded = ", ".join(json.dumps(str(pattern)) for pattern in patterns)
         lines.append(f"ignore_patterns = [{encoded}]")
@@ -1907,6 +1947,13 @@ _REQUEST_STRING_FIELDS = (
     "project_root",
     "branch",
     "request_id",
+    # The deferred spawn-request halves honoured at approval time
+    # (`routes/observations.py`): a one-shot pane-placement hint stamped on the
+    # spawned session, and a settle watch armed for the requesting session.
+    # Strings like everything else on this allowlist ("true", a decimal count).
+    "pane",
+    "watch",
+    "watch_timeout_minutes",
 )
 
 
