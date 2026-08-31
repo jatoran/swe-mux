@@ -904,6 +904,7 @@ export function App() {
   type PluginContribution={id:string;title:string;description:string;contexts:string[]}
   type CommandPlugin={id:string;name:string;enabled:boolean;manifest:null|{actions:PluginContribution[];panes:PluginContribution[]}}
   const [commandPlugins,setCommandPlugins]=useState<CommandPlugin[]>([])
+  const [pluginPopupId,setPluginPopupId]=useState<string|null>(null)
   const loadCommandPlugins=useCallback(()=>api<{plugins:CommandPlugin[]}>('GET','/api/plugins')
     .then(result=>setCommandPlugins(result.plugins.filter(plugin=>plugin.enabled&&plugin.manifest)))
     .catch(()=>{}),[])
@@ -1816,6 +1817,17 @@ export function App() {
   }
 
   const refresh = refreshController.refresh
+  useEffect(()=>{
+    const opened=(event:Event)=>{
+      const detail=(event as CustomEvent<{session:Session;placement:string}>).detail
+      if(detail?.session)setSessions(current=>current.some(item=>item.id===detail.session.id)?current:[...current,detail.session])
+      if(detail?.placement==='popup'){
+        setSettingsOpen(false);setSettingsNavOpen(false);setPluginPopupId(detail.session.id)
+      }
+    }
+    window.addEventListener('mux:plugin-pane-opened',opened)
+    return()=>window.removeEventListener('mux:plugin-pane-opened',opened)
+  },[])
 
   type AppConfig = {
     theme:ThemeName
@@ -5684,7 +5696,7 @@ export function App() {
         const available=action.contexts.includes(context.context)
         return {id:`plugin.${plugin.id}.action.${action.id}`,label:`${plugin.name}: ${action.title}`,category:'input' as const,available,disabledReason:'Select a supported Project or session context',run:()=>void api('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,context).catch(error=>setError(error instanceof Error?error.message:String(error)))}
       }),
-      ...(plugin.manifest?.panes||[]).map(pane=>({id:`plugin.${plugin.id}.pane.${pane.id}`,label:`${plugin.name}: Open ${pane.title}`,category:'pane' as const,available:!!activeProject&&pane.contexts.includes('project'),disabledReason:'Select a Project first',run:()=>{if(activeProject)void api('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,{context:'project',project_id:activeProject.id}).then(()=>refresh()).catch(error=>setError(error instanceof Error?error.message:String(error)))}})),
+      ...(plugin.manifest?.panes||[]).map(pane=>({id:`plugin.${plugin.id}.pane.${pane.id}`,label:`${plugin.name}: Open ${pane.title}`,category:'pane' as const,available:!!activeProject&&pane.contexts.includes('project'),disabledReason:'Select a Project first',run:()=>{if(activeProject)void api<{session:Session;placement:string}>('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,{context:'project',project_id:activeProject.id}).then(result=>{setSessions(current=>current.some(item=>item.id===result.session.id)?current:[...current,result.session]);if(result.placement==='popup')setPluginPopupId(result.session.id)}).catch(error=>setError(error instanceof Error?error.message:String(error)))}})),
     ]),
     // The palette is where someone looks who does not yet know the footer button
     // exists, which is exactly the person this launches something for. The
@@ -8397,6 +8409,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
+    {pluginPopupId&&sessions.some(item=>item.id===pluginPopupId)&&<div class="modal-layer plugin-popup-layer" role="dialog" aria-modal="true" aria-label="Plugin popup"><div class="modal plugin-popup-modal"><header><strong>{sessionName(sessions.find(item=>item.id===pluginPopupId)!)}</strong><button aria-label="Close plugin popup" onClick={()=>{const id=pluginPopupId;setPluginPopupId(null);void api('DELETE',`/api/sessions/${id}`).then(()=>setSessions(current=>current.filter(item=>item.id!==id))).catch(error=>setError(error instanceof Error?error.message:String(error)))}}>×</button></header><div class="plugin-popup-terminal">{renderPaneNode(terminalLeaf(pluginPopupId),'plugin-popup',false,true)}</div></div></div>}
     {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false); void loadCommandPlugins() }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so

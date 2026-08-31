@@ -6515,7 +6515,8 @@ The plugin contract becomes a compatibility commitment once the first third-part
 - [ ] Define restart behavior explicitly.
   A live supervisor-owned plugin pane survives a daemon restart, but an exited pane is not automatically relaunched and plugin v1 has no hidden startup daemon.
 - [ ] Add `swemux plugin pane open`, the equivalent typed daemon operation, and browser controls in the plugin detail view.
-- [ ] Keep popup, overlay, drawer-hosted terminal, and native web placements out of v1 unless the existing layout gains those placements independently.
+- [ ] Add a modal popup placement that renders the same ordinary plugin session without writing it into the durable workspace layout and stops the session when closed.
+- [ ] Keep overlay, drawer-hosted terminal, and native web placements out of v1 unless the existing layout gains those placements independently.
   The manifest cannot promise a host surface the application does not already own.
 
 ### Workstream G - event-triggered commands
