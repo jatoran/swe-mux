@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   SETTING_FLASH_CLASS,
+  SETTING_SECTION_FLASH_CLASS,
+  SETTING_SECTION_HEADING_FLASH_CLASS,
   focusTarget,
   settingSelector,
   shouldFocusControl,
@@ -58,5 +60,9 @@ test('the flash class is the one both arrival paths paint', () => {
   assert.equal(SETTING_FLASH_CLASS, 'setting-flash')
   const style = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
   assert.ok(style.includes(`.${SETTING_FLASH_CLASS}{`), 'the flash class needs a rule')
-  assert.ok(style.includes('@media(prefers-reduced-motion:reduce){.setting-flash{animation:none}}'))
+  assert.equal(SETTING_SECTION_FLASH_CLASS, 'setting-section-flash')
+  assert.equal(SETTING_SECTION_HEADING_FLASH_CLASS, 'setting-section-heading-flash')
+  assert.ok(style.includes(`.${SETTING_SECTION_FLASH_CLASS}{`), 'the section border cue needs a rule')
+  assert.ok(style.includes(`.${SETTING_SECTION_HEADING_FLASH_CLASS}{`), 'the section heading cue needs a rule')
+  assert.match(style, /@media\(prefers-reduced-motion:reduce\)\{[^}]*setting-section-heading-flash/)
 })

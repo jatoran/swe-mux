@@ -70,6 +70,9 @@ The content pane carries no duplicate row of page links.
 Arriving on a tab by any route expands its links; only the chevron collapses them, and never automatically.
 Clicking the tab navigates to its remembered page.
 Only the selected page is visible, but search and deep links select its owner before calling `revealSetting`, so hidden pages remain addressable.
+Clicking a sidebar page or section calls `cueSettingsSection`, which waits for the destination
+heading to become visible and briefly highlights that heading plus the owning section border.
+Search results retain the exact-result flash and add the same section context.
 Reference bodies may still fold inside a page behind `<details class="settings-disclosure">`.
 Settings → Voice is the worked case, pinned by `test/renderer/voice-settings.spec.ts`; the sidebar and page behavior is pinned by `test/renderer/settings-layout.spec.ts`.
 

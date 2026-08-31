@@ -1957,9 +1957,27 @@ body {
   44%{outline-color:var(--green);background:color-mix(in srgb,var(--green) 32%,transparent)}
   100%{outline-color:color-mix(in srgb,var(--green) 50%,transparent);background:transparent}
 }
+/* Sidebar page/section navigation and search add context around the exact arrival:
+   the owning heading pulses while an inset border traces the whole section. Inset keeps
+   the cue visible when a section is flush with the scrolling pane's clipped edges. */
+.setting-section-heading-flash{
+  outline:2px solid var(--green);outline-offset:2px;
+  background:color-mix(in srgb,var(--green) 20%,transparent);
+  animation:setting-flash 1.8s ease-out 1 both
+}
+.setting-section-flash{animation:setting-section-border-flash 1.8s ease-out 1 both}
+@keyframes setting-section-border-flash{
+  0%{box-shadow:inset 0 0 0 2px var(--green)}
+  22%{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 22%,transparent)}
+  44%{box-shadow:inset 0 0 0 2px var(--green)}
+  100%{box-shadow:inset 0 0 0 1px transparent}
+}
 /* Reduced motion keeps the cue and drops the pulsing: the outline and tint carry the
    information, the animation is only what makes them noticed. */
-@media(prefers-reduced-motion:reduce){.setting-flash{animation:none}}
+@media(prefers-reduced-motion:reduce){
+  .setting-flash,.setting-section-heading-flash{animation:none}
+  .setting-section-flash{animation:none;box-shadow:inset 0 0 0 2px var(--green)}
+}
 /* The one control every gated surface offers, in two shapes: `inline` sits inside a sentence,
    the default stands on its own. One component (`SettingLink.tsx`), so a new gated surface
    cannot invent a fifth appearance for "take me to the switch". */
