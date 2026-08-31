@@ -323,13 +323,20 @@ Nothing downstream was mis-handling the extra event as a file, so this was noise
 Verified by execution on Windows and in the Linux container, where the normalization is a no-op and the suite still passes, plus a direct unit test of the projection that asserts the macOS shape on every host without needing a macOS backend to produce it.
 **Not confirmed on macOS**, for the same reason as the two above; the next `macos-latest` run is what closes it.
 
-**4. BSD `renice -n` is relative, while the gate claimed an absolute result.**
+**4. Priority lowering is best-effort, including when the host accepts the command and ignores it.**
 `test_the_gates_own_renice_invocation_actually_lowers_a_process` was the only failure in six consecutive macOS jobs after the priority-yielding gate landed: 6,563 tests passed and this one read niceness `0` after `renice -n 10` exited successfully.
 The gate printed `priority: niceness 10`, and its behavioral test asserted exactly `10`, so an increment operation was the wrong command even on a host where the starting value happened to make the result look right.
 macOS follows the BSD interface and defines `-n` as an increment to the current priority; the absolute form is `renice 10 -p <pid>`.
-The gate now uses that absolute form, which is also accepted by util-linux, and the test extracts and executes the shipped absolute command rather than restating it.
-This is a worktree-gate defect rather than a daemon defect, but leaving it red had a second cost: pytest stopped the matrix job before the macOS wheel build and clean-install smoke could run.
-The next `macos-latest` run confirms the command on Darwin and restores the artifact half of the leg.
+The first run with that absolute form still returned success and left the hosted runner's process at niceness `0`.
+The gate now reads the result back with `ps` and reports `unchanged` unless the requested value actually took effect.
+The behavioral test still proves the operation on Linux and on a Darwin host that honors it, while a Darwin host that accepts and ignores it records a skip matching the gate's documented best-effort contract.
+This is a worktree-gate QoS limitation rather than a daemon defect, and a CI runner has no interactive fleet for the verification workload to yield to.
+
+**5. A Windows identity fixture must still use paths the executing host can resolve.**
+The new infrastructure-reservation suite passed on Windows and failed seven tests identically on Linux and macOS because its fake executable was the literal `D:\PROJECTS\...\swe-mux.exe`.
+`Path.resolve()` correctly applied the running host's rules: Windows resolved that as the intended executable, while POSIX resolved the backslashes as ordinary filename characters and could never equal the fixture's unnormalized identity.
+The production comparison was correct and unchanged.
+The fake machine now uses an absolute host-native path while retaining the `.exe` image name and frozen-app command shapes each test needs, so every host asks the same identity question.
 
 ### What the first WSL Ubuntu run actually found (2026-08-28)
 
