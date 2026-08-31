@@ -97,6 +97,14 @@ export type DemoState = {
    *  the payload builder so a switch survives a reload and reaches the other frame. */
   providerSelection: Record<string, string>
   /**
+   * The daemon's device-class settings store (`/api/settings`), profile to domain to blob.
+   *
+   * State rather than a constant for the usual reason, plus one specific to it: the app
+   * writes here whenever the visitor edits Actions or a top bar, and a route that accepted
+   * the write and then served the seed back would undo their edit on the next read.
+   */
+  deviceSettings: Record<string, Record<string, unknown>>
+  /**
    * The control plane, which is the half of the product a terminal recording cannot
    * show. All four were read-only constants until the scenario director needed them to
    * move; they are state now for the same reason the fleet is - a surface that cannot
@@ -123,6 +131,7 @@ export type DemoMutation =
   | { kind: 'preview-add'; preview: Preview }
   | { kind: 'preview-remove'; id: string }
   | { kind: 'config-patch'; patch: Record<string, unknown> }
+  | { kind: 'settings-put'; profile: string; domains: Record<string, unknown> }
   | { kind: 'keymap-preset'; preset: string }
   | { kind: 'note-add'; note: DemoNote }
   | { kind: 'note-patch'; noteId: string; patch: Partial<DemoNote> }
@@ -313,6 +322,14 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
       return next
     case 'config-patch':
       next.config = { ...current.config, ...mutation.patch, revision: Number(current.config.revision ?? 0) + 1 }
+      return next
+    case 'settings-put':
+      // Merged per domain, not replaced: the daemon's PUT carries only the domains the
+      // caller touched, and a whole-profile overwrite would drop the ones it did not.
+      next.deviceSettings = {
+        ...current.deviceSettings,
+        [mutation.profile]: { ...current.deviceSettings[mutation.profile], ...mutation.domains },
+      }
       return next
     case 'keymap-preset':
       next.keymapPreset = mutation.preset

@@ -10,6 +10,8 @@
 import type { Preview } from '../processFleet.ts'
 import type { PaneLayout } from '../layout.ts'
 import type { Project, Session } from '../types.ts'
+import { defaultRailConfig, writeRailConfigBlob } from '../commandRail.ts'
+import { defaultSessionTopbarConfig } from '../sessionTopbarConfig.ts'
 import type { DemoLandRequest, DemoNote, DemoState } from './store.ts'
 import { initialTimelines, initialTranscripts } from './conversation.ts'
 import {
@@ -520,8 +522,13 @@ export function demoConfig(): Record<string, unknown> {
     xterm_scrollback_lines: 4000,
     terminal_renderer: 'dom',
     claude_max_columns: 0,
-    ui_scale_desktop: 1.0,
-    ui_scale_mobile: 1.0,
+    // Both frames are drawn smaller than the device they stand for - the desktop is
+    // shrunk to sit beside the phone, the phone is a real phone viewport shrunk into a
+    // handset the size of a browser column - so chrome that reads well on a monitor
+    // reads as a smudge here. One step up on each (`UI_SCALE_STEPS`) is what makes a
+    // session row legible at the scale the stage actually draws it.
+    ui_scale_desktop: 1.1,
+    ui_scale_mobile: 1.1,
     rail_density_desktop: 'comfortable',
     rail_density_mobile: 'comfortable',
     rail_enabled_desktop: true,
@@ -587,8 +594,46 @@ const LANDS: DemoLandRequest[] = [
   },
 ]
 
+/**
+ * The daemon's device-class settings, seeded rather than left to the app's defaults.
+ *
+ * Both entries are derived from the app's own defaults and then edited, so a default that
+ * moves reaches the demo instead of being frozen into a hand-written copy here.
+ *
+ *  * **The session top bar drops its approval control.** In the product it is a live
+ *    chooser for a mode that governs what an agent may do without asking, and the demo's
+ *    fleet is a fixture: offering it invites a press that can only be theatre, on the one
+ *    control where theatre is least appropriate. The metrics and the drawer shortcuts
+ *    beside it are all still there.
+ *  * **The phone's Actions rail keeps only its first row.** The product ships two because
+ *    the rail is the keyboard on a real phone; inside a demo frame the second row is a
+ *    second band of chrome across an already short screen, and its contents (the pickers
+ *    and the long tail) are reachable from the app menu anyway.
+ */
+function demoDeviceSettings(): Record<string, Record<string, unknown>> {
+  const topbar = defaultSessionTopbarConfig()
+  const rail = defaultRailConfig()
+  return {
+    desktop: {
+      sessionTopbar: {
+        ...topbar,
+        rows: topbar.rows.map(row => ({
+          ...row,
+          left: row.left.filter(item => !(item.kind === 'action' && item.id === 'approvals')),
+          right: row.right.filter(item => !(item.kind === 'action' && item.id === 'approvals')),
+        })),
+      } as unknown as Record<string, unknown>,
+      commandRail: writeRailConfigBlob(undefined, {
+        ...rail,
+        layouts: { ...rail.layouts, mobile: { strip: rail.layouts.mobile.strip.slice(0, 1) } },
+      }) as unknown as Record<string, unknown>,
+    },
+    mobile: {},
+  }
+}
+
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 11
+export const DEMO_STATE_VERSION = 12
 
 export function initialDemoState(): DemoState {
   return {
@@ -616,6 +661,7 @@ export function initialDemoState(): DemoState {
     transcripts: initialTranscripts(now),
     timelines: initialTimelines(now),
     providerSelection: {},
+    deviceSettings: demoDeviceSettings(),
     // The control plane starts genuinely empty, and that is the honest state: nothing has
     // queued a prompt, nothing has fired, nobody has asked for a session. A scenario
     // fills them, which is what makes the arrival visible - a seeded queue would show a

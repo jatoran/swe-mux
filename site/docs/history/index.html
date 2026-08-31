@@ -52,6 +52,25 @@
   /* The interactive demo only. Prose stays at `--maxw`, which is a reading
      measure; an embedded IDE is not prose and reads better with the room. */
   --demo-maxw: 1560px;
+  /* The stage's own geometry, in one place because three rules and one script all
+     have to agree about it.
+
+     `--demo-desktop-w` and the phone pair are *viewports*, not box sizes: the app
+     is rendered at these and the picture is then scaled to fit whatever the stage
+     can spare (see `.demo-frame iframe`). The desktop one is a width the app has
+     room to be an IDE at and is comfortably clear of its own 760px breakpoint; the
+     phone pair is an iPhone 14, so the phone frame is a phone rather than a
+     narrowed browser.
+
+     `--demo-phone-drop` is what keeps the handset reading as a handset beside the
+     desktop frame: a phone exactly as tall as the monitor beside it reads as two
+     windows. */
+  --demo-h: clamp(460px, 46vw, 780px);
+  --demo-desktop-w: 1280;
+  --demo-phone-w: 390;
+  --demo-phone-h: 844;
+  --demo-phone-bezel: 9px;
+  --demo-phone-drop: 90px;
   /* The browser's own widgets - scrollbars, the caret, form controls, spellcheck
      underlines - follow this and not the variables above, and the meta tag alone does
      not reach them. Declared per theme so the toggle moves them too. */
@@ -353,36 +372,85 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   border: 1px solid transparent; padding: 3px 8px; cursor: pointer; }
 .demo-pick select:hover { color: var(--fg); border-color: var(--line-2); }
 .demo-reset:hover { color: var(--fg); border-color: var(--line-2); }
-.demo-stage { border: 1px solid var(--line-2); background: var(--panel-2);
-  display: flex; align-items: stretch; justify-content: center; gap: 16px; }
-.demo-frame { overflow: hidden; }
-.demo-frame iframe { display: block; border: 0; width: 100%; height: 100%; background: #0b0d10; }
-.demo-desktop { flex: 1 1 auto; min-width: 0; height: clamp(460px, 46vw, 780px); }
-.demo-phone { flex: none; width: min(348px, 86%);
-  height: clamp(460px, 46vw, 780px); align-self: center;
-  border: 1px solid var(--line-2); border-radius: 12px; margin: 14px 0; background: var(--panel); }
+/* Each frame renders the app at a *device* viewport and is then scaled to whatever
+   box the stage can spare, rather than handing the app the box and letting it
+   reflow. Two reasons, and the second is the one that bit:
+
+   - The app's own 760px breakpoint means a shrunk box does not show a smaller
+     desktop, it shows the phone layout - so a "desktop" frame beside a phone used
+     to draw the phone layout twice.
+   - A phone frame given a 320px box really is a 320px phone, and the app is honest
+     about that: rows truncate and controls drop. The visitor reads that as the
+     product being cramped rather than as the frame being narrow. Rendering a real
+     handset viewport (`--demo-phone-w` x `--demo-phone-h`, an iPhone 14) and
+     scaling the picture keeps every surface intact at any stage size.
+
+   The scale itself is measured in JS (`fitDemoFrames`), because it is a ratio of
+   two lengths and CSS cannot divide one by the other. CSS still owns the layout:
+   it sizes the boxes, JS only reads them back. */
+.demo-stage { position: relative; border: 1px solid var(--line-2); background: var(--panel-2);
+  display: flex; align-items: stretch; justify-content: center; }
+/* The overscaled iframe is bigger than its box by construction, so whatever holds
+   it has to clip: the frame itself on the desktop, the drawn screen on the phone. */
+.demo-desktop, .demo-phone-screen { overflow: hidden; }
+.demo-frame iframe { display: block; border: 0; background: #0b0d10;
+  width: calc(100% / var(--demo-scale, 1)); height: calc(100% / var(--demo-scale, 1));
+  transform: scale(var(--demo-scale, 1)); transform-origin: 0 0; }
+.demo-desktop { flex: 1 1 auto; min-width: 0; height: var(--demo-h); }
 .demo-stage[data-view="desktop"] .demo-phone { display: none; }
 .demo-stage[data-view="phone"] .demo-desktop { display: none; }
-.demo-stage[data-view="phone"] { padding: 0 12px; }
-.demo-stage[data-view="both"] { padding-right: 14px; }
-.demo-stage[data-view="both"] .demo-phone { width: min(320px, 34vw); }
-/* Beside the phone the desktop frame's box drops under the app's own 760px
-   mobile breakpoint and would render the phone layout twice. Render it at
-   ~1150 CSS px and scale down instead, so "both" really shows both surfaces. */
-.demo-stage[data-view="both"] .demo-desktop iframe {
-  width: calc(100% / 0.7); height: calc(100% / 0.7);
-  transform: scale(0.7); transform-origin: 0 0;
-}
-.demo-note { color: var(--fg-3); font-size: 13px; margin-top: 10px; max-width: 76ch; }
-.demo-note b { color: var(--fg-2); }
+.demo-stage[data-view="phone"] { padding: 14px 12px; }
+/* Alone on the stage the handset is the subject, so it is drawn at close to life
+   size and the stage shrinks to it. `--demo-h` governs the desktop frame's box and
+   has nothing to say here: bound to it, the phone came out a third of the height of
+   the empty stage around it. */
+.demo-stage[data-view="phone"] .demo-phone-screen { height: min(var(--demo-phone-h) * 1px, 78vh); }
+
+/* The handset. A drawn device rather than a bordered rectangle, because the phone
+   frame is making a claim about a form factor: the same fleet, in a hand.
+
+   The screen carries the height and the proportions; the shell shrink-wraps it.
+   That way the one number a view sets is the screen's height, and the device
+   cannot end up a different shape from the viewport rendered inside it. */
+.demo-phone { flex: none; align-self: center; position: relative;
+  display: inline-flex; width: auto; height: auto; padding: var(--demo-phone-bezel);
+  border: 1px solid var(--line-2); border-radius: 26px; background: #14161a;
+  box-shadow: inset 0 0 0 1px #000, 0 0 0 1px var(--line); }
+.demo-phone-screen { position: relative; overflow: hidden;
+  height: calc(var(--demo-h) - var(--demo-phone-drop) - 2 * var(--demo-phone-bezel));
+  aspect-ratio: var(--demo-phone-w) / var(--demo-phone-h);
+  border-radius: 15px; background: #0b0d10; }
+/* Earpiece and lens, drawn on the bezel above the screen. Two pseudo-elements on
+   the shell rather than markup: they carry no meaning to a screen reader and the
+   frame already announces itself through the iframe's title. */
+.demo-phone::before { content: ''; position: absolute; top: calc(var(--demo-phone-bezel) / 2 - 2px);
+  left: 50%; transform: translateX(-50%); width: 34px; height: 4px; border-radius: 2px;
+  background: #2b3038; }
+.demo-phone::after { content: ''; position: absolute; bottom: calc(var(--demo-phone-bezel) / 2 - 2px);
+  left: 50%; transform: translateX(-50%); width: 62px; height: 3px; border-radius: 2px;
+  background: #2b3038; }
+
+/* Side by side, the phone stole the width that made the desktop frame worth
+   looking at, and the desktop stole the scale that made the phone readable. As an
+   overlay neither pays for the other: the desktop keeps the whole stage and the
+   phone sits over the corner of it, which is also how the hero composite already
+   draws the pair. */
+.demo-stage[data-view="both"] .demo-phone { position: absolute; z-index: 2;
+  right: clamp(10px, 2vw, 26px); bottom: clamp(8px, 1.4vw, 18px); align-self: auto;
+  box-shadow: inset 0 0 0 1px #000, 0 0 0 1px var(--line), 0 18px 40px rgba(0, 0, 0, 0.55); }
+
 /* Below the app's own mobile breakpoint a "desktop" iframe would render the
    phone layout anyway, so the toggle loses the pretense and only the phone
    frame is offered. */
 @media (max-width: 700px) {
   .demo-tabs { display: none; }
   .demo-stage .demo-desktop { display: none !important; }
-  .demo-stage .demo-phone { display: block !important; width: 100% !important;
-    margin: 8px 0; height: min(74vh, 640px); border-radius: 8px; align-self: auto; }
+  /* One frame and no overlay, so the handset is simply centred and sized to the
+     screen it is being read on. `--demo-phone-drop` has nothing to be shorter than
+     here, which is why the height is stated outright rather than derived. */
+  .demo-stage .demo-phone { display: inline-flex !important; position: static !important;
+    margin: 10px auto; box-shadow: none; }
+  .demo-stage .demo-phone-screen { height: min(74vh, 620px); }
   .demo-stage { padding: 0 8px; }
 }
 
@@ -401,7 +469,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   border: 1px solid var(--line-2); border-radius: 11px; overflow: hidden;
   box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
 }
-.herovis img, .herovis video { display: block; width: 100%; height: auto; }
+.herovis img { display: block; width: 100%; height: auto; }
 @media (max-width: 620px) {
   .herovis { padding-right: 0; }
   .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }

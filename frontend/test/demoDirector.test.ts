@@ -10,6 +10,8 @@ import {
 import { SCENARIOS, scenarioById, NUDGE_SCENARIO_ID } from '../src/demo/scenarios.ts'
 import { apply, state } from '../src/demo/store.ts'
 import { DEMO_PROJECT_ID } from '../src/demo/fixtures.ts'
+import { railConfigFromBlob, type RailBlob } from '../src/commandRail.ts'
+import { normalizeSessionTopbarConfig } from '../src/sessionTopbarConfig.ts'
 
 /**
  * The demo's scenario engine, at the two seams a browser is not needed for: the
@@ -289,4 +291,46 @@ test('a reset puts the control plane back', () => {
   assert.deepEqual(state.autoDelivery, [])
   assert.deepEqual(state.notifications, [])
   assert.deepEqual(state.spawnRequests, [])
+})
+
+// --------------------------------------------------------- the seeded device settings
+
+/**
+ * Two settings the demo does not take the product's default for, checked against the
+ * *resolved* config rather than against the blob it is written as.
+ *
+ * Both are derived from the app's own defaults and then edited, which is what keeps them
+ * current - and is also exactly why they need a test. A renamed action id or a reshaped
+ * default rail would leave the derivation running happily and silently stop editing
+ * anything, and the failure is invisible: the demo would simply go back to showing what
+ * these were set to hide.
+ */
+test('the demo seeds a session top bar with no approval control', () => {
+  fresh()
+  const config = normalizeSessionTopbarConfig(state.deviceSettings.desktop.sessionTopbar)
+  const items = config.rows.flatMap(row => [...row.left, ...row.right])
+  assert.ok(items.length > 1, 'the seed must still carry a top bar, not just be emptied')
+  assert.deepEqual(items.filter(item => item.kind === 'action' && item.id === 'approvals'), [])
+  // The rest of the default row is untouched, so this is a removal rather than a rewrite.
+  assert.ok(items.some(item => item.kind === 'action' && item.id === 'drawer:transcript'))
+})
+
+test("the demo seeds the phone's Actions rail with one row, and leaves the desktop's alone", () => {
+  fresh()
+  const rail = railConfigFromBlob(state.deviceSettings.desktop.commandRail as RailBlob)
+  assert.equal(rail.layouts.mobile.strip.length, 1)
+  assert.ok(rail.layouts.mobile.strip[0].items.length > 4, 'the row that is kept must be the populated one')
+  assert.equal(rail.layouts.desktop.strip.length, 1)
+})
+
+test('a settings write reaches the store and merges rather than replacing the profile', () => {
+  fresh()
+  const before = Object.keys(state.deviceSettings.desktop).sort()
+  apply({ kind: 'settings-put', profile: 'desktop', domains: { sounds: { chime: true } } })
+  assert.deepEqual(
+    Object.keys(state.deviceSettings.desktop).sort(),
+    [...before, 'sounds'].sort(),
+    'a PUT carries only the domains it touched, so the others must survive it',
+  )
+  assert.deepEqual(state.deviceSettings.desktop.sounds, { chime: true })
 })
