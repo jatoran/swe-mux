@@ -342,10 +342,16 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 .demo-tab:hover { color: var(--fg); }
 .demo-tab[aria-selected="true"] { color: var(--green); border-color: var(--line-2); background: var(--panel-2); }
 /* Both trailing controls; only the first of them takes the auto margin, so they sit
-   together at the right end of the head row rather than at opposite ends of it. */
+   together at the right end of the head row rather than at opposite ends of it.
+   "replay tour" used to be a third: it is the first entry of the scenarios menu now,
+   because a control that plays one script beside a menu of scripts is one too many. */
 .demo-reset { font: inherit; background: none; border: 1px solid transparent;
   color: var(--fg-4); padding: 3px 8px; cursor: pointer; }
-.demo-reset:first-of-type { margin-left: auto; }
+.demo-pick { margin-left: auto; display: inline-flex; align-items: center; }
+.demo-pick-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.demo-pick select { font: inherit; background: var(--panel-2); color: var(--fg-4);
+  border: 1px solid transparent; padding: 3px 8px; cursor: pointer; }
+.demo-pick select:hover { color: var(--fg); border-color: var(--line-2); }
 .demo-reset:hover { color: var(--fg); border-color: var(--line-2); }
 .demo-stage { border: 1px solid var(--line-2); background: var(--panel-2);
   display: flex; align-items: stretch; justify-content: center; gap: 16px; }

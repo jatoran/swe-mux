@@ -7,13 +7,19 @@
  * fake backend. Everything the visitor does here is simulated in-page; the
  * demo build ships to the static marketing site and talks to nothing.
  */
+// First, and the order is load-bearing rather than stylistic: deterministic mode replaces
+// `Math.random` and rebases the clock, and `fixtures.ts` reads `Date.now()` at module
+// evaluation. An import below this line that pulled the store in first would seed the
+// whole fleet off the wall clock before the switch had been thrown.
+import './determinism.ts'
 import { Component, render, type ComponentChildren } from 'preact'
 import { installFakeFetch } from './fakeApi.ts'
 import { installFakeWebSocket } from './fakeSocket.ts'
 import { installViewMirror } from './mirror.ts'
-import { DemoCoach } from './DemoCoach.tsx'
+import { installDirector } from './director.ts'
+import { DemoDirector } from './DemoDirector.tsx'
 import '../style.css'
-import './demoCoach.css'
+import './demoDirector.css'
 
 installFakeFetch()
 installFakeWebSocket()
@@ -21,6 +27,9 @@ installFakeWebSocket()
 // store cannot see - which modal is open, which panel and tab, which session is focused
 // - so the desktop and phone shown side by side behave as one app rather than two.
 installViewMirror()
+// One thing drives the interface: the walkthrough is its first scenario, and the mirror
+// above is what carries the winning frame's acts to the other one.
+installDirector()
 
 /**
  * Device-local presentation defaults for the embed.
@@ -31,15 +40,18 @@ installViewMirror()
  * visitor's own later edits within one version are still theirs to keep.
  */
 const SEED_KEY = 'swemux-demo-seed'
-const SEED_VERSION = '2'
+const SEED_VERSION = '3'
 
 function seedPresentation(): void {
   try {
     if (localStorage.getItem(SEED_KEY) === SEED_VERSION) return
     localStorage.setItem(SEED_KEY, SEED_VERSION)
     // The drawer shows the tabs this demo actually populates rather than all eleven.
+    // Queue came off this list when the prompt queue became state rather than a constant
+    // (`controlPlane.ts`): two scenarios drive it, and a tab a scenario opens has to be
+    // one the visitor can find again afterwards.
     localStorage.setItem('mux.drawer.hidden.v1', JSON.stringify([
-      'queue', 'agent', 'schedule', 'actions', 'files',
+      'agent', 'schedule', 'actions', 'files',
     ]))
     // An empty presentation map rather than no map at all. The app treats a missing
     // `mux.drawer.projects.v3` as "a legacy layout still needs migrating" and rewrites
@@ -125,9 +137,9 @@ async function boot(): Promise<void> {
   render(
     <DemoBoundary>
       <App />
-      {/* Beside the app rather than inside it: the coach points at the real chrome
+      {/* Beside the app rather than inside it: the director points at the real chrome
           and must never be something the product build could accidentally ship. */}
-      <DemoCoach />
+      <DemoDirector />
     </DemoBoundary>,
     document.getElementById('app')!,
   )

@@ -1,46 +1,96 @@
 /*
- * The demo coach's own chrome, and the crash panel behind it.
+ * The director's own chrome, and the crash panel behind it.
  *
- * Kept out of `style.css` on purpose: none of this ships in the product bundle, and
- * the demo build is the only entry that imports it. Colours come from the app's own
- * theme variables so the coach follows a theme switch the visitor makes mid-walk.
+ * Kept out of `style.css` on purpose: none of this ships in the product bundle, and the
+ * demo build is the only entry that imports it. Colours come from the app's own theme
+ * variables so the overlay follows a theme switch the visitor makes mid-run.
+ *
+ * The whole layer is `pointer-events: none` except the caption card. That is not a
+ * detail: a gated beat is *waiting* for the visitor to press the control it is pointing
+ * at, so an overlay that could swallow the press would make the walkthrough impossible
+ * to finish, and a ripple drawn over a button would eat the next click.
  */
 
-.demo-coach {
+.demo-director {
   position: fixed;
   inset: 0;
   z-index: 900;
-  /* The whole layer is inert. The coach exists to watch the visitor use the real
-     interface, so it must never intercept the click it is waiting for. */
   pointer-events: none;
 }
 
 /* The flash: a ring that pulses around live chrome rather than a modal cut-out.
    A dimming mask would hide the thing being explained, which on a 390px phone is
    most of the screen. */
-.demo-coach-flash {
+.demo-director-flash {
   position: fixed;
   border: 2px solid var(--accent, #8bd450);
   border-radius: 6px;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8bd450) 26%, transparent);
-  animation: demo-coach-pulse 1.5s ease-in-out infinite;
+  animation: demo-director-pulse 1.5s ease-in-out infinite;
   transition: left .18s ease, top .18s ease, width .18s ease, height .18s ease;
 }
 
-@keyframes demo-coach-pulse {
+@keyframes demo-director-pulse {
   0%, 100% { opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8bd450) 26%, transparent); }
   50% { opacity: .62; box-shadow: 0 0 0 9px color-mix(in srgb, var(--accent, #8bd450) 8%, transparent); }
 }
 
+/*
+ * The ghost cursor and its ripple: the only two marks that say "the script did that".
+ *
+ * Without them a scripted press reads as the interface moving on its own, which is the
+ * single worst thing a demo of a *tool* can look like. With them it reads as a
+ * demonstration. They are drawn for scripted acts only; a visitor's own pointer needs no
+ * help from us.
+ */
+.demo-director-ghost {
+  position: fixed;
+  width: 22px;
+  height: 22px;
+  margin: -3px 0 0 -3px;
+  color: var(--accent, #8bd450);
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .65));
+  transition: left .42s cubic-bezier(.33, .68, .35, 1), top .42s cubic-bezier(.33, .68, .35, 1);
+}
+
+.demo-director-ghost path {
+  fill: var(--panel, #0d0f12);
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.demo-director-ripple {
+  position: fixed;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  border: 2px solid var(--accent, #8bd450);
+  animation: demo-director-ripple .55s ease-out forwards;
+}
+
+/* A visitor's own press, drawn only under `?highlightInput=1` - which the capture rig
+   sets and nothing else does. Distinguished by colour, because a capture that could not
+   tell a scripted press from a human one would be worthless as evidence. */
+.demo-director-ripple.echo { border-color: var(--fg-2, #b6bcc4); }
+
+@keyframes demo-director-ripple {
+  from { transform: scale(.4); opacity: .95; }
+  to { transform: scale(3.6); opacity: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .demo-coach-flash { animation: none; }
-  .demo-coach-finger { animation: none; }
-  .demo-coach-trail { animation: none; }
+  .demo-director-flash { animation: none; }
+  .demo-director-finger { animation: none; }
+  .demo-director-trail { animation: none; }
+  .demo-director-ghost { transition: none; }
+  .demo-director-ripple { animation-duration: .01s; }
 }
 
 /* The swipe glyph: a finger travelling along a dashed trail, drawn over the middle
    of the screen because the gesture it teaches is not attached to any control. */
-.demo-coach-gesture {
+.demo-director-gesture {
   position: fixed;
   left: 50%;
   top: 30%;
@@ -48,18 +98,18 @@
   color: var(--accent, #8bd450);
 }
 
-.demo-coach-gesture.left { transform: translate(-50%, -50%) scaleX(-1); }
+.demo-director-gesture.left { transform: translate(-50%, -50%) scaleX(-1); }
 
-.demo-coach-trail {
+.demo-director-trail {
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
   stroke-dasharray: 6 7;
   opacity: .55;
-  animation: demo-coach-dash 1.1s linear infinite;
+  animation: demo-director-dash 1.1s linear infinite;
 }
 
-.demo-coach-head {
+.demo-director-head {
   fill: none;
   stroke: currentColor;
   stroke-width: 2.4;
@@ -68,22 +118,22 @@
   opacity: .8;
 }
 
-.demo-coach-finger {
+.demo-director-finger {
   fill: color-mix(in srgb, var(--accent, #8bd450) 34%, transparent);
   stroke: currentColor;
   stroke-width: 2;
-  animation: demo-coach-swipe 1.6s ease-in-out infinite;
+  animation: demo-director-swipe 1.6s ease-in-out infinite;
 }
 
-@keyframes demo-coach-dash { to { stroke-dashoffset: -26; } }
-@keyframes demo-coach-swipe {
+@keyframes demo-director-dash { to { stroke-dashoffset: -26; } }
+@keyframes demo-director-swipe {
   0% { transform: translateX(0); opacity: 0; }
   15% { opacity: 1; }
   80% { transform: translateX(102px); opacity: 1; }
   100% { transform: translateX(102px); opacity: 0; }
 }
 
-.demo-coach-card {
+.demo-director-card {
   position: fixed;
   width: min(380px, calc(100vw - 32px));
   pointer-events: auto;
@@ -96,7 +146,17 @@
   transition: left .18s ease, top .18s ease;
 }
 
-.demo-coach-card header {
+/* A scripted scenario's caption does not chase the spotlight: the script moves around
+   the whole interface in twenty seconds, and a card following it is the part of the
+   screen the eye ends up watching. It sits at the foot instead, where a subtitle goes. */
+.demo-director-card.caption {
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 28px));
+  transition: none;
+}
+
+.demo-director-card header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -105,13 +165,13 @@
   border-bottom: 1px solid var(--line, #2a2e34);
 }
 
-.demo-coach-card header span {
+.demo-director-card header span {
   font-size: 11px;
   letter-spacing: .16em;
   color: var(--accent, #8bd450);
 }
 
-.demo-coach-card header button {
+.demo-director-card header button {
   font: inherit;
   font-size: 12px;
   background: none;
@@ -122,27 +182,36 @@
   padding: 2px 7px;
 }
 
-.demo-coach-card header button:hover {
+.demo-director-card header button:hover {
   color: var(--fg, #d9dde2);
   border-color: var(--line, #2a2e34);
 }
 
-.demo-coach-copy { padding: 12px 14px 4px; }
+.demo-director-copy { padding: 12px 14px 4px; }
 
-.demo-coach-copy h2 {
+.demo-director-copy h2 {
   margin: 0 0 8px;
   font-size: 16px;
   line-height: 1.3;
 }
 
-.demo-coach-copy p {
+.demo-director-card.caption .demo-director-copy h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--fg-2, #b6bcc4);
+}
+
+.demo-director-card.caption .demo-director-copy { padding: 10px 14px; }
+
+.demo-director-copy p {
   margin: 0 0 9px;
   font-size: 13px;
   line-height: 1.5;
   color: var(--fg-2, #b6bcc4);
 }
 
-.demo-coach-card footer {
+.demo-director-card footer {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -151,13 +220,13 @@
   border-top: 1px solid var(--line, #2a2e34);
 }
 
-.demo-coach-count {
+.demo-director-count {
   font-size: 11px;
   color: var(--muted, #848b94);
   letter-spacing: .1em;
 }
 
-.demo-coach-progress {
+.demo-director-progress {
   flex: 1 1 60px;
   height: 3px;
   background: var(--line, #2a2e34);
@@ -165,14 +234,14 @@
   overflow: hidden;
 }
 
-.demo-coach-progress i {
+.demo-director-progress i {
   display: block;
   height: 100%;
   background: var(--accent, #8bd450);
   transition: width .2s ease;
 }
 
-.demo-coach-card footer em {
+.demo-director-card footer em {
   flex: 1 1 100%;
   order: 3;
   font-style: normal;
@@ -180,8 +249,8 @@
   color: var(--accent, #8bd450);
 }
 
-.demo-coach-next,
-.demo-coach-skip {
+.demo-director-next,
+.demo-director-skip {
   font: inherit;
   font-size: 12px;
   padding: 4px 11px;
@@ -192,13 +261,13 @@
   color: var(--fg-2, #b6bcc4);
 }
 
-.demo-coach-next {
+.demo-director-next {
   border-color: var(--accent, #8bd450);
   color: var(--accent, #8bd450);
 }
 
-.demo-coach-next:hover,
-.demo-coach-skip:hover { color: var(--fg, #d9dde2); }
+.demo-director-next:hover,
+.demo-director-skip:hover { color: var(--fg, #d9dde2); }
 
 /* The boundary's panel. Plain and self-contained, because it is what renders when
    the app's own tree is gone. */

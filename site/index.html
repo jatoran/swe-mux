@@ -350,10 +350,16 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 .demo-tab:hover { color: var(--fg); }
 .demo-tab[aria-selected="true"] { color: var(--green); border-color: var(--line-2); background: var(--panel-2); }
 /* Both trailing controls; only the first of them takes the auto margin, so they sit
-   together at the right end of the head row rather than at opposite ends of it. */
+   together at the right end of the head row rather than at opposite ends of it.
+   "replay tour" used to be a third: it is the first entry of the scenarios menu now,
+   because a control that plays one script beside a menu of scripts is one too many. */
 .demo-reset { font: inherit; background: none; border: 1px solid transparent;
   color: var(--fg-4); padding: 3px 8px; cursor: pointer; }
-.demo-reset:first-of-type { margin-left: auto; }
+.demo-pick { margin-left: auto; display: inline-flex; align-items: center; }
+.demo-pick-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.demo-pick select { font: inherit; background: var(--panel-2); color: var(--fg-4);
+  border: 1px solid transparent; padding: 3px 8px; cursor: pointer; }
+.demo-pick select:hover { color: var(--fg); border-color: var(--line-2); }
 .demo-reset:hover { color: var(--fg); border-color: var(--line-2); }
 .demo-stage { border: 1px solid var(--line-2); background: var(--panel-2);
   display: flex; align-items: stretch; justify-content: center; gap: 16px; }
@@ -682,7 +688,15 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
           <button class="demo-tab" type="button" role="tab" data-view="phone" aria-selected="false">phone</button>
           <button class="demo-tab" type="button" role="tab" data-view="both" aria-selected="false">both</button>
         </div>
-        <button class="demo-reset" type="button" id="demotour" title="Replay the short walkthrough inside the demo">replay tour</button>
+        <label class="demo-pick" for="demoscenario"><span class="demo-pick-label">scenarios</span>
+          <select id="demoscenario" title="Play a scripted run inside the demo, or replay the walkthrough">
+            <option value="">scenarios</option>
+            <option value="tour">replay the tour</option>
+            <option value="queue">a queued prompt delivers</option>
+            <option value="orchestrate">an agent asks for agents</option>
+            <option value="preview">a served page becomes a pane</option>
+            <option value="land">a branch lands through the queue</option>
+          </select></label>
         <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset demo</button>
       </div>
       <div class="demo-stage" id="demostage" data-view="desktop">
@@ -694,8 +708,10 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
       worktree map and commit provenance, watch the process fleet, launch sessions and
       previews, swap the whole keymap to tmux or Vim in Settings. Type at the agents and
       they answer, but only with pre-written jokes; the pulsing ones are mid-turn and will
-      tell you so. A short walkthrough runs on your first visit and
-      <b>replay tour</b> brings it back. Nothing is installed and nothing is sent anywhere.
+      tell you so. A short walkthrough runs on your first visit, and <b>scenarios</b> replays
+      it or plays a scripted run through the control plane - a queued prompt delivering
+      itself, an agent asking for two more, a served page becoming a pane, a branch landing.
+      Anything you touch stops a running scenario at once. Nothing is installed and nothing is sent anywhere.
       Pick <b>both</b> and the two surfaces share one simulated fleet: act on the desktop and
       watch the phone follow.</p>
     </div>
@@ -1577,17 +1593,58 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     }, { rootMargin: '400px' });
     watcher.observe(stage);
   } else { armed = true; promote(); }
-  /* Replay the in-demo walkthrough. The frames are same-origin, so the coach can be
-     asked directly rather than through postMessage; a frame that has not loaded yet
-     is promoted first, because "replay tour" from a cold stage should still start it. */
-  document.getElementById('demotour').addEventListener('click', function () {
-    armed = true;
-    promote();
+  /* Tell the frames whether the demo is actually on screen. A frame cannot work this
+     out for itself: an IntersectionObserver inside an iframe measures against the
+     iframe's own viewport, so it would report "visible" for a demo eight screens below
+     the fold - and the in-demo idle nudge is armed off exactly this signal. */
+  function announce(name) {
     stage.querySelectorAll('iframe').forEach(function (frame) {
-      if (!frame.src) return;
+      if (!frame.src || !frame.contentWindow) return;
       try {
-        frame.contentWindow.dispatchEvent(new frame.contentWindow.Event('swemux-demo:coach'));
-      } catch (error) { /* a frame still loading picks the tour up on its own */ }
+        frame.contentWindow.dispatchEvent(new frame.contentWindow.Event(name));
+      } catch (error) { /* a frame still loading has nothing to hear it yet */ }
+    });
+  }
+  var onScreen = false;
+  function reportPresence() { announce(onScreen ? 'swemux-demo:visible' : 'swemux-demo:hidden'); }
+  if ('IntersectionObserver' in window) {
+    var presence = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) { onScreen = entry.isIntersecting; });
+      reportPresence();
+    }, { threshold: 0.4 });
+    presence.observe(stage);
+  }
+  /* A frame that finished loading after the observer last spoke never heard it, and the
+     nudge would then never arm on the one visitor it is for: the one who scrolled to the
+     demo, waited for it to load, and did nothing. */
+  stage.querySelectorAll('iframe').forEach(function (frame) {
+    frame.addEventListener('load', reportPresence);
+  });
+  /* Play a scenario inside the demo. Both frames are told and the director's own election
+     picks one, so a script never runs twice against a shared fleet.
+
+     A frame that has not loaded yet is asked through its URL rather than through an event,
+     because an event dispatched into a frame whose modules have not evaluated has nobody
+     listening and is simply lost - which is what "choose a scenario from a cold stage"
+     always is. A loaded frame is same-origin, so it can be asked directly. */
+  var picker = document.getElementById('demoscenario');
+  picker.addEventListener('change', function () {
+    var chosen = picker.value;
+    picker.selectedIndex = 0;
+    if (!chosen) return;
+    armed = true;
+    visibleFrames().forEach(function (sel) {
+      var frame = stage.querySelector(sel + ' iframe');
+      if (!frame) return;
+      if (frame.src) {
+        try {
+          frame.contentWindow.dispatchEvent(
+            new frame.contentWindow.CustomEvent('swemux-demo:scenario', { detail: chosen })
+          );
+        } catch (error) { /* mid-navigation; the next choice reaches it */ }
+      } else {
+        frame.src = frame.getAttribute('data-src') + '?scenario=' + encodeURIComponent(chosen);
+      }
     });
   });
   document.getElementById('demoreset').addEventListener('click', function () {
