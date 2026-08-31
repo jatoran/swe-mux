@@ -22,8 +22,12 @@ test('first open orients once, then leads with one device’s layouts', async ({
   const switchGroup = page.getByRole('group', { name: 'Device layout to edit' })
   await expect(switchGroup.getByRole('button', { name: 'Desktop' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('.rail-surface')).toHaveCount(1)
+  // `Copy resume` ships on the default desktop row (and renders as text - the
+  // iconed chips draw no label to match on); the terminal-key chrome (Esc and
+  // friends) is a mobile default now, so its absence here is also asserted.
   const railChips = page.locator('.rail-surface').first().locator('.rail-chip-label')
-  await expect(railChips.filter({ hasText: /^Esc$/ })).toHaveCount(1)
+  await expect(railChips.filter({ hasText: /^Copy resume$/ })).toHaveCount(1)
+  await expect(railChips.filter({ hasText: /^Esc$/ })).toHaveCount(0)
 
   // Creation and the catalog are collapsed disclosures below the layouts.
   await expect(page.locator('details.rail-add')).not.toHaveAttribute('open', '')
@@ -37,8 +41,9 @@ test('first open orients once, then leads with one device’s layouts', async ({
 test('the catalog expands into labelled placement checkboxes that edit the layout', async ({ page }) => {
   await page.goto('/action-editor-harness.html?seen=1')
   await page.locator('details.rail-catalog > summary').click()
-  await page.getByLabel('Filter actions').fill('Esc')
-  const row = page.locator('.rail-catalog-row', { hasText: 'Esc' }).first()
+  // `Copy resume` is placed on both default rails, which is what the summary must say.
+  await page.getByLabel('Filter actions').fill('Copy resume')
+  const row = page.locator('.rail-catalog-row', { hasText: 'Copy resume' }).first()
   await expect(row.locator('.rail-placement-summary')).toHaveText('Desktop rail · Mobile rail')
   await row.locator('.rail-catalog-head').click()
 
@@ -49,13 +54,13 @@ test('the catalog expands into labelled placement checkboxes that edit the layou
 
   // Unchecking "Desktop rail" removes the chip from the visible Rail rows.
   const railSurface = page.locator('.rail-surface').first()
-  const escChip = railSurface.locator('.rail-chip-label', { hasText: /^Esc$/ })
-  await expect(escChip).toHaveCount(1)
+  const resumeChip = railSurface.locator('.rail-chip-label', { hasText: /^Copy resume$/ })
+  await expect(resumeChip).toHaveCount(1)
   await detail.locator('label.check', { hasText: 'Desktop rail' }).locator('input').click()
-  await expect(escChip).toHaveCount(0)
+  await expect(resumeChip).toHaveCount(0)
   await expect(row.locator('.rail-placement-summary')).toHaveText('Mobile rail')
   await detail.locator('label.check', { hasText: 'Desktop rail' }).locator('input').click()
-  await expect(escChip).toHaveCount(1)
+  await expect(resumeChip).toHaveCount(1)
 })
 
 test('preview-as dims what that session type would not show', async ({ page }) => {
