@@ -11,6 +11,7 @@ import { useDismissLevel } from './modalFocus'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
 import { SessionRowSettings } from './SessionRowSettings'
+import { SessionTopbarSettings } from './SessionTopbarSettings'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { commonestParent } from './projectCreate'
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
@@ -2772,7 +2773,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
           <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
-          </section><section><SessionRowSettings /></section><section>
+          </section><section><SessionRowSettings /></section><section><SessionTopbarSettings /></section><section>
           <h3>Right sidebar</h3>
           <label>Drawer tabs<Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
           <label>Right rail<Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>

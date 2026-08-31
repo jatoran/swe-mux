@@ -19,7 +19,7 @@ import type { Session, VoiceMode } from './types'
 import { VOICE_MODE_OFF, resolveVoiceMode, voiceModeLabel, type VoiceModeDefaults } from './voiceMode.ts'
 import {
   MAX_PIPS, ROW_FIELD_BY_ID, ROW_MIN_CHARS, SEPARATORS, contextBand,
-  type ContextBand, type RowAlign, type RowFieldId, type RowLine, type RowSlot,
+  type ContextBand, type RowAlign, type RowFieldId, type RowFieldMode, type RowLine, type RowSlot,
   type SessionRowConfig,
 } from './sessionRowConfig.ts'
 
@@ -876,6 +876,15 @@ function candidateFor(
     default:
       return null
   }
+}
+
+/** One configured field without the sidebar line's width-shedding pass. */
+export function sessionFieldToken(
+  id:RowFieldId,mode:RowFieldMode,session:Session,config:SessionRowConfig,context:SessionRowContext,
+):RowToken|null {
+  const candidate=candidateFor(id,session,config,context)
+  if(!candidate||mode==='notable'&&!candidate.notable)return null
+  return candidate.token
 }
 
 function buildSection(

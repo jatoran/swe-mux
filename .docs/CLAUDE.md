@@ -29,7 +29,7 @@
   moved into `.docs/` reads correctly from source and is silently absent for every user of
   the frozen app, which is the entire audience.
   The third rule governs **writes to a document this process cannot validate** (the
-  per-device settings store, five of whose seven domains are the browser's schema):
+  per-device settings store, seven of whose nine domains are the browser's schema):
   the write takes path-scoped operations, never a document, so everything it did not name
   is untouched by construction - the only safety available where validation is not - and it
   is guarded by a content digest the caller must have read plus a backup of the previous
@@ -119,6 +119,10 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing session pane top-bar metrics, shortcuts, rows, density, persistence, or editor:
+  `design/features/session-topbars.md`, `design/features/ui.md`,
+  `technical/frontend/packages/layout-and-chrome.md`,
+  `technical/frontend/packages/settings-and-gates.md`
 - Changing keyboard shortcuts - the chord vocabulary, sequences and the leader, the
   bindable command registry, the shipped keymap presets, `when` scopes, or what a host
   or platform is said to reserve: `design/features/keybindings.md`,

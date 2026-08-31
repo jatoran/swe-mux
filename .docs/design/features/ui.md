@@ -1899,18 +1899,20 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   maps to the same backend-aware payload: Claude/Codex receive `ESC+CR` to insert a composer newline,
   while shells retain `CR` submit. Agent submission is the fixed rail **Send** action, never the
   soft-keyboard Enter key.
-- A terminal pane is two rows: the header bar, then the terminal surface (terminal + action
-  rail). No feature may add a third.
+- A terminal pane is an intrinsic-height configured header followed by one flexible terminal
+  surface (terminal + action rail).
+  The header may contain one to three persistent rows; no transient feature may add another
+  pane track.
   The read-aloud player strip that once sat between them is retired: read aloud is operated
   entirely from the voice dock's `tts` tab, and which sessions speak is marked on the sidebar
   row and the workspace tab.
-- The pane tools row carries `note`, `queue[:N]` (agent sessions only - focuses that session
-  and opens the drawer's Queue tab on it, the count is its pending items;
-  `features/prompt-queue.md`), `transcript` (transcript-capable sessions only - focuses that
-  session and opens the drawer's Transcript tab), and the `⋯` session menu.
-  The shared pane header supplies the same controls on desktop and in the mobile projection.
-  Labelled chips either report session state or directly open a primary session-bound surface;
-  `proc` did neither, and remains in the drawer.
+- The pane top bar is a persistent one-to-three-row arrangement of shared session metrics and
+  shortcuts (`session-topbars.md`).
+  Its shipped one-row default carries title, conditional cwd, approvals, Queue, Transcript,
+  and the fixed `⋯` session menu.
+  Every metric and optional shortcut can be moved or removed; the fixed menu cannot, so a pane
+  always retains a recovery path.
+  The same configured header renders on desktop and in the mobile projection.
 - The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
   toggle and the separate "accept agent messages armed" switch. Both are checked by default
@@ -1924,17 +1926,14 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
   opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
   operation with nothing open (`features/auto-delivery.md`).
-- The pane header is `[name] [cwd] [tools]` and **must stay one row**.
-  It uses `grid-auto-flow:column`, so an item beyond the declared column count cannot auto-place into a second row.
-  There is no pane-local voice chip group: read-aloud is the voice panel's `tts` tab, workspace talk is the app-level voice dock, and `appr:` - the last chip that group held - is a pane tool now.
-  `.pane-tools` is the one right-aligned group, ordered `appr:` then `queue` then `transcript` then the overflow menu: the standing *mode* leads, and the surfaces that open on click follow it.
-  Three grid tracks are declared for every variant, because the cwd is the item that comes and goes.
-  A two-item header therefore puts the tools in the flexible track and leaves the trailing `auto` track empty, and an `auto` track holding nothing is zero wide, so the group stays flush with the bar's right edge without a spacer element and without one template per variant.
-  `.pane-tools` right-aligns its own contents (`justify-content:flex-end`), which is a no-op when it lands in the trailing track.
-  Phones drop the cwd column, and every device caps the name track so the group keeps room.
+- The pane header is the configured `sessionTopbar` layout (`session-topbars.md`).
+  Each persistent row is a no-wrap left/right pair, with the fixed overflow menu at the first
+  row's right edge.
+  Desktop and mobile read the same rows; width pressure ellipsizes values rather than wrapping
+  configured items into an unrequested row.
 - The header's first field is the session's display name (`sessionNames.ts`), not its status.
   State is already carried by the tab, the sidebar row, and the terminal being read, while the name is the field those surfaces crop: a tab is only as wide as its strip allows.
-  The name track is `fit-content()` rather than `auto`, because an `auto` track takes its max-content size before the flexible track expands - a sentence-length generated title would take the cwd's space and squeeze the pane tools to their floor.
+  The configured title metric keeps a bounded container-relative width, because a sentence-length generated title must yield before shortcuts do.
   The rendered name ellipsizes; the whole of it leads the `title` tooltip, followed by the status line, any faults, and delivery readiness.
   Faults keep a visible marker beside the name (`.pane-fault`) because they have no other pane-level surface - an agent header draws no path chip, which is where a non-local boundary is otherwise reported - and because a stale observation is the one fault that looks like a healthy session.
   Routine state never re-enters the bar: that is what the tab and the row are for.
@@ -1944,8 +1943,10 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The daemon writes `parser_diagnostic` on every observed session as routine detail (`tailing <id>.jsonl`, `schema v2: 801/801 recognized`), so reading its presence as a fault marked 17 of 17 live sessions when it shipped - an alarm that is always on reports nothing.
   A predicate for a visible marker therefore belongs in a unit-tested module and not inline in the surface: `sessionStatus.test.ts` pins that a healthy session carrying both strings has no faults.
   Faults deliberately do not touch the dot, the tab, or the status line, because a session can be perfectly `idle` while reporting on a conversation it no longer owns - which is precisely what a state axis cannot say.
-- **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
-  The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
+- **A pane has two tracks: intrinsic configured header and flexible terminal surface.**
+  The persistent header may contain one to three rows.
+  Nothing a transient feature toggles may add another track.
+  The pane's remaining height is the PTY's row count, so an in-flow strip that appears with session state would resize the terminal under a live agent and make its TUI reflow and repaint.
   The pane's only remaining float is the mobile Draft composer, which overlays the terminal host from inside the surface.
   Anything added later must float from a zero-height anchor sharing the surface's track rather than take a row of its own.
   The Talk toggle is app chrome directly before Run on mobile and desktop.
@@ -3324,6 +3325,7 @@ Detailed UI behavior belongs with the owning feature:
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`
 - Global Talk, registry-backed navigation, fleet speech, and guarded approvals: `voice.md`
+- Configurable session pane top bars: `session-topbars.md`
 
 ## Diagnostics
 

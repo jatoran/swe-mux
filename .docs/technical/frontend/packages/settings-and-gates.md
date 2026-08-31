@@ -55,8 +55,9 @@ A group is a run of the array rather than a declared membership, and `tabForSect
 ### Separate pages and the sidebar as sole navigation
 
 `settingsSubpages` declares the pages of the genuinely long tabs (Accounts, Prompt queue, Appearance, Input, Voice) before those tabs mount; every other tab is one scrolling column.
-Appearance separates ordinary interface controls from Session rows, whose editor and sticky live
-preview are substantial enough to own a page.
+Appearance separates ordinary interface controls, Session rows, and Session top bars.
+Both session appearance editors have sticky live previews and substantial placement models, so
+each owns a page.
 `settingsSubpageId` maps related implementation headings to the user-facing page that owns them.
 The sidebar is the only in-tab navigation: the desktop column and the mobile slide-in drawer both list a paged tab's pages below it, and an unpaged tab's rendered sections as scroll anchors (from `SECTION_RAIL_MIN` sections, scroll-spy highlighted).
 The mobile drawer overlays the current page with a transparent dismissal scrim, keeping that

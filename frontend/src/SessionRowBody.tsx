@@ -56,7 +56,7 @@ function Prefix({ token }: { token: RowToken }) {
   return <span class="row-prefix" aria-hidden="true">{token.prefix}</span>
 }
 
-function TokenView({ token, session, config }: { token: RowToken; session: Session; config: SessionRowConfig }) {
+export function RowTokenView({ token, session, config }: { token: RowToken; session: Session; config: SessionRowConfig }) {
   if (token.display === 'icon' && token.glyph) {
     // Ahead of every kind-specific branch, because the rung is a statement about
     // the whole token: at this width the field is present and identified, and its
@@ -144,7 +144,7 @@ function SectionView({ section, session, config }: { section: RowSection; sessio
     {section.tokens.map((token, index) =>
       <span key={`${token.id}:${index}`} class={`row-token${token.shared ? ' shared' : ''}`}>
         {index > 0 && section.separator ? <span class="row-sep" aria-hidden="true">{section.separator}</span> : null}
-        <TokenView token={token} session={session} config={config} />
+        <RowTokenView token={token} session={session} config={config} />
       </span>)}
   </span>
 }

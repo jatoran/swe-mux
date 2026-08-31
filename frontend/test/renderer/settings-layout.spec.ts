@@ -363,6 +363,44 @@ test('the sticky session-row preview updates before its settings write finishes'
   await expect(row).not.toContainText('5-codex')
 })
 
+for(const [device,viewport] of [['desktop',DESKTOP],['mobile',PHONE]] as const){
+  test(`Session top bars owns a sticky realtime preview on ${device}`,async({page})=>{
+    await page.setViewportSize(viewport)
+    await page.goto('/settings-harness.html?section=Appearance&setting=session_topbar')
+    await expect(page.locator('.settings-content h3',{hasText:/^Session top bars$/})).toBeVisible()
+    await expect(page.locator('.settings-content h3',{hasText:/^Theme$/})).toBeHidden()
+    const preview=page.locator('.session-topbar-preview-sticky')
+    expect(await preview.evaluate(node=>getComputedStyle(node).position)).toBe('sticky')
+    await expect(preview.locator('.session-topbar-row')).toHaveCount(1)
+    await expect(preview.locator('.approval-chip')).toContainText('appr:wait')
+    await expect(preview.locator('.queue-chip')).toContainText('queue:2')
+    await expect(preview.locator('.transcript-chip')).toContainText('transcript')
+    await expect(preview.getByRole('button',{name:'More actions'})).toBeVisible()
+    const addRow=page.getByRole('button',{name:'Add row',exact:true})
+    await addRow.click();await addRow.click()
+    await page.locator('.settings-content').evaluate(node=>{node.scrollTop=600})
+    await expect.poll(async()=>preview.evaluate(node=>Math.abs(node.getBoundingClientRect().top-node.closest('.settings-content')!.getBoundingClientRect().top))).toBeLessThan(1)
+  })
+}
+
+test('top-bar row count and shortcuts update the preview immediately',async({page})=>{
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html?section=Appearance&setting=session_topbar')
+  const preview=page.locator('.session-topbar-preview')
+  const addRow=page.getByRole('button',{name:'Add row',exact:true})
+  await addRow.click();await expect(preview.locator('.session-topbar-row')).toHaveCount(2)
+  await addRow.click();await expect(preview.locator('.session-topbar-row')).toHaveCount(3)
+  await expect(addRow).toBeDisabled()
+
+  const transcriptSlot=page.locator('.topbar-slot').filter({hasText:'Transcript'}).first()
+  await transcriptSlot.getByTitle('Remove').click()
+  await expect(preview.locator('.transcript-chip')).toHaveCount(0)
+  const add=page.locator('.topbar-add-items').first()
+  await add.locator('summary').click()
+  await add.getByRole('button',{name:'Processes',exact:true}).click()
+  await expect(preview.getByRole('button',{name:'processes',exact:true})).toBeVisible()
+})
+
 test('an unpaged tab lists its rendered sections in the sidebar, and the chevron collapses them', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')

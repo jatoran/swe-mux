@@ -184,6 +184,17 @@ Pure config to root custom properties.
 Neither theme nor scale code reads rendered styles back.
 The stylesheet is the only consumer of the *property* but not the only consumer of the *value*: `applyUiScale` returns the resolved step and `watchUiScaleProfile` reports it on a device-class flip, because xterm owns its font and has to be handed a number (`scaledFontSize`) rather than inheriting a custom property.
 
+## Session top bars
+
+`sessionTopbarConfig.ts`, `sessionTopbarPrefs.ts`, `SessionTopbar.tsx`, `SessionTopbarSettings.tsx`
+
+`sessionTopbarConfig.ts` owns the browser-free one-to-three-row layout, the combined metric and drawer-shortcut catalog, normalization, placement, row removal with rehoming, and the non-removable title invariant.
+`sessionTopbarPrefs.ts` pins the shared layout to the canonical desktop profile and republishes settings changes.
+`SessionTopbar.tsx` combines the shared session-row metric engine with target-aware actions supplied by `App.tsx`.
+`SessionTopbarSettings.tsx` owns the dedicated Appearance page and sticky realtime preview.
+The fixed overflow menu is outside the model by design.
+CSS gives `.terminal-pane` an intrinsic header track followed by the flexible terminal surface, so persistent row count is the only top-bar edit that changes terminal height.
+
 ## Icon sets
 
 `railIcons.tsx`, `harnessIcons.tsx`, `noteRailIcons.ts`
