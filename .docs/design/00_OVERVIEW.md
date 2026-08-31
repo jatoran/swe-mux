@@ -51,6 +51,7 @@
 - The shipped agent skill and its installer: `features/agent-skill-delivery.md`
 - First run: experience tiers and the setup sequence: `features/first-run.md`
 - Trusted task discovery and the Project Run menu: `features/project-actions.md`
+- External-process plugins, lifecycle, contributions, and marketplace: `features/plugins.md`
 - Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`
 - History: `features/history.md`
 - Reading a transcript as the branching DAG it is: `features/transcript-branches.md`

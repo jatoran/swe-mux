@@ -30,9 +30,7 @@ def test_config_supplies_host_and_port(monkeypatch: pytest.MonkeyPatch) -> None:
         host = "127.0.0.1"
         port = 18765
 
-    monkeypatch.setattr(
-        "swe_mux.config.load_config", lambda: _Config(), raising=True
-    )
+    monkeypatch.setattr("swe_mux.config.load_config", lambda: _Config(), raising=True)
     assert cli.resolve_base_url(None) == "http://127.0.0.1:18765"
 
 
@@ -46,6 +44,44 @@ def test_config_failure_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -
     assert cli.resolve_base_url(None) == cli.DEFAULT_URL
 
 
+def test_plugin_cli_routes_lifecycle_and_contribution_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, Any]] = []
+
+    def fake_request(
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        base: str,
+        headers: dict[str, str] | None = None,
+        timeout: float = 10,
+    ) -> Any:
+        calls.append((method, path, body))
+        return {"ok": True}
+
+    monkeypatch.setattr(cli, "request", fake_request)
+    args = cli.build_parser().parse_args(
+        ["plugin", "link", "C:/plugins/tool", "--approve", "--enable"]
+    )
+    cli.dispatch(args, "http://daemon")
+    assert calls[-1] == (
+        "POST",
+        "/api/plugins/link",
+        {"path": "C:/plugins/tool", "approve": True, "enable": True},
+    )
+    args = cli.build_parser().parse_args(
+        ["plugin", "action", "vendor.tool", "audit", "--project", "p1"]
+    )
+    cli.dispatch(args, "http://daemon")
+    assert calls[-1] == (
+        "POST",
+        "/api/plugins/vendor.tool/actions/audit",
+        {"context": "project", "project_id": "p1", "session_id": None},
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Session id / name resolution
 # --------------------------------------------------------------------------- #
@@ -55,6 +91,7 @@ def _stub_sessions(monkeypatch: pytest.MonkeyPatch, sessions: list[dict[str, Any
     def _request(method: str, path: str, body: Any = None, *, base: str) -> Any:
         assert path == "/api/sessions"
         return sessions
+
     monkeypatch.setattr(cli, "request", _request)
 
 
@@ -125,19 +162,30 @@ def _capture_requests(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, A
     def _request(method: str, path: str, body: Any = None, *, base: str) -> Any:
         captured.append((method, path, body))
         if path == "/api/sessions" and method == "GET":
-            return [{"id": "sid1", "name": "target", "backend": "shell", "state": "idle",
-                     "project_id": "p1"}]
+            return [
+                {
+                    "id": "sid1",
+                    "name": "target",
+                    "backend": "shell",
+                    "state": "idle",
+                    "project_id": "p1",
+                }
+            ]
         if path == "/api/diagnostics/doctor":
-            return {"ok": False, "summary": {"ok": 1, "warn": 0, "fail": 1, "unavailable": 0},
-                    "checks": [{"title": "t", "detail": "d", "status": "fail", "remedy": "fix"}]}
+            return {
+                "ok": False,
+                "summary": {"ok": 1, "warn": 0, "fail": 1, "unavailable": 0},
+                "checks": [{"title": "t", "detail": "d", "status": "fail", "remedy": "fix"}],
+            }
         return {"ok": True}
 
     monkeypatch.setattr(cli, "request", _request)
     return captured
 
 
-def test_ls_filters_build_query(monkeypatch: pytest.MonkeyPatch,
-                                capsys: pytest.CaptureFixture[str]) -> None:
+def test_ls_filters_build_query(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     captured = _capture_requests(monkeypatch)
     assert cli.main(["ls", "--project", "p1", "--state", "working", "--json"]) == cli.EXIT_OK
     method, path, _ = captured[0]
@@ -146,16 +194,18 @@ def test_ls_filters_build_query(monkeypatch: pytest.MonkeyPatch,
     assert "project=p1" in path and "state=working" in path
 
 
-def test_kill_resolves_name_then_deletes(monkeypatch: pytest.MonkeyPatch,
-                                         capsys: pytest.CaptureFixture[str]) -> None:
+def test_kill_resolves_name_then_deletes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     captured = _capture_requests(monkeypatch)
     assert cli.main(["kill", "target"]) == cli.EXIT_OK
     # First a GET to resolve, then a DELETE to the resolved stable id.
     assert captured[-1] == ("DELETE", "/api/sessions/sid1", None)
 
 
-def test_doctor_returns_fail_exit_code(monkeypatch: pytest.MonkeyPatch,
-                                       capsys: pytest.CaptureFixture[str]) -> None:
+def test_doctor_returns_fail_exit_code(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _capture_requests(monkeypatch)
     code = cli.main(["doctor"])
     assert code == cli.EXIT_DOCTOR_FAIL
@@ -163,23 +213,26 @@ def test_doctor_returns_fail_exit_code(monkeypatch: pytest.MonkeyPatch,
     assert "PROBLEMS FOUND" in out
 
 
-def test_doctor_json_prints_raw(monkeypatch: pytest.MonkeyPatch,
-                                capsys: pytest.CaptureFixture[str]) -> None:
+def test_doctor_json_prints_raw(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _capture_requests(monkeypatch)
     cli.main(["doctor", "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
 
 
-def test_doctor_export_hits_export_endpoint(monkeypatch: pytest.MonkeyPatch,
-                                            capsys: pytest.CaptureFixture[str]) -> None:
+def test_doctor_export_hits_export_endpoint(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     captured = _capture_requests(monkeypatch)
     cli.main(["doctor", "--export"])
     assert ("GET", "/api/diagnostics/export", None) in captured
 
 
-def test_connection_error_exit_code(monkeypatch: pytest.MonkeyPatch,
-                                    capsys: pytest.CaptureFixture[str]) -> None:
+def test_connection_error_exit_code(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     def _boom(method: str, path: str, body: Any = None, *, base: str) -> Any:
         raise cli.CliError("cannot reach", cli.EXIT_CONNECTION)
 
@@ -212,25 +265,50 @@ def _local_report(monkeypatch: pytest.MonkeyPatch, *, failing: bool) -> None:
         "mode": "local",
         "complete": False,
         "ok": not failing,
-        "summary": {"ok": 0 if failing else 1, "warn": 0, "fail": int(failing),
-                    "unavailable": 0, "unchecked": 2},
+        "summary": {
+            "ok": 0 if failing else 1,
+            "warn": 0,
+            "fail": int(failing),
+            "unavailable": 0,
+            "unchecked": 2,
+        },
         "daemon": {"reachable": False, "url": "http://127.0.0.1:8765", "detail": "refused"},
         "checks": [
-            {"id": "install.pty", "category": "install", "title": "Pseudoterminal backend",
-             "status": status, "severity": "critical", "detail": "d", "remedy": "reinstall"},
-            {"id": "daemon.unchecked", "category": "daemon", "title": "Daemon health",
-             "status": "unchecked", "severity": "info", "detail": "Needs a running daemon.",
-             "remedy": None},
-            {"id": "status.unchecked", "category": "status", "title": "Fleet status health",
-             "status": "unchecked", "severity": "info", "detail": "Needs a running daemon.",
-             "remedy": None},
+            {
+                "id": "install.pty",
+                "category": "install",
+                "title": "Pseudoterminal backend",
+                "status": status,
+                "severity": "critical",
+                "detail": "d",
+                "remedy": "reinstall",
+            },
+            {
+                "id": "daemon.unchecked",
+                "category": "daemon",
+                "title": "Daemon health",
+                "status": "unchecked",
+                "severity": "info",
+                "detail": "Needs a running daemon.",
+                "remedy": None,
+            },
+            {
+                "id": "status.unchecked",
+                "category": "status",
+                "title": "Fleet status health",
+                "status": "unchecked",
+                "severity": "info",
+                "detail": "Needs a running daemon.",
+                "remedy": None,
+            },
         ],
     }
     monkeypatch.setattr(cli, "local_doctor_report", lambda *, base, detail: report)
 
 
 def test_doctor_falls_back_to_the_local_report_when_no_daemon_answers(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _unreachable(monkeypatch)
     _local_report(monkeypatch, failing=False)
     code = cli.main(["doctor"])
@@ -244,7 +322,8 @@ def test_doctor_falls_back_to_the_local_report_when_no_daemon_answers(
 
 
 def test_a_failing_local_check_exits_with_the_doctor_fail_code(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _unreachable(monkeypatch)
     _local_report(monkeypatch, failing=True)
     assert cli.main(["doctor"]) == cli.EXIT_DOCTOR_FAIL
@@ -252,7 +331,8 @@ def test_a_failing_local_check_exits_with_the_doctor_fail_code(
 
 
 def test_the_local_report_marks_unchecked_rows_distinctly_from_unavailable(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _unreachable(monkeypatch)
     _local_report(monkeypatch, failing=False)
     cli.main(["doctor"])
@@ -263,7 +343,8 @@ def test_the_local_report_marks_unchecked_rows_distinctly_from_unavailable(
 
 
 def test_doctor_json_prints_the_local_report(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _unreachable(monkeypatch)
     _local_report(monkeypatch, failing=False)
     cli.main(["doctor", "--json"])
@@ -273,8 +354,10 @@ def test_doctor_json_prints_the_local_report(
 
 
 def test_a_daemon_http_error_does_not_fall_back_to_the_local_report(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """An HTTP error means a daemon answered: a daemon fault, not an install one."""
+
     def _boom(method: str, path: str, body: Any = None, *, base: str) -> Any:
         raise cli.CliError("daemon returned HTTP 500: boom", cli.EXIT_HTTP)
 
@@ -284,14 +367,14 @@ def test_a_daemon_http_error_does_not_fall_back_to_the_local_report(
 
 
 def test_doctor_export_still_fails_without_a_daemon_and_points_at_the_local_report(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _unreachable(monkeypatch)
     assert cli.main(["doctor", "--export"]) == cli.EXIT_CONNECTION
     assert "no local form" in capsys.readouterr().err
 
 
-def test_the_daemon_report_renders_exactly_as_it_did(
-        capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_daemon_report_renders_exactly_as_it_did(capsys: pytest.CaptureFixture[str]) -> None:
     """Byte-compatibility guard for the path a running daemon takes.
 
     The local mode's preamble, `????` mark, and `unchecked` tally are each
@@ -304,10 +387,13 @@ def test_the_daemon_report_renders_exactly_as_it_did(
         "checks": [
             {"title": "Daemon reachable", "detail": "up", "status": "ok"},
             {"title": "Frontend build", "detail": "served", "status": "ok"},
-            {"title": "Tailscale connection", "detail": "off", "status": "warn",
-             "remedy": "tailscale up"},
-            {"title": "Serve", "detail": "absent", "status": "unavailable",
-             "remedy": "ignored"},
+            {
+                "title": "Tailscale connection",
+                "detail": "off",
+                "status": "warn",
+                "remedy": "tailscale up",
+            },
+            {"title": "Serve", "detail": "absent", "status": "unavailable", "remedy": "ignored"},
         ],
     }
     assert cli._render_doctor(result) == (
@@ -357,7 +443,8 @@ def _outcome(slot: str, action: str, detail: str = "") -> Any:
 
 
 def test_install_shortcut_asks_for_a_start_menu_and_a_desktop_entry_by_default(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _no_daemon_allowed(monkeypatch)
     seen: dict[str, Any] = {}
 
@@ -373,7 +460,8 @@ def test_install_shortcut_asks_for_a_start_menu_and_a_desktop_entry_by_default(
 
 
 def test_install_shortcut_flags_reach_the_plan(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _no_daemon_allowed(monkeypatch)
     seen: dict[str, Any] = {}
 
@@ -391,7 +479,8 @@ def test_install_shortcut_flags_reach_the_plan(
 
 
 def test_install_shortcut_with_nothing_left_to_create_is_refused(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _no_daemon_allowed(monkeypatch)
     code = cli.main(["install-shortcut", "--no-desktop", "--no-start-menu"])
     assert code == cli.EXIT_LOCAL_FAIL
@@ -399,7 +488,8 @@ def test_install_shortcut_with_nothing_left_to_create_is_refused(
 
 
 def test_an_unsupported_host_is_reported_and_still_exits_zero(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """POSIX asked for something this host does not have; nothing went wrong.
 
     Exiting non-zero here would make the command red on every POSIX machine that
@@ -415,7 +505,8 @@ def test_an_unsupported_host_is_reported_and_still_exits_zero(
 
 
 def test_a_shortcut_that_was_attempted_and_failed_exits_non_zero(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _no_daemon_allowed(monkeypatch)
     monkeypatch.setattr(
         "swe_mux.shortcuts.apply_shortcuts",
@@ -426,7 +517,8 @@ def test_a_shortcut_that_was_attempted_and_failed_exits_non_zero(
 
 
 def test_a_config_that_will_not_load_says_so_instead_of_tracebacking(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _no_daemon_allowed(monkeypatch)
 
     def _boom(*_args: Any, **_kwargs: Any) -> Any:
@@ -440,7 +532,8 @@ def test_a_config_that_will_not_load_says_so_instead_of_tracebacking(
 
 
 def test_install_shortcut_json_carries_every_path_it_wrote(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     _no_daemon_allowed(monkeypatch)
     monkeypatch.setattr(
         "swe_mux.shortcuts.apply_shortcuts",
@@ -486,8 +579,8 @@ def test_the_usage_line_names_the_command_that_was_actually_typed(
     something that does not exist.
     """
     assert cli.invoked_as(argv0) == expected
-    assert cli.build_parser(prog=cli.invoked_as(argv0)).format_usage().startswith(
-        f"usage: {expected}"
+    assert (
+        cli.build_parser(prog=cli.invoked_as(argv0)).format_usage().startswith(f"usage: {expected}")
     )
 
 
@@ -516,9 +609,7 @@ def test_the_daemon_resolves_its_own_pair_by_the_same_rule() -> None:
 
     for name in DAEMON_LAUNCHER_NAMES:
         assert (
-            cli.invoked_as(
-                f"/bin/{name}", names=DAEMON_LAUNCHER_NAMES, default=DEFAULT_DAEMON_PROG
-            )
+            cli.invoked_as(f"/bin/{name}", names=DAEMON_LAUNCHER_NAMES, default=DEFAULT_DAEMON_PROG)
             == name
         )
     assert not (DAEMON_LAUNCHER_NAMES & cli.LAUNCHER_NAMES)

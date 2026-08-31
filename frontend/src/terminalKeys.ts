@@ -2,7 +2,11 @@ import { DEFAULT_COMPOSER_NEWLINE, composerNewline, isAgentBackend } from './har
 
 export type TerminalKeyDecision =
   | { kind: 'pass' }
-  | { kind: 'command'; command: string }
+  /** swe-mux owns this keystroke: xterm must not write it to the PTY. The command
+   *  itself is dispatched by App's window handler, which owns the sequence state -
+   *  the pane can only be told whether the key is claimed, never which binding it
+   *  belongs to, because a chord halfway through a sequence has no command yet. */
+  | { kind: 'claimed' }
   | { kind: 'browserPaste' }
   | { kind: 'copySelection' }
   | { kind: 'sendInput'; data: string }
@@ -25,15 +29,12 @@ export const AGENT_NEWLINE = DEFAULT_COMPOSER_NEWLINE
 
 export function terminalKeyDecision(
   event: TerminalKey,
-  command: string | undefined,
+  claimed: boolean,
   hasSelection: boolean,
   backend?: string,
 ): TerminalKeyDecision {
   if (event.type !== 'keydown') return { kind: 'pass' }
-  if (command) {
-    if (command === 'terminal.copy' && !hasSelection) return { kind: 'pass' }
-    return { kind: 'command', command }
-  }
+  if (claimed) return { kind: 'claimed' }
   const key = event.key.toLowerCase()
   if (key === 'enter' && (event.shiftKey || event.ctrlKey) && !event.altKey && !event.metaKey) {
     if (isAgentBackend(backend)) return { kind: 'sendInput', data: composerNewline(backend) }

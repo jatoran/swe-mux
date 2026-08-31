@@ -30,7 +30,7 @@ const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url),
 const constructionEffect = (): string => {
   const start = source.indexOf('const term = new Terminal(')
   assert.ok(start > 0, 'could not find the terminal construction effect')
-  const end = source.indexOf('}, [session.id, keybindings, scrollback', start)
+  const end = source.indexOf('}, [session.id, scrollback', start)
   assert.ok(end > start, 'could not find the construction effect dependency array')
   return source.slice(start, end)
 }
@@ -47,14 +47,12 @@ const session = (overrides: Partial<Session> = {}): Session =>
 // The reference-compared props are hoisted so a test varies only the session. Rebuilding
 // them per call would make every comparison unequal for the wrong reason, which is how a
 // memo test quietly stops testing anything.
-const KEYBINDINGS: Record<string, string> = {}
 const MOBILE_INPUT = {}
 
 const props = (overrides: Partial<Session> = {}) =>
   ({
     session: session(overrides),
     broadcast: false,
-    keybindings: KEYBINDINGS,
     scrollback: 1000,
     rendererPreference: 'auto',
     mobileInput: MOBILE_INPUT,

@@ -661,3 +661,15 @@ Clipboard history is the one store that holds arbitrary user text verbatim, so i
 store that defaults to keeping nothing durable: memory-only unless persistence is opted into,
 count- and time-bounded (pins exempt), secret-shaped copies refused before an entry exists, and
 no copied text in the `clipboard_changed` events that announce ring changes.
+
+## Plugin registry and command ledger
+
+`plugins` is keyed by namespaced plugin ID and stores display version, enablement, lifecycle, source kind and immutable identity, active and previous roots, manifest and security digests, approval digest, diagnostics, and install/update timestamps.
+It stores no manifest source, runtime token, command environment, or plugin credential.
+
+`plugin_command_logs` is keyed by invocation ID and stores plugin and contribution identity, invocation source, correlation ID, bounded context, start and finish timestamps, outcome, exit code, duration, capped stdout and stderr, truncation flags, and diagnostics.
+The ledger retains the newest 1,000 rows across plugins.
+
+Plugin source lives beneath `<data_dir>/plugins/sources/<plugin-id>/<manifest-digest>`.
+Editable config and durable state live in separate `<data_dir>/plugins/config/<plugin-id>` and `<data_dir>/plugins/state/<plugin-id>` directories.
+Uninstall removes managed source while retaining config and state; purge removes all three only after separate confirmation.

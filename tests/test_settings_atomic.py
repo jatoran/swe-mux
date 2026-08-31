@@ -65,8 +65,14 @@ def _keybindings_file(tmp_path: Path) -> Path:
 
 
 def _written_bindings(tmp_path: Path) -> dict[str, str]:
+    """The saved document flattened to chord -> command, for these assertions.
+
+    The document is a rule *list* since 2026-08-30 (a rule can be scoped to a host,
+    a platform or a `when`, none of which a map can hold), and none of the cases here
+    exercise a scope - so flattening keeps them about atomicity, which is what this
+    file is for."""
     document = json.loads(_keybindings_file(tmp_path).read_text(encoding="utf-8"))
-    return cast(dict[str, str], document["bindings"])
+    return {rule["keys"]: rule["command"] for rule in document["rules"]}
 
 
 async def _apply(app: dict[Any, Any], body: Any, headers: dict[str, str] | None = None) -> Any:
@@ -85,7 +91,7 @@ async def test_one_request_commits_both_halves(tmp_path: Path) -> None:
         {
             "_revision": before,
             "config": {"scrollback_bytes": 7 * 1024 * 1024},
-            "keybindings": {"bindings": {"ctrl+alt+p": "palette.open"}},
+            "keybindings": {"rules": [{"keys": "ctrl+shift+p", "command": "palette.open"}]},
         },
     )
 
@@ -93,10 +99,11 @@ async def test_one_request_commits_both_halves(tmp_path: Path) -> None:
     payload = _payload(response)
     assert payload["committed"] == ["config", "keybindings"]
     assert payload["config"]["scrollback_bytes"] == 7 * 1024 * 1024
-    assert payload["keybindings"]["bindings"]["ctrl+alt+p"] == "palette.open"
+    resolved = payload["keybindings"]["resolved"]
+    assert resolved["ctrl+shift+p"] == [{"command": "palette.open", "when": ""}]
     assert config.revision == before + 1
     assert response.headers["ETag"] == f'"{config.revision}"'
-    assert _written_bindings(tmp_path)["ctrl+alt+p"] == "palette.open"
+    assert _written_bindings(tmp_path) == {"ctrl+shift+p": "palette.open"}
     # One announcement for one transaction, carrying both what changed and the fact that
     # the shortcuts moved with it.
     assert [event for event, _ in events.emitted] == ["configuration_changed"]
@@ -128,7 +135,7 @@ async def test_a_rejected_chord_leaves_the_config_untouched(tmp_path: Path) -> N
         app,
         {
             "config": {"scrollback_bytes": 9 * 1024 * 1024},
-            "keybindings": {"bindings": {"ctrl+alt+p": "no.such.command"}},
+            "keybindings": {"rules": [{"keys": "ctrl+shift+p", "command": "no.such.command"}]},
         },
     )
 
@@ -136,7 +143,7 @@ async def test_a_rejected_chord_leaves_the_config_untouched(tmp_path: Path) -> N
     payload = _payload(response)
     assert payload["section"] == "keybindings"
     assert payload["committed"] == []
-    assert "ctrl+alt+p" in payload["fields"]
+    assert "ctrl+shift+p" in payload["fields"]
     assert config.revision == before
     assert config.scrollback_bytes != 9 * 1024 * 1024
     assert not _keybindings_file(tmp_path).exists()
@@ -149,9 +156,9 @@ async def test_a_rejected_config_field_leaves_the_shortcuts_untouched(tmp_path: 
     _keybindings_file(tmp_path).write_text(
         json.dumps(
             {
-                "version": 2,
-                "replace_defaults": True,
-                "bindings": {"ctrl+alt+p": "palette.open"},
+                "version": 3,
+                "preset": "custom",
+                "rules": [{"keys": "ctrl+shift+p", "command": "palette.open"}],
             }
         ),
         encoding="utf-8",
@@ -162,7 +169,7 @@ async def test_a_rejected_config_field_leaves_the_shortcuts_untouched(tmp_path: 
         app,
         {
             "config": {"scrollback_bytes": -1},
-            "keybindings": {"bindings": {"ctrl+alt+n": "notes.open"}},
+            "keybindings": {"rules": [{"keys": "ctrl+shift+n", "command": "notes.open"}]},
         },
     )
 
@@ -173,7 +180,7 @@ async def test_a_rejected_config_field_leaves_the_shortcuts_untouched(tmp_path: 
     assert payload["fields"]
     assert config.revision == before
     # The file on disk is still the one that was there before the save was attempted...
-    assert _written_bindings(tmp_path) == {"ctrl+alt+p": "palette.open"}
+    assert _written_bindings(tmp_path) == {"ctrl+shift+p": "palette.open"}
     # ...and the staged copy did not survive to be picked up by anything later.
     assert not list(tmp_path.glob("keybindings.json.tmp"))
     assert events.emitted == []
@@ -187,7 +194,7 @@ async def test_an_unknown_setting_commits_nothing(tmp_path: Path) -> None:
         app,
         {
             "config": {"not_a_setting": 1},
-            "keybindings": {"bindings": {"ctrl+alt+p": "palette.open"}},
+            "keybindings": {"rules": [{"keys": "ctrl+shift+p", "command": "palette.open"}]},
         },
     )
 
@@ -209,7 +216,7 @@ async def test_another_devices_revision_conflict_commits_nothing(
     stale = config.revision + 5
     body: dict[str, Any] = {
         "config": {"scrollback_bytes": 9 * 1024 * 1024},
-        "keybindings": {"bindings": {"ctrl+alt+p": "palette.open"}},
+        "keybindings": {"rules": [{"keys": "ctrl+shift+p", "command": "palette.open"}]},
     }
     headers: dict[str, str] = {}
     if channel == "body":
@@ -264,7 +271,7 @@ async def test_a_failed_keybindings_commit_names_the_half_that_landed(
         app,
         {
             "config": {"scrollback_bytes": 6 * 1024 * 1024},
-            "keybindings": {"bindings": {"ctrl+alt+p": "palette.open"}},
+            "keybindings": {"rules": [{"keys": "ctrl+shift+p", "command": "palette.open"}]},
         },
     )
 
@@ -283,14 +290,23 @@ async def test_a_failed_keybindings_commit_names_the_half_that_landed(
 # ------------------------------------------------------------------ body shapes
 
 
-async def test_bare_chord_map_is_accepted_like_the_keybindings_put(tmp_path: Path) -> None:
+async def test_the_preset_a_save_names_is_recorded_beside_its_rules(tmp_path: Path) -> None:
+    """A save carries which preset the rules came from, and `custom` once they no
+    longer come from one. It is what lets a later release seed a new default without
+    an accumulating `V<N>_DEFAULT_KEYBINDINGS` constant per release, which is how the
+    previous format did it and could only ever grow."""
     app, _, _ = _app(tmp_path)
 
-    response = await _apply(app, {"keybindings": {"ctrl+alt+p": "palette.open"}})
+    response = await _apply(app, {"keybindings": {
+        "preset": "tmux",
+        "rules": [{"keys": "ctrl+b c", "command": "session.spawnShell"}],
+    }})
 
     assert response.status == 200
     assert _payload(response)["committed"] == ["config", "keybindings"]
-    assert _written_bindings(tmp_path) == {"ctrl+alt+p": "palette.open"}
+    document = json.loads(_keybindings_file(tmp_path).read_text(encoding="utf-8"))
+    assert document["preset"] == "tmux"
+    assert document["rules"] == [{"keys": "ctrl+b c", "command": "session.spawnShell"}]
 
 
 @pytest.mark.parametrize("body", [[], "config", {"config": []}, {"keybindings": 3}])

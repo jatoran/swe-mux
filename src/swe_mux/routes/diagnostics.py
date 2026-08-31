@@ -452,6 +452,7 @@ async def get_background_health(request: web.Request) -> web.Response:
             # A watch service that stopped resolving is indistinguishable from a
             # fleet nobody is watching, so its counters and open count are here.
             "session_watch": request.app[keys.SESSION_WATCH].status(),
+            "plugins": await request.app[keys.PLUGINS].status(),
         }
     )
 
