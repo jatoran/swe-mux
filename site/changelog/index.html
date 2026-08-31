@@ -947,8 +947,17 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.1.5...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.0...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
+      </div>
+      <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.0">0.2.0</a></h2>
+        <span class="when">2026-08-31</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.0">release notes</a>
       </div>
       <div class="relgroups">
         <div><span class="k">Added</span> <span class="sep">9 entries</span></div>
@@ -965,6 +974,11 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <li><span><b>Monitoring agents now hear their answers without a human pumping the queue.</b> An open settle watch holds the watcher's auto-delivery grant open for the watch's own lifetime (previously any watch longer than the idle window lapsed the grant, and the notice arrived with nothing to deliver it), and any authenticated mux tool call now counts as the "somebody is reading this" evidence that resets the consecutive-send cap - so an orchestrator that reacts to notices by acting, rather than by writing replies, no longer goes silently deaf after three deliveries.</span></li>
           <li><span><b>First-run setup asks the questions that used to wait for Settings.</b> The tier page now carries a live-previewed theme picker and a Customize fold-out with two new axes: an <b>agent autonomy</b> level (Supervised / Assisted / Autonomous - whether queued messages deliver themselves, and under how wide a set of caps) and one checkbox per switch the chosen tier sets, applied atomically with the tier through the same daemon-owned policy route (<code>POST /api/experience-tier</code> now takes <code>autonomy</code> and <code>overrides</code>; <code>GET /api/experience-tiers</code> serves the tables the panel draws). The agents page gains an install-wide <b>fleet access</b> choice - MCP + CLI, MCP only, CLI + skill, or none - answered once instead of per harness. And setup now ends on a <b>first steps</b> page: the same three-quest card the empty workspace shows, so finishing setup hands off into the guided voice, worktree, and phone setups rather than closing on a blank stage.</span></li>
           <li><span><b>The command rail can be switched off per device class.</b> Settings → Appearance → Action rail: <code>rail_enabled_desktop</code> / <code>rail_enabled_mobile</code>, both on by default, hot-applied, and offered during first-run Customize. Turning one off hides the whole rail there (on mobile that includes the pinned Send button) while the configured layout is kept and comes back untouched.</span></li>
+        </ul>
+        <ul class="bullets">
+          <li><span><b>The first launch of the Windows desktop shell offers to add itself to the Start Menu and to start when you sign in.</b> A wheel cannot create a shortcut and nothing runs after <code>pip</code>/<code>uv</code>, so <code>swemux install-shortcut</code> was a command nobody knew to run. Asked once per install whichever way you answer, never for the installer's own build, and never when a Start Menu entry already exists. It writes no desktop icon; that stays a choice in Settings.</span></li>
+          <li><span><b><code>swemux start</code> runs the daemon in the background and returns once it is serving.</b> For the browser-only case, for Linux and macOS where there is no desktop app, and for iterating from a checkout: closing the terminal does not stop it, <code>swemuxd --shutdown</code> does, and a daemon that is already serving is reported and left alone. It is the only command that starts a daemon, and only when typed - <code>swemux ls</code> against a stopped daemon still says so.</span></li>
+          <li><span><b>A daemon started where you can see it opens the UI in your browser.</b> Gated on a terminal actually watching the process, which is what keeps it out of every start that should not do this: the tray's own daemon child, <code>swemux start</code>'s detached child, a restart successor, and a login task are all non-TTY and unaffected. <code>--no-browser</code> on either command, or <code>SWE_MUX_NO_BROWSER</code> for a caller that cannot pass a flag.</span></li>
         </ul>
         <div class="changetype">Changed</div>
         <ul class="bullets">
@@ -999,12 +1013,6 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <li><span><b>Voice setup works on Python 3.13 and 3.14.</b> <code>uv tool install</code> picks the newest CPython on the machine, and the pinned voice closure had no wheel spaCy could load on 3.14, so local voice dead-ended at "no wheel this interpreter can load for: spacy". The pins now cover 3.12 through 3.14, CI checks the closure against each of them rather than only the 3.12 it pins, and the refusal names the interpreter and the supported range instead of reading as a broken package.</span></li>
           <li><span><b>Downloads verify TLS against the OS certificate store.</b> The Kokoro pronunciation model failed with <code>unable to get local issuer certificate</code> against github.com on a machine whose browser reached the same URL: Windows fetches most roots on demand and Python's reading of the store only sees the ones already fetched.</span></li>
           <li><span><b>The Edge TTS install no longer throws away 80 seconds of work to report a timeout.</b> It checks it can reach PyPI before building anything, and separates "cannot connect" from "cannot verify". Its verification step - which imports the package and makes no network request at all - had a 20s budget that a first-ever import on a cold, scanned filesystem could not meet; it is now 120s and says what it was actually doing.</span></li>
-        </ul>
-        <div class="changetype">Added</div>
-        <ul class="bullets">
-          <li><span><b>The first launch of the Windows desktop shell offers to add itself to the Start Menu and to start when you sign in.</b> A wheel cannot create a shortcut and nothing runs after <code>pip</code>/<code>uv</code>, so <code>swemux install-shortcut</code> was a command nobody knew to run. Asked once per install whichever way you answer, never for the installer's own build, and never when a Start Menu entry already exists. It writes no desktop icon; that stays a choice in Settings.</span></li>
-          <li><span><b><code>swemux start</code> runs the daemon in the background and returns once it is serving.</b> For the browser-only case, for Linux and macOS where there is no desktop app, and for iterating from a checkout: closing the terminal does not stop it, <code>swemuxd --shutdown</code> does, and a daemon that is already serving is reported and left alone. It is the only command that starts a daemon, and only when typed - <code>swemux ls</code> against a stopped daemon still says so.</span></li>
-          <li><span><b>A daemon started where you can see it opens the UI in your browser.</b> Gated on a terminal actually watching the process, which is what keeps it out of every start that should not do this: the tray's own daemon child, <code>swemux start</code>'s detached child, a restart successor, and a login task are all non-TTY and unaffected. <code>--no-browser</code> on either command, or <code>SWE_MUX_NO_BROWSER</code> for a caller that cannot pass a flag.</span></li>
         </ul>
       </details>
     </div>

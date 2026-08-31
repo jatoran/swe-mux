@@ -2469,7 +2469,7 @@ class ProviderAccountManager:
                         "jsonrpc": "2.0",
                         "id": 1,
                         "method": "initialize",
-                        "params": {"clientInfo": {"name": "swe-mux", "version": "0.1.5"}},
+                        "params": {"clientInfo": {"name": "swe-mux", "version": "0.2.0"}},
                     }
                 )
                 initialized = await asyncio.wait_for(receive(1), HTTP_TIMEOUT_SECONDS)
