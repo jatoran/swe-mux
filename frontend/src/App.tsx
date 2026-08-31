@@ -160,6 +160,7 @@ import {
   createFleetRefreshController, describeFleetFailures, fetchFleetSlices, type FleetRefreshController,
 } from './fleetRefresh.ts'
 import { planFleetLayouts, type PendingSpawn } from './fleetLayouts.ts'
+import { pluginPaneTarget } from './pluginPanes.ts'
 import { createLayoutWriter } from './layoutWriter.ts'
 import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
@@ -1841,10 +1842,12 @@ export function App() {
   useEffect(()=>{
     const opened=(event:Event)=>{
       const detail=(event as CustomEvent<{session:Session;placement:string}>).detail
-      if(detail?.session)setSessions(current=>current.some(item=>item.id===detail.session.id)?current:[...current,detail.session])
-      if(detail?.placement==='popup'){
-        setSettingsOpen(false);setSettingsNavOpen(false);setPluginPopupId(detail.session.id)
-      }
+      if(!detail?.session)return
+      setSessions(current=>current.some(item=>item.id===detail.session.id)?current:[...current,detail.session])
+      setSettingsOpen(false);setSettingsNavOpen(false)
+      const target=pluginPaneTarget(detail.session,detail.placement)
+      if(target.mode==='popup'){setPluginPopupId(target.popupId);return}
+      setProjectId(target.projectId);setActiveId(target.sessionId);setFocusedViewId(target.sessionId);setSidebarOpen(false)
     }
     window.addEventListener('mux:plugin-pane-opened',opened)
     return()=>window.removeEventListener('mux:plugin-pane-opened',opened)
