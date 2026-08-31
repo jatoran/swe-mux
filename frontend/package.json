@@ -21,6 +21,7 @@
     "test": "node --experimental-strip-types test/all.ts",
     "test:renderer": "playwright test --config playwright.renderer.config.ts",
     "capture:demo": "node scripts/capture-demo.mjs",
+    "capture:demo:check": "node scripts/capture-demo.mjs --scenario queue --check",
     "bench:smart-turn": "node --experimental-strip-types scripts/smart-turn-bench.mts"
   },
   "dependencies": {
