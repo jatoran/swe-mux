@@ -121,7 +121,7 @@ async def test_mobile_voice_setup_uses_fixed_private_serve_route(
             }
         }, ""
 
-    monkeypatch.setattr("swe_mux.tailscale.shutil.which", lambda _: "tailscale")
+    monkeypatch.setattr("swe_mux.tailscale.tailscale_executable", lambda: "tailscale")
     monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
     monkeypatch.setattr("swe_mux.tailscale._status", status)
     result = await enable_mobile_voice_serve(8765)
@@ -168,7 +168,7 @@ async def test_mobile_voice_setup_takes_over_a_stale_loopback_route(
             }
         }, ""
 
-    monkeypatch.setattr("swe_mux.tailscale.shutil.which", lambda _: "tailscale")
+    monkeypatch.setattr("swe_mux.tailscale.tailscale_executable", lambda: "tailscale")
     monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
     monkeypatch.setattr("swe_mux.tailscale._status", status)
     result = await enable_mobile_voice_serve(8765)
@@ -200,7 +200,7 @@ async def test_mobile_voice_setup_refuses_a_foreign_non_loopback_route(
             }
         }, ""
 
-    monkeypatch.setattr("swe_mux.tailscale.shutil.which", lambda _: "tailscale")
+    monkeypatch.setattr("swe_mux.tailscale.tailscale_executable", lambda: "tailscale")
     monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
     monkeypatch.setattr("swe_mux.tailscale._status", status)
     result = await enable_mobile_voice_serve(8765)

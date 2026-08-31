@@ -297,6 +297,63 @@ test('an unpaged tab lists its rendered sections in the sidebar, and the chevron
   await expect(nav).toBeVisible()
 })
 
+test('a tab discloses its sections before it has ever been on screen', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  // Only the opening tab has a DOM, so a chevron on any other tab can only have come
+  // from that tab's vnodes. Reading the DOM alone is what used to make the disclosure
+  // appear on a tab's second visit and not its first.
+  const row=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:/^Remote$/})})
+  await expect(row.locator('[role="tab"]')).toHaveAttribute('aria-selected','false')
+  await row.locator('.settings-tab-expand').click()
+
+  const nav=row.locator('xpath=following-sibling::div[contains(@class,"settings-subtabs")][1]')
+  await expect(nav).toBeVisible()
+  expect(await nav.locator('button').allTextContents()).toContain('Firewall')
+
+  // And the link works from there: it selects the tab it belongs to first, because the
+  // heading it names is not in the document until then.
+  await nav.getByRole('button',{name:'Firewall',exact:true}).click()
+  await expect(row.locator('[role="tab"]')).toHaveAttribute('aria-selected','true')
+  await expect(page.locator('.settings-content h3',{hasText:/^Firewall$/})).toBeInViewport()
+})
+
+test('switching tabs never files one tab sections under another', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  const groups=async()=>page.evaluate(()=>[...document.querySelectorAll('.settings-subtabs')].map(group=>({
+    label:group.getAttribute('aria-label'),
+    buttons:[...group.querySelectorAll('button')].map(button=>button.textContent),
+  })))
+  await expect(page.locator('.settings-subtabs')).toHaveCount(1)
+  const [general]=await groups()
+  expect(general.label).toBe('General pages')
+
+  // The heading read is driven by a MutationObserver, whose callback is a microtask
+  // while the effect cleanup that would retire it is not - so the outgoing tab can be
+  // scheduled to read the incoming tab's DOM. The sidebar now keeps that answer, so the
+  // misattribution outlives the render instead of correcting itself on the next one.
+  for(const tab of ['Voice','Remote','Terminals','General']){
+    await page.locator('.settings-tabs [role="tab"]',{hasText:new RegExp(`^${tab}$`)}).click()
+    await expect(page.locator('.settings-tab-row>[role="tab"].active')).toHaveText(tab)
+    const after=(await groups()).find(group=>group.label==='General pages')
+    expect(after?.buttons,`General was rewritten while opening ${tab}`).toEqual(general.buttons)
+  }
+})
+
+test('a tab with one section is not given a disclosure', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  // `SECTION_RAIL_MIN`: listing a lone section is a row spent saying what one glance
+  // already shows. The rule is the section count, not whether the tab has been opened.
+  for(const tab of ['Git','Automation','Alerts']){
+    const row=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:new RegExp(`^${tab}$`)})})
+    await expect(row.locator('.settings-tab-expand'),`${tab} has one section`).toHaveCount(0)
+    await row.locator('[role="tab"]').click()
+    await expect(row.locator('.settings-tab-expand'),`${tab} gained one by being opened`).toHaveCount(0)
+  }
+})
+
 test('every tab renders, and every marked control is really in its DOM', async ({ page }) => {
   // `settingsCoverage.test.ts` walks from `config.py` to a control, and it reads *source*:
   // it cannot tell a control that renders from one sitting behind a condition that is never

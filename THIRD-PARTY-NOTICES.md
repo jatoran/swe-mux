@@ -152,7 +152,7 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | shellingham | 1.5.4 | ISC License |
 | six | 1.17.0 | MIT |
 | smart-open | 8.0.1 | MIT License |
-| spacy | 3.8.15 | MIT |
+| spacy | 3.8.16 | MIT |
 | spacy-legacy | 3.0.12 | MIT |
 | spacy-loggers | 1.0.5 | MIT |
 | srsly | 2.5.3 | MIT |

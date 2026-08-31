@@ -655,7 +655,7 @@ async def get_doctor_report(request: web.Request) -> web.Response:
 
 async def _doctor_report(app: web.Application) -> dict[str, Any]:
     """Gather every diagnostic payload and assemble the report."""
-    from ..doctor import build_doctor_report, observation_freshness
+    from ..doctor import build_doctor_report, hook_ingress_silence, observation_freshness
     from ..session import fleet_status_health
 
     config: Config = app[keys.CONFIG]
@@ -694,7 +694,7 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
         # host's firewall tool would need, never a rule edit: opening a port is a
         # security decision that requires root, and a daemon must not make it.
         firewall = await inspect_posix_firewall(config.port, await tailscale_ipv4())
-    prerequisites = await asyncio.to_thread(detect_prerequisites)
+    prerequisites = await asyncio.to_thread(detect_prerequisites, dict(config.tool_paths))
     installations = await asyncio.to_thread(
         detect_installations_with_versions, dict(config.harness_exe)
     )
@@ -717,6 +717,14 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
         now=now,
         wsl_bridges=await asyncio.to_thread(_wsl_bridge_report, config),
         optional_assets=await asyncio.to_thread(_optional_asset_report, app),
+        # The instrumentation gate is per-harness and defaults to on, so an
+        # absent key means instrumented; a "launch clean" harness is supposed to
+        # produce no hooks and must never be reported as a broken channel.
+        hook_silence=hook_ingress_silence(
+            sessions.sessions.values(),
+            now=now,
+            instrumented=lambda backend: config.harness_instrument_enabled.get(backend, True),
+        ),
     )
     return report
 

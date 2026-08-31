@@ -248,6 +248,12 @@ responsive controls.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
+- A provider row appears only once that provider has a credential on the daemon host, so a
+  machine signed in to neither draws an invitation rather than two rows reporting "signed out"
+  and two `—` chips on each condensed surface. It is derived, not remembered: signing in brings
+  the row back by itself. The invitation is the expanded sidebar's alone - the rail and the
+  phone toolbar render nothing rather than a call to action neither has room for. Rules and the
+  dismissal flag: `design/features/provider-accounts.md`.
 - That status block is pinned in the mobile drawer too, at touch height. The toolbar's quota
   chips answer "how much is left" in a glance a drawer cannot give; the drawer rows answer
   "on which account, and what is this machine doing" — the selected account per provider, its
@@ -784,7 +790,14 @@ Its rules, and what each one is defending:
 - **The sidebar is the panel's only in-tab navigation, and only genuinely long tabs are pages.**
   A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Input, Voice).
   A page holding two controls costs a navigation step to show less than a glance would - which is how the Projects tab briefly grew a "Project resources" page that rendered two sentences and no control.
-  Every other tab renders as one scrolling column, and while it is the *active* tab the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
+  Every other tab renders as one scrolling column, and the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
+  **A tab discloses what it contains whether or not it has been opened**, so the sidebar describes one kind of tab rather than two: the section count is the rule, never the visit.
+  Pages come from the declaration and sections come from the tab's own markup - read from the live DOM while the tab is on screen and from its vnodes otherwise, which is the same walk the settings search index uses to reach an unmounted tab.
+  Reading only the DOM is what used to give a tab its chevron on the second visit and not the first.
+  A section link on a tab that is not on screen selects that tab first and scrolls once its own rail exists, because the heading it names is not in the document until then.
+  Two limits are deliberate and neither can change whether a chevron is drawn.
+  The vnode read cannot see headings a child component renders (`<AccountSettings/>`, the Alerts panel), so a preview is a floor that the live read replaces on arrival; and it is built once per open rather than per render, so a heading whose rendering is conditional on an edit made in this session is corrected by visiting the tab.
+  Tabs with a single section - Git, Automation, Alerts - are given no disclosure at all, which is `SECTION_RAIL_MIN` doing its job: listing one section is a row spent saying what one glance already shows.
   There is no second copy of this navigation in the content pane: the horizontal row it used to carry wrapped or overflowed the moment a tab had real pages, and it duplicated a sidebar one glance away.
   For paged tabs only the selected page is visible; `settingsSubpageId` maps related implementation headings to one user-facing capability page, and search and deep links select the owning page before revealing a control, so hidden pages remain fully addressable.
   **Arriving on a tab by any route - sidebar click, search result, deep link - expands its page links in the sidebar.**
@@ -840,11 +853,21 @@ Its rules, and what each one is defending:
   unsupported case rather than leaving a heading with nothing under it.
 - "Connect a phone" opens a modal (`ConnectPhone.tsx`) with a scannable QR of the connection URL
   (the `.ts.net` MagicDNS name, secure Serve address when up), a system-prerequisites checklist
-  (Git, Node, npm, Tailscale, each with a next step), and a security-posture line stating that any
-  tailnet device reaches the daemon with no login.
+  (Git, Node, npm, uv, Tailscale, each with a next step), and a security-posture line stating that
+  any tailnet device reaches the daemon with no login.
 - The Diagnostics tab holds the standing system-prerequisites checklist, the three
   session-preserving reload actions (`ui.reload`, `daemon.reload`, `app.redeploy`), and an Export
   diagnostics button that copies one bundle to the clipboard with a selectable textarea fallback.
+  Each prerequisite row renders **three** states, not two. `present` (green), `off_path` (amber -
+  found at a known install location, so the remedy names PATH rather than an install command), and
+  `missing` (red, with the install command and download link). Collapsing the middle state is what
+  told a user with Git and a connected Tailscale to `winget install` both of them.
+  Every row carries a path override, and the section has a Re-scan button. Re-scan is a `POST`
+  rather than a re-fetch on purpose: the daemon inherited its PATH once at spawn, so a button that
+  only re-ran detection would return the same answer for a tool the user had just installed and
+  teach them the feature does not work. It reports which of the three things happened - PATH
+  changed and was re-read, PATH re-read and unchanged, or (off Windows) no out-of-band PATH exists
+  and a daemon restart is needed.
   The reload buttons dispatch the app's own command registry rather than re-implementing the
   paths, so a change to what "reload daemon" means reaches this panel for free, and a command the
   host does not offer disables its button instead of failing when pressed.
@@ -892,6 +915,32 @@ Its rules, and what each one is defending:
   The index and the jump's candidate scan both cover only `.settings-content`, so the
   sidebar's page and section links — which repeat every heading — can never duplicate a
   result or shift the occurrence a recorded result points at.
+- A result says where it lives as a breadcrumb: its tab, the page that owns it when a heading
+  does not already name that page, then the headings enclosing it, nearest two.
+  The index records those headings as a **path** rather than a nearest-heading string, which is
+  what makes a nested tab describable at all: a single slot is claimed by whichever heading
+  rendered last, so every keyboard-shortcut row read "Input · view" — its category — and never
+  named the section it sits in.
+  Levels are positional, so opening one closes every deeper one, and a heading is closed by the
+  end of its `<section>`; without the second rule a group's `<h4>` follows the walk out and
+  claims the block's later controls.
+  `settingsBreadcrumb` in `settingsTabs.ts` builds the line, because which page owns a heading
+  is a navigation fact and the index knows nothing about pagination.
+- The shortcut table on Input carries **its own** filter, separate from the panel-wide search,
+  as the note editor's chord table does on Text editor.
+  The two answer different questions: the panel search asks where a setting lives and navigates
+  away, while this one narrows a 110-row table already on screen.
+  It matches the label, the command id, the category, and the chord in both its stored
+  (`ctrl+shift+p`) and displayed (`Ctrl Shift P`) spellings, so "what owns this chord" is
+  answerable; an unbound row answers to `not set`, exactly as it reads.
+  Filtered rows are **hidden, not unmounted**, because the panel-wide index is harvested from
+  the mounted tab's live DOM and kept for the page session — a dropped row would leave that
+  index and stay gone, letting a filter set in one corner of one tab decide what the whole
+  panel can find. Hiding also preserves document order, and with it the occurrence a recorded
+  search result navigates by. Picking a search result clears the filter, since a hidden row
+  cannot be scrolled to.
+  The box is inert while a chord is being recorded: that recorder listens on the window in
+  capture phase and would eat the filter text and bind it.
 - Every OpenRouter model setting uses the same filtering combobox, wherever it lives.
   It accepts typed queries and filters the cached catalog live by model name or exact ID, and its
   listbox scrolls inside a bounded desktop or mobile height instead of expanding to the height of
@@ -967,6 +1016,9 @@ Its rules, and what each one is defending:
   inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
   Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
   binding cannot compete with browser zoom suppression or leak the same input into xterm.
+  Rows group by command category, and the group heading is the category rendered as a word
+  (`commandCategoryLabel`) rather than the id it is stored as — the settings search index reads
+  the *text* of the heading it files a row under, so a raw `view` reached the result list.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
@@ -2370,14 +2422,15 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The registry is written immediately to `localStorage`, limits each draft to 64 KiB, retains at most 50 sessions for 30 days, and falls back to memory if browser storage is unavailable.
   A green dot on the keyboard control and every tab for that terminal discloses saved text without exposing its content.
 - Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Insert** button appends the exact draft text to the live agent composer without submitting it.
-  Agent multiline insertion uses bracketed paste, including the stale-mode fallback, so newlines and leading or trailing spaces remain composer text rather than becoming Enter key submissions.
+  Agent multiline insertion uses bracketed paste, written by the pane rather than by xterm, so newlines and leading or trailing spaces remain composer text rather than becoming Enter key submissions.
   The Draft path never emits a trailing carriage return.
   A successful insertion clears the saved draft and returns to live input for review; a rejected insertion leaves the text editable and reports the error in the composer.
   Insertion appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
   Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
   target.
-  Native terminal paste and the rail action use the same pane-owned text path, including the agent multiline stale-mode repair, so Ctrl+V cannot submit clipboard lines individually while the rail keeps them composed.
+  Native terminal paste and the rail action use the same pane-owned text path, which brackets multi-line agent text itself rather than trusting xterm's mirror of the child's mode, so Ctrl+V cannot submit clipboard lines individually while the rail keeps them composed.
+  Ctrl+V pressed while the keyboard sits on something focusable but not editable - a rail button, a session tab - is routed to the last-focused terminal instead of going nowhere.
   Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
   than typing `/copy` or waiting for OSC 52. Reply extraction walks back to the newest turn with

@@ -200,12 +200,13 @@ and the declared minimum observation capability.
   reads as off, never as covered.
   The general Projects registry links here instead of rendering a second automation editor.
 - **Agent authority is a second section on the same tab, and moved here on 2026-08-29.**
-  Five rows holding a *level* rather than an on/off, so they sit below the dependency layers
+  Six rows holding a *level* rather than an on/off, so they sit below the dependency layers
   rather than inside them: the "needs X" grouping says nothing about them.
-  Each row carries the install default, an **enforce everywhere** lock that turns that default
-  into a ceiling, the selected Project's override, and a coverage line naming how many Projects
-  the global actually reaches.
-  The Project cell has three positions, and the third ("Follow global") removes the key rather
+  Each row carries the install default, an **enforce** lock that turns that default into a
+  ceiling, the selected Project's override, and compact inherited/custom coverage.
+  On a phone the row name spans the table and the aligned Global and Project controls sit below
+  it, preserving the comparison without horizontal overflow.
+  The Project cell has three positions, and the third ("Use global") removes the key rather
   than writing today's global value - the difference between inheriting and happening to agree.
   The Projects registry keeps a read-only summary and a link, exactly as it already does for the
   opt-ins (`automation-enablement.md` § Agent authority).

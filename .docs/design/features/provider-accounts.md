@@ -138,9 +138,37 @@ the last good reading and changes no state.
   retried first, on every host (`backends.md` § Executable resolution).
 - Selection atomically replaces only the normal system auth file. Provider config,
   skills, sessions, projects, and histories remain shared. It is never refused and never asks
-  for confirmation, including while live sessions of that provider are running: those processes
-  re-read the shared credential file when its mtime changes, so they follow the switch without
-  being restarted.
+  for confirmation, including while live sessions of that provider are running.
+- **A switch is not retroactive, and this passage used to claim it was.** It said live
+  sessions re-read the credential file when its mtime changes and therefore follow a switch
+  without being restarted. Nothing ever measured that; the operator observed the opposite for
+  Codex, whose CLI reads `auth.json` at startup and keeps the token in memory. So the honest
+  statement is the narrower one: every process started **after** a switch authenticates as the
+  new account, and a process started before it may keep spending the outgoing one until it is
+  restarted.
+  It stays unrefused and unconfirmed anyway, because a dialog does not help - what the operator
+  needs is to see which sessions stayed behind, which is what the session counts below are.
+  Two consequences are worth chasing separately and are **not** addressed here:
+  the selection guard's `SELECTION_GUARD_SECONDS` (60s) is sized for a refresh already in
+  flight, and an outgoing CLI that rotates its own token an hour later would revert the switch
+  well outside that window; and quota polling attributes a window to the *selected* account,
+  which a straggling session is not spending against.
+  The measurement that would settle both: two saved Codex accounts, one live Codex session,
+  switch, then watch the `auth.json` digest for an hour while that session works.
+- Live sessions are counted against the account they were **spawned under**, per saved slot,
+  in the popover and on the accounts payload (`session_counts`). The stamp is taken once, at
+  spawn (`SessionRecord.spawn_provider*`), because a provider CLI reads its credential file
+  when the process starts and no later moment can answer the question for that process.
+  It records what mux had *selected*, not what the process authenticates as: a `/login` typed
+  inside a pane is invisible, so every surface says "spawned under" and never "using".
+  Resolution goes through the provider's own account id before the local slot - the rule the
+  durable quota samples already follow - so a slot re-authenticated into a different account
+  does not inherit its predecessor's sessions; those fall into the same bucket as sessions
+  started on an external login, because "not on any account you have saved" is what both mean.
+  A record carrying no stamp at all (adopted from a daemon predating the field, or started
+  while the provider was signed out) is counted as unattributed rather than guessed at.
+  The popover names each non-selected account that still has live sessions, which is the whole
+  point of the count: "3 elsewhere" does not say which login is still being spent.
 - Cached-profile restore (Claude): the CLI shows identity (`/status`, browser bridge) from the
   `oauthAccount` block in `~/.claude.json`, not from the credential file, and refetches it at
   most daily — a credential swap alone leaves every surface naming the outgoing account for up
@@ -265,6 +293,33 @@ the last good reading and changes no state.
   the row already marked active. Identity provenance is one two-state badge with the sentence
   in its tooltip, and `verify identities` is a single install-wide control rather than a copy
   per provider heading sharing one busy key.
+- **A provider is drawn only once a credential for it exists on the daemon host**: a saved
+  slot, or a live login in the CLI's own auth file (`external`, and `unreadable`, which is a
+  credential that exists and cannot be parsed - a problem to report, not an absence to hide).
+  `signed_out` with nothing saved is the one state that describes an absence.
+  `providers` is the inventory of what mux *can* manage and is two entries from the first
+  launch, so a machine that had never signed in to either drew two sidebar rows reporting
+  "signed out", two `—` chips on the collapsed rail, and two more on the phone's toolbar, for a
+  feature the user may never adopt.
+  Derived rather than remembered (`visibleProviders`), which is what makes signing in to one
+  provider bring back that provider's row and not the other's, with nothing to re-enable.
+  The full inventory still reaches the popover and Settings, because both have to offer a
+  sign-in for a provider that has no credential yet.
+- With nothing visible, the **expanded sidebar** alone carries a two-button invitation
+  (`add provider`, which opens the same popover, and `hide`). The collapsed rail and the mobile
+  toolbar render nothing: neither has room for a call to action, and a 40px rail is not where a
+  new user is invited to do anything.
+  `hide` writes `provider_accounts_prompt_dismissed`, machine-side for the same reason the
+  quest dismissals are - the credentials it invites you to add are the daemon host's, so
+  putting it away at the desk must put it away on the phone.
+  It dismisses the **invitation, not the feature**: the block is derived, so signing in later
+  brings the quota rows back whatever the flag says, and there is deliberately no control to
+  un-hide something that restores itself. The invitation is also held back while a first-run
+  surface is up (`firstRunSurface`), because the tour has an account step of its own and two
+  invitations to one thing is the overwhelm first-run exists to remove.
+  With no provider configured the switcher's poll drops to five minutes rather than stopping:
+  nothing on that payload can change except by a login run outside mux, and stopping would mean
+  such a login never appeared at all.
 - The expanded sidebar's status block uses one two-row metric grid per provider.
   The first row shows the provider icon, 5-hour reset countdown, weekly reset countdown, and optional Fable heading.
   The second row shows the selected account label's first four characters followed by the corresponding usage percentages.
@@ -320,6 +375,16 @@ type AccountConflict = {
   is_primary: boolean
   account_ids: string[]
 }
+
+// Live sessions by the account they were SPAWNED UNDER, on every accounts payload.
+// `unsaved` is a session started on a login that is not any saved slot now - an
+// external login, or a slot since re-authenticated into a different account.
+// `unattributed` carries no stamp at all and is never guessed at.
+type SessionCounts = {
+  by_account: Record<string, number>
+  unsaved: Record<string, number>
+  unattributed: Record<string, number>
+}
 ```
 
 ## Failure modes
@@ -351,7 +416,11 @@ type AccountConflict = {
 
 - Service: `src/swe_mux/provider_accounts.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
+- Spawn stamp: `src/swe_mux/models.py` (`SessionRecord.spawn_provider*`),
+  `src/swe_mux/session.py` (read once, at spawn)
 - Composition/routes: `src/swe_mux/server.py`
+- Invitation flag: `src/swe_mux/config.py` (`provider_accounts_prompt_dismissed`),
+  `frontend/src/App.tsx`
 - CLI: `src/swe_mux/cli.py` (`swemux accounts`)
 - UI: `frontend/src/ProviderAccounts.tsx`, `frontend/src/providerAccountDisplay.ts`,
   `frontend/src/style.css`

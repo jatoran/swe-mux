@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginCommand, loginOf, loginRunning, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, shownUsageBand, signInTitle, usageBand, QUOTA_COLUMN_HEADINGS } from '../src/providerAccountDisplay.ts'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginCommand, loginOf, loginRunning, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, shownUsageBand, signInTitle, spawnedSessionCount, strandedSessionNotice, strandedSessions, usageBand, visibleProviders, QUOTA_COLUMN_HEADINGS } from '../src/providerAccountDisplay.ts'
 
 test('quota windows come from the selected account of each provider, never another slot',()=>{
   const accounts=[
@@ -187,4 +187,51 @@ test('account popovers escape a narrow sidebar and remain inside the viewport',(
   assert.equal(style.width,'340px')
   assert.equal(style.bottom,'154px')
   assert.equal(style.maxHeight,'638px')
+})
+
+test('a provider earns its row once a credential for it exists on this host',()=>{
+  const providers=['claude','codex']
+  // A fresh install: two providers in the inventory, nothing signed in to either.
+  assert.deepEqual(visibleProviders({providers,accounts:[],current:{claude:{state:'signed_out'},codex:{state:'signed_out'}}}),[])
+  // Adding one adds one. The other is still an absence, and still hidden.
+  assert.deepEqual(visibleProviders({providers,accounts:[{provider:'claude'}],current:{claude:{state:'saved'},codex:{state:'signed_out'}}}),['claude'])
+  // A login mux has not saved is still a credential on this host, and one whose
+  // quota rows have something to say - including that they are unsaved.
+  assert.deepEqual(visibleProviders({providers,accounts:[],current:{claude:{state:'signed_out'},codex:{state:'external'}}}),['codex'])
+  // A credential that exists and cannot be read is a problem to report, not an
+  // absence to hide.
+  assert.deepEqual(visibleProviders({providers,accounts:[],current:{claude:{state:'unreadable'},codex:{state:'signed_out'}}}),['claude'])
+  // Inventory order, not account order, so the row order never moves.
+  assert.deepEqual(visibleProviders({providers,accounts:[{provider:'codex'},{provider:'claude'}],current:{}}),['claude','codex'])
+  // Nothing to derive from yet is not the same as nothing to show; the caller
+  // holds the invitation back until the first payload lands.
+  assert.deepEqual(visibleProviders(null),[])
+  assert.deepEqual(visibleProviders({}),[])
+})
+
+test('stranded sessions name the accounts a switch left behind, and only those',()=>{
+  const accounts=[
+    {id:'a',provider:'claude',label:'Personal'},
+    {id:'b',provider:'claude',label:'Work'},
+    {id:'c',provider:'codex',label:'Codex'},
+  ]
+  const status={
+    selected:{claude:'a',codex:'c'},
+    accounts,
+    sessions:{by_account:{a:4,b:2,c:1},unsaved:{claude:1},unattributed:{codex:3}},
+  }
+  // The selected account's own sessions are not stranded; they are the point.
+  const claude=strandedSessions(status,'claude')
+  assert.deepEqual(claude,[{label:'Work',count:2},{label:'a login that is not saved here',count:1}])
+  // A count of zero is not a row: an account nobody is running on says nothing.
+  assert.deepEqual(strandedSessions(status,'codex'),[])
+  // `unattributed` is deliberately not surfaced here - a session with no stamp
+  // cannot be claimed for any account, including by omission.
+  assert.equal(spawnedSessionCount(status.sessions,'b'),2)
+  assert.equal(spawnedSessionCount(status.sessions,'nobody'),0)
+  assert.equal(spawnedSessionCount(undefined,'a'),0)
+  // The sentence says what the number means, because "2 sessions on Work" alone
+  // reads as a claim about what those processes authenticate as.
+  assert.match(strandedSessionNotice(claude[0]),/^2 live sessions on Work\. Switching is not retroactive/)
+  assert.match(strandedSessionNotice({label:'Work',count:1}),/^1 live session on Work\./)
 })

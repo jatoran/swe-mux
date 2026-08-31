@@ -154,6 +154,81 @@ export function quotaRowCells(account:QuotaAccountDisplay|undefined,fable:boolea
   return cells
 }
 
+/** The auth states that mean a credential for this provider exists on the daemon host.
+ *
+ *  `unreadable` belongs here: a credential file that exists and cannot be parsed is a
+ *  problem to report, not an absence to hide. `signed_out` is the only state that
+ *  describes nothing being there. */
+const PRESENT_AUTH_STATES=new Set(['saved','external','unreadable'])
+
+export type ProviderVisibilityStatus={
+  providers?:readonly string[]
+  accounts?:readonly {provider:string}[]
+  current?:Record<string,{state?:string}|null|undefined>
+}
+
+/** The providers the status block has something true to say about.
+ *
+ *  `providers` is the inventory of what mux *can* manage, and it is two entries on
+ *  every install from the first launch - so a machine that has never signed in to
+ *  either drew two rows reporting "signed out", plus two `—` chips on the rail and two
+ *  more on the phone's toolbar, for a feature the user may never adopt. A provider
+ *  earns its row once a credential for it exists on the daemon host: a saved slot, or
+ *  a live login in the CLI's own auth file.
+ *
+ *  Deliberately derived rather than remembered. Nothing is stored, nothing has to be
+ *  re-enabled, and signing in to one provider brings back that provider's row and not
+ *  the other's. The full inventory stays in the payload, because Settings and the
+ *  popover both have to offer a sign-in for a provider that has none. */
+export function visibleProviders(status?:ProviderVisibilityStatus|null):string[]{
+  const saved=new Set((status?.accounts||[]).map(account=>account.provider))
+  return (status?.providers||[]).filter(provider=>
+    saved.has(provider)||PRESENT_AUTH_STATES.has(String(status?.current?.[provider]?.state||'')))
+}
+
+/** Live sessions per account, as the daemon counts them (`session_counts`). */
+export type SessionCountsDisplay={
+  by_account?:Record<string,number>
+  unsaved?:Record<string,number>
+  unattributed?:Record<string,number>
+}
+
+export const spawnedSessionCount=(counts:SessionCountsDisplay|null|undefined,accountId:string):number=>
+  counts?.by_account?.[accountId]||0
+
+export type StrandedSessions={label:string;count:number}
+
+/** Live sessions of a provider that are **not** on the account selected right now.
+ *
+ *  The reason the count is worth drawing at all. A switch is not retroactive: a CLI
+ *  reads its credential file at startup, so a session that began before the switch
+ *  keeps spending the outgoing account until it is restarted. Named per account rather
+ *  than totalled, because "3 elsewhere" does not say which login is still being spent.
+ *
+ *  Sessions started on a login mux had not saved are one unnamed row: there is no slot
+ *  to name them by, and leaving them out would make the numbers not add up on exactly
+ *  the install where this happens most. */
+export function strandedSessions(
+  status:{
+    selected?:Record<string,string|null>
+    accounts?:readonly {id:string;provider:string;label:string}[]
+    sessions?:SessionCountsDisplay|null
+  }|null|undefined,
+  provider:string,
+):StrandedSessions[]{
+  const selected=status?.selected?.[provider]||null
+  const rows=(status?.accounts||[])
+    .filter(account=>account.provider===provider&&account.id!==selected)
+    .map(account=>({label:account.label,count:spawnedSessionCount(status?.sessions,account.id)}))
+    .filter(row=>row.count>0)
+  const unsaved=status?.sessions?.unsaved?.[provider]||0
+  if(unsaved)rows.push({label:'a login that is not saved here',count:unsaved})
+  return rows
+}
+
+export const strandedSessionNotice=(row:StrandedSessions):string=>
+  `${row.count} live session${row.count===1?'':'s'} on ${row.label}. Switching is not retroactive - a session keeps the login it started with until it is restarted.`
+
 // A `chipUsageBand` once banded a chip by its *hottest* window so the border could escalate on
 // a window the chip was not printing. It went out with the mobile toolbar's multi-window chip:
 // every condensed indicator now draws exactly one number, and a border disagreeing with the
