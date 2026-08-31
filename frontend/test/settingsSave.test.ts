@@ -71,7 +71,9 @@ test('Settings sends one request for the whole save', () => {
   // far too large to mount here; the renderer suite covers the behaviour.
   const panel = readFileSync(join(import.meta.dirname, '..', 'src', 'Settings.tsx'), 'utf8')
   const save = code(panel.slice(panel.indexOf('const save = async'), panel.indexOf('const reset = async')))
-  assert.ok(save.includes("api<SettingsApplyResult>('POST','/api/settings/apply'"))
+  // The host descriptor rides the query since 2026-08-30, so the daemon resolves the
+  // keymap it hands back for the keyboard that is actually saving.
+  assert.ok(save.includes("api<SettingsApplyResult>('POST',`/api/settings/apply?${hostQuery()}`"))
   assert.doesNotMatch(save, /Promise\.all/)
   assert.doesNotMatch(save, /\/api\/keybindings/)
   assert.doesNotMatch(save, /'PATCH','\/api\/config'/)

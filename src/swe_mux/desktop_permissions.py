@@ -212,9 +212,47 @@ def decide_media_permission(kind: str, uri: str, origin: str) -> PermissionDecis
     )
 
 
+SHELL_MARKER = "__swemuxDesktopShell"
+
+
+def shell_report() -> dict[str, str]:
+    """What the shell says about itself, for the page to read.
+
+    Read by `frontend/src/hostProfile.ts`, and its ABSENCE is the signal that
+    matters: no marker means "not the desktop shell", which is how a browser tab
+    is told apart from this window. `accelerators` records the one fact the
+    keyboard layer needs - production WebView2 runs with pywebview's browser
+    accelerator keys disabled, so this window receives Ctrl+T, Ctrl+W and
+    Ctrl+Tab, which no browser tab ever will.
+
+    A version string is carried so a future keymap can be conditional on the
+    shell rather than on the daemon, which is a different thing that moves at a
+    different rate (`design/features/desktop-shell.md`).
+    """
+    from . import __version__
+
+    return {
+        "shell": "swe-mux-desktop",
+        "version": __version__,
+        "accelerators": "released",
+    }
+
+
 def marker_script(report: MediaPermissionReport) -> str:
-    """JavaScript that publishes ``report`` into the page, idempotently."""
-    return f"window.{MEDIA_MARKER}=Object.freeze({json.dumps(report.as_dict())});"
+    """JavaScript that publishes ``report`` into the page, idempotently.
+
+    Both markers ride one script and one publish. The shell marker is not about
+    the microphone and could have had a mechanism of its own, but this one is
+    already proven against the two traps that path carries (`_publish`: no
+    `evaluate_js`, and marshalling onto the UI thread), it fires on every
+    navigation, and it runs whatever the media outcome was - including
+    ``unsupported``, which is exactly when a keyboard still needs to know it is
+    in the desktop app.
+    """
+    return (
+        f"window.{MEDIA_MARKER}=Object.freeze({json.dumps(report.as_dict())});"
+        f"window.{SHELL_MARKER}=Object.freeze({json.dumps(shell_report())});"
+    )
 
 
 class WebviewMicrophoneGrant:

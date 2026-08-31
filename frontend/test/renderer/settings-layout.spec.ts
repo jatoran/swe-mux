@@ -22,6 +22,15 @@ const DESKTOP = { width: 1280, height: 900 }
 
 type Page = import('playwright/test').Page
 
+test('Notes settings expose the global Scratchpad visibility toggle',async({page})=>{
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  await page.getByRole('tab',{name:'Notes',exact:true}).click()
+  const toggle=page.locator('[data-setting="note_scratchpad_enabled"]')
+  await expect(toggle).toContainText('Global Scratchpad')
+  await expect(toggle.locator('input[type="checkbox"]')).toBeChecked()
+})
+
 async function chrome(page: Page) {
   return page.evaluate(() => {
     const box = (selector: string) => {

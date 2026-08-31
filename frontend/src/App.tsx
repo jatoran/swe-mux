@@ -61,6 +61,8 @@ import { INSTALL_CONFIG_CHANGED } from './installSwitches'
 import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
+import { PaneRunTrigger } from './PaneRunTrigger'
+import { SCRATCHPAD_TAB_ID } from './noteTabs'
 import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
   DRAWER_DEFAULT_WIDTH, DRAWER_MIN_WIDTH, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
@@ -80,7 +82,7 @@ import {
   type DrawerEdge, type DrawerLayout, type DrawerProjectPresentation,
   type DrawerProjectPresentationMap,
 } from './drawerLayout'
-import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS } from './drawerSegments'
+import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS, resolveDrawerSegment } from './drawerSegments'
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
@@ -163,7 +165,7 @@ import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, lo
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { ApprovalMode, DeliveryReadiness, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
-import { keyChord } from './keys'
+import { isModifierOnly, keyChord } from './keys'
 // Type-only: the component itself is a separate chunk, fetched below. Settings
 // is 3,000 lines of form that the workspace cannot draw until it has parsed,
 // and almost nobody opens it in the first seconds of a session.
@@ -188,9 +190,17 @@ import {
 } from './uiScale'
 import { applyRailDensity, watchRailDensityProfile } from './railDensity'
 import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
-import { bindingFor, displayChord, paletteResults, runCommand, type Command, type VoiceCommandResult } from './commands'
+import { bindingFor, displayChord, paletteResults, paletteScope, PALETTE_PREFIXES, runCommand, type Command, type VoiceCommandResult } from './commands'
 import { buildFleetCommands, displayOrderKey, type FleetCommandActions } from './fleetCommands.ts'
 import { setKeybindingsStore } from './keybindingsStore.ts'
+import type { ResolvedBindings, TrieOption } from './keymap.ts'
+import {
+  advance as advanceKeymap, cancel as cancelKeymap, installKeymap,
+  options as keymapOptions, pendingChords as dispatchPending, terminalSelection,
+} from './keymapDispatch.ts'
+import { hostProfile, hostQuery } from './hostProfile.ts'
+import { keyboardLockEnabled } from './KeyboardProbe.tsx'
+import { WhichKey } from './WhichKey.tsx'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
 import { insertIntoTerminal, insertionRefusal, requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
@@ -262,7 +272,7 @@ import {
 } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
-  removeLeaf, replaceTerminal, setSplitRatio,
+  removeLeaf, replaceTerminal, resizeTargetFor, setSplitRatio, swapPanes,
   activateContainingStack, activateStackChild, addLeafToStack, changeMapLeafId, changeMapLeafSessionId, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, moveTerminalBeside, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
@@ -415,7 +425,7 @@ type GrantsCatalogue={
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
-type RunMenuState={project:Project;x:number;y:number}
+type RunMenuState={project:Project;x:number;y:number;trigger?:string}
 type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
 type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
 
@@ -637,7 +647,20 @@ export function App() {
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
   const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail';tab?:DrawerTabId}|null>(null)
   const [zoomedId, setZoomedId] = useState<string | null>(null)
-  const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
+  // The resolved map for THIS host, as the daemon computed it. The seed is the two
+  // chords worth having before the first fetch lands; it is deliberately not a copy
+  // of the default preset, because a second copy of the keymap in the browser is
+  // exactly the drift the daemon-side resolution exists to prevent.
+  const [keymap, setKeymap] = useState<ResolvedBindings>({
+    'ctrl+shift+p': [{ command: 'palette.open', when: '' }],
+    'f1': [{ command: 'palette.open', when: '' }],
+  })
+  // What the which-key overlay draws. The sequence state itself lives in
+  // `keymapDispatch`, because the terminal has to ask about it before this
+  // component's handler ever runs.
+  const [pendingChords, setPendingChords] = useState<string[]>([])
+  const [pendingOptions, setPendingOptions] = useState<TrieOption[]>([])
+  const host = hostProfile()
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null)
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => loadCollapsedProjects(localStorage.getItem(COLLAPSED_PROJECTS_KEY)))
@@ -958,6 +981,7 @@ export function App() {
     ()=>parseHiddenDrawerTabs(localStorage.getItem(DRAWER_HIDDEN_KEY)))
   const drawerLauncherTabs=useMemo(()=>drawerTabs(drawerLayout).map(drawerTab),[drawerLayout])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
+  const [scratchpadEnabled,setScratchpadEnabled]=useState(true)
   // A momentary drawer belongs only to the Project that opened it. Clear the state
   // after any Project switch so returning later cannot revive a stale Actions peek.
   useEffect(()=>setTransientDrawer(null),[projectId])
@@ -1810,6 +1834,7 @@ export function App() {
     terminal_renderer:TerminalRendererPreference
     drawer_tab_display?:'icon'|'title'
     utility_rail_display?:'icon'|'title'
+    note_scratchpad_enabled?:boolean
   }&Record<string,unknown>
 
   // Scale previews have to update both authorities in the browser: the root custom
@@ -1881,6 +1906,7 @@ export function App() {
     setSurfaceGestures(surfaceGesturesEnabled(config))
     setViewBack(viewBackEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
+    setScratchpadEnabled(config.note_scratchpad_enabled!==false)
     setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
     setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')
   }
@@ -1918,6 +1944,16 @@ export function App() {
       .catch(()=>{})
       // Settled, not succeeded: an unreachable daemon must not suppress the tour forever.
       .finally(()=>setFirstRunResolved(true))
+
+  const persistScratchpadEnabled=async(next:boolean):Promise<void>=>{
+    try{
+      const config=await api<AppConfig>('PATCH','/api/config',{note_scratchpad_enabled:next})
+      applyConfig(config,false)
+    }catch(cause){
+      setError(`Scratchpad visibility could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)
+      throw cause
+    }
+  }
 
   const scheduleUiScalePersist = (scale:UiScale):void => {
     const field=uiScaleConfigKey(currentProfile())
@@ -1962,7 +1998,14 @@ export function App() {
     void loadProfiles()
     void loadVoiceStatus()
     void loadNotifications()
-    const loadKeys = () => void api<{ bindings: Record<string, string> }>('GET', '/api/keybindings').then(result => { setKeybindingsStore(result.bindings); setKeybindings(current => JSON.stringify(current) === JSON.stringify(result.bindings) ? current : result.bindings) })
+    // The host descriptor rides the request: the daemon resolves rules for the
+    // keyboard that is actually asking, so a desktop-only chord is live in the
+    // desktop app and simply absent in a browser tab rather than dead in both.
+    const loadKeys = () => void api<{ resolved: ResolvedBindings }>('GET', `/api/keybindings?${hostQuery()}`).then(result => {
+      const next = result.resolved || {}
+      setKeybindingsStore(next, hostProfile().platform)
+      setKeymap(current => JSON.stringify(current) === JSON.stringify(next) ? current : next)
+    })
     loadKeys()
     // The /events WebSocket already pushes a refresh on every change, so these intervals
     // are only a safety net. Skip them while the tab is hidden (no point re-fetching and
@@ -3138,6 +3181,7 @@ export function App() {
     if(place==='drawer')openTargetInDrawer(target);else void showResourceForTarget(target)
   }
   const openScratchpad=(place:NotePlacement='drawer')=>{
+    if(!scratchpadEnabled){setError('Enable the global Scratchpad under Settings → Notes first.');return}
     const targetProject=projectId||activeProject?.id||projects[0]?.id
     if(!targetProject){setError('Create a Project before opening the Scratchpad in a workspace.');return}
     const target:NoteTarget={projectId:targetProject,kind:'global-note',resourceId:'scratchpad'}
@@ -3678,9 +3722,9 @@ export function App() {
     setProjectMenu({project,x,y})
   }
 
-  const openRunMenu=(project:Project,element:HTMLElement)=>{
+  const openRunMenu=(project:Project,element:HTMLElement,trigger?:string)=>{
     const rect=element.getBoundingClientRect()
-    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50)})
+    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50),trigger})
     setProjectMenu(null);setMainMenuOpen(false)
   }
 
@@ -3691,9 +3735,9 @@ export function App() {
   // scrim was covering — a click right after a dismissal is that toggle closing,
   // not a fresh open. Sidebar project rows keep the plain open: clicking another
   // Project's ▶ while a menu is up should switch to it, never just close.
-  const toggleRunMenu=(project:Project,element:HTMLElement)=>{
-    if(runMenu?.project.id===project.id||Date.now()-runMenuClosedAt.current<350){setRunMenu(null);return}
-    openRunMenu(project,element)
+  const toggleRunMenu=(project:Project,element:HTMLElement,trigger='project-run')=>{
+    if((runMenu?.project.id===project.id&&runMenu.trigger===trigger)||Date.now()-runMenuClosedAt.current<350){setRunMenu(null);return}
+    openRunMenu(project,element,trigger)
   }
 
   const startWorktreeSession=async(targetProject:string,path:string,backend:string)=>{
@@ -4462,6 +4506,17 @@ export function App() {
   // the mechanism working rather than news: the refresh that follows re-derives from whatever
   // the winner persisted.
   const updateLayout = layoutWriter.write
+
+  // Disabling Scratchpad removes its view from every Project layout but never deletes the
+  // global note file. Re-enabling restores the Notes-rail entry with its previous content.
+  useEffect(()=>{
+    if(scratchpadEnabled)return
+    for(const project of projects){
+      const current=resolveLayout(layoutMap[project.id],project.layout)
+      if(!leaves(current,'note').some(leaf=>leaf.id===SCRATCHPAD_TAB_ID))continue
+      void updateLayout(project.id,removeLeaf(current,'note',SCRATCHPAD_TAB_ID))
+    }
+  },[scratchpadEnabled,projects,layoutMap])
 
   const showResourceForTarget = async (target:NoteTarget,targetViewId?:string,preserveDrawerSelection=false) => {
     const resourceId=noteIdForTarget(target)
@@ -5687,7 +5742,7 @@ export function App() {
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('policy',activeProject?.id);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
-    { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
+    { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: scratchpadEnabled&&!!activeProject, disabledReason:scratchpadEnabled?'No project workspace available':'Global Scratchpad is disabled under Settings → Notes', run: () => openScratchpad('drawer') },
     { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
     { id: 'notes.browse', label: 'Browse all notes', category: 'view', available: true, run: () => openNotesBrowser(null) },
     { id: 'notes.browseProject', label: 'Browse this project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
@@ -6074,14 +6129,294 @@ export function App() {
     { id: 'pane.zoom', label: zoomedId ? 'Restore pane layout' : 'Zoom focused pane', category: 'pane', available: !!focusedTabId && workspacePanes.length > 1, disabledReason: 'Zoom requires multiple panes', run: () => setZoomedId(zoomedId ? null : focusedTabId) },
     { id: 'pane.next', label: 'Focus next pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(1) },
     { id: 'pane.previous', label: 'Focus previous pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(-1) },
+    // Directional pane movement: focus, swap and resize, one command per direction.
+    // `pane.next/previous` alone is unusable past two panes, and it is the first
+    // vocabulary anyone arriving from tmux or vim reaches for. The split tree already
+    // answers all three questions (`paneNeighborIds`, `swapPanes`, `resizeTargetFor`),
+    // so availability is read from it rather than guessed - a direction with no
+    // neighbour says why it is disabled instead of silently doing nothing.
+    ...paneDirectionOptions.flatMap((option): Command[] => {
+      const suffix = `${option.id[0].toUpperCase()}${option.id.slice(1)}`
+      const neighbour = focusedTabId ? paneNeighborIds(activeLayout, focusedTabId)[option.id] : undefined
+      const resize = focusedTabId ? resizeTargetFor(activeLayout, focusedTabId, option.id) : null
+      return [
+        {
+          id: `pane.focus${suffix}`, label: `Focus the pane ${option.id === 'up' ? 'above' : option.id === 'down' ? 'below' : `to the ${option.id}`}`,
+          category: 'pane', available: !!neighbour, disabledReason: 'No pane in that direction',
+          run: () => { if (neighbour) focusPaneStack(neighbour) },
+        },
+        {
+          id: `pane.swap${suffix}`, label: `Swap the focused pane with the one ${option.id === 'up' ? 'above' : option.id === 'down' ? 'below' : `to its ${option.id}`}`,
+          category: 'pane', available: !!neighbour && !!activeStack, disabledReason: 'No pane in that direction',
+          run: () => {
+            const target = neighbour ? stackForView(activeLayout, neighbour) : null
+            if (activeStack && target) void updateLayout(projectId, swapPanes(activeLayout, activeStack.id, target.id))
+          },
+        },
+        {
+          id: `pane.resize${suffix}`, label: `Move the pane divider ${option.id}`,
+          category: 'pane', available: !!resize, disabledReason: 'No divider on that axis',
+          run: () => { if (resize) void updateLayout(projectId, setSplitRatio(activeLayout, resize.path, resize.ratio)) },
+        },
+      ]
+    }),
+    // Close the focused pane without deciding what to do about the session in it:
+    // a terminal leaf hands off to the ordinary confirm-kill, everything else is a
+    // view and simply goes. There was no keyboard route to either before this.
+    { id: 'pane.close', label: 'Close the focused pane', category: 'pane', available: !!focusedTabId, disabledReason: 'No focused pane', run: () => {
+      const leaf = focusedTabId ? leaves(activeLayout).find(item => item.id === focusedTabId) : null
+      if (!leaf) return
+      const session = leaf.kind === 'terminal' ? sessions.find(item => item.id === leaf.id) : null
+      if (session) { requestKill(session); return }
+      void updateLayout(projectId, removeLeaf(activeLayout, leaf.kind, leaf.id))
+    } },
+    // Registered here since 2026-08-30. It had a button in the pane menu and an entry
+    // in the bindable-command list, and no implementation anywhere - so the button did
+    // nothing and a chord bound to it reported "unknown command".
+    { id: 'pane.detach', label: 'Detach the focused tab into its own pane', category: 'pane', available: !!activeStack && activeStack.children.length > 1 && !!focusedTabId, disabledReason: 'The focused pane has only one tab', run: () => {
+      const leaf = focusedTabId ? leaves(activeLayout).find(item => item.id === focusedTabId) : null
+      if (!leaf || !activeStack) return
+      const detached = splitView(removeLeaf(activeLayout, leaf.kind, leaf.id), activeStack.id, leaf, 'horizontal')
+      void updateLayout(projectId, detached)
+    } },
+    { id: 'pane.swapNext', label: 'Swap the focused pane with the next one', category: 'pane', available: workspacePanes.length > 1 && !!activeStack, disabledReason: 'Only one pane is open', run: () => {
+      if (!activeStack) return
+      const order = workspacePanes.map(pane => pane.id)
+      const next = order[(order.indexOf(activeStack.id) + 1) % order.length]
+      if (next && next !== activeStack.id) void updateLayout(projectId, swapPanes(activeLayout, activeStack.id, next))
+    } },
+    // Reordering a tab inside its own pane, which drag covers by pointer and nothing
+    // covered by keyboard. Same shape as `drawer.moveLeft`, one level down.
+    ...([['stack.tabLeft', -1, 'left'], ['stack.tabRight', 1, 'right']] as const).map(([id, offset, word]): Command => ({
+      id, label: `Move the focused tab ${word} within its pane`, category: 'pane',
+      available: !!activeStack && activeStack.children.length > 1 && !!focusedTabId,
+      disabledReason: 'The focused pane has only one tab',
+      run: () => {
+        if (!activeStack || !focusedTabId) return
+        const order = activeStack.children.map(child => child.id)
+        const index = order.indexOf(focusedTabId)
+        const target = index + offset
+        if (index < 0 || target < 0 || target >= order.length) return
+        const reordered = [...order]
+        reordered.splice(target, 0, ...reordered.splice(index, 1))
+        void updateLayout(projectId, reorderStack(activeLayout, activeStack.id, reordered))
+      },
+    })),
+    // Numbered tabs, mirroring the numbered Projects. The focused pane's tab strip is
+    // the list, so `tab.activate(3)` means "the third tab of the pane I am in".
+    ...Array.from({ length: 9 }, (_, index): Command => ({
+      id: `tab.activate(${index + 1})`, label: `Focus workspace tab ${index + 1}`, category: 'pane',
+      available: !!activeStack && activeStack.children.length > index,
+      disabledReason: 'The focused pane has no such tab',
+      run: () => {
+        const child = activeStack?.children[index]
+        if (!child || !activeStack) return
+        setFocusedViewId(child.id)
+        if (child.kind === 'terminal') setActiveId(child.id)
+        if (activeStack.active_child_id !== child.id) void updateLayout(projectId, activateStackChild(activeLayout, activeStack.id, child.id))
+      },
+    })),
+    // Focus regions: the hole that made "navigate the whole UI" impossible. The
+    // sidebar could be *opened* without being focused and the drawer's tabs could be
+    // stepped without focus ever entering it, so there was no keyboard route between
+    // the parts of the screen at all - only within them.
+    ...focusRegions().map(({ id, label, selector, before }): Command => ({
+      id, label, category: id === 'focus.composer' ? 'input' : 'view', available: true,
+      run: () => { before?.(); focusRegion(selector) },
+    })),
+    { id: 'focus.next', label: 'Focus the next UI region', category: 'view', available: true, run: () => cycleRegion(1) },
+    { id: 'focus.previous', label: 'Focus the previous UI region', category: 'view', available: true, run: () => cycleRegion(-1) },
+    // The palette's four scopes as commands, so a chord can land straight in the one
+    // you want instead of opening the palette and typing its prefix.
+    ...([['palette.commands', '>', 'commands'], ['palette.sessions', '@', 'a session'], ['palette.projects', '#', 'a Project'], ['palette.files', ':', 'a file']] as const).map(([id, prefix, what]): Command => ({
+      id, label: `Palette: jump to ${what}`, category: 'view', available: true,
+      run: () => { setPaletteQuery(prefix); setPaletteOpen(true) },
+    })),
     { id: 'broadcast.toggle', label: broadcast ? 'Stop broadcasting input' : 'Start broadcasting input', category: 'input', available: true, run: () => setBroadcast(value => !value) },
     ...fleetCommands,
   ]
   commandRegistryRef.current=commands
+
+  /**
+   * The context a `when` clause is evaluated against.
+   *
+   * A closed set (`WHEN_FLAGS` in `keybindings.py`), computed fresh per keystroke
+   * rather than memoized: every flag here is already a render-time value, and a
+   * stale answer would fire the wrong binding rather than merely draw the wrong
+   * thing. `agentFocused` and `hasSelection` are the two that are cheap here and
+   * expensive anywhere else, which is why the evaluator lives in App at all.
+   */
+  const whenFlagsRef = useRef<Record<string, boolean>>({})
+  whenFlagsRef.current = {
+    terminalFocused: !!active && !settingsOpen && !paletteOpen,
+    editorFocused: leaves(activeLayout).find(leaf => leaf.id === focusedViewId)?.kind === 'note',
+    inputFocused: document.activeElement instanceof HTMLElement
+      && /^(input|textarea)$/i.test(document.activeElement.tagName),
+    overlayOpen: dismissStack.depth() > 0,
+    paletteOpen,
+    drawerFocused: !!document.activeElement?.closest?.('.utility-drawer'),
+    sidebarFocused: sidebarOpen,
+    settingsOpen,
+    mobile: mobileWorkspace,
+    desktop: !mobileWorkspace,
+    zoomed: !!zoomedId,
+    multiplePanes: workspacePanes.length > 1,
+    multipleTabs: !!activeStack && activeStack.children.length > 1,
+    hasSelection: terminalSelection(),
+    agentFocused: !!active && isAgent(active),
+  }
+  // The trie is rebuilt only when the resolved map changes; the flag reader is a
+  // ref, so the dispatcher always evaluates `when` against the current render
+  // without the map being rebuilt on every state change.
+  useEffect(() => {
+    installKeymap(keymap, () => whenFlagsRef.current)
+    setPendingChords([])
+    setPendingOptions([])
+  }, [keymap])
+
+  /**
+   * Keyboard Lock, off unless the user asked for it.
+   *
+   * In JavaScript-initiated fullscreen a Chromium tab can be handed the chords the
+   * browser normally keeps - Ctrl+T, Ctrl+W, Escape - which is exactly the
+   * remote-access case the API was specified for, and exactly what swe-mux in a
+   * browser is. Never a default: it takes those keys away from the user's own
+   * browser, and the only way out is Chrome's two-second Escape hold. It is armed
+   * and released with fullscreen rather than held, so leaving fullscreen always
+   * gives the keyboard back.
+   */
+  useEffect(() => {
+    if (!keyboardLockEnabled() || !hostProfile().keyboardLockAvailable) return
+    const keyboard = (navigator as Navigator & { keyboard?: { lock: () => Promise<void>; unlock: () => void } }).keyboard
+    if (!keyboard) return
+    const onFullscreen = () => {
+      if (document.fullscreenElement) void keyboard.lock().catch(() => setError('The browser refused to capture its own shortcuts.'))
+      else keyboard.unlock()
+    }
+    document.addEventListener('fullscreenchange', onFullscreen)
+    onFullscreen()
+    return () => { document.removeEventListener('fullscreenchange', onFullscreen); keyboard.unlock() }
+  }, [settingsOpen])
+
+  /**
+   * The palette's four scopes.
+   *
+   * `@` sessions, `#` Projects, `:` files, `>` commands - VS Code's prefixes, and the
+   * reason they exist here is not symmetry. `searchCommands` scored a command's
+   * label, id and category, so the single most common navigation in a fleet UI -
+   * "go to that session" - could not be answered by the palette at all unless the
+   * session's name happened to be in a command label.
+   *
+   * Sessions and Projects need no new data: `fleetCommands` already registers a
+   * `session.focus:<id>` and `project.focus:<id>` per row, so scoping is a filter
+   * over the registry. Files are the one scope with no command behind them, so they
+   * are fetched (`/api/projects/{id}/search?mode=names`) and turned into rows that
+   * exist only while the query does.
+   */
+  const { scope: paletteScopeName, term: paletteTerm } = paletteScope(paletteQuery)
+  const [fileMatches, setFileMatches] = useState<Array<{ name: string; path: string }>>([])
+  useEffect(() => {
+    if (!paletteOpen || paletteScopeName !== 'files' || !activeProject) { setFileMatches([]); return }
+    const needle = paletteTerm.trim()
+    if (!needle) { setFileMatches([]); return }
+    // Debounced, because this is a bounded but real filesystem walk on the daemon and
+    // the palette fires on every keystroke.
+    let live = true
+    const timer = window.setTimeout(() => {
+      void api<{ items: Array<{ name: string; path: string }> }>('GET', `/api/projects/${activeProject.id}/search?mode=names&q=${encodeURIComponent(needle)}`)
+        .then(result => { if (live) setFileMatches(result.items.slice(0, 50)) })
+        .catch(() => { if (live) setFileMatches([]) })
+    }, 120)
+    return () => { live = false; window.clearTimeout(timer) }
+  }, [paletteOpen, paletteScopeName, paletteTerm, activeProject?.id])
+
+  const scopedCommands = useMemo((): Command[] => {
+    if (paletteScopeName === 'sessions') return commands.filter(command => command.id.startsWith('session.focus:'))
+    if (paletteScopeName === 'projects') return commands.filter(command => command.id.startsWith('project.focus:') || command.id.startsWith('project.activate('))
+    if (paletteScopeName === 'files') {
+      return fileMatches.map((file): Command => ({
+        id: `file.open:${file.path}`, label: file.path, category: 'view', available: !!activeProject,
+        run: () => { if (activeProject) openProjectFile(activeProject, file.path) },
+      }))
+    }
+    return commands
+  }, [paletteScopeName, commands, fileMatches, activeProject?.id])
+
   // Nothing is scored while the palette is closed; `commands.ts` owns that gate.
-  const shownCommands = paletteResults(paletteOpen, commands, paletteQuery)
+  // File rows arrive already filtered by the daemon's own walk, so re-scoring them
+  // against the same term would only re-sort what the search already ranked.
+  const shownCommands = paletteScopeName === 'files'
+    ? scopedCommands
+    : paletteResults(paletteOpen, scopedCommands, paletteTerm)
   useEffect(() => setPaletteIndex(0), [paletteQuery, paletteOpen])
   useEffect(()=>{if(!paletteOpen)return;const frame=requestAnimationFrame(()=>{paletteInput.current?.focus();paletteInput.current?.setSelectionRange(paletteInput.current.value.length,paletteInput.current.value.length)});return()=>cancelAnimationFrame(frame)},[paletteOpen])
+
+  /**
+   * The regions the keyboard can own, in the order `focus.next` walks them.
+   *
+   * Declared as a hoisted function because the command list below builds itself from
+   * it during its own initializer, and each entry closes over App state (opening the
+   * sidebar before focusing it, for instance) so it cannot live at module scope.
+   *
+   * A region that is closed is *opened* first rather than skipped. "Focus the side
+   * panel" from a keyboard means "put me in the side panel", and refusing because it
+   * happens to be shut is the answer that makes the command useless exactly when it
+   * is most wanted.
+   */
+  function focusRegions(): Array<{ id: string; label: string; selector: string; before?: () => void }> {
+    return [
+      { id: 'focus.terminal', label: 'Focus the terminal grid', selector: '.pane-stack.focused-pane .xterm-helper-textarea, .pane-stack .xterm-helper-textarea, .pane-stack.focused-pane' },
+      { id: 'focus.tabBar', label: "Focus the focused pane's tab bar", selector: '.pane-stack.focused-pane .stack-tabs [role="tab"], .pane-stack .stack-tabs [role="tab"]' },
+      { id: 'focus.sidebar', label: 'Focus the Projects sidebar', selector: '.sidebar .project-row, .sidebar button, .sidebar', before: () => { setSidebarOpen(true); setNavigationSidebarOpen(true) } },
+      { id: 'focus.drawer', label: 'Focus the side panel', selector: '.utility-drawer [role="tab"], .utility-drawer button, .utility-drawer', before: () => runNamedCommand('drawer.open') },
+      { id: 'focus.composer', label: 'Focus the message composer', selector: '.mobile-terminal-draft textarea, .mobile-terminal-draft input' },
+    ]
+  }
+
+  /**
+   * Move keyboard focus into a region.
+   *
+   * The selector lists fallbacks most-specific first, because a region's ideal
+   * target may not be rendered - a pane with no terminal has no xterm textarea, and
+   * landing on the pane element itself is still better than the focus staying where
+   * it was with no feedback. `preventScroll` because focusing the sidebar must not
+   * scroll the terminal grid out from under the user.
+   */
+  function focusRegion(selector: string): void {
+    // Two frames, not one: `before` may have opened a region that is not in the DOM
+    // yet, and Preact commits on the next frame. Re-querying rather than caching the
+    // element is what makes this safe to run against a region that just appeared.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(selector)
+      if (!target) { setError('That part of the screen is not open.'); return }
+      if (target.tabIndex < 0 && !/^(a|button|input|select|textarea)$/i.test(target.tagName)) target.tabIndex = -1
+      target.focus({ preventScroll: true })
+    }))
+  }
+
+  /** Step to the next region that is currently on screen, wrapping. */
+  function cycleRegion(offset: number): void {
+    const regions = focusRegions()
+    const present = regions.filter(region => !!document.querySelector(region.selector))
+    if (!present.length) return
+    const active = document.activeElement
+    const index = present.findIndex(region => {
+      const root = region.selector.split(',')[0].trim().split(' ')[0]
+      return active instanceof Element && !!active.closest(root)
+    })
+    const next = present[((index < 0 ? 0 : index) + offset + present.length) % present.length]
+    next.before?.()
+    focusRegion(next.selector)
+  }
+
+  /** Focus a pane by its stack id, landing on whichever tab that pane last had open. */
+  function focusPaneStack(stackId: string): void {
+    const pane = workspacePanes.find(item => item.id === stackId)
+    const child = pane?.children.find(item => item.id === pane.active_child_id) || pane?.children[0]
+    if (!child) return
+    setFocusedViewId(child.id)
+    if (child.kind === 'terminal') setActiveId(child.id)
+  }
 
   function focusRelativePane(offset: number) {
     if (!paneViewIds.length) return
@@ -6109,8 +6444,45 @@ export function App() {
     }
     const onError = (event: Event) => setError(String((event as CustomEvent<string>).detail))
     const onKey = (event: KeyboardEvent) => {
-      const command = keybindings[keyChord(event)]
-      if (command && runNamedCommand(command)) event.preventDefault()
+      // Escape cancels an armed sequence before it means anything else. Without
+      // this the only way out of a mistyped leader would be to press a key that
+      // is not in the tree, which is exactly the state a user cannot reason about.
+      if (event.key === 'Escape' && dispatchPending().length) {
+        event.preventDefault()
+        cancelKeymap()
+        setPendingChords([])
+        setPendingOptions([])
+        return
+      }
+      // A modifier pressed on its own never advances the machine: holding Ctrl to
+      // reach the second half of a chord would otherwise abandon the sequence.
+      if (isModifierOnly(event.code)) return
+      const chord = keyChord(event)
+      const outcome = advanceKeymap(chord)
+      if (outcome.kind === 'pending') {
+        event.preventDefault()
+        setPendingChords(outcome.pending)
+        setPendingOptions(keymapOptions())
+        return
+      }
+      // The sequence ended one way or another, so the overlay goes with it. Guarded
+      // by the current value rather than fired blindly: this handler runs on every
+      // keystroke, and an unconditional setState here would re-render the whole
+      // shell on each one.
+      setPendingChords(current => current.length ? [] : current)
+      setPendingOptions(current => current.length ? [] : current)
+      if (outcome.kind === 'abandon') {
+        // Swallowed rather than passed through. Forwarding it would type a stray
+        // character into a terminal the user believed was listening for the second
+        // half of a shortcut, which is the one outcome nobody can attribute.
+        event.preventDefault()
+        setError(`${displayChord(outcome.pending.join(' '), host.platform)} ${displayChord(chord, host.platform)} is not a shortcut.`)
+        return
+      }
+      if (outcome.kind === 'run' && runNamedCommand(outcome.command)) {
+        event.preventDefault()
+        return
+      }
       // One level, not everything on screen. This handler stays bubble-phase on window so
       // a surface that owns Escape for itself — the utility drawer's focus-scoped handler,
       // the shortcut recorder in Settings — still shields it by stopping propagation.
@@ -6708,6 +7080,17 @@ export function App() {
       const previewIds=dragStackTab?.targetStackId===node.id&&dragStackTab.zone==='tabs'?dragStackTab.previewIds:node.children.map(child=>child.id)
       const paneDropClass=dragStackTab?.targetStackId===node.id?`tab-drop-active drop-zone-${dragStackTab.zone}`:''
       const focusedPane=!!focusedViewId&&node.children.some(child=>child.id===focusedViewId)
+      const runTrigger=<PaneRunTrigger
+        projectName={activeProject?.name}
+        mobile={mobileWorkspace}
+        expanded={runMenu?.project.id===activeProject?.id&&runMenu?.trigger===`pane:${node.id}`}
+        order={previewIds.length}
+        onOpen={element=>{
+          if(!activeProject)return
+          setFocusedViewId(activeChild.id)
+          toggleRunMenu(activeProject,element,`pane:${node.id}`)
+        }}
+      />
       const closeTab=(child:PaneLeaf,label:string,session?:Session)=>{
         const terminal=child.kind==='terminal'
         const confirming=terminal&&confirmKillId===child.id
@@ -6757,7 +7140,7 @@ export function App() {
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
           return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''} ${session&&isColdSession(session)?'cold':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
-        })}
+         })}{runTrigger}
       </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
         .map(child=>renderPaneNode(child,`${path}t`,true,child.id===activeChild.id))}</div></section>
@@ -6894,11 +7277,12 @@ export function App() {
         onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
       />}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
       <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <PaneRunTrigger projectName={activeProject?.name} mobile={mobileWorkspace} expanded={runMenu?.project.id===activeProject?.id&&runMenu?.trigger===`pane:${id}`} order={1} onOpen={element=>{if(!activeProject)return;setFocusedViewId(id);toggleRunMenu(activeProject,element,`pane:${id}`)}}/>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -7255,10 +7639,13 @@ export function App() {
       case 'navToggle.open': runNamedCommand('sidebar.open'); return
       case 'drawerToggle.open': runNamedCommand('drawer.open'); return
       case 'noteRail.outline': {
-        // `note.outline` asks "who has focus?", and a rail is not focus — touching it
-        // never made that note the insert target. The gesture already knows the editor
-        // it started on, so it names it and skips the question.
-        const editor=inPath((element):element is HTMLElement=>element.tagName==='CONTINUITY-EDITOR')
+        // `note.outline` asks "who has focus?", while pulling the Notes rail or resource
+        // header does not move focus. Resolve the Project-note editor from the gesture's
+        // own surface and name it explicitly. Scratchpad is excluded by resource kind.
+        const direct=inPath((element):element is HTMLElement=>element.tagName==='CONTINUITY-EDITOR')
+        const resource=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('project-resource')&&element.dataset.resourceKind==='note')
+        const notes=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('notes-tab'))
+        const editor=direct||resource?.querySelector<HTMLElement>('continuity-editor')||notes?.querySelector<HTMLElement>('.project-resource[data-resource-kind="note"] continuity-editor')
         if(!editor)return
         window.dispatchEvent(new CustomEvent('mux:note-outline',{cancelable:true,detail:{editor}}))
         return
@@ -7285,7 +7672,7 @@ export function App() {
       <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginMobileTabDrag(event,leaf,label,openMobileTabMenu)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation()}}>{glyph}{visibleLabel}</button>
     </div>
   }
-  // With no new-tab button left in the rail, an empty projection would render a
+  // Mobile intentionally has no pane Run trigger, so an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
     {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
@@ -7434,7 +7821,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id&&runMenu?.trigger==='project-run'} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.static-preview-entry,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
@@ -7658,10 +8045,9 @@ export function App() {
           <ResourceUsageSummary compact snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
           <AccountSwitcher variant="rail" placement="up" onManage={()=>openSettings('Accounts')}/>
         </div>
-        {/* Run stays reachable while the sidebar is collapsed: the top-bar Run
-            has no room in the 40px rail column, and tab strips no longer carry
-            a new-tab button. */}
-        <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
+        {/* Run stays reachable while the sidebar is collapsed, including before a Project
+            has any pane tabs whose local + could open it. */}
+        <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id&&runMenu?.trigger==='project-run'} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
         {/* The footer's configurator button has to exist here too: collapsing the
             sidebar must not remove a control, and an expand round-trip to ask a
             question about the app is the round-trip this button exists to avoid. */}
@@ -7750,6 +8136,8 @@ export function App() {
           openBrowsedNote(targetProject,noteId,place)
         }}
         onOpenScratchpad={openScratchpad}
+        scratchpadEnabled={scratchpadEnabled}
+        onScratchpadEnabled={persistScratchpadEnabled}
         drawerNoteId={drawerNoteId}
         noteTargetClaimToken={drawerNoteClaimRequest?.projectId===projectId&&drawerNoteClaimRequest.resourceId===drawerNoteId?drawerNoteClaimRequest.token:undefined}
         onNoteTargetClaimed={token=>setDrawerNoteClaimRequest(current=>current?.token===token?null:current)}
@@ -7857,6 +8245,15 @@ export function App() {
 
     {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeCreated={(path,backend)=>void startWorktreeSession(runMenu.project.id,path,backend)} onError={setError}/>}
 
+    {/* Sits above the workspace and takes no focus: the sequence is still being
+        typed, and moving focus would end it. Labels come from the live registry, so
+        a command that is not available right now still says what it is. */}
+    <WhichKey
+      pending={pendingChords}
+      options={pendingOptions}
+      platform={host.platform}
+      labelFor={id => commandRegistryRef.current.find(command => command.id === id)?.label || id}
+    />
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
         // Stops here rather than also reaching the window handler, so one keypress is one pop.
@@ -7868,8 +8265,18 @@ export function App() {
           const command = shownCommands[paletteIndex]
           if (command && runNamedCommand(command.id)) { setPaletteOpen(false); setPaletteQuery('') }
         }
-      }} placeholder="Type a command…" autofocus />
-        <div id="command-results" role="listbox">{shownCommands.map((command, index) => <button id={`command-${command.id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`} role="option" aria-selected={index===paletteIndex} class={index === paletteIndex ? 'active' : ''} disabled={!command.available} title={command.disabledReason} onMouseEnter={() => setPaletteIndex(index)} onClick={() => { if (runNamedCommand(command.id)) { setPaletteOpen(false); setPaletteQuery('') } }}><span><small>{command.category}</small>{command.label}</span>{bindingFor(command.id, keybindings) && <kbd>{displayChord(bindingFor(command.id, keybindings))}</kbd>}</button>)}</div>
+      }} placeholder="Type a command…  @ session  # Project  : file" autofocus />
+        {/* Named rather than implied: nobody discovers a prefix syntax by accident,
+            and a palette that silently means four things is worse than one that
+            means one. The active scope is highlighted so the row list is explicable. */}
+        <div class="palette-scopes" role="tablist" aria-label="Palette scope">
+          {(Object.entries(PALETTE_PREFIXES) as Array<[string, typeof paletteScopeName]>).map(([prefix, name]) =>
+            <button key={name} type="button" role="tab" aria-selected={paletteScopeName === name}
+              class={paletteScopeName === name ? 'active' : ''}
+              onClick={() => { setPaletteQuery(name === 'commands' ? paletteTerm : `${prefix}${paletteTerm}`); paletteInput.current?.focus() }}
+            ><kbd>{prefix}</kbd>{name}</button>)}
+        </div>
+        <div id="command-results" role="listbox">{shownCommands.map((command, index) => <button id={`command-${command.id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`} role="option" aria-selected={index===paletteIndex} class={index === paletteIndex ? 'active' : ''} disabled={!command.available} title={command.disabledReason} onMouseEnter={() => setPaletteIndex(index)} onClick={() => { if (runNamedCommand(command.id)) { setPaletteOpen(false); setPaletteQuery('') } }}><span><small>{command.category}</small>{command.label}</span>{bindingFor(command.id, keymap) && <kbd>{displayChord(bindingFor(command.id, keymap), host.platform)}</kbd>}</button>)}</div>
       </div>
     </div>}
 
@@ -8134,12 +8541,20 @@ export function App() {
       {drawerDisplayMenu.tab&&(()=>{
         const tab=drawerDisplayMenu.tab
         const blocked=!canHideDrawerTab(hiddenDrawerTabs,tab)
-        return <button
-          role="menuitem"
-          disabled={blocked}
-          title={blocked?'The side panel must keep at least one tab.':undefined}
-          onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
-        >Hide {drawerTab(tab).label}</button>
+        const segment=resolveDrawerSegment(tab,activeDrawerPresentation.selected_segments[tab],{
+          hasTranscript:hasHarnessTranscript(active?.backend),
+          isAgentSession:!!active&&isAgentBackend(active.backend),
+        })
+        const topic=helpTopicForDrawer(tab,segment)
+        return <>
+          {topic&&<button role="menuitem" onClick={()=>{setDrawerDisplayMenu(null);openHelp(topic.id)}}>Help: {topic.title}</button>}
+          <button
+            role="menuitem"
+            disabled={blocked}
+            title={blocked?'The side panel must keep at least one tab.':undefined}
+            onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
+          >Hide {drawerTab(tab).label}</button>
+        </>
       })()}
       <MenuGroup
         id="drawer-visible-tabs"

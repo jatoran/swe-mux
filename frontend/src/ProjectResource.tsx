@@ -14,8 +14,7 @@ import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
 import { headingIndexAt, headingTrail, outlineDepths, outlineHeadings, type OutlineHeading } from './noteOutline'
-import { bindingFor, displayChord } from './commands'
-import { currentKeybindings, KEYBINDINGS_EVENT } from './keybindingsStore.ts'
+import { chordHint, currentKeymap, KEYBINDINGS_EVENT, type KeymapSnapshot } from './keybindingsStore.ts'
 import { scrollLineIntoView, type ViewportScroller } from './noteScroll'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
@@ -829,19 +828,20 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const enablePeek=()=>writeOutlinePeek(true)
 
   // The chord bound to the outline commands, for the button tooltip. Read from the shared
-  // keybindings store rather than threaded down from App; it updates when bindings change.
-  const [keybindings,setKeybindings]=useState<Readonly<Record<string,string>>>(currentKeybindings)
+  // keymap store rather than threaded down from App; it updates when bindings change, and
+  // it carries the platform so a macOS reader is shown ⌘⇧K rather than Ctrl+Shift+K.
+  const [keymap,setKeymap]=useState<KeymapSnapshot>(currentKeymap)
   useEffect(()=>{
-    const onKeys=(event:Event)=>setKeybindings((event as CustomEvent<Record<string,string>>).detail)
+    const onKeys=(event:Event)=>setKeymap((event as CustomEvent<KeymapSnapshot>).detail)
     window.addEventListener(KEYBINDINGS_EVENT,onKeys)
-    setKeybindings(currentKeybindings())
+    setKeymap(currentKeymap())
     return()=>window.removeEventListener(KEYBINDINGS_EVENT,onKeys)
   },[])
-  const outlineChord=bindingFor('note.outline',keybindings)
-  const peekChord=bindingFor('note.outlinePeek',keybindings)
-  const outlineTitle=`Jump to a heading${outlineChord?` (${displayChord(outlineChord)})`:''}`
+  const outlineChord=chordHint('note.outline',keymap)
+  const peekChord=chordHint('note.outlinePeek',keymap)
+  const outlineTitle=`Jump to a heading${outlineChord?` (${outlineChord})`:''}`
     +` · ${peekMode?'pinned':'click to open'}, Ctrl+click to ${peekMode?'unpin':'pin'} as an overlay`
-    +(peekChord?` (${displayChord(peekChord)})`:'')
+    +(peekChord?` (${peekChord})`:'')
 
   /** Re-read the note and rebuild the list. Cheap enough to redo on every change while open. */
   const readOutline=()=>{
@@ -1502,7 +1502,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='loading'?'Loading…'
     :status==='error'?null
     :'This resource is read-only.'
-  return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
+  return <section class="project-resource file-editor" data-resource-kind={resource.kind} onKeyDown={handleFindKey}>
     <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{autosaved?<>{isGlobalNote&&<><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">Global</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={`Save status: ${saveIndicator.label}`} title={`Save status: ${saveIndicator.label}`}/></>:<span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||canPreviewDocument||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}

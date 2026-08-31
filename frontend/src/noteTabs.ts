@@ -23,11 +23,15 @@ export function stableProjectNoteTabs<T extends NoteTabRecord>(notes: readonly T
     left.created_at - right.created_at || left.note_id.localeCompare(right.note_id))
 }
 
-export function fallbackNoteTab(selected: string | null, notes: readonly NoteTabRecord[]): string {
+export function fallbackNoteTab(
+  selected: string | null,
+  notes: readonly NoteTabRecord[],
+  scratchpadEnabled = true,
+): string | null {
   const canonical = canonicalNoteTabId(selected)
-  if (canonical === SCRATCHPAD_TAB_ID) return canonical
+  if (scratchpadEnabled && canonical === SCRATCHPAD_TAB_ID) return canonical
   if (canonical && notes.some(note => projectNoteTabId(note.note_id) === canonical)) return canonical
-  return notes.length ? projectNoteTabId(notes[0].note_id) : SCRATCHPAD_TAB_ID
+  return notes.length ? projectNoteTabId(notes[0].note_id) : scratchpadEnabled ? SCRATCHPAD_TAB_ID : null
 }
 
 /** How many notes each Project in a listing owns, keyed by Project id.
@@ -59,11 +63,12 @@ export function noteTabAfterDelete(
   selected: string | null,
   deletedNoteId: string,
   notesBeforeDelete: readonly NoteTabRecord[],
+  scratchpadEnabled = true,
 ): string | null {
   const deletedTab = projectNoteTabId(deletedNoteId)
   if (canonicalNoteTabId(selected) !== deletedTab) return null
   const index = notesBeforeDelete.findIndex(note => note.note_id === deletedNoteId)
   const remaining = notesBeforeDelete.filter(note => note.note_id !== deletedNoteId)
-  if (!remaining.length) return SCRATCHPAD_TAB_ID
+  if (!remaining.length) return scratchpadEnabled ? SCRATCHPAD_TAB_ID : null
   return projectNoteTabId(remaining[Math.min(Math.max(index, 0), remaining.length - 1)].note_id)
 }

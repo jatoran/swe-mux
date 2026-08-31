@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
+import { Dropdown } from './Dropdown.tsx'
+import { hostQuery } from './hostProfile.ts'
 import {
   allHarnessesIncludingDisabled,
   installHarnessRegistry,
@@ -56,6 +58,27 @@ export const EXPERIENCE_TIERS: { id: ExperienceTier; title: string; blurb: strin
   },
 ]
 
+/** Just enough of a preset for the first-run line; Settings reads the full shape. */
+export type KeymapPreset = { id: string; title: string; description: string; warning: string }
+
+/** What a fresh install has before anyone chooses, mirroring `keymaps.DEFAULT_PRESET`. */
+export const DEFAULT_KEYMAP_PRESET = 'swemux'
+
+/**
+ * The one sentence under the picker: what the highlighted preset costs, or what
+ * the default is, in the reader's terms.
+ *
+ * The warning is shown *here* rather than only in Settings because it is the
+ * decision it belongs to: choosing "tmux" takes Ctrl+B away from any tmux running
+ * inside a pane, and finding that out afterwards is the worst possible time.
+ */
+export function keymapNote(presets: KeymapPreset[], selected: string): string {
+  const preset = presets.find(entry => entry.id === selected)
+  if (!preset) return 'Pick the shortcuts you already know. Everything stays editable in Settings.'
+  if (preset.warning) return preset.warning
+  return preset.description
+}
+
 export function HarnessSetup(
   { tierNeeded, onDone, onConfigureMore }:
   { tierNeeded: boolean; onDone: () => void; onConfigureMore: () => void },
@@ -63,6 +86,11 @@ export function HarnessSetup(
   const [step, setStep] = useState<'tier' | 'harnesses'>(tierNeeded ? 'tier' : 'harnesses')
   const [tier, setTier] = useState<ExperienceTier>('deterministic')
   const [tierRestart, setTierRestart] = useState(false)
+  // The keyboard preset, on the same page as the tier. Fetched rather than listed,
+  // because the preset table is data on the daemon (`assets/keymaps/`) and a copy
+  // here would be a second one to keep in step.
+  const [presets, setPresets] = useState<KeymapPreset[]>([])
+  const [keymap, setKeymap] = useState(DEFAULT_KEYMAP_PRESET)
   const [choices, setChoices] = useState<Record<string, boolean>>({})
   const [scanHistory, setScanHistory] = useState(true)
   const [ready, setReady] = useState(false)
@@ -79,6 +107,9 @@ export function HarnessSetup(
       setChoices(initial)
       setReady(true)
     }).catch(() => { if (live) setReady(true) })
+    api<{ presets: KeymapPreset[] }>('GET', `/api/keybindings?${hostQuery()}`)
+      .then(payload => { if (live) setPresets(payload.presets || []) })
+      .catch(() => { /* the picker simply does not appear; the default preset stands */ })
     return () => { live = false }
   }, [])
 
@@ -91,6 +122,12 @@ export function HarnessSetup(
       const applied = await api<{ restart_required: string[] }>(
         'POST', '/api/experience-tier', { tier },
       )
+      // After the tier, and only when it is not already what a fresh install has:
+      // applying the default preset would rewrite `keybindings.json` for no change,
+      // and a first run should not write a file it has no reason to.
+      if (keymap !== DEFAULT_KEYMAP_PRESET) {
+        await api('POST', `/api/keymap-preset?${hostQuery()}`, { preset: keymap })
+      }
       setTierRestart(applied.restart_required.length > 0)
       setStep('harnesses')
       setBusy(false)
@@ -157,6 +194,24 @@ export function HarnessSetup(
             </span>
             <input type="radio" name="experience-tier" checked={tier === entry.id} onChange={() => setTier(entry.id)} />
           </label>)}
+          {/* One line, on the page that already exists, rather than a fourth first-run
+              surface. `firstRunSurface()` arbitrates three and the tier step was
+              folded in here for the same reason; a keymap is a defaults choice of
+              exactly the same shape, and it is reversible from Settings either way.
+              Left at the default when the picker cannot be drawn: a preset nobody
+              chose is the default preset, which is what a fresh install already has. */}
+          {!!presets.length && <label class="harness-setup-row harness-setup-keymap">
+            <span>
+              <strong>Coming from another tool?</strong>
+              <small>{keymapNote(presets, keymap)}</small>
+            </span>
+            <Dropdown
+              ariaLabel="Keyboard shortcut preset"
+              value={keymap}
+              onChange={value => setKeymap(value)}
+              options={presets.map(preset => ({ value: preset.id, label: preset.title }))}
+            />
+          </label>}
           {error && <p class="harness-setup-error" role="alert">{error}</p>}
         </div>
         <footer>

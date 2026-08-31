@@ -767,6 +767,7 @@ def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -
     config = load_config(path)
 
     assert config.note_spellcheck is False
+    assert config.note_scratchpad_enabled is True
     assert config.note_syntax == "markdown"
     assert config.note_tab_behavior == "indent"
     assert config.note_shortcut_policy == "browser-safe"
@@ -783,6 +784,7 @@ def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -
         config,
         {
             "note_spellcheck": True,
+            "note_scratchpad_enabled": False,
             "note_syntax": "plain",
             "note_tab_behavior": "focus",
             "note_shortcut_policy": "editor-first",
@@ -798,6 +800,7 @@ def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -
     assert restart == set()
     assert hot == {
         "note_spellcheck",
+        "note_scratchpad_enabled",
         "note_syntax",
         "note_tab_behavior",
         "note_shortcut_policy",
@@ -809,6 +812,7 @@ def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -
         "note_rail_button_size_px",
     }
     reloaded = load_config(path)
+    assert reloaded.note_scratchpad_enabled is False
     assert reloaded.note_indent_guides is False
     assert reloaded.note_syntax == "plain"
     assert reloaded.note_font_family == "Iosevka"

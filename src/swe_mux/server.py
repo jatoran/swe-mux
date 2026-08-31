@@ -36,6 +36,7 @@ from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_authority import authority_resolver
 from .agent_context import AgentContextService
 from .agent_messaging import AgentMessagingService
+from .agent_worktree_context import session_occupies_worktree
 from .assistant import (
     AssistantError,
     AssistantService,
@@ -1712,17 +1713,18 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     async def _land_busy_sessions(worktree_root: str) -> tuple[str, ...]:
         """Sessions living in this checkout that are not safe to merge underneath.
 
-        A session counts when its *live* cwd is the worktree, which is the same
-        `git_cwd` every other per-checkout reading uses, and when it is doing
-        something a merge would disturb. Starting up counts: a harness that has not
-        settled is exactly the one whose first act may be writing files.
+        A session counts when its live cwd or its current-run land binding is the
+        worktree, and when it is doing something a merge would disturb. The second
+        path is what makes a Codex session whose host process stayed on trunk protect
+        the checkout where its commands are writing. Starting up counts: a harness
+        that has not settled is exactly the one whose first act may be writing files.
         """
         busy: list[str] = []
         for session in sessions.sessions.values():
             record = session.record
             if record.state in {"exited", "crashed"}:
                 continue
-            if not same_path(record.git_cwd, worktree_root):
+            if not session_occupies_worktree(record, worktree_root):
                 continue
             if record.state in {"starting", "working", "awaiting"}:
                 busy.append(str(record.id))

@@ -62,6 +62,9 @@ READ_TOOL_NAMES = (
     # Permission-gating it would put an approval prompt in front of the
     # monitoring call an orchestrator makes most often, buying nothing.
     "watch_session",
+    # Which checkout the targetless land tools would use. A pure read over the
+    # caller's live cwd and its run-bound selection; it changes neither.
+    "worktree_context",
 )
 
 WRITE_TOOL_NAMES = (
@@ -88,11 +91,17 @@ WRITE_TOOL_NAMES = (
     # inert approval request a human acts on.
     "interrupt",
     "end_session",
+    # Select an exact Git-listed linked worktree for a Codex-style session whose
+    # host process remains on trunk. This is deliberately separate from the
+    # dangerous land call: the selection is validated, run-bound and auditable,
+    # while request_land/request_verify keep accepting no target at all.
+    "use_worktree",
     # Phase 14: ask for this worktree's branch to be landed. A request, not the
     # action - it enqueues, and the daemon's fixed git vocabulary is what runs. Like
     # interrupt/end it defaults to a per-Project `draft` grant, so the call writes an
     # inert request a human approves. Deliberately session-scoped with no target
-    # argument: an agent lands the checkout it is working in, never another one.
+    # argument: a live linked-worktree cwd wins (Claude), otherwise only the
+    # separately validated run-bound selection may supply the checkout (Codex).
     "request_land",
     # Phase 2a: the same pipeline stopped before its last step. It moves no trunk, so
     # the `draft` grant enqueues it rather than drafting it - there is nothing for a
@@ -100,7 +109,7 @@ WRITE_TOOL_NAMES = (
     # branch and running bytes a human already approved. `off` still refuses it. It is
     # a separate tool rather than a flag on `request_land` so the dangerous call is
     # never the default spelling of the safe one, and it carries the same
-    # by-construction scoping: no target argument at all.
+    # targetless scoping: no target argument at all.
     "request_verify",
 )
 

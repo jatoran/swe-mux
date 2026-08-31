@@ -217,10 +217,10 @@ responsive controls.
   Each harness launch row is marked with that harness's own mark (`harnessMark`, `harnessIcons.tsx`) rather than a play triangle, and a launch profile wears its harness's mark because it launches that harness.
   Every row in the section starts a session, so a triangle on all of them distinguished nothing; which CLI a row starts is the fact that separates them.
   The Project Action rows keep `▶`/`▷`, which there is not decoration but the file's trust state.
-- Run is the only always-present launcher, since tab strips carry no new-tab button
-  (`workspace-layout.md`). The header Run is styled as an accent chip rather than a faint label,
-  and because it has no room in the 40 px collapsed header column, the collapsed rail carries an
-  equivalent `▶` button. Mobile's toolbar Run is the same surface.
+- Run is the one launcher surface, reached from several contextual triggers (`workspace-layout.md`).
+  Desktop pane tab rails end with `+`, which focuses that pane and opens the same Run menu as the active-Project header.
+  The header Run is styled as an accent chip rather than a faint label, and because it has no room in the 40 px collapsed header column, the collapsed rail carries an equivalent `▶` button.
+  Mobile omits the pane `+`; its toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
   It is reachable from two places on purpose: the sidebar's `PROJECTS` header, beside the
@@ -412,8 +412,8 @@ Its rules, and what each one is defending:
   header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
   Project-scoped Fleet Queue approval rows — live on the Project itself: right-click a
   sidebar row, or tap the Project title in the mobile top bar (both open the same menu).
-- Starting work is the Run menu's job alone (active-Project header, every Project row, mobile
-  rail). Neither the app menu nor the Project context menu carries "New terminal": Run already
+- Starting work is the Run menu's job alone (active-Project header, desktop pane tab rails, every Project row, mobile rail).
+  Neither the app menu nor the Project context menu carries "New terminal": Run already
   offers the same backends plus the Project's imported tasks, and a second door only split the
   affordance.
 - Broadcast input stays in the app menu because it is an app-wide input mode, not a Project
@@ -674,7 +674,7 @@ Its rules, and what each one is defending:
   | --- | --- |
   | Workspace | General, Projects, Terminals, Git, Processes |
   | Agents | Harnesses, Accounts, Prompt queue, Automation, Usage |
-  | Interface | Appearance, Input, Text editor, Voice |
+  | Interface | Appearance, Input, Notes, Voice |
   | System | Alerts, Remote, Diagnostics |
 
   A group is a contiguous *run* of the array, not a declared membership list, so a tab that
@@ -1010,15 +1010,43 @@ Its rules, and what each one is defending:
   **Configure Actions** opens as a standalone modal from the main menu, command palette, or a rail-row popover.
   The Actions drawer does not link to configuration because its job is using actions, not arranging the command rail.
   This surface owns the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
-- Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
-  releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
-  Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
-  inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
-  Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
-  binding cannot compete with browser zoom suppression or leak the same input into xterm.
-  Rows group by command category, and the group heading is the category rendered as a word
-  (`commandCategoryLabel`) rather than the id it is stored as — the settings search index reads
-  the *text* of the heading it files a row under, so a raw `view` reached the result list.
+- Keyboard shortcuts are a rule list rather than a chord map, and the Input tab edits
+  the list: the preset picker, the per-command recorder, and the report of what this
+  host cannot receive. `design/features/keybindings.md` owns the design; three things
+  about the *editor* live here.
+  **It says which keyboard it is describing.** A chord that works in the desktop app
+  may be one a browser tab keeps, and the undeliverable list under the picker is
+  computed for the asking host alone - so the panel names the host and the platform
+  above the list rather than drawing a dead chord as though it were live.
+  **Applying a preset is outside the draft/Save cycle**, like "restore defaults": the
+  assignment is absolute and overwrites hand edits, so it happens on an explicit press
+  after a confirmation naming what the preset takes, not as a side effect of a Save
+  the user made for an unrelated reason. Editing an individual shortcut stays inside
+  the cycle.
+  **The recorder records sequences the way they are typed.** A keystroke landing on a
+  chord that already begins a longer binding keeps recording rather than committing -
+  committing there would silently delete every binding under that prefix.
+  Application-reserved UI scale chords remain fixed controls rather than command
+  bindings, and are the one refusal left, so a saved binding cannot compete with
+  browser zoom suppression or leak the same input into xterm.
+- The command palette has four scopes, named in the UI rather than implied: `>`
+  commands, `@` sessions, `#` Projects, `:` files. `searchCommands` scores a command's
+  label, id and category, so "go to that session" - the most common navigation in a
+  fleet UI - could not be answered by the palette at all before the scopes existed.
+  Sessions and Projects filter the registry `fleetCommands` already builds; files are
+  fetched per query and exist only while it does.
+- A leader key draws a **which-key overlay** naming what the next keystroke can be. It
+  is not decoration: ~200 commands behind one prefix without it is a memory test. It
+  waits 450 ms so fluent use never draws it, and it never takes focus, because the
+  sequence is still being typed.
+- The shortcut list groups rows by command category, and the group heading is the
+  category rendered as a word (`commandCategoryLabel`) rather than the id it is stored
+  as - the settings search index reads the *text* of the heading it files a row under,
+  so a raw `view` reached the result list. The list also filters in place
+  (`shortcutMatches`), matching a chord in both spellings - stored (`ctrl+shift+p`) and
+  displayed (`Ctrl+Shift+P`) - so neither typing habit misses it. The displayed half is
+  platform-dependent, so the filter takes the platform: a macOS reader sees `⌘⇧P` and
+  would otherwise be searching a spelling their screen never shows.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
@@ -1291,11 +1319,10 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   in neither the wheel nor the PyInstaller bundle. Freshness is a test
   (`frontend/test/helpTopics.test.ts` regenerates and compares), exactly as
   `harnessRegistrySeed.ts` is guarded.
-- **A topic's in-context control is drawn from the registry, never per tab.** The drawer's
-  pane heading offers `?` for whichever surface it is drawing, resolved by
-  `helpTopicForDrawer(tab, segment)`; a tab with no registered topic gets no control rather
-  than an empty modal. The scan timeline is Activity's **Timeline** segment, so that is where
-  its help opens from.
+- **A topic's in-context control is drawn from the registry, never per tab.**
+  Headered drawer panes offer `?` for the surface they draw, while content-first tabs expose the same topic in the tab context menu.
+  Both resolve through `helpTopicForDrawer(tab, segment)`; a tab with no registered topic gets no control rather than an empty modal.
+  The scan timeline is Activity's **Timeline** segment, so that is where its help opens from.
 - Each topic links to `https://swemux.dev/docs/<id>/` for the full page. The trailing slash is
   load-bearing under the Pages Actions source, and the retired `/docs/#<slug>` fragment form
   must not come back (`site/README.md`).
@@ -1351,8 +1378,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   provider CLI they have not installed - otherwise leaves abandonment as the only way past it.
   The spotlight and the gate stay for the user who does want to do the thing now; the wording of
   the skip is per-step where the generic one reads wrongly ("I'll do this later" on accounts).
-- Both the Run step and the second-tab step drive the real Run menu, since tab strips have no
-  new-tab button to point at; the second-tab step's spotlight returns to Run.
+- Both the Run step and the second-tab step drive the real Run menu.
+  On desktop the second-tab step spotlights the pane `+`; on mobile it returns to toolbar Run.
 - Run requires opening the actual menu and selecting Shell.
   Account setup **offers** either **sign in + save** or **save current login** and is skippable,
   because the first-run harness panel one surface earlier calls CLI login a later step and two
@@ -1477,7 +1504,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 - **Some swipes belong to a piece of chrome rather than to the screen.**
   A **region** is chrome that answers to a swipe of its own, because the channel the rest of the
   app reserves is dead there (`GESTURE_REGION_SELECTORS`): the terminal's command rail, the mobile
-  tab rail, the voice panel's header, the note editor's command rail, and every control on the
+  tab rail, the voice panel's header, the Notes document rail, Project-note headers, the note editor's command rail, and every control on the
   mobile top bar - the two quota chips, the Project name, the microphone, Run, and the two edge
   toggles.
   On the top bar most of these do what the control's own *tap* does, and that is the point rather
@@ -1525,7 +1552,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   a **tab on the mobile tab rail** opens that tab's menu on either vertical direction - the same
   menu its 350 ms hold opens, reached faster, which is the shape the "reaching a menu should never
   require a hold on touch" rule prefers;
-  the **note editor's command rail** opens the heading outline;
+  the **Notes document rail**, a **Project-note header**, and the **note editor's command rail** open the heading outline on a downward pull;
   a **quota chip** opens Accounts and **Run** opens the launcher, both on a downward drag, because
   what they open is drawn below the bar and the drag is the pull that brings it down;
   the **microphone** reveals the voice panel downward and puts it away upward - the one control
@@ -1542,9 +1569,9 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Four of the nine resolve to ordinary commands, so a chord, the palette and a swipe reach the
   same code. Three cannot, because no command id can name "the tab I just swiped" - they read
   their target back out of the composed path the recognizer kept.
-  The note rail's is the instructive one: `note.outline` asks *who has focus*, and touching a rail
-  never made its note the insert target, so the swipe names its editor in the event's `detail`
-  and the claim protocol skips the question. A caller that does not name one keeps the focus rule.
+  The note surface is the instructive one: `note.outline` asks *who has focus*, and touching the Notes rail, note header, or editor rail never made that note the insert target.
+  The swipe resolves the Project-note editor within the touched Notes workspace, names it in the event's `detail`, and the claim protocol skips the focus question.
+  A caller that does not name an editor keeps the focus rule.
   The note rail is also matched by the CSS shadow **part** Continuity exports rather than by the
   `.command-rail-buttons` class behind it: the part is the contract, the class is an internal a
   version bump may rename.
@@ -2482,11 +2509,9 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Change Map is **Activity's third segment**, because "what the session narrated" and "which files it actually wrote" were always two readings of one run; its pop-out into a workspace tab survived the merge and matters more now, since a force-directed graph wants more width than this column has.
   Agent Context is **Agent's Instructions segment**, because tools, policies, and instruction files are the halves of "what is this agent running with".
 - The two kinds are deliberately distinct rather than collapsed into one (`frontend/src/drawerSegments.ts`).
-  A **segment** is a mutually exclusive view of a tab, drawn by the drawer's single shared segmented control under the pane heading; the heading names the segment, not the tab, because "Change Map" is what that pane *is* while "Activity" is only where it lives.
-  **Git and Files are the exception, and the exception proves the rule**: their headings *are* their segment labels, so the heading row was printing the selected chip's own text directly above that chip and spending a row of a narrow panel to do it.
-  There the control is drawn compactly **in** the heading row, in place of the heading - the same control, the same registry, the same keyboard behaviour, and no second toggle (`git.md`).
-  In that row the subtabs never shrink and the scope caption beside them does: the subtabs are the row's navigation, the caption is a caption, and a Project name that refused to yield is what ellipsised Git's three subtabs into stubs on a phone.
-  Every tab whose heading names something the segments do not keeps the strip under the heading, unchanged.
+  A **segment** is a mutually exclusive view of a tab, drawn by the drawer's shared full-width view rail as the first content row.
+  Files, Git, Activity, and Agent use the same `DrawerViewTabs.tsx` presentation and keyboard behavior.
+  A selected segment is the visible title, so a separate pane heading would repeat navigation while taking a row from the narrow drawer.
 - **Files is the newest of them, and it converted a toggle rather than splitting a tab** (operator decision 2026-08-22).
   Its two readings - the tree and Recent, what Git says was touched in this checkout - were one component and a pressed clock icon inside the search row.
   That is a mode with no name anywhere in the chrome: unreachable by command or by voice, not persisted, and told apart only by inspecting `aria-pressed` on an icon.
@@ -2692,11 +2717,13 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   dragged onto any pane.
   Files can remain visible beside Clipboard or another utility body when the user places them in separate drawer panes.
 - **Notes** is a flat Project-owned collection *and* an editor, and a note is open in exactly one of the two hosts at a time.
-  A non-wrapping sub-tab rail pins Scratchpad first and then shows every note in the active Project in stable creation order.
+  A non-wrapping sub-tab rail shows Scratchpad first when enabled and then every note in the active Project in stable creation order.
   These tabs are the primary navigation and cannot be closed.
   The selected tab scrolls into view automatically, and compact scroll controls handle ordinary overflow.
   A separate searchable browser handles large collections, all-Project discovery, and note management.
   Scratchpad is global, has no rename/delete controls, and uses the same drawer and workspace-tab placements as Project notes.
+  Right-clicking Scratchpad or empty Notes-rail space toggles its install-wide visibility; Settings → Notes exposes the same setting.
+  Disabling closes Scratchpad workspace views and hides its command without deleting its retained content.
   The browser lists explicit notes, including empty notes, searchable over title, Project, and excerpt and scoped to this Project or to all Projects.
   It creates and renames notes through title prompts.
   Selecting a rail tab or browser row opens that note **in the drawer**; `⇥` moves it to a workspace tab instead.
@@ -2704,7 +2731,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Desktop right-click and guarded mobile long-press expose open, rename, and revision-checked delete actions.
   Deletion submits the revision carried by the listing, refuses a concurrent edit with `409 revision_conflict`, logs the user action, and emits the normal note-change event with revision `missing`.
   An open clean editor follows that event to a deleted state; an editor with unsaved local work keeps its text and reaches the existing revision-conflict path instead of being silently cleared.
-  Deleting the selected note selects the next Project note, then the previous note if needed, and falls back to Scratchpad only when none remain.
+  Deleting the selected note selects the next Project note, then the previous note if needed, and falls back to Scratchpad only when it is enabled and none remain.
   Terminals and History do not create or own notes.
 - **Why one host at a time is a rule and not a preference.** `noteSaveQueue` keys one entry per
   `(scope, resource)` at module scope, so two mounted editors on one note share it: each submits
@@ -2766,9 +2793,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   What you pick is remembered **per Project**, device-local, because it is a reading position
   rather than a setting; a stored id whose file has since gone resolves to the empty state
   rather than to something else's body.
-  The tab's own `Agent Context` title is gone for the reason the Actions session line is: the
-  pane heading above already carries it. The line under it stays, because which harness and
-  which working directory the inventory resolved against is a fact the heading has not got.
+  The tab's own `Agent Context` title is gone because the Agent view rail already names Instructions.
+  The line under it stays because which harness and working directory the inventory resolved against is a fact the rail does not carry.
   Fine-pointer desktop rows backed by real files expose **Open in default explorer** on
   right-click, using the Files browser's native reveal behavior; mobile keeps its native
   context-menu behavior.
@@ -2892,16 +2918,13 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   has no body left to contain. None of it costs vertical space.
 - **The Actions tab has three named views: Skills, Prompts, and Clipboard.**
   One view is rendered at a time under a persistent tab row, and the selected view is remembered on the device.
+  The row uses the same full-width view rail as Files, Git, Activity, and Agent.
   The old stacked disclosures made three unrelated catalogs compete in one long scroller and forced their headers to carry excessive visual weight.
   Skill rows now lead with the invocation and short description.
   Selecting one row reveals its full description and Insert action inline, so the catalog stays scannable without losing detail.
   Command-rail configuration is deliberately absent from this usage surface.
-  Amber is safe for the same reason: this tab has no warn or error vocabulary of its own for a
-  3px spine to be confused with.
-  The hue is carried on a `--section-hue` variable rather than written three times, so a
-  fourth section added without one falls back to the muted spine instead of inheriting a
-  neighbour's colour, and a single-hue theme (game-boy, virtual-boy) collapses all three —
-  inherent to those themes, and the spine, the rule, and the caret all still draw.
+  Desktop relies on the adjacent focused terminal for destination context.
+  Mobile shows one compact target line because the overlay covers the terminal that Skills, Prompts, and Clipboard can mutate.
 - A note tab that appears and disappears with focus was considered and rejected: the desktop icon
   rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
   a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed
@@ -2937,18 +2960,16 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   each pane strip shows only its own subset. The per-tab palette commands, their voice phrases, and
   pane tab cycling all still reach any tab, and a rail that appears and disappears with split
   geometry would be harder to predict than one that simply means "collapsed".
-- Every pane heading carries a **scope caption** at its right: the focused session for a session-scoped tab, the active Project's name for a Project-scoped one, "Application-wide" for the rest.
-  The Project's caption is its **bare name**, with no `Project:` in front of it (operator decision 2026-08-22).
-  The word cost eight characters of the heading row on every Project-scoped tab, and on a phone that is what pushed Git's three subtabs into ellipses.
-  It also said nothing: the sidebar, the toolbar title, and the tab's own scope marker already establish that a Project is what is being named, and the session caption beside it is the only other thing the slot can say - so the two are told apart by the one prefix still doing work.
-- Losing the rail on open also loses the pointer affordance for closing again, since clicking an
-  already-selected tab collapses the drawer but does not advertise that it will.
-  Exactly one pane heading therefore carries a **collapse control**: the pane holding the drawer's
-  top-right corner, resolved by taking the right branch of horizontal splits and the top branch of
-  vertical ones. One per drawer rather than one per pane, because the drawer collapses as a whole
-  and a heading is the only chrome available to hang it on.
-  Escape inside the drawer, the outer resizer's collapse threshold, and the `drawer.toggle` command
-  remain the other ways out.
+- Notes, Files, Actions, Git, Activity, and Agent are **content-first tabs** with no pane heading.
+  Notes starts with its scrollable note-document rail.
+  Files, Git, Activity, and Agent start with the shared full-width view rail.
+  Actions starts with the same rail treatment over its three catalog views.
+  Their former title, scope caption, inline help, and collapse control duplicated navigation or context already present in the workspace.
+  Inline help for these tabs moves to the tab context menu and remains available through the Help index, palette, and voice commands.
+  Transcript, Schedule, Alerts, Queue, and Processes keep their pane headings, scope captions, and inline help because those rows still carry information not replaced by a content rail.
+- The drawer has no visible collapse button.
+  Clicking or tapping the selected primary tab collapses it, and that tab's tooltip states the second-click behavior.
+  Escape, the mobile scrim and back stack, gestures, the outer resizer's collapse threshold, the tab context menu, and `drawer.close` remain explicit alternatives.
 - Every width change reflows the pane tree and refits its terminals, which sends a resize to each
   PTY and makes agent TUIs redraw. Width persists globally for the device and the drag commits on
   pointer-up rather than per-frame.
@@ -2960,7 +2981,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   It is not part of Project layout v7 and never adds utility leaves to Project layout PATCHes, SQLite state, workspace focus traversal, warm terminals, or the Project mobile projection.
 - The complete tree is device-local and global across Projects under `mux.drawer.layout.v1`.
   Drawer width is also global per device.
-  Each Project stores only `selected_tabs`, `focused_tab`, and `desktop_expanded` under `mux.drawer.projects.v2`.
+  Each Project stores only `selected_tabs`, `selected_segments`, `focused_tab`, and `desktop_expanded` under `mux.drawer.projects.v3`.
   Switching Projects preserves geometry, membership, order, ratios, and width while restoring that Project's selections and desktop visibility.
   A transient no-Project presentation keeps app-scoped tabs usable before a Project exists.
 - The former `drawerTabs` server setting is read once as migration input and is no longer written by drawer operations.
@@ -2971,7 +2992,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The wedges overlay the rail without reserving space or accepting input; wheel, trackpad, touch, keyboard, focus reveal, and drag-reorder remain the scrolling paths.
   The focused utility tab identifies the focused drawer pane for reopen, cycling, mobile selection, and geometry commands without taking terminal input ownership or changing Project workspace focus.
   Session-scoped bodies follow the focused session, Project-scoped bodies follow the active Project, and app-scoped bodies remain independent.
-  Every body shows its current scope because several scoped bodies can be visible at once.
+  Headered bodies show their current scope because several scoped bodies can be visible at once.
+  Content-first bodies rely on the workspace context and their own content; Actions adds the mobile target exception because it can mutate the covered terminal.
 - Tabs move only through pane rails.
   Dragging across a rail gap performs exact insertion, dropping in a pane center joins that pane, and dropping on a pane edge creates a left, right, top, or bottom split.
   Moving the last tab out of a stack collapses its redundant parent split immediately.
@@ -2997,7 +3019,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 - Mobile renders one flattened depth-first rail and one body from the same desktop tree without rewriting tree membership, stack IDs, directions, ratios, or ordering.
   Selecting a mobile tab updates only its owning stack's Project selection and the Project's focused tab.
   Returning to desktop restores the exact recursive tree.
-  The drawer has no redundant global title or close header.
+  The drawer has no redundant global title, close header, or visible collapse button.
   Clicking or tapping the selected tab collapses the drawer; clicking the active desktop right-rail launcher retains the same toggle behavior.
   Every tab context menu also exposes **Collapse utility drawer**, disabled while the drawer is already collapsed.
 - The focused utility tab is remembered per Project and device, so

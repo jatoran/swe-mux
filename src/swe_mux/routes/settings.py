@@ -17,13 +17,18 @@ from .. import (
 from ..config import Config, update_config
 from ..http_support import json_response
 from ..keybindings import (
-    DEFAULT_KEYBINDINGS,
+    COMMAND_GROUPS,
     KEYBINDING_COMMANDS,
-    KEYBINDINGS_FILE_VERSION,
-    V2_DEFAULT_KEYBINDINGS,
-    keybinding_policy,
-    normalize_binding,
+    WHEN_FLAGS,
+    Rule,
+    document_for,
+    normalize_rule,
+    parse_document,
+    prefixes,
+    resolve,
 )
+from ..keychords import BROWSER_UNREACHABLE, HOSTS, PLATFORMS, chord_policy, sequence_label
+from ..keymaps import DEFAULT_PRESET, default_rules, preset_rules, preset_summaries
 from ..meta_hooks import MetaHookEngine, parse_hook_rules
 from ..profiles import profile_payload
 from ..project_files import (
@@ -116,8 +121,11 @@ async def settings_bundle(request: web.Request) -> web.Response:
             parts[key] = None
             errors[key] = str(exc)
 
+    host, platform = _host_of(request)
+    measured = _measured_unreachable(request, host)
+
     async def keybindings() -> Any:
-        return _keybindings_payload(config)
+        return _keybindings_payload(config, host=host, platform=platform, unreachable=measured)
 
     async def profiles() -> Any:
         # Shell detection stats a handful of executables; keep it off the loop.
@@ -251,6 +259,7 @@ async def apply_settings(request: web.Request) -> web.Response:
     `committed: ["config"]` - instead of claiming nothing changed.
     """
     config: Config = request.app[keys.CONFIG]
+    saved_host, saved_platform = _host_of(request)
     body = await request.json()
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
@@ -262,12 +271,8 @@ async def apply_settings(request: web.Request) -> web.Response:
         raise ValueError("config must be an object")
     changes = dict(changes)
 
-    supplied_bindings = body.get("keybindings")
-    if isinstance(supplied_bindings, dict) and isinstance(
-        supplied_bindings.get("bindings"), dict
-    ):
-        supplied_bindings = supplied_bindings["bindings"]
-    if supplied_bindings is not None and not isinstance(supplied_bindings, dict):
+    supplied = body.get("keybindings")
+    if supplied is not None and not isinstance(supplied, dict):
         raise ValueError("keybindings must be an object")
 
     body_revision = body.get("_revision", changes.pop("_revision", None))
@@ -275,9 +280,11 @@ async def apply_settings(request: web.Request) -> web.Response:
     if conflict is not None:
         return conflict
 
-    normalized: dict[str, str] | None = None
-    if supplied_bindings is not None:
-        normalized, rejected = _normalize_bindings(supplied_bindings)
+    normalized: list[Rule] | None = None
+    supplied_preset = "custom"
+    if supplied is not None:
+        supplied_preset = str(supplied.get("preset") or "custom")
+        normalized, rejected = _normalize_rules(supplied.get("rules"))
         if rejected:
             return json_response(
                 {
@@ -291,7 +298,7 @@ async def apply_settings(request: web.Request) -> web.Response:
 
     staged: Path | None = None
     if normalized is not None:
-        staged = _stage_keybindings(config, normalized)
+        staged = _stage_keybindings(config, supplied_preset, normalized)
 
     try:
         hot, restart = update_config(config, changes)
@@ -355,7 +362,12 @@ async def apply_settings(request: web.Request) -> web.Response:
                 "hot_applied": sorted(hot),
                 "restart_required": sorted(restart),
             },
-            "keybindings": _keybindings_payload(config),
+            "keybindings": _keybindings_payload(
+                config,
+                host=saved_host,
+                platform=saved_platform,
+                unreachable=_measured_unreachable(request, saved_host),
+            ),
             "committed": committed,
         }
     )
@@ -387,77 +399,154 @@ async def reset_config(request: web.Request) -> web.Response:
     )
 
 
-def _keybindings_payload(config: Config) -> dict[str, Any]:
-    defaults = dict(DEFAULT_KEYBINDINGS)
+def _host_of(request: web.Request) -> tuple[str, str]:
+    """Which client is asking, from its own query.
+
+    Resolution runs here rather than in the browser for the reason the
+    experience-tier assignment does: a browser-computed answer would be a second
+    copy of the policy and the copy is what drifts. So the client states what it
+    is and the daemon answers for that host. Unknown or absent values fall back
+    to the most restrictive combination a real client can be (a browser tab on
+    Windows), because a *wrong* permissive answer shows a dead chord as live.
+    """
+    host = request.query.get("host", "")
+    platform = request.query.get("platform", "")
+    return (
+        host if host in HOSTS else "browser",
+        platform if platform in PLATFORMS else "win",
+    )
+
+
+def _read_document(config: Config) -> tuple[str, list[Rule], dict[str, str]]:
+    """This install's saved rules, or the default preset's when it has none."""
     path = config.data_dir / "keybindings.json"
-    rejected: dict[str, str] = {}
-    if path.exists():
-        try:
-            supplied = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"invalid keybindings.json: {exc}") from exc
-        replace_defaults = bool(
-            isinstance(supplied, dict) and supplied.get("replace_defaults") is True
+    if not path.exists():
+        return DEFAULT_PRESET, default_rules(), {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid keybindings.json: {exc}") from exc
+    preset, rules, rejected = parse_document(raw)
+    if rejected:
+        log.warning(
+            "keybindings.json carries rules this build cannot use",
+            extra={"rejected": ",".join(sorted(rejected)), "preset": preset or "custom"},
         )
-        document_version = (
-            int(supplied.get("version", 1))
-            if replace_defaults and isinstance(supplied.get("version", 1), int)
-            else 1
-        )
-        if replace_defaults:
-            supplied = supplied.get("bindings", {})
-            defaults = {}
-        if not isinstance(supplied, dict):
-            raise ValueError("keybindings.json must contain an object")
-        for chord, command in supplied.items():
-            try:
-                key, command_id = normalize_binding(chord, command)
-                defaults[key] = command_id
-            except ValueError as exc:
-                rejected[str(chord)] = str(exc)
-        # Version 1 could not contain these chords through the Settings/API path:
-        # both were rejected as browser-reserved. Seed the new desktop defaults
-        # once, while a version 2 document continues to preserve an intentional
-        # clear or remap.
-        if replace_defaults and document_version < KEYBINDINGS_FILE_VERSION:
-            for chord, command_id in V2_DEFAULT_KEYBINDINGS.items():
-                defaults.setdefault(chord, command_id)
-    commands = [
-        {"id": command_id, "label": label, "category": category}
-        for command_id, label, category in KEYBINDING_COMMANDS
-    ]
+    return preset or DEFAULT_PRESET, rules, rejected
+
+
+def _measured_unreachable(request: web.Request, host: str) -> set[str] | None:
+    """What this device measured about its own browser, or None if it never did.
+
+    Read from the per-device settings store rather than sent on the request, so the
+    correction outlives the tab that made it and applies to every later read. Only a
+    *tested* chord moves the shipped answer: `unknown` leaves it standing, because an
+    untried chord is not evidence and treating it as one would quietly hand back
+    every chord nobody probed (`frontend/src/hostKeyboardProbe.ts` holds the same
+    rule on the other side).
+    """
+    if host != "browser":
+        return None
+    try:
+        store = request.app[keys.SETTINGS_STORE]
+    except KeyError:  # pragma: no cover - a request built without the runtime
+        return None
+    corrected = set(BROWSER_UNREACHABLE)
+    found = False
+    for profile in store.all().get("profiles", {}).values():
+        report = (profile or {}).get("keyboard", {}).get("probe")
+        if not isinstance(report, dict) or report.get("host") != "browser":
+            continue
+        for chord, result in (report.get("results") or {}).items():
+            verdict = (result or {}).get("verdict") if isinstance(result, dict) else None
+            if verdict == "delivered":
+                corrected.discard(str(chord))
+                found = True
+            elif verdict == "blocked":
+                corrected.add(str(chord))
+                found = True
+    return corrected if found else None
+
+
+def _keybindings_payload(
+    config: Config,
+    *,
+    host: str,
+    platform: str,
+    unreachable: set[str] | None = None,
+) -> dict[str, Any]:
+    """Everything a client needs to dispatch keystrokes and to edit its own map.
+
+    `rules` is the durable document; `resolved` is what THIS host dispatches on,
+    with `undeliverable` and `contested` naming what was dropped or shadowed and
+    why. Handing back both is what lets Settings say "works in the desktop app"
+    about a chord the asking browser will never receive, instead of drawing it as
+    though it were live.
+    """
+    preset, rules, rejected = _read_document(config)
+    resolution = resolve(rules, host=host, platform=platform, unreachable=unreachable)
     return {
-        "bindings": defaults,
-        "defaults": DEFAULT_KEYBINDINGS,
-        "commands": commands,
-        "policy": keybinding_policy(),
+        "preset": preset,
+        "measured": sorted(unreachable) if unreachable is not None else None,
+        "presets": preset_summaries(),
+        "host": host,
+        "platform": platform,
+        "rules": [rule.as_dict() for rule in rules],
+        "resolved": resolution.bindings,
+        "prefixes": sorted(prefixes(rules)),
+        "undeliverable": resolution.undeliverable,
+        "contested": resolution.contested,
+        "labels": {
+            sequence: sequence_label(sequence, platform=platform)
+            for sequence in {*resolution.bindings, *prefixes(rules)}
+        },
+        "commands": [
+            {"id": command_id, "label": label, "category": category}
+            for command_id, label, category in KEYBINDING_COMMANDS
+        ],
+        "groups": [
+            {"category": category, "key": key, "title": title}
+            for category, key, title in COMMAND_GROUPS
+        ],
+        "when_flags": list(WHEN_FLAGS),
+        "policy": chord_policy(),
         "rejected": rejected,
     }
 
 
 async def get_keybindings(request: web.Request) -> web.Response:
-    return json_response(_keybindings_payload(request.app[keys.CONFIG]))
+    host, platform = _host_of(request)
+    return json_response(
+        _keybindings_payload(
+            request.app[keys.CONFIG],
+            host=host,
+            platform=platform,
+            unreachable=_measured_unreachable(request, host),
+        )
+    )
 
 
-def _normalize_bindings(bindings: dict[Any, Any]) -> tuple[dict[str, str], dict[str, str]]:
-    """Chord/command pairs the daemon will accept, and the ones it will not.
+def _normalize_rules(raw: object) -> tuple[list[Rule], dict[str, str]]:
+    """Rules the daemon will accept, and the ones it will not.
 
     Pure: nothing here touches the filesystem, which is what lets the atomic
     endpoint below learn that the keybindings half is invalid before it has
     committed the config half.
     """
+    if not isinstance(raw, list):
+        raise ValueError("rules must be a list")
     rejected: dict[str, str] = {}
-    normalized: dict[str, str] = {}
-    for chord, command in bindings.items():
+    normalized: list[Rule] = []
+    for index, entry in enumerate(raw):
         try:
-            key, command_id = normalize_binding(chord, command)
-            normalized[key] = command_id
+            normalized.append(normalize_rule(entry))
         except ValueError as exc:
-            rejected[str(chord)] = str(exc)
+            label = str(entry.get("keys")) if isinstance(entry, dict) else f"rule {index}"
+            rejected[label] = str(exc)
     return normalized, rejected
 
 
-def _stage_keybindings(config: Config, normalized: dict[str, str]) -> Path:
+def _stage_keybindings(config: Config, preset: str, rules: list[Rule]) -> Path:
     """Write the keybindings document beside its destination without publishing it.
 
     Splitting the write from the rename is the whole trick: after this returns,
@@ -467,12 +556,9 @@ def _stage_keybindings(config: Config, normalized: dict[str, str]) -> Path:
     """
     path = config.data_dir / "keybindings.json"
     temporary = path.with_suffix(".json.tmp")
-    document = {
-        "version": KEYBINDINGS_FILE_VERSION,
-        "replace_defaults": True,
-        "bindings": normalized,
-    }
-    temporary.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(document_for(preset, rules), indent=2) + "\n", encoding="utf-8"
+    )
     return temporary
 
 
@@ -482,18 +568,65 @@ def _publish_keybindings(config: Config, temporary: Path) -> None:
 
 async def put_keybindings(request: web.Request) -> web.Response:
     body = await request.json()
-    bindings = body.get("bindings", body)
-    if not isinstance(bindings, dict):
-        raise ValueError("bindings must be an object")
-    normalized, rejected = _normalize_bindings(bindings)
+    if not isinstance(body, dict):
+        raise ValueError("body must be an object")
+    normalized, rejected = _normalize_rules(body.get("rules"))
     if rejected:
         return json_response({"error": "invalid keybindings", "fields": rejected}, 422)
     if request.query.get("validate") == "1":
         return json_response({"ok": True})
     config: Config = request.app[keys.CONFIG]
-    _publish_keybindings(config, _stage_keybindings(config, normalized))
+    preset = str(body.get("preset") or "custom")
+    _publish_keybindings(config, _stage_keybindings(config, preset, normalized))
+    log.info(
+        "keybindings written",
+        extra={"preset": preset, "rules": str(len(normalized))},
+    )
     await request.app[keys.EVENTS].emit("configuration_changed", source="keybindings")
     return await get_keybindings(request)
+
+
+async def apply_keymap_preset(request: web.Request) -> web.Response:
+    """Rewrite `keybindings.json` from one shipped preset.
+
+    The same shape as `POST /api/experience-tier` and for the same reason: the
+    preset table is policy, so a browser that computed the rule list would be a
+    second copy of it. The assignment is absolute rather than a delta - the
+    document is replaced, not merged - so applying a preset twice is idempotent
+    and switching between two is deterministic whatever came before. The cost,
+    stated plainly and repeated in the UI: it overwrites hand-edited bindings,
+    which is why the control applies on an explicit press.
+    """
+    config: Config = request.app[keys.CONFIG]
+    body = await request.json()
+    preset = str(body.get("preset", ""))
+    known = sorted(str(item["id"]) for item in preset_summaries())
+    try:
+        rules = preset_rules(preset)
+    except ValueError:
+        return json_response(
+            {"error": "invalid configuration", "fields": {"preset": f"must be one of {known}"}},
+            422,
+        )
+    _publish_keybindings(config, _stage_keybindings(config, preset, rules))
+    hot, restart = update_config(config, {"keymap_preset": preset})
+    apply_runtime_config(request.app, hot)
+    log.info("keymap preset applied", extra={"preset": preset, "rules": str(len(rules))})
+    await request.app[keys.EVENTS].emit(
+        "configuration_changed", source="keymap-preset", changed=sorted(hot | restart)
+    )
+    host, platform = _host_of(request)
+    return json_response(
+        {
+            "config": config.public_dict(),
+            "keybindings": _keybindings_payload(
+                config,
+                host=host,
+                platform=platform,
+                unreachable=_measured_unreachable(request, host),
+            ),
+        }
+    )
 
 
 async def get_hooks(request: web.Request) -> web.Response:
@@ -543,6 +676,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/settings/bundle", settings_bundle),
     web.patch("/api/config", patch_config),
     web.post("/api/experience-tier", apply_experience_tier),
+    web.post("/api/keymap-preset", apply_keymap_preset),
     web.post("/api/settings/apply", apply_settings),
     web.post("/api/config/reset", reset_config),
     web.get("/api/keybindings", get_keybindings),
