@@ -215,6 +215,29 @@ The rules it lives under:
 - The landing page's frame loader promotes `data-src` to `src` only near the viewport and only for visible frames, so visitors who never reach it download none of its ~700 KB gz.
   The desktop/phone/both toggle is three views of the same build; "both" shows the two frames sharing one simulated fleet over a BroadcastChannel, and "reset demo" clears the demo's localStorage namespaces and reloads the frames.
 - Everything in the visitor-facing demo copy obeys section 5, including the no-em-dash rule - the style block is inherited by every generated page, so an em dash in a demo CSS comment fails `build.py`.
+- **An unmatched route must never answer `{}`.**
+  This is the one rule here written from a failure rather than from a preference.
+  The fake daemon used to answer any unmatched GET with `{}`, on the reasoning that an empty payload renders an empty state.
+  It does not: a view that renders `payload.items.map(...)` throws on it, a throw during render tears the whole Preact tree down, and what the visitor got was a frozen page with a panel that would not close.
+  Seven of the app menu's own rows reached that state, plus five drawer tabs, and the only exit anybody found was "reset demo".
+  Every route a visitor can reach is now answered with the shape its reader expects, even when the content is deliberately nothing (`frontend/src/demo/supportPayloads.ts`), and `main.tsx` wraps the app in an error boundary so the next gap degrades to a named message with a reload button instead of a wedge.
+  When adding a surface to the demo, answer its route explicitly; do not rely on the fallback.
+
+What the demo populates, and why those and not others:
+
+- **Processes, bandwidth, disk and the fleet telemetry** (`fleetFixtures.ts`), derived from the live demo store rather than written flat, so a session the visitor spawns or kills changes the process table too.
+- **The repository** (`gitFixtures.ts`): one invented history serving Map, Log and Provenance, because those three are projections of the same commits and fixtures that disagreed would demonstrate the opposite of what the tab is for. Two of the demo's sessions stand in linked worktrees, which is what puts live occupancy on the Map.
+- **The conversation** (`conversation.ts`): a structured transcript and a scan timeline per session, seeded from the same authored turns the canned scrollbacks draw and **appended to by the same submit**. Typing at a pane adds the exchange to the Transcript tab and a record to the Activity timeline, so the three surfaces can never tell different stories about one turn.
+- Deliberately *not* populated: automation firings, provider accounts, schedules, and the prompt queue. They answer with their real empty shape. A demo that invented model spend would be claiming something about a product that never called a model.
+
+**The coach** (`DemoCoach.tsx`) is a short walkthrough that flashes one piece of real chrome at a time and advances when the visitor performs the act against the real interface - never by simulating it.
+It is not the product's own `GuidedTutorial`: that one teaches an install (create a Project, sign in to a CLI, start a session) and none of those acts exist here.
+The phone list is different from the desktop one and is mostly gestures, because the panels being on the ends of a swipe is the one thing nothing on screen can say for itself.
+It renders beside `<App/>` rather than inside it, so the product build cannot accidentally ship it, and it is dismissible for good; the landing page's **replay tour** control dispatches `swemux-demo:coach` into the same-origin frames to bring it back.
+
+Some of the demo's seeding is there to defeat first-run app behaviour that a returning user never meets.
+`main.tsx` writes `mux.drawer.projects.v3`, `mux.drawer.layout.v1` and `mux.drawer.note.v1` before boot: without the last of those, the always-mounted Notes body opens the Project's first note *and selects its own tab* on first mount, so the very first press of Git or Transcript opened the panel on Notes.
+The seed is versioned by a demo-owned marker (`swemux-demo-seed`) rather than by the presence of each key, because a returning visitor already holds those keys from an older demo and would otherwise never see a tab a later build added.
 
 ## Rejected, so they are not re-proposed
 

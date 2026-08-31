@@ -349,8 +349,11 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   color: var(--fg-3); padding: 3px 11px; cursor: pointer; }
 .demo-tab:hover { color: var(--fg); }
 .demo-tab[aria-selected="true"] { color: var(--green); border-color: var(--line-2); background: var(--panel-2); }
-.demo-reset { margin-left: auto; font: inherit; background: none; border: 1px solid transparent;
+/* Both trailing controls; only the first of them takes the auto margin, so they sit
+   together at the right end of the head row rather than at opposite ends of it. */
+.demo-reset { font: inherit; background: none; border: 1px solid transparent;
   color: var(--fg-4); padding: 3px 8px; cursor: pointer; }
+.demo-reset:first-of-type { margin-left: auto; }
 .demo-reset:hover { color: var(--fg); border-color: var(--line-2); }
 .demo-stage { border: 1px solid var(--line-2); background: var(--panel-2);
   display: flex; align-items: stretch; justify-content: center; gap: 16px; }
@@ -679,6 +682,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
           <button class="demo-tab" type="button" role="tab" data-view="phone" aria-selected="false">phone</button>
           <button class="demo-tab" type="button" role="tab" data-view="both" aria-selected="false">both</button>
         </div>
+        <button class="demo-reset" type="button" id="demotour" title="Replay the short walkthrough inside the demo">replay tour</button>
         <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset demo</button>
       </div>
       <div class="demo-stage" id="demostage" data-view="desktop">
@@ -686,11 +690,14 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
         <div class="demo-frame demo-phone"><iframe title="Interactive swe-mux demo, phone layout. The same simulated fleet as the desktop frame." data-src="demo/" loading="lazy"></iframe></div>
       </div>
       <p class="demo-note">The real UI, live in your browser against a <b>simulated</b> daemon:
-      click around, split and re-stack panes, open the notes and git drawers, launch sessions
-      and previews, swap the whole keymap to tmux or Vim in Settings. Type at the agents and
+      click around, split and re-stack panes, read the transcript beside a pane, walk the
+      worktree map and commit provenance, watch the process fleet, launch sessions and
+      previews, swap the whole keymap to tmux or Vim in Settings. Type at the agents and
       they answer, but only with pre-written jokes; the pulsing ones are mid-turn and will
-      tell you so. Nothing is installed and nothing is sent anywhere. Pick <b>both</b> and the
-      two surfaces share one simulated fleet: act on the desktop and watch the phone follow.</p>
+      tell you so. A short walkthrough runs on your first visit and
+      <b>replay tour</b> brings it back. Nothing is installed and nothing is sent anywhere.
+      Pick <b>both</b> and the two surfaces share one simulated fleet: act on the desktop and
+      watch the phone follow.</p>
     </div>
   </div>
 
@@ -1570,6 +1577,19 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     }, { rootMargin: '400px' });
     watcher.observe(stage);
   } else { armed = true; promote(); }
+  /* Replay the in-demo walkthrough. The frames are same-origin, so the coach can be
+     asked directly rather than through postMessage; a frame that has not loaded yet
+     is promoted first, because "replay tour" from a cold stage should still start it. */
+  document.getElementById('demotour').addEventListener('click', function () {
+    armed = true;
+    promote();
+    stage.querySelectorAll('iframe').forEach(function (frame) {
+      if (!frame.src) return;
+      try {
+        frame.contentWindow.dispatchEvent(new frame.contentWindow.Event('swemux-demo:coach'));
+      } catch (error) { /* a frame still loading picks the tour up on its own */ }
+    });
+  });
   document.getElementById('demoreset').addEventListener('click', function () {
     /* The demo persists its fleet (and the app its presentation) in this
        origin's localStorage; discard both namespaces and restart the frames. */

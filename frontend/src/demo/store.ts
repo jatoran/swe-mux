@@ -9,9 +9,12 @@
  * `onMutation` to push event frames / terminal bytes into the app. Nothing here
  * talks to any network - that is the entire point of the demo build.
  */
+import type { PaneLayout, PaneNode } from '../layout.ts'
 import type { Preview } from '../processFleet.ts'
+import type { TranscriptMessage } from '../transcriptView.ts'
 import type { Project, ProjectGroup, Session } from '../types.ts'
 import { initialDemoState } from './fixtures.ts'
+import type { DemoScanRecord } from './conversation.ts'
 
 export type DemoNote = {
   note_id: string
@@ -38,6 +41,15 @@ export type DemoState = {
   keymapPreset: string
   /** Raw ANSI scrollback per session id, replayed on every pane attach. */
   terminals: Record<string, string>
+  /**
+   * The structured conversation behind each agent pane, which is a different
+   * artifact from the ANSI above and has to be: the drawer's Transcript tab reads
+   * merged messages and tool-call boundaries, not bytes. Both are appended by the
+   * same submit, so the box and the reader can never tell different stories.
+   */
+  transcripts: Record<string, TranscriptMessage[]>
+  /** Scan-timeline records per session, one written per completed turn. */
+  timelines: Record<string, DemoScanRecord[]>
   /** Event-bus watermark; monotonic across every frame via the reducer. */
   seq: number
 }
@@ -60,6 +72,9 @@ export type DemoMutation =
   /** Bytes the user typed. Recorded so every frame's line-buffer state agrees;
    *  only the originating frame runs the responder. */
   | { kind: 'term-input'; id: string; data: string }
+  /** One side of the conversation, appended as the fake turn produces it. */
+  | { kind: 'transcript-append'; id: string; message: TranscriptMessage }
+  | { kind: 'timeline-append'; id: string; record: DemoScanRecord }
   | { kind: 'reset' }
 
 const STORAGE_KEY = 'swemux-demo-state-v1'
@@ -132,6 +147,44 @@ function schedulePersist(): void {
   }, 400)
 }
 
+/**
+ * Drop one leaf from a Project's pane tree, collapsing whatever that empties.
+ *
+ * The real daemon prunes the layout when a session ends; the demo has to do the same
+ * or a killed pane leaves a leaf behind, and because the layout is persisted the
+ * wreckage survives a reload - which is exactly the "I have to reset the demo" shape.
+ * A split that loses one side becomes its surviving side rather than a split with a
+ * hole, and a stack that loses its active child promotes the next one.
+ */
+function pruneLayoutLeaf(project: Project, leafId: string): Project {
+  const layout = project.layout as PaneLayout | undefined
+  if (!layout?.root) return project
+  const visit = (node: PaneNode): PaneNode | null => {
+    if (node.type === 'stack') {
+      const children = node.children.filter(child => child.id !== leafId)
+      if (!children.length) return null
+      if (children.length === node.children.length) return node
+      const active = children.some(child => child.id === node.active_child_id)
+        ? node.active_child_id
+        : children[children.length - 1].id
+      return { ...node, children, active_child_id: active }
+    }
+    const first = visit(node.first)
+    const second = visit(node.second)
+    if (!first) return second
+    if (!second) return first
+    if (first === node.first && second === node.second) return node
+    return { ...node, first, second }
+  }
+  const root = visit(layout.root)
+  if (root === layout.root) return project
+  return {
+    ...project,
+    layout: { ...layout, root },
+    layout_revision: project.layout_revision + 1,
+  }
+}
+
 function reduce(current: DemoState, mutation: DemoMutation): DemoState {
   const next: DemoState = { ...current, seq: current.seq + 1 }
   switch (mutation.kind) {
@@ -148,6 +201,20 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
       const terminals = { ...current.terminals }
       delete terminals[mutation.id]
       next.terminals = terminals
+      // A session's conversation and scan records die with it. Left behind they would
+      // accumulate for the life of the persisted state and, worse, be served to a
+      // freshly spawned pane that happened to reuse the id.
+      const transcripts = { ...current.transcripts }
+      delete transcripts[mutation.id]
+      next.transcripts = transcripts
+      const timelines = { ...current.timelines }
+      delete timelines[mutation.id]
+      next.timelines = timelines
+      // The layout is pruned here rather than by the route that removed the session,
+      // because every path that ends a session goes through this mutation. A leaf left
+      // pointing at a dead session is what used to persist into localStorage and make a
+      // reloaded demo draw a pane with nothing behind it.
+      next.projects = next.projects.map(project => pruneLayoutLeaf(project, mutation.id))
       return next
     }
     case 'project-patch':
@@ -159,6 +226,7 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
       return next
     case 'preview-remove':
       next.previews = current.previews.filter(item => item.id !== mutation.id)
+      next.projects = next.projects.map(project => pruneLayoutLeaf(project, mutation.id))
       return next
     case 'config-patch':
       next.config = { ...current.config, ...mutation.patch, revision: Number(current.config.revision ?? 0) + 1 }
@@ -188,6 +256,19 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
     case 'term-input':
       // Recorded for cross-frame line-buffer agreement; no state change beyond seq.
       return next
+    case 'transcript-append': {
+      const existing = current.transcripts[mutation.id] ?? []
+      next.transcripts = {
+        ...current.transcripts,
+        [mutation.id]: [...existing, { ...mutation.message, ordinal: existing.length + 1 }],
+      }
+      return next
+    }
+    case 'timeline-append': {
+      const existing = current.timelines[mutation.id] ?? []
+      next.timelines = { ...current.timelines, [mutation.id]: [...existing, mutation.record] }
+      return next
+    }
     case 'reset':
       return initialDemoState()
   }

@@ -1,0 +1,245 @@
+/*
+ * The demo coach's own chrome, and the crash panel behind it.
+ *
+ * Kept out of `style.css` on purpose: none of this ships in the product bundle, and
+ * the demo build is the only entry that imports it. Colours come from the app's own
+ * theme variables so the coach follows a theme switch the visitor makes mid-walk.
+ */
+
+.demo-coach {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  /* The whole layer is inert. The coach exists to watch the visitor use the real
+     interface, so it must never intercept the click it is waiting for. */
+  pointer-events: none;
+}
+
+/* The flash: a ring that pulses around live chrome rather than a modal cut-out.
+   A dimming mask would hide the thing being explained, which on a 390px phone is
+   most of the screen. */
+.demo-coach-flash {
+  position: fixed;
+  border: 2px solid var(--accent, #8bd450);
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8bd450) 26%, transparent);
+  animation: demo-coach-pulse 1.5s ease-in-out infinite;
+  transition: left .18s ease, top .18s ease, width .18s ease, height .18s ease;
+}
+
+@keyframes demo-coach-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8bd450) 26%, transparent); }
+  50% { opacity: .62; box-shadow: 0 0 0 9px color-mix(in srgb, var(--accent, #8bd450) 8%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-coach-flash { animation: none; }
+  .demo-coach-finger { animation: none; }
+  .demo-coach-trail { animation: none; }
+}
+
+/* The swipe glyph: a finger travelling along a dashed trail, drawn over the middle
+   of the screen because the gesture it teaches is not attached to any control. */
+.demo-coach-gesture {
+  position: fixed;
+  left: 50%;
+  top: 30%;
+  transform: translate(-50%, -50%);
+  color: var(--accent, #8bd450);
+}
+
+.demo-coach-gesture.left { transform: translate(-50%, -50%) scaleX(-1); }
+
+.demo-coach-trail {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-dasharray: 6 7;
+  opacity: .55;
+  animation: demo-coach-dash 1.1s linear infinite;
+}
+
+.demo-coach-head {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .8;
+}
+
+.demo-coach-finger {
+  fill: color-mix(in srgb, var(--accent, #8bd450) 34%, transparent);
+  stroke: currentColor;
+  stroke-width: 2;
+  animation: demo-coach-swipe 1.6s ease-in-out infinite;
+}
+
+@keyframes demo-coach-dash { to { stroke-dashoffset: -26; } }
+@keyframes demo-coach-swipe {
+  0% { transform: translateX(0); opacity: 0; }
+  15% { opacity: 1; }
+  80% { transform: translateX(102px); opacity: 1; }
+  100% { transform: translateX(102px); opacity: 0; }
+}
+
+.demo-coach-card {
+  position: fixed;
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: auto;
+  background: var(--panel, #0d0f12);
+  border: 1px solid var(--accent, #8bd450);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55);
+  font: inherit;
+  color: var(--fg, #d9dde2);
+  transition: left .18s ease, top .18s ease;
+}
+
+.demo-coach-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line, #2a2e34);
+}
+
+.demo-coach-card header span {
+  font-size: 11px;
+  letter-spacing: .16em;
+  color: var(--accent, #8bd450);
+}
+
+.demo-coach-card header button {
+  font: inherit;
+  font-size: 12px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted, #848b94);
+  cursor: pointer;
+  padding: 2px 7px;
+}
+
+.demo-coach-card header button:hover {
+  color: var(--fg, #d9dde2);
+  border-color: var(--line, #2a2e34);
+}
+
+.demo-coach-copy { padding: 12px 14px 4px; }
+
+.demo-coach-copy h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.demo-coach-copy p {
+  margin: 0 0 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-2, #b6bcc4);
+}
+
+.demo-coach-card footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px 11px;
+  border-top: 1px solid var(--line, #2a2e34);
+}
+
+.demo-coach-count {
+  font-size: 11px;
+  color: var(--muted, #848b94);
+  letter-spacing: .1em;
+}
+
+.demo-coach-progress {
+  flex: 1 1 60px;
+  height: 3px;
+  background: var(--line, #2a2e34);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.demo-coach-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent, #8bd450);
+  transition: width .2s ease;
+}
+
+.demo-coach-card footer em {
+  flex: 1 1 100%;
+  order: 3;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--accent, #8bd450);
+}
+
+.demo-coach-next,
+.demo-coach-skip {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line, #2a2e34);
+  color: var(--fg-2, #b6bcc4);
+}
+
+.demo-coach-next {
+  border-color: var(--accent, #8bd450);
+  color: var(--accent, #8bd450);
+}
+
+.demo-coach-next:hover,
+.demo-coach-skip:hover { color: var(--fg, #d9dde2); }
+
+/* The boundary's panel. Plain and self-contained, because it is what renders when
+   the app's own tree is gone. */
+.demo-crash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background: #0b0d10;
+  color: #d9dde2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  z-index: 1000;
+}
+
+.demo-crash h1 { margin: 0; font-size: 18px; }
+.demo-crash p { margin: 0; max-width: 60ch; font-size: 13px; line-height: 1.55; color: #b6bcc4; }
+
+.demo-crash pre {
+  max-width: 70ch;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-size: 12px;
+  text-align: left;
+  color: #f07178;
+  border: 1px solid #2a2e34;
+  border-radius: 6px;
+}
+
+.demo-crash button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+  border: 1px solid #8bd450;
+  color: #8bd450;
+}

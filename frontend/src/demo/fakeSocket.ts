@@ -10,12 +10,13 @@
  * events half emits a watermark on open and a generic changed frame whenever
  * the demo store mutates, which is what drives the app's fleet refetch.
  */
+import { liveScanRecord } from './conversation.ts'
 import { BUSY_SESSION_IDS } from './fixtures.ts'
-import { apply, onMutation, session, state } from './store.ts'
+import { apply, nowSeconds, onMutation, session, state } from './store.ts'
 import {
   buildReply, busyReply, clearComposer, composerBlock, composerInfo,
   consumeInput, demoBackendKind, promptFor, redrawComposer,
-  type LineState,
+  type LineState, type ReplyTool,
 } from './terminalSim.ts'
 
 const encoder = new TextEncoder()
@@ -114,6 +115,17 @@ class FakeEventsSocket extends FakeSocketBase {
   notifyChanged(): void {
     this.deliverJson({ type: 'demo_state_changed', seq: state.seq })
   }
+
+  /** A typed daemon frame, for the surfaces that listen for one by name rather
+   *  than refetching on any change - the transcript reader above all. */
+  notifyEvent(type: string, sessionId: string): void {
+    this.deliverJson({ type, session_id: sessionId, seq: state.seq })
+  }
+}
+
+/** Push one typed frame into every attached events socket in this frame. */
+function broadcastEvent(type: string, sessionId: string): void {
+  for (const socket of eventSockets) socket.notifyEvent(type, sessionId)
 }
 
 // ---------------------------------------------------------------------- pty
@@ -221,6 +233,49 @@ function appendOutput(id: string, text: string): void {
   apply({ kind: 'term-append', id, data: text })
 }
 
+/** Record what the visitor said, so the Transcript tab shows it immediately rather
+ *  than only once a reply has finished streaming. */
+function recordPrompt(id: string, text: string): void {
+  const stamp = new Date().toISOString()
+  apply({
+    kind: 'transcript-append',
+    id,
+    message: {
+      message_id: `${id}-live-u-${state.seq}`,
+      ordinal: 0,
+      role: 'user',
+      ts: stamp,
+      text,
+      preceding_tool_calls: 0,
+    },
+  })
+}
+
+/** Record the reply and the behavioural record the observer would have written. */
+function recordReply(id: string, ask: string, text: string, tools: ReplyTool[]): void {
+  apply({
+    kind: 'transcript-append',
+    id,
+    message: {
+      message_id: `${id}-live-a-${state.seq}`,
+      ordinal: 0,
+      role: 'assistant',
+      ts: new Date().toISOString(),
+      text,
+      preceding_tool_calls: tools.length,
+      ...(tools.length ? { preceding_tools: tools } : {}),
+    },
+  })
+  const target = session(id)
+  if (target && target.backend !== 'shell') {
+    apply({
+      kind: 'timeline-append',
+      id,
+      record: liveScanRecord(target, ask, text, nowSeconds(), (state.timelines[id] ?? []).length),
+    })
+  }
+}
+
 function streamReply(id: string, submitted: string): void {
   const target = session(id)
   if (!target) return
@@ -257,6 +312,14 @@ function streamReply(id: string, submitted: string): void {
   if (BUSY_SESSION_IDS.includes(id)) {
     openTurn()
     const refusal = busyReply(kind)
+    // Still a turn, so the conversation records it: the refusal is what the pane
+    // actually said, and a reader that showed nothing here would be wrong about a
+    // real exchange rather than merely quiet.
+    recordPrompt(id, submitted)
+    window.setTimeout(
+      () => recordReply(id, submitted, refusal.plain, []),
+      260 + refusal.chunks.length * refusal.pace,
+    )
     refusal.chunks.forEach((chunk, index) => {
       window.setTimeout(() => appendOutput(id, chunk), 260 + index * refusal.pace)
     })
@@ -267,6 +330,7 @@ function streamReply(id: string, submitted: string): void {
   openTurn()
   const reply = buildReply(kind, submitted)
   const startDelay = agent ? 900 : 120
+  if (agent) recordPrompt(id, submitted)
   if (agent) {
     const now = Math.floor(Date.now() / 1000)
     apply({
@@ -299,6 +363,7 @@ function streamReply(id: string, submitted: string): void {
             },
           })
           restoreComposer(false)
+          recordReply(id, submitted, reply.plain, reply.tools)
         }
       }
     }, startDelay + index * reply.pace)
@@ -329,6 +394,15 @@ onMutation((mutation, local) => {
       if (result.submitted !== null) streamReply(mutation.id, result.submitted)
     }
     return
+  }
+  // Named frames rather than the generic changed frame, and raised here rather than
+  // by the responder so the *other* frame (the phone beside the desktop) hears them
+  // too: the transcript reader refreshes on `transcript_message` by name, and a
+  // mirrored mutation that only produced `demo_state_changed` would leave the second
+  // frame's reader a turn behind the pane it is sitting next to.
+  if (mutation.kind === 'transcript-append') {
+    broadcastEvent('transcript_message', mutation.id)
+    if (mutation.message.role === 'assistant') broadcastEvent('turn_ended', mutation.id)
   }
   if (mutation.kind === 'session-patch') {
     const snapshot = session(mutation.id)
