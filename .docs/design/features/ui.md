@@ -710,6 +710,8 @@ Its rules, and what each one is defending:
     accessibility tree without hiding elements that are still focusable, and still animates
     because the transform is what moves. Picking a section closes it, by every route into a
     tab: the list, a search result, a deep link.
+    Its full-body dismissal scrim is transparent, so the current Settings page remains visible
+    behind the drawer while taps outside it still close the navigation.
   - The header therefore reads `SETTINGS` over the **current tab's name** rather than
     `CONFIG::V6` over `Settings`. What the panel is, is the one thing already obvious when it
     owns the whole screen; where you are in it is not.
