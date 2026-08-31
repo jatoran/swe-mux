@@ -75,7 +75,7 @@ export const TUTORIAL_CHROME_CLAIMS: {
   menuRows: [
     'Session history', 'Notes', 'Fleet queue', 'Prompt library', 'Clipboard history',
     'Resources', 'Usage & spend', 'Notifications',
-    'Projects', 'Configure Actions', 'Automation Dashboard', 'Settings', 'Help',
+    'Projects', 'Plugins', 'Configure Actions', 'Automation Dashboard', 'Settings', 'Help',
   ],
   menuGroups: ['Maintenance'],
 }

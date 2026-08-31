@@ -28,7 +28,8 @@ Relative executable and cwd paths may not escape the plugin root.
 
 One plugin is one standalone repository with `swe-mux-plugin.toml` at its root.
 Plugin source is never part of the swe-mux repository, application bundle, installer, wheel, or release closure.
-The primary checkout's ignored `.private/plugin-lab/` is a machine-local smoke lab whose direct children are independent Git repositories.
+The primary checkout's ignored `.private/plugin-lab/` is a machine-local smoke lab whose four direct children are the maintained public plugin repositories.
+Retired experiments remain recoverable under ignored `.trash/plugin-lab-retired/` and are not part of the active lab or marketplace.
 A fresh clone contains no lab plugins and remains complete.
 The authoritative agent and author workflow is `../../technical/plugin-authoring.md`.
 
@@ -118,6 +119,7 @@ The permission layer prevents accidental control-plane widening and provides aud
 ## Management surfaces
 
 Settings contains a compact Plugins list with inline enablement and uninstall controls.
+The app menu's Plugins row and the `plugins.open` command both open that Settings section.
 Each row expands for trust details, source/config/state paths, contribution testing, update, rollback, purge, and command logs.
 The shared test Project defaults to the Project focused when Settings opened, while its choices are alphabetical.
 Project-scoped pane contributions appear in that Project's Run menu, and every enabled contribution remains discoverable in the command palette.

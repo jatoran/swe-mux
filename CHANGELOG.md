@@ -26,6 +26,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Changed
 
+- **Plugins is now a first-class app-menu destination.**
+  The row opens plugin management directly, while Project-scoped plugin tools remain in each Project's Run menu.
 - **Plugin marketplace selection now fills an immutable release tag, and manual installation exposes an optional ref field.**
   Expanded plugin details show the selected channel and resolved revision, while acquisition, approval, and enablement remain separate.
 

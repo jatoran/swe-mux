@@ -8704,6 +8704,7 @@ export function App() {
           menu is where every other app-wide surface is looked for. Two doors to one
           registry is the lesser cost. */}
       <button class="menu-row" onClick={() => runNamedCommand('project.create')}><span class="menu-row-icon" aria-hidden="true"><FilesIcon/></span><span class="menu-row-label">Projects</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('plugins.open')}><span class="menu-row-icon" aria-hidden="true"><PackageIcon/></span><span class="menu-row-label">Plugins</span></button>
       <button class="menu-row" onClick={() => runNamedCommand('actions.configure')}><span class="menu-row-icon" aria-hidden="true"><CommandKeyIcon/></span><span class="menu-row-label">Configure Actions</span></button>
       <button class="menu-row" onClick={() => runNamedCommand('hooks.open')}><span class="menu-row-icon" aria-hidden="true"><DashboardIcon/></span><span class="menu-row-label">Automation Dashboard</span></button>
       <MenuGroup id="maintenance" label="Maintenance" icon={<WrenchIcon/>} openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">

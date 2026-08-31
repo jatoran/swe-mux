@@ -220,15 +220,14 @@ Validation, listing, stars, signatures, and checksums are not a security endorse
 
 ## Machine-local plugin lab
 
-The primary checkout retains six independent repositories under ignored `.private/plugin-lab/`.
-Four are maintained public official plugins:
+The primary checkout retains four independent maintained repositories under ignored `.private/plugin-lab/`:
 
 - `fleet-dashboard`: fleet snapshot action and live split dashboard.
 - `worktree-auditor`: action, startup restoration, and popup report.
 - `session-switchboard`: Project-scoped session list and explicit control in a split.
 - `project-link-hub`: clickable repository links in a popup.
 
-`attention-notifier` and `project-scratchpad` remain unpublished local experiments and are not marketplace examples.
+Retired `attention-notifier` and `project-scratchpad` repositories remain recoverable under ignored `.trash/plugin-lab-retired/` and are not marketplace examples.
 No lab repository is tracked, bundled, or released by the swe-mux repository.
 The public repositories are `jatoran/swe-mux-plugin-fleet-dashboard`, `jatoran/swe-mux-plugin-project-links`, `jatoran/swe-mux-plugin-session-switchboard`, and `jatoran/swe-mux-plugin-worktree-auditor`.
 

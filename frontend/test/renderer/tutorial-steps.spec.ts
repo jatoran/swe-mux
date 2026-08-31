@@ -114,7 +114,7 @@ for (const viewport of VIEWPORTS) {
 
     const copy = (await page.textContent('.tutorial-copy'))!
     expect(copy).not.toContain('Utilities')
-    for (const row of ['Session history', 'Fleet queue', 'Usage & spend', 'Automation Dashboard', 'Help']) {
+    for (const row of ['Session history', 'Fleet queue', 'Usage & spend', 'Plugins', 'Automation Dashboard', 'Help']) {
       expect(copy).toContain(row)
     }
     expect(copy).toContain('Maintenance')
