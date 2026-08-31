@@ -81,6 +81,7 @@
   `technical/frontend/packages.md`.
   The boundary is subprocess-only, and plugin event commands are separately approved EventBus
   consumers rather than legacy meta-hooks or a widening of canonical Universal hooks.
+  Current shipped behavior and implementation paths are in `design/features/plugins.md`.
   **`.swe-mux/` and `.vscode/` are untracked as of 2026-08-28** and `.gitignore` now ignores
   each of them whole. Nothing under either - including the repository-authored
   `actions.toml`, `project-context.md`, and `prompts/`, which used to be deliberate

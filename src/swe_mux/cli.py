@@ -856,9 +856,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         action="store_true",
         help="also add a run-at-login shortcut in shell:startup (starts in the tray)",
     )
-    shortcut.add_argument(
-        "--no-desktop", action="store_true", help="skip the Desktop shortcut"
-    )
+    shortcut.add_argument("--no-desktop", action="store_true", help="skip the Desktop shortcut")
     shortcut.add_argument(
         "--no-start-menu", action="store_true", help="skip the Start Menu shortcut"
     )
@@ -920,6 +918,48 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     resume = sub.add_parser("resume", parents=[common], help="resume a history entry")
     resume.add_argument("id", help="history entry id")
     resume.add_argument("--project", required=True)
+
+    plugin = sub.add_parser(
+        "plugin", parents=[common], help="inspect, install, and run external plugins"
+    )
+    plugin_sub = plugin.add_subparsers(dest="plugin_action", required=True)
+    plugin_sub.add_parser("list", help="list installed plugins")
+    plugin_sub.add_parser("schema", help="print the manifest and callback reference")
+    validate = plugin_sub.add_parser("validate", help="validate an inert plugin manifest")
+    validate.add_argument("path")
+    link = plugin_sub.add_parser("link", help="register a local plugin directory")
+    link.add_argument("path")
+    link.add_argument("--approve", action="store_true")
+    link.add_argument("--enable", action="store_true")
+    install = plugin_sub.add_parser("install", help="install a managed plugin source")
+    install.add_argument("source", help="local directory, GitHub owner/repo, or Git URL")
+    install.add_argument("--ref", default="")
+    install.add_argument("--approve", action="store_true")
+    install.add_argument("--enable", action="store_true")
+    approve = plugin_sub.add_parser("approve", help="approve current executable content")
+    approve.add_argument("plugin_id")
+    approve.add_argument("--no-enable", action="store_true")
+    for action_name in ("enable", "disable", "update", "rollback"):
+        child = plugin_sub.add_parser(action_name)
+        child.add_argument("plugin_id")
+    uninstall = plugin_sub.add_parser("uninstall")
+    uninstall.add_argument("plugin_id")
+    uninstall.add_argument("--purge", action="store_true")
+    logs = plugin_sub.add_parser("logs")
+    logs.add_argument("--plugin-id")
+    logs.add_argument("--limit", type=int, default=100)
+    invoke = plugin_sub.add_parser("action", help="invoke a declared action")
+    invoke.add_argument("plugin_id")
+    invoke.add_argument("action_id")
+    invoke.add_argument("--project")
+    invoke.add_argument("--session")
+    pane = plugin_sub.add_parser("pane", help="open a declared terminal pane")
+    pane.add_argument("plugin_id")
+    pane.add_argument("pane_id")
+    pane.add_argument("--project", required=True)
+    execution = plugin_sub.add_parser("execution", help="global plugin kill switch")
+    execution.add_argument("state", choices=("on", "off"))
+    plugin_sub.add_parser("marketplace", help="browse the unreviewed GitHub topic index")
     return parser
 
 
@@ -1192,7 +1232,114 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
     if args.command == "resume":
         body = {"project_id": args.project}
         return request("POST", f"/api/history/{args.id}/resume", body, base=base), None
+    if args.command == "plugin":
+        return _plugin_command(args, base)
     raise CliError(f"unknown command {args.command!r}", EXIT_NOT_FOUND)
+
+
+def _plugin_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
+    action = args.plugin_action
+    if action == "list":
+        return request("GET", "/api/plugins", base=base), _render_plugins
+    if action == "schema":
+        from importlib.resources import files
+
+        text = files("swe_mux.assets").joinpath("plugin-schema.md").read_text(encoding="utf-8")
+        return {"schema": text}, lambda result: result["schema"]
+    if action == "validate":
+        return request("POST", "/api/plugins/inspect", {"path": args.path}, base=base), None
+    if action == "link":
+        return request(
+            "POST",
+            "/api/plugins/link",
+            {"path": args.path, "approve": args.approve, "enable": args.enable},
+            base=base,
+            timeout=60,
+        ), None
+    if action == "install":
+        return request(
+            "POST",
+            "/api/plugins/install",
+            {
+                "source": args.source,
+                "ref": args.ref,
+                "approve": args.approve,
+                "enable": args.enable,
+            },
+            base=base,
+            timeout=240,
+        ), None
+    if action == "approve":
+        return request(
+            "POST",
+            f"/api/plugins/{args.plugin_id}/approve",
+            {"enable": not args.no_enable},
+            base=base,
+        ), None
+    if action in {"enable", "disable"}:
+        return request(
+            "POST",
+            f"/api/plugins/{args.plugin_id}/enable",
+            {"enabled": action == "enable"},
+            base=base,
+        ), None
+    if action == "rollback":
+        return request("POST", f"/api/plugins/{args.plugin_id}/rollback", {}, base=base), None
+    if action == "uninstall":
+        suffix = "?purge=1" if args.purge else ""
+        return request("DELETE", f"/api/plugins/{args.plugin_id}{suffix}", base=base), None
+    if action == "logs":
+        query = f"?limit={args.limit}"
+        if args.plugin_id:
+            query += f"&plugin_id={args.plugin_id}"
+        return request("GET", f"/api/plugins/logs{query}", base=base), None
+    if action == "action":
+        context = {
+            "context": "session" if args.session else "project" if args.project else "global",
+            "project_id": args.project,
+            "session_id": args.session,
+        }
+        return request(
+            "POST",
+            f"/api/plugins/{args.plugin_id}/actions/{args.action_id}",
+            context,
+            base=base,
+            timeout=90,
+        ), None
+    if action == "update":
+        return request(
+            "POST", f"/api/plugins/{args.plugin_id}/update", {}, base=base, timeout=240
+        ), None
+    if action == "pane":
+        return request(
+            "POST",
+            f"/api/plugins/{args.plugin_id}/panes/{args.pane_id}",
+            {"context": "project", "project_id": args.project},
+            base=base,
+            timeout=60,
+        ), None
+    if action == "execution":
+        return request(
+            "POST", "/api/plugins/execution", {"enabled": args.state == "on"}, base=base
+        ), None
+    if action == "marketplace":
+        return request("GET", "/api/plugins/marketplace", base=base), None
+    raise CliError(f"unknown plugin command {action!r}", EXIT_NOT_FOUND)
+
+
+def _render_plugins(result: Any) -> str:
+    rows = list(result.get("plugins", [])) if isinstance(result, dict) else []
+    return render_table(
+        rows,
+        [
+            ("ID", "id"),
+            ("VERSION", "version"),
+            ("STATE", "lifecycle"),
+            ("ENABLED", "enabled"),
+            ("SOURCE", "source_kind"),
+            ("DIAGNOSTIC", "diagnostic"),
+        ],
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

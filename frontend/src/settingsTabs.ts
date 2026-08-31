@@ -23,6 +23,7 @@ export const settingsTabs = [
   {id:'accounts',label:'Accounts',group:'Agents'},
   {id:'queue',label:'Prompt queue',group:'Agents'},
   {id:'automation',label:'Automation',group:'Agents'},
+  {id:'plugins',label:'Plugins',group:'Agents'},
   {id:'usage',label:'Usage',group:'Agents'},
   {id:'appearance',label:'Appearance',group:'Interface'},
   {id:'input',label:'Input',group:'Interface'},
@@ -143,6 +144,7 @@ export const SECTION_ALIASES:Record<string,SettingsTab> = {
   'hooks and notifications':'notifications',notifications:'notifications',
   'remote and security':'remote',
   'auto-delivery':'queue','agent messaging':'queue','prompt queue':'queue',
+  extensions:'plugins','plugin manager':'plugins',
   // The schedules themselves live in the drawer's Schedule tab; only the install-wide
   // limits are in the Automation workspace; Settings links there.
   'scheduled runs':'automation',schedules:'automation',

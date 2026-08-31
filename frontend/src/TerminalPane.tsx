@@ -6,6 +6,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { routePluginLink } from './pluginLinks'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
@@ -958,6 +959,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     term.loadAddon(fit)
     term.loadAddon(search)
     const openUri=(event:MouseEvent,uri:string)=>{
+      if(event.ctrlKey&&!event.altKey&&!event.metaKey&&!event.shiftKey){
+        event.preventDefault()
+        void routePluginLink(uri,{project_id:session.project_id,session_id:session.id})
+          .then(handled=>{if(!handled)window.open(uri,'_blank','noopener,noreferrer')})
+          .catch(error=>reportError(error instanceof Error?error.message:String(error)))
+        return
+      }
       const previewUrl=localPreviewUrl(uri)
       if(previewUrl){
         event.preventDefault()

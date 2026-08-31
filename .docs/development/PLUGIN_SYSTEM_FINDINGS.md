@@ -92,20 +92,21 @@ It is not a new execution runtime.
 
 ### Host contributions
 
-Plugin v1 exposes three contribution types:
+Plugin v1 exposes five contribution types:
 
 | Contribution | swe-mux contract |
 |---|---|
 | Action | A manifest-declared command shown in approved command surfaces and invoked with explicit global, Project, session, pane, selection, or worktree context. |
 | Pane | A manifest-declared executable opened through the existing session and supervisor spawn path, with plugin ownership retained as metadata. |
 | Event hook | An exact normalized EventBus subscription that launches one bounded command under the plugin's separately approved authority. |
+| Startup hook | A bounded one-shot restoration command scheduled after daemon runtime construction. |
+| Link handler | A validated terminal URL pattern routed to an action declared by the same plugin. |
 
 Event hooks do not become Universal hooks.
 Universal hooks intentionally cannot execute commands, and widening them would let repository or model-authored rules cross an existing authority boundary.
 The plugin event adapter reuses normalized events, bounded queues, rate limits, loop rejection, process cleanup, and command diagnostics without creating a second condition language or general rules engine.
 
-Terminal link handlers are a later contribution after actions are stable.
-Install-time build commands, automatic startup hooks, background daemons, native frontend contributions, and arbitrary backend routes are excluded from v1.
+Install-time build commands, background daemons, native frontend contributions, and arbitrary backend routes are excluded from v1.
 
 ### Manifest and compatibility
 
@@ -128,7 +129,7 @@ Every executable declaration is an argv array with optional contained cwd and bo
 Platform and architecture declarations fail closed before acquisition or invocation.
 
 `min_swe_mux_version` provides a useful message but is not the compatibility authority.
-Versioned host capabilities such as `plugin.actions.v1`, `plugin.panes.v1`, and `plugin.events.v1` determine whether the installed host can load each contribution.
+Versioned host capabilities such as `plugin.actions.v1`, `plugin.panes.v1`, `plugin.events.v1`, `plugin.startup.v1`, and `plugin.links.v1` determine whether the installed host can load each contribution.
 A missing capability disables the incompatible contribution or plugin with a durable diagnostic and never blocks daemon startup or a core update.
 
 ### Callback contract
