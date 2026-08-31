@@ -231,5 +231,49 @@ export const HELP_DOC_CONTENT: HelpDocContent[] = [
         ]
       }
     ]
+  },
+  {
+    "topic": "keybindings",
+    "doc": ".docs/design/features/keybindings.md",
+    "sections": [
+      {
+        "heading": "What it is",
+        "blocks": [
+          {
+            "kind": "p",
+            "text": "The keyboard surface: a chord vocabulary that names physical keys, one-to-three-chord sequences behind a leader, a rule list that can be scoped to a host, a platform and a focus context, five shipped presets that are data rather than code, and a per-host capability report that says what a chord will actually do instead of refusing it."
+          },
+          {
+            "kind": "p",
+            "text": "The scale it answers: 214 bindable commands. Before this there were 26 default bindings and no way to reach the rest without opening the palette."
+          }
+        ]
+      },
+      {
+        "heading": "Hosts, platforms, and the one hard refusal",
+        "blocks": [
+          {
+            "kind": "p",
+            "text": "A rule may carry host (desktop | browser), platform (win | mac | linux) and when. Resolution happens in the daemon, not the browser, for the same reason the experience-tier assignment does: a browser-computed answer would be a second copy of the policy and the copy is what drifts. The client states what it is (GET /api/keybindings?host=…&platform=…, frontend/src/hostProfile.ts) and gets one answer computed for that keyboard."
+          },
+          {
+            "kind": "p",
+            "text": "The desktop shell publishes window.__swemuxDesktopShell on its own page (desktop_permissions.shell_report), and its absence is the signal: a browser tab never has it. The fact it carries is the one the keyboard needs - production WebView2 runs with pywebview's browser accelerators disabled, so that window receives Ctrl+T, Ctrl+W and Ctrl+Tab where no browser tab will."
+          },
+          {
+            "kind": "p",
+            "text": "Four tables say what a chord costs, and only the first is a refusal:"
+          },
+          {
+            "kind": "p",
+            "text": "| Table | What it means | Refused? | |---|---|---| | APPLICATION_RESERVED | the fixed UI-scale controls | yes, at every position in a sequence | | BROWSER_UNREACHABLE | the page never receives the keydown | no - reported, and live in the desktop app | | BROWSER_CONTESTED | the page receives it and can suppress the browser's own meaning | no - reported with what it costs | | WM_RESERVED[platform] | the compositor takes it first | no - reported per platform | | TERMINAL_RESERVED | what a shell in a pane means by it | no - reported, and scopable away with when |"
+          },
+          {
+            "kind": "p",
+            "text": "Plus the AltGr hazard, which is any chord holding both Ctrl and Alt without Meta."
+          }
+        ]
+      }
+    ]
   }
 ]

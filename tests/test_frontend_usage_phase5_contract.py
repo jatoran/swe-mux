@@ -121,8 +121,21 @@ def test_input_has_a_command_first_validated_shortcut_editor() -> None:
     assert "activeTab==='input'" in settings
     assert "<h3>Keyboard shortcuts</h3>" in settings
     assert "captureBinding" in settings
-    assert "Reserved shortcut policy" in settings
-    assert "browser_reserved" in settings
+    # The policy disclosure stopped being one "reserved" list when the reserved sets
+    # were split into "the host keeps this" and "you can have it, and here is what it
+    # costs" - conflating those is why Ctrl+F was refused while this very panel was
+    # intercepting it in the same browser.
+    assert "What each host and platform takes for itself" in settings
+    assert "A BROWSER TAB KEEPS" in settings
+    assert "SHARED WITH THE BROWSER" in settings
+    # The preset picker lives on the same tab, and applies outside the draft/Save
+    # cycle after a confirmation that names what the preset takes.
+    assert "<h3>Keyboard preset</h3>" in settings
+    assert "applyPreset" in settings
+    # `browser_reserved` split into two fields when the sets did.
+    assert "browser_unreachable" in settings
+    assert "browser_contested" in settings
     assert "terminal_reserved" in settings
+    assert "wm_reserved" in settings
     assert "Keybindings JSON" not in settings
     assert ".keybinding-list" in style
