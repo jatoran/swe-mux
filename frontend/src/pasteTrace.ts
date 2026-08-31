@@ -26,6 +26,10 @@ import {
 } from './terminalCaretPlacement.ts'
 
 export const PASTE_TRACE_PHASE = 'terminal_paste_trace'
+/** A native paste event that reached xterm's own textarea because the pane's capture
+ *  listener did not claim it. Content-free: counts and flags only, so it lives with the
+ *  input diagnostics rather than with the trace above. */
+export const PASTE_UNCLAIMED_PHASE = 'terminal_paste_unclaimed'
 /** Echo settle delay before the after-snapshot: covers the browser→daemon→ConPTY→CLI
  *  redraw round trip with margin, while staying inside the durable sink's per-phase
  *  one-second rate window for back-to-back test pastes. */
@@ -142,9 +146,39 @@ export function composerTraceSnapshot(
   }
 }
 
-/** Whether this input burst is a paste worth tracing: either the pane saw the native
- *  paste event, or the bytes themselves carry the bracketed-paste wrapper (which xterm
- *  produces only for a paste, so button- and voice-driven pastes are caught too). */
-export function inputIsTraceablePaste(data: string, captureSource: string | null): boolean {
+/** Where a paste came from, as the pane knows it at the moment it writes the bytes.
+ *
+ *  Recorded because the instrument could not previously tell a Ctrl+V from a rail
+ *  button: both arrive at `onData` as the same wrapped payload, so a field report
+ *  naming one of them could be neither confirmed nor refuted from 109 stored traces. */
+export type PasteOrigin = 'native' | 'rail' | 'insert' | 'mobile' | 'manual' | 'attachment'
+
+/** The two writes a single paste can produce. Only the payload is traced: a leading
+ *  newline run is lifted out of a Codex paste and sent ahead of it as key presses
+ *  (`composerInsertion.ts`), and tracing that two-byte write as its own paste both
+ *  files a meaningless report and - because the durable sink rate-limits a phase to
+ *  one report per second and both land 600 ms later, microseconds apart - *drops the
+ *  real one*. Measured on Ctrl+V into Codex, which is the one path that reaches here
+ *  with a native capture source. */
+export type PasteWriteKind = 'payload' | 'leading'
+
+export type PasteWrite = { origin: PasteOrigin; kind: PasteWriteKind }
+
+/**
+ * Whether this input burst is a paste worth tracing.
+ *
+ * A write the pane's own paste path produced says so explicitly, which is exact and
+ * catches a single-line rail paste the wrapper heuristic used to miss. The heuristic
+ * remains as the fallback for bytes that did not come through that path: either the
+ * pane saw a native paste event, or the bytes carry xterm's bracketed-paste wrapper.
+ * A trace that lands on the fallback while `pasteIntoTerminal` was not running is
+ * itself the finding - it means something else in the page pasted into this terminal.
+ */
+export function inputIsTraceablePaste(
+  data: string,
+  captureSource: string | null,
+  write: PasteWrite | null = null,
+): boolean {
+  if (write) return write.kind === 'payload'
   return captureSource === 'paste' || data.startsWith(BRACKETED_PASTE_START)
 }

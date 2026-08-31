@@ -126,6 +126,13 @@ not a description of its shipped binaries.
 
 ## Verification
 
+Development runs on CPython 3.12: the committed `.python-version` pins it, so
+`uv sync` selects it for every fresh venv regardless of what newer interpreters
+the machine has. The pin exists because `requires-python` deliberately has no
+ceiling (that is published metadata, and the packages that cannot build on a
+newer interpreter are dev-only), and `tests/test_python_pin.py` keeps the CI
+workflows and both mypy configs agreeing with it.
+
 Run the full gate before opening a pull request:
 
 ```bash
@@ -138,6 +145,9 @@ cd frontend && npx tsc --noEmit && npm test
 `.worktree-verify` runs exactly this. Read all of its output rather than piping
 it through `tail` or `grep`; a trimmed gate has shipped a failing test green
 here before.
+The script lowers its own process priority to below normal so a running gate
+does not starve interactive work on the same machine; set `MUX_KEEP_PRIORITY=1`
+to keep normal priority (for timing the gate itself).
 
 The `not live_*` marks deselect tiers that need an authenticated provider CLI, consume quota,
 or reach a third-party service, so none of them belongs in a gate. One of them,

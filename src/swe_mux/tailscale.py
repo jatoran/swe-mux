@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import ipaddress
 import json
 import re
-import shutil
 import ssl
 import time
 import urllib.request
@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .shim_paths import which_real
 from .subprocess_flags import background_creation_flags
 
 # Tailscale Serve terminates HTTPS on 443 and proxies to the swe-mux loopback
@@ -199,18 +200,26 @@ _TS_INSTALL_COMMAND = "winget install tailscale.tailscale"
 def classify_tailscale_connection(available: bool, status_payload: Any) -> dict[str, object]:
     """Map raw `tailscale status --json` output to a display connection state.
 
-    ``available`` is whether the CLI is on PATH. ``status_payload`` is the parsed
-    JSON, or ``None`` when the status probe failed. The result reports
-    not-installed / logged-out / connected-as-``<device>.ts.net`` with the exact
-    next command per state, so the UI can point at the cause instead of a bare
-    "unavailable". Unit-tested against real BackendState fixtures.
+    ``available`` is whether the CLI was found at all - anywhere, not only on PATH
+    (`tailscale_executable`). ``status_payload`` is the parsed JSON, or ``None``
+    when the status probe failed. The result reports not-installed / logged-out /
+    connected-as-``<device>.ts.net`` with the exact next command per state, so the
+    UI can point at the cause instead of a bare "unavailable". Unit-tested against
+    real BackendState fixtures.
+
+    The detail for the absent case used to hedge - "not installed **or is not on
+    PATH**" - while the top-line state said `not_installed` flatly, and the UI
+    renders the state. On every GUI Tailscale install on Windows the hedge was the
+    true half and the headline was the false one. The two are now separate facts:
+    resolution looks past PATH, so ``available`` false really does mean absent, and
+    the caller passes ``on_path`` to say whether it can also be spawned by name.
     """
     if not available:
         return {
             "connection_state": "not_installed",
             "device_name": None,
             "connection_command": _TS_INSTALL_COMMAND,
-            "connection_detail": "Tailscale is not installed or is not on PATH.",
+            "connection_detail": "Tailscale is not installed on this machine.",
         }
     if not isinstance(status_payload, dict):
         return {
@@ -304,8 +313,32 @@ def is_tailscale_ip(value: str) -> bool:
     return address in ipaddress.ip_network("fd7a:115c:a1e0::/48")
 
 
+@functools.cache
+def tailscale_executable() -> str | None:
+    """The Tailscale CLI, wherever it is, or None when this host has none.
+
+    Six call sites used to run a bare `shutil.which("tailscale")` independently,
+    which made "is Tailscale here" six separate opinions, all six wrong in
+    the same way: the Windows MSI installs to `C:\\Program Files\\Tailscale\\` and
+    never touches PATH, so a machine with a running `tailscaled` and a healthy
+    tailnet reported `not_installed` and was told to `winget install` what it
+    already had. Serve, `tailscale cert`, and the direct TLS listener all silently
+    became unavailable with it - which is why fixing only the classification would
+    not have fixed the feature.
+
+    Widening resolution past PATH is safe *here* and is not safe in general: this
+    is not a spawn-by-name path, every caller passes the returned string as argv[0],
+    and the tool being located is a fixed, known binary rather than something a
+    PATH entry could shadow. `_clear_status_cache` drops it, so a re-scan sees an
+    install that landed after the daemon started.
+    """
+    from .tool_locations import locate_tool
+
+    return locate_tool("tailscale").path
+
+
 async def tailscale_ipv4(executable: str | None = None) -> str | None:
-    executable = executable or shutil.which("tailscale")
+    executable = executable or tailscale_executable()
     if not executable:
         return None
     try:
@@ -326,7 +359,7 @@ async def tailscale_ipv4(executable: str | None = None) -> str | None:
 
 
 async def tailscale_ipv6(executable: str | None = None) -> str | None:
-    executable = executable or shutil.which("tailscale")
+    executable = executable or tailscale_executable()
     if not executable:
         return None
     try:
@@ -347,7 +380,7 @@ async def tailscale_ipv6(executable: str | None = None) -> str | None:
 
 
 async def tailscale_dns_name(executable: str | None = None) -> str | None:
-    executable = executable or shutil.which("tailscale")
+    executable = executable or tailscale_executable()
     if not executable:
         return None
     try:
@@ -371,7 +404,7 @@ async def direct_mobile_voice_tls(
     data_dir: Path, https_port: int = MOBILE_VOICE_HTTPS_PORT,
 ) -> tuple[list[str], str, ssl.SSLContext] | tuple[None, None, str]:
     """Prepare a direct TLS listener on the Tailscale IP without Tailscale Serve."""
-    executable = shutil.which("tailscale")
+    executable = tailscale_executable()
     if not executable:
         return None, None, "Tailscale CLI is not installed or is not on PATH."
     tailnet_ipv4, tailnet_ipv6, dns_name = await asyncio.gather(
@@ -455,6 +488,16 @@ _ts_status_cache: dict[tuple[int, bool], tuple[float, dict[str, object]]] = {}
 
 def _clear_status_cache() -> None:
     _ts_status_cache.clear()
+    # `getattr` because a test may have replaced the resolver with a plain
+    # callable, which has no cache to drop. Clearing a cache must not be the thing
+    # that raises - it runs on paths that are already recovering from something.
+    getattr(tailscale_executable, "cache_clear", lambda: None)()
+
+
+#: Public spelling of the same thing, for the prerequisite re-scan: a user who has
+#: just added Tailscale to PATH must not keep being told for fifteen seconds, or
+#: for the life of the daemon, that it is absent.
+clear_status_cache = _clear_status_cache
 
 
 async def tailscale_status(port: int, *, tailnet_enabled: bool = True) -> dict[str, object]:
@@ -473,7 +516,7 @@ async def tailscale_status(port: int, *, tailnet_enabled: bool = True) -> dict[s
 
 
 async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) -> dict[str, object]:
-    executable = shutil.which("tailscale")
+    executable = tailscale_executable()
     result: dict[str, object] = {
         "mode": "loopback",
         "listen_url": f"http://127.0.0.1:{port}",
@@ -492,7 +535,11 @@ async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) ->
             f"tailscale serve --bg --https={MOBILE_VOICE_HTTPS_PORT} "
             f"http://127.0.0.1:{port}"
         ),
-        "diagnostic": "Tailscale CLI is not installed or is not on PATH.",
+        "diagnostic": "Tailscale is not installed on this machine.",
+        # Where the CLI was found, so a support reader can tell an off-PATH
+        # install from an on-PATH one without guessing from the state alone.
+        "executable": executable,
+        "on_path": bool(executable) and which_real("tailscale") is not None,
         **classify_tailscale_connection(bool(executable), None),
     }
     if not executable:
@@ -539,7 +586,7 @@ async def enable_mobile_voice_serve(
     port: int, *, https_port: int = MOBILE_VOICE_HTTPS_PORT
 ) -> dict[str, object]:
     """Configure one private HTTPS listener without resetting other Serve routes."""
-    executable = shutil.which("tailscale")
+    executable = tailscale_executable()
     if not executable:
         return {
             "status": "error",

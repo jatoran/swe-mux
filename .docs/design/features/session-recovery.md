@@ -171,7 +171,8 @@ Per session, under `<data_dir>/recovery/<session_id>/`:
 - Inactive rows are excluded from closed-row retention, the cold-session count ceiling, and bulk ended-session removal.
   Only resume, explicit dismissal, or removal of the owning Project discards one.
 - `POST /api/sessions/{id}/resume` creates and proves a replacement before changing layout identity.
-  Agents resume the provider conversation through `session_resume.resume_run`; shells replay the recorded launch contract.
+  The route accepts an inactive session or any retained ended agent.
+  Agents resume the provider conversation through `session_resume.resume_run`; inactive shells replay the recorded launch contract.
   The old row remains intact if spawn or layout persistence fails.
 
 - **Only an explicit dismissal deletes recovery data.**
@@ -179,8 +180,9 @@ Per session, under `<data_dir>/recovery/<session_id>/`:
   at this session" are different statements, and only the second is a reason to throw away what it
   printed.
   `DELETE /api/sessions/{id}` and a relaunch that supersedes a cold session both discard.
-- A **cold agent** is resumed: `POST /api/history/{run}/resume` already reopens the conversation,
-  and a cold row carries the run id it needs.
+- A **cold agent** is resumed in place through `POST /api/sessions/{id}/resume`.
+  The session route resolves the cold row's run id through the shared conversation-resume authority, replaces the layout leaf, then discards the dead session identity and its recovery checkpoint.
+  The native transcript and History run remain intact.
 - A **cold shell** is relaunched from its recorded argv (`POST /api/sessions/{id}/relaunch`).
   This is the one deliberate widening of the `relaunchable` gate, which exists to keep relaunch away
   from a live lifecycle - a cold session has none.
@@ -202,6 +204,13 @@ makes an ended session's pane survive.
   instant, and the pruned layout was written back, so the pane showing what it printed was destroyed
   at exactly the moment somebody wanted to read it.
 - Ended and cold sessions can be opened in a pane and in splits.
+- Selecting an ended session keeps it selected even when the Project has a live sibling.
+  Session selection means "being viewed"; input eligibility remains a separate terminal-state predicate.
+- The recovered pane's `Read transcript` action opens History directly on that session's run id.
+  It never resolves through whichever live session was previously active.
+- `Resume` is an in-place replacement from a retained pane.
+  The replacement is proved first, the old layout identity and recovery data are removed second, and the browser focuses the replacement.
+  A failed resume leaves the ended pane intact.
 - The pane is read-only on both sides.
   The daemon refuses input for a terminal-state session (`server.session_accepts_input`) rather than
   letting `PtyHost.write` raise into a 500 or a dropped socket; the client stops sending it, and does

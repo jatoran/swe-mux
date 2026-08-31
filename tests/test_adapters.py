@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -17,6 +18,7 @@ from swe_mux.adapters import (
     SpawnOptions,
     SpawnSpec,
 )
+from swe_mux.adapters import claude as claude_adapter
 from swe_mux.adapters.claude import _hook_command, encode_cwd
 from swe_mux.adapters.codex import CODEX_LIFECYCLE_HOOK_EVENTS, codex_lifecycle_hook_args
 from swe_mux.adapters.omp import materialize_mux_extension, omp_hook_path
@@ -556,22 +558,71 @@ def test_claude_settings_without_an_identity_stay_environment_driven(
     assert not (tmp_path / "sessions" / "codex-pane" / "hook-identity.json").exists()
 
 
-def test_claude_hook_command_is_bash_safe_for_windows_venv(tmp_path: Path) -> None:
+def test_claude_hook_command_runs_under_powershell_and_bash(tmp_path: Path) -> None:
+    """The interpreter reaches the shell as `C:/...`, unquoted, under either runner.
+
+    The MSYS form this used to emit (`/d/PROJECTS/...`) runs only under Bash;
+    PowerShell reads it as a command name and every hook dies with
+    `CommandNotFoundException`, which is the whole observability layer gone with
+    no signal. `C:/...` is the one spelling PowerShell, Bash and cmd all execute.
+    """
     command = _hook_command("SessionStart", r"D:\PROJECTS\swe-mux\.venv\Scripts\python.exe")
     argv = shlex.split(command)
     assert argv == [
-        "/d/PROJECTS/swe-mux/.venv/Scripts/python.exe",
+        "D:/PROJECTS/swe-mux/.venv/Scripts/python.exe",
         "-m",
         "swe_mux.hook_client",
         "SessionStart",
     ]
     assert "\\" not in command
+    # Unquoted is the load-bearing half: at command position PowerShell parses a
+    # quoted string as a string expression rather than a program, so a quoted
+    # interpreter is inert there however correct the path is.
+    assert command.startswith("D:/PROJECTS/swe-mux/.venv/Scripts/python.exe ")
 
     ClaudeAdapter(data_dir=tmp_path)
     settings = json.loads((tmp_path / "claude-hooks.json").read_text(encoding="utf-8"))
     generated = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     assert shlex.split(generated)[1:] == ["-m", "swe_mux.hook_client", "SessionStart"]
     assert not (tmp_path / "claude-hooks.json.tmp").exists()
+
+
+def test_claude_hook_command_leaves_a_posix_interpreter_alone() -> None:
+    """Nothing to translate off Windows, and the drive-letter test must not fire."""
+    command = _hook_command("Stop", "/usr/bin/python3")
+    assert shlex.split(command) == ["/usr/bin/python3", "-m", "swe_mux.hook_client", "Stop"]
+
+
+def test_claude_hook_command_removes_a_space_rather_than_quoting_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A space is removed via 8.3, because no quoting style suits both shells."""
+    monkeypatch.setattr(claude_adapter, "IS_WINDOWS", True)
+    monkeypatch.setattr(
+        claude_adapter,
+        "_windows_short_path",
+        lambda path: path.replace(r"C:\Program Files", r"C:\PROGRA~1"),
+    )
+    command = _hook_command("Stop", r"C:\Program Files\swe-mux\python.exe")
+    assert command == "C:/PROGRA~1/swe-mux/python.exe -m swe_mux.hook_client Stop"
+    assert "'" not in command and '"' not in command
+
+
+def test_claude_hook_command_reports_a_space_it_could_not_remove(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """8.3 disabled on the volume degrades to Bash-only, and says so.
+
+    Quoting still runs under Bash, so this is better than refusing to emit a hook
+    at all; what must not happen again is that it fails silently, which is why the
+    warning exists and why `doctor.hook_ingress` watches the runtime outcome.
+    """
+    monkeypatch.setattr(claude_adapter, "IS_WINDOWS", True)
+    monkeypatch.setattr(claude_adapter, "_windows_short_path", lambda path: path)
+    with caplog.at_level(logging.WARNING, logger="swe_mux.adapters.claude"):
+        command = _hook_command("Stop", r"C:\Program Files\swe-mux\python.exe")
+    assert shlex.split(command)[0] == "C:/Program Files/swe-mux/python.exe"
+    assert "CommandNotFoundException" in caplog.text
 
 
 def test_generated_config_is_not_rewritten_when_it_would_not_change(tmp_path: Path) -> None:
