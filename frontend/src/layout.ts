@@ -415,6 +415,48 @@ export function paneNeighborIds(layout:PaneLayout,viewId:string):Partial<Record<
   return result
 }
 
+/** How far one keyboard resize moves a divider, as a fraction of the split. */
+export const RESIZE_STEP = 0.05
+
+/**
+ * The divider a keyboard resize moves, and the ratio it should be set to.
+ *
+ * The contract is tmux's `resize-pane -L/-R/-U/-D` and it is stated as "the
+ * divider moves that way", not "my pane grows that way". The two differ once
+ * splits nest - a pane on the `second` side of a split has no divider on its
+ * right at that level - and only the first can be described without the reader
+ * knowing the shape of the tree they cannot see.
+ *
+ * The divider chosen is the nearest enclosing split on the matching axis, which
+ * is the same one a pointer drag would grab.
+ */
+export function resizeTargetFor(
+  layout: PaneLayout,
+  viewId: string,
+  direction: PaneDirection,
+  step = RESIZE_STEP,
+): { path: string; ratio: number } | null {
+  if (!layout.root) return null
+  const axis: SplitDirection = direction === 'left' || direction === 'right' ? 'horizontal' : 'vertical'
+  const trail: Array<{ split: PaneSplit; path: string }> = []
+  const find = (node: PaneNode, path: string): boolean => {
+    if (node.type === 'stack') return node.children.some(child => child.id === viewId)
+    trail.push({ split: node, path })
+    if (find(node.first, `${path}f`)) return true
+    if (find(node.second, `${path}s`)) return true
+    trail.pop()
+    return false
+  }
+  if (!find(layout.root, '')) return null
+  for (let index = trail.length - 1; index >= 0; index--) {
+    const { split, path } = trail[index]
+    if (split.direction !== axis) continue
+    const delta = direction === 'right' || direction === 'down' ? step : -step
+    return { path, ratio: clampRatio(split.ratio + delta) }
+  }
+  return null
+}
+
 export function reconcileTerminals(layout:PaneLayout,liveIds:Set<string>):PaneLayout{let next=layout;for(const id of terminalIds(layout))if(!liveIds.has(id))next=removeLeaf(next,'terminal',id);return next}
 export function reconcilePreviews(layout:PaneLayout,liveIds:Set<string>):PaneLayout{let next=layout;for(const leaf of leaves(layout,'preview'))if(!liveIds.has(leaf.id))next=removeLeaf(next,'preview',leaf.id);return next}
 

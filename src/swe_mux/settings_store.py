@@ -42,6 +42,14 @@ DOMAINS: tuple[str, ...] = (
     "fileTree",
     "drawerTabs",
     "sessionRows",
+    # What this device class measured about its own keyboard, and whether it may
+    # take the browser's reserved chords in fullscreen. Both are properties of a
+    # *browser*, not of the install: the daemon's shipped table says what a browser
+    # is expected to swallow and is wrong somewhere by construction (its predecessor
+    # refused Ctrl+F while Settings was intercepting Ctrl+F in the same browser), so
+    # the measurement corrects it per device. Stored verbatim; only the browser
+    # reads it.
+    "keyboard",
 )
 #: The two the daemon reads and enforces policy over, because the Web Push sender
 #: has to apply the master switch and quiet hours before any tab is alive to

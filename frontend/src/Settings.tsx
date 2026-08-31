@@ -4,6 +4,8 @@ import { api, type ApiError } from './api'
 import { saveFailureStatus, type SettingsApplyResponse } from './settingsSave'
 import { commandCategoryLabel, displayChord, shortcutMatches, UNBOUND_CHORD, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
+import { hostQuery } from './hostProfile.ts'
+import { KeyboardProbe } from './KeyboardProbe.tsx'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { AccountSettings } from './ProviderAccounts'
@@ -231,17 +233,38 @@ type UsageStatus = {
 type PrerequisiteState = 'present'|'off_path'|'missing'
 type Prerequisite = {id:string;label:string;purpose:string;present:boolean;state:PrerequisiteState;source:string;path:string|null;download_url:string;install_command:string;path_remedy:string|null}
 type KeybindingCommand = {id:string;label:string;category:string}
-type KeybindingPolicy = {browser_reserved:string[];desktop_only:string[];application_reserved:string[];terminal_reserved:string[];rules:string[]}
+type ChordWarning = {severity:'blocked'|'contested';scope:string;message:string}
+type BindingRule = {keys:string;command:string;host?:string;platform?:string;when?:string;note?:string}
+type KeymapPresetSummary = {
+  id:string;title:string;description:string;leader:string
+  prefix:string;prefix_alternates:string[];warning:string;bindings:number
+}
+type KeybindingPolicy = {
+  hosts:string[];platforms:string[];max_sequence:number
+  browser_unreachable:string[];browser_contested:Record<string,string>
+  wm_reserved:Record<string,Record<string,string>>
+  application_reserved:string[];terminal_reserved:Record<string,string>;rules:string[]
+}
+/** What `/api/keybindings?host=…&platform=…` answers. `rules` is the durable
+ *  document and is what a save writes back; `resolved` is what THIS host actually
+ *  dispatches on, and `undeliverable` names the rules it dropped and why - which is
+ *  how the editor can say "works in the desktop app" instead of drawing a dead chord
+ *  as though it were live. */
 type KeybindingsResponse = {
-  bindings:Record<string,string>;defaults:Record<string,string>;commands:KeybindingCommand[]
-  policy:KeybindingPolicy;rejected:Record<string,string>
+  preset:string;presets:KeymapPresetSummary[];host:string;platform:string
+  rules:BindingRule[];resolved:Record<string,Array<{command:string;when:string}>>
+  prefixes:string[];labels:Record<string,string>
+  undeliverable:Array<{keys:string;command:string;warnings:ChordWarning[]}>
+  contested:Array<{keys:string;command:string;warnings:ChordWarning[]}>
+  commands:KeybindingCommand[];groups:Array<{category:string;key:string;title:string}>
+  when_flags:string[];policy:KeybindingPolicy;rejected:Record<string,string>
 }
 type CloseIntent = 'close'|'usage'|'automation'|'tutorial'
 /** The two in-flight statuses, named because the footer and the dialogs both test for them. */
 const SAVING = 'saving…'
 const RESTORING = 'restoring defaults…'
 /** The one atomic-save answer: the new config, the keybindings as re-read, and what committed. */
-type SettingsApplyResult = SettingsApplyResponse<Config>
+type SettingsApplyResult = SettingsApplyResponse<Config, KeybindingsResponse>
 
 // One round trip for everything the panel needs on open. `config` is required;
 // every other part arrives null when its section failed server-side, with the
@@ -351,14 +374,26 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [verifyResult,setVerifyResult]=useState<VerifyResult|null>(null)
   const customProvider=provider?.providers?.find(entry=>entry.id==='custom')
   const [providerMessage,setProviderMessage]=useState('')
-  const [bindings, setBindings] = useState<Record<string,string>>({})
-  const [bindingDefaults, setBindingDefaults] = useState<Record<string,string>>({})
+  // The keymap is edited as the rule LIST the daemon stores, not as the resolved map
+  // it dispatches: a rule can be scoped to a host, a platform or a `when`, and the
+  // resolved map has already thrown all three away. Editing the resolved map and
+  // writing it back is how a desktop-only binding would silently disappear the first
+  // time a phone opened Settings.
+  const [bindingRules, setBindingRules] = useState<BindingRule[]>([])
   const [bindingCommands, setBindingCommands] = useState<KeybindingCommand[]>([])
-  const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy>({browser_reserved:[],desktop_only:[],application_reserved:[],terminal_reserved:[],rules:[]})
+  const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy|null>(null)
+  const [keymapPresets, setKeymapPresets] = useState<KeymapPresetSummary[]>([])
+  const [keymapPreset, setKeymapPreset] = useState('')
+  const [keymapHost, setKeymapHost] = useState<{host:string;platform:string}>({host:'browser',platform:'win'})
+  const [keymapWarnings, setKeymapWarnings] = useState<KeybindingsResponse['undeliverable']>([])
+  const [presetIntent, setPresetIntent] = useState<KeymapPresetSummary|null>(null)
+  const [presetApplying, setPresetApplying] = useState('')
   const [capturingCommand, setCapturingCommand] = useState<string|null>(null)
+  /** Chords typed so far while recording, for a binding that is a sequence. */
+  const [captureSequence, setCaptureSequence] = useState<string[]>([])
   // The shortcut table's own filter. Separate from the panel-wide search because it
   // answers a different question: that one asks where a setting lives, this one narrows
-  // a 110-row table you are already looking at, and typing into it must not navigate away.
+  // a 200-row table you are already looking at, and typing into it must not navigate away.
   const [shortcutQuery, setShortcutQuery] = useState('')
   const [bindingError, setBindingError] = useState('')
   const [harnessArgs, setHarnessArgs] = useState<Record<string,string>>({})
@@ -454,7 +489,29 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // `/api/projects` call: the panel was fetching the same 25 KiB twice on every
   // open, once inside the bundle and once here.
   const [projectParentHint,setProjectParentHint]=useState('')
-  const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
+  const [savedBindings, setSavedBindings] = useState<BindingRule[]>([])
+
+  /**
+   * Take a fresh keybindings payload into every piece of state that reads it.
+   *
+   * One function rather than eight setters at three call sites (open, save, apply a
+   * preset): the pieces are not independent - `rules` is what a save writes back and
+   * `undeliverable` describes exactly those rules on exactly this host, so adopting
+   * one without the other draws warnings about a keymap that is no longer there.
+   */
+  const adoptKeybindings = useCallback((data:KeybindingsResponse) => {
+    setBindingRules(data.rules||[])
+    setSavedBindings(data.rules||[])
+    setBindingCommands(data.commands||[])
+    setBindingPolicy(data.policy||null)
+    setKeymapPresets(data.presets||[])
+    setKeymapPreset(data.preset||'')
+    setKeymapHost({host:data.host||'browser',platform:data.platform||'win'})
+    setKeymapWarnings(data.undeliverable||[])
+    setBindingError(Object.keys(data.rejected||{}).length
+      ? `Ignored saved shortcuts · ${Object.entries(data.rejected).map(([keys,message])=>`${displayChord(keys,data.platform)}: ${message}`).join(' · ')}`
+      : '')
+  },[])
   const [status, setStatus] = useState('loading…')
   const [errors, setErrors] = useState<Record<string,string>>({})
   const [scanJob, setScanJob] = useState<HistoryScanJob|null>(null)
@@ -578,7 +635,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // `provider` 177.3 KiB — two tabs the operator usually has not opened —
     // while the config it renders from is 12.7 KiB. Alongside it went a
     // `/api/remote/firewall` call that takes 809ms and gates nothing at all.
-    api<SettingsBundle>('GET','/api/settings/bundle').then(bundle => {
+    api<SettingsBundle>('GET',`/api/settings/bundle?${hostQuery()}`).then(bundle => {
       const { config: next, keybindings: keyData } = bundle
       // Saving unconditionally PUTs keybindings back; rendering without them
       // would let a Save overwrite their file with empty defaults. (The rules
@@ -588,12 +645,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         return
       }
       adoptConfig(next)
-      setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
-      setBindingCommands(keyData.commands||[]);setBindingPolicy({
-        browser_reserved:keyData.policy?.browser_reserved||[],desktop_only:keyData.policy?.desktop_only||[],application_reserved:keyData.policy?.application_reserved||[],
-        terminal_reserved:keyData.policy?.terminal_reserved||[],rules:keyData.policy?.rules||[],
-      })
-      if(Object.keys(keyData.rejected||{}).length)setBindingError(`Ignored saved shortcuts · ${Object.entries(keyData.rejected).map(([chord,message])=>`${displayChord(chord)}: ${message}`).join(' · ')}`)
+      adoptKeybindings(keyData)
       setStatus('ready')
       // Both halves of the profile payload are kept. `detected` seeds "restore
       // detected"; `profiles` carries the daemon's *derived* capabilities, which
@@ -889,8 +941,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const dirty = useMemo(() => Boolean(config&&draft&&(
     !sameDraftValue(config,draft)
     ||Object.entries(config.harness_args).some(([name,args])=>harnessArgs[name]!==formatCommandLine(args))
-    ||!sameDraftValue(bindings,savedBindings)
-  )),[config,draft,harnessArgs,bindings,savedBindings])
+    ||!sameDraftValue(bindingRules,savedBindings)
+  )),[config,draft,harnessArgs,bindingRules,savedBindings])
 
   // A write to the daemon is in flight, or the last one was refused. Both are things the
   // footer has to say over the dirty hint, and `errors` is exactly the failure's lifetime:
@@ -1119,13 +1171,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       // recorder is open. Leave them untouched for App's scale capture listener.
       if(uiScaleKeyboardIntent(event))return
       event.preventDefault();event.stopImmediatePropagation()
-      if(event.key==='Escape'){setCapturingCommand(null);setBindingError('');return}
+      if(event.key==='Escape'){setCapturingCommand(null);setCaptureSequence([]);setBindingError('');return}
       if(event.repeat||['Control','Shift','Alt','Meta'].includes(event.key))return
       void captureBinding(event,capturingCommand)
     }
     window.addEventListener('keydown',capture,true)
     return()=>window.removeEventListener('keydown',capture,true)
-  },[capturingCommand,bindings,bindingCommands])
+  },[capturingCommand,captureSequence,bindingRules,bindingCommands])
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -1155,33 +1207,57 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     return () => window.removeEventListener('keydown', close, true)
   }, [closeIntent,resetIntent,capturingCommand])
 
+  /**
+   * Record one chord, or extend a sequence that is already being recorded.
+   *
+   * A sequence is recorded the way it is typed. The first keystroke that lands on a
+   * chord which already *begins* a longer binding keeps the recorder open rather
+   * than committing, because committing there would silently delete every binding
+   * under that prefix - press Ctrl+Shift+Space meaning "the leader, then p" and the
+   * whole leader tree would be gone. Anything else commits immediately, which is
+   * every ordinary single-chord case.
+   */
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)
-    const conflict=bindings[chord]
-    if(conflict&&conflict!==commandId){
-      const label=bindingCommands.find(command=>command.id===conflict)?.label||conflict
-      setBindingError(`${displayChord(chord)} is already assigned to ${label}. Clear or change that shortcut first.`)
+    if(!chord){setBindingError('That key cannot be part of a shortcut.');return}
+    const sequence=[...captureSequence,chord]
+    const keys=sequence.join(' ')
+    const continues=bindingRules.some(rule=>rule.keys!==keys&&rule.keys.startsWith(`${keys} `))
+    if(continues&&sequence.length<(bindingPolicy?.max_sequence??3)){
+      setCaptureSequence(sequence)
+      setBindingError(`${displayChord(keys,keymapHost.platform)} starts other shortcuts. Keep typing to make a longer one, or press Escape.`)
       return
     }
-    const next=Object.fromEntries(Object.entries(bindings).filter(([,assigned])=>assigned!==commandId))
-    next[chord]=commandId
+    const conflict=bindingRules.find(rule=>rule.keys===keys&&rule.command!==commandId&&!rule.host&&!rule.platform)
+    if(conflict){
+      const label=bindingCommands.find(command=>command.id===conflict.command)?.label||conflict.command
+      setBindingError(`${displayChord(keys,keymapHost.platform)} is already assigned to ${label}. Clear or change that shortcut first.`)
+      return
+    }
+    // The rule keeps this host's scope only when the recording device is the one it
+    // will not work on anywhere else. A chord recorded in the desktop app that a
+    // browser cannot receive is saved as desktop-only rather than saved as broken.
+    const next:BindingRule[]=[
+      ...bindingRules.filter(rule=>rule.command!==commandId&&rule.keys!==keys),
+      {keys,command:commandId},
+    ]
     try {
-      await api('PUT','/api/keybindings?validate=1',{bindings:next})
-      setBindings(next);setCapturingCommand(null);setBindingError('')
+      await api('PUT','/api/keybindings?validate=1',{rules:next})
+      setBindingRules(next);setCapturingCommand(null);setCaptureSequence([]);setBindingError('')
     } catch(error) {
       const typed=error as Error&{fields?:Record<string,string>}
-      setBindingError(typed.fields?.[chord]||typed.message)
+      setBindingError(typed.fields?.[keys]||typed.message)
     }
   }
 
-  // One pass over the bindings instead of a scan per row: the shortcut table asks this
-  // for all 110 commands on every render, and each answer used to walk the whole map.
-  // First chord wins, which is what the scan it replaces returned.
+  // One pass over the rules instead of a scan per row: the shortcut table asks this
+  // for all 200 commands on every render, and each answer used to walk the whole list.
+  // First rule wins, which is what the scan it replaces returned.
   const commandChords=useMemo(()=>{
     const chords=new Map<string,string>()
-    for(const [chord,assigned] of Object.entries(bindings))if(!chords.has(assigned))chords.set(assigned,chord)
+    for(const rule of bindingRules)if(rule.command&&!chords.has(rule.command))chords.set(rule.command,rule.keys)
     return chords
-  },[bindings])
+  },[bindingRules])
   const bindingForCommand=(commandId:string)=>commandChords.get(commandId)
 
   // Which shortcut rows the filter leaves showing. Rows are *hidden*, never dropped
@@ -1191,12 +1267,32 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // whole panel can find. Keeping every row also keeps document order, and with it the
   // `occurrence` a search result navigates by.
   const visibleShortcuts=useMemo(()=>new Set(bindingCommands
-    .filter(command=>shortcutMatches(command,commandChords.get(command.id),shortcutQuery))
-    .map(command=>command.id)),[bindingCommands,commandChords,shortcutQuery])
+    .filter(command=>shortcutMatches(command,commandChords.get(command.id),shortcutQuery,keymapHost.platform))
+    .map(command=>command.id)),[bindingCommands,commandChords,shortcutQuery,keymapHost.platform])
   const clearBinding=(commandId:string)=>{
-    setBindings(current=>Object.fromEntries(Object.entries(current).filter(([,assigned])=>assigned!==commandId)))
-    if(capturingCommand===commandId)setCapturingCommand(null)
+    setBindingRules(current=>current.filter(rule=>rule.command!==commandId))
+    if(capturingCommand===commandId){setCapturingCommand(null);setCaptureSequence([])}
     setBindingError('')
+  }
+
+  /**
+   * Replace the whole document from one shipped preset.
+   *
+   * Outside the draft/Save cycle on purpose, exactly like "restore defaults": the
+   * assignment is absolute rather than a delta, so it overwrites hand-edited
+   * bindings, and a change that large should not be something a user discovers they
+   * made when they pressed Save for an unrelated reason. It applies on an explicit
+   * press, after a confirmation that names what the preset takes.
+   */
+  const applyPreset=async(preset:KeymapPresetSummary)=>{
+    setPresetApplying(preset.id);setPresetIntent(null)
+    try {
+      const result=await api<{keybindings:KeybindingsResponse}>('POST',`/api/keymap-preset?${hostQuery()}`,{preset:preset.id})
+      adoptKeybindings(result.keybindings)
+      setBindingError('')
+    } catch(error) {
+      setBindingError(error instanceof Error?error.message:String(error))
+    } finally { setPresetApplying('') }
   }
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(current => current ? {...current,[key]:value} : current)
@@ -1274,15 +1370,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // commits both or neither (see `routes/settings.apply_settings`), and the one case it
     // genuinely cannot make atomic reports which half landed instead of denying both.
     try {
-      const result = await api<SettingsApplyResult>('POST','/api/settings/apply',{
+      const result = await api<SettingsApplyResult>('POST',`/api/settings/apply?${hostQuery()}`,{
         _revision: config.revision,
         config: changes,
-        keybindings: {bindings},
+        // `custom` once the rules have been hand-edited: the preset id records what
+        // they were derived from, and a hand edit means they no longer are.
+        keybindings: {preset: sameDraftValue(bindingRules,savedBindings) ? keymapPreset : 'custom', rules: bindingRules},
       })
       const next = result.config
       adoptConfig(next); setErrors({})
-      if (result.keybindings?.bindings) { setBindings(result.keybindings.bindings); setSavedBindings(result.keybindings.bindings) }
-      else setSavedBindings(bindings)
+      if (result.keybindings) adoptKeybindings(result.keybindings)
+      else setSavedBindings(bindingRules)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
       return true
     } catch (error) {
@@ -2155,18 +2253,61 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
 
           <section class="input-settings">
-          <div class="keybinding-heading"><div><h3>Keyboard shortcuts</h3><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
+          {/* The preset picker. Outside the draft/Save cycle deliberately, like
+              "restore defaults": applying one rewrites the whole document, and a
+              change that large must not arrive as a side effect of an unrelated Save. */}
+          <div class="keybinding-heading" data-setting="keymap_preset"><div><h3>Keyboard preset</h3>
+            <p>The starting point for every shortcut below. Applying one replaces the whole keymap, including anything edited by hand.</p></div></div>
+          <div class="keymap-presets">
+            {keymapPresets.map(preset=><article key={preset.id} class={preset.id===keymapPreset?'active':''}>
+              <div><strong>{preset.title}</strong>{preset.id===keymapPreset&&<span class="keymap-current">in use</span>}
+                <small>{preset.bindings} bindings · leader {displayChord(preset.leader,keymapHost.platform)}{preset.prefix?` · prefix ${displayChord(preset.prefix,keymapHost.platform)}`:''}</small></div>
+              <p>{preset.description}</p>
+              {preset.warning&&<p class="keymap-warning">⚠ {preset.warning}</p>}
+              <button type="button" disabled={!!presetApplying} onClick={()=>setPresetIntent(preset)}>
+                {presetApplying===preset.id?'applying…':preset.id===keymapPreset?'Re-apply':'Use this preset'}</button>
+            </article>)}
+            {keymapPreset==='custom'&&<p class="keymap-custom">These shortcuts have been edited by hand, so they no longer match any preset. Applying one below discards those edits.</p>}
+          </div>
+          {presetIntent&&<div class="keymap-confirm" role="alertdialog" aria-label={`Apply the ${presetIntent.title} preset`}>
+            <p><strong>Replace every shortcut with the {presetIntent.title} preset?</strong> This rewrites the keymap immediately, outside Save, and any shortcut you set by hand is lost.</p>
+            {presetIntent.warning&&<p class="keymap-warning">⚠ {presetIntent.warning}</p>}
+            <div><button type="button" onClick={()=>setPresetIntent(null)}>Cancel</button><button type="button" class="primary" onClick={()=>void applyPreset(presetIntent)}>Apply {presetIntent.title}</button></div>
+          </div>}
+
+          <div class="keybinding-heading"><div><h3>Keyboard shortcuts</h3>
+            <p>Click a command, then press the new shortcut. A chord that starts a longer one keeps recording, so a sequence is typed the way it is used. Changes apply when Settings is saved.</p></div>
+            <button onClick={()=>setPresetIntent(keymapPresets.find(preset=>preset.id===(keymapPreset==='custom'?'swemux':keymapPreset))||keymapPresets[0]||null)} disabled={!keymapPresets.length}>Restore shortcut defaults</button></div>
+          {/* Which keyboard the list is describing. Not decoration: a chord that works
+              here may not work on the phone reading the same daemon, and the
+              undeliverable list below is computed for THIS host only. */}
+          <p class="keymap-host">Showing shortcuts as they behave in <strong>{keymapHost.host==='desktop'?'the desktop app':'a browser tab'}</strong> on <strong>{keymapHost.platform==='mac'?'macOS':keymapHost.platform==='linux'?'Linux':'Windows'}</strong>.</p>
+          {!!keymapWarnings.length&&<details class="keymap-undeliverable"><summary>{keymapWarnings.length} shortcut{keymapWarnings.length===1?'':'s'} this host cannot receive</summary>
+            <ul>{keymapWarnings.map(item=><li key={item.keys}><kbd>{displayChord(item.keys,keymapHost.platform)}</kbd> {bindingCommands.find(command=>command.id===item.command)?.label||item.command} — {item.warnings[0]?.message}</li>)}</ul>
+          </details>}
           {/* Inert while a chord is being recorded: that recorder listens on the window in
               capture phase and swallows every key, so an enabled box here would eat the
               filter text and bind it. */}
           <input class="keybinding-filter" type="search" value={shortcutQuery} disabled={!!capturingCommand} placeholder="Filter commands and chords…" aria-label="Filter keyboard shortcuts" autocomplete="off" spellcheck={false} onInput={event=>setShortcutQuery(event.currentTarget.value)}/>
-          {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
+          {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong>{!!captureSequence.length&&<kbd>{displayChord(captureSequence.join(' '),keymapHost.platform)} …</kbd>}<button onClick={()=>{setCapturingCommand(null);setCaptureSequence([]);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
           <div class="keybinding-list" hidden={!visibleShortcuts.size}>
-            {[...new Set(bindingCommands.map(command=>command.category))].map(category=>{const rows=bindingCommands.filter(command=>command.category===category);return <section class="keybinding-group" aria-label={`${commandCategoryLabel(category)} shortcuts`} hidden={!rows.some(command=>visibleShortcuts.has(command.id))}><h4>{commandCategoryLabel(category)}</h4>{rows.map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''} hidden={!visibleShortcuts.has(command.id)}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord):UNBOUND_CHORD}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>})}
+            {[...new Set(bindingCommands.map(command=>command.category))].map(category=>{const rows=bindingCommands.filter(command=>command.category===category);return <section class="keybinding-group" aria-label={`${commandCategoryLabel(category)} shortcuts`} hidden={!rows.some(command=>visibleShortcuts.has(command.id))}><h4>{commandCategoryLabel(category)}</h4>{rows.map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''} hidden={!visibleShortcuts.has(command.id)}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord,keymapHost.platform):UNBOUND_CHORD}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>})}
           </div>
           {!!shortcutQuery.trim()&&!!bindingCommands.length&&!visibleShortcuts.size&&<p class="keybinding-empty" role="status">No shortcut matches “{shortcutQuery.trim()}”.</p>}
-          <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>DESKTOP APP</strong>{bindingPolicy.desktop_only.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>APPLICATION</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
+          {bindingPolicy&&<KeyboardProbe policy={bindingPolicy} platform={keymapHost.platform}/>}
+          {bindingPolicy&&<details class="keybinding-policy"><summary>What each host and platform takes for itself</summary>
+            <ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul>
+            {/* Split into "you cannot have this" and "you can have it but it costs you
+                something", which the old single BROWSER list conflated - and that
+                conflation is why Ctrl+F was refused for years while this very panel
+                was intercepting it successfully in the same browser. */}
+            <div><strong>A BROWSER TAB KEEPS</strong>{bindingPolicy.browser_unreachable.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div><strong>SHARED WITH THE BROWSER</strong>{Object.entries(bindingPolicy.browser_contested).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div><strong>{keymapHost.platform==='mac'?'MACOS':keymapHost.platform==='linux'?'YOUR DESKTOP':'WINDOWS'} KEEPS</strong>{Object.entries(bindingPolicy.wm_reserved[keymapHost.platform]||{}).slice(0,40).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div><strong>THE SHELL IN A PANE USES</strong>{Object.entries(bindingPolicy.terminal_reserved).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div><strong>FIXED APP CONTROLS</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+          </details>}
           </section>
         </Fragment>}
 

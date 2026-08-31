@@ -229,6 +229,64 @@ async def test_repository_safety_reads_have_a_contention_tolerant_deadline(
     assert land_preconditions.LAND_GIT_TIMEOUT_SECONDS > 4.0
 
 
+async def test_a_timed_out_safety_read_holds_rather_than_refusing(
+    trunk: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shape of the 2026-08-30 gate flake: one transient git failure under host
+    contention used to fold into a falsy fact and produce a *permanent* refusal
+    ("not a registered worktree", "a linked worktree", "a detached HEAD") for a
+    perfectly healthy checkout. Unknown must read as unknown - a hold - for every
+    safety read, so each one is failed here in turn against a real repository."""
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    real_read = land_preconditions.read_git
+
+    failing_reads: tuple[tuple[str, ...], ...] = (
+        ("worktree", "list"),
+        ("rev-parse", "--git-common-dir"),
+        ("rev-parse", "HEAD"),
+        ("rev-parse", "--abbrev-ref"),
+        ("merge-base", "--is-ancestor"),
+    )
+    for failing in failing_reads:
+
+        async def flaky(
+            cwd: str, *args: str, _failing: tuple[str, ...] = failing, **kwargs: Any
+        ) -> tuple[int, str]:
+            if args[: len(_failing)] == _failing:
+                return 124, "git timed out after 15s"
+            return await real_read(cwd, *args, **kwargs)
+
+        monkeypatch.setattr(land_preconditions, "read_git", flaky)
+        facts = await read_repository_facts(str(worktree), str(trunk))
+        assert facts.readable is False, failing
+        assert "timed out" in facts.error, failing
+        result = evaluate_preconditions(facts, branch="worktree-alpha")
+        assert result.disposition == "hold", failing
+        assert "could not be read" in result.reason, failing
+
+
+async def test_a_genuinely_foreign_checkout_still_refuses(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Honest reads must not turn every "no" into a hold. A repository that Git
+    itself lists as no worktree of the trunk gets the real, permanent refusal."""
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    git(stranger, "init", "-b", "main")
+    git(stranger, "config", "user.name", "Test User")
+    git(stranger, "config", "user.email", "test@example.invalid")
+    (stranger / "other.txt").write_text("other\n", encoding="utf-8")
+    git(stranger, "add", "other.txt")
+    git(stranger, "commit", "-m", "other")
+
+    facts = await read_repository_facts(str(stranger), str(trunk))
+    assert facts.readable is True
+    result = evaluate_preconditions(facts, branch="main")
+    assert result.disposition == "refuse"
+    assert "not a registered worktree" in result.reason
+
+
 async def test_a_dirty_worktree_holds_but_untracked_files_do_not(trunk: Path) -> None:
     worktree = add_worktree(trunk, "alpha")
     commit(worktree, "alpha.txt", "alpha\n", "alpha work")

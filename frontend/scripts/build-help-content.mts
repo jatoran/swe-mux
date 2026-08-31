@@ -48,6 +48,14 @@ export const HELP_SECTIONS = [
   { topic: 'project-resources', doc: 'project-resources.md', headings: ['What it is'] },
   { topic: 'transcript-branches', doc: 'transcript-branches.md', headings: ['What it is'] },
   { topic: 'project-actions', doc: 'project-actions.md', headings: ['What it is'] },
+  // Two sections, because "how do I change a shortcut" and "why did my shortcut not
+  // work" are different questions and the second is the one people arrive with - a
+  // chord can be perfectly valid and still be taken by the browser or the desktop.
+  {
+    topic: 'keybindings',
+    doc: 'keybindings.md',
+    headings: ['What it is', 'Hosts, platforms, and the one hard refusal'],
+  },
 ]
 
 const inline = (text: string): string => text
