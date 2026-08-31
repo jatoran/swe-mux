@@ -61,7 +61,14 @@ Three rules the existing boundaries follow, each of which has a failure mode:
 - [`packages/agent-inspection.md`](packages/agent-inspection.md) - the Agent tab's Instructions/Config/Tools segments and the Activity tab's Timeline/Findings/Change Map segments.
 - [`packages/metering.md`](packages/metering.md) - the Resources dialog and its four segments, usage analytics, automation spend, provider accounts.
 - [`packages/settings-and-gates.md`](packages/settings-and-gates.md) - Settings, setting links and grant gates, budget controls, model selection, guided onboarding.
-- Plugin management - `PluginsSettings.tsx` owns lifecycle and contribution controls; `pluginLinks.ts` owns cached terminal-link dispatch; `pluginPanes.ts` maps contributed placement to overlay or workspace focus; `fleetLayouts.ts` persists tab/split placement and excludes popups; `App.tsx` projects enabled contributions into the command registry.
+- Plugin management:
+  `PluginsSettings.tsx` owns compact lifecycle controls and focused/alphabetical test targeting.
+  `ProjectRunMenu.tsx` launches Project-scoped pane tools.
+  `pluginLinks.ts` owns cached terminal-link dispatch.
+  `pluginPanes.ts` places and focuses tab/split contributions in their target Project.
+  `fleetLayouts.ts` reconciles durable placement and excludes popups.
+  `TerminalPane.tsx` omits the agent command rail for plugin utility sessions.
+  `App.tsx` projects enabled contributions into the command registry.
 - [`packages/voice-and-assistant.md`](packages/voice-and-assistant.md) - voice capture and playback, and the Mux assistant.
 
 ## UI state boundaries

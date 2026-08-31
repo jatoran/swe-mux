@@ -595,6 +595,37 @@ class PluginManager:
         project = self.projects.projects.get(project_id)
         if project is None:
             raise PluginError("project_required", "a registered project_id is required")
+        existing = next(
+            (
+                item
+                for item in self.sessions.sessions.values()
+                if item.record.project_id == project.id
+                and item.record.plugin_id == manifest.id
+                and item.record.plugin_entrypoint_id == pane.id
+                and item.record.state not in {"exited", "crashed"}
+                and not item.record.inactive
+            ),
+            None,
+        )
+        if existing is not None:
+            has_live_grant = any(
+                grant.session_id == existing.record.id for grant in self._tokens.values()
+            )
+            if has_live_grant:
+                snapshot = existing.record.snapshot()
+                snapshot["spawn_env"] = {}
+                log.info(
+                    "plugin pane focused plugin_id=%s pane_id=%s session_id=%s project_id=%s",
+                    plugin_id,
+                    pane_id,
+                    existing.record.id,
+                    project.id,
+                )
+                return {"session": snapshot, "placement": pane.placement, "reused": True}
+            # The PTY can outlive the daemon generation that issued its callback token.
+            # Launching the tool again is an explicit request for a usable pane, so replace
+            # that stale process instead of focusing a UI whose callbacks can only fail.
+            await self.sessions.stop(existing.record.id, reason="plugin pane reopened")
         env, token = self._environment(record, manifest, "pane", pane.id, context, lifetime=None)
         command, cwd = self._resolve_command(manifest, pane.command)
         session = await self.sessions.spawn(
@@ -624,7 +655,7 @@ class PluginManager:
         )
         snapshot = session.record.snapshot()
         snapshot["spawn_env"] = {}
-        return {"session": snapshot, "placement": pane.placement}
+        return {"session": snapshot, "placement": pane.placement, "reused": False}
 
     async def link_handlers(self) -> builtins.list[dict[str, Any]]:
         handlers: builtins.list[dict[str, Any]] = []
