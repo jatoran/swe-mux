@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>rocket-shop — landing</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 16px/1.6 system-ui, sans-serif; background: #0e1116; color: #dde3ea; padding: 2rem 1.5rem; }
+  .badge { display: inline-block; font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: #8bd450; border: 1px solid #2f3b2a; border-radius: 999px; padding: .2rem .7rem; margin-bottom: 1rem; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin-bottom: .5rem; }
+  p { color: #9aa4b0; max-width: 34rem; }
+  .cta { display: inline-block; margin-top: 1.25rem; background: #8bd450; color: #10140c; font-weight: 600; border-radius: .5rem; padding: .6rem 1.1rem; text-decoration: none; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; margin-top: 2rem; max-width: 34rem; }
+  .card { background: #161b22; border: 1px solid #262d36; border-radius: .6rem; padding: .9rem; }
+  .card b { display: block; font-size: 1.25rem; }
+  .card span { color: #9aa4b0; font-size: .8rem; }
+  footer { margin-top: 2.5rem; color: #5b6570; font-size: .8rem; }
+</style>
+</head>
+<body>
+  <span class="badge">rocket-shop</span>
+  <h1>Ship your cart at escape velocity</h1>
+  <p>This is the dummy page the demo's preview pane is serving — in the real app
+     this pane shows your own dev server or a static document from the checkout,
+     live-reloading as the agent edits it.</p>
+  <a class="cta" href="#" onclick="return false">Add to cart</a>
+  <div class="cards">
+    <div class="card"><b>11ms</b><span>p95 /api/cart</span></div>
+    <div class="card"><b>12/12</b><span>tests passing</span></div>
+    <div class="card"><b>0</b><span>flakes in 30 runs</span></div>
+  </div>
+  <footer>served by the swe-mux demo · nothing here is real, especially the rockets</footer>
+</body>
+</html>
