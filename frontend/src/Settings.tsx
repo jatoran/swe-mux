@@ -2807,7 +2807,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // which is the rule the search index already follows for the same call.
   //
   // Measured in the renderer harness over five opens: 6.5ms on the first (cold) build
-  // and 1.1-2.4ms after, for thirteen tabs. The four paged tabs are skipped and they
+  // and 1.1-2.4ms after, for thirteen tabs. The five paged tabs are skipped and they
   // are the two largest — Voice's command reference and Accounts' model routing — so
   // the preview costs less than a search does for the same reason it is affordable
   // at all.

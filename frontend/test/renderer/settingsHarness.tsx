@@ -256,6 +256,7 @@ document.documentElement.style.setProperty('--ui-scale', '1')
 
 function Host() {
   const [navOpen, setNavOpen] = useState(false)
+  const params = new URLSearchParams(location.search)
   return <Settings
     activeUiScale={1}
     onUiScalePreview={() => 1}
@@ -263,6 +264,8 @@ function Host() {
     navOpen={navOpen}
     onNavOpenChange={setNavOpen}
     onLaunchConfigurator={() => {}}
+    initialSection={params.get('section')||undefined}
+    initialSetting={params.get('setting')||undefined}
     onClose={() => {}}
   />
 }

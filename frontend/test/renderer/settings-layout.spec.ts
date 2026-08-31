@@ -326,6 +326,43 @@ test('every paged Settings tab exposes working page links in the sidebar', async
   }
 })
 
+for (const [device, viewport] of [['desktop', DESKTOP], ['mobile', PHONE]] as const) {
+  test(`Session rows owns a sticky, expandable live preview on ${device}`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    await page.goto('/settings-harness.html?section=Appearance&setting=session_rows')
+    const heading=page.locator('.settings-content h3',{hasText:/^Session rows$/})
+    await expect(heading).toBeVisible()
+    await expect(page.locator('.settings-content h3',{hasText:/^Theme$/})).toBeHidden()
+
+    const preview=page.locator('.session-row-preview-sticky')
+    const rows=preview.locator('.session-row')
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toHaveClass(/working/)
+    expect(await preview.evaluate(node=>getComputedStyle(node).position)).toBe('sticky')
+
+    await preview.getByRole('button',{name:'Show examples'}).click()
+    await expect(rows).toHaveCount(4)
+    await preview.getByRole('button',{name:'Show one row'}).click()
+    await expect(rows).toHaveCount(1)
+
+    await page.locator('.settings-content').evaluate(node=>{node.scrollTop=600})
+    await expect.poll(async()=>preview.evaluate(node=>{
+      const box=node.getBoundingClientRect()
+      const scroller=node.closest('.settings-content')!.getBoundingClientRect()
+      return Math.abs(box.top-scroller.top)
+    })).toBeLessThan(1)
+  })
+}
+
+test('the sticky session-row preview updates before its settings write finishes', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html?section=Appearance&setting=session_rows')
+  const row=page.locator('.session-row-preview .session-row').first()
+  await expect(row).toContainText('5-codex')
+  await page.getByRole('button',{name:'Minimal',exact:true}).click()
+  await expect(row).not.toContainText('5-codex')
+})
+
 test('an unpaged tab lists its rendered sections in the sidebar, and the chevron collapses them', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')

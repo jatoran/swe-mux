@@ -30,18 +30,23 @@ test('tab context-menu openers target without activating',()=>{
   assert.doesNotMatch(menu,/runNamedCommand\('pane\.stackNew'\)|spawnTerminal\(/, 'no session menu spawns a terminal: new work is the Run button, and a menu opened on some other session makes the landing pane a guess')
 })
 
-test('session menus act on the session and never open another surface',()=>{
+test('session menus act on the session and expose only the row-appearance settings shortcut',()=>{
   const menu=section('{contextMenu && <div', '{projectMenu && <div')
   // Copy working directory is the one pane-only row left, and it stays gated: sidebar,
   // desktop-tab and mobile-tab menus are opened to rename or kill.
   assert.match(menu,/\{contextMenu\.source==='pane'&&<button[^]*?session\.copyCwd/, 'copy-cwd must stay behind the pane gate')
   assert.equal(menu.split('session.copyCwd').length-1,1,'copy-cwd must appear once, gated')
 
-  // Every remaining row does something to this session immediately. The two that opened
-  // a whole surface of their own instead — the prompt library and the Resources dialog —
-  // left, because both are a command and a drawer tab away from where you already are.
+  // Prompt library and Resources remain absent: both are a command and a drawer tab away.
+  // Row appearance is the one surface shortcut because this menu is itself a rendered
+  // session row, so it is the only place where the consequence is already under the pointer.
   assert.doesNotMatch(menu,/setPromptLibraryOpen/, 'the session menu must not open the prompt library')
   assert.doesNotMatch(menu,/processes\.open/, 'the session menu must not open the Resources dialog')
+  assert.deepEqual(
+    [...menu.matchAll(/openSettingTarget\('([^']+)'\)/g)].map(match=>match[1]),
+    ['appearance.sessionRows'],
+  )
+  assert.match(menu,/>Configure appearance<\/span>/)
   // Clicking the row already opens the session; a row saying so was a second way to click.
   assert.doesNotMatch(menu,/runNamedCommand\('session\.open'\)/)
   // Boot timing is a fact about how the session started, read from the startup
