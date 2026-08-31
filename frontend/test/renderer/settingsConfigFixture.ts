@@ -132,6 +132,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "harness_cli_enabled": {},
   "harness_skill_enabled": {},
   "experience_tier": "",
+  "keymap_preset": "",
   "quests_dismissed": [],
   "harness_setup_complete": false,
   "provider_accounts_prompt_dismissed": false,

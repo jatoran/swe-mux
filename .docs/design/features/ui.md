@@ -1010,15 +1010,43 @@ Its rules, and what each one is defending:
   **Configure Actions** opens as a standalone modal from the main menu, command palette, or a rail-row popover.
   The Actions drawer does not link to configuration because its job is using actions, not arranging the command rail.
   This surface owns the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
-- Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
-  releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
-  Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
-  inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
-  Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
-  binding cannot compete with browser zoom suppression or leak the same input into xterm.
-  Rows group by command category, and the group heading is the category rendered as a word
-  (`commandCategoryLabel`) rather than the id it is stored as — the settings search index reads
-  the *text* of the heading it files a row under, so a raw `view` reached the result list.
+- Keyboard shortcuts are a rule list rather than a chord map, and the Input tab edits
+  the list: the preset picker, the per-command recorder, and the report of what this
+  host cannot receive. `design/features/keybindings.md` owns the design; three things
+  about the *editor* live here.
+  **It says which keyboard it is describing.** A chord that works in the desktop app
+  may be one a browser tab keeps, and the undeliverable list under the picker is
+  computed for the asking host alone - so the panel names the host and the platform
+  above the list rather than drawing a dead chord as though it were live.
+  **Applying a preset is outside the draft/Save cycle**, like "restore defaults": the
+  assignment is absolute and overwrites hand edits, so it happens on an explicit press
+  after a confirmation naming what the preset takes, not as a side effect of a Save
+  the user made for an unrelated reason. Editing an individual shortcut stays inside
+  the cycle.
+  **The recorder records sequences the way they are typed.** A keystroke landing on a
+  chord that already begins a longer binding keeps recording rather than committing -
+  committing there would silently delete every binding under that prefix.
+  Application-reserved UI scale chords remain fixed controls rather than command
+  bindings, and are the one refusal left, so a saved binding cannot compete with
+  browser zoom suppression or leak the same input into xterm.
+- The command palette has four scopes, named in the UI rather than implied: `>`
+  commands, `@` sessions, `#` Projects, `:` files. `searchCommands` scores a command's
+  label, id and category, so "go to that session" - the most common navigation in a
+  fleet UI - could not be answered by the palette at all before the scopes existed.
+  Sessions and Projects filter the registry `fleetCommands` already builds; files are
+  fetched per query and exist only while it does.
+- A leader key draws a **which-key overlay** naming what the next keystroke can be. It
+  is not decoration: ~200 commands behind one prefix without it is a memory test. It
+  waits 450 ms so fluent use never draws it, and it never takes focus, because the
+  sequence is still being typed.
+- The shortcut list groups rows by command category, and the group heading is the
+  category rendered as a word (`commandCategoryLabel`) rather than the id it is stored
+  as - the settings search index reads the *text* of the heading it files a row under,
+  so a raw `view` reached the result list. The list also filters in place
+  (`shortcutMatches`), matching a chord in both spellings - stored (`ctrl+shift+p`) and
+  displayed (`Ctrl+Shift+P`) - so neither typing habit misses it. The displayed half is
+  platform-dependent, so the filter takes the platform: a macOS reader sees `⌘⇧P` and
+  would otherwise be searching a spelling their screen never shows.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from

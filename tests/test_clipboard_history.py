@@ -17,7 +17,7 @@ from swe_mux.config import (
     default_mobile_gestures,
     load_config,
 )
-from swe_mux.keybindings import COMMAND_IDS, normalize_binding
+from swe_mux.keybindings import COMMAND_IDS, migrate_command
 from swe_mux.routes.clipboard import (
     capture_clipboard_entry,
     clear_clipboard_entries,
@@ -319,7 +319,7 @@ def test_drawer_commands_are_bindable_and_gesture_default_is_the_panel() -> None
         "drawer.changemap": "drawer.activity.changes",
     }.items():
         assert retired not in COMMAND_IDS
-        assert normalize_binding("ctrl+alt+9", retired) == ("ctrl+alt+9", survivor)
+        assert migrate_command(retired) == survivor
     # The right-edge drawer is pulled in by the leftward two-finger swipe; the
     # sidebar keeps the rightward one.
     assert default_mobile_gestures()["two_finger_swipe_left"] == "drawer.toggle"

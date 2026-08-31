@@ -74,6 +74,16 @@ decision rather than a tier side effect.
 `firstRunSurface()` (`frontend/src/tutorial.ts`) still arbitrates: the harness panel leads,
 the tutorial waits. The tier step lives *inside* `HarnessSetup.tsx` as its first page,
 shown only while `experience_tier` is `""`, so the arbitration gains no fourth surface.
+
+The **keyboard preset** rides that same page as one line, for the same reason and with
+the same shape (`design/features/keybindings.md`): a preset is a defaults choice, it is
+reversible from Settings, and it is exactly the question somebody arriving from tmux or
+VS Code wants asked once. The line shows the highlighted preset's *warning* rather than
+its description where it has one - choosing "tmux" takes Ctrl+B away from any tmux
+running inside a pane, and after the choice is the worst time to find that out.
+Skipping leaves `keymap_preset` at `""`, which behaves as the default preset; applying
+the default explicitly is skipped too, because a first run should not write a
+`keybindings.json` it has no reason to.
 Skip skips everything and writes only `harness_setup_complete`; "Configure in Settings…"
 does the same and opens Settings → Agents.
 

@@ -598,6 +598,13 @@ class SessionRecord:
     # daemon: a configurator adopted after a session-preserving restart that came
     # back without its tools would look like the feature silently breaking.
     configurator: bool = False
+    # Immutable ownership for a terminal/TUI pane contributed by an external
+    # plugin.  Optional fields preserve snapshots written by older daemons and
+    # keep ordinary shells and agents byte-for-byte unchanged.
+    plugin_id: str | None = None
+    plugin_version: str | None = None
+    plugin_entrypoint_id: str | None = None
+    plugin_placement: str | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

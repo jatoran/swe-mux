@@ -10,6 +10,14 @@ they fail closed: an unreadable repository blocks exactly like a dirty one, beca
 "the check could not be made" and "the check passed" are the two answers that must
 never be conflated.
 
+Fail-closed has a direction, and it is *hold*, never *refuse*. Every safety read
+distinguishes Git answering "no" from Git not answering (`_SafetyReadFailed`), so a
+timed-out or failed read reports the repository unreadable rather than folding into
+a falsy fact - which downstream would read as a **permanent** verdict ("not a
+registered worktree", "a linked worktree", "a detached HEAD") for what was a
+transient hiccup. That fold is exactly what a gate-contention flake produced on
+2026-08-30.
+
 They divide into two kinds, and the difference is the whole UX of the queue:
 
 - **Transient** (`hold`): a busy tree, a working session, a locked index. The request
@@ -23,9 +31,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from .git_monitor import read_git
 from .path_identity import same_path
@@ -97,13 +106,62 @@ def _tracked_changes(porcelain: str) -> tuple[str, ...]:
     return tuple(changed)
 
 
+class _SafetyReadFailed(Exception):
+    """One safety read could not be answered.
+
+    Raised instead of folding the failure into a falsy value, because a falsy fact
+    produces a *permanent* verdict downstream - "not a registered worktree", "a
+    linked worktree", "a detached HEAD" - while the truth is transient. That is
+    exactly the misclassification a timed-out `git worktree list` produced under
+    gate contention on 2026-08-30. The only catcher is `read_repository_facts`,
+    which reports it as `readable=False`, and unreadable is a hold.
+    """
+
+
+def _read_failure(cwd: str, args: tuple[str, ...], code: int, output: str) -> _SafetyReadFailed:
+    detail = (output or f"exit code {code}").strip()
+    return _SafetyReadFailed(f"`git {' '.join(args)}` in {cwd}: {detail[:200]}")
+
+
 async def _read_land_git(cwd: str, *args: str) -> tuple[int, str]:
     return await read_git(cwd, *args, timeout_seconds=LAND_GIT_TIMEOUT_SECONDS)
 
 
+async def _gather_settled(*reads: Awaitable[Any]) -> list[Any]:
+    """Await every read to completion, then raise the first failure.
+
+    Raising out of a live `asyncio.gather` abandons the sibling reads mid-await on
+    their git subprocesses, and cancelling those at event-loop close is what hung
+    pytest-asyncio's teardown on Windows (`_cancel_all_tasks` never returning) when
+    this module first raised from inside one. So failures are collected, everything
+    finishes, and only then does one raise - the same wait-your-children-out rule
+    the test suite already applies (CLAUDE.md § Verification).
+
+    Anything that is not a `_SafetyReadFailed` re-raises first: a cancelled outer
+    task and a genuine bug must both stay loud rather than being reported as an
+    unreadable repository.
+    """
+    results = await asyncio.gather(*reads, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(result, _SafetyReadFailed):
+            raise result
+    for result in results:
+        if isinstance(result, _SafetyReadFailed):
+            raise result
+    return results
+
+
 async def _rev_parse(cwd: str, *args: str) -> str:
+    """One rev-parse answer, or `_SafetyReadFailed` - never an empty stand-in.
+
+    Every caller asks about a ref or a repository directory that exists in any
+    checkout this pipeline addresses, so a failure here is Git not answering, not
+    Git answering "no".
+    """
     code, output = await _read_land_git(cwd, "rev-parse", *args)
-    return output.strip() if code == 0 else ""
+    if code != 0:
+        raise _read_failure(cwd, ("rev-parse", *args), code, output)
+    return output.strip()
 
 
 async def _is_main_tree(cwd: str) -> bool:
@@ -115,12 +173,12 @@ async def _is_main_tree(cwd: str) -> bool:
     (`git.md`). A name comparison reports every primary checkout as a worktree of
     itself.
     """
-    git_dir, common_dir = await asyncio.gather(
+    git_dir, common_dir = await _gather_settled(
         _rev_parse(cwd, "--absolute-git-dir"),
         _rev_parse(cwd, "--git-common-dir"),
     )
     if not git_dir or not common_dir:
-        return False
+        raise _SafetyReadFailed(f"git rev-parse answered nothing for the git dirs of {cwd}")
     base = Path(cwd)
     return same_path(str((base / git_dir).resolve()), str((base / common_dir).resolve()))
 
@@ -129,11 +187,12 @@ async def _registered_worktree(trunk_root: str, worktree_root: str) -> bool:
     """Whether Git itself lists this path as a worktree of this repository.
 
     Git is the authority here, exactly as it is for `resolve_listed_cwd` in the spawn
-    path. A directory that merely looks like a checkout is not one of ours.
+    path. A directory that merely looks like a checkout is not one of ours - but that
+    verdict may only come from a listing Git actually produced.
     """
     code, output = await _read_land_git(trunk_root, "worktree", "list", "--porcelain")
     if code != 0:
-        return False
+        raise _read_failure(trunk_root, ("worktree", "list", "--porcelain"), code, output)
     for line in output.splitlines():
         if line.startswith("worktree "):
             if same_path(line[len("worktree ") :].strip(), worktree_root):
@@ -163,10 +222,18 @@ async def _incoming_paths(trunk_root: str, trunk_head: str, branch_head: str) ->
 
 
 async def _is_ancestor(cwd: str, ancestor: str, descendant: str) -> bool:
-    if not ancestor or not descendant:
+    code, output = await _read_land_git(
+        cwd, "merge-base", "--is-ancestor", ancestor, descendant
+    )
+    if code == 0:
+        return True
+    if code == 1:
+        # Git's own "no". A spawn failure degrades to this shape too
+        # (`read_git` answers `(1, "")` on OSError), and that errs in the
+        # harmless direction: an unlanded reading runs the pipeline, and Git
+        # itself answers again at the fast-forward.
         return False
-    code, _ = await _read_land_git(cwd, "merge-base", "--is-ancestor", ancestor, descendant)
-    return code == 0
+    raise _read_failure(cwd, ("merge-base", "--is-ancestor"), code, output)
 
 
 async def read_repository_facts(worktree_root: str, trunk_root: str) -> RepositoryFacts:
@@ -194,24 +261,46 @@ async def read_repository_facts(worktree_root: str, trunk_root: str) -> Reposito
             readable=False,
             error=(wt_top if wt_top_code != 0 else tr_top) or "git could not read the checkout",
         )
-    worktree_head, trunk_head, main_tree, registered = await asyncio.gather(
-        _rev_parse(worktree_root, "HEAD"),
-        _rev_parse(trunk_root, "HEAD"),
-        _is_main_tree(trunk_root),
-        _registered_worktree(trunk_root, worktree_root),
-    )
-    incoming, already_landed = await asyncio.gather(
-        _incoming_paths(trunk_root, trunk_head, worktree_head),
-        _is_ancestor(trunk_root, worktree_head, trunk_head),
-    )
+    if wt_branch_code != 0 or tr_branch_code != 0:
+        # A branch that could not be read is not a detached HEAD (Git prints the
+        # literal `HEAD` for that, with exit code 0), so folding it into "" would
+        # turn a transient failure into a permanent branch-mismatch refusal.
+        return RepositoryFacts(
+            readable=False,
+            error=(wt_branch if wt_branch_code != 0 else tr_branch)
+            or "git could not read the checked-out branch",
+        )
+    try:
+        worktree_head, trunk_head, main_tree, registered = await _gather_settled(
+            _rev_parse(worktree_root, "HEAD"),
+            _rev_parse(trunk_root, "HEAD"),
+            _is_main_tree(trunk_root),
+            _registered_worktree(trunk_root, worktree_root),
+        )
+        if main_tree and registered:
+            incoming, already_landed = await _gather_settled(
+                _incoming_paths(trunk_root, trunk_head, worktree_head),
+                _is_ancestor(trunk_root, worktree_head, trunk_head),
+            )
+        else:
+            # These two questions are only meaningful between a registered
+            # worktree and its own main tree, and their answers are never
+            # consulted downstream of the identity refusals. Asking anyway would
+            # hand a foreign checkout's HEAD to this repository's `merge-base`,
+            # whose `fatal: not a valid object` is indistinguishable from an
+            # infrastructure failure - turning a permanent refusal into an
+            # eternal hold.
+            incoming, already_landed = (), False
+    except _SafetyReadFailed as exc:
+        return RepositoryFacts(readable=False, error=str(exc))
     return RepositoryFacts(
         worktree_root=wt_top,
-        worktree_branch=wt_branch if wt_branch_code == 0 else "",
+        worktree_branch=wt_branch,
         worktree_head=worktree_head,
         worktree_dirty=_tracked_changes(wt_status) if wt_status_code == 0 else (),
         worktree_registered=registered,
         trunk_root=tr_top,
-        trunk_branch=tr_branch if tr_branch_code == 0 else "",
+        trunk_branch=tr_branch,
         trunk_head=trunk_head,
         trunk_is_main_tree=main_tree,
         trunk_dirty=_tracked_changes(tr_status) if tr_status_code == 0 else (),

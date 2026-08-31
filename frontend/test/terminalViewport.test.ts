@@ -285,7 +285,7 @@ test('the width envelope reaches live panes and explains itself when it clamps',
   // rather than only grepped (`terminalPaneInputBackend.test.ts`).
   const memo = readFileSync(join(root, '..', 'src', 'terminalPaneMemo.ts'), 'utf8')
   assert.match(memo, /a\.claudeMaxColumns === b\.claudeMaxColumns/)
-  const lifetime = /\n  \}, \[session\.id, keybindings,[^\]]*\]\)/.exec(pane)?.[0] ?? ''
+  const lifetime = /\n  \}, \[session\.id, scrollback,[^\]]*\]\)/.exec(pane)?.[0] ?? ''
   assert.ok(lifetime, 'the terminal lifetime effect dep list has moved')
   assert.doesNotMatch(lifetime, /claudeMaxColumns/)
   // Uncapped means no host style at all, so a disabled envelope and a build without
