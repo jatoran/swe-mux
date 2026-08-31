@@ -15,6 +15,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-31
+
 ### Added
 
 - **`swemux agent` - the mux fleet tools over a second transport.** Inside any swe-mux
@@ -65,6 +67,24 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   hot-applied, and offered during first-run Customize. Turning one off hides the whole
   rail there (on mobile that includes the pinned Send button) while the configured layout
   is kept and comes back untouched.
+
+- **The first launch of the Windows desktop shell offers to add itself to the Start Menu and
+  to start when you sign in.** A wheel cannot create a shortcut and nothing runs after
+  `pip`/`uv`, so `swemux install-shortcut` was a command nobody knew to run. Asked once per
+  install whichever way you answer, never for the installer's own build, and never when a
+  Start Menu entry already exists. It writes no desktop icon; that stays a choice in
+  Settings.
+- **`swemux start` runs the daemon in the background and returns once it is serving.** For
+  the browser-only case, for Linux and macOS where there is no desktop app, and for
+  iterating from a checkout: closing the terminal does not stop it, `swemuxd --shutdown`
+  does, and a daemon that is already serving is reported and left alone. It is the only
+  command that starts a daemon, and only when typed - `swemux ls` against a stopped daemon
+  still says so.
+- **A daemon started where you can see it opens the UI in your browser.** Gated on a
+  terminal actually watching the process, which is what keeps it out of every start that
+  should not do this: the tray's own daemon child, `swemux start`'s detached child, a
+  restart successor, and a login task are all non-TTY and unaffected. `--no-browser` on
+  either command, or `SWE_MUX_NO_BROWSER` for a caller that cannot pass a flag.
 
 ### Changed
 
@@ -190,26 +210,6 @@ share a cause: a property of the development host was written down as a fact abo
   "cannot verify". Its verification step - which imports the package and makes no network
   request at all - had a 20s budget that a first-ever import on a cold, scanned filesystem
   could not meet; it is now 120s and says what it was actually doing.
-
-### Added
-
-- **The first launch of the Windows desktop shell offers to add itself to the Start Menu and
-  to start when you sign in.** A wheel cannot create a shortcut and nothing runs after
-  `pip`/`uv`, so `swemux install-shortcut` was a command nobody knew to run. Asked once per
-  install whichever way you answer, never for the installer's own build, and never when a
-  Start Menu entry already exists. It writes no desktop icon; that stays a choice in
-  Settings.
-- **`swemux start` runs the daemon in the background and returns once it is serving.** For
-  the browser-only case, for Linux and macOS where there is no desktop app, and for
-  iterating from a checkout: closing the terminal does not stop it, `swemuxd --shutdown`
-  does, and a daemon that is already serving is reported and left alone. It is the only
-  command that starts a daemon, and only when typed - `swemux ls` against a stopped daemon
-  still says so.
-- **A daemon started where you can see it opens the UI in your browser.** Gated on a
-  terminal actually watching the process, which is what keeps it out of every start that
-  should not do this: the tray's own daemon child, `swemux start`'s detached child, a
-  restart successor, and a login task are all non-TTY and unaffected. `--no-browser` on
-  either command, or `SWE_MUX_NO_BROWSER` for a caller that cannot pass a flag.
 
 ## [0.1.5] - 2026-08-30
 
@@ -705,7 +705,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.0
 [0.1.5]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.5
 [0.1.4]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.4
 [0.1.3]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.3
