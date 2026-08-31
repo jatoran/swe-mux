@@ -3746,13 +3746,25 @@ requires one; crash telemetry or license infrastructure would, and both are out 
   GitHub Pages via the Actions source (`actions/upload-pages-artifact` over `site/` +
   `actions/deploy-pages` on push), so site updates ship with ordinary commits and no
   `gh-pages` branch holds build output; the `swemux.dev` custom domain with enforced HTTPS.
-  Cloudflare Pages is the alternative if its free analytics are wanted - the same
-  one-repo layout works there unchanged.
   (Workflow landed 2026-08-27, W2, as `.github/workflows/pages.yml`. It shares a `concurrency`
-  group with the release workflow's deploy, which is not incidental: Pages serves whichever
+  group with the release workflow's deploy, which is not incidental: the host serves whichever
   deployment finished last, so a site commit landing during a release would otherwise publish a
-  site with no `version.json`. Enabling Pages, pointing DNS, and enforcing HTTPS are account
-  acts and stay with the operator, in `RELEASE_MANUAL_TASKS.md` task 5.)
+  site with no `version.json`. Pointing DNS and attaching the domain are account acts and stay
+  with the operator, in `RELEASE_MANUAL_TASKS.md` task 5.)
+
+  **Moved to Cloudflare Workers on 2026-08-31**, as `.github/workflows/deploy-site.yml`; the
+  one-repo layout carried over unchanged, and so did the shared `concurrency` group and the
+  post-release `workflow_run` re-trigger. The prediction above that Cloudflare was "the
+  alternative if its free analytics are wanted" was the wrong reason and worth recording as
+  such: what actually forced it was bandwidth. GitHub Pages' 100 GB/month soft cap is roughly
+  33k engaged visits at this site's ~3 MB blended weight, so one front-page day spends the
+  monthly allowance - and because that limit is enforced by a human deciding to throttle, and
+  `swemux.dev/version.json` is a contract every installed build polls daily, outgrowing the host
+  meant losing the update endpoint rather than merely serving a slow landing page. The apex
+  requirement decided the shape: Cloudflare will not serve an apex custom domain unless the zone
+  is on Cloudflare, and `swemux.dev` (not `www.`) is the hostname compiled into shipped clients,
+  so the nameserver migration was mandatory rather than optional. Rationale in
+  `wrangler.jsonc`, including why this is a Worker rather than a Pages project.
 - [x] Pages: the drafted homepage, install/quickstart, a documentation section, a changelog,
   a public roadmap page (a curated projection of this file, not a copy), and an
   acknowledgements page thanking the libraries and projects swe-mux builds on.

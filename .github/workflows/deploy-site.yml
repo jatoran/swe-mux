@@ -1,0 +1,136 @@
+# Deploys swemux.dev from `site/` to Cloudflare Workers.
+#
+# Was `pages.yml`, deploying to GitHub Pages, until 2026-08-31. The move is about
+# one number: Pages' 100 GB/month bandwidth is roughly 33k engaged visits at this
+# site's ~3 MB blended weight, so a single front-page day spends the monthly
+# allowance, and the limit is soft - enforced by a human deciding to throttle.
+# `swemux.dev/version.json` is a published contract that every installed build
+# polls daily, so the consequence of outgrowing the host was never "the landing
+# page gets slow". `wrangler.jsonc` carries the rest of the rationale, including
+# why this is a Worker rather than a Pages project.
+#
+# The shape of the workflow is deliberately unchanged. Cloudflare's Git
+# integration would have replaced all of it, and was rejected: `plugins.py` needs
+# `github.token` (which does not exist on Cloudflare's builders, so it would
+# become a stored PAT), `gh release download` needs the same, `release.yml` also
+# deploys this site and cannot trigger a Cloudflare build, and the schedule below
+# has no equivalent there. Direct upload from Actions keeps every GitHub API call
+# on the automatic token and leaves exactly one deployer.
+#
+# Path-filtered to `site/**` because this repository's ordinary traffic is
+# backend and frontend work, and a site deployment on every one of those commits
+# is a queue of no-op deployments in front of the one that matters. The workflow
+# and `wrangler.jsonc` are in the filter so a change to *how* the site deploys is
+# exercised by making it, not by remembering to dispatch afterwards.
+#
+# `master` only, not `[master, main]` as `ci.yml` allows: CI answering the same
+# question on two branch names is harmless, but two branches deploying to one
+# live site is a race with a publicly visible loser.
+#
+# The custom domain (`swemux.dev` and `www.swemux.dev`) is attached to the Worker
+# in the Cloudflare dashboard, not declared here. There is deliberately no
+# `site/CNAME` any more - that file was GitHub's mechanism and Cloudflare would
+# have served it as a stray text file at `/CNAME`.
+name: deploy-site
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - "wrangler.jsonc"
+      - ".github/workflows/deploy-site.yml"
+  # After a release, because a push-triggered run stages its bytes at checkout
+  # and deploys them after the queue clears, so it can publish content older than
+  # itself.
+  #
+  # Measured on v0.1.2 (2026-08-29) under GitHub Pages: the release commit's run
+  # checked out at 00:30:57, when the newest release was still v0.1.0, and
+  # restored that `version.json`. `release.yml`'s `update-manifest` then published
+  # the correct 0.1.2 manifest at 00:37:25. The queued deploy finished at 00:38:56
+  # and overwrote it, so the site advertised 0.1.0 while PyPI served 0.1.2 and the
+  # download section had no artifacts to name.
+  #
+  # Nothing about that changed with the host: Cloudflare also serves whichever
+  # deployment finished last, and the `concurrency` group below only serialises
+  # the two - the loser is whichever *finishes* first, not whichever holds newer
+  # content. Re-running after the release is what makes the last deployment the
+  # newest one, and it is cheap.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  repository_dispatch:
+    types: [plugin_catalog_changed]
+  schedule:
+    # Off the hour because GitHub documents heavier schedule delays at minute
+    # zero. Six-hourly because `plugins.py` builds the catalog from a live
+    # `topic:swe-mux-plugin` search, so a newly published plugin changes nothing
+    # in this repository and no push-triggered run would ever fire for it.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+# `contents: read` is for the checkout and for reading the latest release's
+# assets. Deployment itself no longer uses an Actions permission at all: it
+# authenticates with `CLOUDFLARE_API_TOKEN`, scoped to Workers Scripts: Edit on
+# one account. That is a real stored credential where the Pages OIDC exchange
+# needed none, and it is the one thing this migration traded away.
+permissions:
+  contents: read
+
+# Shared with `release.yml`'s `update-manifest` job, which deploys this same
+# site. Cloudflare serves whichever deployment finished last, so the two must not
+# overlap. `cancel-in-progress: false` because both deployments carry real
+# content - dropping the running one to start a newer one is how the manifest or
+# a site edit goes missing.
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build validated plugin catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python site/tools/plugins.py
+          --output site/plugins/catalog.json
+          --script-output site/plugins/catalog.js
+
+      # `site/version.json` is the app's update-check endpoint and is generated
+      # by `release.yml`, never committed - so a checkout of master does not
+      # contain it, and deploying `site/` as-is would delete the endpoint every
+      # time somebody fixed a typo on the landing page. Restoring it from the
+      # latest Release, where `release.yml` also attaches it, keeps one writer
+      # and one source of truth while making every deployment carry it.
+      #
+      # A missing manifest is not an error: before the first release there is
+      # nothing to restore, and the site is still worth publishing.
+      - name: Restore the update manifest from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download --pattern version.json --dir site --clobber; then
+            echo "Restored site/version.json from the latest release."
+          else
+            echo "No published release carries version.json yet; deploying without it."
+          fi
+
+      # `wranglerVersion` is deliberately unpinned. The command below takes no
+      # flags and every runtime-visible choice is pinned by `compatibility_date`
+      # in `wrangler.jsonc`, so the CLI version only decides upload mechanics -
+      # pinning it would buy a dependency to keep current and no reproducibility
+      # this does not already have.
+      - name: Deploy to Cloudflare Workers
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Report the deployment URL
+        run: echo "Deployed ${{ steps.deploy.outputs.deployment-url }}"

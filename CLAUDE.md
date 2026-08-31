@@ -110,8 +110,8 @@ Ubuntu, macOS, Windows and `site` all block.
 **The site's pages are committed build output, and the release commit is where that bites.**
 `site/tools/build.py` writes `site/changelog/index.html` and thirty siblings out of
 `CHANGELOG.md`, `site/tools/docs_content.py`, `THIRD-PARTY-NOTICES.md` and
-`packaging/third_party_licenses.json`; `pages.yml` uploads `site/` verbatim and never runs the
-generator, which is what keeps the deploy a twenty-second file copy. So a commit that edits a
+`packaging/third_party_licenses.json`; `deploy-site.yml` uploads `site/` verbatim and never runs
+the generator, which is what keeps the deploy a twenty-second file copy. So a commit that edits a
 source and not the page publishes a stale page - 0.1.3 did exactly that, and `swemux.dev/changelog/`
 showed 0.1.2 for a day while 0.1.3 was live on PyPI, on GitHub Releases and in `version.json`.
 **If you touch any of those sources, run `python site/tools/build.py` and commit `site/`.**

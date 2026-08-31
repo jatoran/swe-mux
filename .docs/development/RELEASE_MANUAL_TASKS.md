@@ -104,14 +104,37 @@ Only choose it if the rewrite verification above turns up something unexpected.
 - [ ] Enable private security advisories, so `SECURITY.md` points at something real.
 - [ ] Add branch protection on `master` only after the first CI run is green, so a red required check does not lock you out of your own repository.
 
-## 5. GitHub Pages and the domain
+## 5. Hosting and the domain
 
-Agent W2 writes the deploy workflow; the account-side setup is yours.
+**Moved from GitHub Pages to Cloudflare Workers on 2026-08-31.** The deploy workflow is
+`.github/workflows/deploy-site.yml`; the account-side setup is yours. The original GitHub Pages
+steps are kept below, struck through, because restoring those DNS records is the rollback.
 
-- [ ] Settings, Pages, Source: **GitHub Actions** (not a branch).
-- [ ] Add `swemux.dev` as the custom domain.
-- [ ] DNS at the registrar: apex `A` records to GitHub's four Pages addresses, plus a `www` `CNAME` to `<owner>.github.io`.
-- [ ] Wait for the certificate, then enable **Enforce HTTPS**.
+- [x] Domain registered at Porkbun; DNS delegated to Cloudflare (`gina`/`quinton.ns.cloudflare.com`) on 2026-08-31.
+      Every record was recreated identically first and the nameservers flipped second, so the
+      propagation window served the same content from either provider and mail never moved.
+- [x] Mail is unaffected by the delegation and must stay that way: `MX` to `fwd1`/`fwd2.porkbun.com`,
+      one SPF, the `brevo-code` TXT, `_dmarc`, and both `brevo*._domainkey` CNAMEs.
+      **The two DKIM CNAMEs must be DNS only.** Cloudflare defaults new CNAMEs to Proxied, and a
+      proxied `_domainkey` answers with Cloudflare's IPs instead of resolving through to Brevo,
+      which silently fails every outbound message's DMARC. Details in `.private/email-setup.md`.
+- [x] SSL/TLS mode set to **Full (strict)**.
+- [ ] Attach `swemux.dev` and `www.swemux.dev` as custom domains on the Worker.
+      This also fixes a pre-existing defect: GitHub issued a single-name certificate covering the
+      apex only, so `https://www.swemux.dev` never worked. Cloudflare's Universal SSL covers
+      `swemux.dev` and `*.swemux.dev`.
+- [ ] `CLOUDFLARE_API_TOKEN` (Account, Workers Scripts, Edit) and `CLOUDFLARE_ACCOUNT_ID` as
+      repository secrets. This is a real stored credential where the Pages OIDC exchange needed
+      none, and it is the one thing the migration traded away.
+- [ ] Once stable, remove `swemux.dev` as the custom domain in GitHub's Pages settings.
+      **Not before**: until then, rollback is restoring the four `A` records and the `www` CNAME
+      in Cloudflare's DNS, grey-clouded, which takes about a minute. That fallback decays -
+      GitHub will not renew its certificate while DNS points elsewhere - so treat it as good for
+      weeks, not indefinitely.
+- [ ] ~~Settings, Pages, Source: **GitHub Actions** (not a branch).~~ (retired 2026-08-31)
+- [ ] ~~Add `swemux.dev` as the custom domain.~~ (retired 2026-08-31)
+- [ ] ~~DNS at the registrar: apex `A` records to GitHub's four Pages addresses, plus a `www` `CNAME` to `<owner>.github.io`.~~ (this is the rollback target)
+- [ ] ~~Wait for the certificate, then enable **Enforce HTTPS**.~~ (retired 2026-08-31)
 - [x] Fill the three `data-todo` placeholders in `site/index.html` (docs, blog, repository URLs). All three are filled; `TODO_VALUES` in `site/tools/build.py` and `check.mjs` is now empty and the guard stays. Verify with `grep -rn data-todo site/`, which should find only the guards themselves.
 - [x] Re-run the site's own gates after editing: `node site/tools/check.mjs` and `python site/tools/contrast.py`.
       No longer a manual step as of 2026-08-29: `ci.yml`'s `site` job runs both on every push, alongside `python site/tools/build.py --check` and `python site/tools/check_changelog.py --require-tags`.

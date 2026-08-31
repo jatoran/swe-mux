@@ -1,0 +1,36 @@
+# Response headers for swemux.dev. Consumed by Cloudflare Workers Assets at
+# deploy time and never served as a file. GitHub Pages had no equivalent, so
+# everything here is new capability rather than a port of prior behaviour.
+#
+# Up to 100 rules, 2000 characters per line. Matching is by path; every matching
+# rule applies, so the security block below and the cache blocks under it
+# compose rather than override.
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+# Vite writes content hashes into these filenames, so a changed file is a
+# changed URL and the response can be cached for as long as a browser will keep
+# it. This is the bulk of the site's bytes: the demo bundle is ~5.5 MB, of which
+# a 1.9 MB `App-*.js` and a 1.1 MB `.wasm`.
+/demo/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Deliberately NOT `immutable`, because these names carry no hash: `hero.mp4`
+# replaced in place would otherwise stay pinned in every visitor's cache
+# forever. An hour of freshness with a day of stale-while-revalidate keeps the
+# 6 MB of video and screenshots off the wire on repeat visits without that.
+/img/*
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+
+# Both are generated per deploy rather than committed, and both are read by
+# installed builds (`update_check.py`, `plugins.py`) rather than only by the
+# site. Five minutes is short enough that a release or a catalog refresh is
+# visible almost immediately, and long enough that a poll storm never reaches
+# the origin.
+/version.json
+  Cache-Control: public, max-age=300
+
+/plugins/catalog.json
+  Cache-Control: public, max-age=300

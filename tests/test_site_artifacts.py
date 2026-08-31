@@ -1,7 +1,7 @@
 """The committed site pages still match the sources they were generated from.
 
 `site/changelog/index.html` and its thirty siblings are **build output that is
-committed**: `site/tools/build.py` writes them, and `pages.yml` uploads `site/`
+committed**: `site/tools/build.py` writes them, and `deploy-site.yml` uploads `site/`
 verbatim without ever running that script, which is what keeps the deploy a
 twenty-second file copy with no toolchain in it.
 

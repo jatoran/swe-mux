@@ -439,22 +439,21 @@ jobs:
     needs: [build, github-release]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Shared with `pages.yml`. Both workflows deploy the same site, and Pages
-    # serves whichever deployment finished last - so a site commit landing during
-    # a release would otherwise publish a site with no `version.json` in it.
-    # `cancel-in-progress: false` because the loser here must wait, not be
-    # dropped: a cancelled release deployment leaves the manifest a version
-    # behind with nothing reporting it.
+    # Shared with `deploy-site.yml`. Both workflows deploy the same site, and
+    # Cloudflare serves whichever deployment finished last - so a site commit
+    # landing during a release would otherwise publish a site with no
+    # `version.json` in it. `cancel-in-progress: false` because the loser here
+    # must wait, not be dropped: a cancelled release deployment leaves the
+    # manifest a version behind with nothing reporting it.
     concurrency:
-      group: pages
+      group: deploy-site
       cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    # `contents: write` is for `gh release upload` below, which attaches the
+    # manifest to the Release. Deployment needs no Actions permission at all
+    # since the move off GitHub Pages: it authenticates with
+    # `CLOUDFLARE_API_TOKEN`.
     permissions:
       contents: write
-      pages: write
-      id-token: write
     steps:
       # `master`, not the tag. The site is not versioned with the package: it
       # carries the current landing page, docs and changelog, and deploying the
@@ -551,11 +550,26 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: gh release upload "$TAG" site/version.json --clobber
 
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
+      # The plugin catalog is deliberately NOT rebuilt here, unlike in
+      # `deploy-site.yml`. It is generated from a live GitHub topic search, and
+      # plugins are a side surface rather than part of what a release publishes;
+      # the six-hourly schedule there is its writer. Adding the step here would
+      # put a network search for third-party repositories on the release path,
+      # which is a larger promise than a release needs to make.
+      #
+      # The consequence, and it is accepted rather than overlooked: for up to six
+      # hours after a release, `/plugins/catalog.json` is absent and the page
+      # falls back to the committed `catalog.js` placeholder, which renders as
+      # "No validated plugins are published yet" - a confident claim where
+      # "unknown" would be honest. The app is unaffected; it reads the
+      # unreviewed topic directly when the catalog 404s. Fixing the page's
+      # wording is its own change, not this one's.
+      - name: Deploy to Cloudflare Workers
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
         with:
-          path: site/
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - id: deploy
-        uses: actions/deploy-pages@v4
+      - name: Report the deployment URL
+        run: echo "Deployed ${{ steps.deploy.outputs.deployment-url }}"

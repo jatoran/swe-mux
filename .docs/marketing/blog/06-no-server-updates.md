@@ -18,7 +18,7 @@ This was a design decision, not a budget one, and it turned out to cost nothing.
 
 The entire distribution stack is static files:
 
-- **Release CI writes `version.json`** - latest version, artifact URLs, SHA-256 hashes, changelog pointer - into the static site (GitHub Pages, same repo as the code).
+- **Release CI writes `version.json`** - latest version, artifact URLs, SHA-256 hashes, changelog pointer - into the static site (Cloudflare Workers, deployed from the same repo as the code).
 - **The app polls that file** about once a day, compares versions, and shows a banner.
   Nothing downloads without an explicit click.
   Fallback endpoint: the GitHub Releases API, whose unauthenticated rate limit is laughably sufficient for a daily check.
