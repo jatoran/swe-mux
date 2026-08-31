@@ -6385,7 +6385,7 @@ Recorded 2026-08-30 and scheduled.
 The evidence and architectural decisions are in `PLUGIN_SYSTEM_FINDINGS.md`; this phase is the authoritative implementation checklist and acceptance contract.
 
 Implementation candidate completed 2026-08-30 on `worktree-plugin-system` and intentionally remains unlanded for operator review.
-The branch gate passes 6,480 backend tests plus ruff, full and per-platform mypy, frontend source and test typechecks, and 2,302 frontend tests.
+The branch gate passes 6,495 backend tests plus ruff, full and per-platform mypy, frontend source and test typechecks, and 2,302 frontend tests.
 Three high-utility test plugins live as independent Git repositories under the primary checkout's ignored `.private/plugin-lab`; no plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
 Checkboxes remain open until review and landing make the implementation part of `master`.
 
