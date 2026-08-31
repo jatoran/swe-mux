@@ -7,6 +7,7 @@ import {
   clampPeekOffset,
   deepActiveElement,
   hiddenOutputDeservesPeek,
+  inputEndsPeek,
   nextPeekOffset,
   peekToggleVisible,
   raisesSoftKeyboard,
@@ -289,6 +290,23 @@ test('peeking at the top of a grid survives output and ends on input', () => {
   // Without the keyboard the whole grid fits, so there is no slice left to move.
   assert.equal(nextPeekOffset(415, 'keyboardClosed', 415), 0)
   assert.equal(nextPeekOffset(0, 'keyboardClosed', 415), 0)
+})
+
+test('forwarded scroll reports are reading, not typing, so they do not end a peek', () => {
+  // A drag that pans the peek to its end chains into wheel reports through the same
+  // onData path as a keystroke; counting them as input snapped the peek back mid-gesture.
+  assert.equal(inputEndsPeek('\x1b[<64;12;5M'), false)
+  assert.equal(inputEndsPeek('\x1b[<65;12;5M'), false)
+  assert.equal(inputEndsPeek('\x1b[<64;12;5M\x1b[<64;12;5M'), false)
+  // Everything actually typed still returns the reader to the composer.
+  assert.equal(inputEndsPeek('a'), true)
+  assert.equal(inputEndsPeek('\r'), true)
+  assert.equal(inputEndsPeek('\x1b'), true)
+  // A non-wheel mouse report is the reader acting, the same statement a keystroke makes.
+  assert.equal(inputEndsPeek('\x1b[<0;5;6M'), true)
+  // A modified wheel is an application chord, not flick traffic — the pacer excludes it
+  // and so does this, deliberately on the same classification.
+  assert.equal(inputEndsPeek('\x1b[<68;12;5M'), true)
 })
 
 test('a dragged peek is held inside the travel the keyboard covers', () => {

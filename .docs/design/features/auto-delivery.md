@@ -53,7 +53,8 @@ message on behalf of the user; a per-conversation opt-out remains available.
   message was **delivered** to a peer inside `auto_delivery_reply_window_minutes` (30 by
   default, 0 to disable) is not an untouched conversation - it is the waiting half of a
   bounded exchange, and losing its grant there is what strands the answer.
-  **Two kinds of evidence count, and they are the same fact about two pipes.** `kind: "message"`
+  **Three kinds of evidence count, and they are the same fact about three pipes.**
+  `kind: "message"`
   is the delivered agent message above. `kind: "land"` is an open land request this session
   made (`land-queue.md`) - the same waiting half of the same bounded exchange, except that what
   owes the answer is the daemon rather than a peer. That second one is where the lapse bites
@@ -62,9 +63,19 @@ message on behalf of the user; a per-conversation opt-out remains available.
   handback then arrives armed with nothing to deliver it. It is bounded by the request rather
   than by a thread budget - a terminal request opens no window, because the answer has already
   been written - and its clock runs from the last step the pipeline actually recorded, so a
-  queue that has stopped moving stops holding the grant. The evidence arrives through an
-  injected callable rather than an import, so nothing in the controller knows what a land
-  request is, and a source that cannot be read is absent rather than fatal.
+  queue that has stopped moving stops holding the grant.
+  `kind: "watch"` (2026-08-30) is an open settle watch this session armed
+  (`session_watch.origin_windows`) - a watcher waiting to be told goes quiet exactly the way
+  a landing session does, and before this its grant lapsed under any watch timeout longer
+  than the idle TTL, so the notice matured into an armed message nothing would deliver
+  (the gap `mux-mcp.md` tracked). A watch window carries its **own** expiry - the watch's
+  deadline plus a short delivery grace - rather than taking the reply-window span, because
+  the watch's timeout is the request's own bound; a resolved or dropped watch stops holding
+  immediately. The evidence arrives through an
+  injected callable rather than an import (`merge_solicited_sources` composes the land and
+  watch pipes, later sources winning for a session holding both), so nothing in the
+  controller knows what a land request or a watch is, and a source that cannot be read is
+  absent rather than fatal.
   Observed live
   2026-08-21: an orchestrator's notify to a finished worker armed and could not deliver, and
   the worker's reply had nowhere to land either. Three things keep this from being a
@@ -83,8 +94,17 @@ message on behalf of the user; a per-conversation opt-out remains available.
   `accept_agent_messages` choice made during that run. An explicit opt-out and an ambiguous
   failed delivery record something that happened and stay until a human clears them.
   The exhausted consecutive-send budget sits between the two: it records that *nobody was
-  seen*, so anything that shows somebody is clears it - a human send, or a reply the session
-  itself wrote to a peer (`PromptQueueStore.credit_auto_attention`).
+  seen*, so anything that shows somebody is clears it - a human send, a reply the session
+  itself wrote to a peer, or (2026-08-30) any authenticated mux tool call the session makes
+  (`PromptQueueStore.credit_auto_attention`; the MCP dispatch credits it, throttled to one
+  write per 30 s per session). The third is the same fact as the second, generalized: a
+  session acting through the mux surface is running turns, and every delivered message lands
+  in the prompt those turns read - the opposite of the unattended run the cap exists to
+  catch. The gap it closes is structural: an orchestrator that consumes its watch notices
+  by *acting on them* - arming new watches, requesting lands - rather than by writing
+  notify replies produced none of the evidence the cap accepted, so after
+  `auto_delivery_max_consecutive` notices its monitoring silently stopped ("worked, then
+  stopped"), with nothing on its side distinguishable from a finished fleet.
 - **The cap only ever bounded an unattended run, and until 2026-08-19 it could not be
   recovered from at all.** `reset_auto_sends` zeroed `sends_used` and left `enabled=0` with
   the disable reason in place, while the conversation-default pass deliberately restores only
@@ -236,8 +256,9 @@ PATCH /api/queue/messages/{id}             {constraints}     schedule / clear
 Per-session rows carry `lapse` (the audit, present only while the grant is off for idleness,
 with individually-null fields on a row that lapsed before the audit existed) and `reply_window`
 (present while an exchange is holding the lapse off). A `reply_window` carries `kind`:
-`"message"` with the thread's used/limit counts, or `"land"` with the request id, branch, and
-state and null thread fields. A client reading an unrecognised `kind` treats it as `"message"`,
+`"message"` with the thread's used/limit counts, `"land"` with the request id, branch, and
+state and null thread fields, or `"watch"` with the watch id, target session, and timeout.
+A client reading an unrecognised `kind` treats it as `"message"`,
 which is the shape every row had before the field existed.
 The policy block carries `reply_window_minutes` beside the other bounds.
 

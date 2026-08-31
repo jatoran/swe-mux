@@ -160,6 +160,7 @@ import {
   createFleetRefreshController, describeFleetFailures, fetchFleetSlices, type FleetRefreshController,
 } from './fleetRefresh.ts'
 import { planFleetLayouts, type PendingSpawn } from './fleetLayouts.ts'
+import { pluginPaneTarget } from './pluginPanes.ts'
 import { createLayoutWriter } from './layoutWriter.ts'
 import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
@@ -922,6 +923,18 @@ export function App() {
   // The Queue drawer tab's deliberate-open counter focuses the composer even when the
   // same chip is clicked twice.
   const [queueOpenToken,setQueueOpenToken]=useState(0)
+  type PluginContribution={id:string;title:string;description:string;contexts:string[]}
+  type CommandPlugin={id:string;name:string;enabled:boolean;manifest:null|{actions:PluginContribution[];panes:PluginContribution[]}}
+  const [commandPlugins,setCommandPlugins]=useState<CommandPlugin[]>([])
+  const [pluginPopupId,setPluginPopupId]=useState<string|null>(null)
+  const loadCommandPlugins=useCallback(()=>api<{plugins:CommandPlugin[]}>('GET','/api/plugins')
+    .then(result=>setCommandPlugins(result.plugins.filter(plugin=>plugin.enabled&&plugin.manifest)))
+    .catch(()=>{}),[])
+  useEffect(()=>{
+    void loadCommandPlugins()
+    window.addEventListener('focus',loadCommandPlugins)
+    return()=>window.removeEventListener('focus',loadCommandPlugins)
+  },[loadCommandPlugins])
   // The utility workspace has one device-local split tree shared by every Project. Selection
   // and desktop expansion remain device-local per Project. Mobile visibility is transient.
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
@@ -1584,6 +1597,28 @@ export function App() {
   // The pane a joining session should prefer, kept fresh every render because `refresh` runs from
   // intervals and sockets whose closures are older than the current focus.
   const joinAnchor=useRef<{projectId:string;viewId:string|null}>({projectId:'',viewId:null})
+  // One-shot pane placement asked for by an agent spawn (`request_spawn(pane=...)`).
+  // Panes are per-device state, so the daemon only records the ask: every browser
+  // sees `pane_hint` on the session row and races the claim, the daemon clears it
+  // atomically, and the winner opens the split - exactly one device acts however
+  // many are attached. Only a visible tab competes, and a claim this client already
+  // made (won or lost) is never repeated.
+  const paneHintClaims=useRef<Set<string>>(new Set())
+  const openInSplitRef=useRef<((session:Session,direction:SplitDirection)=>Promise<void>)|null>(null)
+  const claimPaneHints=(rows:Session[]):void=>{
+    if(typeof document!=='undefined'&&document.visibilityState!=='visible')return
+    for(const row of rows){
+      const hint=row.pane_hint
+      if(!hint||row.pending||paneHintClaims.current.has(row.id))continue
+      paneHintClaims.current.add(row.id)
+      void api<{hint:string}>('POST',`/api/sessions/${row.id}/pane-hint/claim`)
+        .then(result=>{
+          if(!result.hint)return // another device won the race and is acting
+          void openInSplitRef.current?.(row,result.hint==='split_horizontal'?'horizontal':'vertical')
+        })
+        .catch(()=>paneHintClaims.current.delete(row.id))
+    }
+  }
   const spawning = useRef(false)
   const relaunching = useRef(false)
   const longPressTimer = useRef<number | null>(null)
@@ -1770,6 +1805,7 @@ export function App() {
         const optimistic=current.filter(session=>session.pending&&pendingSpawns.current[session.id]&&!pendingSpawns.current[session.id].resolvedId)
         return reconcileSessionSnapshots(current,visible,optimistic)
       })
+      claimPaneHints(visible)
     }
     if (nextProjects) {
       setProjects(nextProjects)
@@ -1826,6 +1862,19 @@ export function App() {
   }
 
   const refresh = refreshController.refresh
+  useEffect(()=>{
+    const opened=(event:Event)=>{
+      const detail=(event as CustomEvent<{session:Session;placement:string}>).detail
+      if(!detail?.session)return
+      setSessions(current=>current.some(item=>item.id===detail.session.id)?current:[...current,detail.session])
+      setSettingsOpen(false);setSettingsNavOpen(false)
+      const target=pluginPaneTarget(detail.session,detail.placement)
+      if(target.mode==='popup'){setPluginPopupId(target.popupId);return}
+      setProjectId(target.projectId);setActiveId(target.sessionId);setFocusedViewId(target.sessionId);setSidebarOpen(false)
+    }
+    window.addEventListener('mux:plugin-pane-opened',opened)
+    return()=>window.removeEventListener('mux:plugin-pane-opened',opened)
+  },[])
 
   type AppConfig = {
     theme:ThemeName
@@ -4841,6 +4890,7 @@ export function App() {
     await updateLayout(session.project_id, splitTerminal(layoutMap[session.project_id] || emptyLayout(), targetId, session.id, direction,position))
     setContextMenu(null)
   }
+  openInSplitRef.current = openInSplit
 
   const moveTabDirection=async(leaf:PaneLeaf,targetProject:string,direction:PaneDirection)=>{
     const current=resolveLayout(layoutMap[targetProject],projects.find(project=>project.id===targetProject)?.layout)
@@ -5690,6 +5740,19 @@ export function App() {
     { id: 'history.openProject', label: 'Browse selected project’s session history', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => void showHistory(commandProject||null) },
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
+    { id: 'plugins.open', label: 'Manage plugins', category: 'view', available: true, run: () => openSettings('Plugins') },
+    ...commandPlugins.flatMap(plugin=>[
+      ...(plugin.manifest?.actions||[]).map(action=>{
+        const context=active&&action.contexts.includes('session')
+          ?{context:'session',project_id:active.project_id,session_id:active.id}
+          :activeProject&&action.contexts.includes('project')
+            ?{context:'project',project_id:activeProject.id}
+            :{context:'global'}
+        const available=action.contexts.includes(context.context)
+        return {id:`plugin.${plugin.id}.action.${action.id}`,label:`${plugin.name}: ${action.title}`,category:'input' as const,available,disabledReason:'Select a supported Project or session context',run:()=>void api('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,context).catch(error=>setError(error instanceof Error?error.message:String(error)))}
+      }),
+      ...(plugin.manifest?.panes||[]).map(pane=>({id:`plugin.${plugin.id}.pane.${pane.id}`,label:`${plugin.name}: Open ${pane.title}`,category:'pane' as const,available:!!activeProject&&pane.contexts.includes('project'),disabledReason:'Select a Project first',run:()=>{if(activeProject)void api<{session:Session;placement:string}>('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,{context:'project',project_id:activeProject.id}).then(result=>{setSessions(current=>current.some(item=>item.id===result.session.id)?current:[...current,result.session]);if(result.placement==='popup')setPluginPopupId(result.session.id)}).catch(error=>setError(error instanceof Error?error.message:String(error)))}})),
+    ]),
     // The palette is where someone looks who does not yet know the footer button
     // exists, which is exactly the person this launches something for. The
     // disabled reason is the same sentence the button's tooltip carries, so the
@@ -8737,7 +8800,8 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {pluginPopupId&&sessions.some(item=>item.id===pluginPopupId)&&<div class="modal-layer plugin-popup-layer" role="dialog" aria-modal="true" aria-label="Plugin popup"><div class="modal plugin-popup-modal"><header><strong>{sessionName(sessions.find(item=>item.id===pluginPopupId)!)}</strong><button aria-label="Close plugin popup" onClick={()=>{const id=pluginPopupId;setPluginPopupId(null);void api('DELETE',`/api/sessions/${id}`).then(()=>setSessions(current=>current.filter(item=>item.id!==id))).catch(error=>setError(error instanceof Error?error.message:String(error)))}}>×</button></header><div class="plugin-popup-terminal">{renderPaneNode(terminalLeaf(pluginPopupId),'plugin-popup',false,true)}</div></div></div>}
+    {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false); void loadCommandPlugins() }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so
         "exactly one of them, ever" is a property of the function rather than of two

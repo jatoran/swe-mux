@@ -210,6 +210,12 @@ class SessionRecord:
     args: list[str]
     shell_profile_id: str | None = None
     auto_named: bool = True
+    #: One-shot pane-placement request from an agent spawn ("split_horizontal"
+    #: or "split_vertical", else empty). Panes are per-device browser state, so
+    #: the daemon only records what was asked for; the first browser viewing
+    #: the Project claims it through the pane-hint claim route, which clears it
+    #: atomically so exactly one device acts (`routes/sessions.py`).
+    pane_hint: str = ""
     pid: int = -1
     # OS creation time of the root process, captured at spawn. A PID alone is not
     # an identity on Windows — it is recycled aggressively — and exited sessions
@@ -592,6 +598,13 @@ class SessionRecord:
     # daemon: a configurator adopted after a session-preserving restart that came
     # back without its tools would look like the feature silently breaking.
     configurator: bool = False
+    # Immutable ownership for a terminal/TUI pane contributed by an external
+    # plugin.  Optional fields preserve snapshots written by older daemons and
+    # keep ordinary shells and agents byte-for-byte unchanged.
+    plugin_id: str | None = None
+    plugin_version: str | None = None
+    plugin_entrypoint_id: str | None = None
+    plugin_placement: str | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

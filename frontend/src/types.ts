@@ -152,6 +152,10 @@ export interface Session {
   created_at: number; state: SessionState; state_detail?: string; tokens_in: number
   /** Epoch seconds of the transition into `state`; 0 when the daemon never dated it. */
   state_since?: number
+  /** One-shot pane-placement ask from an agent spawn ("split_horizontal" or
+   *  "split_vertical", else empty). Claimed and cleared atomically through the
+   *  pane-hint claim route, so exactly one device acts on it. */
+  pane_hint?: string
   /** Wall-clock length of the last completed root turn, milliseconds. Run-scoped. */
   last_turn_ms?: number | null
   /** Sum of every accepted completed root turn on this run, milliseconds.
@@ -269,6 +273,11 @@ export interface Session {
   voice_content?: VoiceContent | null
   /** Task/Project-Action shell whose exact spawn argv can be relaunched in place. */
   relaunchable?: boolean
+  /** Immutable ownership and host placement for a plugin-contributed terminal. */
+  plugin_id?: string | null
+  plugin_version?: string | null
+  plugin_entrypoint_id?: string | null
+  plugin_placement?: 'tab' | 'split' | 'popup' | null
   /**
    * Recovered from durable recovery data rather than from a running process: the
    * daemon and its PTY owner both died without recording how this session ended,

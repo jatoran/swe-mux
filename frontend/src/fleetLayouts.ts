@@ -3,7 +3,8 @@ import {
 } from './layout.ts'
 import { placePendingTerminal, type PendingSpawnPlacement } from './pendingSession.ts'
 import {
-  forgetJoinAttempts, joinSessions, joinableSessionIds, unjoinedSessionIds, type JoinAttempts,
+  forgetJoinAttempts, joinAnchorId, joinSessions, joinableSessionIds, unjoinedSessionIds,
+  type JoinAttempts,
 } from './sessionJoin.ts'
 import type { Project, Session } from './types.ts'
 
@@ -54,7 +55,13 @@ export function planFleetLayouts(input: FleetLayoutInput): FleetLayoutPlan {
     sessions, projects, previewIds, pendingSpawns, joinAnchor, hasPendingLayoutWrite, isEnded,
   } = input
   const live = new Set(sessions.map(session => session.id))
-  const joinAttempts = forgetJoinAttempts(input.joinAttempts, live)
+  // Popup panes are ordinary supervised sessions, but they are owned by an overlay rather
+  // than the durable Project layout. Excluding them from the layout's live set both prevents
+  // an event-driven refresh from auto-joining a newly opened popup and repairs a leaf written
+  // by an older client. They remain in `liveSessionIds` and in the fleet itself.
+  const layoutSessions = sessions.filter(session => session.plugin_placement !== 'popup')
+  const layoutLive = new Set(layoutSessions.map(session => session.id))
+  const joinAttempts = forgetJoinAttempts(input.joinAttempts, layoutLive)
   // A session this device is mid-spawn on already owns an optimistic leaf under its
   // pending id; joining it here as well would leave the layout holding it twice once
   // `replaceTerminal` swaps the real id in.
@@ -71,13 +78,13 @@ export function planFleetLayouts(input: FleetLayoutInput): FleetLayoutPlan {
   )
   // Grouped once rather than per Project: this runs on every refresh, and the fleet and the
   // Project list both grow.
-  const joinCandidates = new Map<string, string[]>()
-  for (const session of sessions) {
+  const joinCandidates = new Map<string, Session[]>()
+  for (const session of layoutSessions) {
     if (isEnded(session) || session.pending || spawningHere.has(session.id)) continue
     if (launchingHere.has(session.project_id)) continue
     const forProject = joinCandidates.get(session.project_id)
-    if (forProject) forProject.push(session.id)
-    else joinCandidates.set(session.project_id, [session.id])
+    if (forProject) forProject.push(session)
+    else joinCandidates.set(session.project_id, [session])
   }
   const layouts: Record<string, PaneLayout> = {}
   const joins: FleetLayoutJoin[] = []
@@ -90,7 +97,7 @@ export function planFleetLayouts(input: FleetLayoutInput): FleetLayoutPlan {
     // drop any persisted history leaf so old layouts don't dangle.
     let base = parseLayout(project.layout)
     for (const leaf of leaves(base, 'history')) base = removeLeaf(base, 'history', leaf.id)
-    let reconciled = reconcilePreviews(reconcileTerminals(base, live), previewIds)
+    let reconciled = reconcilePreviews(reconcileTerminals(base, layoutLive), previewIds)
     for (const [pendingId, pending] of Object.entries(pendingSpawns)) {
       if (pending.projectId !== project.id || !pending.placement) continue
       reconciled = placePendingTerminal(reconciled, pending.resolvedId || pendingId, pending.placement, false)
@@ -105,13 +112,28 @@ export function planFleetLayouts(input: FleetLayoutInput): FleetLayoutPlan {
     // nobody ever opened, and adopting a long archive of them at boot would spend the
     // layout's 64 leaves on sessions with nothing running. `sessionJoin.ts` owns the
     // placement rule and the no-focus-stealing contract.
-    const candidates = joinableSessionIds(joinCandidates.get(project.id) || [], joinAttempts)
-    const joined = joinSessions(
-      reconciled,
-      candidates,
-      joinAnchor.projectId === project.id ? joinAnchor.viewId : null,
-    )
-    if (joined !== reconciled) joins.push({ projectId: project.id, layout: joined, ids: unjoinedSessionIds(reconciled, candidates) })
+    const preferred = joinAnchor.projectId === project.id ? joinAnchor.viewId : null
+    const candidates = joinCandidates.get(project.id) || []
+    const candidateIds = joinableSessionIds(candidates.map(session => session.id), joinAttempts)
+    const eligible = new Set(candidateIds)
+    const splitIds = candidates
+      .filter(session => session.plugin_placement === 'split' && eligible.has(session.id))
+      .map(session => session.id)
+    const tabIds = candidates
+      .filter(session => session.plugin_placement !== 'split' && eligible.has(session.id))
+      .map(session => session.id)
+    const missingSplits = unjoinedSessionIds(reconciled, splitIds)
+    let joined = reconciled
+    const splitAnchor = joinAnchorId(reconciled, preferred)
+    for (const id of missingSplits) {
+      joined = placePendingTerminal(joined, id, {
+        split: 'vertical', targetId: splitAnchor, position: 'after',
+      }, false)
+    }
+    const missingTabs = unjoinedSessionIds(joined, tabIds)
+    joined = joinSessions(joined, tabIds, preferred)
+    const joinedIds = [...missingSplits, ...missingTabs]
+    if (joinedIds.length) joins.push({ projectId: project.id, layout: joined, ids: joinedIds })
     layouts[project.id] = joined
   }
   return { layouts, joins, liveSessionIds: live, joinAttempts }

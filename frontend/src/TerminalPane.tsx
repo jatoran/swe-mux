@@ -6,6 +6,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { routePluginLink } from './pluginLinks'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
@@ -107,7 +108,7 @@ import {
   type TerminalInputSource,
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
-import { SOFT_KEYBOARD_EVENT, clampPeekOffset, deepActiveElement, hiddenOutputDeservesPeek, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, shouldHoldBridgeFocus, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, touchCompatMouseEvent, type PeekTrigger } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, clampPeekOffset, deepActiveElement, hiddenOutputDeservesPeek, holdSoftKeyboard, inputEndsPeek, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, shouldHoldBridgeFocus, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, touchCompatMouseEvent, type PeekTrigger } from './mobileKeyboard'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { RESERVE_INTENT_WINDOW_MS, nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
@@ -958,6 +959,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     term.loadAddon(fit)
     term.loadAddon(search)
     const openUri=(event:MouseEvent,uri:string)=>{
+      if(event.ctrlKey&&!event.altKey&&!event.metaKey&&!event.shiftKey){
+        event.preventDefault()
+        void routePluginLink(uri,{project_id:session.project_id,session_id:session.id})
+          .then(handled=>{if(!handled)window.open(uri,'_blank','noopener,noreferrer')})
+          .catch(error=>reportError(error instanceof Error?error.message:String(error)))
+        return
+      }
       const previewUrl=localPreviewUrl(uri)
       if(previewUrl){
         event.preventDefault()
@@ -2514,7 +2522,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // Typing is the reader saying they have stopped reading, so a pane peeking at the top
       // of its grid returns to the composer. Deliberately on input rather than on writes:
       // snapping back on output would fight the reader for the whole of a streaming reply.
-      applyPeekRef.current('input')
+      // Wheel reports are excluded (`inputEndsPeek`): a drag that pans the peek to its end
+      // chains into forwarded scroll reports through this same path, and counting those as
+      // typing snapped the peek back mid-gesture for as long as the keyboard stayed up.
+      if(inputEndsPeek(data))applyPeekRef.current('input')
       // The same sentence, one viewport further in. A submission moves the *application's*
       // own viewport to its newest output, and that is the one movement the pane forwards
       // nothing for and can never total, so the running estimate has to be dropped rather

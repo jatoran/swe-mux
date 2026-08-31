@@ -1046,6 +1046,7 @@ PATCH  /sessions/{id}
 POST   /sessions/{id}/read
 POST   /sessions/{id}/title/regenerate
 POST   /sessions/{id}/standing-activity/clear
+POST   /sessions/{id}/pane-hint/claim           -> {hint} and clears it atomically
 GET    /sessions/{id}/approvals
 PUT    /sessions/{id}/approvals                 {mode: wait|allowlisted|allow_all, set_by?}
   POST   /sessions/{id}/approvals/approve-once    {fingerprint?}
@@ -2954,6 +2955,8 @@ swemux compact-db [--now] [--cancel] [--no-trigram-rebuild] [--no-vacuum] [--no-
 swemux doctor [--export]
 swemux install-shortcut [--startup] [--no-desktop] [--no-start-menu] [--remove]
 swemux install-skill [--project DIR | --global] [--harness NAME]... [--remove] [--yes]
+swemux agent tools                                  # what THIS session may call
+swemux agent call TOOL [key=value|key:=json]... [--input JSON]
 swemux --skill           # print the embedded agent skill and exit
 
 swemuxd [--no-browser]   # the daemon in the foreground
@@ -2966,6 +2969,27 @@ interface and MCP serves structured reads to agents, so the CLI carries only the
 no substitute.
 Every subcommand accepts `--json` (raw daemon payload) and `--url` (daemon base URL); without
 `--json` the output is a human table.
+
+**`swemux agent` is the exception to all three sentences above: it is the agent's surface, not
+the operator's** (ROADMAP Phase 23 W2/W3). It authenticates as the calling session with the
+credentials every swe-mux pane carries (`MUX_MCP_URL`, `MUX_MCP_TOKEN`; refused with exit `1`
+outside a pane, and refused client-side when `MUX_SURFACES` says the CLI surface is off for this
+harness) and speaks JSON-RPC to the same `/mcp` endpoint the MCP client uses — one authority core,
+a second transport. The verbs are the MCP tools themselves: `agent tools` lists what this session
+may call (with `--json`, full schemas), `agent call <tool>` calls one with `key=value` pairs
+(strings), `key:=value` pairs (JSON-typed), or `--input` (a whole JSON object, `-` reads stdin).
+Results are the tool's own JSON verbatim; a typed refusal prints the same way and exits `1`, a
+JSON-RPC fault exits `4`. The passthrough deliberately hand-writes no per-tool subcommand, so
+adding an MCP tool costs zero CLI work and the two surfaces cannot drift.
+
+Inside a pane, **every** CLI request also stamps its calling session onto the wire
+(`X-Mux-Caller-Session` / `X-Mux-Caller-Token`), and the session-acting operator routes —
+terminal input, broadcast, kill, spawn — refuse a request whose identity resolves to a live
+*agent*-backed session, naming `swemux agent` and the MCP tools instead (Phase 23 W1,
+`routes/support.py::refuse_agent_session_caller`). A shell pane's operator carries the same
+headers and passes, because the check is the session's backend; the same-host trust decision
+stands, so this constrains honest clients, which is its whole job. `reload-daemon` deliberately
+stays reachable from agent panes: the session-preserving reload is a documented agent flow.
 
 `SESSION` is a stable session id, an exact session name, or a unique id prefix.
 An ambiguous name or prefix lists the candidates and exits `5`; no match exits `6`.
@@ -3179,3 +3203,37 @@ A failing local check is still `1`, because a named broken check is the more act
 local report with nothing failing is `3`, which is exactly what `3` already meant.
 A degraded report therefore never exits `0`, and a script gating on `swemux doctor` keeps working
 unchanged.
+
+## Plugin API
+
+Lifecycle endpoints:
+
+```text
+GET    /api/plugins
+POST   /api/plugins/inspect
+POST   /api/plugins/link
+POST   /api/plugins/install
+POST   /api/plugins/execution
+POST   /api/plugins/{id}/approve
+POST   /api/plugins/{id}/enable
+POST   /api/plugins/{id}/update
+POST   /api/plugins/{id}/rollback
+DELETE /api/plugins/{id}[?purge=1]
+GET    /api/plugins/logs[?plugin_id=...]
+GET    /api/plugins/marketplace
+```
+
+Contribution endpoints:
+
+```text
+POST /api/plugins/{id}/actions/{action_id}
+POST /api/plugins/{id}/panes/{pane_id}
+GET  /api/plugins/link-handlers
+POST /api/plugins/{id}/links/{handler_id}
+```
+
+`POST /api/plugins/callback` requires a runtime token in `Authorization: Bearer` or `X-Swemux-Plugin-Token`.
+The body names one of `projects.list`, `sessions.list`, `terminal.write`, `session.stop`, `notify`, or `self.describe`.
+The token's manifest-approved permission is checked before the operation and plugin identity is injected from the token rather than accepted from the body.
+
+Plugin errors use `{error, code}` and distinguish missing plugins, stale approval, incompatibility, source conflict, in-use panes, invalid or expired tokens, and denied permissions.

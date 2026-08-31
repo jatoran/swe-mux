@@ -65,9 +65,9 @@ const BESPOKE_CONTROLS: Record<string, string> = {
   // names the field with a literal key.
   harness_args: 'setHarnessArgs(current=>',
   harness_mcp_enabled: "setHarnessDict('harness_mcp_enabled'",
+  harness_cli_enabled: "setHarnessDict('harness_cli_enabled'",
   harness_instrument_enabled: "setHarnessDict('harness_instrument_enabled'",
-  // Edited through the per-harness Fleet access control, which writes the MCP
-  // and skill maps together from one capability choice.
+  // Edited through the per-harness Fleet access control's skill checkbox.
   harness_skill_enabled: "change('harness_skill_enabled',next)",
   // Applied through its own endpoint because the key sets are daemon policy;
   // the draft adopts the returned config rather than editing the field.

@@ -34,6 +34,7 @@ from ..session import (
     note_remote_shell_submission,
 )
 from ..supervisor_client import Liveness, liveness_of
+from .support import refuse_agent_session_caller
 
 log = logging.getLogger(__name__)
 
@@ -237,6 +238,13 @@ async def _end_session_gracefully(
 
 
 async def session_input(request: web.Request) -> web.Response:
+    # Writing into another session's terminal bypasses the prompt queue,
+    # readiness, arming, and revocation - the exact machinery agent-to-agent
+    # messaging exists to route through - so an agent session's pane is
+    # refused here and pointed at notify/`swemux agent` (Phase 23 W1).
+    refuse_agent_session_caller(
+        request, operation="writing terminal input over HTTP"
+    )
     body = await request.json()
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if session.record.state in {"exited", "crashed"}:
@@ -328,6 +336,9 @@ async def deliver_broadcast(
 
 
 async def broadcast_input_route(request: web.Request) -> web.Response:
+    refuse_agent_session_caller(
+        request, operation="broadcasting terminal input over HTTP"
+    )
     data = str((await request.json()).get("data", ""))
     return json_response(
         await deliver_broadcast(request.app[keys.SESSIONS], data, request.app[keys.EVENTS])

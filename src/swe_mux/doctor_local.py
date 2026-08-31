@@ -166,6 +166,15 @@ _DAEMON_ONLY: tuple[tuple[str, str, str, str], ...] = (
         "",
     ),
     (
+        "agent-surfaces",
+        "Fleet-access coherence",
+        "Needs a running daemon: the coherence warnings are advisory rows the "
+        "daemon derives from the same config this report holds, but they only "
+        "matter for sessions that daemon would spawn - a report about an "
+        "install nothing is running has no agent to mislead.",
+        "",
+    ),
+    (
         "remote",
         "Tailscale and remote access",
         "Not run in the local report: whether a phone can reach this machine is not "
