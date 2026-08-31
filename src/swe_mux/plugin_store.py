@@ -19,7 +19,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-PLUGIN_SCHEMA_VERSION = 2
+PLUGIN_SCHEMA_VERSION = 3
 PLUGIN_LOG_LIMIT = 1000
 PLUGIN_SCHEMA = """
 CREATE TABLE IF NOT EXISTS plugins(
@@ -67,6 +67,11 @@ CREATE INDEX IF NOT EXISTS plugin_logs_plugin ON plugin_command_logs(plugin_id, 
 CREATE TABLE IF NOT EXISTS plugin_settings(
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS plugin_update_stages(
+  plugin_id TEXT PRIMARY KEY,
+  payload_json TEXT NOT NULL,
+  created_at REAL NOT NULL
 );
 """
 
@@ -274,6 +279,95 @@ class PluginStore:
             self._db.commit()
 
         await self._run(op)
+
+    async def get_setting(self, key: str) -> str | None:
+        def op() -> str | None:
+            row = self._db.execute(
+                "SELECT value FROM plugin_settings WHERE key=?", (key,)
+            ).fetchone()
+            return str(row[0]) if row is not None else None
+
+        return await self._run(op)
+
+    async def set_setting(self, key: str, value: str) -> None:
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO plugin_settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def put_update_stage(
+        self, plugin_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        created_at = time.time()
+
+        def op() -> dict[str, Any]:
+            self._db.execute(
+                "INSERT INTO plugin_update_stages(plugin_id,payload_json,created_at) "
+                "VALUES(?,?,?) ON CONFLICT(plugin_id) DO UPDATE SET "
+                "payload_json=excluded.payload_json,created_at=excluded.created_at",
+                (plugin_id, json.dumps(payload, separators=(",", ":")), created_at),
+            )
+            self._db.commit()
+            return {**payload, "plugin_id": plugin_id, "created_at": created_at}
+
+        return await self._run(op)
+
+    async def get_update_stage(self, plugin_id: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT payload_json,created_at FROM plugin_update_stages WHERE plugin_id=?",
+                (plugin_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except json.JSONDecodeError:
+                payload = {}
+            return {
+                **(payload if isinstance(payload, dict) else {}),
+                "plugin_id": plugin_id,
+                "created_at": float(row["created_at"]),
+            }
+
+        return await self._run(op)
+
+    async def list_update_stages(self) -> dict[str, dict[str, Any]]:
+        def op() -> dict[str, dict[str, Any]]:
+            result: dict[str, dict[str, Any]] = {}
+            for row in self._db.execute(
+                "SELECT plugin_id,payload_json,created_at FROM plugin_update_stages"
+            ):
+                plugin_id = str(row["plugin_id"])
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except json.JSONDecodeError:
+                    payload = {}
+                result[plugin_id] = {
+                    **(payload if isinstance(payload, dict) else {}),
+                    "plugin_id": plugin_id,
+                    "created_at": float(row["created_at"]),
+                }
+            return result
+
+        return await self._run(op)
+
+    async def remove_update_stage(self, plugin_id: str) -> dict[str, Any] | None:
+        stage = await self.get_update_stage(plugin_id)
+
+        def op() -> None:
+            self._db.execute(
+                "DELETE FROM plugin_update_stages WHERE plugin_id=?", (plugin_id,)
+            )
+            self._db.commit()
+
+        await self._run(op)
+        return stage
 
     async def log_started(self, record: dict[str, Any]) -> None:
         def op() -> None:

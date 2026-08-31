@@ -27,7 +27,8 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     assert "mobileWorkspaceProjection" in combined
     assert "mobile-unified-tabs" in combined
     assert (
-        ".pane-stack:not(.focused-pane):not(.empty-workspace-pane):not(.mobile-unified-workspace){display:none}"
+        ".pane-stack:not(.focused-pane):not(.empty-workspace-pane)"
+        ":not(.mobile-unified-workspace):not(.plugin-popup-stack){display:none}"
         in css
     )
     # Mobile menus carry no geometry or ordering controls at all now — the touch

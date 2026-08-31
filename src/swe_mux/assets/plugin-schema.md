@@ -77,7 +77,12 @@ swemux plugin logs --plugin-id publisher.plugin
 ```
 
 Any source or security-relevant manifest change revokes approval before new content executes.
-Validate and approve the current bytes again after editing a linked plugin.
+Run `swemux plugin refresh`, validate, and approve the current bytes again after editing a linked plugin.
+The configurable development root defaults to `~/swe-mux-plugins`; `swemux plugin discover` inspects only direct children and never links or executes them automatically.
+Existing panes do not hot reload; close and reopen them or run `swemux plugin restart-panes publisher.plugin` after approval.
+
+Managed updates are three explicit acts: `swemux plugin check-updates`, `swemux plugin update publisher.plugin` to acquire a separate inert review stage, and `swemux plugin approve-update publisher.plugin` to promote the reviewed bytes.
+Until approval, the active version remains enabled and rollback-capable.
 
 Pane processes are supervised sessions, but callback bearer grants are currently daemon-generation scoped.
 A callback-dependent pane must tolerate daemon unavailability and must be reopened after a daemon reload to obtain a valid token.
