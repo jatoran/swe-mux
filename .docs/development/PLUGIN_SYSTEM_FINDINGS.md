@@ -45,8 +45,16 @@ Herdr's marketplace is an automatic index of public GitHub repositories carrying
 It stores repository metadata and exact manifest metadata, refreshes automatically, and explicitly does not review listings.
 Installation still resolves an immutable commit through the ordinary plugin install path.
 
-The topic contains hundreds of repositories across Rust, Shell, JavaScript, Python, Go, TypeScript, Lua, and PowerShell.
-Observed plugins include file viewers, plugin managers, worktree bootstrap, Git and pull-request workflows, terminal notifications, smart naming, layouts, remote control, agent handoff, sandboxes, and organization-specific workflow adapters.
+The official index generated 2026-08-29 reports 872 valid plugin manifests across 856 repositories from 888 public repositories carrying the topic.
+It records 23 repositories with no manifest, one invalid manifest, and seven duplicate manifests rather than presenting every self-tagged repository as installable.
+
+Repository stars are a discovery signal, not plugin adoption.
+The most-starred cards include large standalone products whose Herdr adapter is one secondary integration: `oh-my-opencode-slim` at 8,503 stars, `terminal-browser` at 2,396, `terminal-code` at 1,748, and `crabbox` at 1,339.
+The stronger Herdr-first cohort in the same snapshot is `herdr-reviewr` at 562 stars, `collie` at 561, `herdr-file-viewer` at 495, `herdr-plus` at 271, `herdr-sidebar` at 226, `herdr-annotate` at 212, and `herdr-mirror` at 197.
+
+The recurring high-signal categories are interactive diff review and annotation, file and source-control workbenches, mobile and remote control, declarative workspace launchers, transcript search and memory, disposable remote test environments, worktree bootstrap, CI and pull-request status, and adapters that bring an existing developer tool into a pane.
+The strongest plugins are not cosmetic.
+They close a repeated loop between an agent session and a concrete human task such as reviewing, resuming, testing, dispatching, or responding.
 
 The community lesson is not merely that extensions exist.
 The low-friction combination is an ordinary repository, a small manifest, an existing CLI as the API, a local link workflow, and automatic discovery without central package hosting.
@@ -195,8 +203,17 @@ Community plugins remain third-party software and do not inherit swe-mux support
 
 - Herdr plugin reference: <https://herdr.dev/docs/plugins/>
 - Herdr marketplace reference: <https://herdr.dev/docs/marketplace/>
+- Herdr official marketplace index snapshot: <https://assets.herdr.dev/plugins/index.json>
 - Herdr plugin source: <https://github.com/herdrdev/herdr/tree/master/src/app/api/plugins>
 - Herdr plugin topic: <https://github.com/topics/herdr-plugin>
+- Herdr review workbench: <https://github.com/persiyanov/herdr-reviewr>
+- Herdr mobile control: <https://github.com/AltanS/collie>
+- Herdr file viewer: <https://github.com/smarzban/herdr-file-viewer>
+- Herdr workspace launcher: <https://github.com/cloudmanic/herdr-plus>
+- Herdr source-control sidebar: <https://github.com/alexarthurs/herdr-sidebar>
+- Herdr annotation workflow: <https://github.com/plannotator/herdr-annotate>
+- Herdr remote mirror: <https://github.com/nikok6/herdr-mirror>
+- Cross-agent transcript search: <https://github.com/nicosuave/memex>
 - Herdr prebuilt-artifact discussion: <https://github.com/herdrdev/herdr/issues/2693>
 - swe-mux implementation plan and acceptance contract: `ROADMAP.md` Phase 25
 - swe-mux shipped behavior: `../design/features/plugins.md`
