@@ -6413,9 +6413,10 @@ Recorded 2026-08-30.
 The external evidence and architectural decisions are in `PLUGIN_SYSTEM_FINDINGS.md`.
 Current shipped behavior is in `../design/features/plugins.md`, and the agent-neutral repository and author workflow is in `../technical/plugin-authoring.md`.
 
-The baseline landed on `master` and is deployed.
+The source baseline is implemented on `master`.
+Deployment state is operational state and is not recorded by this phase.
 It includes the manifest parser, SQLite registry and command ledger, linked and managed source, content-bound approval, lifecycle operations, actions, tab/split/popup terminal panes, EventBus hooks, startup hooks, terminal link handlers, scoped loopback callbacks, Settings, command-palette entries, CLI management, diagnostics, and the unreviewed GitHub-topic browser.
-The management baseline now also includes a configurable direct-child development root, explicit inert refresh, read-only managed update checks, durable update review that leaves the active version usable, authority-delta approval, and placement-preserving pane restart for linked development.
+The management baseline now also includes a configurable direct-child development root, explicit inert refresh, read-only managed update checks, durable update review that leaves the active version usable, authority-delta approval, and placement-preserving pane restart for linked and managed development.
 Four maintained development repositories remain under the primary checkout's ignored `.private/plugin-lab` and are published as independent official repositories.
 Retired Attention Notifier and Project Scratchpad repositories remain recoverable under ignored `.trash/plugin-lab-retired` and are outside the active lab and marketplace.
 No plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
@@ -6469,9 +6470,22 @@ The plugin contract becomes a compatibility commitment once the first third-part
 - Pane callback tokens are daemon-generation state.
   The supervisor may preserve the process and terminal through reload, but callback-dependent panes must be reopened.
 - Managed install does not support a first-class prebuilt artifact matrix or archive safety budget.
+- `runtime_requirements` is parsed and retained but is not enforced against the host before approval, enablement, or invocation.
+  Installed plugin details also do not yet report the requirement or its measured host verdict.
 - Action inputs, hosted web UI, native frontend injection, dynamic Settings forms, and persistent plugin daemons are absent.
 - The primary marketplace is a validated exact-revision catalog shared by swemux.dev and the app, with a live unreviewed GitHub-topic query only as an availability fallback.
 - Four lab plugins are public official examples with independent three-platform CI; a minimal template and general compatibility harness remain open.
+
+### Next expansion sequence
+
+1. Enforce declared script runtimes before execution.
+   This is the smallest language-diversity gap and makes missing Python, Node, Deno, Ruby, PowerShell, or another declared runtime an inspection diagnostic instead of an operating-system spawn failure.
+2. Add the prebuilt artifact matrix and bounded archive installer.
+   This unlocks Rust, Go, C++, and other compiled plugins without installing a compiler or running repository code during acquisition.
+3. Ship the release template and compatibility harness with artifact production.
+   Compiled-plugin support without a three-platform author pipeline would move installation complexity onto every plugin author and produce an ecosystem of unverified binaries.
+4. Consider hosted web plugin surfaces only after Phase 13 supplies the non-terminal browser leaf and its isolation contract.
+   Native frontend or backend injection remains permanently closed; Phase 13 is an unblocker for isolated hosted content, not for trusted React, CSS, DOM, route, middleware, or migration injection.
 
 ### Workstream A - manifest and host capability contract
 
@@ -6492,43 +6506,56 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 ### Workstream B - registry, storage, and lifecycle
 
-- [ ] Add a daemon-owned plugin registry and store under the existing domain-store and SQLite coordination rules.
+- [x] Add a daemon-owned plugin registry and store under the existing domain-store and SQLite coordination rules.
   Registry records include plugin identity, version, enabled state, lifecycle state, source kind, resolved commit or artifact digest, manifest digest, approved capability and permission digest, install time, update time, and the last load diagnostic.
-- [ ] Give each plugin separate managed source, config, state, log, staging, and rollback locations beneath `<data_dir>/plugins`.
+- [x] Give each plugin separate managed source, config, state, staging, and rollback identities beneath `<data_dir>/plugins`, with namespaced rows in the bounded command ledger.
   Source replacement never touches config or state, and plugin files never enter `src/`, `frontend/`, `dist/`, a Project, or a worktree.
-- [ ] Model acquisition, inspection, approval, enablement, disablement, update, uninstall, and purge as distinct transitions.
+- [x] Model acquisition, inspection, approval, enablement, disablement, update, uninstall, and purge as distinct transitions.
   A newly acquired plugin is inert, and a source, manifest, executable, capability, or permission change returns it to inspection before any new bytes execute.
-- [ ] Reload manifests without executing them at daemon startup and on explicit refresh.
+- [x] Reload manifests without executing them at daemon startup and on explicit refresh.
   Missing, malformed, unsupported, or changed manifests remain in the registry with a durable diagnostic and contribute no executable surface.
-- [ ] Make daemon startup and readiness independent of plugin discovery and every plugin command.
+- [x] Make daemon startup and readiness independent of plugin discovery and every plugin command.
   Registry corruption follows the existing store quarantine and diagnostic rules rather than taking down sessions.
-- [ ] Make ordinary uninstall remove registration and managed source while preserving config and state by default.
+- [x] Make ordinary uninstall remove registration and managed source while preserving config and state by default.
   Add a separate, explicit purge confirmation for config and state.
-- [ ] Define stable plugin ownership metadata for actions, event deliveries, command logs, and plugin pane sessions so diagnostics and cleanup never guess from names or process trees.
-- [ ] Retain enough previous source metadata and bytes for one rollback after a managed update.
+- [x] Define stable plugin ownership metadata for actions, event deliveries, command logs, and plugin pane sessions so diagnostics and cleanup never guess from names or process trees.
+- [x] Retain enough previous source metadata and bytes for one rollback after a managed update.
   Rollback is explicit, atomic, and leaves current config and state in place.
 
 ### Workstream C - acquisition, inspection, trust, and updates
 
-- [ ] Add `swemux plugin link <path>` for local authoring.
+- [x] Add `swemux plugin link <path>` for local authoring.
   Linking validates and registers a working directory, runs no build command, marks the source as mutable developer content, and makes every capability or executable change visible before reapproval.
 - [x] Add managed installation from GitHub repository shorthand and an explicit ref.
   Resolve a branch or tag to an immutable commit before inspection and store both requested ref and resolved commit.
+- [ ] Define and enforce a versioned `runtime_requirements` grammar.
+  Recognized runtime IDs, version operators, per-platform applicability, executable resolution, and version-probe timeouts are host contract rather than free-form prose.
+  Inspection, approval, enablement, and invocation fail closed with an actionable diagnostic when the selected host lacks a requirement; the host never installs or updates that runtime.
+  Settings shows the declared requirement, resolved executable and version, and measured compatible, missing, or unverifiable verdict.
 - [ ] Add versioned release artifacts for compiled plugins.
-  Each platform and architecture entry declares an immutable URL, SHA-256 digest, archive shape, and executable path; unsupported hosts fail before download.
-- [ ] Do not run repository build commands, package managers, post-install scripts, or startup hooks during managed installation.
+  Each `[[artifacts]]` entry declares one platform, architecture, immutable HTTPS URL, SHA-256 digest, archive kind, and contained executable path.
+  The host selects exactly one entry and refuses unsupported or ambiguous platform/architecture matches before any network request.
+  Repository installation remains the script-plugin path; artifact installation is a release-asset path and never treats committed binaries as the distribution convention.
+- [x] Do not run repository build commands, package managers, or post-install scripts during managed acquisition.
+  A startup hook runs only after the operator explicitly approves and enables the acquired plugin, including when those explicit transitions share one request.
   Script plugins declare required runtimes, and compiled plugins publish prebuilt artifacts.
 - [ ] Stage acquisition outside the live source path, impose download, expanded-size, file-count, path-length, and compression-ratio limits, reject escaping paths and unsafe links, validate the complete manifest and content, then atomically install.
+  Artifact extraction additionally rejects absolute paths, traversal, Windows device names and alternate data streams, case-folding collisions, symlinks, hard links, unsupported entry types, and duplicate normalized paths before writing the live source root.
+  POSIX grants execute permission only to the declared executable after digest verification.
+  Windows removes `Zone.Identifier` only from verified staged artifact files before the atomic promotion, and reports a specific diagnostic when execution remains blocked.
 - [ ] Show an inspection record before approval: source and immutable revision, manifest metadata, commands, contexts, event subscriptions, platform support, runtime requirements, API permissions, artifact URLs and digests, and the explicit full-user-authority warning.
-- [ ] Bind approval to immutable source content plus the security-relevant manifest digest.
+  Binary artifacts also carry an explicit opacity warning: digest verification proves the downloaded bytes match the declaration but provides less human-inspectable evidence than source.
+- [x] Bind approval to immutable source content plus the security-relevant manifest digest.
   Hashes and signatures prove integrity or publisher provenance, never that code is benign.
-- [ ] Separate download from enablement.
+- [ ] Extend approval binding to artifact SHA-256 plus the security-relevant manifest digest, selected platform, architecture, archive kind, and executable path.
+  Changing any selected artifact identity returns the plugin to inspection even when the display version is unchanged.
+- [x] Separate download from enablement.
   Noninteractive acquisition may leave an inspected plugin inert, but no flag bypasses approval for newly executable content.
-- [ ] Add explicit update discovery and update application.
+- [x] Add explicit update discovery and update application.
   No background network check runs by default; an operator-triggered check may compare the installed immutable revision with the requested ref and preview the exact change before staging it.
-- [ ] Keep the currently enabled version active until the replacement validates and the operator approves it.
+- [x] Keep the currently enabled version active until the replacement validates and the operator approves it.
   A failed download, digest check, extraction, validation, approval, swap, health check, or first invocation leaves the prior version usable and reports the failed candidate.
-- [ ] Ensure a core application update never triggers the plugin updater and never rewrites plugin approval.
+- [x] Ensure a core application update never triggers the plugin updater and never rewrites plugin approval.
   Compatibility is re-evaluated locally against the new host capabilities with no network request.
 
 ### Workstream D - callback authorization and bounded command runtime
@@ -6564,18 +6591,20 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 ### Workstream F - contributed panes
 
-- [ ] Add manifest-declared terminal/TUI pane entrypoints using executable, argv, cwd, environment, title, supported contexts, and default tab or split placement.
-- [ ] Launch plugin panes through the existing session manager and supervisor `spawn` message.
+- [x] Add manifest-declared terminal/TUI pane entrypoints using executable, argv, cwd, environment, title, supported contexts, and default tab, split, or popup placement.
+- [x] Launch plugin panes through the existing session manager and supervisor `spawn` message.
   Do not add a plugin-specific supervisor message or bump `PROTOCOL_VERSION` for executable, argv, cwd, or environment already carried by `spawn`.
-- [ ] Represent a plugin pane as an ordinary supervised session with immutable plugin ID, plugin version, and entrypoint ID metadata.
+- [x] Represent a plugin pane as an ordinary supervised session with immutable plugin ID, plugin version, and entrypoint ID metadata.
   It participates in layout, focus, input arbitration, replay, resize, daemon restart adoption, explicit stop, and ended-session history like any other terminal.
-- [ ] Preserve plugin ownership when the user moves, tabs, splits, or restores the pane.
+- [x] Preserve plugin ownership when the user moves, tabs, splits, or restores the pane.
   A source update does not rewrite the executable identity of a pane that is already running.
-- [ ] Define restart behavior explicitly.
+- [x] Define restart behavior explicitly.
   A live supervisor-owned plugin pane survives a daemon restart, but an exited pane is not automatically relaunched and plugin v1 has no hidden startup daemon.
-- [ ] Add `swemux plugin pane open`, the equivalent typed daemon operation, and browser controls in the plugin detail view.
-- [ ] Add a modal popup placement that renders the same ordinary plugin session without writing it into the durable workspace layout and stops the session when closed.
-- [ ] Keep overlay, drawer-hosted terminal, and native web placements out of v1 unless the existing layout gains those placements independently.
+  The explicit development restart replaces live panes on approved current bytes while preserving Project ownership and retained placement.
+- [x] Add `swemux plugin pane`, the equivalent typed daemon operation, Project Run and command-palette launch surfaces, and context-native launch ownership.
+  Plugins Settings manages global lifecycle and deliberately does not carry a Project selector or contribution launcher.
+- [x] Add a modal popup placement that renders the same ordinary plugin session without writing it into the durable workspace layout, can be promoted to a persistent Project tab, and stops the session when closed before promotion.
+- [x] Keep drawer-hosted terminal and native web placements out of v1 unless the existing layout gains those placements independently.
   The manifest cannot promise a host surface the application does not already own.
 
 ### Workstream G - event-triggered commands
@@ -6607,13 +6636,16 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 ### Workstream H - management surfaces and recovery
 
-- [ ] Add typed daemon operations and `swemux plugin` commands for validate, link, install, inspect, list, enable, disable, update, rollback, uninstall, purge, config-dir, state-dir, action list and invoke, pane list and open, event subscriptions, and bounded logs.
-- [ ] Keep the daemon and store authoritative for registry mutation.
+- [x] Add typed daemon operations and `swemux plugin` commands for validation, discovery, link, install, inspect, list, refresh, enable, disable, staged update review and approval, rollback, uninstall, purge, action invocation, pane open and restart, and bounded logs.
+- [ ] Add focused recovery/list commands for config directory, state directory, contribution inventory, and event subscriptions without expanding mutation authority.
+- [x] Keep the daemon and store authoritative for registry mutation.
   The CLI does not edit the database or plugin paths behind a running daemon, and offline mutation is unnecessary because plugin loading cannot prevent daemon readiness.
 - [ ] Add Settings or a dedicated Plugins workspace showing installed state, enabled state, compatibility, source revision, update availability after an explicit check, permissions, contributions, runtime requirements, diagnostics, recent commands, config and state locations, and destructive actions.
+  The current global Settings surface covers lifecycle, source revision, explicit refresh, read-only update checks, durable update review, permission and capability deltas, development-root discovery, pane ownership and restart, diagnostics, command logs, and config/state locations.
+  Remaining work is runtime-requirement verdicts, complete command/contribution inspection, and stable diagnostic deep links.
 - [ ] Make install, update, enable, permission-change approval, uninstall, and purge confirmations usable on desktop and mobile.
   Mobile never loses the source revision, command preview, full-trust warning, or rollback result to responsive simplification.
-- [ ] Add a global plugin execution kill switch and a startup-safe disabled mode for diagnosis.
+- [x] Add a global plugin execution kill switch and a startup-safe disabled mode for diagnosis.
   Neither mode removes registry, config, state, or logs.
 - [ ] Include plugin registry health, incompatible manifests, stuck commands, queue drops, and recent failures in `swemux doctor` and the diagnostic bundle without including plugin secrets or arbitrary source files.
 - [ ] Expose stable deep links from plugin diagnostics and unavailable contributed actions to the owning plugin detail view.
@@ -6629,7 +6661,11 @@ The plugin contract becomes a compatibility commitment once the first third-part
   Validation, listing, stars, downloads, signatures, and checksums are not security endorsements or compatibility guarantees.
 - [x] Route marketplace installation through the same immutable acquisition, inspection, approval, and rollback path as direct installation.
   A marketplace card cannot enable code by itself.
+- [ ] Extend catalog validation and cards with artifact platform, architecture, archive kind, immutable URL, and SHA-256 metadata without downloading the artifact.
+  Catalog inclusion proves that the manifest is structurally valid at the indexed commit and makes no claim that a binary is safe or corresponds to published source.
 - [ ] Publish a minimal template repository plus one action, pane, and event example that share one small cross-platform implementation rather than three unrelated showcase applications.
+- [ ] Add an optional compiled-plugin release workflow to the template.
+  The workflow builds the declared platform/architecture matrix on native CI hosts, packages the exact archive shape, computes SHA-256 values, verifies the manifest against release assets, and attaches immutable artifacts to the matching version tag.
 - [ ] Publish the manifest reference, callback environment, permission catalog, compatibility policy, security model, packaging guide, publishing checklist, troubleshooting guide, and expected support boundary on `swemux.dev`.
 - [ ] Ship an author compatibility harness that validates manifests, runs fixture invocations with bounded context, verifies declared artifacts and digests, and tests against every retained host capability version without requiring a live user's data directory.
 - [x] Define official and community labeling before displaying any badge.
@@ -6656,12 +6692,14 @@ The plugin contract becomes a compatibility commitment once the first third-part
 - Install-time builds and package-manager execution.
 - Invisible persistent plugin daemons.
 - Native React components, CSS, arbitrary DOM, backend routes, middleware, and database migrations.
-- Hosted web plugins, until an isolated origin, navigation policy, authentication boundary, storage policy, and mobile behavior are designed with Phase 13.
+- Hosted web plugins, until Phase 13 ships a non-terminal browser leaf plus an isolated origin, navigation policy, authentication boundary, storage policy, lifecycle model, and mobile behavior.
+  Phase 13 is the mechanical prerequisite because a plugin manifest may request only a placement the host layout already owns.
+  Hosted content, if later approved, receives a plugin/version-scoped isolated surface and never becomes native React, CSS, DOM, route, middleware, or database injection.
 - Dynamic Settings forms or plugin-defined schemas rendered as trusted host UI.
   V1 exposes config and state directories and lets a plugin provide its own action or pane for configuration.
 - A cross-platform OS sandbox claim.
   If one is added later, it is a separate verified security boundary and does not retroactively describe v1 plugins.
-- Automatic plugin updates, moving-branch execution, marketplace-hosted binaries, popularity-based trust, paid marketplace mechanics, and anonymous plugin telemetry.
+- Background or automatic plugin updates, automatic execution of moving-branch bytes, marketplace-hosted binaries, popularity-based trust, paid marketplace mechanics, and anonymous plugin telemetry.
 
 ### Phase 25 exit criteria
 
