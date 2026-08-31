@@ -107,9 +107,11 @@ export function composerBlock(info: ComposerInfo, buffer: string): string {
   // rather than letting a long line break the box.
   const room = inner - 2
   const typed = buffer.length > room ? buffer.slice(buffer.length - room) : buffer
-  const body = typed
-    ? `${typed}${DIM}▏${RESET}`
-    : `${DIM}${placeholder}${RESET}`
+  // No drawn caret. The block ends by parking the terminal's *own* cursor after the
+  // typed text (`composerCaret`), which is what a real CLI does - and drawing a second
+  // one here is what put a block glyph in the box while the real cursor blinked on the
+  // status line underneath it.
+  const body = typed || `${DIM}${placeholder}${RESET}`
   const row = `${accent}${glyph}${RESET} ${body}`
   const rule = '─'.repeat(BOX_WIDTH - 2)
 
@@ -136,16 +138,64 @@ export function composerBlock(info: ComposerInfo, buffer: string): string {
   ].join(CRLF)
 }
 
+/** Home the cursor and wipe the screen, for a repaint after a resize. */
+export const CLEAR_SCREEN = `${ESC}[H${ESC}[2J`
+
 /**
- * Replace the composer in place: up over the block, clear to the end of the
- * screen, draw it again. Exactly what the real CLIs do on every keystroke, and
- * the reason the demo can show a box the visitor appears to type inside.
+ * How many rows this transcript occupies in a terminal `cols` wide.
+ *
+ * Used to work out the top padding that pins the composer to the bottom of a pane, so
+ * it only has to be right about *authored* content: the demo's transcripts contain no
+ * cursor movement and no wide characters, which is what makes counting wrapped lines a
+ * sufficient answer rather than a terminal emulator.
+ */
+export function renderedRows(transcript: string, cols: number): number {
+  if (!transcript) return 0
+  const width = Math.max(1, cols)
+  // A trailing newline ends the last line rather than starting an empty one.
+  const lines = transcript.replace(/\r\n$/, '').split(/\r?\n/)
+  return lines.reduce((total, text) => total + Math.max(1, Math.ceil(bare(text).length / width)), 0)
+}
+
+/**
+ * Column, 1-based, of the first character inside the box: the border, a space, the
+ * prompt glyph and another space. Where the caret belongs when the box is empty.
+ */
+const BOX_TEXT_COLUMN = 5
+
+/**
+ * Park the terminal's own cursor after the typed text, inside the box.
+ *
+ * `composerBlock` ends on the status line, three rows below the input row, so the
+ * caret has to be walked back up and placed by absolute column. Without this the
+ * visitor typed into a box while the cursor blinked on the line under it, which is
+ * the one part of a composer nobody can mistake for cosmetic.
+ */
+export function composerCaret(buffer: string): string {
+  const room = BOX_WIDTH - 4 - 2
+  const typed = Math.min(buffer.length, room)
+  return `${ESC}[2A${ESC}[${BOX_TEXT_COLUMN + typed}G`
+}
+
+/** The whole box, with the caret placed inside it. */
+export const composerFrame = (info: ComposerInfo, buffer: string): string =>
+  `${composerBlock(info, buffer)}${composerCaret(buffer)}`
+
+/**
+ * Replace the composer in place: down to the status line, up over the block, clear to
+ * the end of the screen, draw it again. Exactly what the real CLIs do on every
+ * keystroke, and the reason the demo can show a box the visitor appears to type inside.
+ *
+ * The leading `\x1b[2B` undoes `composerCaret`: the cursor is parked on the input row,
+ * and the erase has to start from the top of the block rather than from wherever the
+ * caret happens to be sitting.
  */
 export const redrawComposer = (info: ComposerInfo, buffer: string): string =>
-  `${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J${composerBlock(info, buffer)}`
+  `${ESC}[2B${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J${composerFrame(info, buffer)}`
 
 /** Wipe the composer without drawing a new one, before appending transcript. */
-export const clearComposer = (): string => `${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J`
+export const clearComposer = (): string =>
+  `${ESC}[2B${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J`
 
 /** A line the *user* typed, drawn after that harness's prompt. */
 const said = (kind: DemoBackendKind, text: string): string => line(`${promptFor(kind)}${text}`)
@@ -155,7 +205,7 @@ const yelled = (kind: DemoBackendKind, text: string): string =>
 
 // --------------------------------------------------------------- transcripts
 
-export function claudeScrollback(info: ComposerInfo): string {
+export function claudeScrollback(): string {
   return (
     line(`${ORANGE}╭──────────────────────────────────────────────────╮${RESET}`) +
     line(`${ORANGE}│${RESET} ${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo - nothing here is real)${RESET}     ${ORANGE}│${RESET}`) +
@@ -184,12 +234,11 @@ export function claudeScrollback(info: ComposerInfo): string {
     line(`  zero production changes. Deterministic. Fast. Boring.`) +
     line() +
     line(`${bullet('claude')} Want me to audit the other numbered specs for the same pattern?`) +
-    line() +
-    composerBlock(info, '')
+    line()
   )
 }
 
-export function codexScrollback(info: ComposerInfo): string {
+export function codexScrollback(): string {
   return (
     line(`${CYAN}${BOLD}◆ Codex${RESET} ${DIM}v0.0.0-demo - simulated session${RESET}`) +
     line(`${DIM}  model: gpt-demo · cwd: /code/rocket-shop${RESET}`) +
@@ -211,13 +260,12 @@ export function codexScrollback(info: ComposerInfo): string {
     line() +
     line(`  The coupon file is 40MB because somebody committed every coupon`) +
     line(`  issued since 2019. That is a conversation for a human.`) +
-    line() +
-    composerBlock(info, '')
+    line()
   )
 }
 
 /** The one where the user is losing their mind and the agent stays chipper. */
-export function rageScrollback(info: ComposerInfo): string {
+export function rageScrollback(): string {
   const b = bullet('claude')
   return (
     line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - session 4h12m${RESET}`) +
@@ -270,13 +318,12 @@ export function rageScrollback(info: ComposerInfo): string {
     yelled('claude', 'WHO ASKED') +
     line() +
     line(`${b} Fair. Want me to write a postmortem?`) +
-    line() +
-    composerBlock(info, '')
+    line()
   )
 }
 
 /** The one where the human contributes nothing and the agent is delighted. */
-export function vibeScrollback(info: ComposerInfo): string {
+export function vibeScrollback(): string {
   const b = bullet('codex')
   return (
     line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - cwd: /code/meme-garden${RESET}`) +
@@ -317,8 +364,7 @@ export function vibeScrollback(info: ComposerInfo): string {
     said('codex', 'no') +
     line() +
     line(`${b} Added the README.`) +
-    line() +
-    composerBlock(info, '')
+    line()
   )
 }
 
@@ -351,8 +397,7 @@ export function workingScrollback(info: ComposerInfo, task: string): string {
     line(`${b} This is more load-bearing than it first appears. Continuing.`) +
     line(`${b} ${BOLD}Bash${RESET}${DIM}(npm test -- --runInBand)${RESET}`) +
     line(`  ${DIM}⎿ running…${RESET}`) +
-    line() +
-    composerBlock({ ...info, working: true }, '')
+    line()
   )
 }
 
@@ -361,13 +406,13 @@ export function spawnScrollback(info: ComposerInfo): string {
   if (info.kind === 'claude') {
     return (
       line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - ask me anything, I only tell jokes${RESET}`) +
-      line() + composerBlock(info, '')
+      line()
     )
   }
   if (info.kind === 'codex') {
     return (
       line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - simulated, replies are pre-written${RESET}`) +
-      line() + composerBlock(info, '')
+      line()
     )
   }
   // A shell has no composer, and that contrast is worth keeping: it echoes at a
