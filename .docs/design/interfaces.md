@@ -3236,9 +3236,13 @@ Contribution endpoints:
 ```text
 POST /api/plugins/{id}/actions/{action_id}
 POST /api/plugins/{id}/panes/{pane_id}
+POST /api/plugins/panes/{session_id}/dock
 GET  /api/plugins/link-handlers
 POST /api/plugins/{id}/links/{handler_id}
 ```
+
+The pane launch response carries the live session's retained placement when an existing pane is reused.
+Docking accepts only a live plugin-owned pane session, changes its retained placement to `tab`, publishes the session update, and returns the updated session snapshot.
 
 `POST /api/plugins/callback` requires a runtime token in `Authorization: Bearer` or `X-Swemux-Plugin-Token`.
 The body names one of `projects.list`, `sessions.list`, `terminal.write`, `session.stop`, `notify`, or `self.describe`.

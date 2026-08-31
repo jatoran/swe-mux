@@ -71,7 +71,10 @@ Callback bearer grants are currently daemon-generation scoped, so a callback-dep
 Source updates do not rewrite a pane that is already running.
 Tab placement enters the focused terminal stack and split placement opens to its right.
 The fleet reconciler routes those sessions from their retained `plugin_placement`, so an event-driven refresh cannot race the pane-open response.
-Popup placement renders the same session in a modal, is excluded from durable layout reconciliation, and stops the session when the modal closes.
+Popup placement renders the same session in a modal and is excluded from durable layout reconciliation while it remains a popup.
+The popup is a responsive terminal host on desktop and mobile and offers `Keep as Project tab` as an explicit promotion into the owning Project's durable layout.
+Promotion changes the live session's retained placement to `tab`, closes the modal without stopping the process, and makes later launches focus that tab rather than recreate the manifest's initial popup placement.
+Closing an undocked popup stops its session.
 Opening any pane contribution closes Settings and focuses the resulting workspace pane or popup.
 Each plugin entrypoint is single-instance per Project while its pane is live.
 Launching it again focuses the existing pane instead of creating a duplicate.
@@ -124,6 +127,7 @@ Each row expands for trust details, source/config/state paths, contribution test
 The shared test Project defaults to the Project focused when Settings opened, while its choices are alphabetical.
 Project-scoped pane contributions appear in that Project's Run menu, and every enabled contribution remains discoverable in the command palette.
 The command palette receives one entry per enabled action and pane plus a stable Manage plugins command.
+Popup pane headers expose `Keep as Project tab`; docking preserves the running utility process and focuses its new Project tab.
 The `swemux plugin` CLI exposes the same lifecycle and contribution operations for recovery and scripts.
 The shipped local-development loop is validate, link, inspect, approve, enable, invoke, inspect logs, disable, uninstall, and relink.
 Linked source is author-owned and uninstall never removes its repository.
@@ -150,6 +154,7 @@ The public `/plugins/` page and the in-app marketplace consume the same generate
 - CLI: `src/swe_mux/cli.py`
 - Session ownership: `src/swe_mux/models.py`
 - Settings UI: `frontend/src/PluginsSettings.tsx`
+- Popup host and docking control: `frontend/src/PluginPopup.tsx`, `frontend/src/App.tsx`
 - Public catalog builder: `site/tools/plugins.py`
 - Public catalog page: `site/content/plugins.html`, `site/content/plugins.js`
 - Project launch surface: `frontend/src/ProjectRunMenu.tsx`

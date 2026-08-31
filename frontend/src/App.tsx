@@ -120,6 +120,7 @@ import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subsc
 import type { InsertTarget } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
+import { PluginPopup } from './PluginPopup'
 import { AutomationDashboard, type AutomationView } from './AutomationDashboard'
 import { useConversation, VoiceControl, VoiceDock } from './ConversationControl'
 import {
@@ -926,6 +927,7 @@ export function App() {
   const [queueOpenToken,setQueueOpenToken]=useState(0)
   const [commandPlugins,setCommandPlugins]=useState<InstalledPlugin[]>([])
   const [pluginPopupId,setPluginPopupId]=useState<string|null>(null)
+  const [pluginPopupDocking,setPluginPopupDocking]=useState<string|null>(null)
   const loadCommandPlugins=useCallback(()=>api<{plugins:InstalledPlugin[]}>('GET','/api/plugins')
     .then(result=>setCommandPlugins(result.plugins.filter(plugin=>plugin.enabled&&plugin.manifest)))
     .catch(()=>{}),[])
@@ -1871,6 +1873,29 @@ export function App() {
   }
 
   const refresh = refreshController.refresh
+  const placePluginSessionInWorkspace=useCallback((session:Session,placement:string)=>{
+    const target=pluginPaneTarget(session,placement)
+    if(target.mode!=='workspace')return
+    const project=projectsRef.current.find(item=>item.id===target.projectId)
+    const current=layoutValues.current[target.projectId]||parseLayout(project?.layout)
+    const anchor=target.projectId===joinAnchor.current.projectId
+      ?joinAnchor.current.viewId
+      :spawnAnchorId(current)
+    const next=placePluginPane(current,target.sessionId,placement,anchor)
+    layoutValues.current[target.projectId]=next
+    setLayoutMap(layouts=>({...layouts,[target.projectId]:next}))
+    void layoutWriter.write(target.projectId,next,{quiet:true})
+    setProjectId(target.projectId);setActiveId(target.sessionId);setFocusedViewId(target.sessionId);setSidebarOpen(false)
+  },[layoutWriter])
+  const dockPluginPopup=useCallback((session:Session)=>{
+    setPluginPopupDocking(session.id)
+    void api<Session>('POST',`/api/plugins/panes/${session.id}/dock`).then(updated=>{
+      setSessions(current=>current.map(item=>item.id===updated.id?updated:item))
+      setPluginPopupId(current=>current===updated.id?null:current)
+      placePluginSessionInWorkspace(updated,'tab')
+    }).catch(error=>setError(error instanceof Error?error.message:String(error)))
+      .finally(()=>setPluginPopupDocking(current=>current===session.id?null:current))
+  },[placePluginSessionInWorkspace])
   useEffect(()=>{
     const opened=(event:Event)=>{
       const detail=(event as CustomEvent<{session:Session;placement:string}>).detail
@@ -1879,20 +1904,11 @@ export function App() {
       setSettingsOpen(false);setSettingsNavOpen(false)
       const target=pluginPaneTarget(detail.session,detail.placement)
       if(target.mode==='popup'){setPluginPopupId(target.popupId);return}
-      const project=projectsRef.current.find(item=>item.id===target.projectId)
-      const current=layoutValues.current[target.projectId]||parseLayout(project?.layout)
-      const anchor=target.projectId===joinAnchor.current.projectId
-        ?joinAnchor.current.viewId
-        :spawnAnchorId(current)
-      const next=placePluginPane(current,target.sessionId,detail.placement,anchor)
-      layoutValues.current[target.projectId]=next
-      setLayoutMap(layouts=>({...layouts,[target.projectId]:next}))
-      void layoutWriter.write(target.projectId,next,{quiet:true})
-      setProjectId(target.projectId);setActiveId(target.sessionId);setFocusedViewId(target.sessionId);setSidebarOpen(false)
+      placePluginSessionInWorkspace(detail.session,detail.placement)
     }
     window.addEventListener('mux:plugin-pane-opened',opened)
     return()=>window.removeEventListener('mux:plugin-pane-opened',opened)
-  },[])
+  },[placePluginSessionInWorkspace])
 
   type AppConfig = {
     theme:ThemeName
@@ -7153,7 +7169,7 @@ export function App() {
     )
   }
 
-  const renderPaneNode = (node: PaneNode|PaneLeaf, path = '', insideStack = false, paneVisible = true): ComponentChildren => {
+  const renderPaneNode = (node: PaneNode|PaneLeaf, path = '', insideStack = false, paneVisible = true, forceVisible = false): ComponentChildren => {
     if (node.type === 'split') {
       return <div class={`pane-split ${node.direction}`}>
         <div class="pane-branch" style={{ flex: `${node.ratio} 1 0` }}>{renderPaneNode(node.first, `${path}f`)}</div>
@@ -7338,7 +7354,7 @@ export function App() {
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
-    const terminalPane=<section key={id} class={`terminal-pane ${session.plugin_id?'plugin-utility-pane ':''}${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
+    const terminalPane=<section key={id} class={`terminal-pane ${session.plugin_id?'plugin-utility-pane ':''}${activeId === id||forceVisible ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
         <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
         {session.plugin_id
@@ -7368,7 +7384,7 @@ export function App() {
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
-    return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
+    return <section data-tutorial="workspace-pane" class={`pane-stack singleton-stack ${forceVisible?'plugin-popup-stack':''}`}><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
       <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
       <PaneRunTrigger projectName={activeProject?.name} mobile={mobileWorkspace} expanded={runMenu?.project.id===activeProject?.id&&runMenu?.trigger===`pane:${id}`} order={1} onOpen={element=>{if(!activeProject)return;setFocusedViewId(id);toggleRunMenu(activeProject,element,`pane:${id}`)}}/>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
@@ -7831,6 +7847,7 @@ export function App() {
       </div>}
     </section>
   }
+  const pluginPopupSession=pluginPopupId?sessions.find(item=>item.id===pluginPopupId)||null:null
 
   return <div class="app-shell">
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{attention ? `${attention} agent${attention === 1 ? '' : 's'} awaiting attention` : 'No agents awaiting attention'}</div>
@@ -8826,7 +8843,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {pluginPopupId&&sessions.some(item=>item.id===pluginPopupId)&&<div class="modal-layer plugin-popup-layer" role="dialog" aria-modal="true" aria-label="Plugin popup"><div class="modal plugin-popup-modal"><header><strong>{sessionName(sessions.find(item=>item.id===pluginPopupId)!)}</strong><button aria-label="Close plugin popup" onClick={()=>{const id=pluginPopupId;setPluginPopupId(null);void api('DELETE',`/api/sessions/${id}`).then(()=>setSessions(current=>current.filter(item=>item.id!==id))).catch(error=>setError(error instanceof Error?error.message:String(error)))}}>×</button></header><div class="plugin-popup-terminal">{renderPaneNode(terminalLeaf(pluginPopupId),'plugin-popup',false,true)}</div></div></div>}
+    {pluginPopupSession&&<PluginPopup title={sessionName(pluginPopupSession)} docking={pluginPopupDocking===pluginPopupSession.id} onDock={()=>dockPluginPopup(pluginPopupSession)} onClose={()=>{const id=pluginPopupSession.id;setPluginPopupId(null);void api('DELETE',`/api/sessions/${id}`).then(()=>setSessions(current=>current.filter(item=>item.id!==id))).catch(error=>setError(error instanceof Error?error.message:String(error)))}}>{renderPaneNode(terminalLeaf(pluginPopupSession.id),'plugin-popup',false,true,true)}</PluginPopup>}
     {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} focusedProjectId={projectId} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false); void loadCommandPlugins() }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so

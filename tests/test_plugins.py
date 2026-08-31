@@ -16,6 +16,7 @@ from swe_mux import app_keys as keys
 from swe_mux import plugins as plugin_module
 from swe_mux.cli import _plugin_command
 from swe_mux.config import Config
+from swe_mux.errors import NotFound
 from swe_mux.event_bus import EventBus
 from swe_mux.models import ProjectRecord, SessionRecord
 from swe_mux.plugin_manifest import PluginManifestError, parse_plugin_manifest
@@ -233,6 +234,7 @@ class FakeSessions:
         self.sessions: dict[str, Any] = {}
         self.spawn_args: dict[str, Any] = {}
         self.spawn_count = 0
+        self.published: list[dict[str, Any]] = []
 
     async def spawn(self, **kwargs: Any) -> Any:
         self.spawn_count += 1
@@ -247,9 +249,19 @@ class FakeSessions:
             kwargs["exe"],
             kwargs["args"],
         )
-        session = SimpleNamespace(record=record, approval_input_sink=None)
+        session = SimpleNamespace(
+            record=record,
+            approval_input_sink=None,
+            publish_update=lambda: self.published.append(record.snapshot()),
+        )
         self.sessions[record.id] = session
         return session
+
+    def resolve(self, identity: str) -> Any:
+        try:
+            return self.sessions[identity]
+        except KeyError as exc:
+            raise NotFound(identity, kind="session") from exc
 
     async def stop(self, session_id: str, *, reason: str = "killed") -> None:
         self.sessions.pop(session_id, None)
@@ -435,6 +447,16 @@ async def test_plugin_http_lifecycle_and_scoped_callback(tmp_path: Path) -> None
             json={"context": "project", "project_id": "p1"},
         )
         assert opened.status == 201
+        docked = await client.post("/api/plugins/panes/pane-1/dock")
+        assert docked.status == 200
+        assert (await docked.json())["plugin_placement"] == "tab"
+        assert sessions.published[-1]["plugin_placement"] == "tab"
+        reopened = await client.post(
+            "/api/plugins/tests.utility/panes/dashboard",
+            json={"context": "project", "project_id": "p1"},
+        )
+        assert reopened.status == 201
+        assert (await reopened.json())["placement"] == "tab"
         token = next(
             token for token, grant in manager._tokens.items() if grant.session_id == "pane-1"
         )

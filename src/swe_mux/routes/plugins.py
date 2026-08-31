@@ -193,6 +193,22 @@ async def plugin_pane(request: web.Request) -> web.Response:
         return _failure(exc)
 
 
+async def plugin_pane_dock(request: web.Request) -> web.Response:
+    try:
+        result = _manager(request).dock_pane(request.match_info["session_id"])
+        await request.app[keys.EVENTS].emit(
+            "plugin_pane_docked",
+            source="user",
+            plugin_id=result["plugin_id"],
+            pane_id=result["plugin_entrypoint_id"],
+            session_id=result["id"],
+            project_id=result["project_id"],
+        )
+        return web.json_response(result)
+    except PluginError as exc:
+        return _failure(exc)
+
+
 async def plugin_logs(request: web.Request) -> web.Response:
     try:
         limit = int(request.query.get("limit", "100"))
@@ -317,6 +333,7 @@ ROUTES = (
     web.get("/api/plugins/link-handlers", plugin_links),
     web.get("/api/plugins/marketplace", plugin_marketplace),
     web.post("/api/plugins/callback", plugin_callback),
+    web.post("/api/plugins/panes/{session_id}/dock", plugin_pane_dock),
     web.post("/api/plugins/{plugin_id}/approve", plugin_approve),
     web.post("/api/plugins/{plugin_id}/enable", plugin_enable),
     web.post("/api/plugins/{plugin_id}/rollback", plugin_rollback),

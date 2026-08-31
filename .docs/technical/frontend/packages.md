@@ -68,7 +68,7 @@ Three rules the existing boundaries follow, each of which has a failure mode:
   `pluginPanes.ts` places and focuses tab/split contributions in their target Project.
   `fleetLayouts.ts` reconciles durable placement and excludes popups.
   `TerminalPane.tsx` omits the agent command rail for plugin utility sessions.
-  `App.tsx` projects enabled contributions into the command registry and exposes Plugins through the app menu.
+  `App.tsx` projects enabled contributions into the command registry, exposes Plugins through the app menu, hosts responsive popup terminals, and promotes a running popup into its Project layout when the operator keeps it as a tab.
 - [`packages/voice-and-assistant.md`](packages/voice-and-assistant.md) - voice capture and playback, and the Mux assistant.
 
 ## UI state boundaries
