@@ -23,11 +23,16 @@ test.use({ hasTouch: true, viewport: { width: 390, height: 780 } })
 
 const HOLD_MS = 450
 
-/** The editor opens on this device's own layout, which at this viewport is Mobile. */
+/** The editor opens on this device's own layout, which at this viewport is Mobile.
+ *  `compact=1` seeds a five-chip saved row: these specs exercise drag *mechanics*,
+ *  and the shipped mobile default is two dense rows whose wrapping would couple
+ *  chip geometry to the layout under test. */
 const open = async (page: Page) => {
-  await page.goto('/action-editor-harness.html?seen=1')
+  await page.goto('/action-editor-harness.html?seen=1&compact=1')
   await expect(page.locator('.rail-surface')).toHaveCount(1)
-  await expect(page.locator('.rail-chips').first().locator('.rail-chip')).not.toHaveCount(0)
+  // Exactly the compact seed: if this reads the shipped default instead, the
+  // geometry assumptions below are void and every failure would mislead.
+  await expect(page.locator('.rail-chips').first().locator('.rail-chip:not(.ghost)')).toHaveCount(5)
 }
 
 const row = (page: Page) => page.locator('.rail-chips').first()
@@ -42,6 +47,16 @@ const centreOf = async (page: Page, index: number) => {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2, box }
 }
 
+/** Where a finger presses a chip: the left side of its label, not the chip's centre. A
+ *  chip is the label plus a trailing remove button, and on a short label the centre sits
+ *  close enough to the `×` that Chrome's fat-finger target adjustment picks the button -
+ *  which removes instead of lifting, and is also not where a person aims. */
+const pressPoint = async (page: Page, index: number) => {
+  const box = await row(page).locator('.rail-chip:not(.ghost)').nth(index).locator('.rail-chip-label').boundingBox()
+  if (!box) throw new Error(`chip ${index} has no label box`)
+  return { x: box.x + Math.min(4, box.width / 2), y: box.y + box.height / 2, box }
+}
+
 const ghost = (page: Page) => page.locator('.mux-pointer-drag-ghost')
 
 test('a held chip lifts through the jitter of a resting finger, then reorders', async ({ page }) => {
@@ -50,7 +65,7 @@ test('a held chip lifts through the jitter of a resting finger, then reorders', 
   expect(before.length, 'this test needs a row with something to reorder').toBeGreaterThan(1)
 
   const finger = await touch(page)
-  const first = await centreOf(page, 0)
+  const first = await pressPoint(page, 0)
   const second = await centreOf(page, 1)
   const scrollBefore = await page.evaluate(() => document.querySelector('.action-editor-body')!.scrollTop)
 
@@ -80,7 +95,7 @@ test('a drop that lands just outside the row still goes into it', async ({ page 
   expect(before.length).toBeGreaterThan(1)
 
   const finger = await touch(page)
-  const first = await centreOf(page, 0)
+  const first = await pressPoint(page, 0)
   const rowBox = (await row(page).boundingBox())!
   const last = await centreOf(page, before.length - 1)
 
@@ -102,7 +117,7 @@ test('lifting a chip and letting it go where it sat leaves the layout alone', as
   const before = await order(page)
 
   const finger = await touch(page)
-  const first = await centreOf(page, 0)
+  const first = await pressPoint(page, 0)
   await finger.down(first.x, first.y)
   await page.waitForTimeout(HOLD_MS)
   await expect(ghost(page)).toHaveCount(1)
@@ -118,7 +133,7 @@ test('a finger that travels before the hold scrolls instead of dragging', async 
   const before = await order(page)
 
   const finger = await touch(page)
-  const first = await centreOf(page, 0)
+  const first = await pressPoint(page, 0)
   await finger.down(first.x, first.y)
   // Past the hold's slop and long before its delay: this gesture is a scroll the drag never
   // owned, and it must stay one even though it started on a chip.
