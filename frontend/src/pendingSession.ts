@@ -43,9 +43,11 @@ export function placePendingTerminal(
 
 /** Select a pending session without inventing pane membership for it.
  *
- * Ordinary spawns already own an optimistic leaf and should activate it. Worktree setup stays
- * unpanned, so the App can render it as a temporary full-workspace surface without mutating the
- * Project's durable split tree.
+ * Every launch this device starts now owns an optimistic leaf - worktree setup included, which
+ * used to stay unpanned - so the ordinary answer is to activate the tab it already has. The
+ * guard covers the window where this render's layout has not caught up with the placement yet:
+ * minting a leaf here would put the session in a pane nobody chose, which is the placement
+ * decision `sessionJoin.ts` exists to make on one authoritative snapshot instead.
  */
 export function selectPendingTerminal(layout: PaneLayout, id: string): PaneLayout {
   return stackForView(layout, id) ? activateContainingStack(layout, id) : layout

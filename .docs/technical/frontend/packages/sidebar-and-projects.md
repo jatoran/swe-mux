@@ -151,5 +151,6 @@ That is what makes refreshing safe while someone is typing: a refresh moves the 
 `ProjectRunMenu.tsx`, `worktreeLaunch.ts`, `pendingSession.ts`, `App.tsx` orchestration
 
 The Run catalog, trust, and ordinary launch interaction.
-Durable worktree creation is followed by an unpanned full-workspace setup placeholder, with active-session-gated non-focus-stealing resolution and a setup-failure warning.
+The worktree launch is one App-owned act across both of its phases: an optimistic tab is placed in the focused pane first, then `git worktree add`, then bootstrap and spawn behind it.
+The form holds only for creation and stays open on that failure's message, which is the one the operator can correct there; bootstrap failures are toasts, and resolution swaps the real id into the same leaf without stealing a tab the operator moved to meanwhile.
 Also branch-whitespace normalization, a long background setup deadline, config-root loading, and pure `<root>/<project>/<branch>` path derivation.

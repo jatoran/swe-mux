@@ -170,9 +170,9 @@ PaneLeaf = terminal | note | preview | history | queue
 - Layout changes update the local `layoutValues` ref and rendered map immediately, then serialize
   per-Project PATCH requests behind an optimistic `layout_revision`. Later writes cannot be
   overwritten by an earlier response. A stale revision refreshes authoritative Project state.
-- Client-only pending terminal leaves make ordinary launches visible before daemon spawn completes.
+- Client-only pending terminal leaves make every launch visible before daemon spawn completes, worktree setup included.
   Their IDs never persist or attach to PTY routes; success replaces the leaf atomically and failure removes it.
-  Worktree setup instead uses an unpanned pending session that temporarily replaces the rendered workspace only while selected, leaving every durable split and active tab unchanged.
+  A refresh during a long launch re-places the leaf without taking the pane's active tab, except for the one launch the operator is currently watching.
 - Project Action steps join the pane containing the currently focused view as ordinary terminal
   tabs. A compound action does not create layout groups or import VS Code presentation/split
   hints; every returned session uses the same placement rule.
