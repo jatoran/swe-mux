@@ -5905,10 +5905,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .session-row-preview-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .session-row-preview-heading>div{min-width:0;display:grid;gap:2px}.session-row-preview-heading strong{color:var(--text)}.session-row-preview-heading small{color:var(--muted)}
 .session-row-preview-heading>button{flex:none;min-height:27px;padding:0 8px}
-/* Width comes from the panel's own control, not from a cap here: it used to be
-   pinned at 420px — wider than the sidebar can be dragged — so the panel showed
-   every setting except the one a reader cannot predict from the field list. */
-.session-row-preview{max-width:100%;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+/* Match the current device's real navigation width. Desktop reads the device-local
+   sidebar preference; mobile uses the same viewport-derived cap as the drawer. */
+.session-row-preview{width:min(100%,var(--session-row-preview-width,254px));padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 .session-row-preview .session-row{cursor:default}
 .session-row-preview .session-list{overflow:visible;padding:0 5px}
 /* Slider plus a live readout, because a size in pixels is a number the user has
@@ -5934,7 +5933,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-field-pool{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:7px;color:var(--muted);font-size:9px}
 .row-field-pool button{padding:2px 6px;border:1px dashed var(--line);border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;font-size:9px}
 .row-field-pool button:hover{border-style:solid;color:var(--text)}
-@media(max-width:760px){.session-row-preview-sticky{margin-inline:0;padding:7px}.row-section-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){.session-row-preview-sticky{margin-inline:0;padding:7px}.session-row-preview{width:min(100%,285px,86vw)}.row-section-grid{grid-template-columns:minmax(0,1fr)}}
 
 /* Configurable session pane top bars. Their row count is persistent layout state, so the
    terminal gives the bar its intrinsic height and keeps the remaining track for xterm. */
@@ -5959,7 +5958,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Settings → Appearance → Session top bars. */
 .session-topbar-settings h4{margin:0}.session-topbar-settings h5{margin:0 0 4px;color:var(--muted);text-transform:uppercase}
 .session-topbar-preview-sticky{position:sticky;top:0;z-index:3;display:grid;gap:7px;margin:8px 0 12px;padding:8px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 96%,var(--green));box-shadow:0 6px 12px #0008}
-.session-topbar-preview{max-width:100%;border:1px solid var(--line);background:var(--bg);overflow:hidden}.session-topbar-preview .session-topbar{width:100%}
+.session-topbar-preview{width:100%;border:1px solid var(--line);background:var(--bg);overflow:hidden}.session-topbar-preview .session-topbar{width:100%}
 .topbar-row-editor{margin:10px 0;padding:9px;border:1px solid var(--line);background:var(--bg)}.topbar-row-editor>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}.topbar-row-editor>header>button{min-height:26px;color:var(--red)}
 .topbar-section-editor ul{list-style:none;display:grid;gap:4px;margin:0;padding:0}.topbar-section-editor>p{margin:0;color:var(--muted)}
 .topbar-slot{display:grid;grid-template-columns:minmax(80px,1fr) minmax(90px,auto) minmax(72px,auto) auto;align-items:center;gap:5px;padding:4px;border:1px solid var(--line);background:var(--panel2)}.topbar-slot>em{color:var(--muted);font-style:normal}.topbar-slot-actions{display:flex;gap:2px}.topbar-slot-actions button{width:22px;height:22px;padding:0;border:1px solid var(--line);background:var(--panel);color:var(--muted)}.topbar-slot-actions button.danger{color:var(--red)}
