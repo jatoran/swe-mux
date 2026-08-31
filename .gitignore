@@ -103,6 +103,13 @@ _agents-orchestrator/
 # Pages rebuilds this exact-revision catalog from public GitHub repositories.
 site/plugins/catalog.json
 
+# === Demo capture output ===
+# `frontend/scripts/capture-demo.mjs` writes video, stills and a manifest here. It is
+# reproducible from the committed `site/demo/` bundle at a fixed seed, so committing the
+# frames would be committing a derived artifact that a rebuild regenerates byte for byte.
+# Anything from here that earns a place on the site is copied into `site/` deliberately.
+trailer/demo-capture/
+
 # === Project-local swe-mux state ===
 # The whole directory, as of 2026-08-28. It used to be a split: the daemon's own runtime
 # writes were ignored one path at a time while the repository-authored files beside them

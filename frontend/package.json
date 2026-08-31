@@ -20,6 +20,7 @@
     "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "test": "node --experimental-strip-types test/all.ts",
     "test:renderer": "playwright test --config playwright.renderer.config.ts",
+    "capture:demo": "node scripts/capture-demo.mjs",
     "bench:smart-turn": "node --experimental-strip-types scripts/smart-turn-bench.mts"
   },
   "dependencies": {

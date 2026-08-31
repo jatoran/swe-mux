@@ -267,6 +267,15 @@ jobs:
       - name: Browser smoke (Playwright renderer suite)
         run: npm --prefix frontend run test:renderer
 
+      # The demo capture rig, in its check form: it plays a scenario twice against the
+      # **committed** `site/demo/` bundle and fails if the two runs produce different
+      # stores. That is the claim everything else built on determinism rests on, and it is
+      # the one thing a source-level test cannot ask - the bundle is build output, so a
+      # stale one is exactly the failure this is here to name. No video is recorded and no
+      # encoder is needed; it costs about a minute.
+      - name: Demo capture determinism
+        run: npm --prefix frontend run capture:demo -- --scenario queue --check
+
   platform:
     name: platform (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
