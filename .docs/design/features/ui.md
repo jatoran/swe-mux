@@ -794,6 +794,9 @@ Its rules, and what each one is defending:
   Pages come from the declaration and sections come from the tab's own markup - read from the live DOM while the tab is on screen and from its vnodes otherwise, which is the same walk the settings search index uses to reach an unmounted tab.
   Reading only the DOM is what used to give a tab its chevron on the second visit and not the first.
   A section link on a tab that is not on screen selects that tab first and scrolls once its own rail exists, because the heading it names is not in the document until then.
+  Clicking a declared page or section link briefly highlights the destination heading and the
+  border of its whole section, so arrival remains visible inside a dense page.
+  Settings search keeps its exact-result flash and adds the same heading and section-border cue.
   Two limits are deliberate and neither can change whether a chevron is drawn.
   The vnode read cannot see headings a child component renders (`<AccountSettings/>`, the Alerts panel), so a preview is a floor that the live read replaces on arrival; and it is built once per open rather than per render, so a heading whose rendering is conditional on an edit made in this session is corrected by visiting the tab.
   Tabs with a single section - Git, Automation, Alerts - are given no disclosure at all, which is `SECTION_RAIL_MIN` doing its job: listing one section is a row spent saying what one glance already shows.

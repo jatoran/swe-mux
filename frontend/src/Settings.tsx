@@ -42,7 +42,7 @@ import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestHeadings, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
-import { flashSetting, revealSetting, settingSelector } from './settingReveal'
+import { cueSettingsSection, flashSetting, flashSettingsSection, revealSetting, settingSelector } from './settingReveal'
 import {
   railSectionIds, rememberedSections, rememberedTab, rememberSection, rememberTab,
   sameRailSections, SECTION_RAIL_MIN, settingsBreadcrumb, settingsSubpageId, settingsSubpages, settingsTabGroups, settingsTabs, tabForSection,
@@ -564,6 +564,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [query,setQuery] = useState('')
   const [highlight,setHighlight] = useState(0)
   const [jump,setJump] = useState<{entry:SettingsSearchEntry}|null>(null)
+  const [sectionCue,setSectionCue] = useState<{tab:SettingsTab;id:string;token:number}|null>(null)
   const [themePickerOpen,setThemePickerOpen] = useState(false)
   const declaredSubpages=settingsSubpages[activeTab]||[]
   const pagedSubpages=declaredSubpages.length>1
@@ -927,12 +928,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   /** Every route to a different tab, so none of them leaves the drawer standing open
    *  over the tab it just switched to: the rail, a search result, a deep link. */
   const selectTab=useCallback((tab:SettingsTab)=>{setActiveTab(tab);setNavOpen(false)},[setNavOpen])
+  const requestSectionCue=(tab:SettingsTab,id:string)=>
+    setSectionCue(current=>({tab,id,token:(current?.token||0)+1}))
   const toggleTabExpanded=(tab:SettingsTab)=>setExpandedTabs(current=>{
     const next=new Set(current)
     if(next.has(tab))next.delete(tab);else next.add(tab)
     return next
   })
   const selectSubpage=(tab:SettingsTab,id:string)=>{
+    requestSectionCue(tab,id)
     setSelectedSubpages(current=>({...current,[tab]:id}))
     setExpandedTabs(current=>new Set(current).add(tab))
     selectTab(tab)
@@ -943,6 +947,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
    * because the heading it names does not exist in the DOM until then.
    */
   const openSection=(tab:SettingsTab,id:string)=>{
+    requestSectionCue(tab,id)
     if(tab===activeTab){scrollToSection(id);setNavOpen(false);return}
     pendingSection.current=id
     selectTab(tab)
@@ -1160,7 +1165,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const arrive=()=>{
       for(let node=target.parentElement;node;node=node.parentElement)if(node instanceof HTMLDetailsElement)node.open=true
       target.scrollIntoView({block:'center'})
-      return flashSetting(target)
+      const clearTarget=flashSetting(target)
+      const clearSection=flashSettingsSection(target)
+      return()=>{clearTarget();clearSection()}
     }
     const page=target.closest<HTMLElement>('section[data-settings-subpage]')?.dataset.settingsSubpage
     if(pagedSubpages&&page&&page!==selectedSubpage){
@@ -1170,6 +1177,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
     return arrive()
   },[jump,pagedSubpages,selectedSubpage,activeTab])
+
+  // Sidebar pages and scroll anchors get the same contextual arrival cue as search.
+  // The target can belong to a tab that has not rendered yet, or to a page that is still
+  // hidden during this commit, so the cue waits for the first visible matching heading.
+  useEffect(() => {
+    if(!sectionCue||sectionCue.tab!==activeTab)return
+    const root=panel.current
+    if(!root)return
+    return cueSettingsSection(root,sectionCue.id)
+  },[sectionCue,activeTab,draft!==null])
 
   // Reveal a control a gated surface deep-linked to (`settingTargets.ts`). Unlike the search
   // jump above, this can arrive before the panel has anything to show: the bundle is still in

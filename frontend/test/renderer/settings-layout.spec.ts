@@ -367,6 +367,44 @@ test('a tab discloses its sections before it has ever been on screen', async ({ 
   await expect(page.locator('.settings-content h3',{hasText:/^Firewall$/})).toBeInViewport()
 })
 
+test('sidebar pages and sections cue their destination heading and section border', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+
+  const remote=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:/^Remote$/})})
+  await remote.locator('.settings-tab-expand').click()
+  await remote.locator('xpath=following-sibling::div[contains(@class,"settings-subtabs")][1]').getByRole('button',{name:'Firewall',exact:true}).click()
+  const firewall=page.locator('.settings-content h3',{hasText:/^Firewall$/})
+  await expect(firewall).toHaveClass(/setting-section-heading-flash/)
+  await expect(firewall.locator('xpath=ancestor::section[1]')).toHaveClass(/setting-section-flash/)
+
+  const input=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:/^Input$/})})
+  await input.locator('[role="tab"]').click()
+  const pages=input.locator('xpath=following-sibling::div[contains(@class,"settings-subtabs")][1]')
+  await pages.getByRole('button',{name:'Clipboard history',exact:true}).click()
+  const clipboard=page.locator('.settings-content h3',{hasText:/^Clipboard history$/})
+  await expect(clipboard).toHaveClass(/setting-section-heading-flash/)
+  const clipboardSection=clipboard.locator('xpath=ancestor::section[1]')
+  await expect(clipboardSection).toHaveClass(/setting-section-flash/)
+  await expect(clipboard).not.toHaveClass(/setting-section-heading-flash/,{timeout:4000})
+  await expect(clipboardSection).not.toHaveClass(/setting-section-flash/)
+})
+
+test('Settings search flashes the exact result and its section context', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  const search=page.getByRole('combobox',{name:'Search settings'})
+  await search.fill('scrollback bytes')
+  await page.locator('.settings-search-results').getByRole('option',{name:/Scrollback bytes/}).click()
+
+  const target=page.locator('.settings-content label').filter({hasText:'Scrollback bytes'}).first()
+  const section=target.locator('xpath=ancestor::section[1]')
+  const heading=section.locator('h3').first()
+  await expect(target).toHaveClass(/setting-flash/)
+  await expect(heading).toHaveClass(/setting-section-heading-flash/)
+  await expect(section).toHaveClass(/setting-section-flash/)
+})
+
 test('switching tabs never files one tab sections under another', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')
