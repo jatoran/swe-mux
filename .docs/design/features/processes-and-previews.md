@@ -77,7 +77,7 @@
   Three sources now answer the question together, because no one of them sees all of it: the
   descendant walk finds what this daemon started, the ancestor walk finds the shell while that
   link is live, and an **exact match on the executable file this daemon is itself running**
-  finds it afterwards. The image test is deliberately not a name or a directory match - the
+  finds it afterwards, along with its WebView2 host. The image test is deliberately not a name or a directory match - the
   frozen shell, daemon and `--daemon-child` successors are all literally the same file, and
   nothing else on the machine runs it. It is also gated on `sys.frozen`: running from source
   `sys.executable` is a shared `python.exe`, and reserving on that would strip real session
@@ -86,8 +86,20 @@
   session spawned in its own tree (`hook_client` runs on every tool call). It shares the image
   and stays session-owned. `packaging/redeploy_desktop.py` draws the same line before killing
   anything, for the same reason.
-  The image test is asked only about pids some session is actually claiming, never about the
-  machine, which is what keeps it off the sampling budget.
+  **Reservation and enumeration are separated on purpose, and the cost is why.** A claim is
+  answered by testing the image of the pid being claimed - immediately, on a handful of pids,
+  never on the machine. *Finding* a shell nothing points at needs a whole-machine scan, and
+  constructing a `psutil.Process` is the most expensive operation in this file, so that scan
+  runs once a minute against a long-lived shell rather than once per five-second tick, filtered
+  on the image's file name before the exact-path check runs. A pid leaving the system parent
+  table forces an immediate rescan, so a dead shell is never enumerated - and never becomes a
+  recycled pid enumerated as swe-mux - for the rest of the interval. Nothing about attribution
+  waits on the cadence; only what the runtime footer can see does.
+  The upward edges deliberately carry **no** creation-time check, unlike every downward one.
+  There a recycled parent pid splices in a process that is not ours; here the edge is only
+  followed to a pid the image test has already declared ours, and a recycled pid running our
+  own executable is swe-mux whether or not it is really this daemon's parent. The check could
+  not change an answer, so it is not written.
 - **The supervisor is reserved and is a traversal boundary in the same breath.** It parents
   every live session, so a walk that descends *through* it absorbs the whole fleet. It is
   reserved by pid - the daemon knows it directly, which matters because it is spawned to break
