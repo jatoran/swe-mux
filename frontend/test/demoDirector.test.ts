@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mulberry32, nextOrdinal, resetOrdinals, DEMO_EPOCH_MS } from '../src/demo/determinism.ts'
+import {
+  fixtureSeconds, mulberry32, nextOrdinal, resetOrdinals, DEMO_EPOCH_MS,
+} from '../src/demo/determinism.ts'
 import {
   makeLandRequest, makeQueueMessage, makeSpawnRequest, queueAutoPayload, queueMailboxPayload,
   queueMessagesPayload, queueSummaryPayload, notificationsPayload, landPayload, landEventsPayload,
@@ -46,6 +48,13 @@ test('generated ordinals are a counter, so an id can be named twice', () => {
   assert.deepEqual([nextOrdinal(), nextOrdinal(), nextOrdinal()], [1, 2, 3])
   resetOrdinals()
   assert.equal(nextOrdinal(), 1)
+})
+
+test('a generated fixture timestamp is a pure function of its id', () => {
+  const epoch = Math.floor(DEMO_EPOCH_MS / 1000)
+  assert.equal(fixtureSeconds('s-d3'), epoch + 3)
+  assert.equal(fixtureSeconds('s-d4'), epoch + 4)
+  assert.throws(() => fixtureSeconds('s-live'), /has no ordinal/)
 })
 
 test('the demo epoch is a fixed instant in the past', () => {
