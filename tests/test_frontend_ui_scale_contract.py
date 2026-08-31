@@ -183,7 +183,11 @@ def test_the_terminal_font_follows_the_chrome_scale() -> None:
     memo = (SRC / "terminalPaneMemo.ts").read_text(encoding="utf-8")
     assert "a.uiScale === b.uiScale" in memo
     # A scale change must not be in the terminal's construction deps.
-    lifetime = re.search(r"\n  \}, \[session\.id, keybindings,[^\]]*\]\)", pane)
+    # `keybindings` left this list when the pane stopped resolving commands itself:
+    # a multi-chord sequence depends on state no prop can carry, so it asks
+    # `keymapDispatch` at the moment a key fires - and a keymap edit no longer tears
+    # down and rebuilds the terminal.
+    lifetime = re.search(r"\n  \}, \[session\.id, scrollback,[^\]]*\]\)", pane)
     assert lifetime, "the terminal lifetime effect's dep list has moved"
     assert "uiScale" not in lifetime.group(0)
     # Nothing may read the unscaled constant once the terminal exists; every site that

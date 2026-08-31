@@ -10,6 +10,7 @@ import pytest
 from swe_mux.desktop_permissions import (
     MECHANISM,
     MEDIA_MARKER,
+    SHELL_MARKER,
     MediaPermissionReport,
     WebviewMicrophoneGrant,
     decide_media_permission,
@@ -91,14 +92,36 @@ def test_marker_script_publishes_a_frozen_report() -> None:
         state="armed", origin=ORIGIN, detail="ready", mechanism=MECHANISM
     )
     script = marker_script(report)
-    assert script.startswith(f"window.{MEDIA_MARKER}=Object.freeze(")
-    payload = json.loads(script[script.index("(") + 1 : script.rindex(")")])
+    statements = [line for line in script.split(";") if line]
+    assert len(statements) == 2
+    assert statements[0].startswith(f"window.{MEDIA_MARKER}=Object.freeze(")
+    payload = json.loads(statements[0][statements[0].index("(") + 1 : statements[0].rindex(")")])
     assert payload == {
         "state": "armed",
         "origin": ORIGIN,
         "detail": "ready",
         "mechanism": MECHANISM,
     }
+
+
+def test_marker_script_also_identifies_the_shell_itself() -> None:
+    """The keyboard layer's `desktop or browser?` answer, and its absence is the signal.
+
+    A browser tab never has this global, which is how `hostProfile.ts` tells the two
+    apart - and the fact it carries is the one the keymap needs: production WebView2
+    runs with pywebview's browser accelerators disabled, so this window receives
+    Ctrl+T, Ctrl+W and Ctrl+Tab where a browser tab never will.
+    """
+    report = MediaPermissionReport(
+        state="unsupported", origin=ORIGIN, detail="no control", mechanism=None
+    )
+    script = marker_script(report)
+    statements = [line for line in script.split(";") if line]
+    assert statements[1].startswith(f"window.{SHELL_MARKER}=Object.freeze(")
+    payload = json.loads(statements[1][statements[1].index("(") + 1 : statements[1].rindex(")")])
+    assert payload["shell"] == "swe-mux-desktop"
+    assert payload["accelerators"] == "released"
+    assert payload["version"]
 
 
 class FakeEvent:

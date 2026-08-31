@@ -20,6 +20,7 @@ import { consoleContentionNotice } from './consoleContention.ts'
 import { resolveInputBackend } from './inputBackend.ts'
 import { terminalPanePropsEqual } from './terminalPaneMemo.ts'
 import { keyChord } from './keys'
+import { claims as keymapClaims, setTerminalSelection } from './keymapDispatch.ts'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
 import { isTerminalProtocolResponse, shouldSuppressTerminalProtocolResponse } from './terminalProtocol'
@@ -223,7 +224,6 @@ interface Props {
   onStartupTiming?: (milestone: StartupMilestone, elapsedMs: number) => void
   startupOrigin?: number
   broadcast: boolean
-  keybindings: Record<string, string>
   scrollback: number
   rendererPreference: TerminalRendererPreference
   /** ConPTY compatibility descriptor from the daemon; undefined off Windows. */
@@ -389,7 +389,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, inputBack
   return 'text'
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   // Held in a ref rather than closed over: every reader below lives inside the
   // terminal's construction effect, which must not re-run just because a font moved.
@@ -1112,7 +1112,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     window.addEventListener('mux:theme', onTheme)
     term.attachCustomKeyEventHandler(event => {
-      const decision = terminalKeyDecision(event, keybindings[keyChord(event)], term.hasSelection(), inputBackendRef.current)
+      // The pane no longer resolves commands itself: with multi-chord sequences it
+      // cannot, because `p` alone says nothing about whether a leader is armed. It
+      // asks the one owner of that state (`keymapDispatch`) whether swe-mux is
+      // claiming the key, swallows it if so, and leaves the dispatch to App's
+      // window handler - which sees the same event a moment later.
+      setTerminalSelection(term.hasSelection())
+      const decision = terminalKeyDecision(event, keymapClaims(keyChord(event)), term.hasSelection(), inputBackendRef.current)
       if (decision.kind === 'sendInput') {
         event.preventDefault()
         // term.input keeps the write on the normal onData path, so broadcast membership
@@ -1120,10 +1126,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         term.input(decision.data, true)
         return false
       }
-      if (decision.kind === 'command') {
+      if (decision.kind === 'claimed') {
+        // Not `stopPropagation`: App's window handler is the dispatcher now, and
+        // it has to see this event. Only xterm is stopped, which is the whole job.
         event.preventDefault()
-        event.stopPropagation()
-        runCommand(decision.command)
         return false
       }
       if (decision.kind === 'browserPaste') {
@@ -3433,7 +3439,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
     return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
-  }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
+    // `keybindings` used to be a dependency here, so every keymap edit tore down and
+    // rebuilt the terminal. The key handler now asks `keymapDispatch` at the moment
+    // it fires, so a changed map is picked up without remounting anything.
+  }, [session.id, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // A pane spawned as a shell chose WebGL, and a promotion can make that the wrong
   // renderer: a harness declaring `webgl_unsafe` keeps an alternate-screen surface that

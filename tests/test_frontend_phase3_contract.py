@@ -14,10 +14,18 @@ def test_recursive_layout_and_command_surfaces_are_wired() -> None:
     assert "swapTerminals" in layout
     assert 'role="separator"' in app
     assert "paneNeighborIds" in app
-    assert "pane.swapNext" not in app
+    # This used to assert `pane.swapNext` was ABSENT from App, which was true and was
+    # the bug: the id was registered in `keybindings.py` the whole time, so it was
+    # bindable, appeared in the shortcut editor, and did nothing when pressed.
+    # Registered ids and implemented commands are now checked against each other in
+    # `test_keybinding_registry.py`; what belongs here is that it is implemented.
+    assert "id: 'pane.swapNext'" in app
     # Scoring is gated on the palette being open, and the gate lives in `commands.ts`
     # so the renderer harness exercises the same function the app does.
-    assert "paletteResults(paletteOpen, commands, paletteQuery)" in app
+    # `commands` became `scopedCommands` and `paletteQuery` became `paletteTerm` when
+    # the palette gained its `@`/`#`/`:`/`>` scopes; the gate itself is unchanged and
+    # still the thing being asserted.
+    assert "paletteResults(paletteOpen, scopedCommands, paletteTerm)" in app
     commands = (root / "frontend" / "src" / "commands.ts").read_text(encoding="utf-8")
     assert "return open ? searchCommands(commands, query) : NO_COMMANDS" in commands
 
@@ -516,8 +524,12 @@ def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> 
     session_menu = app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
     assert "runNamedCommand('session.open')" not in session_menu
     assert "{ id: 'session.open'" in app
-    assert "id: 'pane.detach'" not in app
-    assert "runNamedCommand('pane.detach')" not in app
+    # Scoped to the menu rather than to the whole file. `pane.detach` staying out of
+    # this menu is the contract; the command existing is not only allowed but
+    # required - `TerminalPane` has a "Detach pane" button that calls it, and for as
+    # long as nothing implemented it that button silently did nothing.
+    assert "runNamedCommand('pane.detach')" not in session_menu
+    assert "id: 'pane.detach'" in app
 
 
 def test_no_context_menu_reorders_or_reshapes_anything() -> None:

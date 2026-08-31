@@ -121,7 +121,7 @@ async def test_the_default_bundle_is_what_first_paint_needs_and_nothing_else(
         assert deferred not in payload
     assert payload["errors"] == {}
     assert payload["config"]["scrollback_bytes"] == 5 * 1024 * 1024
-    assert payload["keybindings"]["bindings"]
+    assert payload["keybindings"]["resolved"]
     assert payload["projects"] == []
     # No cwd supplied, so the per-project part is intentionally absent.
     assert payload["project_config"] is None
@@ -169,7 +169,7 @@ async def test_bundle_degrades_a_failed_part_to_null_instead_of_failing(tmp_path
     assert "ccusage cache unreadable" in payload["errors"]["usage"]
     # Everything else still arrives, including the parts the panel cannot open without.
     assert payload["config"]["scrollback_bytes"]
-    assert payload["keybindings"]["bindings"]
+    assert payload["keybindings"]["resolved"]
 
 
 async def test_bundle_reads_project_config_for_the_requested_cwd(tmp_path: Path) -> None:
