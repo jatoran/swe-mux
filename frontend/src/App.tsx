@@ -220,7 +220,7 @@ import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
 import { composeBackTarget, viewBackEnabled, viewHistory, type ViewEntry, type ViewNavigator, type ViewPosition } from './viewHistory.ts'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
+import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from './viewState'
 import {
   DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_DRAG, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
   reorderForHover, reorderTargetFromContainer, type DropSide, type ListDropTarget, type PointerDragActivation, type ReorderAxis, type ReorderTarget,
@@ -709,6 +709,13 @@ export function App() {
   const [experienceTierUnchosen, setExperienceTierUnchosen] = useState(false)
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false)
   const [questSignals, setQuestSignals] = useState<QuestSignals>({})
+  // The sidebar's "add a provider account" invitation, which the status block shows
+  // only while no provider has a credential on this host. Machine-side like the
+  // quest dismissals above and for the same reason: it invites you to add a login
+  // to the daemon host, so putting it away at the desk must also put it away on
+  // the phone. Undefined until `/api/config` settles, which is what keeps the
+  // invitation from flashing on an install that has already dismissed it.
+  const [accountPromptDismissed, setAccountPromptDismissed] = useState<boolean | undefined>(undefined)
   const questAction = (id: QuestId): void => {
     if (id === 'voice') setVoiceSetupOpen(true)
     else if (id === 'worktrees') showDrawerTab('git')
@@ -721,6 +728,13 @@ export function App() {
     const next = withQuestDismissed(questSignals.quests_dismissed, id)
     setQuestSignals(current => ({ ...current, quests_dismissed: next }))
     void api('PATCH', '/api/config', { quests_dismissed: next }).catch(() => {})
+  }
+  // Optimistic and machine-side, exactly like the quest dismissal above. There is
+  // deliberately no control to bring it back: it answers itself the moment a
+  // credential exists, because the status block is derived rather than remembered.
+  const dismissAccountPrompt = (): void => {
+    setAccountPromptDismissed(true)
+    void api('PATCH', '/api/config', { provider_accounts_prompt_dismissed: true }).catch(() => {})
   }
   // False until the first `/api/config` call settles, either way. Whether the first-run
   // harness panel is going to lead is a fact only the daemon holds, and it arrives after
@@ -1846,6 +1860,7 @@ export function App() {
       stt_enabled: config.stt_enabled === true,
       quests_dismissed: Array.isArray(config.quests_dismissed) ? config.quests_dismissed as string[] : [],
     })
+    setAccountPromptDismissed(config.provider_accounts_prompt_dismissed === true)
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
     applyRailDensity(config)
@@ -3051,7 +3066,7 @@ export function App() {
 
   useEffect(() => {
     if(!focusHydrated)return
-    const session=sessions.find(item=>item.id===activeId&&item.project_id===projectId&&!isEndedSession(item))
+    const session=sessions.find(item=>item.id===activeId&&item.project_id===projectId)
     // Persist the focused view (note/file/terminal) alongside the active session so a
     // later return to this project reopens exactly what was last looked at here.
     const focusView=leaves(activeLayout).some(leaf=>leaf.id===focusedViewId)?focusedViewId:null
@@ -3097,14 +3112,10 @@ export function App() {
 
   useEffect(() => {
     if(!focusHydrated)return
-    const live = sessions.filter(session => session.project_id === projectId && !['exited', 'crashed'].includes(session.state))
     if (zoomedId && !leaves(activeLayout).some(leaf => leaf.id === zoomedId)) setZoomedId(null)
-    if (live.some(session => session.id === activeId)) return
-    const liveIds = new Set(live.map(session => session.id))
-    const nextId = visibleTerminalIds(activeLayout).find(id => liveIds.has(id))
-      ?? terminalIds(activeLayout).find(id => liveIds.has(id))
-      ?? live[0]?.id
-      ?? null
+    const nextId = resolveActiveSession(
+      sessions, projectId, activeId, visibleTerminalIds(activeLayout), terminalIds(activeLayout),
+    )
     if (nextId === activeId) return
     setActiveId(nextId)
     // Follow the active terminal with focus only when the current focus is stale (its
@@ -4933,25 +4944,11 @@ export function App() {
     if (failure) setError(failure)
   }
 
-  // Resume targets the history entry of the conversation the pane was last on,
-  // which is its run rather than its session: a pane that rolled its
-  // conversation (/clear) or inherited one (a previous resume) owns a row keyed
-  // by the run id, and asking for the session id there finds nothing.
+  // A retained pane resumes in place. The session route delegates agent work to the
+  // shared History resume authority, proves the replacement, swaps the layout identity,
+  // then removes the dead row. History's own Resume stays additive because it may name
+  // a conversation with no retained pane to replace.
   const resumeSession = async (session: Session) => {
-    try {
-      const resumed = await api<Session>('POST', `/api/history/${session.agent_run_id || session.id}/resume`, { project_id: session.project_id })
-      markProjectRecent(resumed.project_id)
-      setSessions(items => [...items, resumed])
-      setActiveId(resumed.id)
-      // The replacement takes the original's place in the layout, so focus has to move
-      // with it: the leaf it was on is about to stop existing.
-      requestFocusView(resumed.id)
-      setContextMenu(null)
-      await updateLayout(session.project_id, replaceTerminal(layoutMap[session.project_id] || emptyLayout(), session.id, resumed.id))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-  }
-
-  const resumeInactiveSession = async (session: Session) => {
     try {
       const { session: resumed } = await api<{session: Session; replaced: string}>(
         'POST', `/api/sessions/${session.id}/resume`, {},
@@ -4959,14 +4956,14 @@ export function App() {
       markProjectRecent(resumed.project_id)
       startupOrigins.current[resumed.id] = performance.now()
       setSessions(items => [...items.filter(item => item.id !== session.id && item.id !== resumed.id), resumed])
-      if (activeId === session.id) setActiveId(resumed.id)
-      if (focusedViewId === session.id) requestFocusView(resumed.id)
+      setProjectId(resumed.project_id)
+      setActiveId(resumed.id)
+      requestFocusView(resumed.id)
       if (zoomedId === session.id) setZoomedId(resumed.id)
       setContextMenu(null)
+      setSidebarOpen(false)
       await refresh()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
   // Delegated rather than reimplemented: the sidebar row and the tab strip resolve
@@ -5895,7 +5892,7 @@ export function App() {
     { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill and remove focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill and remove selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
     { id: 'session.standDown', label: 'Stand down selected session', category: 'session', available: !!commandSession && !isEndedSession(commandSession), disabledReason: 'Select a live session', run: () => commandSession && void standDownSession(commandSession) },
-    { id: 'session.resumeInactive', label: commandSession?.backend === 'shell' ? 'Restart inactive terminal' : 'Resume inactive session', category: 'session', available: !!commandSession && isInactiveSession(commandSession), disabledReason: 'Select an inactive session', run: () => commandSession && void resumeInactiveSession(commandSession) },
+    { id: 'session.resumeInactive', label: commandSession?.backend === 'shell' ? 'Restart inactive terminal' : 'Resume inactive session', category: 'session', available: !!commandSession && isInactiveSession(commandSession), disabledReason: 'Select an inactive session', run: () => commandSession && void resumeSession(commandSession) },
     { id: 'session.clearEnded', label: `Remove all ended sessions from sidebar${clearEndedCount > 1 ? ` (${clearEndedCount})` : ''}`, category: 'session', available: clearEndedCount > 0, disabledReason: 'No ended sessions in this Project', run: () => void clearEndedSessions(clearEndedTarget) },
     { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
     // Same endpoint, different framing: for a recovered shell this is not
@@ -6061,7 +6058,7 @@ export function App() {
     { id: 'session.reveal', label: 'Reveal selected working directory', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api('POST', '/api/reveal', { path: commandSession.cwd }); setContextMenu(null) } },
     { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.project_id, 'horizontal') } } },
     { id: 'session.broadcastMembership', label: commandSession?.broadcast ? 'Remove selected session from broadcast' : 'Add selected session to broadcast', category: 'input', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api<Session>('POST', `/api/sessions/${commandSession.id}/broadcast-set`, { include: !commandSession.broadcast }).then(updated => { updateSession(updated); setContextMenu(null) }) } },
-    { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && !isInactiveSession(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
+    { id: 'session.resume', label: 'Resume selected agent', category: 'history', available: !!commandSession && isAgent(commandSession) && !isInactiveSession(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
     // Offered on a live pane too, and that is the point: "pick this up on Tuesday" is
     // asked about work in progress far more often than about something already ended.
     { id: 'session.resumeLater', label: 'Resume selected agent later…', category: 'history', available: !!commandSession && isAgent(commandSession), disabledReason: 'Select an agent session', run: () => commandSession && scheduleResumeFromSession(commandSession) },
@@ -6931,9 +6928,9 @@ export function App() {
       </div>
       {isEndedSession(session)&&<EndedPaneBanner
         session={session}
-        onResume={isAgent(session)?()=>void (isInactiveSession(session) ? resumeInactiveSession(session) : resumeSession(session)):undefined}
-        onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeInactiveSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
-        onOpenTranscript={hasHarnessTranscript(session.backend)?()=>void openTranscriptForSession(session.id):undefined}
+        onResume={isAgent(session)?()=>void resumeSession(session):undefined}
+        onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
+        onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
       />}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
@@ -7655,7 +7652,11 @@ export function App() {
             </>}
         </div>
         <div class="sidebar-status">
-          <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
+          {/* The one surface that carries the empty-state invitation. `firstRun` holds
+              it back while the harness panel or the tour is on screen: the tour has an
+              account step of its own, and two invitations to the same thing at once is
+              the overwhelm the first-run work exists to remove. */}
+          <AccountSwitcher onManage={()=>openSettings('Accounts')} promptDismissed={accountPromptDismissed!==false} promptSuppressed={firstRun!=='none'} onDismissPrompt={dismissAccountPrompt}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
         <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button
@@ -7930,7 +7931,7 @@ export function App() {
       {/* No `Open in focused pane`. Clicking the row already does it, from the same list
           the menu was opened on, so the row existed only to say so a second time. */}
       {isInactiveSession(contextMenu.session)&&<button class="menu-row" onClick={() => runNamedCommand('session.resumeInactive')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">{contextMenu.session.backend==='shell'?'Restart terminal':'Resume'}</span></button>}
-      {!isInactiveSession(contextMenu.session)&&['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.resume')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">Resume as new…</span></button>}
+      {!isInactiveSession(contextMenu.session)&&['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.resume')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">Resume</span></button>}
       {canRestartCold(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.restartCold')}><span class="menu-row-icon" aria-hidden="true"><RefreshIcon/></span><span class="menu-row-label">Restart terminal</span></button>}
       {activityBadges(contextMenu.session).length>0&&<button class="menu-row" onClick={() => runNamedCommand('session.clearStandingActivity')}><span class="menu-row-icon" aria-hidden="true"><ClearIcon/></span><span class="menu-row-label">Clear standing activity</span></button>}
       {contextMenu.session.state==='awaiting'&&contextMenu.session.awaiting_reason==='approval'&&<button class="menu-row" onClick={() => runNamedCommand('session.approveOnce')}><span class="menu-row-icon" aria-hidden="true"><CheckIcon/></span><span class="menu-row-label">Approve this request</span></button>}

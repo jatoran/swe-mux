@@ -120,6 +120,101 @@ def observation_freshness(sessions: Any, *, now: float) -> list[dict[str, Any]]:
     return rows
 
 
+#: How long after a spawn a silent hook channel stops being "not yet" and starts
+#: being "never". SessionStart fires as the CLI boots, so the honest bound is the
+#: CLI's own startup: seconds on a warm machine, and the clean Windows 11 laptop
+#: this check was written for took tens of seconds to do anything at all. Two
+#: minutes is generous against that and still catches the fault inside one turn.
+HOOK_SILENCE_GRACE_SECONDS = 120.0
+
+
+def hook_ingress_silence(
+    sessions: Any, *, now: float, instrumented: Any = None
+) -> list[dict[str, Any]]:
+    """Instrumented agent sessions this daemon spawned that never reported a hook.
+
+    The fault this exists for is total and silent. swe-mux writes Claude Code's
+    hook `command` as a path string, Claude Code decides for itself which shell
+    runs it, and when the two disagree every one of the eleven events dies inside
+    the CLI: status detection, history, the prompt queue and approvals all stop,
+    the session still runs, and nothing in mux says a word. It shipped that way on
+    every Windows machine without Git Bash and was found by a tester reading the
+    CLI's stderr, which is not a diagnostic channel this project can rely on.
+
+    Deliberately narrow, because a false positive here would fire on every healthy
+    session after every daemon reload. Three conditions must all hold: the session
+    is an *agent* on a harness this install instruments (a "launch clean" session
+    is supposed to be silent); **this daemon spawned it**, so a working channel was
+    obliged to speak (`hook_channel_watch_since`, never set on an adopted or
+    restored session, whose in-memory counter the restart merely reset); and the
+    grace period has passed. ``instrumented`` is a predicate over the backend name,
+    defaulting to "all of them" so the pure builder needs no config.
+    """
+    rows: list[dict[str, Any]] = []
+    for session in sessions:
+        record = getattr(session, "record", None)
+        if record is None or record.backend not in AGENT_BACKENDS:
+            continue
+        if instrumented is not None and not instrumented(record.backend):
+            continue
+        since = getattr(session, "hook_channel_watch_since", None)
+        if since is None:
+            continue
+        if getattr(session, "last_hook_ts", 0.0):
+            continue
+        silent_for = now - since
+        if silent_for < HOOK_SILENCE_GRACE_SECONDS:
+            continue
+        rows.append(
+            {
+                "id": record.id,
+                "name": record.name,
+                "backend": record.backend,
+                "since": since,
+                "seconds_silent": round(silent_for, 1),
+            }
+        )
+    rows.sort(key=lambda row: row["since"])
+    return rows
+
+
+def _hook_ingress_checks(silent: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not silent:
+        return [
+            _check(
+                id="hook_ingress.ok",
+                category="hook_ingress",
+                title="Agent hook channel",
+                status="ok",
+                severity="critical",
+                detail="Every instrumented agent session this daemon spawned has "
+                "reported at least one lifecycle hook.",
+            )
+        ]
+    names = ", ".join(f"{row['name']} ({row['backend']})" for row in silent[:5])
+    return [
+        _check(
+            id="hook_ingress.silent",
+            category="hook_ingress",
+            title="Agent hook channel",
+            status="fail",
+            severity="critical",
+            detail=(
+                f"{len(silent)} agent session(s) spawned by this daemon have never "
+                f"reported a lifecycle hook: {names}. Status detection, history, the "
+                "prompt queue and approvals are all fed by that channel, so these "
+                "sessions run unobserved even though they look healthy."
+            ),
+            remedy=(
+                "Check the agent CLI's own stderr for a failure running the hook "
+                "command. On Windows the usual cause is the interpreter path being "
+                "unrunnable in the shell the CLI chose; `swemux doctor --export` "
+                "carries the generated command."
+            ),
+        )
+    ]
+
+
 def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[str, Any]]:
     checks = [
         _check(
@@ -887,6 +982,7 @@ def build_doctor_report(
     now: float,
     wsl_bridges: list[dict[str, Any]] | None = None,
     optional_assets: list[dict[str, Any]] | None = None,
+    hook_silence: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the consolidated doctor report from already-fetched diagnostics.
 
@@ -906,6 +1002,7 @@ def build_doctor_report(
     checks += _freshness_checks(freshness)
     checks += _wsl_bridge_checks(wsl_bridges or [])
     checks += _optional_asset_checks(optional_assets or [])
+    checks += _hook_ingress_checks(hook_silence or [])
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "unavailable": 0}
     for check in checks:
@@ -921,6 +1018,7 @@ def build_doctor_report(
         ),
         "checks": checks,
         "observation_freshness": freshness,
+        "hook_ingress_silence": hook_silence or [],
     }
 
 

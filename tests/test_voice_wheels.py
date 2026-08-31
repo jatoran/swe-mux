@@ -193,6 +193,66 @@ def test_selection_refuses_rather_than_returning_a_partial_closure() -> None:
         voice_wheels.wheels_for_this_interpreter(dropped)
 
 
+def test_the_refusal_names_the_interpreter_and_the_range_it_supports() -> None:
+    """A bare package name reads as a broken package. It was a version mismatch.
+
+    On a clean Windows 11 laptop `uv tool install` had put swe-mux on CPython 3.14,
+    for which spaCy published no wheel, and the message said only "no wheel this
+    interpreter can load for: spacy" - which sent the reader looking for a missing
+    or corrupt package rather than at the interpreter.
+    """
+    dropped = tuple(wheel for wheel in voice_wheels.WHEELS if wheel.distribution != "spacy")
+    with pytest.raises(LookupError) as caught:
+        voice_wheels.wheels_for_this_interpreter(dropped)
+    message = str(caught.value)
+    assert f"CPython {sys.version_info.major}.{sys.version_info.minor}" in message
+    assert "spacy" in message
+    assert "interpreter-version mismatch" in message
+    assert voice_wheels._supported_python_range() in message
+
+
+def test_an_abi3_wheel_does_not_narrow_the_supported_range() -> None:
+    """The first version of this reported "CPython 3.14 only" for a 3.12-3.14 closure.
+
+    `hf-xet` ships both a `cp314-cp314` wheel and a `cp38-abi3` one; the abi3 wheel
+    loads on everything in range, so the distribution constrains nothing. Counting
+    its version-specific sibling as a limit collapsed the whole intersection.
+    """
+    assert voice_wheels._supported_python_range() == "CPython 3.12 through 3.14"
+
+
+def test_the_closure_resolves_on_every_interpreter_this_project_may_run_on() -> None:
+    """Tag-level restatement of `packaging/check_voice_closure_interpreters.py`.
+
+    That script is the real proof - it runs the selector inside each interpreter -
+    but it needs to download them, so it is a CI step rather than part of the
+    landing gate. This is the cheap always-on half: every distribution that has no
+    universal wheel must publish a version-specific one for each supported minor,
+    which is the property whose absence dead-ended voice setup on 3.14.
+    """
+    from packaging.utils import parse_wheel_filename
+
+    supported = {(3, 12), (3, 13), (3, 14)}
+    universal: set[str] = set()
+    specific: dict[str, set[tuple[int, int]]] = {}
+    for wheel in voice_wheels.WHEELS:
+        _, _, _, tags = parse_wheel_filename(wheel.filename)
+        for tag in tags:
+            if not (tag.interpreter.startswith("cp") and tag.abi.startswith("cp")):
+                universal.add(wheel.distribution)
+                continue
+            specific.setdefault(wheel.distribution, set()).add(
+                (int(tag.interpreter[2]), int(tag.interpreter[3:]))
+            )
+    for distribution, versions in sorted(specific.items()):
+        if distribution in universal:
+            continue
+        assert supported <= versions, (
+            f"{distribution} publishes no wheel for "
+            f"{sorted(supported - versions)}; swe-mux may be installed onto those"
+        )
+
+
 def test_the_table_covers_every_supported_platform() -> None:
     """A platform with no wheels is a platform where voice cannot be acquired.
 

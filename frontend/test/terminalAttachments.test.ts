@@ -36,7 +36,7 @@ test('attachment insertion cannot inherit terminal broadcast', () => {
 
 test('an idle terminal accepts attachments after replay regardless of xterm paste mode', () => {
   assert.equal(canInsertTerminalAttachment('idle', true), true)
-  assert.equal(attachmentNeedsManualBracketing(true, true, false), true)
+  assert.equal(attachmentNeedsManualBracketing(true, true), true)
 })
 
 test('attachment insertion waits for replay and refuses non-live sessions', () => {
@@ -47,7 +47,14 @@ test('attachment insertion waits for replay and refuses non-live sessions', () =
 })
 
 test('only native agent images need a single-line manual paste wrapper', () => {
-  assert.equal(attachmentNeedsManualBracketing(true, true, true), false)
-  assert.equal(attachmentNeedsManualBracketing(false, true, false), false)
-  assert.equal(attachmentNeedsManualBracketing(true, false, false), false)
+  assert.equal(attachmentNeedsManualBracketing(true, true), true)
+  assert.equal(attachmentNeedsManualBracketing(false, true), false)
+  assert.equal(attachmentNeedsManualBracketing(true, false), false)
+})
+
+test('the wrapper decision does not consult xterm’s mirror of the child mode', () => {
+  // The mirror is a guess about the child and goes stale in both directions, so an agent
+  // native image gets the wrapper on the harness trait alone. `attachmentNeedsManualBracketing`
+  // taking no mode argument is the assertion: there is no third input to get wrong.
+  assert.equal(attachmentNeedsManualBracketing.length, 2)
 })
