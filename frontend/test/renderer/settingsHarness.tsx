@@ -120,6 +120,36 @@ const EDGE_PROVIDER = {
 
 const RESPONSES: Record<string, unknown> = {
   '/api/settings/bundle': BUNDLE,
+  '/api/projects': [
+    {id:'p3',name:'Zulu'},
+    {id:'p1',name:'Alpha'},
+    {id:'p2',name:'Beta'},
+  ],
+  '/api/plugins': {
+    execution_enabled:true,
+    host_capabilities:['plugin.actions.v1','plugin.panes.v1'],
+    plugins:[
+      {
+        id:'example.switchboard',name:'Session Switchboard',version:'0.2.0',enabled:true,
+        lifecycle:'enabled',source_kind:'link',source_ref:'C:/plugins/switchboard',resolved_ref:'',
+        diagnostic:'',approval_current:true,config_dir:'C:/config/switchboard',state_dir:'C:/state/switchboard',
+        manifest:{id:'example.switchboard',name:'Session Switchboard',version:'0.2.0',
+          description:'Compact Project session navigator.',author:'Example',license:'MIT',homepage:'',
+          permissions:['sessions.read'],requires:['plugin.panes.v1'],runtime_requirements:['python>=3.10'],
+          actions:[],events:[],startup:[],link_handlers:[],panes:[{id:'switchboard',title:'Session switchboard',
+            description:'Open session switchboard',placement:'split',contexts:['project'],
+            command:{command:['python','switchboard.py'],cwd:'.',timeout_seconds:60}}]},
+      },
+      {
+        id:'example.health',name:'Worktree Health',version:'0.2.0',enabled:false,
+        lifecycle:'disabled',source_kind:'managed',source_ref:'owner/health',resolved_ref:'abc',
+        diagnostic:'',approval_current:true,config_dir:'C:/config/health',state_dir:'C:/state/health',
+        manifest:{id:'example.health',name:'Worktree Health',version:'0.2.0',description:'Project worktree health.',
+          author:'Example',license:'MIT',homepage:'',permissions:['projects.read'],requires:['plugin.panes.v1'],
+          runtime_requirements:['python>=3.10'],actions:[],events:[],startup:[],link_handlers:[],panes:[]},
+      },
+    ],
+  },
   '/api/remote/status': REMOTE,
   '/api/remote/firewall': FIREWALL,
   '/api/wsl/bridge': WSL,
@@ -193,6 +223,7 @@ function Host() {
   return <Settings
     activeUiScale={1}
     onUiScalePreview={() => 1}
+    focusedProjectId="p2"
     navOpen={navOpen}
     onNavOpenChange={setNavOpen}
     onLaunchConfigurator={() => {}}
