@@ -38,6 +38,9 @@ Permissions are `projects.read`, `sessions.read`, `sessions.control`, `terminal.
 Permissions scope the callback endpoint and do not sandbox the plugin process.
 
 Pane fields add `placement = "tab" | "split" | "popup"` and use Project context for launch.
+Project-scoped pane tools appear in the Project Run menu and command palette.
+One live session is kept per plugin entrypoint and Project; launching it again focuses that pane.
+Plugin panes are utility terminals and do not receive the agent command rail.
 Event fields add `on`, optional string-valued `match`, and `rate_limit_seconds`.
 Startup entries are bounded one-shot commands.
 Link handlers declare `pattern` and the ID of an action in the same manifest.

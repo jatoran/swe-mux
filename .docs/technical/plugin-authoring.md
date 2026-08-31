@@ -99,6 +99,8 @@ Pane placement is `tab`, `split`, or `popup`.
 Tab and split panes are ordinary supervised sessions and enter Project layout state.
 Popup panes are overlay-owned sessions and stop when the popup closes.
 Opening a pane from Settings closes Settings and focuses the new surface.
+Opening the same entrypoint again in the same Project focuses its existing live pane.
+Utility panes do not receive the agent command rail; the TUI owns its own compact controls.
 
 ## Runtime contract
 
@@ -158,6 +160,9 @@ swemux plugin action publisher.plugin inspect --project PROJECT_ID
 swemux plugin pane publisher.plugin dashboard --project PROJECT_ID
 swemux plugin logs --plugin-id publisher.plugin
 ```
+
+Users normally open Project-scoped pane tools from that Project's Run menu or the command palette.
+Settings is the management and diagnostic surface, not the primary launcher.
 
 After editing linked source:
 
