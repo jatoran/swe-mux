@@ -6183,23 +6183,41 @@ here and does not there.
 
 ### Sequenced after it, in order
 
-- [ ] **W1 - distinguish operator-originated from session-originated requests, server-side.**
+- [x] **W1 - distinguish operator-originated from session-originated requests, server-side.**
   The prerequisite for everything below, and it stands on its own merits as a pre-existing gap
   even if the CLI work never happens. Without it a CLI toggle is decorative, because a capability
   the daemon honours from anyone cannot be turned off.
-- [ ] **W2 - agent mode in the CLI.** Read `MUX_SESSION_ID`/`MUX_MCP_TOKEN` from the pane
+  **Shipped 2026-08-30, scoped honestly.** The CLI stamps its calling session onto every request
+  (`X-Mux-Caller-Session`/`X-Mux-Caller-Token`, from the pane env), and the session-acting
+  operator routes - terminal input, broadcast, kill, spawn - refuse an identity that resolves to
+  a live agent-backed session, naming `swemux agent` instead
+  (`routes/support.py::refuse_agent_session_caller`). A shell pane's operator passes (the check
+  is the session's backend, not the headers' presence), `reload-daemon` deliberately stays
+  reachable (the session-preserving reload is a documented agent flow), and the same-host trust
+  decision stands: this closes the gap for honest clients at the route, which is what the item
+  asked for - a *boundary* against a hostile caller remains the OS-isolation future decision
+  recorded in `agent-messaging.md`.
+- [x] **W2 - agent mode in the CLI.** Read `MUX_SESSION_ID`/`MUX_MCP_TOKEN` from the pane
   environment; when present, authenticate as that session, expose the identity-bound verbs through
   the same gates the MCP tools use, and refuse the operator verbs. Same authority model, second
-  transport.
-- [ ] **W3 - generate the agent verbs from the MCP tool registry** rather than hand-writing
+  transport. **Shipped 2026-08-30** as `swemux agent` (`cli.py`), speaking JSON-RPC to `/mcp`
+  with the pane's own bearer token; the operator-verb refusal is W1's route guard.
+- [x] **W3 - generate the agent verbs from the MCP tool registry** rather than hand-writing
   thirty-five subcommands: either codegen or one passthrough (`tools` to list, `tool <name>
   --json` to call). Adding an MCP tool then costs zero CLI work and the two cannot drift.
-- [ ] **W4 - two independent per-harness toggles in the existing authority matrix**, with install
-  default and ceiling, the same shape as `land_verify_grant`. Four states, all valid: both
-  (default), MCP only (today's behaviour), CLI only (`pi`, or trading tool-schema context for a
-  shell call), and neither - which is currently unreachable and is the one worth designing for
-  deliberately, because an untrusted or contributor branch should be able to hold a pane with no
-  fleet access at all.
+  **Shipped 2026-08-30** as the passthrough: `swemux agent tools` / `agent call <tool>
+  key=value|key:=json ... [--input JSON]`, results verbatim, typed refusals exit 1.
+- [x] **W4 - two independent per-harness toggles**, with the "neither" state enforced
+  server-side. **Shipped 2026-08-30** as `harness_cli_enabled` beside `harness_mcp_enabled`
+  (both absent-key ON; `agent_surfaces.py` computes the set, stamps it into agent panes as
+  `MUX_SURFACES`, and gates `/mcp`: a harness with both maps off has session tokens that
+  authenticate nothing). One deliberate deviation from the sketch: config maps beside the
+  existing harness toggles rather than authority-matrix fields - the matrix's rows are
+  per-*Project* grants with an ordering, and a per-*harness* capability pair is the same kind
+  of thing as `harness_mcp_enabled` already was, so a second home would have been a second
+  place for the same shape. All four states are reachable in Settings -> Harnesses -> Fleet
+  access, and the incoherent skill combinations warn there and in `swemux doctor`
+  (`agent-skill-delivery.md`).
 - [x] **W5 - ship a skill, embedded in the binary**, so `--skill` prints a release-matched copy and
   guidance cannot drift from the code. The frontmatter description tuned to suppress over-firing,
   the first instruction an in-session environment check, and the body pointing at `--help` rather
@@ -6225,6 +6243,9 @@ Recorded so they are not re-litigated.
 - **Do not build a second surface.** One authority core, three transports - browser, MCP, CLI -
   all reading through the same services.
 - **Do not copy herdr's synchronous `--wait` model.** The queue here is asynchronous by design.
+  (`await_session`, added 2026-08-30, is not this: it blocks on *state* - the settle rules
+  `watch_session` already owns - and touches no queue, no reply route, and no delivery. The
+  decision this item records is about messaging, and messaging stays asynchronous.)
 - **Do not add a new settings page for W4.** The authority matrix already has the shape.
 - **Do not make a legal determination about the name.** The additive rename is correct under
   either answer, which is precisely why it was chosen.
@@ -6241,12 +6262,19 @@ Recorded so they are not re-litigated.
   contains the daemon and already runs it as `--daemon-child`. Close this criterion by deciding
   that is the right answer and rewording it, or by finding a daemon launcher that is not a
   second copy - not by shipping one.
-- [ ] No request that carries session identity can reach an operator-only route, and the gap is
-  closed at the route rather than in any one client.
-- [ ] An agent in a pane with no MCP client has the same fleet capability, through the same gates,
-  as one with it.
-- [ ] Adding an MCP tool requires no CLI change, and a test proves the two cannot drift.
-- [ ] All four toggle states are reachable and enforced server-side, including "neither".
+- [x] No request that carries session identity can reach an operator-only route, and the gap is
+  closed at the route rather than in any one client. (2026-08-30: `refuse_agent_session_caller`
+  on input/broadcast/kill/spawn; identity is self-declared per the standing same-host decision,
+  so "carries session identity" is exactly the scope.)
+- [x] An agent in a pane with no MCP client has the same fleet capability, through the same gates,
+  as one with it. (2026-08-30: `swemux agent` is a client of `/mcp` itself, so parity is by
+  construction rather than by parallel implementation.)
+- [x] Adding an MCP tool requires no CLI change, and a test proves the two cannot drift.
+  (The CLI names no tool at all - `tests/test_cli.py`'s agent-mode tests pin the passthrough
+  shape, and there is no per-tool code for a drift test to guard.)
+- [x] All four toggle states are reachable and enforced server-side, including "neither".
+  (2026-08-30: `agent_surfaces.surface_gate` at `/mcp`; `tests/test_agent_surfaces.py`,
+  `tests/test_mcp.py`.)
 
 ## Phase 24 - Desktop integration a PyPI install can turn on later
 

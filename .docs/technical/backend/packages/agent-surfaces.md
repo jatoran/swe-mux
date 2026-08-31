@@ -114,9 +114,38 @@ Every refusal is a typed `QueueError`.
 
 **Not:** the interrupt and graceful-end PTY operations themselves and the daemon-owner check (all three in `routes/terminal.py`), MCP transport (`mcp.py`), or observation storage (`project_files.py`).
 
+### `agent_surfaces.py`
+
+The one place the two per-harness capability maps (`harness_mcp_enabled`,
+`harness_cli_enabled`) become answers, so the spawn env, the MCP endpoint's gate, and the
+doctor report cannot disagree about what a harness holds.
+
+- `harness_surfaces` / `surfaces_env_value`: the canonical `MUX_SURFACES` value stamped into
+  agent panes (`session.py`), empty for the enforced "neither" state.
+- `surface_gate`: the `backend -> bool` callable `mcp.resolve_caller` refuses tokens through
+  when both surfaces are off (ROADMAP Phase 23 W4).
+- `coherence_warnings`: the two advisory incoherences - a delivered skill with no capability
+  behind it, and a CLI-only surface nothing ever advertises - consumed by `doctor.py` and
+  mirrored client-side in the Settings Fleet access control.
+
+**Not:** the toggles' storage or validation (`config.py`), the transports themselves
+(`mcp.py`, `cli.py`), or skill delivery (`skill_install.py`, the adapters).
+
 ### `session_watch.py`
 
-`SessionWatchService`: one-shot settle watches, the read that matures into one bounded message.
+`SessionWatchService`: one-shot settle watches, the read that matures into one bounded
+message - and, since 2026-08-30, the synchronous waits (`await_settle`) behind
+`await_session`, which share the sweep and the fire rules with a different sink: an
+`asyncio` future fulfilled in-band instead of a queue notice, so no arming, delivery, or
+grant machinery is involved. Awaits are bounded (`AWAIT_*` constants: 50 s default under
+every measured harness tool timeout, 600 s ceiling, 4 per caller), a timeout is a
+re-callable result carrying the state, a target already settled *and held* answers
+immediately from `record.state_since`, and `stop()` resolves every open future rather than
+abandoning it (an abandoned future raises from a finalizer at some later test's expense
+under `filterwarnings = error`).
+The service is also the watch half of the reply-window evidence: `origin_windows` reports
+open watches per watcher, each bounded by its own deadline plus `WINDOW_GRACE_SECONDS`, for
+`auto_delivery.py`'s lapse hold-off.
 
 - Arming bounds: the install switch, Project scope through `project_scope.py`, agent-only target and watcher, no self-watch, one watch per target, the per-watcher ceiling, and the timeout ceiling (a `0` timeout is refused rather than defaulted).
 - The fire rules: `ended` unconditionally, `settled` only on an observed `working` -> `idle`/`awaiting` edge that holds `SETTLE_HOLD_SECONDS`, and the timeout checked last so a settle maturing on the same sweep reports the case that happened.
@@ -155,7 +184,11 @@ The persistent prompt queue.
 The gate on automatic sends: the install master, a default-on bounded grant per live agent run, conversation opt-out, run binding, expiry, the consecutive cap, the stability window over `delivery_state`, quiet hours, the persisted emergency pause, the expiry sweep, and proving-period counters with `promotion_status`.
 Also the idle lapse and its audit (`_lapse_session`, `lapse_record`) and the bounded reply window that is the single thing allowed to hold that lapse off (`reply_windows`).
 The reply window is deliberately *evidence*, not a second authority: it changes whether a grant lapses and nothing else, and it is capped by the exchange's own end - `max_thread_turns` for a message, a terminal request for a land - so nothing can renew it past the conversation that justifies it.
-It draws that evidence from two sources: the queue's own `open_reply_windows`, and a second one registered through `set_solicited_requests` (the land queue's `origin_windows`). The second is a callable rather than an import so nothing here knows what a land request is, and a source that raises is absent rather than fatal.
+It draws that evidence from two sources: the queue's own `open_reply_windows`, and a second one registered through `set_solicited_requests`.
+Since 2026-08-30 the second is a `merge_solicited_sources` composition of the settle-watch service's `origin_windows` and the land queue's, later sources winning for a session holding both.
+Solicited entries may carry their own `kind` and `expires_at` (a watch is bounded by its own deadline, not the reply-window span); an entry naming neither gets the land defaults every pre-plural entry had.
+The sources are callables rather than imports so nothing here knows what a land request or a watch is, and a source that raises is absent rather than fatal.
+The consecutive-send cap's recovery gained a third evidence kind the same day: `PromptQueueStore.credit_auto_attention` is also called from the MCP dispatch (throttled per session), because an authenticated tool call is the same "somebody is reading the deliveries" fact a written reply is.
 
 **Not:** delivery itself - it calls `send_next` and cannot pass `confirm` - readiness evaluation, relay policy or the thread model it borrows the cap from (`agent_messaging.py`), or HTTP.
 

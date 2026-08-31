@@ -450,6 +450,53 @@ async def test_granted_spawn_into_another_project() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_granted_spawn_records_the_pane_hint_one_shot() -> None:
+    """A placement request, not layout: the daemon records what was asked for
+    on the session and the first browser viewing the Project claims it."""
+    caller = _caller()
+    created: list[Any] = []
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        session = live_session("new-1", project_id="p1", backend="claude")
+        session.record.pane_hint = ""
+        created.append(session)
+        return session
+
+    service = _build(caller, spawn_grant="granted", spawn_op=spawn_op)
+    await service.spawn(caller, prompt="go", backend="claude", pane="split_vertical")
+    assert created[0].record.pane_hint == "split_vertical"
+
+    # Omitted: nothing is stamped.
+    await service.spawn(caller, prompt="go", backend="claude")
+    assert created[1].record.pane_hint == ""
+
+
+@pytest.mark.asyncio
+async def test_a_drafted_spawn_carries_the_deferred_watch_and_pane() -> None:
+    caller = _caller()
+    drafts: list[dict[str, Any]] = []
+
+    async def spawn_op(body: dict[str, Any]) -> Any:  # pragma: no cover - draft path
+        raise AssertionError("a draft must not spawn")
+
+    async def draft(_caller: Any, **kwargs: Any) -> dict[str, Any]:
+        drafts.append(kwargs)
+        return {"status": "drafted", "request_id": "r1"}
+
+    service = _build(caller, spawn_grant="draft", spawn_op=spawn_op, draft_spawn=draft)
+    await service.spawn(
+        caller,
+        prompt="later",
+        pane="split_horizontal",
+        watch=True,
+        watch_timeout_minutes=45,
+    )
+    assert drafts[0]["pane"] == "split_horizontal"
+    assert drafts[0]["watch"] is True
+    assert drafts[0]["watch_timeout_minutes"] == 45
+
+
+@pytest.mark.asyncio
 async def test_spawn_drafts_when_grant_is_draft() -> None:
     caller = _caller()
     spawns: list[Any] = []

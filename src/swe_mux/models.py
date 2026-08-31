@@ -210,6 +210,12 @@ class SessionRecord:
     args: list[str]
     shell_profile_id: str | None = None
     auto_named: bool = True
+    #: One-shot pane-placement request from an agent spawn ("split_horizontal"
+    #: or "split_vertical", else empty). Panes are per-device browser state, so
+    #: the daemon only records what was asked for; the first browser viewing
+    #: the Project claims it through the pane-hint claim route, which clears it
+    #: atomically so exactly one device acts (`routes/sessions.py`).
+    pane_hint: str = ""
     pid: int = -1
     # OS creation time of the root process, captured at spawn. A PID alone is not
     # an identity on Windows — it is recycled aggressively — and exited sessions

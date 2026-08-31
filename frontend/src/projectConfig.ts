@@ -42,6 +42,10 @@ export type PortableValues = {
   /** Backend name to launch profile id. A selection only; the profile itself is
    *  defined on the device, because argv for an agent CLI is an authority field. */
   default_agent_profiles?: Record<string, string>
+  /** Backend name to model name in that CLI's own spelling. Applied when a spawn
+   *  into this Project names no model; an explicit model always wins, and a name
+   *  gone stale degrades to a spawn-time diagnostic rather than a failed session. */
+  default_agent_models?: Record<string, string>
   preferred_backend?: ProjectBackend
   prompt_library_scope?: PromptLibraryScope
   notification_sounds_enabled?: boolean
@@ -83,6 +87,7 @@ export const PANEL_CONFIG_FIELDS = [
   'preferred_backend',
   'default_shell_profile',
   'default_agent_profiles',
+  'default_agent_models',
   'prompt_library_scope',
   'notification_sounds_enabled',
   'ignore_patterns',
@@ -177,6 +182,7 @@ const CONFLICT_LABELS: Record<string, string> = {
   preferred_backend: 'the default backend',
   default_shell_profile: 'the shell profile',
   default_agent_profiles: 'the launch profiles',
+  default_agent_models: 'the default models',
   prompt_library_scope: 'the prompt library scope',
   notification_sounds_enabled: 'the notification sound setting',
 }

@@ -540,6 +540,17 @@ because those need a bound conversation and this is only evidence one is coming.
 resolve to nothing rather than a guess, on the same grounds the daemon's own promotion refuses
 an ambiguous match.
 
+**A pane-placement hint is a request recorded on the session, never layout** (2026-08-30).
+`request_spawn(pane="split_horizontal"|"split_vertical")` stamps `SessionRecord.pane_hint`,
+one-shot: panes are per-device browser state on purpose, so the daemon only records what was
+asked for, every browser viewing the Project sees the hint on the session row and races
+`POST /api/sessions/{id}/pane-hint/claim`, and the claim clears it atomically - the winner
+opens the split through the ordinary `openInSplit` path, the losers read an empty hint and do
+nothing, and with no browser open the hint simply expires unclaimed while the session appears
+in the sidebar as ever. Splitting and starting stay separate verbs; the spawn succeeds
+identically whether or not anything ever claims the hint. Only a visible browser tab competes,
+so a background tab cannot rearrange a workspace nobody is looking at.
+
 **A promoted pane must be indistinguishable from a directly-spawned one, and was not.**
 Measured 2026-08-27 after the promotion work shipped: a shell promoted around a typed `claude`
 still submitted on Shift+Enter. The pane's terminal is built in an effect keyed on `session.id`

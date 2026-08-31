@@ -7,6 +7,19 @@ agent session visibility into the fleet — sibling sessions, their live status,
 bounded transcript reads, indexed search over conversation history, exact Agent
 Context sources, Project notes, cross-session memory reads, and request outcomes, plus the
 bounded write tools added in Phase 5 and the session-control tools added in Phase 7.6.
+Since 2026-08-30 the surface has **two transports onto one authority core** (Phase 23
+W2/W3): the MCP client registration below, and the CLI's agent mode — `swemux agent tools`
+/ `swemux agent call <tool> key=value …` — which authenticates with the same per-session
+bearer token from the pane environment, speaks the same JSON-RPC to the same endpoint, and
+therefore inherits every authority check, budget, ring detector, and provenance record by
+construction. The CLI passthrough is deliberately generated from nothing: it names no tool,
+so adding an MCP tool costs zero CLI work and the two cannot drift. Which transports a
+harness's sessions hold is the per-harness pair `harness_mcp_enabled` /
+`harness_cli_enabled` (`agent_surfaces.py`), stamped into every agent pane as
+`MUX_SURFACES` so the shipped skill can teach whichever capability is present
+(`agent-skill-delivery.md`) — and "neither" is a state the **daemon enforces**: a session
+of a harness with both maps off has a token that authenticates nothing, refused at the
+endpoint rather than in any client (`resolve_caller`'s `surface_gate`).
 Every tool answers within the caller's own Project until the caller asks for more with the
 shared `project` argument.
 Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), Phase 5
@@ -190,11 +203,12 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `find_references` | every call or reference to a symbol in a file — the precise structural neighborhood, not a grep. Gated on `code_graph` |
 | `code_context` | a compact structural neighborhood for context packing: each file's key symbols, imports, and direct callers, instead of reading whole files. Gated on `code_graph` |
 | `test_gap` | recently-changed files whose static blast radius contains no covering test. A lower bound: a test reaching the code through dynamic dispatch is invisible, so a listed file is a candidate not a proof. Gated on `code_graph` |
+| `await_session` | blocks **inside the call** until the target settles or ends, under a bounded timeout (default 50 s, ceiling 600 s) — the synchronous sibling of `watch_session`, sharing its sweep and settle rules (`session_watch.py`) with a different sink: the answer fulfils the caller's own tool call, so nothing is staged, armed, or delivered and no grant or readiness machinery applies. A timeout is a normal result carrying the current state — the caller re-calls to keep waiting, which is what keeps each call inside the harness's own tool-call timeout. A target already settled *and held* answers immediately from the record's own `state_since`, which is what lets the re-call loop converge on a worker that finished between two polls. This deliberately does **not** revisit the recorded "do not copy herdr's synchronous `--wait`" decision (ROADMAP Phase 23): that decision is about the message queue, which stays asynchronous with its reply route in the text — what blocks here is a wait on *state*, and it produces no message at all |
 | `watch_session` | arms a one-shot watch on another session and returns having delivered nothing. Exactly one deterministic notice then enters the **caller's own** prompt queue: when the target leaves working for a settled state and holds it, when it ends, or when the caller's timeout elapses - whichever is first. The notice names which case fired and the target's state, including the `awaiting` sub-reason and any background work still running. It is staged **armed** (`solicited_by` naming the watch), because the watch is the receiver's own request for it - armed is still not delivered. Bounded per watcher, one per target, ephemeral (see "Session-settle watches" below) |
 | `notify` | stages a message behind an envelope whose size is the *target* Project's `message_envelope` — `compact` by default (sender, whether a human reviewed it, the conflict instruction, the reply route), `full` for the whole standing-grant statement, `bare` for the body alone; names the sender's Project when it crossed one and the mid-turn arrival when it landed in a running turn; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, how many messages the thread has left, the `envelope` actually used, and `target_delivery` — whether anything will actually deliver it, and what is stopping it if not. `dry_run:true` runs every one of those bounds and answers with the same verdict having staged nothing and spent nothing, so an unreachable peer is chosen rather than discovered after the item is armed |
 | `revoke_message` | withdraws one message the caller sent that nothing has delivered, cancelling it as `revoked`. Attribution is the whole check and a miss answers `unknown_message`; a delivered message answers `not_revocable`, because the text is already in another terminal |
 | `list_models` | which models a harness's CLI actually has on this machine, asked of the CLI itself through the command that harness declares. Carries the command it ran and the vocabulary the harness accepts, so a thin list is a diagnosis rather than a shrug. Advisory: a model missing from it is not refused, and a harness with no listing command (`claude`, `codex`) says so rather than answering with an empty list |
-| `request_spawn` | creates a session in the target Project directly under the default `granted` grant (since 2026-08-25), inside the per-origin spawn budget; against a Project lowered to `draft` it writes an inert spawn approval row into that Project's Fleet Queue and starts nothing. Takes an optional `model`, refused before anything spawns if that harness could not be told it, and proves the pane survived its own startup before answering |
+| `request_spawn` | creates a session in the target Project directly under the default `granted` grant (since 2026-08-25), inside the per-origin spawn budget; against a Project lowered to `draft` it writes an inert spawn approval row into that Project's Fleet Queue and starts nothing. Takes an optional `model`, refused before anything spawns if that harness could not be told it, and proves the pane survived its own startup before answering. Since 2026-08-30: `watch:true` (+ `watch_timeout_minutes`) also arms the settle watch `watch_session` would, in the same call — on the draft path the watch is deferred onto the request row and armed at approval, only while the requesting conversation is still the run that asked, and a watch that cannot arm is reported in the result and never fails the spawn. `pane:"split_horizontal"\|"split_vertical"` records a one-shot placement hint the first browser viewing the Project claims (`sessions.md`); omitted `model` now genuinely takes the target Project's `default_agent_models[backend]` before falling back to the CLI's own sticky default |
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Acts directly under the default `granted` grant (since 2026-08-25); a Project lowered to `draft` gets an inert approval instead |
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Acts directly under the default `granted` grant; a Project lowered to `draft` gets an inert approval instead |
@@ -393,7 +407,7 @@ It polled `list_sessions` (or `/api/sessions` from an ad-hoc script), spending a
   The resolution records `armed` and, when it is false, the `arming_reason`, on the log line and the `session_watch_resolved` event, and the service counts `armed_notices` beside `resolved`; without that, a notice nobody delivered reads from the trail exactly like one that arrived.
 
 What is deliberately absent: no per-Project opt-in and no grant, because a watch reads what the caller can already read and writes only to itself; and no standing self-arming exception for `rule` senders, because the arming is per message and per request - it is `solicited_by` naming this watch, not a change to what a `rule` sender may claim.
-Not yet present: a watching session opens no `reply_windows` entry, so a watch whose timeout runs past the auto-delivery idle TTL can still lapse its own grant while it waits - the same second half `land-queue.md` needed, tracked there.
+Closed 2026-08-30: an open watch now opens a `reply_windows` entry for its watcher (`origin_windows` in `session_watch.py`, merged with the land queue's through `AutoDeliveryController.merge_solicited_sources`), bounded by the watch's own deadline plus a delivery grace - so a watcher waiting out a long timeout no longer lapses its own grant while it waits, which was the same second half `land-queue.md` needed (`auto-delivery.md`).
 
 ## Session control (Phase 7.6)
 
@@ -561,6 +575,10 @@ Both tiers are excluded from `.worktree-verify` and CI.
 ## Key files
 
 - Protocol + tools: `src/swe_mux/mcp.py`
+- The surface pair, `MUX_SURFACES`, the endpoint gate, and the coherence
+  warnings: `src/swe_mux/agent_surfaces.py`
+- The CLI transport (`swemux agent tools` / `agent call`, env auth, the k=v /
+  k:=json grammar): `src/swe_mux/cli.py`
 - Scan-record projection, the bounded digest, and the repair classifier:
   `src/swe_mux/scan_consumers.py`
 - The enablement/liveness block both this surface and the drawer read:

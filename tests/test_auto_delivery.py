@@ -920,6 +920,74 @@ async def test_an_open_land_request_holds_the_idle_lapse_off(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_an_open_watch_holds_the_lapse_off_on_its_own_deadline(
+    tmp_path: Path,
+) -> None:
+    """The watch half of the land queue's gap (`mux-mcp.md` tracked it): a
+    watcher waiting to be told goes quiet by definition, so its grant must not
+    lapse while the watch is open - bounded by the watch's own deadline, which
+    the entry carries, rather than by the reply-window span."""
+    harness = Harness(tmp_path, live_session("s1"))
+    try:
+        deadline = time.time() + 4 * 60 * 60  # far past the reply-window span
+
+        async def source(ids: Sequence[str], since: float) -> dict[str, dict[str, object]]:
+            return {
+                "s1": {
+                    "kind": "watch",
+                    "watch_id": "watch_1",
+                    "target_session_id": "t9",
+                    "updated_at": time.time(),
+                    "expires_at": deadline,
+                }
+            }
+
+        harness.auto.set_solicited_requests(source)
+        await harness.auto.tick()
+
+        window = (await harness.auto.reply_windows(["s1"]))["s1"]
+        assert window["kind"] == "watch"
+        assert window["watch_id"] == "watch_1"
+        # The entry's own expiry survives, rather than being recomputed from
+        # the span - that is what lets a four-hour watch hold a one-hour TTL.
+        assert window["expires_at"] == pytest.approx(deadline)
+
+        await _lapse_now(harness, "s1")
+        held = await harness.store.auto_policy("s1")
+        assert held is not None and held["enabled"], "the open watch should hold it open"
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_merge_solicited_sources_lets_the_later_pipe_win(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    try:
+        async def watches(ids: Sequence[str], since: float) -> dict[str, dict[str, object]]:
+            return {
+                "s1": {"kind": "watch", "watch_id": "w1", "updated_at": time.time()},
+                "s2": {"kind": "watch", "watch_id": "w2", "updated_at": time.time()},
+            }
+
+        async def lands(ids: Sequence[str], since: float) -> dict[str, dict[str, object]]:
+            return {
+                "s1": {"kind": "land", "request_id": "req_1", "updated_at": time.time()}
+            }
+
+        harness.auto.set_solicited_requests(
+            harness.auto.merge_solicited_sources(watches, lands)
+        )
+        windows = await harness.auto.reply_windows(["s1", "s2"])
+        # s1 holds both: the land entry (registered last, the narrower claim) wins.
+        assert windows["s1"]["kind"] == "land"
+        assert windows["s2"]["kind"] == "watch"
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
 async def test_unreadable_solicited_evidence_is_absent_rather_than_asserted(
     tmp_path: Path,
 ) -> None:

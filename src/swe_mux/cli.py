@@ -138,6 +138,20 @@ def request(
     # the default, and a client that gave up while the server succeeded would
     # report a failure that did not happen.
     headers = {"Content-Type": "application/json", **(headers or {})}
+    # Inside a swe-mux pane the environment names the calling session, and the
+    # CLI says so on every request. This is what lets the daemon refuse an
+    # operator-only mutation coming from an *agent* session's pane (Phase 23
+    # W1) - the route names `swemux agent` instead of acting. It is honesty,
+    # not a boundary: the same-host trust decision stands, and a caller that
+    # strips its own identity is the caller that decision already covers. A
+    # shell pane's operator carries the same headers and is not refused,
+    # because the check is on the session's backend, not on the headers'
+    # presence.
+    caller_session = os.environ.get("MUX_SESSION_ID", "")
+    caller_token = os.environ.get("MUX_MCP_TOKEN", "")
+    if caller_session and caller_token:
+        headers.setdefault("X-Mux-Caller-Session", caller_session)
+        headers.setdefault("X-Mux-Caller-Token", caller_token)
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
@@ -196,6 +210,173 @@ def _raise_ambiguous(token: str, candidates: list[dict[str, Any]]) -> None:
         )
     lines.append("Re-run with a full id.")
     raise CliError("\n".join(lines), EXIT_AMBIGUOUS)
+
+
+# --------------------------------------------------------------------------- #
+# Agent mode: the CLI as a second transport onto the mux MCP surface
+# --------------------------------------------------------------------------- #
+#
+# `swemux agent ...` authenticates as the calling session with the credentials
+# every pane already holds (`MUX_MCP_URL`, `MUX_MCP_TOKEN`) and speaks JSON-RPC
+# to the same `/mcp` endpoint the MCP client uses - so it inherits every
+# authority check, budget, ring detector, and provenance record by
+# construction, and adding an MCP tool costs zero CLI work (ROADMAP Phase 23
+# W2/W3: one passthrough, not thirty-five hand-written subcommands that
+# drift). `agent tools` lists what this session may call; `agent call <tool>
+# key=value ...` calls one. Results are the tool's own JSON, verbatim.
+
+
+def _agent_env() -> tuple[str, str]:
+    """The MCP endpoint and bearer token from the pane environment, or fail.
+
+    Refused with `EXIT_LOCAL_FAIL` outside a pane: agent mode acts *as* a
+    session, and with no session to be there is nothing coherent to do -
+    unlike the operator commands, which take a --url and act as the person
+    typing.
+    """
+    url = os.environ.get("MUX_MCP_URL", "")
+    token = os.environ.get("MUX_MCP_TOKEN", "")
+    if not url or not token:
+        raise CliError(
+            "agent mode needs MUX_MCP_URL and MUX_MCP_TOKEN in the "
+            "environment, which every swe-mux pane carries. Outside a pane "
+            "there is no session to act as; use the operator commands or the "
+            "browser instead.",
+            EXIT_LOCAL_FAIL,
+        )
+    surfaces = os.environ.get("MUX_SURFACES")
+    if surfaces is not None and "cli" not in surfaces.split(","):
+        raise CliError(
+            "the agent CLI surface is switched off for this session's harness "
+            "(MUX_SURFACES=" + surfaces + "). A mux operator can re-enable it "
+            "in Settings -> Harnesses.",
+            EXIT_LOCAL_FAIL,
+        )
+    return url, token
+
+
+def _mcp_rpc(url: str, token: str, method: str, params: dict[str, Any]) -> Any:
+    envelope = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(envelope).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=630) as response:
+            # 630s: above the longest wait `await_session` may hold the call
+            # open (600s), so the server's own timeout result arrives instead
+            # of a client-side abort that says nothing.
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace").strip()
+        raise CliError(f"daemon returned HTTP {exc.code}: {detail}", EXIT_HTTP) from exc
+    except urllib.error.URLError as exc:
+        raise CliError(
+            f"cannot reach the mux MCP endpoint at {url}: {exc.reason}. "
+            "Is the daemon running?",
+            EXIT_CONNECTION,
+            reason=str(exc.reason),
+        ) from exc
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if error:
+        raise CliError(
+            f"the daemon refused the call: {error.get('message', error)}", EXIT_HTTP
+        )
+    return payload.get("result") if isinstance(payload, dict) else payload
+
+
+def _parse_tool_args(pairs: list[str], raw_input: str | None) -> dict[str, Any]:
+    """`key=value` pairs (strings) and `key:=value` pairs (JSON-typed).
+
+    `--input` supplies a whole JSON object ('-' reads stdin); explicit pairs
+    override its keys, so a templated call can still be corrected inline.
+    """
+    arguments: dict[str, Any] = {}
+    if raw_input:
+        text = sys.stdin.read() if raw_input == "-" else raw_input
+        try:
+            parsed = json.loads(text)
+        except ValueError as exc:
+            raise CliError(f"--input is not valid JSON: {exc}", EXIT_LOCAL_FAIL) from exc
+        if not isinstance(parsed, dict):
+            raise CliError("--input must be a JSON object", EXIT_LOCAL_FAIL)
+        arguments.update(parsed)
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            raise CliError(
+                f"tool arguments are key=value pairs (or key:=json), got {pair!r}",
+                EXIT_LOCAL_FAIL,
+            )
+        if key.endswith(":"):
+            try:
+                arguments[key[:-1]] = json.loads(value)
+            except ValueError as exc:
+                raise CliError(
+                    f"{key[:-1]}:= takes JSON, got {value!r}: {exc}", EXIT_LOCAL_FAIL
+                ) from exc
+        else:
+            arguments[key] = value
+    return arguments
+
+
+def agent_command(args: Any) -> tuple[Any, Callable[[Any], str] | None]:
+    url, token = _agent_env()
+    if args.action == "tools":
+        result = _mcp_rpc(url, token, "tools/list", {})
+        tools = result.get("tools", []) if isinstance(result, dict) else []
+
+        def _render_tools(payload: Any) -> str:
+            del payload
+            rows = [
+                {
+                    "name": str(tool.get("name") or ""),
+                    "summary": str(tool.get("description") or "").split(". ")[0][:100],
+                }
+                for tool in tools
+            ]
+            return render_table(rows, [("TOOL", "name"), ("SUMMARY", "summary")]) + (
+                "\n\nCall one with: swemux agent call <tool> key=value ... "
+                "(key:=json for non-strings; --json here prints full schemas)"
+            )
+
+        return result, _render_tools
+    if args.action == "call":
+        if not args.tool:
+            raise CliError("agent call needs a tool name", EXIT_LOCAL_FAIL)
+        arguments = _parse_tool_args(list(args.tool_args or []), args.input)
+        result = _mcp_rpc(
+            url,
+            token,
+            "tools/call",
+            {"name": args.tool, "arguments": arguments},
+        )
+        # The tool's answer travels as one JSON text block; unwrap it so the
+        # caller gets the tool's own result shape, with `isError` carried
+        # through for the exit code (typed refusals are results, not faults).
+        content = (result or {}).get("content") if isinstance(result, dict) else None
+        text = ""
+        if isinstance(content, list) and content:
+            text = str(content[0].get("text") or "")
+        try:
+            unwrapped = json.loads(text) if text else {}
+        except ValueError:
+            unwrapped = {"text": text}
+        if (
+            isinstance(unwrapped, dict)
+            and isinstance(result, dict)
+            and bool(result.get("isError"))
+        ):
+            # Stamped only on refusals, so a success prints the tool's own
+            # shape untouched and a script can branch on the exit code alone.
+            unwrapped["isError"] = True
+        return unwrapped, None
+    raise CliError(f"unknown agent action {args.action!r}", EXIT_NOT_FOUND)
 
 
 # --------------------------------------------------------------------------- #
@@ -920,6 +1101,36 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     resume = sub.add_parser("resume", parents=[common], help="resume a history entry")
     resume.add_argument("id", help="history entry id")
     resume.add_argument("--project", required=True)
+
+    agent = sub.add_parser(
+        "agent",
+        parents=[common],
+        help="agent mode: act as this pane's session through the mux fleet surface",
+        description=(
+            "Act as the calling session, authenticated by the credentials every "
+            "swe-mux pane carries (MUX_MCP_URL, MUX_MCP_TOKEN). The verbs are "
+            "the mux MCP tools themselves, spoken to the same endpoint under "
+            "the same authority checks, budgets, and provenance - `agent "
+            "tools` lists what this session may call and `agent call <tool> "
+            "key=value ...` calls one (key:=json for non-string values, "
+            "--input for a whole JSON object). Results are the tool's own "
+            "JSON; a typed refusal prints the same way and exits 1. Only "
+            "meaningful inside a swe-mux pane."
+        ),
+    )
+    agent.add_argument("action", choices=("tools", "call"))
+    agent.add_argument("tool", nargs="?", help="tool name (for call)")
+    agent.add_argument(
+        "tool_args",
+        nargs="*",
+        metavar="key=value",
+        help="tool arguments: key=value (string) or key:=value (JSON-typed)",
+    )
+    agent.add_argument(
+        "--input",
+        metavar="JSON",
+        help="a JSON object of tool arguments ('-' reads stdin); key=value pairs override it",
+    )
     return parser
 
 
@@ -1072,6 +1283,10 @@ def install_skill_command(args: argparse.Namespace) -> tuple[Any, Any]:
 
 def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
     """Run the command; return (result, human_renderer). Renderer None = JSON only."""
+    if args.command == "agent":
+        # Agent mode ignores `base`: it speaks to the endpoint the pane
+        # environment names, as the session the pane environment names.
+        return agent_command(args)
     if args.command == "ls":
         query = "&".join(
             f"{key}={value}"
@@ -1217,6 +1432,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{invoked_as()}: {exc}", file=sys.stderr)
         return exc.code
     _print(result, getattr(args, "json", False), human)
+    if args.command == "agent" and isinstance(result, dict):
+        # A typed refusal is a *result* (the tool's own JSON, printed above),
+        # and the exit code is how a script hears it without parsing prose.
+        if result.get("isError"):
+            return EXIT_LOCAL_FAIL
     if args.command == "install-skill" and isinstance(result, dict):
         # A policy refusal (a foreign file left in place) is the command doing
         # its job; only an attempted write or removal the filesystem rejected

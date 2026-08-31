@@ -523,3 +523,174 @@ def test_the_daemon_resolves_its_own_pair_by_the_same_rule() -> None:
         )
     assert not (DAEMON_LAUNCHER_NAMES & cli.LAUNCHER_NAMES)
     assert DEFAULT_DAEMON_PROG in DAEMON_LAUNCHER_NAMES
+
+
+# ------------------------------------------------------------------ agent mode
+#
+# `swemux agent` is the CLI as a second transport onto the mux MCP surface
+# (ROADMAP Phase 23 W2/W3): env-authenticated, one passthrough, zero per-tool
+# CLI code. What these pin: the env refusals, the k=v / k:=json argument
+# grammar, the unwrapping of a tool result, and the exit-code contract - a
+# typed refusal prints the tool's own JSON and exits 1.
+
+
+def _agent_env(monkeypatch, surfaces: str | None = "mcp,cli") -> None:
+    monkeypatch.setenv("MUX_SESSION_ID", "s1")
+    monkeypatch.setenv("MUX_MCP_URL", "http://127.0.0.1:8765/mcp")
+    monkeypatch.setenv("MUX_MCP_TOKEN", "tok-abc")
+    if surfaces is None:
+        monkeypatch.delenv("MUX_SURFACES", raising=False)
+    else:
+        monkeypatch.setenv("MUX_SURFACES", surfaces)
+
+
+def test_agent_mode_refuses_outside_a_pane(monkeypatch, capsys) -> None:
+    for var in ("MUX_SESSION_ID", "MUX_MCP_URL", "MUX_MCP_TOKEN", "MUX_SURFACES"):
+        monkeypatch.delenv(var, raising=False)
+    assert cli.main(["agent", "tools"]) == cli.EXIT_LOCAL_FAIL
+    err = capsys.readouterr().err
+    assert "MUX_MCP_TOKEN" in err
+
+
+def test_agent_mode_refuses_when_the_cli_surface_is_off(monkeypatch, capsys) -> None:
+    _agent_env(monkeypatch, surfaces="mcp")
+    assert cli.main(["agent", "tools"]) == cli.EXIT_LOCAL_FAIL
+    assert "Settings -> Harnesses" in capsys.readouterr().err
+
+
+def test_agent_call_speaks_the_mcp_passthrough_and_unwraps_the_result(
+    monkeypatch, capsys
+) -> None:
+    _agent_env(monkeypatch)
+    calls: list[tuple[str, str, str, dict]] = []
+
+    def fake_rpc(url: str, token: str, method: str, params: dict) -> dict:
+        calls.append((url, token, method, params))
+        return {
+            "content": [{"type": "text", "text": json.dumps({"sessions": []})}],
+            "isError": False,
+        }
+
+    monkeypatch.setattr(cli, "_mcp_rpc", fake_rpc)
+    code = cli.main(
+        [
+            "agent",
+            "call",
+            "list_sessions",
+            "project=fleet",
+            "limit:=5",
+            "include_ended:=true",
+        ]
+    )
+    assert code == cli.EXIT_OK
+    url, token, method, params = calls[0]
+    assert url == "http://127.0.0.1:8765/mcp"
+    assert token == "tok-abc"
+    assert method == "tools/call"
+    assert params == {
+        "name": "list_sessions",
+        # k=v is a string, k:=v is JSON-typed - the difference the grammar exists for.
+        "arguments": {"project": "fleet", "limit": 5, "include_ended": True},
+    }
+    assert json.loads(capsys.readouterr().out) == {"sessions": []}
+
+
+def test_a_typed_refusal_prints_the_tools_own_json_and_exits_one(
+    monkeypatch, capsys
+) -> None:
+    _agent_env(monkeypatch, surfaces=None)  # an unset variable means an older daemon
+    refusal = {"error": "origin_budget_exhausted", "message": "spent"}
+
+    def fake_rpc(url: str, token: str, method: str, params: dict) -> dict:
+        return {
+            "content": [{"type": "text", "text": json.dumps(refusal)}],
+            "isError": True,
+        }
+
+    monkeypatch.setattr(cli, "_mcp_rpc", fake_rpc)
+    assert cli.main(["agent", "call", "notify", "target=x", "body=y"]) == cli.EXIT_LOCAL_FAIL
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["error"] == "origin_budget_exhausted"
+    assert printed["isError"] is True
+
+
+def test_agent_tools_lists_names_for_humans(monkeypatch, capsys) -> None:
+    _agent_env(monkeypatch)
+
+    def fake_rpc(url: str, token: str, method: str, params: dict) -> dict:
+        assert method == "tools/list"
+        return {
+            "tools": [
+                {"name": "list_sessions", "description": "List sessions. More prose."}
+            ]
+        }
+
+    monkeypatch.setattr(cli, "_mcp_rpc", fake_rpc)
+    assert cli.main(["agent", "tools"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "list_sessions" in out
+    assert "swemux agent call" in out
+
+
+def test_malformed_tool_arguments_are_refused_locally(monkeypatch, capsys) -> None:
+    _agent_env(monkeypatch)
+    monkeypatch.setattr(
+        cli, "_mcp_rpc", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no rpc"))
+    )
+    assert cli.main(["agent", "call", "notify", "not-a-pair"]) == cli.EXIT_LOCAL_FAIL
+    assert "key=value" in capsys.readouterr().err
+    assert cli.main(["agent", "call", "notify", "n:=not-json"]) == cli.EXIT_LOCAL_FAIL
+
+
+def test_requests_carry_the_pane_identity_headers(monkeypatch) -> None:
+    """Phase 23 W1's client half: inside a pane, every operator-route request
+    names its calling session, which is what lets the daemon refuse the
+    session-acting verbs from an agent pane."""
+    _agent_env(monkeypatch)
+    seen: dict[str, str] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"[]"
+
+    def fake_urlopen(req, timeout=0):
+        seen.update({key: value for key, value in req.header_items()})
+
+        class Body:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        import io
+
+        return io.BytesIO(b"[]")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+    cli.request("GET", "/api/sessions", base="http://127.0.0.1:1")
+    headers = {key.lower(): value for key, value in seen.items()}
+    assert headers.get("x-mux-caller-session") == "s1"
+    assert headers.get("x-mux-caller-token") == "tok-abc"
+
+
+def test_requests_outside_a_pane_carry_no_identity(monkeypatch) -> None:
+    for var in ("MUX_SESSION_ID", "MUX_MCP_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    seen: dict[str, str] = {}
+
+    def fake_urlopen(req, timeout=0):
+        seen.update({key: value for key, value in req.header_items()})
+        import io
+
+        return io.BytesIO(b"[]")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+    cli.request("GET", "/api/sessions", base="http://127.0.0.1:1")
+    assert not any(key.lower().startswith("x-mux-caller") for key in seen)
