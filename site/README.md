@@ -62,10 +62,10 @@ All four exit non-zero on failure, and none of them needs an argument.
 `build.py --check` is the exception: it fails instead of writing when a generated page is stale, which is how you find out that a source moved without touching the tree.
 
 **CI runs all four on every push**, in `ci.yml`'s `site` job, and did not until 2026-08-29.
-That gap is what let the 0.1.3 release commit stale `/changelog/` for a day: the pages here are committed build output, `pages.yml` deploys `site/` verbatim without ever running the generator, and nothing anywhere asked whether the artifact still matched its source.
+That gap is what let the 0.1.3 release commit stale `/changelog/` for a day: the pages here are committed build output, `deploy-site.yml` deploys `site/` verbatim without ever running the generator, and nothing anywhere asked whether the artifact still matched its source.
 Every gate that existed passed correctly throughout, `check_changelog.py` included - it asks whether `CHANGELOG.md` carries an entry per released version, which it did.
 `build.py --check` is the question none of them was asking, so it is the first step in that job.
-The job is deliberately **not** path-filtered the way `pages.yml` is, because a `site/**` filter is precisely what would have missed this: the commit that staled the page touched `CHANGELOG.md`.
+The job is deliberately **not** path-filtered the way `deploy-site.yml` is, because a `site/**` filter is precisely what would have missed this: the commit that staled the page touched `CHANGELOG.md`.
 It runs `check_changelog.py --require-tags`, because `actions/checkout` fetches no tags at all by default and the tolerant reading of that - a note, the package version alone, exit 0 - is a pass earned by asking almost nothing.
 `tests/test_site_artifacts.py` runs the staleness half in the landing gate as well, so a branch that edits a source and forgets to regenerate fails `.worktree-verify` rather than reddening master.
 
@@ -209,7 +209,7 @@ Nothing in it talks to any network; the page copy says so out loud, which is why
 The rules it lives under:
 
 - **Rebuild with `npm run build:demo`** (in `frontend/`) after any frontend change you want the demo to carry, and commit `site/demo/`.
-  It is the same committed-build-output posture as the generated pages: `pages.yml` uploads it verbatim and never builds it.
+  It is the same committed-build-output posture as the generated pages: `deploy-site.yml` uploads it verbatim and never builds it.
 - **It is an application, not a marketing page.** `check.mjs` and `contrast.py` both skip `demo/` and `preview/`; its gates are the frontend's own (`tsc`, the unit suite).
 - **Fixtures are invented.** Same rule as the screenshots (section 8): no name, path, or number in `frontend/src/demo/fixtures.ts` may come from a real install.
 - The landing page's frame loader promotes `data-src` to `src` only near the viewport and only for visible frames, so visitors who never reach it download none of its ~700 KB gz.
@@ -670,7 +670,7 @@ Both tabs are gone, replaced by commands that resolve against PyPI.
 Section 11's first block, `#download`, and the only part of the site whose content comes from outside the checkout.
 
 **It is drawn from `version.json` and there is no second list of artifacts anywhere.**
-That file is the update manifest: `release.yml` generates it from a release's **own** assets, attaches it to the Release, and `pages.yml` downloads it back into the deploy root on every deploy.
+That file is the update manifest: `release.yml` generates it from a release's **own** assets, attaches it to the Release, and `deploy-site.yml` downloads it back into the deploy root on every deploy.
 So the section lights up by itself on the first release that carries a desktop artifact, and nobody has to remember to edit a page at release time.
 A hand-maintained download list beside a generated manifest is a second manifest, and the copy is the one that goes stale the day a release is cut in a hurry.
 
@@ -890,7 +890,7 @@ apart reads as filler.
 
 The captures that first occupied these nine filenames were screenshots of a live machine.
 Between them they showed the operator's full project sidebar (ten unrelated private project names), the operator's own name against two provider accounts with their spend percentages, absolute local paths, competitor checkout directories (`.tmp-herdr/`, `.tmp-omp/`) in the file tree, and several screens of real transcript prose.
-`site/` is the GitHub Pages deploy root, so every file in it is served whether or not a page references it; eight of the nine were not referenced and would have been published anyway.
+`site/` is the deploy root, so every file in it is served whether or not a page references it; eight of the nine were not referenced and would have been published anyway.
 
 Blurring or cropping was rejected.
 A redaction leaves the original bytes in that file's git history, and an image on a public domain is scraped and cached faster than it can be withdrawn.
@@ -976,7 +976,7 @@ Edit the source in the table and run `python site/tools/build.py`.
 `build.py --check` fails on a stale page, which is what makes "regenerate identically" a checkable claim rather than a habit.
 
 **The output is committed rather than built in CI.**
-GitHub Pages deploys `site/` as a directory (`.github/workflows/pages.yml`), so a page built at deploy time would mean the deploy needs a build step, which is exactly what that decision avoided.
+The deploy uploads `site/` as a directory (`.github/workflows/deploy-site.yml`), so a page built at deploy time would mean the deploy needs a build step, which is exactly what that decision avoided.
 
 **The design system is extracted, not duplicated.**
 `build.py` reads the `<style>` block out of `index.html` and inlines it into each page, so there is one copy of the tokens and it is the one `contrast.py` audits.
@@ -990,7 +990,7 @@ The theme scripts are still literal constants in `build.py` and are the remainin
 Its bar and footer are hand-written copies of what `shell()` emits, which is a real hazard and is the reason `check.mjs` compares them on every page rather than trusting whoever edited one to remember the other.
 
 **Never commit `site/version.json`.**
-`release.yml` writes it at release time and `pages.yml` restores it from the latest Release on every deploy.
+`release.yml` writes it at release time and `deploy-site.yml` restores it from the latest Release on every deploy.
 A committed copy would be destroyed by the next ordinary site deploy, and the comments in both workflows say why.
 
 It has a second reader now: the landing page's `#download` section is drawn from it (section 7).
@@ -1001,7 +1001,7 @@ If you drop a copy in to see the populated layout, take it back out before commi
 **The plugin catalog has one deliberate deployment-time artifact.**
 `plugins/index.html` and the public plugin authoring page are generated and committed like every other page.
 `plugins/catalog.json` is ignored, while `plugins/catalog.js` carries a committed empty fixture so file-based browser checks make no failed request.
-`pages.yml` runs `tools/plugins.py` before upload and replaces both catalog files from public GitHub repository metadata and exact-commit manifests.
+`deploy-site.yml` runs `tools/plugins.py` before upload and replaces both catalog files from public GitHub repository metadata and exact-commit manifests.
 The scheduled and manual Pages paths therefore refresh listings without creating repository commits, while a generator failure leaves the previously deployed site intact.
 The application reads the JSON artifact; the public page reads the script artifact so it also works under `file://` in the site gate.
 
@@ -1012,7 +1012,9 @@ The application reads the JSON artifact; the public page reads the script artifa
 - **`https://swemux.dev/plugins/`** is the public validated plugin catalog.
 - **`https://swemux.dev/plugins/catalog.json`** is the machine-readable catalog consumed by swe-mux.
 
-Trailing slashes are load-bearing: under the Actions source, Pages serves `/docs/` from `docs/index.html` and does not resolve `/docs`.
+Trailing slashes are load-bearing: `/docs/` is served from `docs/index.html`, and `/docs` is answered with a redirect to it rather than served directly.
+That held on GitHub Pages and still holds on Cloudflare Workers; only the status code moved, from a permanent `301` to a temporary `307`, so the redirect is no longer cached indefinitely by a browser that has seen it once.
+Link to the slashed form anyway - a redirect is a round trip nobody needs to pay.
 
 **The `/docs/#<slug>` fragment contract is gone, and the reason it existed was not true.**
 This section used to open by saying the in-app help modals link to those fragments, which made them an interface rather than a layout choice.
@@ -1024,7 +1026,7 @@ That correction is what made this package possible, and it is recorded here rath
 A belief about who depends on a URL is worth re-checking before it is used to argue against changing one; this one had been carried forward for a while and cost nothing to falsify.
 
 The old contract is not preserved by redirect.
-GitHub Pages serves static files and cannot redirect a fragment at all - a fragment never reaches the server - so preserving it would have meant keeping the anchored index page alive beside the browser, which is the link farm this package exists to remove.
+The site is static files and cannot redirect a fragment at all - a fragment never reaches the server - so preserving it would have meant keeping the anchored index page alive beside the browser, which is the link farm this package exists to remove.
 
 ## The docs browser
 
@@ -1092,7 +1094,7 @@ It is high on the page because the reader most likely to act on it is the one wh
 
 ### Search
 
-**A prebuilt index plus vanilla JavaScript**, because the site is static files on GitHub Pages with no build step and no server.
+**A prebuilt index plus vanilla JavaScript**, because the site is static files on a CDN with no build step and no server.
 A search needing either would be a search that does not work here, and a framework or a bundler is not coming to this directory.
 
 `docs/search-index.js` is generated beside the pages and committed with them, and `build.py --check` covers it - a stale index beside a changed page is a search that confidently returns the wrong words.
@@ -1231,7 +1233,7 @@ An unverifiable thank-you is decoration, and there is one of those on every ackn
 - **Done: a desktop artifact is published, and the download section fills itself in.**
   `v0.1.2` carries an unsigned Windows installer and a portable archive beside the wheel and the sdist, and `version.json` names all four.
   The section on the live site is drawn from that manifest.
-  **The static markup in `index.html` is still the empty state, and it must stay that way**: `version.json` is restored into the deploy root by `pages.yml` rather than committed, `file://` cannot fetch a sibling file, and `check.mjs` asserts the empty state's exact copy ("not published yet", plus a pointer at the Python install) before driving the renderer with a synthetic manifest.
+  **The static markup in `index.html` is still the empty state, and it must stay that way**: `version.json` is restored into the deploy root by `deploy-site.yml` rather than committed, `file://` cannot fetch a sibling file, and `check.mjs` asserts the empty state's exact copy ("not published yet", plus a pointer at the Python install) before driving the renderer with a synthetic manifest.
   Editing that fallback to say the installer exists breaks the gate and describes a state no reader ever sees.
 - **Buy a code-signing certificate, or keep the SmartScreen paragraph.**
   `.docs/development/RELEASE_MANUAL_TASKS.md` § 1 holds the decision and its options.
@@ -1287,12 +1289,12 @@ An unattended job that writes markup is a second author for the page, and it is 
 - **The scan is bounded and the bound is fatal.**
   Ranking has to see every open request to be a ranking, so overrunning `MAX_PAGES` raises rather than ranking a prefix.
 
-## Why the workflow dispatches `pages.yml`
+## Why the workflow dispatches `deploy-site.yml`
 
 A push made with `GITHUB_TOKEN` deliberately does not start another workflow run, which is what stops a committing job triggering itself.
-`pages.yml` is path-filtered on `site/**` and would otherwise have deployed the regenerated page, so without an explicit dispatch it sits on `master` until somebody else edits the site.
-`workflow_dispatch` is the documented exception to that rule and always creates a run, so the workflow calls `gh workflow run pages.yml` after a commit.
-That is why `pages.yml` itself needed no change and there is still exactly one deployment definition.
+`deploy-site.yml` is path-filtered on `site/**` and would otherwise have deployed the regenerated page, so without an explicit dispatch it sits on `master` until somebody else edits the site.
+`workflow_dispatch` is the documented exception to that rule and always creates a run, so the workflow calls `gh workflow run deploy-site.yml` after a commit.
+That is why `deploy-site.yml` itself needed no change and there is still exactly one deployment definition.
 
 ## Steps only the repository owner can take
 
@@ -1315,7 +1317,7 @@ These are repository settings and an account action, so nothing in this checkout
 It is read by an **AI agent walking a human through setup**, and everything about it follows from that audience.
 
 **It lives at the deploy root rather than in `content/`, because it is a page rather than a source.**
-`site/` is what `pages.yml` uploads, so a file in the root is served; `content/` is one level down for the things that are inputs.
+`site/` is what `deploy-site.yml` uploads, so a file in the root is served; `content/` is one level down for the things that are inputs.
 The artifact upload runs no Jekyll, so the file is served as written rather than rendered into HTML, which is the point: an agent gets text and not a layout.
 
 **Plain Markdown, not a generated page**, for the same reason.

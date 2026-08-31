@@ -539,7 +539,7 @@ jobs:
           PY
 
       # Also attached to the Release, and this is what makes the manifest survive
-      # an ordinary site commit: `pages.yml` deploys from a checkout of master,
+      # an ordinary site commit: `deploy-site.yml` deploys from a checkout of master,
       # where `site/version.json` does not exist (it is generated, never
       # committed), so without a copy to restore from, the next documentation
       # typo fix would delete the update endpoint. The Release asset is the one
