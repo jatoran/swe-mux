@@ -15,6 +15,10 @@ design feature first, then the relevant technical page before changing code.
   the index of the per-domain package maps under `frontend/packages/`.
 - `frontend/workspace-state.md`: layout-v6 state, persistence, pointer drag, and mobile projection.
 
+## Extensions
+
+- `plugin-authoring.md`: standalone repository model, manifest and callback contracts, agent rules, development workflow, testing, and publishing.
+
 ## Package map shape
 
 The package maps are the documents most branches touch at once, so they are written as per-feature
@@ -28,4 +32,3 @@ Add a module to the domain file that owns it, and link any new domain file from 
 Technical pages describe current implementation constraints, not planned abstractions. Update
 them in the same change whenever package ownership, persistence sequencing, or state authority
 moves. Product behavior and security boundaries remain authoritative in `../design/`.
-

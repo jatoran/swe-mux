@@ -2,11 +2,12 @@
 
 ## Status and scope
 
-This document is the research and architectural reference for `ROADMAP.md` Phase 25.
-Phase 25 owns every implementation task, sequencing note, and exit criterion.
-This document records the external evidence, the current swe-mux substrate, and the decisions those tasks must preserve.
+This document is the Herdr research and architectural decision record for `ROADMAP.md` Phase 25.
+Phase 25 owns the remaining public-release and hardening contract.
+Current swe-mux behavior lives in `../design/features/plugins.md` and repository workflow lives in `../technical/plugin-authoring.md`.
 
-Reviewed 2026-08-30 against the current Herdr plugin and marketplace documentation, the local Herdr reference checkout at commit `f7d791eba53d1e72b2318d2d5d038fc0dc8c15dc`, and the current swe-mux design documents and implementation.
+Herdr evidence was reviewed 2026-08-30 against the plugin and marketplace documentation and the local reference checkout at commit `f7d791eba53d1e72b2318d2d5d038fc0dc8c15dc`.
+The shipped swe-mux baseline was reviewed 2026-08-30 against its implementation, tests, live frozen app, and six independent machine-local plugin repositories.
 
 ## Herdr's model
 
@@ -60,7 +61,7 @@ The low-friction combination is an ordinary repository, a small manifest, an exi
 - Native non-terminal UI is absent.
   This keeps the host stable, but it means plugin UI is a TUI unless a separately isolated web surface is designed.
 
-## Current swe-mux substrate
+## Substrate used by the shipped swe-mux implementation
 
 swe-mux already owns most runtime primitives a plugin host needs:
 
@@ -76,8 +77,8 @@ swe-mux already owns most runtime primitives a plugin host needs:
 - The data directory survives source, frozen-desktop, installer, and PyPI updates.
   Plugin source, config, state, logs, and trust records can therefore remain outside every application bundle.
 
-The missing system is packaging, identity, lifecycle, contribution registration, scoped callback authority, and community discovery.
-It is not a new execution runtime.
+The shipped plugin host adds packaging, identity, lifecycle, contribution registration, scoped callback authority, and community discovery around those existing primitives.
+It adds no new in-process execution runtime.
 
 ## swe-mux architectural decisions
 
@@ -171,13 +172,15 @@ A digest proves integrity, not author trust.
 - A missing, malformed, incompatible, disabled, crashing, hanging, or flooding plugin degrades only that plugin and remains inspectable.
 - Daemon readiness never depends on a plugin command succeeding.
 
-## Community contract
+## Public-release community contract
 
 The first marketplace is an unreviewed index of public GitHub repositories carrying the `swe-mux-plugin` topic and a parseable manifest.
 Repository cards expose source, license metadata, supported hosts, plugin version, required host capabilities, and the exact indexed commit.
 Installation always passes through the same immutable-content inspection and approval flow as a directly entered repository.
 
-The project ships a minimal template repository, manifest reference, action example, pane example, event example, compatibility test harness, and publishing checklist.
+The repository currently ships the manifest reference and agent-neutral authoring guide.
+Six ignored machine-local repositories prove the contribution model but are not public templates, release artifacts, or CI fixtures.
+A public template repository, published examples, compatibility harness, and publishing checklist remain Phase 25 work.
 Community plugins remain third-party software and do not inherit swe-mux support, security review, trademark, or release guarantees merely by appearing in the index.
 
 ## Expected extension categories
@@ -196,4 +199,6 @@ Community plugins remain third-party software and do not inherit swe-mux support
 - Herdr plugin topic: <https://github.com/topics/herdr-plugin>
 - Herdr prebuilt-artifact discussion: <https://github.com/herdrdev/herdr/issues/2693>
 - swe-mux implementation plan and acceptance contract: `ROADMAP.md` Phase 25
+- swe-mux shipped behavior: `../design/features/plugins.md`
+- swe-mux repository and authoring workflow: `../technical/plugin-authoring.md`
 - swe-mux related design: `../design/features/automation.md`, `../design/features/meta-hooks.md`, `../design/features/project-actions.md`, `../design/features/mux-mcp.md`, `../design/features/sessions.md`, `../design/features/desktop-shell.md`

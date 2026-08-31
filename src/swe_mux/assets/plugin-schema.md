@@ -46,3 +46,34 @@ Runtime commands receive `SWEMUX_PLUGIN_ID`, `SWEMUX_PLUGIN_VERSION`, `SWEMUX_PL
 
 The callback is `POST $SWEMUX_API_URL` with `Authorization: Bearer $SWEMUX_PLUGIN_TOKEN` and a JSON `operation`.
 Supported operations are `projects.list`, `sessions.list`, `terminal.write`, `session.stop`, `notify`, and `self.describe`, each gated by its corresponding manifest permission.
+
+## Repository model
+
+One plugin is one ordinary repository with `swe-mux-plugin.toml` at its root.
+The repository owns its source, tests, README, license, dependency metadata, and artifacts.
+It must not patch swe-mux, import swe-mux modules, depend on another machine-local plugin repository, or write config and state into its source tree or a Project.
+Use `SWEMUX_PLUGIN_CONFIG_DIR` and `SWEMUX_PLUGIN_STATE_DIR` for mutable data.
+
+`swemux plugin link PATH` registers an editable directory in place and never removes it.
+`swemux plugin install SOURCE [--ref REF]` creates a managed immutable copy.
+Managed installation runs no build command, package manager, or post-install script.
+
+## Author loop
+
+```text
+swemux plugin validate .
+swemux plugin link .
+swemux plugin approve publisher.plugin
+swemux plugin action publisher.plugin action-id --project PROJECT_ID
+swemux plugin pane publisher.plugin pane-id --project PROJECT_ID
+swemux plugin logs --plugin-id publisher.plugin
+```
+
+Any source or security-relevant manifest change revokes approval before new content executes.
+Validate and approve the current bytes again after editing a linked plugin.
+
+Pane processes are supervised sessions, but callback bearer grants are currently daemon-generation scoped.
+A callback-dependent pane must tolerate daemon unavailability and must be reopened after a daemon reload to obtain a valid token.
+Never print, log, persist, or expose `SWEMUX_PLUGIN_TOKEN`.
+
+The complete repository, agent, testing, lifecycle, and publishing guide is `.docs/technical/plugin-authoring.md` in the swe-mux source repository.
