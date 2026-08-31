@@ -117,6 +117,20 @@ jobs:
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
           -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag"
 
+      # `requires-python = ">=3.12"` lets `uv tool install swe-mux` land on
+      # whatever the newest CPython on a machine is, while the voice closure is
+      # only as new as its slowest native dependency. Those drifted apart in
+      # silence and reached a user: on a clean Windows 11 laptop uv picked 3.14,
+      # spaCy had published no cp314 wheel, and local voice setup dead-ended at
+      # "no wheel this interpreter can load for: spacy".
+      #
+      # Every other step in this file runs on the 3.12 pinned above - the one
+      # interpreter that was always going to say yes - so nothing here could have
+      # caught it. This step asks the same question on the versions swe-mux may
+      # actually be installed onto, by running the real selector inside each.
+      - name: Voice closure resolves on every supported interpreter
+        run: uv run python packaging/check_voice_closure_interpreters.py
+
       # The one live tier that needs no provider, no credential and no quota, so
       # it is the only one a public runner can run. It starts a real daemon - in
       # process for the startup phases and the session round trip, and as a real

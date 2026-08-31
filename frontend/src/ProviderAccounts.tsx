@@ -4,7 +4,7 @@ import { api } from './api'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { currentProfile } from './deviceSettings'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, quotaWindowSummary, shownUsageBand, QUOTA_COLUMN_HEADINGS, type LoginDisplay, type QuotaWindowDisplay } from './providerAccountDisplay'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, quotaWindowSummary, shownUsageBand, spawnedSessionCount, strandedSessionNotice, strandedSessions, visibleProviders, QUOTA_COLUMN_HEADINGS, type LoginDisplay, type QuotaWindowDisplay, type SessionCountsDisplay } from './providerAccountDisplay'
 import { serverNow } from './serverClock.ts'
 import { emitTutorialAction } from './tutorial'
 // Provider marks live in `harnessIcons.tsx`, which every surface naming a harness reads. This
@@ -31,7 +31,11 @@ type ResetReview={items:ResetEvidence[];reset_alert:ResetAlert}
  *  minutes: the tab that started it may close, reload, or be a phone, and every other
  *  client should still see the same one. */
 type LoginState=LoginDisplay
-export type ProviderAccountsStatus={providers:ProviderName[];selected:Record<ProviderName,string|null>;current:Record<ProviderName,CurrentProviderAccount>;accounts:ProviderAccount[];poll_minutes:number;stale_minutes:number;refreshing:boolean;reset_alert?:ResetAlert;login?:Record<ProviderName,LoginState|null>;login_commands?:Record<ProviderName,string>}
+/** Live sessions grouped by the account they were **spawned under**, counted by the
+ *  daemon. Not "sessions using this account": mux stamps what it had selected when the
+ *  process started, and cannot see a `/login` typed inside a pane. */
+type AccountSessionCounts=SessionCountsDisplay
+export type ProviderAccountsStatus={providers:ProviderName[];selected:Record<ProviderName,string|null>;current:Record<ProviderName,CurrentProviderAccount>;accounts:ProviderAccount[];poll_minutes:number;stale_minutes:number;refreshing:boolean;reset_alert?:ResetAlert;login?:Record<ProviderName,LoginState|null>;login_commands?:Record<ProviderName,string>;sessions?:AccountSessionCounts}
 
 const providerEvent='swe-mux:provider-accounts-changed'
 const notifyChanged=()=>window.dispatchEvent(new Event(providerEvent))
@@ -39,6 +43,9 @@ const notifyChanged=()=>window.dispatchEvent(new Event(providerEvent))
 // the poll's, so it gets its own cadence instead of leaving the outcome up to a minute
 // stale. It reverts the moment nothing is running.
 const LOGIN_POLL_MS=3_000
+// The cadence for an install with no provider configured, where the only thing
+// that can change this payload is a login run somewhere else entirely.
+const IDLE_POLL_MS=300_000
 const quotaTitle=(account?:ProviderAccount)=>account?.quota?.error||`5h ${quotaWindowSummary(account?.quota?.session)} · weekly ${quotaWindowSummary(account?.quota?.weekly)}${account?.quota?.fable?` · fable weekly ${percent(account.quota.fable)}`:''}`
 const identityLabel=(current?:CurrentProviderAccount)=>current?.email||current?.organization||current?.provider_account_id||'unknown identity'
 const currentLabel=(current?:CurrentProviderAccount,account?:ProviderAccount)=>account?.label||(current?.state==='external'?identityLabel(current):current?.state==='unreadable'?'login unreadable':'signed out')
@@ -66,14 +73,21 @@ const formatRefreshAge=(seconds?:number,nowSeconds=serverNow())=>{
   return `${Math.floor(hours/24)}d`
 }
 
-function useProviderAccounts(intervalMs=60_000) {
+function useProviderAccounts(intervalMs=60_000,idleMs=intervalMs) {
   const [status,setStatus]=useState<ProviderAccountsStatus|null>(null)
   const [error,setError]=useState('')
   const load=()=>api<ProviderAccountsStatus>('GET','/api/provider-accounts').then(value=>{setStatus(value);setError('')}).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
   // A sign-in running on the daemon is the only state here that a human is
   // actively waiting on, so it tightens the poll for as long as it lasts.
   const awaitingLogin=loginRunning(status?.login)
-  const period=awaitingLogin?LOGIN_POLL_MS:intervalMs
+  // With no provider configured there is nothing on this payload that changes
+  // except by an act somewhere else - a `claude login` in an outside terminal -
+  // so the switcher slows down rather than stopping. Stopping would mean such a
+  // login never appeared at all; a minute of extra latency on a surface that is
+  // currently one dismissable invitation costs nothing. Opt-in, because Settings
+  // → Accounts is where a login *is* being waited for.
+  const idle=!!status&&!visibleProviders(status).length
+  const period=awaitingLogin?LOGIN_POLL_MS:idle?idleMs:intervalMs
   useEffect(()=>{
     void load()
     // Skip while hidden and catch up on return, matching every other poll in the
@@ -132,13 +146,19 @@ function LoginProgress({login,busy,onDismiss}:{login:LoginState|null;busy:boolea
   </div>
 }
 
-export function AccountSwitcher({variant='full',placement,onManage}:{
+export function AccountSwitcher({variant='full',placement,onManage,promptDismissed,promptSuppressed,onDismissPrompt}:{
   // `variant` picks the trigger; `placement` is independent because the collapsed
   // desktop rail wants a condensed trigger with an upward-opening popover.
   variant?:'full'|'compact'|'rail';placement?:'up'|'down';onManage:()=>void
+  // The empty-state invitation, which belongs to the expanded sidebar alone and
+  // is therefore the host's to persist: it is machine config, not this
+  // component's state. `promptSuppressed` is the first-run surfaces asking for
+  // the floor - a tour whose account step is already on screen does not want a
+  // second invitation competing with it.
+  promptDismissed?:boolean;promptSuppressed?:boolean;onDismissPrompt?:()=>void
 }) {
   const compact=variant!=='full'
-  const {status,setStatus,error,setError}=useProviderAccounts()
+  const {status,setStatus,error,setError}=useProviderAccounts(60_000,IDLE_POLL_MS)
   const {busy:loginBusy,startLogin,dismissLogin}=useProviderLogin(setStatus,setError)
   const [open,setOpen]=useState(false)
   const [ownBusy,setOwnBusy]=useState('')
@@ -148,7 +168,11 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
   const root=useRef<HTMLDivElement>(null)
   const popover=useRef<HTMLDivElement>(null)
   const [popoverStyle,setPopoverStyle]=useState<Record<string,string>>({})
+  // Two lists on purpose. `providers` is everything mux can manage and is what the
+  // popover offers a sign-in for; `visible` is the subset a credential exists for,
+  // and is what the status block, the rail and the phone's toolbar draw.
   const providers=status?.providers||[]
+  const visible=useMemo(()=>visibleProviders(status),[status])
   const selected=(provider:ProviderName)=>status?.accounts.find(account=>account.id===status.selected[provider])
   // Unread is now purely the server's unreviewed set. It used to be a localStorage
   // marker, which is why dismissing at the desk left the same alert waiting on the phone.
@@ -224,13 +248,29 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
         {!!saved.length&&<div class={`quota-columns${sectionFable?' has-fable':''}`} aria-hidden="true">
           {columns.map(key=><span key={key}>{QUOTA_COLUMN_HEADINGS[key]}</span>)}
         </div>}
-        {saved.map(account=><button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} aria-label={`${account.label}: ${account.conflict&&!account.conflict.is_primary?'duplicate account, polling suspended':quotaTitle(account)}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
+        {saved.map(account=>{
+          // Sessions this account was selected for when they started. Deliberately not
+          // "sessions using it": mux cannot see a `/login` typed inside a pane, and a
+          // CLI already running holds the credential it read at startup. It joins the
+          // accessible name because `aria-label` replaces the row's content outright,
+          // so a badge left out of it is a badge no screen reader can reach.
+          const spawned=spawnedSessionCount(status?.sessions,account.id)
+          const spawnedTitle=`${spawned} live session${spawned===1?'':'s'} spawned under this account. That is what mux had selected when each started, not proof of what it authenticates as now.`
+          const state=account.conflict&&!account.conflict.is_primary?'duplicate account, polling suspended':quotaTitle(account)
+          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
           {account.quota?.status==='error'
             ?<em class="quota-row-note">unavailable</em>
             :quotaRowCells(account,sectionFable).map(cell=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}><b>{cell.percent}</b><i>{cell.reset}</i></span>)}
           {account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}
-        </span>}</small></button>)}
+        </span>}{spawned>0&&<i class="account-session-count" aria-hidden="true" title={spawnedTitle}>{spawned}×</i>}</small></button>
+        })}
         {!saved.length&&!login&&<button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>No saved accounts — <strong>sign in to {provider}</strong></button>}
+        {/* The point of the counts. A switch reaches the next process, not the ones
+            already running, so this names the logins still being spent. The whole
+            sentence is on screen rather than in a tooltip: this popover is the phone's
+            account surface too, and a phone cannot hover. Keyed by position, because
+            two accounts may carry the same label. */}
+        {strandedSessions(status,provider).map((row,index)=><p class="account-session-notice" key={`${provider}-${index}`}>{strandedSessionNotice(row)}</p>)}
       </section>})}
       {error&&<p class="account-error" role="alert">{error}</p>}
       {resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p>{resetItems.length===1?'One confirmed unexpected reset:':`${status?.reset_alert?.count??resetItems.length} confirmed unexpected resets · one provider rollover reaches every account on that plan:`}</p><ul>{resetItems.map(item=><li key={item.id}><strong>{item.provider} {item.window}</strong> · {status?.accounts.find(account=>account.id===item.account_id)?.label||item.account_id} · {item.before_value}% → {item.after_value}%</li>)}</ul><div>{resetProviders.length===1&&resetProviders[0]==='codex'&&<button disabled={!!busy} onClick={()=>void reviewResets('manual_usage')}>{busy==='reset-manual_usage'?'marking…':resetItems.length>1?'all manual Codex usage':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewResets('discarded')}>{busy==='reset-discarded'?'discarding…':resetItems.length>1?'discard all as errors':'discard as error'}</button><button disabled={!!busy} onClick={()=>void reviewResets('seen')}>{busy==='reset-seen'?'marking…':'mark seen'}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
@@ -283,8 +323,18 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
       <span class={`provider-glyph ${provider}`} aria-hidden="true">{harnessMark(provider)}</span><strong>{weekly?`${Math.round(weekly.used_percent)}%`:'—'}</strong>
     </button>
   }
+  // The expanded sidebar carries the invitation for all three surfaces: the 40px rail
+  // and the phone's 44px toolbar have no room for a call to action, and a chip reading
+  // `—` for a provider this machine has never signed in to is the thing being removed.
+  // Held until the first payload lands, too, or a fresh load flashes the invitation at
+  // an install that has two accounts.
+  const invite=!compact&&!!status&&!visible.length&&!promptDismissed&&!promptSuppressed
+  // Nothing to draw and nothing to invite with. `open` keeps the root mounted while
+  // the popover is up, so nothing can yank its anchor away mid-request - including
+  // the switch that removes the last saved account.
+  if(!visible.length&&!invite&&!open)return null
   return <div ref={root} class={`account-switcher ${compact?'compact':''} ${variant==='rail'?'rail':''}`}>
-    {variant==='rail'?providers.map(provider=>quotaChip(provider,weeklyTitle(provider)))
+    {variant==='rail'?visible.map(provider=>quotaChip(provider,weeklyTitle(provider)))
     // The mobile toolbar carries one chip per provider, in the same provider order as every
     // other surface — collapsing both into whichever weekly window was furthest along hid which
     // provider was burning. It wears the same square as the collapsed rail rather than the
@@ -293,9 +343,18 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
     // glanced at for is how much of the week is gone. The breakdown is one tap away, in the
     // popover this chip opens, which is also where the tooltip's window-by-window text lands
     // for a device that cannot hover.
-    :variant==='compact'?providers.map(provider=>quotaChip(provider,toolbarTitle(provider)))
+    :variant==='compact'?visible.map(provider=>quotaChip(provider,toolbarTitle(provider)))
+    // The invitation replaces the rows rather than sitting above them: the moment a
+    // credential exists there is something real here, and this is gone.
+    :invite?<div class="account-prompt">
+      <div><strong>Provider accounts</strong><small>Quota and one-click account switching for Claude and Codex, once one of them is signed in on this machine.</small></div>
+      <div class="account-prompt-actions">
+        <button type="button" class="primary" aria-expanded={open} onClick={show}>add provider</button>
+        <button type="button" title="Puts away this invitation, not the feature. Sign in later and the quota rows come back by themselves." onClick={()=>onDismissPrompt?.()}>hide</button>
+      </div>
+    </div>
     :<div class="account-summary">
-      {providers.map(provider=>{const account=selected(provider);const current=status?.current[provider];const state=account?account.quota?.status||'pending':current?.state||'loading';return <button class={account?'tracked':current?.state==='external'?'external':'untracked'} aria-label={`${provider} account: ${currentLabel(current,account)}; ${currentSummary(current,account)}; ${state}`} aria-expanded={open} onClick={toggle} title={`${provider} · ${account?quotaTitle(account):currentDescription(current,account)}`}>{quotaGrid(provider)}{state!=='ready'&&<em>{state}</em>}</button>})}
+      {visible.map(provider=>{const account=selected(provider);const current=status?.current[provider];const state=account?account.quota?.status||'pending':current?.state||'loading';return <button class={account?'tracked':current?.state==='external'?'external':'untracked'} aria-label={`${provider} account: ${currentLabel(current,account)}; ${currentSummary(current,account)}; ${state}`} aria-expanded={open} onClick={toggle} title={`${provider} · ${account?quotaTitle(account):currentDescription(current,account)}`}>{quotaGrid(provider)}{state!=='ready'&&<em>{state}</em>}</button>})}
       {resetUnread&&<button class="quota-reset-indicator" title="Confirmed unexpected reset; open for evidence" onClick={show}><span>RESET</span><strong>{resetItems.length>1?`${resetItems.length} unexpected quota resets`:'unexpected quota reset'}</strong><small>{resetProviders.join(' · ')}</small></button>}
     </div>}
     {popup&&createPortal(popup,document.body)}
@@ -346,7 +405,7 @@ export function AccountSettings() {
     {/* Policy that never changes is reference, not instruction, and it was the first
         thing on the panel every time. Folded away, it is still one click from the
         control it describes. */}
-    <details class="account-explainer"><summary>How switching works</summary><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. Sessions already running follow the switch too — they re-read that file — so switching is never blocked or confirmed. The switch also restores the account's cached CLI profile, so <code>/status</code> in new sessions names the right account immediately; panes already running keep the old display until restarted.</p><p>swe-mux follows the daemon host credentials; startup never restores an older saved account. Credentials move into a saved account only on a provider-verified identity or an explicit relink.</p></details>
+    <details class="account-explainer"><summary>How switching works</summary><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. It is never blocked and never confirmed, but it is not retroactive either: a CLI reads that file when it starts, so a session running from before the switch can keep spending the outgoing account until it is restarted. Codex behaves this way. The account switcher counts live sessions against the account each one was spawned under, so you can see which logins are still in use.</p><p>The switch also restores the account's cached CLI profile, so <code>/status</code> in new sessions names the right account immediately; panes already running keep the old display until restarted.</p><p>swe-mux follows the daemon host credentials; startup never restores an older saved account. Credentials move into a saved account only on a provider-verified identity or an explicit relink.</p></details>
     {providers.map(provider=>{const current=status?.current[provider];const accounts=grouped[provider]||[];const active=accounts.find(account=>account.id===current?.account_id);const login=loginOf(status?.login,provider);return <div class="account-provider-settings"><header><div><strong>{provider.toUpperCase()}</strong><small>{accounts.length} saved · quotas refresh every {status?.poll_minutes||15} minutes</small></div></header>
       {/* Only the states that need explaining, and that carry an action. While the live
           login is a saved account, this block restated the row already marked ◆ active

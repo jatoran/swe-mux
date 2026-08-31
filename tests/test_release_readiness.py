@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -48,6 +49,50 @@ def test_classify_not_installed() -> None:
     assert "winget" in str(result["connection_command"])
 
 
+def test_the_absent_detail_no_longer_hedges_about_path() -> None:
+    """It said "not installed **or is not on PATH**" while the state said absent.
+
+    The UI renders the state, so on every GUI Tailscale install on Windows - whose
+    MSI never touches PATH - the hedge was the true half and the headline was the
+    false one. Resolution now looks past PATH, so the absent case really is absent
+    and the sentence can say so.
+    """
+    detail = str(tailscale.classify_tailscale_connection(False, None)["connection_detail"])
+    assert "not on PATH" not in detail
+    assert "not installed" in detail
+
+
+def test_tailscale_is_found_at_its_install_location_when_it_is_not_on_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The single case that motivated widening resolution at all.
+
+    A running `tailscaled`, a healthy tailnet, and swe-mux telling the user to
+    `winget install` it. Six call sites resolved independently, so fixing only the
+    classifier would have left Serve, `tailscale cert` and the direct TLS listener
+    dead for the same reason.
+    """
+    from swe_mux import tool_locations
+
+    binary = tmp_path / "tailscale.exe"
+    binary.write_text("", encoding="utf-8")
+    monkeypatch.setattr(tool_locations, "which_real", lambda command: None)
+    monkeypatch.setattr(tool_locations, "well_known_locations", lambda tool: (str(binary),))
+    tailscale.tailscale_executable.cache_clear()
+    try:
+        assert tailscale.tailscale_executable() == str(binary)
+    finally:
+        tailscale.tailscale_executable.cache_clear()
+
+
+def test_every_tailscale_call_site_shares_one_resolver() -> None:
+    """A second `shutil.which("tailscale")` is a second opinion that can differ."""
+    import inspect
+
+    source = inspect.getsource(tailscale)
+    assert 'shutil.which("tailscale")' not in source.replace('`shutil.which("tailscale")`', "")
+
+
 def test_classify_installed_but_status_unreadable() -> None:
     result = tailscale.classify_tailscale_connection(True, None)
     assert result["connection_state"] == "unknown"
@@ -83,14 +128,14 @@ def test_classify_needs_machine_auth() -> None:
 
 
 async def test_probe_merges_connection_fields_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tailscale.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(tailscale, "tailscale_executable", lambda: None)
     result = await tailscale._probe_tailscale_status(8765, tailnet_enabled=True)
     assert result["available"] is False
     assert result["connection_state"] == "not_installed"
 
 
 async def test_probe_reports_connected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tailscale.shutil, "which", lambda _name: "tailscale")
+    monkeypatch.setattr(tailscale, "tailscale_executable", lambda: "tailscale")
 
     async def fake_serve_or_funnel(_exe: str, _command: str) -> tuple[Any | None, str]:
         return None, "not configured"
@@ -328,6 +373,59 @@ def _diagnostics_app(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> web.Appl
     return app
 
 
+async def test_prerequisite_rescan_rereads_path_before_looking_again(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The button has to re-read PATH, or it returns the same wrong answer.
+
+    A daemon inherits its environment once at spawn, and every Windows installer
+    that edits PATH edits the registry and broadcasts a change only interactive
+    shells act on. A refresh that merely re-ran detection would have taught the
+    user that the feature does not work.
+    """
+    app = _diagnostics_app(tmp_path, monkeypatch)
+    app.router.add_post(
+        "/api/diagnostics/prerequisites/refresh", system_routes.prerequisites_refresh
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        system_routes, "refresh_search_path", lambda: (calls.append("path"), True)[1]
+    )
+    monkeypatch.setattr(
+        system_routes,
+        "detect_prerequisites",
+        lambda overrides=None: (calls.append("detect"), [{"id": "git", "state": "present"}])[1],
+    )
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post("/api/diagnostics/prerequisites/refresh")
+        assert response.status == 200
+        body = await response.json()
+    # Order matters: detection after the re-read, never before it.
+    assert calls == ["path", "detect"]
+    assert body["path_refreshed"] is True
+    assert body["prerequisites"] == [{"id": "git", "state": "present"}]
+
+
+async def test_prerequisite_rescan_passes_the_user_overrides(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _diagnostics_app(tmp_path, monkeypatch)
+    app[keys.CONFIG] = Config(data_dir=tmp_path, port=8765, tool_paths={"git": "/opt/git"})
+    app.router.add_post(
+        "/api/diagnostics/prerequisites/refresh", system_routes.prerequisites_refresh
+    )
+    seen: list[dict[str, str]] = []
+    monkeypatch.setattr(system_routes, "refresh_search_path", lambda: False)
+    monkeypatch.setattr(
+        system_routes,
+        "detect_prerequisites",
+        lambda overrides=None: (seen.append(overrides or {}), [])[1],
+    )
+    async with TestClient(TestServer(app)) as client:
+        assert (await client.post("/api/diagnostics/prerequisites/refresh")).status == 200
+    assert seen == [{"git": "/opt/git"}]
+
+
 async def test_diagnostics_export_bundles_pieces(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -392,7 +490,7 @@ async def test_doctor_endpoint_assembles_a_report(
     # references to these - patching `routes/system.py`'s copies takes, and does
     # nothing, which showed up only as an intermittent "connected" that was the
     # host's real Tailscale answering.
-    monkeypatch.setattr(diagnostics_routes, "detect_prerequisites", lambda: [])
+    monkeypatch.setattr(diagnostics_routes, "detect_prerequisites", lambda _overrides=None: [])
     monkeypatch.setattr(diagnostics_routes, "detect_installations_with_versions", lambda exe: {})
     monkeypatch.setattr(
         server, "background", SimpleNamespace(health=lambda: {"degraded": [], "total_faults": 0})
@@ -554,15 +652,97 @@ def test_registry_carries_cli_version_when_probed(monkeypatch: pytest.MonkeyPatc
 
 def test_detect_prerequisites_reports_each_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "swe_mux.prerequisites.which_real",
+        "swe_mux.tool_locations.which_real",
         lambda command: "/usr/bin/git" if command == "git" else None,
     )
+    monkeypatch.setattr("swe_mux.tool_locations.well_known_locations", lambda tool: ())
     result = detect_prerequisites()
     ids = {item["id"] for item in result}
-    assert {"git", "node", "npm", "tailscale"} <= ids
+    # `uv` joined the list on 2026-08-30: managed integrations shell out to it, so
+    # it is a real dependency of a real feature and its absence must be visible
+    # before an install fails halfway rather than after.
+    assert {"git", "node", "npm", "uv", "tailscale"} <= ids
     git = next(item for item in result if item["id"] == "git")
     tailscale_entry = next(item for item in result if item["id"] == "tailscale")
     assert git["present"] is True
+    assert git["state"] == "present"
     assert git["path"] == "/usr/bin/git"
     assert tailscale_entry["present"] is False
+    assert tailscale_entry["state"] == "missing"
     assert tailscale_entry["install_command"]
+    assert tailscale_entry["path_remedy"] is None
+
+
+def test_a_tool_found_off_path_is_not_reported_as_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The exact clean-machine failure: installed, working, reported absent.
+
+    Tailscale's Windows installer never adds its directory to PATH, so every GUI
+    install read as `not_installed` and the user was told to `winget install`
+    something they already had - while `tailscale status` returned a healthy
+    tailnet. "Installed but not on PATH" is a third state with its own remedy.
+    """
+    installed = tmp_path / "tailscale.exe"
+    installed.write_text("", encoding="utf-8")
+    monkeypatch.setattr("swe_mux.tool_locations.which_real", lambda command: None)
+    monkeypatch.setattr(
+        "swe_mux.tool_locations.well_known_locations",
+        lambda tool: (str(installed),) if tool == "tailscale" else (),
+    )
+    entry = next(
+        item for item in detect_prerequisites() if item["id"] == "tailscale"
+    )
+    assert entry["state"] == "off_path"
+    assert entry["present"] is True
+    assert entry["path"] == str(installed)
+    # The remedy must be about PATH, not about installing it again.
+    assert "PATH" in str(entry["path_remedy"])
+
+
+def test_a_user_supplied_path_wins_over_every_search(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The escape hatch for install layouts this project cannot enumerate."""
+    override = tmp_path / "my-git"
+    override.write_text("", encoding="utf-8")
+    monkeypatch.setattr("swe_mux.tool_locations.which_real", lambda command: "/usr/bin/git")
+    monkeypatch.setattr("swe_mux.tool_locations.well_known_locations", lambda tool: ())
+    entry = next(
+        item
+        for item in detect_prerequisites({"git": str(override)})
+        if item["id"] == "git"
+    )
+    assert entry["source"] == "override"
+    assert entry["path"] == str(override)
+
+
+def test_a_stale_override_falls_back_to_detection_rather_than_hiding_the_tool(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("swe_mux.tool_locations.which_real", lambda command: "/usr/bin/git")
+    monkeypatch.setattr("swe_mux.tool_locations.well_known_locations", lambda tool: ())
+    entry = next(
+        item
+        for item in detect_prerequisites({"git": str(tmp_path / "gone")})
+        if item["id"] == "git"
+    )
+    assert entry["source"] == "on_path"
+    assert entry["path"] == "/usr/bin/git"
+
+
+def test_every_prerequisite_has_a_step_for_every_platform() -> None:
+    """Remediation used to be Windows-only while the check claimed neutrality.
+
+    A Linux user missing Git was told to run `winget` and sent to a `/download/win`
+    page - advice that cannot work, from a module whose own docstring admitted it.
+    """
+    from swe_mux.prerequisites import _PREREQUISITES
+
+    for prerequisite in _PREREQUISITES:
+        assert set(prerequisite.steps) == {"windows", "macos", "linux"}
+        for platform_name, step in prerequisite.steps.items():
+            assert step.command and step.download_url
+            if platform_name != "windows":
+                assert "winget" not in step.command
+                assert "/download/win" not in step.download_url

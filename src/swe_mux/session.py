@@ -2137,6 +2137,15 @@ class Session:
             self.record.state_since = self.last_state_change_ts
         self.last_evidence_ts = time.time()
         self.last_hook_ts = 0.0
+        # Wall clock at which *this daemon* spawned this session, and only then:
+        # `None` for a session adopted from the supervisor or restored from cold.
+        # It is what licenses `doctor.hook_ingress` to read a silent `last_hook_ts`
+        # as a broken hook channel. A spawn is the one moment a working channel
+        # must speak (SessionStart fires unconditionally), whereas an adopted
+        # session's counter is merely reset by the restart and an idle one has no
+        # reason to speak again for hours - reading that as a fault would flag
+        # every healthy session after every reload.
+        self.hook_channel_watch_since: float | None = None
         # Only hooks whose event *must* have produced transcript records — a prompt
         # submitted, a tool run, a turn stopped. Staleness detection keys off this
         # and not `last_hook_ts`, because the hook that fires most often on a quiet
@@ -2824,6 +2833,12 @@ class SessionManager:
         self.operator_input_sink_factory: Callable[[Session], Callable[[str, str], None]] | None = (
             None
         )
+        # Which provider account a session started now would authenticate as.
+        # Installed by the composition root, which owns the account manager;
+        # asking it here rather than importing keeps the dependency one-way,
+        # since that manager already holds this one. None on a manager built
+        # without it, and a session then simply carries no account stamp.
+        self.provider_attribution: Callable[[str], dict[str, str | None] | None] | None = None
         # Daemon-configured bounds stamped onto every session as it is wired, so
         # the observer reads them off the session it already has instead of
         # importing config — the same shape `approval_stabilization_seconds`
@@ -3051,6 +3066,21 @@ class SessionManager:
         record.spawn_native_session_id = native_id
         record.spawn_agent_run_id = adopt_run_id
         record.spawn_env = dict(extra_env or {})
+        # Stamped here because this is the only moment it is knowable: the CLI
+        # about to start reads its credential file once, and a switch made later
+        # does not reach back into it. Never allowed to fail a spawn - an account
+        # manager that cannot answer costs one unattributed row, not a terminal.
+        attribution = getattr(self, "provider_attribution", None)
+        if callable(attribution):
+            try:
+                stamp = attribution(backend)
+            except Exception:
+                log.exception("could not read the provider account for %s", sid)
+                stamp = None
+            if stamp is not None:
+                record.spawn_provider = stamp.get("provider")
+                record.spawn_provider_account_id = stamp.get("account_id")
+                record.spawn_provider_account_uuid = stamp.get("provider_account_id")
         if project is None:
             project_started_at = time.perf_counter()
             project = await resolve_project(resolved_cwd)
@@ -3209,6 +3239,8 @@ class SessionManager:
         )
         if initial_output:
             session.scrollback.append(initial_output)
+        # Set on the spawn path and nowhere else; see the attribute's own comment.
+        session.hook_channel_watch_since = time.time()
         self.sessions[sid] = session
         self._attach_ledger_sink(session)
         self._attach_operator_input(session)

@@ -29,10 +29,16 @@ export function canInsertTerminalAttachment(state: string, replayReady: boolean)
   return replayReady && !['starting', 'exited', 'crashed'].includes(state)
 }
 
+/** Whether a native image reference must carry the paste wrapper by hand.
+ *
+ * Same rule, and the same reasoning, as `pasteNeedsManualBracketing`: xterm's mirror of
+ * the child's bracketed-paste mode is a guess that goes stale in both directions, while
+ * an agent CLI holds the mode on for its whole life. The wrapper is what makes the CLI
+ * read the reference as a pasted image rather than as typed text, so it is sent on the
+ * harness trait alone. */
 export function attachmentNeedsManualBracketing(
   nativeImage: boolean,
   agentBackend: boolean,
-  bracketedPasteMode: boolean,
 ): boolean {
-  return nativeImage && agentBackend && !bracketedPasteMode
+  return nativeImage && agentBackend
 }

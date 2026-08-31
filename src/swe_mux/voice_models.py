@@ -48,6 +48,8 @@ from typing import Any
 
 import aiohttp
 
+from .tls_trust import trusting_connector
+
 log = logging.getLogger(__name__)
 
 KOKORO_REPO = "onnx-community/Kokoro-82M-v1.0-ONNX"
@@ -279,7 +281,9 @@ class KokoroModelStore:
         downloaded = 0
         timeout = aiohttp.ClientTimeout(total=DOWNLOAD_TIMEOUT_SECONDS, connect=20)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=trusting_connector()
+            ) as session:
                 for relative, (size, sha256) in KOKORO_FILES.items():
                     destination = self.install.root / relative
                     if self._file_verified(destination, size, sha256):
@@ -842,7 +846,9 @@ class SpacyModelStore:
         started = time.monotonic()
         timeout = aiohttp.ClientTimeout(total=DOWNLOAD_TIMEOUT_SECONDS, connect=20)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout, connector=trusting_connector()
+            ) as session:
                 payload = await self._fetch_wheel(session)
             await asyncio.to_thread(self._unpack, payload)
             self._write_state(

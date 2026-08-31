@@ -7,6 +7,7 @@ import {
   SECTION_RAIL_MIN,
   sectionSlug,
   sameRailSections,
+  settingsBreadcrumb,
   settingsTabGroups,
   settingsSubpageId,
   settingsSubpages,
@@ -103,6 +104,26 @@ test('declared subpages are unique, plural, and belong to live tabs', () => {
     assert.ok((pages?.length||0)>1,`${tab} must declare more than one page`)
     assert.equal(new Set(pages?.map(page=>page.id)).size,pages?.length,`${tab} page ids must be unique`)
   }
+})
+
+test('a breadcrumb places a result without repeating the heading that names its page', () => {
+  // Input's pages *are* its h3s, so naming the page as well would say it twice.
+  assert.equal(settingsBreadcrumb('input', 'Input', ['Keyboard shortcuts', 'View']),
+    'Input · Keyboard shortcuts · View')
+  // Voice folds several headings onto one page, so the page is the only crumb that
+  // says which sidebar entry to click.
+  assert.equal(settingsBreadcrumb('voice', 'Voice', ['Voice and engine']),
+    'Voice · Read aloud · Voice and engine')
+})
+
+test('a breadcrumb on an unpaged tab is the tab and its headings', () => {
+  assert.equal(settingsBreadcrumb('general', 'General', ['Defaults']), 'General · Defaults')
+  assert.equal(settingsBreadcrumb('general', 'General', []), 'General')
+})
+
+test('a breadcrumb keeps the headings nearest the result rather than growing', () => {
+  assert.equal(settingsBreadcrumb('general', 'General', ['One', 'Two', 'Three']),
+    'General · Two · Three')
 })
 
 test('Voice groups implementation headings under user-facing capability pages', () => {
