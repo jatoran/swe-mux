@@ -382,6 +382,8 @@ Its rules, and what each one is defending:
   say which. Unfolded, those counts are back on the rows that own them, where one number
   means one thing. What divides the halves now is a plain rule, not a `CONFIGURATION`
   heading over an already-obvious group.
+- **Plugins is an app-wide management destination in the configuration half.**
+  The row calls the shared `plugins.open` command and opens the Plugins Settings section; Project-scoped plugin tools remain in each Project's Run menu.
 - **`Usage & spend` is the eighth row, and the row is what the budget is for.**
   It was a segment of Resources, and the way it did not fit is the argument for spending a
   row on it: the surface named for money had no total on its first screen, and three of its

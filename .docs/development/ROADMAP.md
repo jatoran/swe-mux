@@ -6415,8 +6415,8 @@ Current shipped behavior is in `../design/features/plugins.md`, and the agent-ne
 
 The baseline landed on `master` and is deployed.
 It includes the manifest parser, SQLite registry and command ledger, linked and managed source, content-bound approval, lifecycle operations, actions, tab/split/popup terminal panes, EventBus hooks, startup hooks, terminal link handlers, scoped loopback callbacks, Settings, command-palette entries, CLI management, diagnostics, and the unreviewed GitHub-topic browser.
-Six development repositories remain under the primary checkout's ignored `.private/plugin-lab`.
-Four maintained high-utility plugins are published as independent official repositories; Attention Notifier and Project Scratchpad remain unpublished local experiments.
+Four maintained development repositories remain under the primary checkout's ignored `.private/plugin-lab` and are published as independent official repositories.
+Retired Attention Notifier and Project Scratchpad repositories remain recoverable under ignored `.trash/plugin-lab-retired` and are outside the active lab and marketplace.
 No plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
 
 The checkboxes in this phase are the complete public-release and hardening contract.
