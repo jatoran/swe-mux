@@ -227,24 +227,21 @@ responsive controls.
   tree it edits, and `menu → Projects`, between the viewers and Configure Actions. The header
   button is discoverable only once the sidebar is open and its header is in view, while the
   app menu is where every other app-wide surface is looked for.
-- The sidebar footer is three controls: `menu` at the left edge, then the alerts bell and the
-  configurator gear at the right.
-  It once held four different ones. `projects` moved into the `PROJECTS` header, beside the
-  tree it edits, and the settings cog was removed: `menu → Settings` sits one row away from the
-  button next to it, and a second permanent door to the same panel cost a footer slot for a
-  saving of nothing. A named menu row is also searchable and keyboard-reachable, which an icon
-  is not.
-  The rule that removal established is "app-wide switches, not navigation", and the
-  configurator gear is worth restating it for: it is **not** a door to an existing surface, it
-  starts an agent session about this install (`configurator.md`), so it belongs to the whole
-  app rather than to the tree above it. A plain press launches the default harness; right-click,
-  shift-click, or alt-click opens a harness chooser, and only when more than one agent is
-  available. A missing prerequisite dims it with the reason in its title rather than hiding it,
-  because a control that vanishes teaches nothing.
+- The sidebar footer has two stable control groups.
+  The left group is the configurator gear followed by the alerts bell.
+  The right group is `menu` followed by a Settings cog that opens the Settings panel directly.
+  Settings remains in the app menu and command registry for search, keyboard, and voice access;
+  the persistent cog is the direct pointer route to a primary app-wide surface.
+  The configurator gear starts an agent session about this install (`configurator.md`) rather
+  than opening an existing surface.
+  A plain press launches the default harness; right-click, shift-click, or alt-click opens a
+  harness chooser only when more than one agent is available.
+  A missing prerequisite dims the configurator with the reason in its title rather than hiding
+  it, because a control that vanishes teaches nothing.
   It has a twin in the collapsed rail: collapsing the sidebar must not remove a control, and
   an expand round-trip to ask a question about the app is the round-trip it exists to avoid.
-  The row still uses the left item's own `margin-right:auto` rather than `space-between`, so a
-  removed button can come back without the layout re-deciding itself.
+  The menu owns `margin-left:auto` rather than the footer using `space-between`, so the two
+  groups stay stable when a control is unavailable or later returns.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
@@ -669,13 +666,13 @@ Its rules, and what each one is defending:
   It is the one control in the panel that rewrites the whole saved configuration on a single click, is not staged behind Save, discards unsaved edits, and cannot be undone.
   The confirmation is an `alertdialog` and its own dismiss level, so back, Escape, and the scrim all back out of it before they reach the panel; the click that opens it sends nothing.
   Its failure is visible for the same reason every other write's is - a refused reset used to be an unhandled rejection, leaving the panel showing a draft the daemon no longer held with no indication that anything had gone wrong.
-- **One tab names one subsystem.** Seventeen tabs are grouped into four runs, declared once
+- **One tab names one subsystem.** Eighteen tabs are grouped into four runs, declared once
   in `settingsTabs.ts` and rendered from that single order by both layouts:
 
   | Group | Tabs |
   | --- | --- |
   | Workspace | General, Projects, Terminals, Git, Processes |
-  | Agents | Harnesses, Accounts, Prompt queue, Automation, Usage |
+  | Agents | Harnesses, Accounts, Prompt queue, Automation, Plugins, Usage |
   | Interface | Appearance, Input, Notes, Voice |
   | System | Alerts, Remote, Diagnostics |
 
