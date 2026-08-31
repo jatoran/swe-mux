@@ -17,8 +17,8 @@
         looking for a reason to distrust the page will find that list either way and
         should find it where it was volunteered.
      3. **Never claim the project cannot see something it merely does not look at.**
-        GitHub serves swemux.dev and sees the requests to it; saying otherwise would be
-        false. What is true is that the project has no analytics and no access log.
+        Cloudflare serves swemux.dev and sees the requests to it; saying otherwise would
+        be false. What is true is that the project has no analytics and no access log.
      4. **No legal register.** No "we may", no "from time to time", no defined terms.
         This describes behaviour. What it is not is stated at the bottom.
 -->
@@ -132,20 +132,29 @@
 
     <div class="rel">
       <div class="relhead"><h2>This website</h2><span class="fill"></span></div>
-      <p class="prose">swemux.dev is static files served by GitHub Pages from the
-      <code>site/</code> directory of the public repository.</p>
+      <p class="prose">swemux.dev is static files served by Cloudflare Workers from the
+      <code>site/</code> directory of the public repository. GitHub Pages served it until
+      2026-08-31; the files and the repository did not change, only the host.</p>
       <ul class="bullets">
         <li><span><b>No analytics, no tracking pixels, no cookies set by this site, and
-        no third-party requests of any kind.</b> No external fonts, no CDN, no embedded
-        video. Every page is one HTML file with its CSS and its handful of lines of
-        JavaScript inline. You can read the whole thing with view-source.</span></li>
+        nothing the page itself requests from a third party.</b> No external fonts, no
+        tag manager, no embedded video. Every page is one HTML file with its CSS and its
+        handful of lines of JavaScript inline. You can read the whole thing with
+        view-source.</span></li>
+        <li><span>One exception, and it belongs to the host rather than the page:
+        Cloudflare sends <code>NEL</code> and <code>Report-To</code> response headers,
+        which ask your browser to report <i>failed</i> requests to
+        <code>a.nel.cloudflare.com</code>. Successful loads report nothing - the
+        sampling fraction is zero. Nothing in the page triggers it, and the project never
+        sees those reports.</span></li>
         <li><span>One value is stored in your browser: <code>localStorage</code> under
         the key <code>swemux-theme</code>, holding <code>dark</code> or
         <code>light</code>. It is what stops the colour scheme flashing on load, it is
         never read by anything else, and it never leaves your browser.</span></li>
-        <li><span><b>GitHub serves these pages and therefore sees the requests</b>, the
-        way any web host does. That is covered by GitHub's own privacy statement. This
-        project has no access log for the site and collects nothing from it.</span></li>
+        <li><span><b>Cloudflare serves these pages and therefore sees the requests</b>,
+        the way any web host does. That is covered by Cloudflare's own privacy policy.
+        This project has no access log for the site and collects nothing from
+        it.</span></li>
         <li><span>Links from here to GitHub, PyPI, or another project's site are ordinary
         links. Following one is a request to that host, under that host's terms.</span></li>
       </ul>

@@ -26,13 +26,14 @@ on:
 
 permissions:
   # `contents: write` pushes the regenerated page. `actions: write` dispatches
-  # `pages.yml`; see the deploy step for why that is needed rather than relying
-  # on the push.
+  # `deploy-site.yml`; see the deploy step for why that is needed rather than
+  # relying on the push.
   contents: write
   actions: write
 
-# Its own group, not `pages`: that group belongs to the deployment itself, which
-# runs inside `pages.yml`. Two of these overlapping would race on one branch.
+# Its own group, not `deploy-site`: that group belongs to the deployment itself,
+# which runs inside `deploy-site.yml`. Two of these overlapping would race on one
+# branch.
 concurrency:
   group: ideas
   cancel-in-progress: false
@@ -78,16 +79,17 @@ jobs:
 
       # A push made with `GITHUB_TOKEN` deliberately does not start another
       # workflow run, which is what stops a committing job from triggering
-      # itself. `pages.yml` is path-filtered on `site/**` and would otherwise
-      # have deployed this - so without an explicit dispatch the regenerated page
-      # sits on master until somebody else edits the site, and the block silently
-      # runs days behind the votes it claims to show.
+      # itself. `deploy-site.yml` is path-filtered on `site/**` and would
+      # otherwise have deployed this - so without an explicit dispatch the
+      # regenerated page sits on master until somebody else edits the site, and
+      # the block silently runs days behind the votes it claims to show.
       #
       # `workflow_dispatch` is the documented exception to that rule: it always
-      # creates a run, `GITHUB_TOKEN` or not. `pages.yml` already accepts it, so
-      # nothing there changes and there is exactly one deployment definition.
+      # creates a run, `GITHUB_TOKEN` or not. `deploy-site.yml` already accepts
+      # it, so nothing there changes and there is exactly one deployment
+      # definition.
       - name: Deploy the regenerated page
         if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run pages.yml --ref master
+        run: gh workflow run deploy-site.yml --ref master
