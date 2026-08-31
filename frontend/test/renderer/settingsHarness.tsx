@@ -167,7 +167,7 @@ const RESPONSES: Record<string, unknown> = {
     plugins:[
       {
         id:'example.switchboard',name:'Session Switchboard',version:'0.2.0',enabled:true,
-        lifecycle:'enabled',source_kind:'link',source_ref:'C:/plugins/switchboard',resolved_ref:'',
+        lifecycle:'enabled',source_kind:'link',source_ref:'C:/plugins/switchboard',requested_ref:'',selected_ref:'',resolved_ref:'',
         diagnostic:'',approval_current:true,config_dir:'C:/config/switchboard',state_dir:'C:/state/switchboard',
         manifest:{id:'example.switchboard',name:'Session Switchboard',version:'0.2.0',
           description:'Compact Project session navigator.',author:'Example',license:'MIT',homepage:'',
@@ -178,7 +178,7 @@ const RESPONSES: Record<string, unknown> = {
       },
       {
         id:'example.health',name:'Worktree Health',version:'0.2.0',enabled:false,
-        lifecycle:'disabled',source_kind:'managed',source_ref:'owner/health',resolved_ref:'abc',
+        lifecycle:'disabled',source_kind:'managed',source_ref:'owner/health',requested_ref:'latest',selected_ref:'v1.0.0',resolved_ref:'abc',
         diagnostic:'',approval_current:true,config_dir:'C:/config/health',state_dir:'C:/state/health',
         manifest:{id:'example.health',name:'Worktree Health',version:'0.2.0',description:'Project worktree health.',
           author:'Example',license:'MIT',homepage:'',permissions:['projects.read'],requires:['plugin.panes.v1'],

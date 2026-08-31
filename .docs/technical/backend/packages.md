@@ -46,7 +46,7 @@ Feature stores sharing `mux.db` use their own single-worker executor and connect
 - [`packages/history-and-observation.md`](packages/history-and-observation.md) - run history, transcripts and forking, the observation pipeline, approvals, and the durable status timeline.
 - [`packages/automation-and-control-plane.md`](packages/automation-and-control-plane.md) - rules and observers, Tier 0 facts, deterministic detectors, the scan timeline, attention ranking, budgets, model endpoints, grants.
 - [`packages/agent-surfaces.md`](packages/agent-surfaces.md) - the MCP tool surface, the prompt queue, auto-delivery, agent messaging, session control, scheduled runs.
-- Plugin host - `plugin_manifest.py`, `plugin_store.py`, `plugins.py`, and `routes/plugins.py` own inert manifests, lifecycle, scoped callbacks, command execution, EventBus hooks, and management routes.
+- Plugin host - `plugin_manifest.py`, `plugin_store.py`, `plugins.py`, and `routes/plugins.py` own inert manifests, release-channel resolution, lifecycle, scoped callbacks, command execution, EventBus hooks, validated catalog consumption, and management routes.
 - [`packages/harnesses.md`](packages/harnesses.md) - the harness registry, adapters and launchers, skills and environment inventory, provider accounts, usage collection.
 - [`packages/processes-and-devices.md`](packages/processes-and-devices.md) - process inspection, Previews, clipboard, device presence, push, operational telemetry.
 - [`packages/voice-and-assistant.md`](packages/voice-and-assistant.md) - TTS and STT, the Kokoro engine and its models, the Mux assistant.

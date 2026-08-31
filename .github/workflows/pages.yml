@@ -46,6 +46,11 @@ on:
   workflow_run:
     workflows: [release]
     types: [completed]
+  repository_dispatch:
+    types: [plugin_catalog_changed]
+  schedule:
+    # Off the hour because GitHub documents heavier schedule delays at minute zero.
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 # `pages: write` and `id-token: write` are what `deploy-pages` exchanges for its
@@ -77,6 +82,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/configure-pages@v5
+
+      - name: Build validated plugin catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python site/tools/plugins.py
+          --output site/plugins/catalog.json
+          --script-output site/plugins/catalog.js
 
       # `site/version.json` is the app's update-check endpoint and is generated
       # by `release.yml`, never committed - so a checkout of master does not

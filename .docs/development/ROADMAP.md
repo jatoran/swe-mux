@@ -6415,7 +6415,9 @@ Current shipped behavior is in `../design/features/plugins.md`, and the agent-ne
 
 The baseline landed on `master` and is deployed.
 It includes the manifest parser, SQLite registry and command ledger, linked and managed source, content-bound approval, lifecycle operations, actions, tab/split/popup terminal panes, EventBus hooks, startup hooks, terminal link handlers, scoped loopback callbacks, Settings, command-palette entries, CLI management, diagnostics, and the unreviewed GitHub-topic browser.
-Six high-utility development plugins live as independent Git repositories under the primary checkout's ignored `.private/plugin-lab`; no plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
+Six development repositories remain under the primary checkout's ignored `.private/plugin-lab`.
+Four maintained high-utility plugins are published as independent official repositories; Attention Notifier and Project Scratchpad remain unpublished local experiments.
+No plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
 
 The checkboxes in this phase are the complete public-release and hardening contract.
 An open checkbox may describe a stricter version of a capability whose baseline already exists.
@@ -6458,7 +6460,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 | UI | Settings management, command-palette entries, and terminal/TUI panes using tab, right-hand split, or popup placement. |
 | Runtime | Bounded argv runner, capped logs, concurrency and event bounds, revocable permission-scoped callback tokens, and a global execution kill switch. |
 | Isolation | Plugin source, config, state, trust, and logs stay outside the application and Project repositories; linked source is never deleted by swe-mux. |
-| Examples | Six clean machine-local repositories exercise every contribution family and all three pane placements without entering the release closure. |
+| Examples | Four maintained public official repositories exercise actions and Project utility panes; two unpublished machine-local experiments retain event and link-handler coverage without entering the release closure. |
 
 ### Known baseline limits
 
@@ -6467,8 +6469,8 @@ The plugin contract becomes a compatibility commitment once the first third-part
   The supervisor may preserve the process and terminal through reload, but callback-dependent panes must be reopened.
 - Managed install does not support a first-class prebuilt artifact matrix or archive safety budget.
 - Action inputs, hosted web UI, native frontend injection, dynamic Settings forms, and persistent plugin daemons are absent.
-- The marketplace is a live unreviewed GitHub-topic query, not a validated manifest index with retained commit metadata or popularity analytics.
-- The private plugin lab is not a public template, compatibility harness, CI fixture, or published example set.
+- The primary marketplace is a validated exact-revision catalog shared by swemux.dev and the app, with a live unreviewed GitHub-topic query only as an availability fallback.
+- Four lab plugins are public official examples with independent three-platform CI; a minimal template and general compatibility harness remain open.
 
 ### Workstream A - manifest and host capability contract
 
@@ -6509,7 +6511,7 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 - [ ] Add `swemux plugin link <path>` for local authoring.
   Linking validates and registers a working directory, runs no build command, marks the source as mutable developer content, and makes every capability or executable change visible before reapproval.
-- [ ] Add managed installation from GitHub repository shorthand and an explicit ref.
+- [x] Add managed installation from GitHub repository shorthand and an explicit ref.
   Resolve a branch or tag to an immutable commit before inspection and store both requested ref and resolved commit.
 - [ ] Add versioned release artifacts for compiled plugins.
   Each platform and architecture entry declares an immutable URL, SHA-256 digest, archive shape, and executable path; unsupported hosts fail before download.
@@ -6617,19 +6619,19 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 ### Workstream I - marketplace and author experience
 
-- [ ] Build an unreviewed marketplace index over public GitHub repositories carrying the `swe-mux-plugin` topic and at least one parseable manifest on the default branch.
+- [x] Build an unreviewed marketplace index over public GitHub repositories carrying the `swe-mux-plugin` topic and at least one parseable manifest on the default branch.
   The index stores the exact scanned commit and excludes forks, archived repositories, malformed manifests, and unsupported manifest versions.
-- [ ] Keep plugins as ordinary repositories or release artifacts.
+- [x] Keep plugins as ordinary repositories or release artifacts.
   The marketplace hosts metadata and discovery, not executable packages, credentials, reviews, or a second update channel.
-- [ ] Show repository owner, source, description, license metadata, last update, plugin ID and version, platforms and architectures, host capabilities, runtime requirements, and the exact indexed revision.
-- [ ] Mark every listing as unreviewed community software.
-  Listing, stars, downloads, signatures, and checksums are not security endorsements or compatibility guarantees.
-- [ ] Route marketplace installation through the same immutable acquisition, inspection, approval, and rollback path as direct installation.
+- [x] Show repository owner, source, description, license metadata, last update, plugin ID and version, platforms and architectures, host capabilities, runtime requirements, and the exact indexed revision.
+- [x] Mark allowlisted first-party repositories as official and every other valid listing as unreviewed community software.
+  Validation, listing, stars, downloads, signatures, and checksums are not security endorsements or compatibility guarantees.
+- [x] Route marketplace installation through the same immutable acquisition, inspection, approval, and rollback path as direct installation.
   A marketplace card cannot enable code by itself.
 - [ ] Publish a minimal template repository plus one action, pane, and event example that share one small cross-platform implementation rather than three unrelated showcase applications.
 - [ ] Publish the manifest reference, callback environment, permission catalog, compatibility policy, security model, packaging guide, publishing checklist, troubleshooting guide, and expected support boundary on `swemux.dev`.
 - [ ] Ship an author compatibility harness that validates manifests, runs fixture invocations with bounded context, verifies declared artifacts and digests, and tests against every retained host capability version without requiring a live user's data directory.
-- [ ] Define official, verified, and community labeling before displaying any badge.
+- [x] Define official and community labeling before displaying any badge.
   Community plugins do not inherit swe-mux support, security review, trademark permission, or release guarantees by appearing in the index.
 
 ### Workstream J - compatibility, failure, and release verification

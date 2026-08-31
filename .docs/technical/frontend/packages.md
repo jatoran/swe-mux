@@ -62,7 +62,7 @@ Three rules the existing boundaries follow, each of which has a failure mode:
 - [`packages/metering.md`](packages/metering.md) - the Resources dialog and its four segments, usage analytics, automation spend, provider accounts.
 - [`packages/settings-and-gates.md`](packages/settings-and-gates.md) - Settings, setting links and grant gates, budget controls, model selection, guided onboarding.
 - Plugin management:
-  `PluginsSettings.tsx` owns compact lifecycle controls and focused/alphabetical test targeting.
+  `PluginsSettings.tsx` owns compact lifecycle controls, focused/alphabetical test targeting, release-ref selection, and validated catalog cards.
   `ProjectRunMenu.tsx` launches Project-scoped pane tools.
   `pluginLinks.ts` owns cached terminal-link dispatch.
   `pluginPanes.ts` places and focuses tab/split contributions in their target Project.

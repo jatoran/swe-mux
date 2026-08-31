@@ -499,6 +499,58 @@ console.log('docs browser')
   )
 }
 
+// ------------------------------------------------------------ plugin catalog
+console.log('plugin catalog')
+const pluginPage = PAGES.find((page) => page.name === 'plugins/index.html')
+if (!pluginPage) {
+  fail('plugin catalog page is missing')
+} else {
+  const c = await browser.newPage({ viewport: { width: 390, height: 844 } })
+  const fixture = {
+    schema: 1,
+    plugins: [{
+      official: true,
+      indexed_ref: 'a'.repeat(40),
+      install_ref: 'v1.2.3',
+      release_url: 'https://github.com/publisher/utility/releases/tag/v1.2.3',
+      repository: {
+        full_name: 'publisher/utility',
+        url: 'https://github.com/publisher/utility',
+        stars: 7,
+        license: 'MIT',
+      },
+      manifest: {
+        id: 'publisher.utility',
+        name: 'Utility',
+        version: '1.2.3',
+        description: 'Fixture plugin.',
+        platforms: ['windows', 'linux'],
+        runtime_requirements: ['python>=3.10'],
+        permissions: ['projects.read'],
+      },
+    }],
+  }
+  await c.goto(url(pluginPage), { waitUntil: 'load' })
+  await c.evaluate((catalog) => {
+    window.dispatchEvent(new CustomEvent('swemux:plugin-catalog', { detail: catalog }))
+  }, fixture)
+  await c.waitForSelector('.plugin-public-card', { timeout: 5000 }).catch(() => {})
+  const catalog = await c.evaluate(() => ({
+    count: document.getElementById('plugin-count')?.textContent,
+    cards: document.querySelectorAll('.plugin-public-card').length,
+    command: document.querySelector('.plugin-install code')?.textContent,
+    badge: document.querySelector('.plugin-badge')?.textContent,
+  }))
+  if (catalog.count !== '1 plugin') fail(`plugin catalog: count is ${catalog.count}`)
+  if (catalog.cards !== 1) fail(`plugin catalog: rendered ${catalog.cards} cards`)
+  if (catalog.command !== 'swemux plugin install publisher/utility --ref v1.2.3') {
+    fail(`plugin catalog: install command is ${catalog.command}`)
+  }
+  if (catalog.badge !== 'official') fail(`plugin catalog: badge is ${catalog.badge}`)
+  await c.close()
+  console.log('  validated metadata refreshed into an official release card')
+}
+
 // ---------------------------------------------------------- install callout
 console.log('install callout')
 const p = await browser.newPage({ viewport: { width: 1280, height: 900 } })

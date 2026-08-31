@@ -1150,9 +1150,16 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     approve = plugin_sub.add_parser("approve", help="approve current executable content")
     approve.add_argument("plugin_id")
     approve.add_argument("--no-enable", action="store_true")
-    for action_name in ("enable", "disable", "update", "rollback"):
+    for action_name in ("enable", "disable", "rollback"):
         child = plugin_sub.add_parser(action_name)
         child.add_argument("plugin_id")
+    update = plugin_sub.add_parser("update", help="stage the current source channel")
+    update.add_argument("plugin_id")
+    update.add_argument(
+        "--ref",
+        default=None,
+        help="replace the stored release channel, branch, or tag; 'latest' follows releases",
+    )
     uninstall = plugin_sub.add_parser("uninstall")
     uninstall.add_argument("plugin_id")
     uninstall.add_argument("--purge", action="store_true")
@@ -1462,7 +1469,13 @@ def _plugin_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
         text = files("swe_mux.assets").joinpath("plugin-schema.md").read_text(encoding="utf-8")
         return {"schema": text}, lambda result: result["schema"]
     if action == "validate":
-        return request("POST", "/api/plugins/inspect", {"path": args.path}, base=base), None
+        from .plugin_manifest import PluginManifestError
+        from .plugins import inspect_plugin_path
+
+        try:
+            return inspect_plugin_path(args.path), None
+        except (PluginManifestError, OSError, ValueError) as exc:
+            raise CliError(f"plugin validation failed: {exc}", EXIT_LOCAL_FAIL) from exc
     if action == "link":
         return request(
             "POST",
@@ -1523,7 +1536,11 @@ def _plugin_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
         ), None
     if action == "update":
         return request(
-            "POST", f"/api/plugins/{args.plugin_id}/update", {}, base=base, timeout=240
+            "POST",
+            f"/api/plugins/{args.plugin_id}/update",
+            {"ref": args.ref} if args.ref is not None else {},
+            base=base,
+            timeout=240,
         ), None
     if action == "pane":
         return request(

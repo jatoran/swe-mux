@@ -173,11 +173,14 @@ A digest proves integrity, not author trust.
 
 ## Community contract
 
-The first marketplace is an unreviewed index of public GitHub repositories carrying the `swe-mux-plugin` topic and a parseable manifest.
-Repository cards expose source, license metadata, supported hosts, plugin version, required host capabilities, and the exact indexed commit.
+The primary marketplace is a generated index of public GitHub repositories carrying the `swe-mux-plugin` topic and a parseable root manifest.
+The generator validates the manifest at an exact commit without executing source and excludes forks, archived repositories, malformed manifests, duplicate plugin IDs, and unsupported manifest versions.
+Repository cards expose source, license metadata, supported hosts, plugin version, required host capabilities, permissions, release tag, and the exact indexed commit.
 Installation always passes through the same immutable-content inspection and approval flow as a directly entered repository.
 
-The project ships a minimal template repository, manifest reference, action example, pane example, event example, compatibility test harness, and publishing checklist.
+An explicit repository-to-plugin-ID allowlist defines official plugins.
+Every other valid listing is unreviewed community software.
+Four independent official repositories ship real action and pane examples with cross-platform CI; a minimal template, event example, and general compatibility harness remain public-release work.
 Community plugins remain third-party software and do not inherit swe-mux support, security review, trademark, or release guarantees merely by appearing in the index.
 
 ## Expected extension categories

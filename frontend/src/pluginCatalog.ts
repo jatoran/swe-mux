@@ -18,7 +18,7 @@ export type PluginManifest={
 
 export type InstalledPlugin={
   id:string;name:string;version:string;enabled:boolean;lifecycle:string
-  source_kind:string;source_ref:string;resolved_ref:string;diagnostic:string
+  source_kind:string;source_ref:string;requested_ref:string;selected_ref:string;resolved_ref:string;diagnostic:string
   approval_current:boolean;config_dir:string;state_dir:string;manifest:PluginManifest|null
 }
 
@@ -49,4 +49,3 @@ export function projectPluginPanes(plugins:readonly InstalledPlugin[]){
     .map(pane=>({pluginId:plugin.id,pluginName:plugin.name,pane})))
     .sort((left,right)=>left.pluginName.localeCompare(right.pluginName)||left.pane.title.localeCompare(right.pane.title))
 }
-

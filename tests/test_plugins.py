@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
+from swe_mux import plugins as plugin_module
+from swe_mux.cli import _plugin_command
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import ProjectRecord, SessionRecord
@@ -123,6 +126,16 @@ def test_manifest_rejects_undeclared_capability_and_host_env(tmp_path: Path) -> 
         parse_plugin_manifest(path)
 
 
+def test_cli_validation_is_local_and_uses_the_canonical_parser(tmp_path: Path) -> None:
+    write_plugin(tmp_path / "plugin")
+    result, renderer = _plugin_command(
+        SimpleNamespace(plugin_action="validate", path=str(tmp_path / "plugin")),
+        "http://127.0.0.1:1",
+    )
+    assert result["manifest"]["id"] == "tests.utility"
+    assert renderer is None
+
+
 @pytest.mark.asyncio
 async def test_plugin_store_round_trip_and_bounded_log(tmp_path: Path) -> None:
     store = PluginStore(tmp_path / "mux.db")
@@ -134,6 +147,9 @@ async def test_plugin_store_round_trip_and_bounded_log(tmp_path: Path) -> None:
             "enabled": False,
             "lifecycle": "inspected",
             "source_kind": "link",
+            "requested_ref": "latest",
+            "selected_ref": "v1.0.0",
+            "resolved_ref": "abc123",
             "root": str(tmp_path),
             "manifest_path": str(tmp_path / "swe-mux-plugin.toml"),
             "manifest_digest": "a",
@@ -141,6 +157,9 @@ async def test_plugin_store_round_trip_and_bounded_log(tmp_path: Path) -> None:
         }
     )
     assert record["enabled"] is False
+    assert record["requested_ref"] == "latest"
+    assert record["selected_ref"] == "v1.0.0"
+    assert record["resolved_ref"] == "abc123"
     enabled = await store.set_state("tests.utility", enabled=True, lifecycle="enabled")
     assert enabled and enabled["enabled"] is True
     await store.log_started(
@@ -160,6 +179,52 @@ async def test_plugin_store_round_trip_and_bounded_log(tmp_path: Path) -> None:
     assert await store.execution_enabled() is True
     await store.set_execution_enabled(False)
     assert await store.execution_enabled() is False
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_plugin_store_migrates_release_provenance_columns(tmp_path: Path) -> None:
+    path = tmp_path / "mux.db"
+    db = sqlite3.connect(path)
+    db.execute(
+        """CREATE TABLE plugins(
+        id TEXT PRIMARY KEY,name TEXT NOT NULL,version TEXT NOT NULL,
+        enabled INTEGER NOT NULL,lifecycle TEXT NOT NULL,source_kind TEXT NOT NULL,
+        source_ref TEXT NOT NULL,resolved_ref TEXT NOT NULL,root TEXT NOT NULL,
+        manifest_path TEXT NOT NULL,manifest_digest TEXT NOT NULL,content_digest TEXT NOT NULL,
+        security_digest TEXT NOT NULL,approved_digest TEXT NOT NULL,previous_root TEXT NOT NULL,
+        diagnostic TEXT NOT NULL,installed_at REAL NOT NULL,updated_at REAL NOT NULL)"""
+    )
+    db.execute(
+        "INSERT INTO plugins VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "tests.old",
+            "Old",
+            "1.0.0",
+            0,
+            "inspected",
+            "managed",
+            "publisher/old",
+            "abc123",
+            str(tmp_path),
+            str(tmp_path / "swe-mux-plugin.toml"),
+            "manifest",
+            "content",
+            "security",
+            "",
+            "",
+            "",
+            1.0,
+            1.0,
+        ),
+    )
+    db.commit()
+    db.close()
+    store = PluginStore(path)
+    record = await store.get("tests.old")
+    assert record and record["requested_ref"] == ""
+    assert record["selected_ref"] == ""
+    assert record["resolved_ref"] == "abc123"
     await store.close()
 
 
@@ -308,6 +373,34 @@ async def test_plugin_source_change_revokes_enablement(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_uninstall_remains_available_after_linked_manifest_identity_changes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "plugin"
+    path = write_plugin(root)
+    manager = PluginManager(
+        data_dir=tmp_path / "data",
+        database_path=tmp_path / "mux.db",
+        events=EventBus(),
+        sessions=FakeSessions(),
+        projects=SimpleNamespace(projects={}),
+        port=8765,
+    )
+    await manager.start()
+    await manager.link(root, approve=True, enable=True)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("tests.utility", "tests.renamed"),
+        encoding="utf-8",
+    )
+    assert (await manager.list())["plugins"][0]["lifecycle"] == "changed"
+    removed = await manager.uninstall("tests.utility")
+    assert removed["id"] == "tests.utility"
+    assert root.exists()
+    assert (await manager.list())["plugins"] == []
+    await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_plugin_http_lifecycle_and_scoped_callback(tmp_path: Path) -> None:
     root = tmp_path / "plugin"
     write_plugin(root)
@@ -394,6 +487,140 @@ async def test_managed_update_is_inert_and_rollback_restores_previous_version(
     assert rolled_back["enabled"] is False
     assert rolled_back["lifecycle"] == "inspected"
     await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_managed_update_retains_the_requested_release_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = PluginManager(
+        data_dir=tmp_path / "data",
+        database_path=tmp_path / "mux.db",
+        events=EventBus(),
+        sessions=FakeSessions(),
+        projects=SimpleNamespace(projects={}),
+        port=8765,
+    )
+    await manager.store.put(
+        {
+            "id": "tests.utility",
+            "name": "Utility",
+            "version": "1.0.0",
+            "enabled": False,
+            "lifecycle": "inspected",
+            "source_kind": "managed",
+            "source_ref": "publisher/utility",
+            "requested_ref": "latest",
+            "selected_ref": "v1.0.0",
+            "resolved_ref": "abc123",
+            "root": str(tmp_path),
+            "manifest_path": str(tmp_path / "swe-mux-plugin.toml"),
+            "manifest_digest": "a",
+            "security_digest": "b",
+        }
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_install(source: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update(source=source, **kwargs)
+        return {"id": "tests.utility"}
+
+    monkeypatch.setattr(manager, "install", fake_install)
+    await manager.update("tests.utility")
+    assert captured == {
+        "source": "publisher/utility",
+        "ref": "latest",
+        "approve": False,
+        "enable": False,
+    }
+    await manager.store.close()
+
+
+@pytest.mark.asyncio
+async def test_latest_release_channel_resolves_a_github_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self) -> FakeResponse:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def json(self) -> dict[str, str]:
+            return {"tag_name": "v2.3.4"}
+
+    class FakeClientSession:
+        async def __aenter__(self) -> FakeClientSession:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        def get(self, url: str, *, allow_redirects: bool) -> FakeResponse:
+            assert url.endswith("/repos/publisher/utility/releases/latest")
+            assert allow_redirects is False
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        plugin_module.aiohttp,
+        "ClientSession",
+        lambda **kwargs: FakeClientSession(),
+    )
+    manager = PluginManager(
+        data_dir=tmp_path / "data",
+        database_path=tmp_path / "mux.db",
+        events=EventBus(),
+        sessions=FakeSessions(),
+        projects=SimpleNamespace(projects={}),
+        port=8765,
+    )
+    assert await manager._latest_release_ref("publisher/utility") == "v2.3.4"
+    await manager.store.close()
+
+
+def test_validated_catalog_maps_manifest_and_release_metadata() -> None:
+    repositories = PluginManager._catalog_repositories(
+        {
+            "schema": 1,
+            "plugins": [
+                {
+                    "official": True,
+                    "indexed_ref": "abc123",
+                    "install_ref": "v1.0.0",
+                    "release_url": "https://github.com/publisher/utility/releases/tag/v1.0.0",
+                    "repository": {
+                        "name": "utility",
+                        "full_name": "publisher/utility",
+                        "owner": "publisher",
+                        "description": "Repository description",
+                        "stars": 2,
+                        "language": "Python",
+                        "updated_at": "2026-08-31T00:00:00Z",
+                        "url": "https://github.com/publisher/utility",
+                        "license": "MIT",
+                    },
+                    "manifest": {
+                        "id": "publisher.utility",
+                        "name": "Utility",
+                        "version": "1.0.0",
+                        "description": "Manifest description",
+                        "license": "MIT",
+                        "permissions": ["projects.read"],
+                        "requires": ["plugin.actions.v1"],
+                        "platforms": ["windows"],
+                        "runtime_requirements": ["python>=3.10"],
+                    },
+                }
+            ],
+        }
+    )
+    assert repositories[0]["plugin_id"] == "publisher.utility"
+    assert repositories[0]["description"] == "Manifest description"
+    assert repositories[0]["install_ref"] == "v1.0.0"
+    assert repositories[0]["official"] is True
 
 
 @pytest.mark.asyncio

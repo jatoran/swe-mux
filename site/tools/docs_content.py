@@ -2946,6 +2946,91 @@ TROUBLESHOOTING = Page(
     ],
 )
 
+PLUGINS = Page(
+    slug="plugins",
+    title="Plugins",
+    description=(
+        "Install versioned external-process plugins, understand their authority, and publish a "
+        "standalone repository to the validated swe-mux catalog."
+    ),
+    lede=(
+        "A swe-mux plugin is an ordinary repository with <code>swe-mux-plugin.toml</code> at its "
+        "root. It contributes commands and terminal tools without changing the swe-mux checkout "
+        "or application bundle."
+    ),
+    blocks=[
+        ("h2", "Install from the catalog"),
+        (
+            "p",
+            'Open <a href="../../plugins/">the plugin catalog</a>, inspect the declared source, '
+            "permissions, platforms, runtime requirements, and exact revision, then install the "
+            "repository. Catalog selection never approves or enables code.",
+        ),
+        (
+            "code",
+            "swemux plugin install OWNER/REPOSITORY --ref RELEASE_TAG\n"
+            "swemux plugin list\n"
+            "swemux plugin approve PUBLISHER.PLUGIN",
+        ),
+        (
+            "note",
+            "The catalog supplies a literal release tag, which pins the inspected release. "
+            "A branch is accepted but is a moving channel, and every changed byte still requires approval.",
+        ),
+        ("h2", "Authority"),
+        (
+            "p",
+            "<b>A plugin process runs as your operating-system user.</b> The permission list limits "
+            "which cooperative swe-mux callback operations receive a token. It is not a sandbox "
+            "for files, processes, credentials, or network access.",
+        ),
+        (
+            "ul",
+            [
+                "Acquisition, catalog browsing, validation, and inspection execute no plugin code.",
+                "Approval is bound to the complete source content and security-relevant manifest fields.",
+                "An update stages inert content and leaves the prior version available for rollback.",
+                "Uninstall retains plugin config and state unless purge is separately confirmed.",
+            ],
+        ),
+        ("h2", "What a plugin can contribute"),
+        (
+            "flat",
+            [
+                ("Actions", "Bounded explicit commands that exit and retain capped output in the command log."),
+                ("Panes", "Interactive terminal tools opened as a Project tab, right-hand split, or popup."),
+                ("Events", "Bounded commands subscribed to exact normalized application events."),
+                ("Startup", "One bounded restoration command after enablement or daemon startup."),
+                ("Links", "Validated terminal URL patterns routed to an action from the same plugin."),
+            ],
+        ),
+        ("h2", "Author and publish"),
+        (
+            "steps",
+            [
+                "Create one standalone repository with a root manifest, directly runnable source, tests, README, and licence.",
+                "Declare every platform, runtime, capability, context, and callback permission the code requires.",
+                "Run <code>swemux plugin validate .</code>, link it locally, and exercise every contribution and lifecycle transition.",
+                "Publish a GitHub release whose tag matches the manifest version, then add the <code>swe-mux-plugin</code> topic.",
+            ],
+        ),
+        (
+            "code",
+            "swemux plugin validate .\n"
+            "swemux plugin link .\n"
+            "swemux plugin approve PUBLISHER.PLUGIN\n"
+            "swemux plugin disable PUBLISHER.PLUGIN\n"
+            "swemux plugin uninstall PUBLISHER.PLUGIN",
+        ),
+        (
+            "p",
+            "The catalog reads only public repository metadata and the manifest at an exact commit. "
+            "A valid community listing is discoverable, not reviewed or endorsed.",
+        ),
+    ],
+)
+
+
 CONTRIBUTING = Page(
     slug="contributing",
     title="Developing swe-mux",
@@ -3081,7 +3166,7 @@ SECTIONS: list[Section] = [
         "Working in it",
         [WORKSPACE, QUEUE, GIT, NOTES_FILES, HISTORY, VOICE, AUTOMATION, USAGE],
     ),
-    Section("Reference", [SETTINGS, CLI, KEYBOARD, DATA]),
+    Section("Reference", [PLUGINS, SETTINGS, CLI, KEYBOARD, DATA]),
     Section("Help", [TROUBLESHOOTING, CONTRIBUTING]),
 ]
 

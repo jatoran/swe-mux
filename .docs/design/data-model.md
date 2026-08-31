@@ -664,7 +664,7 @@ no copied text in the `clipboard_changed` events that announce ring changes.
 
 ## Plugin registry and command ledger
 
-`plugins` is keyed by namespaced plugin ID and stores display version, enablement, lifecycle, source kind and immutable identity, active and previous roots, manifest and security digests, approval digest, diagnostics, and install/update timestamps.
+`plugins` is keyed by namespaced plugin ID and stores display version, enablement, lifecycle, source kind, source locator, requested release channel or ref, selected tag or branch, resolved commit, active and previous roots, manifest and security digests, approval digest, diagnostics, and install/update timestamps.
 It stores no manifest source, runtime token, command environment, or plugin credential.
 Runtime token grants are therefore daemon-generation state rather than durable pane state.
 

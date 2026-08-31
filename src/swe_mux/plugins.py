@@ -19,6 +19,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 from packaging.version import InvalidVersion, Version
@@ -49,6 +50,8 @@ CONTEXT_LIMIT = 32 * 1024
 MARKETPLACE_URL = (
     "https://api.github.com/search/repositories?q=topic%3Aswe-mux-plugin&sort=updated&per_page=50"
 )
+MARKETPLACE_CATALOG_URL = "https://swemux.dev/plugins/catalog.json"
+GITHUB_API = "https://api.github.com"
 PLUGIN_EVENT_LOOP = "plugin-events"
 
 
@@ -78,6 +81,62 @@ def _within(root: Path, candidate: Path) -> bool:
         return True
     except (OSError, ValueError):
         return False
+
+
+def _github_repository(source: str) -> tuple[str, str] | None:
+    if "://" not in source:
+        parts = [part for part in source.split("/") if part]
+        if len(parts) >= 2:
+            return parts[0], parts[1].removesuffix(".git")
+        return None
+    parsed = urlparse(source)
+    if parsed.hostname not in {"github.com", "www.github.com"}:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return None
+    return parts[0], parts[1].removesuffix(".git")
+
+
+def plugin_compatibility(manifest: PluginManifest) -> str:
+    if current_platform() not in manifest.platforms:
+        return f"unsupported on {current_platform()}"
+    machine = platform.machine().lower()
+    aliases = {
+        "amd64": "x86_64",
+        "x64": "x86_64",
+        "aarch64": "arm64",
+    }
+    architecture = aliases.get(machine, machine)
+    declared = {aliases.get(item.lower(), item.lower()) for item in manifest.architectures}
+    if declared and architecture not in declared:
+        return f"unsupported on architecture {architecture}"
+    missing = set(manifest.requires) - HOST_CAPABILITIES
+    if missing:
+        return f"host capabilities unavailable: {', '.join(sorted(missing))}"
+    try:
+        if Version(__version__) < Version(manifest.min_swe_mux_version):
+            return f"requires swe-mux {manifest.min_swe_mux_version} or newer"
+    except InvalidVersion:
+        return "host version cannot be compared"
+    return ""
+
+
+def plugin_approval_digest(manifest: PluginManifest, content_digest: str) -> str:
+    return hashlib.sha256(f"{manifest.security_digest}:{content_digest}".encode()).hexdigest()
+
+
+def inspect_plugin_path(path: str | Path) -> dict[str, Any]:
+    manifest = parse_plugin_manifest(path)
+    content_digest = plugin_content_digest(manifest.path.parent)
+    return {
+        "manifest": manifest.snapshot(),
+        "security_digest": manifest.security_digest,
+        "content_digest": content_digest,
+        "approval_digest": plugin_approval_digest(manifest, content_digest),
+        "diagnostic": plugin_compatibility(manifest),
+        "full_trust": True,
+    }
 
 
 class PluginManager:
@@ -155,31 +214,11 @@ class PluginManager:
         return config_dir, state_dir
 
     def _compatible(self, manifest: PluginManifest) -> str:
-        if current_platform() not in manifest.platforms:
-            return f"unsupported on {current_platform()}"
-        machine = platform.machine().lower()
-        aliases = {
-            "amd64": "x86_64",
-            "x64": "x86_64",
-            "aarch64": "arm64",
-        }
-        architecture = aliases.get(machine, machine)
-        declared = {aliases.get(item.lower(), item.lower()) for item in manifest.architectures}
-        if declared and architecture not in declared:
-            return f"unsupported on architecture {architecture}"
-        missing = set(manifest.requires) - HOST_CAPABILITIES
-        if missing:
-            return f"host capabilities unavailable: {', '.join(sorted(missing))}"
-        try:
-            if Version(__version__) < Version(manifest.min_swe_mux_version):
-                return f"requires swe-mux {manifest.min_swe_mux_version} or newer"
-        except InvalidVersion:
-            return "host version cannot be compared"
-        return ""
+        return plugin_compatibility(manifest)
 
     @staticmethod
     def _approval_digest(manifest: PluginManifest, content_digest: str) -> str:
-        return hashlib.sha256(f"{manifest.security_digest}:{content_digest}".encode()).hexdigest()
+        return plugin_approval_digest(manifest, content_digest)
 
     async def _load(
         self, record: dict[str, Any], *, require_enabled: bool = False
@@ -291,16 +330,7 @@ class PluginManager:
         }
 
     async def inspect(self, path: str | Path) -> dict[str, Any]:
-        manifest = parse_plugin_manifest(path)
-        content_digest = plugin_content_digest(manifest.path.parent)
-        return {
-            "manifest": manifest.snapshot(),
-            "security_digest": manifest.security_digest,
-            "content_digest": content_digest,
-            "approval_digest": self._approval_digest(manifest, content_digest),
-            "diagnostic": self._compatible(manifest),
-            "full_trust": True,
-        }
+        return inspect_plugin_path(path)
 
     async def link(
         self, path: str | Path, *, approve: bool = False, enable: bool = False
@@ -358,10 +388,14 @@ class PluginManager:
         stage.mkdir(parents=True, exist_ok=False)
         source_path = Path(source)
         source_ref = source
+        requested_ref = ref
+        selected_ref = ref
         resolved_ref = ""
         plugin_subdir = ""
         try:
             if source_path.exists():
+                if ref:
+                    raise PluginError("invalid_ref", "a ref applies only to a Git source")
                 await asyncio.to_thread(
                     shutil.copytree, source_path.resolve(), stage / "source", dirs_exist_ok=True
                 )
@@ -376,9 +410,11 @@ class PluginManager:
                         )
                     repo = f"https://github.com/{parts[0]}/{parts[1]}.git"
                     plugin_subdir = "/".join(parts[2:])
+                if ref == "latest":
+                    selected_ref = await self._latest_release_ref(source)
                 argv = ["git", "clone", "--filter=blob:none", "--depth", "1"]
-                if ref:
-                    argv += ["--branch", ref]
+                if selected_ref:
+                    argv += ["--branch", selected_ref]
                 argv += [repo, str(stage / "source")]
                 result = await run_bounded(
                     argv,
@@ -432,6 +468,8 @@ class PluginManager:
                     else "inspected",
                     "source_kind": "managed",
                     "source_ref": source_ref,
+                    "requested_ref": requested_ref,
+                    "selected_ref": selected_ref,
                     "resolved_ref": resolved_ref,
                     "root": str(target),
                     "manifest_path": str(installed_manifest.path),
@@ -452,9 +490,12 @@ class PluginManager:
                 }
             )
             log.info(
-                "plugin installed plugin_id=%s source=%s resolved_ref=%s enabled=%s",
+                "plugin installed plugin_id=%s source=%s requested_ref=%s selected_ref=%s "
+                "resolved_ref=%s enabled=%s",
                 installed_manifest.id,
                 source,
+                requested_ref,
+                selected_ref,
                 resolved_ref,
                 record["enabled"],
             )
@@ -491,12 +532,54 @@ class PluginManager:
         return updated
 
     async def update(
-        self, plugin_id: str, *, approve: bool = False, enable: bool = False
+        self,
+        plugin_id: str,
+        *,
+        ref: str | None = None,
+        approve: bool = False,
+        enable: bool = False,
     ) -> dict[str, Any]:
         record = await self._record(plugin_id)
         if record["source_kind"] != "managed":
             raise PluginError("not_managed", "linked plugins update in their working directory")
-        return await self.install(record["source_ref"], approve=approve, enable=enable)
+        requested_ref = record["requested_ref"] if ref is None else ref
+        return await self.install(
+            record["source_ref"], ref=requested_ref, approve=approve, enable=enable
+        )
+
+    async def _latest_release_ref(self, source: str) -> str:
+        repository = _github_repository(source)
+        if repository is None:
+            raise PluginError(
+                "invalid_ref", "the 'latest' release channel requires a GitHub repository source"
+            )
+        owner, name = repository
+        timeout = aiohttp.ClientTimeout(total=10)
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"swe-mux/{__version__}",
+        }
+        url = f"{GITHUB_API}/repos/{owner}/{name}/releases/latest"
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(url, allow_redirects=False) as response:
+                    if response.status != 200:
+                        raise PluginError(
+                            "release_unavailable",
+                            f"GitHub returned HTTP {response.status} for the latest release",
+                        )
+                    payload = await response.json()
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise PluginError("release_unavailable", str(exc)) from exc
+        tag = payload.get("tag_name") if isinstance(payload, dict) else None
+        if not isinstance(tag, str) or not tag.strip():
+            raise PluginError("release_unavailable", "GitHub returned no latest release tag")
+        log.info(
+            "plugin release channel resolved source=%s requested_ref=latest selected_ref=%s",
+            source,
+            tag,
+        )
+        return tag
 
     async def enable(self, plugin_id: str, enabled: bool) -> dict[str, Any]:
         record = await self._record(plugin_id)
@@ -560,7 +643,11 @@ class PluginManager:
                 "plugin_in_use",
                 "stop the plugin panes before uninstalling: " + ", ".join(live_panes),
             )
-        await self.enable(plugin_id, False)
+        await self.store.set_state(plugin_id, enabled=False, lifecycle="disabled")
+        self._revoke(plugin_id)
+        for task in tuple(self._tasks):
+            if task.get_name().startswith(f"plugin:{plugin_id}:"):
+                task.cancel()
         removed = await self.store.remove(plugin_id)
         if record["source_kind"] == "managed":
             container = self.sources / _safe_name(plugin_id)
@@ -1006,6 +1093,84 @@ class PluginManager:
         headers = {"Accept": "application/vnd.github+json", "User-Agent": f"swe-mux/{__version__}"}
         try:
             async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(MARKETPLACE_CATALOG_URL, allow_redirects=False) as response:
+                    if response.status != 200:
+                        raise PluginError(
+                            "marketplace_unavailable",
+                            f"catalog returned HTTP {response.status}",
+                        )
+                    payload = await response.json()
+            repositories = self._catalog_repositories(payload)
+            log.info(
+                "plugin marketplace catalog loaded source=%s repositories=%s generated_at=%s",
+                MARKETPLACE_CATALOG_URL,
+                len(repositories),
+                payload.get("generated_at", ""),
+            )
+            return {
+                "unreviewed": True,
+                "repositories": repositories,
+                "source": "swemux-catalog",
+                "generated_at": payload.get("generated_at"),
+            }
+        except (aiohttp.ClientError, TimeoutError, PluginError, ValueError, TypeError) as exc:
+            log.warning(
+                "plugin marketplace catalog unavailable; falling back to GitHub topic: %s", exc
+            )
+        return await self._topic_marketplace(client_timeout=timeout, headers=headers)
+
+    @staticmethod
+    def _catalog_repositories(payload: Any) -> builtins.list[dict[str, Any]]:
+        if not isinstance(payload, dict) or payload.get("schema") != 1:
+            raise PluginError("marketplace_unavailable", "catalog schema is unsupported")
+        plugins = payload.get("plugins")
+        if not isinstance(plugins, list):
+            raise PluginError("marketplace_unavailable", "catalog plugin list is missing")
+        repositories = []
+        for item in plugins[:50]:
+            if not isinstance(item, dict):
+                continue
+            repository = item.get("repository")
+            manifest = item.get("manifest")
+            if not isinstance(repository, dict) or not isinstance(manifest, dict):
+                continue
+            full_name = repository.get("full_name")
+            if not isinstance(full_name, str) or "/" not in full_name:
+                continue
+            repositories.append(
+                {
+                    "name": repository.get("name"),
+                    "full_name": full_name,
+                    "owner": repository.get("owner"),
+                    "description": (
+                        manifest.get("description") or repository.get("description") or ""
+                    ),
+                    "stars": repository.get("stars", 0),
+                    "language": repository.get("language"),
+                    "updated_at": repository.get("updated_at"),
+                    "url": repository.get("url"),
+                    "license": manifest.get("license") or repository.get("license"),
+                    "unreviewed": True,
+                    "official": bool(item.get("official")),
+                    "plugin_id": manifest.get("id"),
+                    "plugin_name": manifest.get("name"),
+                    "plugin_version": manifest.get("version"),
+                    "permissions": manifest.get("permissions") or [],
+                    "requires": manifest.get("requires") or [],
+                    "platforms": manifest.get("platforms") or [],
+                    "runtime_requirements": manifest.get("runtime_requirements") or [],
+                    "indexed_ref": item.get("indexed_ref"),
+                    "install_ref": item.get("install_ref") or "",
+                    "release_url": item.get("release_url"),
+                }
+            )
+        return repositories
+
+    async def _topic_marketplace(
+        self, *, client_timeout: aiohttp.ClientTimeout, headers: dict[str, str]
+    ) -> dict[str, Any]:
+        try:
+            async with aiohttp.ClientSession(timeout=client_timeout, headers=headers) as session:
                 async with session.get(MARKETPLACE_URL, allow_redirects=False) as response:
                     if response.status != 200:
                         raise PluginError(
@@ -1032,4 +1197,5 @@ class PluginManager:
                     "unreviewed": True,
                 }
             )
+        log.info("plugin marketplace GitHub topic loaded repositories=%s", len(repositories))
         return {"unreviewed": True, "repositories": repositories, "source": "github-topic"}

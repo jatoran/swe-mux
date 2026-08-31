@@ -4,8 +4,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Command line reference · swe-mux docs</title>
-<meta name="description" content="Every mux subcommand, every muxd flag, the exit-code contract scripts branch on, and how the CLI resolves which daemon to talk to." />
+<title>Plugins · swe-mux</title>
+<meta name="description" content="Validated swe-mux plugins: exact indexed revisions, declared permissions, supported platforms, release channels, and direct installation commands." />
 <meta name="color-scheme" content="dark" />
 <meta name="darkreader-lock" />
 <script>
@@ -940,19 +940,19 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 
 <div class="bar">
   <div class="wrap">
-    <a class="brand" href="../../" aria-label="swe-mux, home">
-      <img class="dark" src="../../img/logo.png" width="640" height="73" alt="" />
-      <img class="lite" src="../../img/logo-light.png" width="640" height="73" alt="" />
+    <a class="brand" href="../" aria-label="swe-mux, home">
+      <img class="dark" src="../img/logo.png" width="640" height="73" alt="" />
+      <img class="lite" src="../img/logo-light.png" width="640" height="73" alt="" />
     </a>
     <nav class="secnav pagenav" aria-label="Pages">
-      <a href="../../">home</a>
-      <a href="../../docs/" aria-current="page">docs</a>
-      <a href="../../plugins/">plugins</a>
-      <a href="../../changelog/">changelog</a>
-      <a href="../../roadmap/">roadmap</a>
+      <a href="../">home</a>
+      <a href="../docs/">docs</a>
+      <a href="../plugins/" aria-current="page">plugins</a>
+      <a href="../changelog/">changelog</a>
+      <a href="../roadmap/">roadmap</a>
     </nav>
     <div class="util">
-      <a class="cta" href="../../#install">install</a>
+      <a class="cta" href="../#install">install</a>
       <a href="https://github.com/jatoran/swe-mux" aria-label="Source on GitHub" title="Source on GitHub">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         <span class="lbl">github</span>
@@ -969,12 +969,12 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   <div class="menu" id="menu" hidden>
     <div class="wrap">
       <nav aria-label="Menu">
-        <a href="../../">home</a>
-        <a href="../../docs/" aria-current="page">docs</a>
-        <a href="../../plugins/">plugins</a>
-        <a href="../../changelog/">changelog</a>
-        <a href="../../roadmap/">roadmap</a>
-        <a class="sep" href="../../#install">install</a>
+        <a href="../">home</a>
+        <a href="../docs/">docs</a>
+        <a href="../plugins/" aria-current="page">plugins</a>
+        <a href="../changelog/">changelog</a>
+        <a href="../roadmap/">roadmap</a>
+        <a class="sep" href="../#install">install</a>
         <a href="https://github.com/jatoran/swe-mux">github</a>
       </nav>
     </div>
@@ -982,160 +982,53 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 </div>
 
 <main id="main">
-<section class="page docs">
+<section class="page plugins-page">
   <div class="wrap">
-    <div class="docsgrid">
-    <div class="dsaside">
-      <div class="dsearch" data-base="../">
-        <label class="dsvh" for="dsq">Search the documentation</label>
-        <input type="search" id="dsq" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-controls="dsr" aria-expanded="false" aria-describedby="dskey" />
-        <div class="dskey" id="dskey" aria-hidden="true">/</div>
-        <p class="dsvh" id="dsstatus" role="status" aria-live="polite"></p>
-        <div class="dsr" id="dsr" hidden></div>
-      </div>
-      <button type="button" id="dsnavbtn" class="dsnavbtn" hidden aria-expanded="true" aria-controls="dsnav">All documentation</button>
-      <nav class="dsnav" id="dsnav" aria-label="Documentation">
-        <a href="../">Overview</a>
-        <div class="dsgroup">Getting started</div>
-        <a href="../install/">Install</a>
-        <a href="../first-session/">Your first session</a>
-        <a href="../phone/">Reach it from your phone</a>
-        <a href="../agent-setup/">Have an agent set it up</a>
-        <div class="dsgroup">Concepts</div>
-        <a href="../projects/">Projects and Groups</a>
-        <a href="../sessions/">Sessions, terminals, and harnesses</a>
-        <a href="../status/">Session status</a>
-        <a href="../control-plane/">What the control plane is</a>
-        <div class="dsgroup">Working in it</div>
-        <a href="../workspace/">Panes, tabs, and the drawer</a>
-        <a href="../queue/">The prompt queue</a>
-        <a href="../git/">Git, worktrees, and landing</a>
-        <a href="../notes-files/">Notes, files, and previews</a>
-        <a href="../history/">History and transcripts</a>
-        <a href="../voice/">Voice and the assistant</a>
-        <a href="../automation/">Automation and alerts</a>
-        <a href="../usage/">Accounts, usage, and budgets</a>
-        <div class="dsgroup">Reference</div>
-        <a href="../plugins/">Plugins</a>
-        <a href="../settings/">Settings reference</a>
-        <a href="../cli/" aria-current="page">Command line reference</a>
-        <a href="../keyboard/">Keyboard and the command palette</a>
-        <a href="../data/">Where data lives, and what leaves the machine</a>
-        <div class="dsgroup">Help</div>
-        <a href="../troubleshooting/">Troubleshooting</a>
-        <a href="../contributing/">Developing swe-mux</a>
-      </nav>
-      <script>(function () {
-  var btn = document.getElementById('dsnavbtn');
-  var nav = document.getElementById('dsnav');
-  if (!btn || !nav) return;
-  btn.hidden = false;
-  function set(open) {
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    nav.hidden = !open;
-  }
-  var narrow = window.matchMedia('(max-width: 899px)');
-  set(!narrow.matches);
-  btn.addEventListener('click', function () {
-    set(btn.getAttribute('aria-expanded') !== 'true');
-  });
-  narrow.addEventListener('change', function (e) { set(!e.matches); });
-})();</script>
+    <div class="kick">External tools, ordinary repositories</div>
+    <h1>Plugins</h1>
+    <p class="lede">Add Project tools and automated integrations without modifying swe-mux.
+    Every listing resolves to inspectable source at an exact Git commit, and no plugin runs until you approve its current bytes.</p>
+
+    <div class="plugin-safety note">
+      <b>Plugins run as your user.</b>
+      Manifest permissions limit cooperative swe-mux callbacks.
+      They do not sandbox filesystem, process, credential, or network access.
     </div>
-    <article class="dsbody">
-      <div class="kick">reference</div>
-      <h1>Command line reference</h1>
-      <div class="lede"><p>Three commands are installed: <code>mux</code> talks to a running daemon, <code>muxd</code> <em>is</em> the daemon, and <code>swe-mux</code> is the Windows desktop window and tray.</p></div>
-      <nav class="toc" aria-label="On this page">
-        <a href="#muxd-the-daemon">muxd, the daemon</a>
-        <a href="#mux-the-client">mux, the client</a>
-        <a href="#which-daemon-mux-talks-to">which daemon mux talks to</a>
-        <a href="#exit-codes">exit codes</a>
-        <a href="#swemux-doctor-has-two-modes-and-picks-between-them-itself">swemux doctor has two modes, and picks between them itself</a>
-      </nav>
-      <div class="docsec" id="muxd-the-daemon">
-        <div class="head"><span class="n">#</span><h2>muxd, the daemon</h2><span class="fill"></span></div>
-        <div class="tablewrap"><table>
-          <thead><tr><th>Flag</th><th>What it does</th></tr></thead>
-          <tbody>
-            <tr><td>--host</td><td>Override the configured listener host. Must be a loopback address.</td></tr>
-            <tr><td>--port</td><td>Override the configured port for this run.</td></tr>
-            <tr><td>--config</td><td>Use a specific configuration file.</td></tr>
-            <tr><td>--dev</td><td>Development mode.</td></tr>
-            <tr><td>--local-only</td><td>Do not open the direct Tailscale listener for this run. Useful when you are isolating a network problem, because it removes tailnet detection from the startup path.</td></tr>
-            <tr><td>--where</td><td>Print where swe-mux is installed, whether its commands are on PATH, and how to run it when they are not. Then exit.</td></tr>
-            <tr><td>--shutdown</td><td>Reap every session the PTY supervisor owns, stop the supervisor, and exit. <b>This ends live sessions.</b> It is the deliberate stop-everything command, never part of an update.</td></tr>
-          </tbody>
-        </table></div>
-        <p class="note"><code>--host</code> takes a loopback address only, because the Tailscale listener is <em>detected</em> rather than configured. Binding a LAN interface is an unsupported configuration rather than a flag that is missing.</p>
+
+    <section class="rel" aria-labelledby="catalog-title">
+      <div class="relhead">
+        <h2 id="catalog-title">Catalog</h2>
+        <span class="when" id="plugin-count">loading</span>
+        <span class="fill"></span>
+        <button class="plugin-refresh" id="plugin-refresh" type="button">refresh</button>
       </div>
-      <div class="docsec" id="mux-the-client">
-        <div class="head"><span class="n">#</span><h2>mux, the client</h2><span class="fill"></span></div>
-        <div class="tablewrap"><table>
-          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
-          <tbody>
-            <tr><td>swemux ls</td><td>List sessions. Filter with --project, --state, --backend.</td></tr>
-            <tr><td>swemux spawn</td><td>Spawn a session. --project is required; --backend, --name, --profile, --exe, and repeatable --arg shape it.</td></tr>
-            <tr><td>swemux send</td><td>Send input to a session, named by id, name, or a unique id prefix.</td></tr>
-            <tr><td>swemux kill</td><td>Terminate a session.</td></tr>
-            <tr><td>swemux resume</td><td>Resume a history entry. --project is required.</td></tr>
-            <tr><td>swemux projects</td><td>List Projects.</td></tr>
-            <tr><td>swemux profiles</td><td>List launch profiles.</td></tr>
-            <tr><td>swemux harnesses</td><td>List every harness in the registry with its detection state. The first thing to run when a CLI you have installed is not being recognised.</td></tr>
-            <tr><td>swemux history</td><td>List conversation history.</td></tr>
-            <tr><td>swemux history-duplicates</td><td>Report, or with <code>repair</code> merge, history entries that share one conversation.</td></tr>
-            <tr><td>swemux accounts</td><td><code>list</code>, <code>verify</code>, or <code>audit</code> saved provider accounts.</td></tr>
-            <tr><td>swemux doctor</td><td>The consolidated read-only diagnostics report. <code>--export</code> prints the full bundle as JSON.</td></tr>
-            <tr><td>swemux update</td><td>Report the release check and this install's update path. <code>--install VERSION</code> downloads that release and verifies its hash against the published manifest before anything is staged.</td></tr>
-            <tr><td>swemux reload-daemon</td><td>Restart the daemon in place. Sessions survive when the PTY supervisor is on; <code>--force</code> restarts without it and <b>kills every session</b>.</td></tr>
-            <tr><td>swemux install-shortcut</td><td>Create the Start Menu and Desktop shortcuts a wheel install structurally cannot (Windows). <code>--startup</code> adds a run-at-login entry, <code>--remove</code> takes them all away. Idempotent.</td></tr>
-          </tbody>
-        </table></div>
-        <p class="prose">Every subcommand takes <code>--json</code> to print the raw daemon response instead of a table, and <code>--url</code> to point at a specific daemon.</p>
-      </div>
-      <div class="docsec" id="which-daemon-mux-talks-to">
-        <div class="head"><span class="n">#</span><h2>Which daemon mux talks to</h2><span class="fill"></span></div>
-        <p class="prose">Resolved in this order, and the order is the contract: <code>--url</code>, then the <code>MUX_URL</code> environment variable, then the configured host and port, then <code>http://127.0.0.1:8765</code>.</p>
-      </div>
-      <div class="docsec" id="exit-codes">
-        <div class="head"><span class="n">#</span><h2>Exit codes</h2><span class="fill"></span></div>
-        <div class="tablewrap"><table>
-          <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
-          <tbody>
-            <tr><td>0</td><td>Success. For doctor, a full report with no failing check.</td></tr>
-            <tr><td>1</td><td>A doctor report with a failing check, local or full.</td></tr>
-            <tr><td>2</td><td>Usage error.</td></tr>
-            <tr><td>3</td><td>Daemon unreachable. For doctor, also a clean local report.</td></tr>
-            <tr><td>4</td><td>Daemon HTTP error.</td></tr>
-            <tr><td>5</td><td>Ambiguous session name.</td></tr>
-            <tr><td>6</td><td>Not found.</td></tr>
-          </tbody>
-        </table></div>
-        <p class="note"><b>A degraded report never exits 0</b>, so a script gating on <code>mux doctor</code> keeps working whether or not a daemon is running. The doctor codes compose the two that already existed rather than adding a scheme of their own.</p>
-      </div>
-      <div class="docsec" id="swemux-doctor-has-two-modes-and-picks-between-them-itself">
-        <div class="head"><span class="n">#</span><h2>swemux doctor has two modes, and picks between them itself</h2><span class="fill"></span></div>
-        <ul class="flat">
-          <li><b>Full report</b><span>When a daemon answers. Categories for the daemon, each harness, remote access, the firewall, host prerequisites, fleet status health, the background loops, conversation freshness, WSL, and optional assets. Nothing in it reads a secret, a terminal byte, or message content.</span></li>
-          <li><b>Local report</b><span>When nothing answers, because a daemon that will not start is the most likely new-user failure and the full report presupposes exactly the thing that is missing. It checks the interpreter, the imports, the config, the frontend bundle, the data directory, the database, the port, this host's pseudoterminal backend, and the supervisor bundle.</span></li>
-        </ul>
-        <p class="note">The local report marks what it did <em>not</em> check as <code>unchecked</code> rather than folding it into a pass. Folding a skipped check into <em>ok</em> claims health nobody measured, which is worse than the connection error it replaced.</p>
-      </div>
-      <nav class="dsstep" aria-label="Page navigation">
-        <a class="prev" rel="prev" href="../settings/"><span class="l">Previous</span><span class="t">Settings reference</span></a>
-        <a class="next" rel="next" href="../keyboard/"><span class="l">Next</span><span class="t">Keyboard and the command palette</span></a>
-      </nav>
-    </article>
-    </div>
+      <p class="prose">Official plugins are maintained with swe-mux.
+      Community listings have a valid manifest and indexed revision but are not security-reviewed or endorsed.</p>
+      <div class="plugin-grid" id="plugin-grid" aria-live="polite"></div>
+      <p class="plugin-empty" id="plugin-empty" hidden></p>
+    </section>
+
+    <section class="rel" aria-labelledby="publish-title">
+      <div class="relhead"><h2 id="publish-title">Publish a plugin</h2></div>
+      <ol class="steps">
+        <li><span>Put <code>swe-mux-plugin.toml</code>, runnable source, tests, README, and a license in one standalone public repository.</span></li>
+        <li><span>Run <code>swemux plugin validate .</code> and test installation from a clean checkout.</span></li>
+        <li><span>Publish a release whose tag matches the manifest version.</span></li>
+        <li><span>Add the <code>swe-mux-plugin</code> GitHub topic.
+        The catalog validates the repository before listing it.</span></li>
+      </ol>
+      <p class="prose">The complete manifest, permission, testing, and lifecycle contract is in the <a href="../docs/plugins/">plugin authoring guide</a>.</p>
+    </section>
   </div>
 </section>
+<script src="catalog.js"></script>
 </main>
 
 <footer>
   <div class="wrap">
     <div class="fbrand">
-      <img class="brandmark dark" src="../../img/logo.png" width="640" height="73" alt="swe-mux" />
-      <img class="brandmark lite" src="../../img/logo-light.png" width="640" height="73" alt="swe-mux" />
+      <img class="brandmark dark" src="../img/logo.png" width="640" height="73" alt="swe-mux" />
+      <img class="brandmark lite" src="../img/logo-light.png" width="640" height="73" alt="swe-mux" />
       <p>Agentic development environment and agent control plane.<br />
       Windows-first. Local-only. No account.</p>
     </div>
@@ -1143,13 +1036,13 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="fcol">
         <h4>pages</h4>
         <ul>
-          <li><a href="../../">home</a></li>
-          <li><a href="../../docs/">docs</a></li>
-          <li><a href="../../plugins/">plugins</a></li>
-          <li><a href="../../changelog/">changelog</a></li>
-          <li><a href="../../roadmap/">roadmap</a></li>
-          <li><a href="../../acknowledgements/">acknowledgements</a></li>
-          <li><a href="../../compare/">compare</a></li>
+          <li><a href="../">home</a></li>
+          <li><a href="../docs/">docs</a></li>
+          <li><a href="../plugins/">plugins</a></li>
+          <li><a href="../changelog/">changelog</a></li>
+          <li><a href="../roadmap/">roadmap</a></li>
+          <li><a href="../acknowledgements/">acknowledgements</a></li>
+          <li><a href="../compare/">compare</a></li>
         </ul>
       </div>
       <div class="fcol">
@@ -1165,8 +1058,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <ul>
           <li><a href="https://github.com/jatoran/swe-mux/blob/master/LICENSE">Apache-2.0</a></li>
           <li><a href="https://github.com/jatoran/swe-mux/blob/master/THIRD-PARTY-NOTICES.md">Third-party notices</a></li>
-          <li><a href="../../privacy/">Privacy</a></li>
-          <li><a href="../../terms/">Terms</a></li>
+          <li><a href="../privacy/">Privacy</a></li>
+          <li><a href="../terms/">Terms</a></li>
         </ul>
         <div class="social">
           <a href="https://x.com/swemux" rel="me" aria-label="swe-mux on X" title="swe-mux on X">
@@ -1253,160 +1146,121 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   var wide = window.matchMedia('(min-width: 861px)');
   wide.addEventListener('change', function (e) { if (e.matches) open(false); });
 })();
-
-/* ----------------------------------------------------------------- search */
 (function () {
-  var box = document.querySelector('.dsearch');
-  if (!box) return;
-  var input = document.getElementById('dsq');
-  var out = document.getElementById('dsr');
-  var status = document.getElementById('dsstatus');
-  var base = box.getAttribute('data-base') || '';
-  var loading = false;
+  var grid = document.getElementById('plugin-grid');
+  var empty = document.getElementById('plugin-empty');
+  var count = document.getElementById('plugin-count');
+  var refresh = document.getElementById('plugin-refresh');
+
+  function text(tag, className, value) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    node.textContent = value;
+    return node;
+  }
+
+  function list(value) {
+    return Array.isArray(value) && value.length ? value.join(', ') : 'none';
+  }
+
+  function row(label, value) {
+    var item = document.createElement('div');
+    item.className = 'plugin-meta-row';
+    item.appendChild(text('dt', '', label));
+    item.appendChild(text('dd', '', value));
+    return item;
+  }
+
+  function card(item) {
+    var manifest = item.manifest || {};
+    var repository = item.repository || {};
+    var article = document.createElement('article');
+    article.className = 'plugin-public-card';
+
+    var head = document.createElement('header');
+    var title = document.createElement('div');
+    title.appendChild(text('span', 'plugin-badge ' + (item.official ? 'official' : ''), item.official ? 'official' : 'community'));
+    title.appendChild(text('h3', '', manifest.name || repository.full_name || 'Unnamed plugin'));
+    title.appendChild(text('code', '', manifest.id || 'missing id'));
+    head.appendChild(title);
+    head.appendChild(text('span', 'plugin-version', manifest.version ? 'v' + manifest.version : 'unversioned'));
+    article.appendChild(head);
+    article.appendChild(text('p', 'plugin-description', manifest.description || repository.description || 'No description supplied.'));
+
+    var details = document.createElement('dl');
+    details.className = 'plugin-public-meta';
+    details.appendChild(row('Platforms', list(manifest.platforms)));
+    details.appendChild(row('Runtime', list(manifest.runtime_requirements)));
+    details.appendChild(row('Permissions', list(manifest.permissions)));
+    details.appendChild(row('License', manifest.license || repository.license || 'not declared'));
+    details.appendChild(row('Revision', String(item.indexed_ref || '').slice(0, 12) || 'unavailable'));
+    article.appendChild(details);
+
+    var install = document.createElement('div');
+    install.className = 'plugin-install';
+    var command = 'swemux plugin install ' + repository.full_name;
+    if (item.install_ref) command += ' --ref ' + item.install_ref;
+    install.appendChild(text('code', '', command));
+    var source = document.createElement('a');
+    source.href = repository.url;
+    source.textContent = 'source';
+    source.rel = 'noreferrer';
+    install.appendChild(source);
+    if (item.release_url) {
+      var release = document.createElement('a');
+      release.href = item.release_url;
+      release.textContent = 'release';
+      release.rel = 'noreferrer';
+      install.appendChild(release);
+    }
+    article.appendChild(install);
+    return article;
+  }
+
+  function fail(message) {
+    grid.replaceChildren();
+    empty.textContent = message;
+    empty.hidden = false;
+    count.textContent = 'unavailable';
+  }
+
+  function render(catalog) {
+    if (catalog.schema !== 1 || !Array.isArray(catalog.plugins)) throw new Error('unsupported catalog');
+    grid.replaceChildren();
+    catalog.plugins.forEach(function (plugin) { grid.appendChild(card(plugin)); });
+    count.textContent = catalog.plugins.length + (catalog.plugins.length === 1 ? ' plugin' : ' plugins');
+    if (!catalog.plugins.length) fail('No validated plugins are published yet.');
+  }
 
   function load() {
-    if (loading || window.__MUXDOCS) return;
-    loading = true;
-    var s = document.createElement('script');
-    s.src = base + 'search-index.js';
-    s.onload = function () { run(); };
-    document.head.appendChild(s);
+    refresh.disabled = true;
+    count.textContent = 'loading';
+    empty.hidden = true;
+    fetch('catalog.json', { cache: 'no-store' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+      })
+      .then(function (catalog) {
+        render(catalog);
+      })
+      .catch(function () {
+        fail('The catalog is unavailable. Direct installation by GitHub owner/repository still works in swe-mux.');
+      })
+      .finally(function () { refresh.disabled = false; });
   }
 
-  // A window around the first hit, snapped to word boundaries at both ends.
-  // Slicing on raw offsets opens a snippet mid-word ('...ding. Attention'),
-  // which reads as a rendering fault rather than as a truncation.
-  function snippet(body, term) {
-    var at = body.toLowerCase().indexOf(term);
-    if (at < 0) return body.slice(0, body.indexOf(' ', 120) + 1 || 120) + '\u2026';
-    var from = Math.max(0, at - 55);
-    var to = Math.min(body.length, from + 165);
-    if (from > 0) {
-      var space = body.indexOf(' ', from);
-      from = space >= 0 && space < at ? space + 1 : from;
-    }
-    if (to < body.length) {
-      var end = body.lastIndexOf(' ', to);
-      to = end > at ? end : to;
-    }
-    return (from ? '\u2026' : '') + body.slice(from, to).trim() +
-      (to < body.length ? '\u2026' : '');
+  refresh.addEventListener('click', load);
+  window.addEventListener('swemux:plugin-catalog', function (event) {
+    render(event.detail);
+  });
+  if (window.SWEMUX_PLUGIN_CATALOG) {
+    try { render(window.SWEMUX_PLUGIN_CATALOG); }
+    catch (error) { fail('The bundled catalog is invalid.'); }
+    refresh.disabled = false;
+  } else {
+    load();
   }
-
-  function rank(query) {
-    var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (!terms.length) return [];
-    var hits = [];
-    (window.__MUXDOCS || []).forEach(function (page) {
-      var title = page.t.toLowerCase();
-      var body = page.b.toLowerCase();
-      var score = 0;
-      var heading = null;
-      for (var i = 0; i < terms.length; i++) {
-        var term = terms[i];
-        var here = 0;
-        if (title.indexOf(term) >= 0) here += 8;
-        for (var j = 0; j < page.h.length; j++) {
-          if (page.h[j][0].toLowerCase().indexOf(term) >= 0) {
-            here += 4;
-            if (!heading) heading = page.h[j];
-            break;
-          }
-        }
-        if (body.indexOf(term) >= 0) here += 1;
-        if (!here) return;
-        score += here;
-      }
-      hits.push({ page: page, score: score, heading: heading, term: terms[0] });
-    });
-    hits.sort(function (a, b) { return b.score - a.score; });
-    return hits.slice(0, 8);
-  }
-
-  function run() {
-    var query = input.value.trim();
-    if (!query) {
-      out.hidden = true;
-      out.textContent = '';
-      input.setAttribute('aria-expanded', 'false');
-      status.textContent = '';
-      return;
-    }
-    if (!window.__MUXDOCS) { load(); return; }
-    var hits = rank(query);
-    out.textContent = '';
-    if (!hits.length) {
-      var none = document.createElement('p');
-      none.className = 'dsnone';
-      none.textContent = 'No page matches "' + query + '".';
-      out.appendChild(none);
-    }
-    hits.forEach(function (hit) {
-      var a = document.createElement('a');
-      a.href = base + hit.page.u + (hit.heading ? '#' + hit.heading[1] : '');
-      var t = document.createElement('span');
-      t.className = 't';
-      t.textContent = hit.page.t + (hit.heading ? '  \u203a  ' + hit.heading[0] : '');
-      var d = document.createElement('span');
-      d.className = 'd';
-      d.textContent = snippet(hit.page.b, hit.term);
-      a.appendChild(t);
-      a.appendChild(d);
-      out.appendChild(a);
-    });
-    out.hidden = false;
-    input.setAttribute('aria-expanded', 'true');
-    status.textContent = hits.length + (hits.length === 1 ? ' result' : ' results');
-  }
-
-  input.addEventListener('focus', load);
-  input.addEventListener('input', run);
-
-  function results() { return [].slice.call(out.querySelectorAll('a')); }
-
-  input.addEventListener('keydown', function (e) {
-    var found = results();
-    if (e.key === 'ArrowDown' && found.length) { e.preventDefault(); found[0].focus(); }
-    else if (e.key === 'Enter' && found.length) { e.preventDefault(); found[0].click(); }
-    else if (e.key === 'Escape') { input.value = ''; run(); input.blur(); }
-  });
-
-  out.addEventListener('keydown', function (e) {
-    var found = results();
-    var at = found.indexOf(document.activeElement);
-    if (at < 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      found[Math.min(at + 1, found.length - 1)].focus();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (at === 0) input.focus(); else found[at - 1].focus();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      input.focus();
-      input.value = '';
-      run();
-    }
-  });
-
-  // `/` is the shortcut every documentation site has, so it is the one people
-  // try. Never while a field is focused, because then it is a character.
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== '/' || e.ctrlKey || e.altKey || e.metaKey) return;
-    var el = document.activeElement;
-    var tag = el && el.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable)) return;
-    e.preventDefault();
-    input.focus();
-    input.select();
-  });
-
-  document.addEventListener('click', function (e) {
-    if (!box.contains(e.target)) {
-      out.hidden = true;
-      input.setAttribute('aria-expanded', 'false');
-    }
-  });
 })();
 </script>
 

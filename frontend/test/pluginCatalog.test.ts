@@ -23,7 +23,7 @@ test('the focused Project is the initial plugin target and an explicit choice su
 
 test('the Project launcher exposes only enabled Project-scoped panes',()=>{
   const plugin=(id:string,enabled:boolean,contexts:string[]):InstalledPlugin=>({
-    id,name:id,version:'1',enabled,lifecycle:'enabled',source_kind:'link',source_ref:'',resolved_ref:'',
+    id,name:id,version:'1',enabled,lifecycle:'enabled',source_kind:'link',source_ref:'',requested_ref:'',selected_ref:'',resolved_ref:'',
     diagnostic:'',approval_current:true,config_dir:'',state_dir:'',manifest:{
       id,name:id,version:'1',description:'',author:'',license:'',homepage:'',permissions:[],requires:[],
       runtime_requirements:[],actions:[],events:[],startup:[],link_handlers:[],
@@ -36,4 +36,3 @@ test('the Project launcher exposes only enabled Project-scoped panes',()=>{
     plugin('disabled',false,['project']),
   ]).map(item=>item.pluginId),['enabled'])
 })
-

@@ -99,6 +99,10 @@ _agents-orchestrator/
 # gitignore rule is one `git add -f` away from not protecting them.
 .private/
 
+# Deployment-time plugin discovery output. The source page and validator are tracked;
+# Pages rebuilds this exact-revision catalog from public GitHub repositories.
+site/plugins/catalog.json
+
 # === Project-local swe-mux state ===
 # The whole directory, as of 2026-08-28. It used to be a split: the daemon's own runtime
 # writes were ignored one path at a time while the repository-authored files beside them

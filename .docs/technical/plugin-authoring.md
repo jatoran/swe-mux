@@ -150,6 +150,7 @@ swemux plugin list
 ```
 
 Validation and linking execute no plugin command.
+Validation runs locally through the release-matched canonical manifest parser and does not require a daemon.
 Approval enables current content by default.
 Use `swemux plugin approve publisher.plugin --no-enable` when approval and enablement must remain separate.
 
@@ -192,7 +193,10 @@ Never use purge as test cleanup against user-owned state.
 
 `swemux plugin install` accepts a local directory, GitHub `owner/repository`, or Git URL plus optional `--ref`.
 Managed acquisition copies immutable content and leaves it inert unless approval and enablement are explicit.
-`swemux plugin update` stages current requested source as inert content and `swemux plugin rollback` restores the retained prior source as inert content.
+A literal tag pins one release, a branch is an explicit moving channel, and `--ref latest` resolves the newest GitHub release each time an install or update is requested.
+The registry retains requested channel, selected tag or branch, and resolved commit as separate provenance.
+`swemux plugin update` reuses that requested channel and stages the result as inert content; `--ref` replaces the stored channel deliberately.
+`swemux plugin rollback` restores the retained prior source as inert content.
 
 Before publishing:
 
@@ -205,24 +209,28 @@ Before publishing:
 - Confirm disablement removes contributed surfaces.
 - Confirm uninstall does not remove linked source and retains state.
 - Confirm no secret or absolute machine path appears in source, logs, fixtures, or output.
-- Add the `swe-mux-plugin` GitHub topic only after the default branch contains a valid manifest.
+- Run repository CI on Windows, Linux, and macOS with the release-matched host validator.
+- Publish a GitHub release whose tag matches the manifest version.
+- Add the `swe-mux-plugin` GitHub topic only after the default branch and release tag both contain a valid manifest.
 
-The marketplace is an unreviewed discovery index.
-Listing, stars, signatures, and checksums are not a swe-mux security endorsement.
+The swemux.dev catalog validates root manifests at exact commits and excludes forks, archived repositories, duplicate IDs, malformed manifests, and unsupported schema versions without executing source.
+Official status is a closed repository-to-plugin-ID allowlist maintained by swe-mux.
+Every other valid listing is unreviewed community software.
+Validation, listing, stars, signatures, and checksums are not a security endorsement.
 
 ## Machine-local plugin lab
 
-The current primary checkout has six independent repositories under ignored `.private/plugin-lab/`:
+The primary checkout retains six independent repositories under ignored `.private/plugin-lab/`.
+Four are maintained public official plugins:
 
 - `fleet-dashboard`: fleet snapshot action and live split dashboard.
 - `worktree-auditor`: action, startup restoration, and popup report.
-- `attention-notifier`: action, EventBus hooks, notification permission, and link handler.
-- `project-scratchpad`: persistent Project notes in a tab.
 - `session-switchboard`: Project-scoped session list and explicit control in a split.
 - `project-link-hub`: clickable repository links in a popup.
 
-These repositories prove local isolation and contribution behavior.
-They are not tracked fixtures, bundled examples, public releases, or dependencies of swe-mux.
+`attention-notifier` and `project-scratchpad` remain unpublished local experiments and are not marketplace examples.
+No lab repository is tracked, bundled, or released by the swe-mux repository.
+The public repositories are `jatoran/swe-mux-plugin-fleet-dashboard`, `jatoran/swe-mux-plugin-project-links`, `jatoran/swe-mux-plugin-session-switchboard`, and `jatoran/swe-mux-plugin-worktree-auditor`.
 
 ## Key files
 
@@ -233,4 +241,5 @@ They are not tracked fixtures, bundled examples, public releases, or dependencie
 | `../../src/swe_mux/plugins.py` | Lifecycle, commands, panes, events, tokens, and marketplace. |
 | `../../src/swe_mux/routes/plugins.py` | Management and callback HTTP operations. |
 | `../../frontend/src/PluginsSettings.tsx` | Browser lifecycle and contribution controls. |
+| `../../site/tools/plugins.py` | Public exact-revision catalog validation and generation. |
 | `../../tests/test_plugins.py` | Host contract coverage. |
