@@ -235,6 +235,21 @@ It is not the product's own `GuidedTutorial`: that one teaches an install (creat
 The phone list is different from the desktop one and is mostly gestures, because the panels being on the ends of a swipe is the one thing nothing on screen can say for itself.
 It renders beside `<App/>` rather than inside it, so the product build cannot accidentally ship it, and it is dismissible for good; the landing page's **replay tour** control dispatches `swemux-demo:coach` into the same-origin frames to bring it back.
 
+**The two frames behave as one app** (`mirror.ts`). The demo store already mirrored the *fleet* over a BroadcastChannel, because that is the fake daemon's state and both frames read the same copy; what it could not mirror is everything the app keeps in its own head - which modal is open, whether the navigation sidebar is out, which side-panel tab is selected, which Project and session are focused. "Both" was therefore two independent apps sharing a database.
+
+It is a **state** mirror, not an event mirror, and the distinction is the whole design. Each frame reads its own view state out of the DOM it already renders, broadcasts it, and a frame receiving someone else's drives itself toward it through the app's own command bus (`mux:command`) and its own controls. Converging on a state is idempotent, where replaying a click could spawn two sessions out of one press; it is indifferent to how the act happened, so a modal opened by a menu row, a chord, the palette or a voice phrase all read alike; and it degrades to nothing, because a surface with no command in `OVERLAY_COMMANDS` is simply not mirrored rather than closed and never reopened.
+
+Pane geometry is deliberately excluded and needs nothing: the pane tree lives in the Project record, so a split made on the desktop is already in the phone's copy, which draws it as a tab rail because that is what the phone layout is for.
+
+Four rules paid for by failures, all of them worth keeping:
+
+- **One attempt per field per received state.** A frame can be told to reach something it cannot - a Project row inside a collapsed group, a control the other layout does not draw. Retrying inside the convergence pass made the two frames take turns undoing each other.
+- **The phone's side panel is a `role="dialog"`, and is not a modal.** Counting it as one made the frames permanently disagree about "which modal is open": the phone naming a drawer the desktop docks.
+- **The sidebar's resting state differs by layout** (a desktop column that starts open, a phone overlay that starts shut), so a frame says nothing about it until its own value has moved. Without that, the first load had the phone silently collapsing the desktop's fleet column.
+- **A forced value is not an opinion.** A phone showing the side panel has its sidebar shut because it must; reporting that made the constraint travel back to the desktop.
+
+The walkthrough elects a single leader over the same channel (widest frame wins, random tiebreak), because two cards flashing two different controls is noise - and the mirror means the winner's steps visibly drive the other frame, which demonstrates more than a second tour would.
+
 Some of the demo's seeding is there to defeat first-run app behaviour that a returning user never meets.
 `main.tsx` writes `mux.drawer.projects.v3`, `mux.drawer.layout.v1` and `mux.drawer.note.v1` before boot: without the last of those, the always-mounted Notes body opens the Project's first note *and selects its own tab* on first mount, so the very first press of Git or Transcript opened the panel on Notes.
 The seed is versioned by a demo-owned marker (`swemux-demo-seed`) rather than by the presence of each key, because a returning visitor already holds those keys from an older demo and would otherwise never see a tab a later build added.
