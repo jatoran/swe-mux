@@ -47,6 +47,51 @@ test('a daemon-started session joins the Project it belongs to', () => {
   assert.equal(stackForView(result.layouts.p1, 'daemon-1')?.active_child_id, 'term-a')
 })
 
+test('plugin popup sessions never enter the durable layout', () => {
+  const result = plan({
+    sessions: [session('term-a'), session('popup-1', {
+      plugin_id: 'example.plugin', plugin_placement: 'popup',
+    })],
+    projects: [project('p1', paneWith('term-a'))],
+  })
+  assert.deepEqual(terminalIds(result.layouts.p1), ['term-a'])
+  assert.deepEqual(result.joins, [])
+  assert.deepEqual([...result.liveSessionIds], ['term-a', 'popup-1'])
+})
+
+test('the reconciler removes a popup leaf written by an older client', () => {
+  const layout = {
+    version: 7,
+    root: { type: 'stack', id: 'pane', active_child_id: 'term-a', children: [
+      { type: 'leaf', kind: 'terminal', id: 'term-a' },
+      { type: 'leaf', kind: 'terminal', id: 'popup-1' },
+    ] },
+  }
+  const result = plan({
+    sessions: [session('term-a'), session('popup-1', {
+      plugin_id: 'example.plugin', plugin_placement: 'popup',
+    })],
+    projects: [project('p1', layout)],
+  })
+  assert.deepEqual(terminalIds(result.layouts.p1), ['term-a'])
+})
+
+test('plugin split sessions use a right-hand split instead of a tab', () => {
+  const result = plan({
+    sessions: [session('term-a'), session('plugin-split', {
+      plugin_id: 'example.plugin', plugin_placement: 'split',
+    })],
+    projects: [project('p1', paneWith('term-a'))],
+  })
+  const root = result.layouts.p1.root
+  assert.ok(root)
+  assert.equal(root.type, 'split')
+  if (!root || root.type !== 'split') return
+  assert.equal(root.direction, 'vertical')
+  assert.deepEqual(terminalIds(result.layouts.p1), ['term-a', 'plugin-split'])
+  assert.deepEqual(result.joins[0].ids, ['plugin-split'])
+})
+
 test('the reconciler withholds the join from a Project whose own launch is still in flight', () => {
   // The daemon creates and announces a session before the POST that asked for it returns, so a
   // refresh landing in that window carries a session this client cannot yet recognise as its own.

@@ -56,8 +56,9 @@ Panes launch through `SessionManager.spawn` as ordinary shell sessions and the e
 `SessionRecord.plugin_id`, `plugin_version`, `plugin_entrypoint_id`, and `plugin_placement` retain ownership across layout moves and daemon adoption.
 Live plugin panes survive a daemon restart.
 Source updates do not rewrite a pane that is already running.
-Tab and split placements enter the ordinary workspace layout.
-Popup placement renders the same session in a modal without writing a layout leaf and stops the session when the modal closes.
+Tab placement enters the focused terminal stack and split placement opens to its right.
+The fleet reconciler routes those sessions from their retained `plugin_placement`, so an event-driven refresh cannot race the pane-open response.
+Popup placement renders the same session in a modal, is excluded from durable layout reconciliation, and stops the session when the modal closes.
 
 ### Startup hooks
 

@@ -269,6 +269,11 @@ export interface Session {
   voice_content?: VoiceContent | null
   /** Task/Project-Action shell whose exact spawn argv can be relaunched in place. */
   relaunchable?: boolean
+  /** Immutable ownership and host placement for a plugin-contributed terminal. */
+  plugin_id?: string | null
+  plugin_version?: string | null
+  plugin_entrypoint_id?: string | null
+  plugin_placement?: 'tab' | 'split' | 'popup' | null
   /**
    * Recovered from durable recovery data rather than from a running process: the
    * daemon and its PTY owner both died without recording how this session ended,
