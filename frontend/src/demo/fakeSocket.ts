@@ -10,9 +10,10 @@
  * events half emits a watermark on open and a generic changed frame whenever
  * the demo store mutates, which is what drives the app's fleet refetch.
  */
+import { BUSY_SESSION_IDS } from './fixtures.ts'
 import { apply, onMutation, session, state } from './store.ts'
 import {
-  buildReply, consumeInput, demoBackendKind, promptFor,
+  buildReply, busyReply, consumeInput, demoBackendKind, promptFor,
   type LineState,
 } from './terminalSim.ts'
 
@@ -229,6 +230,16 @@ function streamReply(id: string, submitted: string): void {
   }
   if (busy.has(id)) {
     appendOutput(id, `\x1b[38;5;243m(one thing at a time - still typing the last answer)\x1b[0m\r\n${promptFor(kind)}`)
+    return
+  }
+  // A permanently-working pane answers rather than running the joke responder,
+  // and never leaves `working`: it is the demo's stand-in for a turn in flight,
+  // which is exactly the state the real product will not interleave input into.
+  if (BUSY_SESSION_IDS.includes(id)) {
+    const refusal = busyReply(kind)
+    refusal.chunks.forEach((chunk, index) => {
+      window.setTimeout(() => appendOutput(id, chunk), 260 + index * refusal.pace)
+    })
     return
   }
   busy.add(id)

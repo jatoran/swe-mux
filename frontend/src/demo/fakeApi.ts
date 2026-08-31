@@ -12,6 +12,7 @@ import type { Preview } from '../processFleet.ts'
 import type { PaneLayout, PaneLeaf, PaneNode } from '../layout.ts'
 import type { Session } from '../types.ts'
 import { PREVIEW_PAGE_IDS } from './fixtures.ts'
+import { KEYMAP_FIXTURE } from './keymapFixture.ts'
 import { apply, demoId, nowSeconds, project, session, state } from './store.ts'
 import { spawnScrollback } from './terminalSim.ts'
 
@@ -70,20 +71,57 @@ function profilesPayload(): unknown {
   }
 }
 
+/**
+ * `GET /api/keybindings`, over the daemon's own preset documents.
+ *
+ * `keymapFixture.ts` is generated from `swe_mux.keymaps`, so the tmux, Vim,
+ * Emacs and VS Code presets a visitor switches between here carry the real
+ * chords rather than an invented handful - which is the whole point of offering
+ * the switch in a demo at all.
+ */
 function keybindingsPayload(): unknown {
-  const bindings: Record<string, string> = {
-    'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+o': 'session.quickLaunch',
-    'ctrl+alt+p': 'palette.open', 'ctrl+shift+f': 'terminal.find',
-    'ctrl+alt+h': 'pane.splitHorizontal', 'ctrl+alt+v': 'pane.splitVertical',
-    'ctrl+alt+z': 'pane.zoom', 'ctrl+alt+d': 'pane.detach',
-    'ctrl+alt+arrowright': 'pane.next', 'ctrl+alt+arrowleft': 'pane.previous',
-    'ctrl+alt+s': 'settings.open', 'ctrl+alt+n': 'notes.open',
-    'ctrl+tab': 'tab.next', 'ctrl+shift+tab': 'tab.previous',
-    'ctrl+alt+1': 'project.activate(1)', 'ctrl+alt+2': 'project.activate(2)',
+  const preset = state.keymapPreset || 'swemux'
+  const rules = KEYMAP_FIXTURE.rules[preset as keyof typeof KEYMAP_FIXTURE.rules]
+    ?? KEYMAP_FIXTURE.rules.swemux
+  const summary = KEYMAP_FIXTURE.presets.find(item => item.id === preset)
+  // What this host dispatches on. Every demo rule is deliverable in a browser,
+  // so `resolved` is the rule list keyed by chord and `undeliverable` is empty.
+  const resolved: Record<string, Array<{ command: string; when: string }>> = {}
+  for (const rule of rules) {
+    const entry = { command: rule.command, when: (rule as { when?: string }).when ?? '' }
+    ;(resolved[rule.keys] ??= []).push(entry)
   }
   return {
-    bindings, defaults: { ...bindings }, commands: [],
-    policy: { browser_reserved: [], desktop_only: [], application_reserved: [], terminal_reserved: [], rules: [] },
+    preset,
+    presets: KEYMAP_FIXTURE.presets,
+    host: 'browser',
+    platform: 'win',
+    rules,
+    resolved,
+    prefixes: summary?.prefix ? [summary.prefix, ...summary.prefix_alternates] : [],
+    labels: {},
+    undeliverable: [],
+    contested: [],
+    commands: KEYMAP_FIXTURE.commands,
+    groups: [],
+    when_flags: [
+      'terminalFocused', 'editorFocused', 'inputFocused', 'overlayOpen', 'paletteOpen',
+      'drawerFocused', 'sidebarFocused', 'settingsOpen', 'mobile', 'desktop', 'zoomed',
+      'multiplePanes', 'multipleTabs', 'hasSelection', 'agentFocused',
+    ],
+    policy: {
+      hosts: ['browser', 'desktop'], platforms: ['win', 'mac', 'linux'], max_sequence: 3,
+      browser_unreachable: ['ctrl+n', 'ctrl+t', 'ctrl+w'],
+      browser_contested: { 'ctrl+f': 'find in page', 'ctrl+p': 'print' },
+      wm_reserved: { win: { 'alt+tab': 'switch windows' }, mac: {}, linux: {} },
+      application_reserved: ['ctrl+-', 'ctrl+0', 'ctrl+='],
+      terminal_reserved: { 'ctrl+c': 'interrupt', 'ctrl+d': 'end of file' },
+      rules: [
+        'A chord may use Ctrl, Alt, or Meta plus a non-modifier key.',
+        'Known browser and terminal shortcuts are reserved.',
+        'This is a demo: nothing you bind here reaches a real keyboard.',
+      ],
+    },
     rejected: {},
   }
 }
@@ -397,6 +435,21 @@ const ROUTES: Route[] = [
     }),
   },
   { method: 'GET', pattern: /^\/api\/keybindings$/, handler: () => keybindingsPayload() },
+  {
+    method: 'PUT', pattern: /^\/api\/keybindings$/,
+    handler: () => keybindingsPayload(),
+  },
+  {
+    method: 'POST', pattern: /^\/api\/keymap-preset$/,
+    handler: (_match, body) => {
+      const requested = String((body as Record<string, unknown>)?.preset ?? '')
+      if (!KEYMAP_FIXTURE.presets.some(item => item.id === requested)) {
+        return error(400, `Unknown keymap preset: ${requested}`)
+      }
+      apply({ kind: 'keymap-preset', preset: requested })
+      return { keybindings: keybindingsPayload() }
+    },
+  },
   {
     method: 'POST', pattern: /^\/api\/settings\/apply$/,
     handler: (_match, body) => {

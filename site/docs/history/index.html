@@ -49,6 +49,9 @@
           "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --pad: clamp(18px, 4vw, 40px);
   --maxw: 1160px;
+  /* The interactive demo only. Prose stays at `--maxw`, which is a reading
+     measure; an embedded IDE is not prose and reads better with the room. */
+  --demo-maxw: 1560px;
   /* The browser's own widgets - scrollbars, the caret, form controls, spellcheck
      underlines - follow this and not the variables above, and the meta tag alone does
      not reach them. Declared per theme so the toggle moves them too. */
@@ -317,7 +320,18 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
    in the side-by-side view the two frames share one simulated fleet through a
    BroadcastChannel, which is the closest a static page can get to the
    multi-device story the screenshots only assert. */
+/* The demo escapes the page's 1160px reading column, because the thing inside
+   it is an IDE and every pixel of width is a pane the visitor can see. Its own
+   wrapper rather than a `100vw` breakout: `100vw` includes the scrollbar, which
+   is the classic way to earn the horizontal scroll `tools/check.mjs` fails on.
+   Same shape as `.wrap`, one token wider. */
+.demo-wrap { max-width: var(--demo-maxw); margin-inline: auto; padding-inline: var(--pad); }
 .demo { margin-top: clamp(30px, 5vw, 52px); }
+/* Above the frame, not inside the control strip: it is the section's heading,
+   and it was competing with the view toggles for the same row. */
+.demo-title { font-size: clamp(15px, 2.2vw, 19px); letter-spacing: 0.14em;
+  color: var(--fg); margin-bottom: 12px; }
+.demo-title .on { color: var(--green); }
 .demo-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   border: 1px solid var(--line-2); border-bottom: 0; background: var(--panel);
   padding: 7px 12px; font-family: var(--mono); font-size: 12px; }
@@ -334,9 +348,9 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   display: flex; align-items: stretch; justify-content: center; gap: 16px; }
 .demo-frame { overflow: hidden; }
 .demo-frame iframe { display: block; border: 0; width: 100%; height: 100%; background: #0b0d10; }
-.demo-desktop { flex: 1 1 auto; min-width: 0; height: clamp(430px, 52vw, 680px); }
-.demo-phone { flex: none; width: min(348px, calc(100vw - 2 * var(--pad) - 14px));
-  height: clamp(430px, 52vw, 680px); align-self: center;
+.demo-desktop { flex: 1 1 auto; min-width: 0; height: clamp(460px, 46vw, 780px); }
+.demo-phone { flex: none; width: min(348px, 86%);
+  height: clamp(460px, 46vw, 780px); align-self: center;
   border: 1px solid var(--line-2); border-radius: 12px; margin: 14px 0; background: var(--panel); }
 .demo-stage[data-view="desktop"] .demo-phone { display: none; }
 .demo-stage[data-view="phone"] .demo-desktop { display: none; }

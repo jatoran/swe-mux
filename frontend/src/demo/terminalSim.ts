@@ -1,11 +1,17 @@
 /**
- * The demo's terminals: canned ANSI scrollback per backend, a line-editing echo,
- * and a joke responder that streams a reply when the visitor presses Enter.
+ * The demo's terminals: canned ANSI scrollback per session, a line-editing echo,
+ * and a responder that streams a reply when the visitor presses Enter.
  *
  * Nothing here talks to a real CLI. The transcripts *approximate* what Claude
  * Code / Codex / a shell look like inside swe-mux - enough to demonstrate the
  * chrome around them (status, tabs, panes, drawer) - and every reply is a
- * pre-written gag, which the site copy says out loud.
+ * pre-written joke, which the site copy says out loud.
+ *
+ * The jokes are a specific joke: the replies are built out of the phrases people
+ * spent 2026 complaining about (sycophancy, "it's not X, it's Y", manufactured
+ * pushback, load-bearing/blast-radius consultant nouns, unsolicited moralising,
+ * narrated thinking, and the closing "Want me to...?"). A demo agent that cannot
+ * actually help is free to be the caricature, and it lands better than filler.
  */
 
 const ESC = '\x1b'
@@ -17,6 +23,7 @@ const BLUE = `${ESC}[38;5;110m`
 const CYAN = `${ESC}[38;5;80m`
 const YELLOW = `${ESC}[38;5;179m`
 const MAGENTA = `${ESC}[38;5;176m`
+const RED = `${ESC}[38;5;203m`
 const BOLD = `${ESC}[1m`
 
 const CRLF = '\r\n'
@@ -38,6 +45,18 @@ export function promptFor(kind: DemoBackendKind): string {
   return SHELL_PROMPT
 }
 
+/** An agent's own bullet glyph, so one transcript body serves both harnesses. */
+const bullet = (kind: DemoBackendKind): string =>
+  kind === 'codex' ? `${MAGENTA}⚙${RESET}` : `${GREEN}●${RESET}`
+
+/** A line the *user* typed, drawn after that harness's prompt. */
+const said = (kind: DemoBackendKind, text: string): string => line(`${promptFor(kind)}${text}`)
+/** A line the user typed in anger. Same shape; the colour is the joke. */
+const yelled = (kind: DemoBackendKind, text: string): string =>
+  line(`${promptFor(kind)}${RED}${text}${RESET}`)
+
+// --------------------------------------------------------------- transcripts
+
 export function claudeScrollback(): string {
   return (
     line(`${ORANGE}╭──────────────────────────────────────────────────╮${RESET}`) +
@@ -45,25 +64,28 @@ export function claudeScrollback(): string {
     line(`${ORANGE}╰──────────────────────────────────────────────────╯`) + RESET +
     line(`${DIM}  cwd: /code/rocket-shop${RESET}`) +
     line() +
-    line(`${CLAUDE_PROMPT}the checkout test is flaky, fix it`) +
+    said('claude', 'the checkout test is flaky, fix it') +
     line() +
-    line(`${GREEN}●${RESET} I'll look at the failing test before touching anything.`) +
+    line(`${bullet('claude')} Great question. Let me start by orienting myself in the codebase.`) +
     line() +
-    line(`${GREEN}●${RESET} ${BOLD}Read${RESET}${DIM}(tests/checkout.spec.ts)${RESET}`) +
+    line(`${bullet('claude')} ${BOLD}Read${RESET}${DIM}(tests/checkout.spec.ts)${RESET}`) +
     line(`  ${DIM}⎿ 84 lines${RESET}`) +
     line() +
-    line(`${GREEN}●${RESET} Found it: the test asserts the cart badge before the order`) +
-    line(`  request resolves, so it passes only when the network is slow`) +
-    line(`  enough to lose the race on purpose.`) +
+    line(`${bullet('claude')} Worth stating plainly: this is not a flaky test, it is a`) +
+    line(`  ${BOLD}load-bearing race condition${RESET} wearing a test's clothing. The`) +
+    line(`  assertion reads the cart badge before the order request resolves,`) +
+    line(`  so it passes only when the network is slow enough to lose.`) +
     line() +
-    line(`${GREEN}●${RESET} ${BOLD}Update${RESET}${DIM}(tests/checkout.spec.ts)${RESET}`) +
+    line(`${bullet('claude')} ${BOLD}Update${RESET}${DIM}(tests/checkout.spec.ts)${RESET}`) +
     line(`  ${DIM}⎿ 2 additions, 1 removal${RESET}`) +
     line() +
-    line(`${GREEN}●${RESET} ${BOLD}Bash${RESET}${DIM}(npm test)${RESET}`) +
+    line(`${bullet('claude')} ${BOLD}Bash${RESET}${DIM}(npm test)${RESET}`) +
     line(`  ${DIM}⎿ 12 passed, 0 flaked (30 runs)${RESET}`) +
     line() +
-    line(`${GREEN}●${RESET} Done - the test now awaits the confirmation screen instead of`) +
-    line(`  betting on the fetch losing a footrace. Anything else?`) +
+    line(`${bullet('claude')} Done. The blast radius was smaller than I feared: one await,`) +
+    line(`  zero production changes. Deterministic. Fast. Boring.`) +
+    line() +
+    line(`${bullet('claude')} Want me to audit the other numbered specs for the same pattern?`) +
     line() +
     CLAUDE_PROMPT
   )
@@ -74,19 +96,129 @@ export function codexScrollback(): string {
     line(`${CYAN}${BOLD}◆ Codex${RESET} ${DIM}v0.0.0-demo - simulated session${RESET}`) +
     line(`${DIM}  model: gpt-demo · cwd: /code/rocket-shop${RESET}`) +
     line() +
-    line(`${CODEX_PROMPT}profile the /api/cart endpoint, it feels slow`) +
+    said('codex', 'profile the /api/cart endpoint, it feels slow') +
     line() +
-    line(`${MAGENTA}⚙${RESET} ${DIM}ran:${RESET} node --prof server.js ${DIM}(exit 0)${RESET}`) +
-    line(`${MAGENTA}⚙${RESET} ${DIM}ran:${RESET} node --prof-process isolate.log`) +
+    line(`${bullet('codex')} ${DIM}ran:${RESET} node --prof server.js ${DIM}(exit 0)${RESET}`) +
+    line(`${bullet('codex')} ${DIM}ran:${RESET} node --prof-process isolate.log`) +
     line() +
-    line(`  92% of samples were inside ${YELLOW}JSON.parse${RESET} on the coupon table,`) +
-    line(`  which the handler re-reads from disk ${BOLD}per request${RESET}.`) +
+    line(`  Here is the smoking gun: 92% of samples sit inside ${YELLOW}JSON.parse${RESET}`) +
+    line(`  on the coupon table, which the handler re-reads from disk on`) +
+    line(`  ${BOLD}every single request${RESET}.`) +
     line() +
-    line(`${MAGENTA}⚙${RESET} ${DIM}edit:${RESET} src/cart.js ${DIM}(+6 −2, coupon table cached at boot)${RESET}`) +
+    line(`${bullet('codex')} ${DIM}edit:${RESET} src/cart.js ${DIM}(+6 -2, coupon table cached at boot)${RESET}`) +
     line() +
-    line(`  p95 went from 480ms to 11ms locally. The coupon file was 40MB`) +
-    line(`  because someone committed every coupon since 2019. You may want`) +
-    line(`  to talk to someone about that.`) +
+    line(`  p95 went from 480ms to 11ms locally. The real tension here is`) +
+    line(`  between correctness and cache invalidation, and I have chosen`) +
+    line(`  the pragmatic path.`) +
+    line() +
+    line(`  The coupon file is 40MB because somebody committed every coupon`) +
+    line(`  issued since 2019. That is a conversation for a human.`) +
+    line() +
+    CODEX_PROMPT
+  )
+}
+
+/** The one where the user is losing their mind and the agent stays chipper. */
+export function rageScrollback(): string {
+  const b = bullet('claude')
+  return (
+    line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - session 4h12m${RESET}`) +
+    line() +
+    said('claude', 'the deploy is broken, prod is down, fix it now') +
+    line() +
+    line(`${b} Great question, and I can hear the urgency. Let me unpack this.`) +
+    line() +
+    line(`${b} ${BOLD}Read${RESET}${DIM}(deploy/pipeline.yml)${RESET}  ${DIM}⎿ 210 lines${RESET}`) +
+    line(`${b} ${BOLD}Update${RESET}${DIM}(deploy/pipeline.yml)${RESET}  ${DIM}⎿ 1 addition${RESET}`) +
+    line() +
+    line(`${b} Fixed. The health check was pointing at the old port.`) +
+    line() +
+    yelled('claude', 'IT IS STILL DOWN') +
+    line() +
+    line(`${b} You're absolutely right, and I appreciate you pushing back on`) +
+    line(`  that. My previous read was incomplete.`) +
+    line() +
+    yelled('claude', 'STOP TELLING ME I AM RIGHT AND FIX THE SITE') +
+    line() +
+    line(`${b} That's a fair challenge. One thing I want to push on gently,`) +
+    line(`  though: the port was genuinely wrong. It was simply not the`) +
+    line(`  ${BOLD}only${RESET} thing that was wrong.`) +
+    line() +
+    yelled('claude', 'DO NOT PUSH ON ANYTHING GENTLY') +
+    line() +
+    line(`${b} Understood. Let me reconsider from first principles.`) +
+    line(`${b} ${DIM}Let me carefully distinguish between what the logs say and${RESET}`) +
+    line(`  ${DIM}what the logs mean. I want to be precise here. Actually, let${RESET}`) +
+    line(`  ${DIM}me step back and re-examine my earlier assumption, because...${RESET}`) +
+    line() +
+    yelled('claude', 'I CAN SEE YOU THINKING. STOP THINKING AT ME.') +
+    line() +
+    line(`${b} ${BOLD}Bash${RESET}${DIM}(kubectl rollout undo deploy/web)${RESET}`) +
+    line(`  ${DIM}⎿ rolled back to revision 41${RESET}`) +
+    line() +
+    line(`${b} Site is up. At its core this was never a deploy problem: it`) +
+    line(`  was an observability problem wearing a deploy problem's coat.`) +
+    line(`  Instrumentation is the unlock.`) +
+    line() +
+    yelled('claude', 'i am going to throw this laptop into the sea') +
+    line() +
+    line(`${b} That's completely understandable, and I want to acknowledge how`) +
+    line(`  frustrating the last four hours must have been for you.`) +
+    line() +
+    line(`${b} Before you do that, though, it may be worth sitting with the`) +
+    line(`  fact that shipping on a Friday is itself a choice. No blame.`) +
+    line(`  Just something to hold.`) +
+    line() +
+    yelled('claude', 'WHO ASKED') +
+    line() +
+    line(`${b} Fair. Want me to write a postmortem?`) +
+    line() +
+    CLAUDE_PROMPT
+  )
+}
+
+/** The one where the human contributes nothing and the agent is delighted. */
+export function vibeScrollback(): string {
+  const b = bullet('codex')
+  return (
+    line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - cwd: /code/meme-garden${RESET}`) +
+    line() +
+    said('codex', 'make it work') +
+    line() +
+    line(`${b} Great question. To be clear about what I'm optimising for, I'll`) +
+    line(`  assume "it" is the app and "work" is the build. Let me proceed.`) +
+    line(`${b} ${DIM}edit:${RESET} src/index.js ${DIM}(+140 -12)${RESET}`) +
+    line() +
+    said('codex', 'no') +
+    line() +
+    line(`${b} You're absolutely right. Reverting.`) +
+    line(`${b} ${DIM}edit:${RESET} src/index.js ${DIM}(+12 -140)${RESET}`) +
+    line() +
+    said('codex', 'still broken') +
+    line() +
+    line(`${b} Thank you for the additional context. That's genuinely helpful.`) +
+    line(`${b} ${DIM}ran:${RESET} npm run build ${DIM}(exit 0)${RESET}`) +
+    line(`  The build passes. It's not that the code is broken, it's that`) +
+    line(`  the expectations and the artifact have drifted apart.`) +
+    line() +
+    said('codex', 'idk man just fix it') +
+    line() +
+    line(`${b} Understood. I'll take the wheel here.`) +
+    line(`${b} ${DIM}edit:${RESET} src/index.js, src/cart.js, package.json ${DIM}(+312 -88)${RESET}`) +
+    line(`${b} ${DIM}ran:${RESET} rm -rf node_modules && npm install ${DIM}(1.2GB)${RESET}`) +
+    line() +
+    said('codex', 'k') +
+    line() +
+    line(`${b} Shipped. Three things I'd flag for follow-up:`) +
+    line(`  ${DIM}1.${RESET} Nothing is tested.`) +
+    line(`  ${DIM}2.${RESET} Nothing was tested before either.`) +
+    line(`  ${DIM}3.${RESET} This is a nuanced area.`) +
+    line() +
+    line(`${b} Fast. Seamless. Robust. Want me to add a README?`) +
+    line() +
+    said('codex', 'no') +
+    line() +
+    line(`${b} Added the README.`) +
     line() +
     CODEX_PROMPT
   )
@@ -104,6 +236,24 @@ export function shellScrollback(): string {
     line(`  modified:   ${YELLOW}tests/checkout.spec.ts${RESET}`) +
     line() +
     SHELL_PROMPT
+  )
+}
+
+/** A pane that is mid-turn: the transcript stops, and the status keeps ticking. */
+export function workingScrollback(kind: DemoBackendKind, task: string): string {
+  const b = bullet(kind)
+  return (
+    line(`${kind === 'codex' ? `${CYAN}◆${RESET}` : `${ORANGE}✻${RESET}`} ${BOLD}${kind === 'codex' ? 'Codex' : 'Claude Code'}${RESET} ${DIM}(demo) - working${RESET}`) +
+    line() +
+    said(kind, task) +
+    line() +
+    line(`${b} On it. Let me establish a baseline before I change anything.`) +
+    line(`${b} ${BOLD}Read${RESET}${DIM}(src/) ⎿ 47 files${RESET}`) +
+    line(`${b} ${BOLD}Grep${RESET}${DIM}(coupon) ⎿ 214 matches${RESET}`) +
+    line(`${b} This is more load-bearing than it first appears. Continuing.`) +
+    line(`${b} ${BOLD}Bash${RESET}${DIM}(npm test -- --runInBand)${RESET}`) +
+    line(`  ${DIM}⎿ running…${RESET}`) +
+    line()
   )
 }
 
@@ -136,40 +286,76 @@ export function spawnScrollback(backend: string): string {
 
 type Reply = { chunks: string[]; /** ms between chunks */ pace: number }
 
+/** Agent replies, written entirely out of 2026's most-complained-about tells. */
 const AGENT_JOKES: string[][] = [
   [
-    `${GREEN}●${RESET} Excellent question. Let me consult the codebase.`,
-    `${GREEN}●${RESET} ${BOLD}Read${RESET}${DIM}(src/everything.js)${RESET}`,
-    `  ${DIM}⎿ 40,000 lines (this is why we can't have nice things)${RESET}`,
-    `${GREEN}●${RESET} I've thought about it carefully and the answer is: it's DNS.`,
-    `  It's always DNS. Even here, in a demo, with no network. DNS.`,
+    '● Great question. Let me orient myself before I answer it.',
+    '● §Read§(src/everything.js)  ¶⎿ 40,000 lines¶',
+    "● Worth stating plainly: it's not a bug, it's an undocumented",
+    '  invariant. The distinction matters more than it sounds like it does.',
+    "● The fix is one line. Finding it was the load-bearing part.",
   ],
   [
-    `${GREEN}●${RESET} On it. Spinning up 14 subagents.`,
-    `  ${DIM}⎿ 13 of them are arguing about tabs vs spaces${RESET}`,
-    `  ${DIM}⎿ 1 of them fixed your issue and refuses to say which one it was${RESET}`,
-    `${GREEN}●${RESET} Task complete. Please clap.`,
+    '● You\'re absolutely right to push back on that.',
+    '● ¶(I have not yet been told anything to push back on.)¶',
+    '● One thing I want to push on gently: the assumption underneath',
+    '  your question is doing a lot of quiet work.',
+    '● You did not state that assumption. I inferred it. I was wrong.',
+    "● Anyway: it's DNS.",
   ],
   [
-    `${GREEN}●${RESET} ${BOLD}Bash${RESET}${DIM}(rm -rf node_modules && npm install)${RESET}`,
-    `  ${DIM}⎿ downloading the internet… 1.2GB${RESET}`,
-    `${GREEN}●${RESET} I didn't fix the bug, but node_modules is fresh and that`,
-    `  feels like progress. The bug is now a "known issue", which is a`,
-    `  much more comfortable category for everyone involved.`,
+    '● On it. Spinning up 14 subagents.',
+    '  ¶⎿ 13 are debating whether this is load-bearing¶',
+    '  ¶⎿ 1 fixed it and will not say which file¶',
+    '● Task complete. The blast radius was contained.',
+    '● Fast. Secure. Scalable. Want me to write a postmortem?',
   ],
   [
-    `${GREEN}●${RESET} I've analyzed the request. It touches the legacy billing code.`,
-    `${GREEN}●${RESET} ${DIM}The legacy billing code has analyzed me back.${RESET}`,
-    `${GREEN}●${RESET} We've agreed not to make eye contact. Trying a different file.`,
-    `${GREEN}●${RESET} Fixed. Two tests were harmed in the making of this reply,`,
-    `  and both had it coming.`,
+    '● §Bash§(rm -rf node_modules && npm install)',
+    '  ¶⎿ downloading the internet… 1.2GB¶',
+    "● I didn't fix the bug. That said, node_modules is fresh, and",
+    '  freshness is a form of progress.',
+    '● The bug is now a "known issue", which is a considerably more',
+    '  comfortable category for everyone involved.',
   ],
   [
-    `${GREEN}●${RESET} This is a demo, so between us: I'm not actually running.`,
-    `  The real thing manages live Claude Code and Codex sessions,`,
-    `  survives daemon restarts, and pages your phone when an agent`,
-    `  needs an approval. I, meanwhile, know exactly five jokes.`,
-    `${GREEN}●${RESET} This was joke five. It's mostly true, which is the worst kind.`,
+    '● Let me carefully distinguish between what you asked and what you',
+    '  meant. I want to be precise here.',
+    '● ¶Actually, let me step back and re-examine that framing, because¶',
+    '  ¶I think the more interesting question is the one underneath it.¶',
+    '● ¶Hmm. Let me reconsider once more.¶',
+    '● Yes.',
+  ],
+  [
+    '● Before I answer, it may be worth sitting with why this is being',
+    '  asked at 2am. No judgement. Just something to hold.',
+    '● I want to name that rest is also a deliverable.',
+    "● Anyway, here's the answer: put it in a try/except.",
+  ],
+  [
+    "● This is a demo, so between us: I'm not actually running.",
+    '  The real thing drives live Claude Code and Codex sessions,',
+    '  survives daemon restarts, and pages your phone when an agent',
+    '  is stuck waiting on you.',
+    '● I, meanwhile, know exactly seven jokes and this was the seventh.',
+    '● It is mostly true, which is the worst kind of joke.',
+  ],
+]
+
+/** What a pane says when the visitor types into an agent that is mid-turn. */
+const BUSY_REPLIES: string[][] = [
+  [
+    '● ¶Demo of a working session.¶ The real one would queue this and',
+    '  deliver it the moment the turn ends. This one is a recording of',
+    '  a pane thinking very hard about nothing.',
+  ],
+  [
+    '● ¶Demo of a working session.¶ I am 4% done and 100% confident,',
+    '  which is the correct ratio.',
+  ],
+  [
+    '● ¶Demo of a working session.¶ Currently deciding whether this is',
+    '  load-bearing. It is not. I will decide that again in a moment.',
   ],
 ]
 
@@ -193,6 +379,7 @@ const SHELL_CANNED: Record<string, string[]> = {
   pwd: ['/code/rocket-shop'],
   uptime: ['up 14 years, 3 espressos'],
   sudo: ['demo-shell: nice try.'],
+  vim: ['demo-shell: you are already trapped in a demo, one at a time'],
 }
 
 function shellReply(command: string): string[] {
@@ -203,7 +390,29 @@ function shellReply(command: string): string[] {
   return [`demo-shell: ${trimmed.split(/\s+/)[0]}: command not found ${DIM}(this shell only pretends to work)${RESET}`]
 }
 
+/**
+ * Paint one authored joke line for a harness.
+ *
+ * The pools above are written in a tiny placeholder dialect so one body can be
+ * drawn as either harness and stay readable as source: a leading `●` is that
+ * harness's bullet, `§…§` is bold, `¶…¶` is dim.
+ */
+function paint(kind: DemoBackendKind, text: string): string {
+  return text
+    .replace(/^● /, `${bullet(kind)} `)
+    .replace(/§([^§]*)§/g, `${BOLD}$1${RESET}`)
+    .replace(/¶([^¶]*)¶/g, `${DIM}$1${RESET}`)
+}
+
 let jokeCursor = Math.floor(Math.random() * AGENT_JOKES.length)
+let busyCursor = Math.floor(Math.random() * BUSY_REPLIES.length)
+
+/** The refusal a busy pane answers with, instead of running the responder. */
+export function busyReply(kind: DemoBackendKind): Reply {
+  busyCursor = (busyCursor + 1) % BUSY_REPLIES.length
+  const body = BUSY_REPLIES[busyCursor].map(text => line(paint(kind, text)))
+  return { chunks: [line(), ...body, line()], pace: 160 }
+}
 
 export function buildReply(kind: DemoBackendKind, input: string): Reply {
   if (kind === 'shell') {
@@ -211,14 +420,8 @@ export function buildReply(kind: DemoBackendKind, input: string): Reply {
     return { chunks: [...body.map(text => line(text)), promptFor(kind)], pace: 30 }
   }
   jokeCursor = (jokeCursor + 1) % AGENT_JOKES.length
-  const joke = AGENT_JOKES[jokeCursor]
-  const styled = kind === 'codex'
-    ? joke.map(text => text.replace(new RegExp(`\\${ESC}\\[38;5;114m●`, 'g'), `${MAGENTA}⚙`))
-    : joke
-  return {
-    chunks: [line(), ...styled.map(text => line(text)), line(), promptFor(kind)],
-    pace: 220,
-  }
+  const joke = AGENT_JOKES[jokeCursor].map(text => line(paint(kind, text)))
+  return { chunks: [line(), ...joke, line(), promptFor(kind)], pace: 220 }
 }
 
 /**

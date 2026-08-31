@@ -1,5 +1,16 @@
 import { expect, test } from 'playwright/test'
 
+// The declared navigation model, so the orphan check below compares the rendered
+// DOM against the registry itself rather than against a second list written here
+// that would drift the moment a page is added.
+import { settingsSubpages, settingsTabs, type SettingsTab } from '../../src/settingsTabs'
+
+const tabId = (label:string):SettingsTab => {
+  const found = settingsTabs.find(tab => tab.label === label)
+  if (!found) throw new Error(`no Settings tab is labelled ${label}`)
+  return found.id
+}
+
 /**
  * Settings' two layouts, measured rather than described.
  *
@@ -277,6 +288,35 @@ test('every paged Settings tab exposes working page links in the sidebar', async
       expect(await visible.count(),`${tab} > ${label} rendered no page`).toBeGreaterThan(0)
       expect((await visible.first().innerText()).trim(),`${tab} > ${label} rendered blank`).not.toBe('')
     }
+
+    // Every rendered section has to belong to a page this tab declares.
+    //
+    // The loop above cannot catch what this does, and both escapes shipped:
+    // switching page sets `hidden` on every section that is not the selected
+    // one, so a section whose id matches no declared page is hidden on *every*
+    // page and its content is unreachable, while the link that should have
+    // opened it is treated as invalid and silently falls back to page one. The
+    // visible-and-non-blank assertions above stay true throughout, because a
+    // fallback page is visible and non-blank.
+    //
+    // Measured when this assertion was added: Input's shortcuts section was
+    // filed under `what-this-browser-gives-the-app` (its last heading rather
+    // than its first), so the Keyboard shortcuts page drew nothing at all; and
+    // Accounts rendered an `openrouter` section - the API key field - that no
+    // page could reach. `groupedHeadings` is where a section with several
+    // headings declares which page owns it.
+    const declared=new Set((settingsSubpages[tabId(tab)]||[]).map(entry=>entry.id))
+    const rendered=await page.locator('.settings-content section[data-settings-subpage]')
+      .evaluateAll(nodes=>nodes.map(node=>({
+        id:node.getAttribute('data-settings-subpage')||'',
+        heading:node.querySelector('h3')?.textContent?.trim()||'(no heading)',
+      })))
+    const orphans=rendered.filter(section=>!declared.has(section.id))
+    expect(orphans,
+      `${tab}: these sections belong to no declared page, so nothing can reach them: `
+      + `${JSON.stringify(orphans)}. Declare the page, or map the heading onto an `
+      + 'existing one in `groupedHeadings` (settingsTabs.ts).',
+    ).toEqual([])
   }
 })
 
