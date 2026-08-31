@@ -21,9 +21,11 @@ Reads:
   No scan or backfill trigger is reachable from MCP, because a read costs nothing while a scan spends the human's gated budget.
 - `watch_session`, the one read that matures into a message: it reads a sibling's state and stages a single deterministic notice into the *caller's own* queue when that sibling settles, ends, or the caller's timeout elapses.
   Declared a read because it addresses nobody and actuates nothing; the bounds and the fire rules live in `session_watch.py`.
+- `worktree_context`, the read-only projection of the targetless land resolver.
 
-Writes, all thin callers into services that hold the authority: `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, and the two land-queue callers.
-`request_land` and `request_verify` read their worktree from the caller's own live cwd rather than accepting it as an argument, through one shared enqueue helper so that scoping is written once.
+Writes, all thin callers into services that hold the authority: `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, `use_worktree`, and the two land-queue callers.
+`use_worktree` calls `agent_worktree_context.py`, which validates and records one run-bound linked worktree for a Codex-style session whose host cwd remains on trunk.
+`request_land` and `request_verify` accept no checkout argument and share one resolver: live linked-worktree cwd first, validated selection only from primary cwd second.
 Two tools rather than one flagged tool, so the call that moves a trunk is never the default spelling of the call that moves nothing.
 `notify(dry_run=true)` is the one call on that list that writes nothing, and it is not counted as a write: checking before you send must not read as authority spent.
 A service refusal a caller can act on is translated where the tool calls the service - the enqueue helper turns `LandRefusal` into the same typed `QueueError` the tool's own refusals raise - because the generic handler above it can only answer `500 internal server error`, which is what the land tools did until the wire canary first ran.
@@ -31,7 +33,7 @@ A service refusal a caller can act on is translated where the tool calls the ser
 Also token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics.
 
 **Not:** history indexing and ranking (`history.py`), relay policy and queue and request storage (`agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, or aiohttp handlers (`routes/`).
-Nor any authority a write tool borrows: session control (`session_control.py`), landing (`land_queue.py`), settle-watch bounds and fire rules (`session_watch.py`).
+Nor any authority a write tool borrows: session control (`session_control.py`), worktree selection and land resolution (`agent_worktree_context.py`), landing (`land_queue.py`), settle-watch bounds and fire rules (`session_watch.py`).
 
 Also the configurator family (`CONFIGURATOR_TOOLS`), which is a *separate* array rather than flagged entries in `TOOLS`: `tools_for` returns the ordinary list unchanged to every session but a configurator, so nothing has to remember to filter.
 Listing and dispatch apply the same `SessionRecord.configurator` check, and a guessed name answers "unknown tool" rather than "not permitted" - to a session that was never shown the tool that is the literal truth.

@@ -9,6 +9,9 @@ import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { PromptsTab, type PromptsTabProps } from './PromptsTab'
 import { ClipboardTab } from './ClipboardPanel'
+import { drawerSegmentsFor } from './drawerSegments'
+import { DrawerViewTabs } from './DrawerViewTabs'
+import { sessionDisplayName } from './sessionNames'
 
 // The Actions drawer combines three catalogs that can act on the focused session:
 // the live skill inventory, reusable prompt templates, and clipboard history.
@@ -42,6 +45,7 @@ type Props = Pick<PromptsTabProps, 'project' | 'backend' | 'onInsert' | 'onManag
 const ACTION_VIEWS = ['skills', 'prompts', 'clipboard'] as const
 type ActionView = typeof ACTION_VIEWS[number]
 const ACTION_VIEW_KEY = 'mux.actions.view.v1'
+const ACTION_VIEW_TABS = drawerSegmentsFor('actions', 'section')
 
 function initialView(): ActionView {
   try {
@@ -129,13 +133,17 @@ export function ActionsTab({ session, onDone, project, backend: promptBackend, o
   const disclosure = inventoryNote(inventory)
 
   return <div class="actions-tab">
-    <div class="actions-view-tabs" role="tablist" aria-label="Actions catalog">
-      <button type="button" role="tab" aria-selected={view==='skills'} class={view==='skills'?'active':''} onClick={()=>setView('skills')}>
-        Skills{inventory?` ${inventory.skills.length}`:''}
-      </button>
-      <button type="button" role="tab" aria-selected={view==='prompts'} class={view==='prompts'?'active':''} onClick={()=>setView('prompts')}>Prompts</button>
-      <button type="button" role="tab" aria-selected={view==='clipboard'} class={view==='clipboard'?'active':''} onClick={()=>setView('clipboard')}>Clipboard</button>
-    </div>
+    <DrawerViewTabs
+      className="actions-view-tabs"
+      ariaLabel="Actions catalog"
+      active={view}
+      items={ACTION_VIEW_TABS.map(item => ({
+        ...item,
+        label: item.id === 'skills' && inventory ? `${item.label} ${inventory.skills.length}` : item.label,
+      }))}
+      onSelect={id => setView(id as ActionView)}
+    />
+    <p class="actions-target">Target: {session ? sessionDisplayName(session) : 'No focused session'}</p>
     {view==='skills'&&<div class="actions-view actions-skills-view" data-setting="drawer.actions.skills">
       {!session&&<p class="drawer-empty">Focus an agent session to read its skill inventory.</p>}
       {session&&!isAgent&&<p class="drawer-empty">Shell sessions do not expose agent skills.</p>}

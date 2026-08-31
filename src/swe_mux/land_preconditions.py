@@ -37,6 +37,12 @@ Disposition = Literal["ready", "hold", "refuse", "already_landed"]
 #: Long enough that an ordinary agent turn finishes inside it, short enough that a
 #: request against an abandoned worktree does not sit in the queue forever.
 DEFAULT_HOLD_TIMEOUT_SECONDS = 30 * 60.0
+#: Landing reads protect a mutation and run in the verification gate's deliberately
+#: lowered-priority process tree during the landing-queue tests. They therefore get
+#: a wider scheduling window than the 4-second interactive Git monitor reads. A
+#: timeout still fails closed; this only prevents ordinary host contention from
+#: turning a healthy checkout into a transiently unreadable one.
+LAND_GIT_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,8 +97,12 @@ def _tracked_changes(porcelain: str) -> tuple[str, ...]:
     return tuple(changed)
 
 
+async def _read_land_git(cwd: str, *args: str) -> tuple[int, str]:
+    return await read_git(cwd, *args, timeout_seconds=LAND_GIT_TIMEOUT_SECONDS)
+
+
 async def _rev_parse(cwd: str, *args: str) -> str:
-    code, output = await read_git(cwd, "rev-parse", *args)
+    code, output = await _read_land_git(cwd, "rev-parse", *args)
     return output.strip() if code == 0 else ""
 
 
@@ -121,7 +131,7 @@ async def _registered_worktree(trunk_root: str, worktree_root: str) -> bool:
     Git is the authority here, exactly as it is for `resolve_listed_cwd` in the spawn
     path. A directory that merely looks like a checkout is not one of ours.
     """
-    code, output = await read_git(trunk_root, "worktree", "list", "--porcelain")
+    code, output = await _read_land_git(trunk_root, "worktree", "list", "--porcelain")
     if code != 0:
         return False
     for line in output.splitlines():
@@ -142,7 +152,7 @@ async def _incoming_paths(trunk_root: str, trunk_head: str, branch_head: str) ->
     """
     if not trunk_head or not branch_head or trunk_head == branch_head:
         return ()
-    code, output = await read_git(
+    code, output = await _read_land_git(
         trunk_root, "diff", "--name-only", f"{trunk_head}..{branch_head}"
     )
     if code != 0:
@@ -155,7 +165,7 @@ async def _incoming_paths(trunk_root: str, trunk_head: str, branch_head: str) ->
 async def _is_ancestor(cwd: str, ancestor: str, descendant: str) -> bool:
     if not ancestor or not descendant:
         return False
-    code, _ = await read_git(cwd, "merge-base", "--is-ancestor", ancestor, descendant)
+    code, _ = await _read_land_git(cwd, "merge-base", "--is-ancestor", ancestor, descendant)
     return code == 0
 
 
@@ -170,12 +180,12 @@ async def read_repository_facts(worktree_root: str, trunk_root: str) -> Reposito
             (tr_branch_code, tr_branch),
             (tr_status_code, tr_status),
         ) = await asyncio.gather(
-            read_git(worktree_root, "rev-parse", "--show-toplevel"),
-            read_git(worktree_root, "rev-parse", "--abbrev-ref", "HEAD"),
-            read_git(worktree_root, "status", "--porcelain"),
-            read_git(trunk_root, "rev-parse", "--show-toplevel"),
-            read_git(trunk_root, "rev-parse", "--abbrev-ref", "HEAD"),
-            read_git(trunk_root, "status", "--porcelain"),
+            _read_land_git(worktree_root, "rev-parse", "--show-toplevel"),
+            _read_land_git(worktree_root, "rev-parse", "--abbrev-ref", "HEAD"),
+            _read_land_git(worktree_root, "status", "--porcelain"),
+            _read_land_git(trunk_root, "rev-parse", "--show-toplevel"),
+            _read_land_git(trunk_root, "rev-parse", "--abbrev-ref", "HEAD"),
+            _read_land_git(trunk_root, "status", "--porcelain"),
         )
     except OSError as exc:  # pragma: no cover - defensive
         return RepositoryFacts(readable=False, error=str(exc))

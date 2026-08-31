@@ -27,7 +27,7 @@ export const settingsTabs = [
   {id:'usage',label:'Usage',group:'Agents'},
   {id:'appearance',label:'Appearance',group:'Interface'},
   {id:'input',label:'Input',group:'Interface'},
-  {id:'notes',label:'Text editor',group:'Interface'},
+  {id:'notes',label:'Notes',group:'Interface'},
   {id:'voice',label:'Voice',group:'Interface'},
   {id:'notifications',label:'Alerts',group:'System'},
   {id:'remote',label:'Remote',group:'System'},

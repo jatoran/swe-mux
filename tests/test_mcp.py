@@ -17,7 +17,9 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import mcp as mcp_module
 from swe_mux.agent_context import AgentContextService
+from swe_mux.agent_worktree_context import ResolvedLandWorktree, WorktreeContextRefusal
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.land_queue import LandRefusal
 from swe_mux.mcp import (
@@ -1291,6 +1293,8 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "run_action",
         "interrupt",
         "end_session",
+        "worktree_context",
+        "use_worktree",
         "request_land",
         "request_verify",
         "watch_session",
@@ -1482,13 +1486,91 @@ def _land_service(session: Any, land: Any = None) -> McpService:
     )
 
 
-async def test_request_land_reads_the_worktree_from_the_callers_own_cwd() -> None:
+@pytest.fixture
+def selected_land_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def selected(*_args: Any, **_kwargs: Any) -> ResolvedLandWorktree:
+        return ResolvedLandWorktree("D:/worktrees/alpha", "worktree-alpha", "live_cwd")
+
+    monkeypatch.setattr(mcp_module.agent_worktree_context, "resolve_land_worktree", selected)
+
+
+async def test_worktree_context_is_read_only_and_use_worktree_owns_the_path_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    async def read_context(_caller: Any, root: str, _sessions: Any) -> dict[str, Any]:
+        seen.append(("read", root))
+        return {"source": "primary_cwd", "landable": False}
+
+    async def bind(
+        _caller: Any, root: str, requested: str | None, _sessions: Any
+    ) -> dict[str, Any]:
+        seen.append((root, requested))
+        return {"source": "bound", "landable": True, "worktree_root": requested}
+
+    monkeypatch.setattr(mcp_module.agent_worktree_context, "worktree_context", read_context)
+    monkeypatch.setattr(mcp_module.agent_worktree_context, "use_worktree", bind)
+    caller = live_session("s1")
+    service = _land_service(caller, LandStub())
+
+    status = await service.dispatch_tool(caller, "worktree_context", {})
+    selected = await service.dispatch_tool(
+        caller, "use_worktree", {"worktree_root": "D:/worktrees/alpha"}
+    )
+    cleared = await service.dispatch_tool(caller, "use_worktree", {})
+
+    assert status["source"] == "primary_cwd"
+    assert selected["worktree_root"] == "D:/worktrees/alpha"
+    assert cleared["worktree_root"] is None
+    assert seen == [
+        ("read", "D:/repo"),
+        ("D:/repo", "D:/worktrees/alpha"),
+        ("D:/repo", None),
+    ]
+    assert service.writes == 2
+
+
+async def test_worktree_selection_refusal_reaches_the_agent_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def refused(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise WorktreeContextRefusal("worktree_in_use", "owned by session other")
+
+    monkeypatch.setattr(mcp_module.agent_worktree_context, "use_worktree", refused)
+    caller = live_session("s1")
+    with pytest.raises(QueueError) as caught:
+        await _land_service(caller, LandStub()).dispatch_tool(
+            caller, "use_worktree", {"worktree_root": "D:/worktrees/alpha"}
+        )
+    assert caught.value.code == "worktree_in_use"
+    assert caught.value.status == 409
+
+
+async def test_land_resolution_refusal_is_more_actionable_than_already_landed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def refused(*_args: Any, **_kwargs: Any) -> ResolvedLandWorktree:
+        raise WorktreeContextRefusal(
+            "worktree_context_required", "call use_worktree before requesting a land"
+        )
+
+    monkeypatch.setattr(mcp_module.agent_worktree_context, "resolve_land_worktree", refused)
+    caller = live_session("s1")
+    with pytest.raises(QueueError) as caught:
+        await _land_service(caller, LandStub()).dispatch_tool(caller, "request_land", {})
+    assert caught.value.code == "worktree_context_required"
+    assert "use_worktree" in str(caught.value)
+
+
+async def test_request_land_reads_the_resolved_targetless_worktree(
+    selected_land_worktree: None,
+) -> None:
     """There is no target argument, so there is nothing here to forge.
 
-    The checkout the daemon lands comes from the caller's own live cwd - the same
-    `git_cwd` every other per-checkout reading uses - which makes "an agent lands
-    the checkout it is working in, and no other" true by construction rather than
-    by a check something could be routed around.
+    The resolver prefers the caller's live linked-worktree cwd and otherwise uses
+    only the separately validated run-bound selection. The dangerous tool itself
+    still accepts no checkout argument.
     """
     land = LandStub()
     caller = live_session("s1")
@@ -1504,11 +1586,13 @@ async def test_request_land_reads_the_worktree_from_the_callers_own_cwd() -> Non
     assert land.calls[0]["kind"] == "land"
 
 
-async def test_request_verify_is_the_same_scoping_asking_for_a_different_act() -> None:
+async def test_request_verify_is_the_same_scoping_asking_for_a_different_act(
+    selected_land_worktree: None,
+) -> None:
     """A separate tool, so the dangerous call is never the default spelling of the safe one.
 
-    It inherits `request_land`'s by-construction scoping unchanged - no target argument,
-    the worktree read off the caller's own record - and differs in exactly one field.
+    It inherits `request_land`'s targetless resolution unchanged and differs in
+    exactly one field.
     """
     land = LandStub()
     caller = live_session("s1")
@@ -1519,10 +1603,16 @@ async def test_request_verify_is_the_same_scoping_asking_for_a_different_act() -
     assert land.calls[0]["kind"] == "verify"
     assert land.calls[0]["worktree_root"] == "D:/worktrees/alpha"
     assert land.calls[0]["origin"] == "agent"
-    # No argument of any spelling can name another checkout.
-    schema = next(item for item in TOOLS if item["name"] == "request_verify")["inputSchema"]
-    assert "target" not in schema["properties"]
-    assert schema["additionalProperties"] is False
+    # No argument of any spelling can name another checkout on either dangerous call.
+    for tool in ("request_land", "request_verify"):
+        schema = next(item for item in TOOLS if item["name"] == tool)["inputSchema"]
+        assert "target" not in schema["properties"]
+        assert "worktree_root" not in schema["properties"]
+        assert schema["additionalProperties"] is False
+    selection_schema = next(item for item in TOOLS if item["name"] == "use_worktree")[
+        "inputSchema"
+    ]
+    assert "worktree_root" in selection_schema["properties"]
 
 
 async def test_request_verify_without_the_service_is_unavailable() -> None:
@@ -1553,7 +1643,9 @@ class RefusingLandStub:
 
 
 @pytest.mark.parametrize("tool", ["request_land", "request_verify"])
-async def test_a_land_service_refusal_reaches_the_agent_typed(tool: str) -> None:
+async def test_a_land_service_refusal_reaches_the_agent_typed(
+    tool: str, selected_land_worktree: None
+) -> None:
     """A refusal is an answer, so it must not arrive as an internal error.
 
     The service refuses for reasons an agent can act on - the branch is already on

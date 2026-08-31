@@ -52,7 +52,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import session_titles
+from . import agent_worktree_context, session_titles
 from .automation_store import SCAN_SEARCH_SCAN_LIMIT
 from .clipboard_store import looks_like_secret
 from .code_graph import (
@@ -1626,6 +1626,47 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "worktree_context",
+        "description": (
+            "Report which checkout request_land and request_verify would use for "
+            "this session, without changing anything. A live linked-worktree cwd "
+            "wins, which is the ordinary Claude worktree path. If this agent "
+            "started on trunk and later created a worktree while its process cwd "
+            "stayed put, the result names whether a run-bound selection exists, is "
+            "valid, or must be set with use_worktree."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "use_worktree",
+        "description": (
+            "Select the exact linked worktree this agent run owns for later "
+            "request_land and request_verify calls when the session itself remains "
+            "on the Project's primary checkout. The daemon accepts only a Git-listed "
+            "linked worktree of this Project, refuses trunk, detached, changed, and "
+            "live-session-owned targets, records the branch, and revalidates it on "
+            "every land call. A real linked-worktree cwd still wins, so Claude's "
+            "native worktree behavior is unchanged. Call with no worktree_root to "
+            "clear this run's selection."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "worktree_root": {
+                    "type": "string",
+                    "description": (
+                        "Absolute exact root of an existing linked worktree; omit to clear"
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "request_land",
         "description": (
             "Ask for your worktree branch to be landed on its Project's trunk. "
@@ -1637,8 +1678,9 @@ TOOLS: list[dict[str, Any]] = [
             "to you as a message naming what stopped it, and your worktree is left "
             "exactly as it was: nothing is committed for you and no conflict is "
             "resolved for you. By default this is not granted, and the call writes "
-            "an inert request a human approves. Call it from a session whose cwd is "
-            "the worktree you want landed."
+            "an inert request a human approves. A live linked-worktree cwd is used "
+            "automatically. If this session started on trunk and created a worktree "
+            "later, call use_worktree first; request_land itself remains targetless."
         ),
         "inputSchema": {
             "type": "object",
@@ -1666,8 +1708,9 @@ TOOLS: list[dict[str, Any]] = [
             "than a miss. Use this instead of running the full suite yourself: "
             "your own run cannot be reused, because only a run this queue "
             "executed counts. Iterate with targeted tests and let this be the "
-            "full gate. Call it from a session whose cwd is the worktree you "
-            "want verified."
+            "full gate. A live linked-worktree cwd is used automatically. If this "
+            "session started on trunk and created a worktree later, call "
+            "use_worktree first; request_verify itself remains targetless."
         ),
         "inputSchema": {
             "type": "object",
@@ -5027,6 +5070,56 @@ class McpService:
         )
         return dict(result)
 
+    def _land_project(self, caller: Any) -> Any:
+        project = None
+        if self.projects is not None:
+            project = self.projects.projects.get(str(caller.record.project_id or ""))
+        if project is None:
+            raise QueueError(
+                "no_project",
+                "this session is not owned by a registered Project.",
+                status=409,
+            )
+        return project
+
+    @staticmethod
+    def _worktree_refusal(
+        exc: agent_worktree_context.WorktreeContextRefusal,
+    ) -> QueueError:
+        return QueueError(exc.code, exc.message, status=exc.status)
+
+    async def worktree_context(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.worktree_context`: resolve the targetless land checkout read-only."""
+        del args
+        project = self._land_project(caller)
+        try:
+            return dict(
+                await agent_worktree_context.worktree_context(
+                    caller, str(project.root), self.sessions
+                )
+            )
+        except agent_worktree_context.WorktreeContextRefusal as exc:
+            raise self._worktree_refusal(exc) from exc
+
+    async def use_worktree(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.use_worktree`: bind one validated checkout to this agent run."""
+        self.writes += 1
+        project = self._land_project(caller)
+        requested = args.get("worktree_root") if "worktree_root" in args else None
+        if requested is not None and not isinstance(requested, str):
+            raise ValueError("worktree_root must be a string")
+        try:
+            return dict(
+                await agent_worktree_context.use_worktree(
+                    caller,
+                    str(project.root),
+                    requested,
+                    self.sessions,
+                )
+            )
+        except agent_worktree_context.WorktreeContextRefusal as exc:
+            raise self._worktree_refusal(exc) from exc
+
     async def request_verify(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         """`mux.request_verify`: run the approved gate on the caller's branch, and stop.
 
@@ -5037,16 +5130,18 @@ class McpService:
         under the grant that exists for the trunk.
 
         It inherits `request_land`'s scoping unchanged, and for the same reason:
-        no target argument, so the worktree comes from the caller's own live cwd.
+        no target argument. A live linked-worktree cwd wins; a session still on
+        trunk may use only the run-bound selection established by `use_worktree`.
         """
         return await self._enqueue_land(caller, args, kind="verify")
 
     async def request_land(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         """`mux.request_land`: enqueue a land of the caller's own worktree branch.
 
-        Deliberately has no target argument. An agent lands the checkout it is
-        working in and no other, so the worktree is read from the caller's own live
-        cwd rather than accepted from the call - there is nothing here to forge.
+        Deliberately has no target argument. A live linked-worktree cwd is the
+        ordinary Claude path; a run-bound, separately validated selection is the
+        Codex path when its host cwd remains on trunk. In both cases this dangerous
+        call accepts no checkout name to forge.
         Every bound (install switch, Project opt-in, grant, budget, preconditions,
         the git vocabulary itself) lives in the daemon service; this is a caller.
         """
@@ -5057,9 +5152,9 @@ class McpService:
     ) -> dict[str, Any]:
         """The caller both land-queue tools are, with the kind they asked for.
 
-        Shared so the by-construction scoping is written once: a second copy of "read
-        the worktree off the caller's own record" is a second chance to accept one from
-        the arguments instead.
+        Shared so the targetless resolution is written once: a second copy of the
+        live-cwd-first, bound-selection-second rule is a second place for the two
+        agent execution models to disagree.
         """
         self.writes += 1
         if self.land_queue is None:
@@ -5069,27 +5164,18 @@ class McpService:
                 status=503,
             )
         record = caller.record
-        worktree_root = str(getattr(record, "git_cwd", "") or "")
-        if not worktree_root:
-            raise QueueError(
-                "no_worktree",
-                "this session has no working directory to land.",
-                status=409,
+        project = self._land_project(caller)
+        try:
+            selection = await agent_worktree_context.resolve_land_worktree(
+                caller, str(project.root), self.sessions
             )
-        project = None
-        if self.projects is not None:
-            project = self.projects.projects.get(str(record.project_id or ""))
-        if project is None:
-            raise QueueError(
-                "no_project",
-                "this session is not owned by a registered Project.",
-                status=409,
-            )
+        except agent_worktree_context.WorktreeContextRefusal as exc:
+            raise self._worktree_refusal(exc) from exc
         try:
             result = await self.land_queue.request(
                 project_id=str(project.id),
                 project_root=str(project.root),
-                worktree_root=worktree_root,
+                worktree_root=selection.root,
                 kind=kind,
                 origin="agent",
                 origin_session_id=str(record.id),
@@ -5339,6 +5425,8 @@ class McpService:
             "run_action": self.run_action,
             "interrupt": self.interrupt,
             "end_session": self.end_session,
+            "worktree_context": self.worktree_context,
+            "use_worktree": self.use_worktree,
             "request_land": self.request_land,
             "request_verify": self.request_verify,
         }

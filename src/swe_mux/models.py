@@ -461,6 +461,16 @@ class SessionRecord:
     run_cwd: str | None = None
     run_project_scope_id: str | None = None
     run_repo_group_id: str | None = None
+    # A targetless land-queue selection for agents whose host process stays in
+    # the primary checkout while their commands run in a worktree (Codex's
+    # per-command `workdir` model). This never replaces runtime cwd telemetry:
+    # a real linked-worktree `git_cwd` remains authoritative, which preserves
+    # Claude's native worktree behavior. Bound to one agent run so `/clear` or
+    # `/new` cannot inherit a checkout decision it was never told about.
+    land_worktree_root: str | None = None
+    land_worktree_branch: str | None = None
+    land_worktree_run_id: str | None = None
+    land_worktree_bound_at: float | None = None
     # Set when the followed transcript has gone quiet while this PTY is still
     # producing output and no switch could be corroborated: the conversation moved
     # somewhere we cannot prove. Observation then fails closed — hooks resume
