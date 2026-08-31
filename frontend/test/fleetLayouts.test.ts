@@ -119,6 +119,49 @@ test('a session this device already resolved a pending leaf for is not joined a 
   assert.deepEqual(terminalIds(result.layouts.p1), ['term-a'])
 })
 
+test('an optimistic leaf is re-placed off the server layout, which never holds a pending id', () => {
+  const pendingSpawns: Record<string, PendingSpawn> = {
+    'pending-1': { projectId: 'p1', placement: { split: false, targetId: 'term-a', position: 'after' } },
+  }
+  const result = plan({
+    sessions: [session('term-a'), session('pending-1', { pending: true })],
+    projects: [project('p1', paneWith('term-a'))],
+    pendingSpawns,
+  })
+  assert.deepEqual(terminalIds(result.layouts.p1), ['term-a', 'pending-1'])
+  // Nobody is looking at it, so the pane keeps the tab the server layout says it was showing.
+  assert.equal(stackForView(result.layouts.p1, 'pending-1')?.active_child_id, 'term-a')
+})
+
+test("re-placing the optimistic leaf the operator is watching keeps it the pane's active tab", () => {
+  // Worktree bootstrap runs for minutes, so several refreshes land while the setup splash is
+  // the thing on screen. Restoring the server layout's active tab under it would hide the
+  // launch behind a sibling while focus still names it.
+  const pendingSpawns: Record<string, PendingSpawn> = {
+    'pending-1': { projectId: 'p1', placement: { split: false, targetId: 'term-a', position: 'after' } },
+  }
+  const result = plan({
+    sessions: [session('term-a'), session('pending-1', { pending: true })],
+    projects: [project('p1', paneWith('term-a'))],
+    pendingSpawns,
+    joinAnchor: { projectId: 'p1', viewId: 'pending-1' },
+  })
+  assert.equal(stackForView(result.layouts.p1, 'pending-1')?.active_child_id, 'pending-1')
+})
+
+test('the watched-launch exception is keyed on the Project as well as the view', () => {
+  const pendingSpawns: Record<string, PendingSpawn> = {
+    'pending-1': { projectId: 'p1', placement: { split: false, targetId: 'term-a', position: 'after' } },
+  }
+  const result = plan({
+    sessions: [session('term-a'), session('pending-1', { pending: true })],
+    projects: [project('p1', paneWith('term-a'))],
+    pendingSpawns,
+    joinAnchor: { projectId: 'p2', viewId: 'pending-1' },
+  })
+  assert.equal(stackForView(result.layouts.p1, 'pending-1')?.active_child_id, 'term-a')
+})
+
 test('ended and pending sessions keep their leaf but are never given a new one', () => {
   const withEnded = plan({
     sessions: [session('term-a'), session('gone', { state: 'exited' })],
