@@ -349,7 +349,7 @@ async def test_notify_accepts_the_display_name_but_sends_the_stable_id() -> None
 
     result = await service.notify(
         caller,
-        {"target": "Fix Sidebar Sorting", "body": "Review this"},
+        {"target": "Fix Sidebar Sorting", "body": "Review this", "delivery": "when_idle"},
     )
 
     assert messaging.targets == ["s2"]
@@ -373,10 +373,11 @@ async def test_notify_resolves_a_display_name_across_projects_and_carries_the_sc
     )
 
     named = await service.notify(
-        caller, {"target": "Pack The Atlas", "body": "hi", "project": "fleet"}
+        caller,
+        {"target": "Pack The Atlas", "body": "hi", "delivery": "when_idle", "project": "fleet"},
     )
     qualified = await service.notify(
-        caller, {"target": "Pixel Lab/Pack The Atlas", "body": "hi"}
+        caller, {"target": "Pixel Lab/Pack The Atlas", "body": "hi", "delivery": "when_idle"}
     )
 
     assert named["target_session_id"] == "s3"
@@ -400,7 +401,13 @@ async def test_notify_refuses_an_ambiguous_target_as_a_typed_result() -> None:
 
     with pytest.raises(QueueError) as caught:
         await service.notify(
-            caller, {"target": "Same title", "body": "which one", "project": "fleet"}
+            caller,
+            {
+                "target": "Same title",
+                "body": "which one",
+                "delivery": "when_idle",
+                "project": "fleet",
+            },
         )
 
     assert caught.value.code == "ambiguous_target"
@@ -1298,6 +1305,7 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "request_land",
         "request_verify",
         "watch_session",
+        "await_session",
     }
     assert names == {tool["name"] for tool in TOOLS}
     by_name = {tool["name"]: tool for tool in listing["result"]["tools"]}
@@ -1851,3 +1859,180 @@ def test_list_models_is_declared_a_read_and_annotated_as_one() -> None:
     tool = next(item for item in TOOLS if item["name"] == "list_models")
     assert tool["annotations"]["readOnlyHint"] is True
     assert "mcp__mux__list_models" in claude_read_permissions()
+
+
+# ---------------------------------------------------- coordination surfaces
+
+
+def test_the_surface_gate_makes_neither_an_enforced_state() -> None:
+    """Phase 23 W4: a harness with both capability surfaces off has sessions
+    whose tokens authenticate nothing - refused at the endpoint both
+    transports share, not in any client."""
+    caller = live_session("s1", token="tok")
+    service = service_for(caller)
+    service.surface_gate = lambda backend: False
+    with pytest.raises(McpAuthError, match="switched off"):
+        service.resolve_caller("Bearer tok")
+    service.surface_gate = lambda backend: True
+    assert service.resolve_caller("Bearer tok") is caller
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_credits_attention_once_per_throttle_window() -> None:
+    """An authenticated call is 'somebody is reading the deliveries' evidence,
+    throttled so a burst costs one write."""
+    caller = live_session("s1", token="tok")
+    service = service_for(caller)
+    credited: list[str] = []
+
+    async def credit(session_id: str) -> None:
+        credited.append(session_id)
+
+    service.attention_credit = credit
+    await service.dispatch_tool(caller, "list_sessions", {})
+    await service.dispatch_tool(caller, "list_sessions", {})
+    assert credited == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_attention_credit_never_fails_the_call() -> None:
+    caller = live_session("s1", token="tok")
+    service = service_for(caller)
+
+    async def broken(session_id: str) -> None:
+        raise RuntimeError("bookkeeping down")
+
+    service.attention_credit = broken
+    result = await service.dispatch_tool(caller, "list_sessions", {})
+    assert "sessions" in result
+
+
+@pytest.mark.asyncio
+async def test_notify_requires_a_deliberate_delivery_choice() -> None:
+    caller = live_session("s1", token="tok")
+    service = service_for(caller, live_session("s2"), messaging=MessagingStub())
+    with pytest.raises(ValueError, match="requires delivery"):
+        await service.notify(caller, {"target": "s2", "body": "hi"})
+    with pytest.raises(ValueError, match="requires delivery"):
+        await service.notify(
+            caller, {"target": "s2", "body": "hi", "delivery": "soon"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_delivery_now_requires_a_reason() -> None:
+    caller = live_session("s1", token="tok")
+    messaging = MessagingStub()
+    service = service_for(caller, live_session("s2"), messaging=messaging)
+    with pytest.raises(ValueError, match="requires a reason"):
+        await service.notify(
+            caller, {"target": "s2", "body": "hi", "delivery": "now"}
+        )
+    result = await service.notify(
+        caller,
+        {"target": "s2", "body": "hi", "delivery": "now", "reason": "changed constraint"},
+    )
+    assert result["target_session_id"] == "s2"
+    assert messaging.calls[0]["delivery"] == "now"
+
+
+class AwaitStub:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def await_settle(self, caller: Any, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"caller": caller.record.id, **kwargs})
+        return {"case": "settled", "target_state": "idle"}
+
+    async def watch(self, caller: Any, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"watch": True, "caller": caller.record.id, **kwargs})
+        return {"watch_id": "watch_abc", "status": "watching"}
+
+
+@pytest.mark.asyncio
+async def test_await_session_is_a_thin_caller_over_the_watch_service() -> None:
+    caller = live_session("s1", token="tok")
+    stub = AwaitStub()
+    service = service_for(caller)
+    service.session_watch = stub
+    result = await service.await_session(
+        caller, {"target": "worker", "until": ["ended"], "timeout_seconds": 30}
+    )
+    assert result == {"case": "settled", "target_state": "idle"}
+    assert stub.calls[0]["target"] == "worker"
+    assert stub.calls[0]["until"] == ["ended"]
+    assert stub.calls[0]["timeout_seconds"] == 30
+
+
+@pytest.mark.asyncio
+async def test_await_session_without_the_service_answers_unavailable() -> None:
+    caller = live_session("s1", token="tok")
+    service = service_for(caller)
+    with pytest.raises(QueueError) as caught:
+        await service.await_session(caller, {"target": "worker"})
+    assert caught.value.code == "unavailable"
+
+
+class SpawnControlStub:
+    def __init__(self, status: str = "spawned") -> None:
+        self.status = status
+        self.calls: list[dict[str, Any]] = []
+
+    async def spawn(self, _caller: Any, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        if self.status == "spawned":
+            return {"status": "spawned", "session_id": "new1", "name": "claude-new1"}
+        return {"status": "drafted", "request_id": "req1"}
+
+
+@pytest.mark.asyncio
+async def test_request_spawn_watch_arms_the_same_watch_watch_session_would() -> None:
+    caller = live_session("s1", token="tok")
+    control = SpawnControlStub()
+    watch = AwaitStub()
+    service = service_for(caller)
+    service.session_control = control
+    service.session_watch = watch
+    result = await service.request_spawn(
+        caller, {"prompt": "do the thing", "watch": True, "watch_timeout_minutes": 45}
+    )
+    assert result["status"] == "spawned"
+    assert result["watch"]["watch_id"] == "watch_abc"
+    armed = [call for call in watch.calls if call.get("watch")]
+    assert armed[0]["target"] == "new1"
+    assert armed[0]["timeout_minutes"] == 45
+    # The service was told what was deferred, so a draft can carry it.
+    assert control.calls[0]["watch"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_failed_watch_never_fails_the_spawn() -> None:
+    caller = live_session("s1", token="tok")
+    control = SpawnControlStub()
+    service = service_for(caller)
+    service.session_control = control
+    service.session_watch = None
+    result = await service.request_spawn(caller, {"prompt": "go", "watch": True})
+    assert result["status"] == "spawned"
+    assert "watch_error" in result
+    assert "watch" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_drafted_spawn_reports_the_watch_as_pending() -> None:
+    caller = live_session("s1", token="tok")
+    control = SpawnControlStub(status="drafted")
+    service = service_for(caller)
+    service.session_control = control
+    result = await service.request_spawn(caller, {"prompt": "go", "watch": True})
+    assert result["status"] == "drafted"
+    assert result["watch_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_request_spawn_refuses_an_unknown_pane_hint() -> None:
+    caller = live_session("s1", token="tok")
+    service = service_for(caller)
+    service.session_control = SpawnControlStub()
+    with pytest.raises(ValueError, match="pane must be"):
+        await service.request_spawn(caller, {"prompt": "go", "pane": "floating"})

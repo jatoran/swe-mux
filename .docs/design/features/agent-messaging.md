@@ -97,7 +97,7 @@ its own is the default and nothing widens implicitly.
   | Bound | Configured default | Backstop (limits off) | Refusal code |
   |---|---|---|---|
   | target in the requested scope, live agent session, not the caller | caller's Project | same | `unknown_target`, `ambiguous_target`, `unknown_project`, `not_agent_target`, `self_notify` |
-  | body size | 4 000 chars | same (always binds) | `body_too_large` |
+  | body size | 8 000 chars (raised from 4 000 on 2026-08-30: a real task brief with acceptance criteria measures 6-9k, and the old cap trimmed the constraints rather than the padding; beyond a brief a reference still beats a payload, which is why it is not larger) | same (always binds) | `body_too_large` |
   | per-origin hourly budget | 20 messages | 500 | `origin_budget_exhausted` |
   | undelivered agent messages per target | 5 | 50 | `target_backlog_full` |
   | relay propagation: distinct sessions one thread may reach | 6 | 10 | `chain_depth_exceeded` |
@@ -348,12 +348,20 @@ GET  /api/queue/mailbox?author=all|non_human|human[&project_id=...][&target_sess
      (the route keeps its original name; the surface it backs is the fleet queue)
 POST /api/queue/messages/{id}/cancel            {kind: revoked}
 POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
-MCP  notify(target, body, reason?, correlation_id?, project?, delivery?, dry_run?)
+MCP  notify(target, body, delivery, reason?, correlation_id?, project?, dry_run?)
 MCP  revoke_message(message_id, reason?)
-MCP  request_spawn(prompt, backend?, name?, reason?, project?)
+MCP  request_spawn(prompt, backend?, model?, name?, reason?, project?,
+                   watch?, watch_timeout_minutes?, pane?, correlation_id?)
 MCP  message_status(message_id)
 MCP  spawn_requests(project?)
 ```
+
+`delivery` became **required** on 2026-08-30 (`"when_idle"` or `"now"`, and `"now"` also
+requires a `reason`): with a silent `when_idle` default, senders never weighed *when* the
+message should land, and a correction that should have interrupted a worker's plan arrived
+after the worker had finished executing it. Requiring the argument forces that choice at
+every call, and the reason on `"now"` is provenance for a delivery that costs the receiver
+attention immediately.
 
 `dry_run` stages nothing and returns `{dry_run, would_arm, state, thread_messages_remaining,
 would_deduplicate, target_delivery, note}`. `revoke_message` refuses with `unknown_message`

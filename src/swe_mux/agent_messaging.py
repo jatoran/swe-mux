@@ -932,6 +932,9 @@ class AgentMessagingService:
         reason: str = "",
         project: Any = None,
         model: str = "",
+        pane: str = "",
+        watch: bool = False,
+        watch_timeout_minutes: Any = None,
     ) -> dict[str, Any]:
         """Write an inert spawn request for review in the Fleet Queue.
 
@@ -1018,6 +1021,19 @@ class AgentMessagingService:
             "from_run_id": str(getattr(record, "agent_run_id", "") or ""),
             "project_id": project_id,
             "status": "pending",
+            # The two deferred halves of the request, honoured at approval time:
+            # a placement hint the approving spawn stamps on the session, and a
+            # settle watch armed for the requester - only if its conversation
+            # is still the one that asked (`routes/observations.py`). Strings,
+            # because the request row is a closed string-field allowlist.
+            **({"pane": pane} if pane else {}),
+            **({"watch": "true"} if watch else {}),
+            **(
+                {"watch_timeout_minutes": str(watch_timeout_minutes)}
+                if watch
+                and str(watch_timeout_minutes or "").strip().isdigit()
+                else {}
+            ),
         }
         result = await self._append_observation(
             target_project.root, body, kind="spawn_request", request=request

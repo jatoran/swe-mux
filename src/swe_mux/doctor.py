@@ -967,6 +967,28 @@ def _optional_asset_checks(assets: list[dict[str, Any]]) -> list[dict[str, Any]]
     return checks
 
 
+def _surface_checks(warnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per incoherent agent-surface combination (`agent_surfaces.py`).
+
+    Advisory (`warn`), never `fail`: every combination is legal and an operator
+    mid-reconfiguration passes through the incoherent ones - but a skill
+    teaching commands that will fail, and a mute CLI capability nothing ever
+    advertises, are both traps a report should name before an agent falls in.
+    """
+    return [
+        _check(
+            id=f"agent_surfaces.{warning.get('backend')}",
+            category="agent-surfaces",
+            title=f"Fleet access coherence ({warning.get('backend')})",
+            status="warn",
+            severity="optional",
+            detail=str(warning.get("message") or warning.get("code") or ""),
+            remedy="Settings -> Harnesses -> Fleet access",
+        )
+        for warning in warnings
+    ]
+
+
 def build_doctor_report(
     *,
     health: dict[str, Any],
@@ -983,6 +1005,7 @@ def build_doctor_report(
     wsl_bridges: list[dict[str, Any]] | None = None,
     optional_assets: list[dict[str, Any]] | None = None,
     hook_silence: list[dict[str, Any]] | None = None,
+    surface_warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the consolidated doctor report from already-fetched diagnostics.
 
@@ -1003,6 +1026,7 @@ def build_doctor_report(
     checks += _wsl_bridge_checks(wsl_bridges or [])
     checks += _optional_asset_checks(optional_assets or [])
     checks += _hook_ingress_checks(hook_silence or [])
+    checks += _surface_checks(surface_warnings or [])
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "unavailable": 0}
     for check in checks:

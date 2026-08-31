@@ -24,6 +24,7 @@ from ..project_files import (
     update_observation_request,
     write_observations,
 )
+from ..prompt_queue import QueueError
 from . import sessions, terminal
 from .support import _human_sender_kind, _observations_project, _registered_identity
 
@@ -312,6 +313,13 @@ async def decide_observation_request(request: web.Request) -> web.Response:
     if cwd:
         spawn_body["cwd"] = cwd
     session = await sessions._spawn_from_body(request.app, spawn_body)
+    pane_hint = str(spawn_request.get("pane") or "")
+    if pane_hint in {"split_horizontal", "split_vertical"}:
+        # The requester's deferred placement ask, honoured only now that a
+        # human has approved the spawn. One-shot: the first browser viewing
+        # the Project claims and clears it.
+        session.record.pane_hint = pane_hint
+    watch_outcome = await _arm_requested_watch(request, spawn_request, session)
     result = await update_observation_request(
         project.root,
         observation_id,
@@ -337,9 +345,54 @@ async def decide_observation_request(request: web.Request) -> web.Response:
             "project_id": project.id,
             "project_name": project.name,
             "session": session.record.snapshot(),
+            **({"watch": watch_outcome} if watch_outcome else {}),
         }
     )
     return json_response(result, 201)
+
+
+async def _arm_requested_watch(
+    request: web.Request, spawn_request: dict[str, Any], session: Any
+) -> dict[str, Any] | None:
+    """Arm the settle watch a drafted `request_spawn(watch=true)` deferred.
+
+    The consent travels with the request: the watch is armed for the session
+    that asked, and only while its conversation is still the run that asked -
+    a rolled or ended requester gets nothing, exactly as a live watch would
+    have been dropped (`session_watch.py`). A watch that cannot be armed never
+    fails the approval; the spawn is the human's act and it has succeeded.
+    """
+    if str(spawn_request.get("watch") or "") != "true":
+        return None
+    watch_service = request.app.get(keys.SESSION_WATCH)
+    if watch_service is None:
+        return {"armed": False, "reason": "session watches are unavailable"}
+    requester_id = str(spawn_request.get("from_session") or "")
+    requester = request.app[keys.SESSIONS].sessions.get(requester_id)
+    if requester is None:
+        return {"armed": False, "reason": "the requesting session has ended"}
+    asked_run = str(spawn_request.get("from_run_id") or "")
+    live_run = str(getattr(requester.record, "agent_run_id", "") or "")
+    if asked_run and live_run and asked_run != live_run:
+        return {"armed": False, "reason": "the requesting conversation was replaced"}
+    try:
+        view = await watch_service.watch(
+            requester,
+            target=str(session.record.id),
+            timeout_minutes=str(spawn_request.get("watch_timeout_minutes") or "")
+            or None,
+            project="fleet",
+        )
+    except QueueError as exc:
+        return {"armed": False, "reason": f"{exc.code}: {exc}"}
+    except Exception:  # noqa: BLE001 - a failed watch must not fail the approval
+        log.exception(
+            "spawn approval watch arming failed requester=%s target=%s",
+            requester_id,
+            session.record.id,
+        )
+        return {"armed": False, "reason": "the watch could not be armed"}
+    return {"armed": True, "watch_id": str(view.get("watch_id") or "")}
 
 
 ROUTES: tuple[web.RouteDef, ...] = (
