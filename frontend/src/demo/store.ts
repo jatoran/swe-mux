@@ -32,6 +32,10 @@ export type DemoState = {
   previews: Preview[]
   notes: DemoNote[]
   config: Record<string, unknown>
+  /** Which keymap preset is in force. The demo ships the daemon's own preset
+   *  documents (`keymapFixture.ts`), so switching to tmux or Vim really does
+   *  redraw every chord in Settings rather than only changing a label. */
+  keymapPreset: string
   /** Raw ANSI scrollback per session id, replayed on every pane attach. */
   terminals: Record<string, string>
   /** Event-bus watermark; monotonic across every frame via the reducer. */
@@ -46,6 +50,7 @@ export type DemoMutation =
   | { kind: 'preview-add'; preview: Preview }
   | { kind: 'preview-remove'; id: string }
   | { kind: 'config-patch'; patch: Record<string, unknown> }
+  | { kind: 'keymap-preset'; preset: string }
   | { kind: 'note-add'; note: DemoNote }
   | { kind: 'note-patch'; noteId: string; patch: Partial<DemoNote> }
   | { kind: 'note-remove'; noteId: string }
@@ -64,6 +69,33 @@ const SCROLLBACK_CAP = 120_000
 
 const FRAME_ID = `frame-${Math.random().toString(36).slice(2, 10)}`
 
+/**
+ * Pull every open turn back to the recent past.
+ *
+ * A turn clock is an absolute timestamp measured against wall time, so a visitor
+ * who returns a day later would find a pane that has been "working" for 26
+ * hours - which reads as a hung demo rather than as a busy agent. Rebasing on
+ * load keeps the pulse honest without persisting anything about when they left.
+ */
+function rebaseWorkingTurns(loaded: DemoState): DemoState {
+  const now = Math.floor(Date.now() / 1000)
+  const CEILING_SECONDS = 15 * 60
+  return {
+    ...loaded,
+    sessions: loaded.sessions.map(item => {
+      const started = item.turn_started_at
+      if (item.state !== 'working' || !started || now - started <= CEILING_SECONDS) return item
+      const fresh = now - (30 + Math.floor(Math.random() * 240))
+      return {
+        ...item,
+        turn_started_at: fresh,
+        state_since: fresh,
+        ...(item.running_work_since ? { running_work_since: fresh } : {}),
+      }
+    }),
+  }
+}
+
 function loadPersisted(): DemoState | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -71,7 +103,7 @@ function loadPersisted(): DemoState | null {
     const parsed = JSON.parse(raw) as DemoState
     if (!Array.isArray(parsed.sessions) || !Array.isArray(parsed.projects)) return null
     if (parsed.version !== initialDemoState().version) return null
-    return parsed
+    return rebaseWorkingTurns(parsed)
   } catch {
     return null
   }
@@ -130,6 +162,9 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
       return next
     case 'config-patch':
       next.config = { ...current.config, ...mutation.patch, revision: Number(current.config.revision ?? 0) + 1 }
+      return next
+    case 'keymap-preset':
+      next.keymapPreset = mutation.preset
       return next
     case 'note-add':
       next.notes = [...current.notes, mutation.note]

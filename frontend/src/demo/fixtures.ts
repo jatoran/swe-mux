@@ -11,7 +11,10 @@ import type { Preview } from '../processFleet.ts'
 import type { PaneLayout } from '../layout.ts'
 import type { Project, Session } from '../types.ts'
 import type { DemoNote, DemoState } from './store.ts'
-import { claudeScrollback, codexScrollback, shellScrollback, spawnScrollback } from './terminalSim.ts'
+import {
+  claudeScrollback, codexScrollback, rageScrollback, shellScrollback,
+  spawnScrollback, vibeScrollback, workingScrollback,
+} from './terminalSim.ts'
 
 const now = Math.floor(Date.now() / 1000)
 
@@ -28,8 +31,15 @@ function makeSession(input: {
   state: Session['state']; model?: string; tokens?: number; cost?: number
   contextPct?: number; turnSeq?: number; git?: Partial<Session['git']>
   workedMs?: number; ageSeconds?: number
+  /** Seconds this session's open turn has been running. Only for `working`
+   *  rows: it is what makes the status dot pulse and the turn clock tick, and
+   *  the clock ticks by itself because the UI measures it against wall time. */
+  workingForSeconds?: number
 }): Session {
   const created = now - (input.ageSeconds ?? 3600)
+  const turnStarted = input.workingForSeconds === undefined
+    ? undefined
+    : now - input.workingForSeconds
   return {
     id: input.id,
     name: input.name,
@@ -42,7 +52,14 @@ function makeSession(input: {
     pid: 40000 + Math.abs(hash(input.id)) % 9000,
     created_at: created,
     state: input.state,
-    state_since: now - 90,
+    state_since: turnStarted ?? now - 90,
+    ...(turnStarted === undefined ? {} : {
+      turn_started_at: turnStarted,
+      running_work_since: turnStarted,
+      turn_epoch: 1,
+      active_turn_id: `turn-${input.id}`,
+      last_human_prompt_at: turnStarted,
+    }),
     tokens_in: input.tokens ?? 0,
     tokens_out: Math.floor((input.tokens ?? 0) / 4),
     tokens_cache_read: (input.tokens ?? 0) * 6,
@@ -89,12 +106,36 @@ function hash(text: string): number {
   return value
 }
 
+/** Sessions the demo keeps permanently mid-turn. They pulse, their turn clock
+ *  ticks, and typing into one is answered by `busyReply` instead of the joke
+ *  responder - which is the honest demonstration, because the real product also
+ *  refuses to interleave a keystroke into a running turn. */
+export const BUSY_SESSION_IDS: readonly string[] = ['s-working', 's-migrate']
+
+const GARDEN_GIT: Partial<Session['git']> = {
+  branch: 'main', dirty: 0, ahead: 0, behind: 0, added: 0, removed: 0,
+  root: '/code/meme-garden', compare_ref: null, compare_added: null,
+  compare_removed: null, compare_files: null,
+}
+
 const SESSIONS: Session[] = [
   makeSession({
     id: 's-claude', name: 'fix flaky checkout test', project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 48200, cost: 1.84, contextPct: 31, turnSeq: 4, workedMs: 8 * 60_000,
     ageSeconds: 2 * 3600,
+  }),
+  makeSession({
+    id: 's-rage', name: 'prod is down (4h)', project: DEMO_PROJECT_ID,
+    backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
+    tokens: 187400, cost: 6.42, contextPct: 79, turnSeq: 31, workedMs: 71 * 60_000,
+    ageSeconds: 4 * 3600 + 12 * 60,
+  }),
+  makeSession({
+    id: 's-working', name: 'refactor the coupon table', project: DEMO_PROJECT_ID,
+    backend: 'claude', state: 'working', model: 'claude-opus-4-8',
+    tokens: 33100, cost: 1.12, contextPct: 24, turnSeq: 6, workedMs: 12 * 60_000,
+    ageSeconds: 55 * 60, workingForSeconds: 96,
   }),
   makeSession({
     id: 's-codex', name: 'profile cart endpoint', project: DEMO_PROJECT_ID,
@@ -110,7 +151,19 @@ const SESSIONS: Session[] = [
     id: 's-garden', name: 'water the memes', project: DEMO_PROJECT2_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 9800, cost: 0.31, contextPct: 9, turnSeq: 1, ageSeconds: 20 * 60,
-    git: { branch: 'main', dirty: 0, ahead: 0, behind: 0, added: 0, removed: 0, root: '/code/meme-garden', compare_ref: null, compare_added: null, compare_removed: null, compare_files: null },
+    git: GARDEN_GIT,
+  }),
+  makeSession({
+    id: 's-vibe', name: 'make it work', project: DEMO_PROJECT2_ID,
+    backend: 'codex', state: 'idle', model: 'gpt-demo',
+    tokens: 64300, cost: 1.97, contextPct: 41, turnSeq: 9, workedMs: 23 * 60_000,
+    ageSeconds: 70 * 60, git: GARDEN_GIT,
+  }),
+  makeSession({
+    id: 's-migrate', name: 'migrate the meme schema', project: DEMO_PROJECT2_ID,
+    backend: 'codex', state: 'working', model: 'gpt-demo',
+    tokens: 12750, cost: 0.38, contextPct: 11, turnSeq: 2, workedMs: 4 * 60_000,
+    ageSeconds: 18 * 60, workingForSeconds: 402, git: GARDEN_GIT,
   }),
 ]
 
@@ -122,6 +175,8 @@ const P1_LAYOUT: PaneLayout = {
       type: 'stack', id: 'stack-agents', active_child_id: 's-claude',
       children: [
         { type: 'leaf', kind: 'terminal', id: 's-claude' },
+        { type: 'leaf', kind: 'terminal', id: 's-rage' },
+        { type: 'leaf', kind: 'terminal', id: 's-working' },
         { type: 'leaf', kind: 'terminal', id: 's-codex' },
       ],
     },
@@ -142,8 +197,18 @@ const P1_LAYOUT: PaneLayout = {
 const P2_LAYOUT: PaneLayout = {
   version: 7,
   root: {
-    type: 'stack', id: 'stack-garden', active_child_id: 's-garden',
-    children: [{ type: 'leaf', kind: 'terminal', id: 's-garden' }],
+    type: 'split', id: 'split-garden', direction: 'horizontal', ratio: 0.5,
+    first: {
+      type: 'stack', id: 'stack-garden', active_child_id: 's-vibe',
+      children: [
+        { type: 'leaf', kind: 'terminal', id: 's-vibe' },
+        { type: 'leaf', kind: 'terminal', id: 's-garden' },
+      ],
+    },
+    second: {
+      type: 'stack', id: 'stack-garden-work', active_child_id: 's-migrate',
+      children: [{ type: 'leaf', kind: 'terminal', id: 's-migrate' }],
+    },
   },
 }
 
@@ -435,7 +500,7 @@ export function demoConfig(): Record<string, unknown> {
 }
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 4
+export const DEMO_STATE_VERSION = 5
 
 export function initialDemoState(): DemoState {
   return {
@@ -446,11 +511,16 @@ export function initialDemoState(): DemoState {
     previews: PREVIEWS.map(item => ({ ...item })),
     notes: NOTES.map(item => ({ ...item })),
     config: demoConfig(),
+    keymapPreset: 'swemux',
     terminals: {
       's-claude': claudeScrollback(),
+      's-rage': rageScrollback(),
+      's-working': workingScrollback('claude', 'pull the coupon table out of the request path'),
       's-codex': codexScrollback(),
       's-shell': shellScrollback(),
       's-garden': spawnScrollback('claude'),
+      's-vibe': vibeScrollback(),
+      's-migrate': workingScrollback('codex', 'migrate the meme schema to v3, keep the old ids'),
     },
     seq: 1,
   }

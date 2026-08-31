@@ -16,14 +16,50 @@ import type { WslBridgeStatus } from '../../src/wslBridge'
 import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
 import '../../src/style.css'
 
+/**
+ * `GET /api/keybindings`, in the shape the daemon has served since keymap presets
+ * landed - a rule LIST plus a preset catalogue, not the old `bindings` map.
+ *
+ * The stale shape was not merely out of date, it was actively hiding a defect:
+ * with no `policy.wm_reserved` the browser probe rendered nothing, the shortcuts
+ * page was left with two headings instead of three, and its section happened to
+ * take the right slug. The blank Keyboard-shortcuts page that shipped was
+ * therefore invisible to the one spec that walks every page. Keep this in step
+ * with `routes/keybindings`.
+ */
 const KEYBINDINGS = {
-  bindings: { 'ctrl+k': 'palette.open' },
-  defaults: { 'ctrl+k': 'palette.open' },
+  preset: 'swemux',
+  presets: [
+    { id: 'swemux', title: 'swe-mux', description: 'The default.', leader: 'ctrl+shift+space', prefix: '', prefix_alternates: [], warning: '', bindings: 2 },
+    { id: 'tmux', title: 'tmux', description: 'The tmux prefix.', leader: 'ctrl+shift+space', prefix: 'ctrl+b', prefix_alternates: ['ctrl+a'], warning: 'C-b belongs to tmux itself inside a pane.', bindings: 2 },
+  ],
+  host: 'browser',
+  platform: 'win',
+  rules: [
+    { keys: 'ctrl+shift+space space', command: 'palette.open' },
+    { keys: 'ctrl+shift+b', command: 'sidebar.toggle' },
+  ],
+  resolved: {
+    'ctrl+shift+space space': [{ command: 'palette.open', when: '' }],
+    'ctrl+shift+b': [{ command: 'sidebar.toggle', when: '' }],
+  },
+  prefixes: [],
+  labels: {},
+  undeliverable: [],
+  contested: [],
   commands: [
     { id: 'palette.open', label: 'Open command palette', category: 'view' },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view' },
   ],
-  policy: { browser_reserved: [], desktop_only: [], application_reserved: [], terminal_reserved: [], rules: [] },
+  groups: [{ category: 'view', key: 'v', title: 'Views' }],
+  when_flags: ['terminalFocused', 'overlayOpen'],
+  policy: {
+    hosts: ['browser', 'desktop'], platforms: ['win', 'mac', 'linux'], max_sequence: 3,
+    browser_unreachable: ['ctrl+n'], browser_contested: { 'ctrl+f': 'find in page' },
+    wm_reserved: { win: { 'alt+tab': 'switch windows' }, mac: {}, linux: {} },
+    application_reserved: ['ctrl+0'], terminal_reserved: { 'ctrl+c': 'interrupt' },
+    rules: ['Use Ctrl, Alt, or Meta plus a non-modifier key.'],
+  },
   rejected: {},
 }
 

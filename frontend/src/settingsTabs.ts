@@ -64,6 +64,21 @@ export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
 }
 
 const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
+  // The OpenRouter block (the API key, and the catalogue it fetches) is a second
+  // section on the Model provider page, rendered only while that provider is
+  // selected. Undeclared it matched no page, so it was hidden on every one of
+  // them and the key could not be reached from Settings at all.
+  accounts:{'OpenRouter':'model-provider'},
+  // The shortcuts page is three headings deep - the preset picker, the shortcut
+  // tree, and the browser probe - and only the middle one is the page's name.
+  // Without these its section resolved to `what-this-browser-gives-the-app`,
+  // which is not a declared page, so selecting "Keyboard shortcuts" matched no
+  // section, hid all of them, and drew a blank pane.
+  input:{
+    'Keyboard preset':'keyboard-shortcuts',
+    'Keyboard shortcuts':'keyboard-shortcuts',
+    'What this browser gives the app':'keyboard-shortcuts',
+  },
   voice:{
     'Read aloud (TTS)':'read-aloud','Read aloud':'read-aloud','Voice and engine':'read-aloud','TTS provider':'read-aloud',Pronunciation:'read-aloud','Spoken summary':'read-aloud','Clip storage':'read-aloud',
     'Microphone and wake words':'talk-dictation','Talk & dictation':'talk-dictation',

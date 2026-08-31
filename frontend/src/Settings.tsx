@@ -791,13 +791,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       const headings=[...content.querySelectorAll<HTMLElement>('h3')]
       const sections=pagedSubpages?declaredSubpages:railSectionIds(headings.map(heading=>heading.textContent||''))
       let at=0
+      const claimed=new Set<HTMLElement>()
       for(const heading of headings){
         const label=(heading.textContent||'').trim()
         if(!label)continue
         const id=pagedSubpages?settingsSubpageId(activeTab,label):(sections[at]?.id||'')
         heading.dataset.settingsSection=id
         const owner=heading.closest<HTMLElement>('section')
-        if(owner&&id)owner.dataset.settingsSubpage=id
+        // First heading wins. A section is named by the heading that opens it;
+        // anything below is a sub-topic of the same page. Letting each heading
+        // overwrite meant a section with three of them took the *last* one's
+        // slug, which is how the shortcuts page came to be labelled
+        // `what-this-browser-gives-the-app` and matched no declared page.
+        if(owner&&id&&!claimed.has(owner)){owner.dataset.settingsSubpage=id;claimed.add(owner)}
         at+=1
       }
       // The live read is authoritative and replaces the vnode preview for this tab:
