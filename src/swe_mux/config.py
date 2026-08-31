@@ -917,6 +917,9 @@ class Config:
     clipboard_history_retention_hours: int = 24
     clipboard_history_redact_secrets: bool = True
     notes_default_open: str = "dock"
+    # Visibility only. The global Scratchpad file is retained while disabled and returns
+    # unchanged when the setting is enabled again.
+    note_scratchpad_enabled: bool = True
     # Note editor (the vendored Continuity Markdown editor). Only what the
     # editor genuinely exposes is here: element properties/attributes
     # (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`,

@@ -193,11 +193,13 @@ export type SurfaceGesture =
 /**
  * Region selectors, matched against the composed path, **most specific first**.
  *
- * `noteRail` names a CSS shadow part rather than a class on purpose: Continuity's rail
- * lives in its shadow root, and `part` is the contract it exports, where
+ * `noteRail` covers the Notes document rail, a Project note's header, and Continuity's
+ * exported command-rail part. The shadow part is the stable editor contract;
  * `.command-rail-buttons` is an internal that a version bump may rename under us.
  */
 export const GESTURE_REGION_SELECTORS: readonly (readonly [GestureRegion, string])[] = [
+  ['noteRail', '.notes-subtabs-row'],
+  ['noteRail', '.project-resource[data-resource-kind="note"]>header'],
   ['noteRail', '[part~="command-rail"]'],
   ['tabRail', '.mobile-unified-tabs'],
   ['voiceDock', '.voice-dock-head'],
@@ -244,7 +246,7 @@ const REGION_GESTURES: Partial<Record<GestureRegion, Partial<Record<GestureDirec
     down: 'projectName.menu',
   },
   tabRail: { up: 'tabRail.menu', down: 'tabRail.menu' },
-  noteRail: { up: 'noteRail.outline' },
+  noteRail: { down: 'noteRail.outline' },
   // Downward for the three that *open* something, because the thing they open is drawn
   // below the bar and the drag is the pull that brings it down. Only the mic has an
   // upward half, because its panel is the one that stays on screen afterwards and so is

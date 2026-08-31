@@ -89,7 +89,7 @@ test('section targets are namespaced so they cannot collide with Settings', () =
   assert.equal(drawerSectionTarget('actions', 'clipboard'), 'drawer.actions.clipboard')
   const actions = source('ActionsTab.tsx')
   for(const section of ['skills','prompts','clipboard'])assert.ok(actions.includes(`data-setting="drawer.actions.${section}"`))
-  assert.ok(actions.includes('class="actions-view-tabs"'), 'named tabs replace the retired disclosure stack')
+  assert.ok(actions.includes('className="actions-view-tabs"'), 'named tabs replace the retired disclosure stack')
 })
 
 test('every segment and section gets a palette entry and a voice phrase', () => {
@@ -130,7 +130,12 @@ test('the segment selection is persisted per Project beside the tab selection', 
 test('the host draws one shared control and keeps only what must stay mounted', () => {
   const host = source('UtilityDrawer.tsx')
   const control = source('DrawerSegmentControl.tsx')
+  const viewTabs = source('DrawerViewTabs.tsx')
   assert.ok(host.includes('<DrawerSegmentControl'))
+  assert.ok(control.includes('<DrawerViewTabs'), 'registered segments use the shared view rail')
+  assert.ok(source('ActionsTab.tsx').includes('<DrawerViewTabs'), 'Actions uses the same view rail')
+  assert.ok(viewTabs.includes("role=\"tablist\""))
+  assert.ok(viewTabs.includes("event.key !== 'ArrowLeft' && event.key !== 'ArrowRight'"))
   // Unavailable segments are dropped rather than disabled: a greyed-out "Timeline" on a
   // shell session promises a surface that does not exist.
   assert.ok(control.includes('const segments = availableDrawerSegments(tab, context)'))
@@ -142,6 +147,16 @@ test('the host draws one shared control and keeps only what must stay mounted', 
   // user-agent default - the trap `.drawer-note-host[hidden]` already documents.
   assert.ok(host.includes('hidden={!on}'))
   assert.ok(source('style.css').includes('.drawer-segment-body[hidden]{display:none}'))
+})
+
+test('content-first tabs omit redundant headings while the remaining tabs keep theirs', () => {
+  const host = source('UtilityDrawer.tsx')
+  const app = source('App.tsx')
+  assert.ok(host.includes("const CONTENT_FIRST_TABS: readonly DrawerTabId[] = ['notes', 'files', 'actions', 'git', 'activity', 'agent']"))
+  assert.ok(host.includes('!contentFirst && <div class="drawer-pane-heading">'))
+  assert.ok(!host.includes('class="drawer-collapse"'), 'the drawer has no visible collapse button')
+  assert.ok(host.includes("click again to collapse"), 'the active tab explains its second activation')
+  assert.ok(app.includes('Help: {topic.title}'), 'removed inline help remains in the tab context menu')
 })
 
 test('Git owns no view state of its own', () => {
