@@ -14,7 +14,7 @@ import type { Session } from '../types.ts'
 import { PREVIEW_PAGE_IDS } from './fixtures.ts'
 import { KEYMAP_FIXTURE } from './keymapFixture.ts'
 import { apply, demoId, nowSeconds, project, session, state } from './store.ts'
-import { spawnScrollback } from './terminalSim.ts'
+import { composerInfo, spawnScrollback } from './terminalSim.ts'
 
 const realFetch = window.fetch.bind(window)
 
@@ -197,7 +197,11 @@ function spawnSession(body: Record<string, unknown>): unknown {
     git: { branch: 'feature/faster-cart', dirty: 2, ahead: 2, behind: 0, root: target.root },
     delivery_readiness: { state: 'safe', reason: '', observed_at: created, authorized: false },
   }
-  apply({ kind: 'session-add', session: newSession, scrollback: spawnScrollback(backend) })
+  apply({
+    kind: 'session-add',
+    session: newSession,
+    scrollback: spawnScrollback(composerInfo(newSession)),
+  })
   // A spawned pane settles quickly: running → idle, like a CLI finishing startup.
   window.setTimeout(() => {
     if (session(id)) apply({ kind: 'session-patch', id, patch: { state: 'idle', state_since: nowSeconds() } })

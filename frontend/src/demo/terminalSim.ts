@@ -49,6 +49,104 @@ export function promptFor(kind: DemoBackendKind): string {
 const bullet = (kind: DemoBackendKind): string =>
   kind === 'codex' ? `${MAGENTA}⚙${RESET}` : `${GREEN}●${RESET}`
 
+// ------------------------------------------------------------------ composer
+
+/**
+ * The bordered prompt box and status line an agent CLI parks at the bottom of
+ * its pane, redrawn on every keystroke the way a real TUI does.
+ *
+ * Fixed width rather than the pane's own, and this is the one deliberate
+ * inaccuracy: a real composer spans the terminal, but one byte stream feeds
+ * *both* demo surfaces at once (the desktop pane and the phone beside it), so a
+ * box sized for either wraps on the other. 44 columns fits the narrowest pane
+ * the demo can present and still reads as a composer on the widest.
+ */
+const BOX_WIDTH = 40
+/** Lines the block occupies: two borders, the input row, and the status row. */
+export const COMPOSER_HEIGHT = 4
+
+export type ComposerInfo = {
+  kind: DemoBackendKind
+  model: string
+  /** 0..1, as `Session.context_pct` carries it. Shown as the room remaining. */
+  contextPct: number
+  /** Mid-turn panes swap the shortcut hint for the interrupt hint. */
+  working?: boolean
+}
+
+/** Visible text, ignoring the SGR escapes the styled halves carry. */
+const bare = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
+
+/** The shape of a session this module needs to draw its composer. Structural
+ *  rather than `Session`, so the sim stays free of the app's types. */
+export type ComposerSession = {
+  backend: string
+  model?: string
+  context_pct: number
+  state: string
+}
+
+/** One derivation of a pane's composer, shared by the seed, the spawn route and
+ *  the live redraw - so a box can never report a different model or context
+ *  than the row above it. */
+export function composerInfo(session: ComposerSession): ComposerInfo {
+  return {
+    kind: demoBackendKind(session.backend),
+    model: (session.model || session.backend).replace(/^claude-/, ''),
+    contextPct: session.context_pct,
+    working: session.state === 'working',
+  }
+}
+
+export function composerBlock(info: ComposerInfo, buffer: string): string {
+  const inner = BOX_WIDTH - 4
+  const accent = info.kind === 'codex' ? CYAN : ORANGE
+  const glyph = info.kind === 'codex' ? '›' : '>'
+  const placeholder = info.kind === 'codex' ? 'ask codex anything' : 'try "fix the flaky test"'
+  // A single-line composer scrolls its own text: keep the tail under the cursor
+  // rather than letting a long line break the box.
+  const room = inner - 2
+  const typed = buffer.length > room ? buffer.slice(buffer.length - room) : buffer
+  const body = typed
+    ? `${typed}${DIM}▏${RESET}`
+    : `${DIM}${placeholder}${RESET}`
+  const row = `${accent}${glyph}${RESET} ${body}`
+  const rule = '─'.repeat(BOX_WIDTH - 2)
+
+  // While a turn runs the meter is dropped and the interrupt hint has the line to
+  // itself - which is both what the real CLIs do and what keeps this row inside a
+  // phone-width pane, where hint plus meter would wrap by a character.
+  const left = 100 - Math.round(info.contextPct * 100)
+  const status = info.working
+    ? `  ${accent}✻${RESET} ${DIM}working… (esc to interrupt)${RESET}`
+    : (() => {
+      const hint = `${DIM}? for shortcuts${RESET}`
+      const meter = `${DIM}${info.model} · ${left}% ctx${RESET}`
+      // Right-aligned against the box, measured on the bare text so the escapes
+      // do not count toward the column.
+      const gap = Math.max(1, BOX_WIDTH - 2 - bare(hint).length - bare(meter).length)
+      return `  ${hint}${' '.repeat(gap)}${meter}`
+    })()
+
+  return [
+    `${DIM}╭${rule}╮${RESET}`,
+    `${DIM}│${RESET} ${row}${' '.repeat(Math.max(0, inner - bare(row).length))} ${DIM}│${RESET}`,
+    `${DIM}╰${rule}╯${RESET}`,
+    status,
+  ].join(CRLF)
+}
+
+/**
+ * Replace the composer in place: up over the block, clear to the end of the
+ * screen, draw it again. Exactly what the real CLIs do on every keystroke, and
+ * the reason the demo can show a box the visitor appears to type inside.
+ */
+export const redrawComposer = (info: ComposerInfo, buffer: string): string =>
+  `${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J${composerBlock(info, buffer)}`
+
+/** Wipe the composer without drawing a new one, before appending transcript. */
+export const clearComposer = (): string => `${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J`
+
 /** A line the *user* typed, drawn after that harness's prompt. */
 const said = (kind: DemoBackendKind, text: string): string => line(`${promptFor(kind)}${text}`)
 /** A line the user typed in anger. Same shape; the colour is the joke. */
@@ -57,7 +155,7 @@ const yelled = (kind: DemoBackendKind, text: string): string =>
 
 // --------------------------------------------------------------- transcripts
 
-export function claudeScrollback(): string {
+export function claudeScrollback(info: ComposerInfo): string {
   return (
     line(`${ORANGE}╭──────────────────────────────────────────────────╮${RESET}`) +
     line(`${ORANGE}│${RESET} ${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo - nothing here is real)${RESET}     ${ORANGE}│${RESET}`) +
@@ -87,11 +185,11 @@ export function claudeScrollback(): string {
     line() +
     line(`${bullet('claude')} Want me to audit the other numbered specs for the same pattern?`) +
     line() +
-    CLAUDE_PROMPT
+    composerBlock(info, '')
   )
 }
 
-export function codexScrollback(): string {
+export function codexScrollback(info: ComposerInfo): string {
   return (
     line(`${CYAN}${BOLD}◆ Codex${RESET} ${DIM}v0.0.0-demo - simulated session${RESET}`) +
     line(`${DIM}  model: gpt-demo · cwd: /code/rocket-shop${RESET}`) +
@@ -114,12 +212,12 @@ export function codexScrollback(): string {
     line(`  The coupon file is 40MB because somebody committed every coupon`) +
     line(`  issued since 2019. That is a conversation for a human.`) +
     line() +
-    CODEX_PROMPT
+    composerBlock(info, '')
   )
 }
 
 /** The one where the user is losing their mind and the agent stays chipper. */
-export function rageScrollback(): string {
+export function rageScrollback(info: ComposerInfo): string {
   const b = bullet('claude')
   return (
     line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - session 4h12m${RESET}`) +
@@ -173,12 +271,12 @@ export function rageScrollback(): string {
     line() +
     line(`${b} Fair. Want me to write a postmortem?`) +
     line() +
-    CLAUDE_PROMPT
+    composerBlock(info, '')
   )
 }
 
 /** The one where the human contributes nothing and the agent is delighted. */
-export function vibeScrollback(): string {
+export function vibeScrollback(info: ComposerInfo): string {
   const b = bullet('codex')
   return (
     line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - cwd: /code/meme-garden${RESET}`) +
@@ -220,7 +318,7 @@ export function vibeScrollback(): string {
     line() +
     line(`${b} Added the README.`) +
     line() +
-    CODEX_PROMPT
+    composerBlock(info, '')
   )
 }
 
@@ -240,12 +338,12 @@ export function shellScrollback(): string {
 }
 
 /** A pane that is mid-turn: the transcript stops, and the status keeps ticking. */
-export function workingScrollback(kind: DemoBackendKind, task: string): string {
-  const b = bullet(kind)
+export function workingScrollback(info: ComposerInfo, task: string): string {
+  const b = bullet(info.kind)
   return (
-    line(`${kind === 'codex' ? `${CYAN}◆${RESET}` : `${ORANGE}✻${RESET}`} ${BOLD}${kind === 'codex' ? 'Codex' : 'Claude Code'}${RESET} ${DIM}(demo) - working${RESET}`) +
+    line(`${info.kind === 'codex' ? `${CYAN}◆${RESET}` : `${ORANGE}✻${RESET}`} ${BOLD}${info.kind === 'codex' ? 'Codex' : 'Claude Code'}${RESET} ${DIM}(demo) - working${RESET}`) +
     line() +
-    said(kind, task) +
+    said(info.kind, task) +
     line() +
     line(`${b} On it. Let me establish a baseline before I change anything.`) +
     line(`${b} ${BOLD}Read${RESET}${DIM}(src/) ⎿ 47 files${RESET}`) +
@@ -253,32 +351,27 @@ export function workingScrollback(kind: DemoBackendKind, task: string): string {
     line(`${b} This is more load-bearing than it first appears. Continuing.`) +
     line(`${b} ${BOLD}Bash${RESET}${DIM}(npm test -- --runInBand)${RESET}`) +
     line(`  ${DIM}⎿ running…${RESET}`) +
-    line()
+    line() +
+    composerBlock({ ...info, working: true }, '')
   )
 }
 
-export function initialScrollback(backend: string): string {
-  const kind = demoBackendKind(backend)
-  if (kind === 'claude') return claudeScrollback()
-  if (kind === 'codex') return codexScrollback()
-  return shellScrollback()
-}
-
-/** Freshly spawned pane: shorter banner, straight to the prompt. */
-export function spawnScrollback(backend: string): string {
-  const kind = demoBackendKind(backend)
-  if (kind === 'claude') {
+/** Freshly spawned pane: shorter banner, straight to the composer. */
+export function spawnScrollback(info: ComposerInfo): string {
+  if (info.kind === 'claude') {
     return (
       line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - ask me anything, I only tell jokes${RESET}`) +
-      line() + CLAUDE_PROMPT
+      line() + composerBlock(info, '')
     )
   }
-  if (kind === 'codex') {
+  if (info.kind === 'codex') {
     return (
       line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - simulated, replies are pre-written${RESET}`) +
-      line() + CODEX_PROMPT
+      line() + composerBlock(info, '')
     )
   }
+  // A shell has no composer, and that contrast is worth keeping: it echoes at a
+  // prompt exactly as the real one does.
   return line(`${DIM}demo shell - try 'git status', 'ls', 'npm test', 'whoami'${RESET}`) + line() + SHELL_PROMPT
 }
 
@@ -421,7 +514,9 @@ export function buildReply(kind: DemoBackendKind, input: string): Reply {
   }
   jokeCursor = (jokeCursor + 1) % AGENT_JOKES.length
   const joke = AGENT_JOKES[jokeCursor].map(text => line(paint(kind, text)))
-  return { chunks: [line(), ...joke, line(), promptFor(kind)], pace: 220 }
+  // No trailing prompt: an agent pane's caller redraws the composer once the
+  // last chunk has landed, which is what puts the box back under the reply.
+  return { chunks: [line(), ...joke, line()], pace: 220 }
 }
 
 /**

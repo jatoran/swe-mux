@@ -12,8 +12,9 @@ import type { PaneLayout } from '../layout.ts'
 import type { Project, Session } from '../types.ts'
 import type { DemoNote, DemoState } from './store.ts'
 import {
-  claudeScrollback, codexScrollback, rageScrollback, shellScrollback,
-  spawnScrollback, vibeScrollback, workingScrollback,
+  claudeScrollback, codexScrollback, composerInfo, rageScrollback,
+  shellScrollback, spawnScrollback, vibeScrollback, workingScrollback,
+  type ComposerInfo,
 } from './terminalSim.ts'
 
 const now = Math.floor(Date.now() / 1000)
@@ -67,7 +68,7 @@ function makeSession(input: {
     cost_usd: input.cost ?? 0,
     context_window: 200000,
     context_pct: input.contextPct ?? 0,
-    context_peak_pct: Math.min(95, (input.contextPct ?? 0) + 8),
+    context_peak_pct: Math.min(0.97, (input.contextPct ?? 0) + 0.06),
     last_activity_ts: now - 45,
     last_turn_ms: 48_000,
     worked_ms: input.workedMs ?? 0,
@@ -122,25 +123,25 @@ const SESSIONS: Session[] = [
   makeSession({
     id: 's-claude', name: 'fix flaky checkout test', project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
-    tokens: 48200, cost: 1.84, contextPct: 31, turnSeq: 4, workedMs: 8 * 60_000,
+    tokens: 48200, cost: 1.84, contextPct: 0.31, turnSeq: 4, workedMs: 8 * 60_000,
     ageSeconds: 2 * 3600,
   }),
   makeSession({
     id: 's-rage', name: 'prod is down (4h)', project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
-    tokens: 187400, cost: 6.42, contextPct: 79, turnSeq: 31, workedMs: 71 * 60_000,
+    tokens: 187400, cost: 6.42, contextPct: 0.86, turnSeq: 31, workedMs: 71 * 60_000,
     ageSeconds: 4 * 3600 + 12 * 60,
   }),
   makeSession({
     id: 's-working', name: 'refactor the coupon table', project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'working', model: 'claude-opus-4-8',
-    tokens: 33100, cost: 1.12, contextPct: 24, turnSeq: 6, workedMs: 12 * 60_000,
+    tokens: 33100, cost: 1.12, contextPct: 0.24, turnSeq: 6, workedMs: 12 * 60_000,
     ageSeconds: 55 * 60, workingForSeconds: 96,
   }),
   makeSession({
     id: 's-codex', name: 'profile cart endpoint', project: DEMO_PROJECT_ID,
     backend: 'codex', state: 'idle', model: 'gpt-demo',
-    tokens: 21050, cost: 0.62, contextPct: 18, turnSeq: 2, workedMs: 5 * 60_000,
+    tokens: 21050, cost: 0.62, contextPct: 0.18, turnSeq: 2, workedMs: 5 * 60_000,
     ageSeconds: 90 * 60,
   }),
   makeSession({
@@ -150,22 +151,30 @@ const SESSIONS: Session[] = [
   makeSession({
     id: 's-garden', name: 'water the memes', project: DEMO_PROJECT2_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
-    tokens: 9800, cost: 0.31, contextPct: 9, turnSeq: 1, ageSeconds: 20 * 60,
+    tokens: 9800, cost: 0.31, contextPct: 0.09, turnSeq: 1, ageSeconds: 20 * 60,
     git: GARDEN_GIT,
   }),
   makeSession({
     id: 's-vibe', name: 'make it work', project: DEMO_PROJECT2_ID,
     backend: 'codex', state: 'idle', model: 'gpt-demo',
-    tokens: 64300, cost: 1.97, contextPct: 41, turnSeq: 9, workedMs: 23 * 60_000,
+    tokens: 64300, cost: 1.97, contextPct: 0.67, turnSeq: 9, workedMs: 23 * 60_000,
     ageSeconds: 70 * 60, git: GARDEN_GIT,
   }),
   makeSession({
     id: 's-migrate', name: 'migrate the meme schema', project: DEMO_PROJECT2_ID,
     backend: 'codex', state: 'working', model: 'gpt-demo',
-    tokens: 12750, cost: 0.38, contextPct: 11, turnSeq: 2, workedMs: 4 * 60_000,
+    tokens: 12750, cost: 0.38, contextPct: 0.44, turnSeq: 2, workedMs: 4 * 60_000,
     ageSeconds: 18 * 60, workingForSeconds: 402, git: GARDEN_GIT,
   }),
 ]
+
+/** The composer a seeded session draws, read off the session itself so the box's
+ *  status line and the sidebar row can never disagree. */
+function composerFor(id: string): ComposerInfo {
+  const found = SESSIONS.find(item => item.id === id)
+  if (!found) throw new Error(`no demo session ${id}`)
+  return composerInfo(found)
+}
 
 const P1_LAYOUT: PaneLayout = {
   version: 7,
@@ -500,7 +509,7 @@ export function demoConfig(): Record<string, unknown> {
 }
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 5
+export const DEMO_STATE_VERSION = 7
 
 export function initialDemoState(): DemoState {
   return {
@@ -512,15 +521,17 @@ export function initialDemoState(): DemoState {
     notes: NOTES.map(item => ({ ...item })),
     config: demoConfig(),
     keymapPreset: 'swemux',
+    // Each transcript ends with that session's own composer, so the status line
+    // under the box reports the same model and context the sidebar row does.
     terminals: {
-      's-claude': claudeScrollback(),
-      's-rage': rageScrollback(),
-      's-working': workingScrollback('claude', 'pull the coupon table out of the request path'),
-      's-codex': codexScrollback(),
+      's-claude': claudeScrollback(composerFor('s-claude')),
+      's-rage': rageScrollback(composerFor('s-rage')),
+      's-working': workingScrollback(composerFor('s-working'), 'pull the coupon table out of the request path'),
+      's-codex': codexScrollback(composerFor('s-codex')),
       's-shell': shellScrollback(),
-      's-garden': spawnScrollback('claude'),
-      's-vibe': vibeScrollback(),
-      's-migrate': workingScrollback('codex', 'migrate the meme schema to v3, keep the old ids'),
+      's-garden': spawnScrollback(composerFor('s-garden')),
+      's-vibe': vibeScrollback(composerFor('s-vibe')),
+      's-migrate': workingScrollback(composerFor('s-migrate'), 'migrate the meme schema to v3, keep the old ids'),
     },
     seq: 1,
   }
