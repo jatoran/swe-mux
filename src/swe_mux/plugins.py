@@ -54,6 +54,8 @@ MARKETPLACE_URL = (
 MARKETPLACE_CATALOG_URL = "https://swemux.dev/plugins/catalog.json"
 GITHUB_API = "https://api.github.com"
 PLUGIN_EVENT_LOOP = "plugin-events"
+DEVELOPMENT_ROOT_SETTING = "development_root"
+MAX_DISCOVERED_PLUGINS = 256
 
 
 class PluginError(ValueError):
@@ -173,6 +175,8 @@ class PluginManager:
         self._tokens: dict[str, PluginToken] = {}
         self._last_event_run: dict[tuple[str, str], float] = {}
         self._event_seen: dict[str, float] = {}
+        self._default_development_root = Path.home() / "swe-mux-plugins"
+        self._update_checks: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         self.execution_enabled = await self.store.execution_enabled()
@@ -259,8 +263,9 @@ class PluginManager:
             raise PluginError("approval_stale", diagnostic)
         return manifest
 
-    async def refresh_all(self) -> None:
-        for record in await self.store.list():
+    async def refresh_all(self) -> dict[str, Any]:
+        initial = {item["id"]: item for item in await self.store.list()}
+        for record in initial.values():
             try:
                 manifest = await self._load(record)
                 content_digest = await asyncio.to_thread(
@@ -287,8 +292,45 @@ class PluginManager:
             except PluginError:
                 continue
 
-    async def list(self) -> dict[str, Any]:
-        await self.refresh_all()
+        current = await self.store.list()
+        changed = [
+            item["id"]
+            for item in current
+            if item["lifecycle"] == "changed"
+            and (
+                item["lifecycle"],
+                item["manifest_digest"],
+                item["content_digest"],
+                item["diagnostic"],
+            )
+            != (
+                initial[item["id"]]["lifecycle"],
+                initial[item["id"]]["manifest_digest"],
+                initial[item["id"]]["content_digest"],
+                initial[item["id"]]["diagnostic"],
+            )
+        ]
+        result: dict[str, Any] = {
+            "checked": len(current),
+            "changed": changed,
+            "invalid": [item["id"] for item in current if item["lifecycle"] == "invalid"],
+            "incompatible": [
+                item["id"] for item in current if item["lifecycle"] == "incompatible"
+            ],
+        }
+        log.info(
+            "plugin registry refreshed checked=%s changed=%s invalid=%s incompatible=%s",
+            result["checked"],
+            len(result["changed"]),
+            len(result["invalid"]),
+            len(result["incompatible"]),
+        )
+        return result
+
+    async def list(self, *, refresh: bool = True) -> dict[str, Any]:
+        if refresh:
+            await self.refresh_all()
+        stages = await self.store.list_update_stages()
         plugins = []
         for record in await self.store.list():
             item = dict(record)
@@ -308,16 +350,158 @@ class PluginManager:
                 item["approval_current"] = False
             config_dir, state_dir = self._directories(record["id"])
             item.update(config_dir=str(config_dir), state_dir=str(state_dir))
+            item["running_panes"] = [
+                {
+                    "session_id": session.record.id,
+                    "project_id": session.record.project_id,
+                    "pane_id": session.record.plugin_entrypoint_id,
+                    "placement": session.record.plugin_placement,
+                }
+                for session in self.sessions.sessions.values()
+                if session.record.plugin_id == record["id"]
+                and session.record.state not in {"exited", "crashed"}
+                and not session.record.inactive
+            ]
+            item["update_check"] = self._update_checks.get(record["id"])
+            item["staged_update"] = self._staged_update_review(record, stages.get(record["id"]))
             plugins.append(item)
+        development_root = await self.development_root()
         return {
             "execution_enabled": self.execution_enabled,
             "host_capabilities": sorted(HOST_CAPABILITIES),
+            "development_root": str(development_root),
             "plugins": plugins,
         }
+
+    @staticmethod
+    def _staged_update_review(
+        current: dict[str, Any], stage: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if not stage:
+            return None
+        manifest = stage.get("manifest")
+        if not isinstance(manifest, dict):
+            return None
+        current_permissions = set(stage.get("current_permissions") or [])
+        next_permissions = set(manifest.get("permissions") or [])
+        current_requires = set(stage.get("current_requires") or [])
+        next_requires = set(manifest.get("requires") or [])
+        return {
+            "version": manifest.get("version"),
+            "current_version": current["version"],
+            "selected_ref": stage.get("selected_ref", ""),
+            "resolved_ref": stage.get("resolved_ref", ""),
+            "permissions_added": sorted(next_permissions - current_permissions),
+            "permissions_removed": sorted(current_permissions - next_permissions),
+            "capabilities_added": sorted(next_requires - current_requires),
+            "capabilities_removed": sorted(current_requires - next_requires),
+            "authority_changed": bool(
+                next_permissions != current_permissions or next_requires != current_requires
+            ),
+            "diagnostic": stage.get("diagnostic", ""),
+            "created_at": stage.get("created_at"),
+        }
+
+    async def development_root(self) -> Path:
+        configured = await self.store.get_setting(DEVELOPMENT_ROOT_SETTING)
+        return (
+            Path(configured).expanduser().resolve()
+            if configured
+            else self._default_development_root
+        )
+
+    async def set_development_root(self, path: str, *, create: bool = False) -> dict[str, Any]:
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            raise PluginError("invalid_development_root", "development root must be absolute")
+        resolved = candidate.resolve()
+        if create:
+            await asyncio.to_thread(resolved.mkdir, parents=True, exist_ok=True)
+        elif resolved.exists() and not resolved.is_dir():
+            raise PluginError("invalid_development_root", "development root is not a directory")
+        await self.store.set_setting(DEVELOPMENT_ROOT_SETTING, str(resolved))
+        log.info("plugin development root changed path=%s created=%s", resolved, create)
+        return await self.scan_development_root()
+
+    async def scan_development_root(self) -> dict[str, Any]:
+        root = await self.development_root()
+        installed = {item["id"]: item for item in await self.store.list()}
+        candidates: list[dict[str, Any]] = []
+        child_count = 0
+        diagnostic = ""
+        if root.is_dir():
+            try:
+                children = await asyncio.to_thread(
+                    lambda: sorted(root.iterdir(), key=lambda item: item.name.lower())
+                )
+            except OSError as exc:
+                children = []
+                diagnostic = f"cannot scan development root: {exc}"
+            child_count = len(children)
+            for child in children[:MAX_DISCOVERED_PLUGINS]:
+                manifest_path = child / "swe-mux-plugin.toml"
+                if child.is_symlink() or not child.is_dir() or not manifest_path.is_file():
+                    continue
+                try:
+                    manifest = parse_plugin_manifest(manifest_path)
+                    existing = installed.get(manifest.id)
+                    candidates.append(
+                        {
+                            "path": str(child.resolve()),
+                            "id": manifest.id,
+                            "name": manifest.name,
+                            "version": manifest.version,
+                            "description": manifest.description,
+                            "diagnostic": self._compatible(manifest),
+                            "linked": bool(
+                                existing
+                                and existing["source_kind"] == "link"
+                                and Path(existing["root"]).resolve() == child.resolve()
+                            ),
+                            "conflict": bool(
+                                existing
+                                and Path(existing["root"]).resolve() != child.resolve()
+                            ),
+                        }
+                    )
+                except (PluginManifestError, OSError) as exc:
+                    candidates.append(
+                        {
+                            "path": str(child.resolve()),
+                            "id": "",
+                            "name": child.name,
+                            "version": "",
+                            "description": "",
+                            "diagnostic": str(exc),
+                            "linked": False,
+                            "conflict": False,
+                        }
+                    )
+        result = {
+            "root": str(root),
+            "exists": root.is_dir(),
+            "candidates": candidates,
+            "truncated": child_count > MAX_DISCOVERED_PLUGINS,
+            "diagnostic": diagnostic,
+        }
+        log.info(
+            "plugin development root scanned path=%s exists=%s candidates=%s",
+            root,
+            result["exists"],
+            len(candidates),
+        )
+        if diagnostic:
+            log.warning(
+                "plugin development root scan failed path=%s diagnostic=%s",
+                root,
+                diagnostic,
+            )
+        return result
 
     async def status(self) -> dict[str, Any]:
         self._prune_tokens()
         records = await self.store.list()
+        stages = await self.store.list_update_stages()
         return {
             "execution_enabled": self.execution_enabled,
             "installed": len(records),
@@ -328,10 +512,19 @@ class PluginManager:
             "commands_in_flight": len(self._tasks),
             "runtime_tokens": len(self._tokens),
             "event_subscribed": self._event_queue is not None,
+            "staged_updates": len(stages),
+            "update_checks": len(self._update_checks),
         }
 
     async def inspect(self, path: str | Path) -> dict[str, Any]:
-        return inspect_plugin_path(path)
+        result = inspect_plugin_path(path)
+        log.info(
+            "plugin inspected plugin_id=%s path=%s compatible=%s",
+            result["manifest"]["id"],
+            Path(path).resolve(),
+            not bool(result["diagnostic"]),
+        )
+        return result
 
     async def link(
         self, path: str | Path, *, approve: bool = False, enable: bool = False
@@ -381,9 +574,7 @@ class PluginManager:
             await self._run_plugin_startup(record, manifest)
         return record
 
-    async def install(
-        self, source: str, *, ref: str = "", approve: bool = False, enable: bool = False
-    ) -> dict[str, Any]:
+    async def _acquire_managed(self, source: str, ref: str) -> dict[str, Any]:
         operation = uuid.uuid4().hex
         stage = self.staging / operation
         stage.mkdir(parents=True, exist_ok=False)
@@ -441,71 +632,93 @@ class PluginManager:
             if not _within(stage / "source", candidate_root):
                 raise PluginError("invalid_source", "plugin subdirectory escapes the checkout")
             manifest = parse_plugin_manifest(candidate_root)
-            existing = await self.store.get(manifest.id)
-            if existing and existing["source_kind"] == "link":
-                raise PluginError(
-                    "source_conflict", "unlink the developer directory before managed installation"
-                )
             container = self.sources / _safe_name(manifest.id)
             container.mkdir(parents=True, exist_ok=True)
-            target = container / manifest.digest[:16]
+            content_digest = await asyncio.to_thread(plugin_content_digest, candidate_root)
+            target = container / content_digest[:16]
             if target.exists():
                 await asyncio.to_thread(shutil.rmtree, candidate_root, True)
             else:
                 os.replace(candidate_root, target)
             installed_manifest = parse_plugin_manifest(target)
-            content_digest = await asyncio.to_thread(plugin_content_digest, target)
             diagnostic = self._compatible(installed_manifest)
-            record = await self.store.put(
-                {
-                    "id": installed_manifest.id,
-                    "name": installed_manifest.name,
-                    "version": installed_manifest.version,
-                    "enabled": approve and enable and not diagnostic,
-                    "lifecycle": "enabled"
-                    if approve and enable and not diagnostic
-                    else "approved"
-                    if approve
-                    else "inspected",
-                    "source_kind": "managed",
-                    "source_ref": source_ref,
-                    "requested_ref": requested_ref,
-                    "selected_ref": selected_ref,
-                    "resolved_ref": resolved_ref,
-                    "root": str(target),
-                    "manifest_path": str(installed_manifest.path),
-                    "manifest_digest": installed_manifest.digest,
-                    "content_digest": content_digest,
-                    "security_digest": installed_manifest.security_digest,
-                    "approved_digest": (
-                        self._approval_digest(installed_manifest, content_digest) if approve else ""
-                    ),
-                    "previous_root": (
-                        existing["root"]
-                        if existing
-                        and Path(existing["root"]).is_dir()
-                        and Path(existing["root"]) != target
-                        else ""
-                    ),
-                    "diagnostic": diagnostic,
-                }
-            )
-            log.info(
-                "plugin installed plugin_id=%s source=%s requested_ref=%s selected_ref=%s "
-                "resolved_ref=%s enabled=%s",
-                installed_manifest.id,
-                source,
-                requested_ref,
-                selected_ref,
-                resolved_ref,
-                record["enabled"],
-            )
-            if record["enabled"]:
-                await self._run_plugin_startup(record, installed_manifest)
-            return record
+            return {
+                "id": installed_manifest.id,
+                "name": installed_manifest.name,
+                "version": installed_manifest.version,
+                "source_kind": "managed",
+                "source_ref": source_ref,
+                "requested_ref": requested_ref,
+                "selected_ref": selected_ref,
+                "resolved_ref": resolved_ref,
+                "root": str(target),
+                "manifest_path": str(installed_manifest.path),
+                "manifest_digest": installed_manifest.digest,
+                "content_digest": content_digest,
+                "security_digest": installed_manifest.security_digest,
+                "diagnostic": diagnostic,
+                "manifest": installed_manifest.snapshot(),
+            }
         finally:
             if stage.exists():
                 await asyncio.to_thread(shutil.rmtree, stage, True)
+
+    async def install(
+        self, source: str, *, ref: str = "", approve: bool = False, enable: bool = False
+    ) -> dict[str, Any]:
+        candidate = await self._acquire_managed(source, ref)
+        existing = await self.store.get(candidate["id"])
+        if existing and existing["source_kind"] == "link":
+            raise PluginError(
+                "source_conflict", "unlink the developer directory before managed installation"
+            )
+        if existing:
+            raise PluginError(
+                "source_conflict",
+                "plugin is already installed; use the update review flow",
+            )
+        diagnostic = str(candidate["diagnostic"])
+        record = await self.store.put(
+            {
+                **candidate,
+                "enabled": approve and enable and not diagnostic,
+                "lifecycle": "enabled"
+                if approve and enable and not diagnostic
+                else "approved"
+                if approve
+                else "inspected",
+                "approved_digest": (
+                    self._approval_digest(
+                        parse_plugin_manifest(candidate["manifest_path"]),
+                        candidate["content_digest"],
+                    )
+                    if approve
+                    else ""
+                ),
+                "previous_root": (
+                    existing["root"]
+                    if existing
+                    and Path(existing["root"]).is_dir()
+                    and Path(existing["root"]) != Path(candidate["root"])
+                    else ""
+                ),
+            }
+        )
+        await self.store.remove_update_stage(record["id"])
+        self._update_checks.pop(record["id"], None)
+        log.info(
+            "plugin installed plugin_id=%s source=%s requested_ref=%s selected_ref=%s "
+            "resolved_ref=%s enabled=%s",
+            record["id"],
+            source,
+            record["requested_ref"],
+            record["selected_ref"],
+            record["resolved_ref"],
+            record["enabled"],
+        )
+        if record["enabled"]:
+            await self._run_plugin_startup(record, parse_plugin_manifest(record["manifest_path"]))
+        return record
 
     async def approve(self, plugin_id: str, *, enable: bool = True) -> dict[str, Any]:
         record = await self._record(plugin_id)
@@ -537,16 +750,252 @@ class PluginManager:
         plugin_id: str,
         *,
         ref: str | None = None,
-        approve: bool = False,
-        enable: bool = False,
     ) -> dict[str, Any]:
         record = await self._record(plugin_id)
         if record["source_kind"] != "managed":
             raise PluginError("not_managed", "linked plugins update in their working directory")
         requested_ref = record["requested_ref"] if ref is None else ref
-        return await self.install(
-            record["source_ref"], ref=requested_ref, approve=approve, enable=enable
+        candidate = await self._acquire_managed(record["source_ref"], requested_ref)
+        if candidate["id"] != plugin_id:
+            raise PluginError(
+                "manifest_changed",
+                f"update identity changed from {plugin_id} to {candidate['id']}",
+            )
+        if (
+            candidate["content_digest"] == record["content_digest"]
+            and candidate["resolved_ref"] == record["resolved_ref"]
+        ):
+            self._update_checks[plugin_id] = {
+                "status": "current",
+                "checked_at": time.time(),
+                "current_ref": record["resolved_ref"] or record["selected_ref"],
+                "available_ref": candidate["resolved_ref"] or candidate["selected_ref"],
+            }
+            return {"staged": False, "reason": "already_current", "plugin_id": plugin_id}
+        current_manifest = parse_plugin_manifest(record["manifest_path"])
+        staged = await self.store.put_update_stage(
+            plugin_id,
+            {
+                **candidate,
+                "base_content_digest": record["content_digest"],
+                "base_root": record["root"],
+                "current_permissions": list(current_manifest.permissions),
+                "current_requires": list(current_manifest.requires),
+            },
         )
+        self._update_checks[plugin_id] = {
+            "status": "staged",
+            "checked_at": time.time(),
+            "current_ref": record["resolved_ref"] or record["selected_ref"],
+            "available_ref": candidate["resolved_ref"] or candidate["selected_ref"],
+        }
+        log.info(
+            "plugin update staged plugin_id=%s version=%s selected_ref=%s resolved_ref=%s",
+            plugin_id,
+            candidate["version"],
+            candidate["selected_ref"],
+            candidate["resolved_ref"],
+        )
+        return {"staged": True, "plugin_id": plugin_id, "stage": staged}
+
+    async def approve_update(
+        self, plugin_id: str, *, enable: bool | None = None
+    ) -> dict[str, Any]:
+        current = await self._record(plugin_id)
+        stage = await self.store.get_update_stage(plugin_id)
+        if not stage:
+            raise PluginError("update_not_found", "no staged update is available")
+        if (
+            stage.get("base_content_digest") != current["content_digest"]
+            or stage.get("base_root") != current["root"]
+        ):
+            raise PluginError(
+                "approval_stale",
+                "active plugin changed after this update was staged; discard and review it again",
+            )
+        manifest = parse_plugin_manifest(str(stage.get("manifest_path") or ""))
+        if manifest.id != plugin_id:
+            raise PluginError("manifest_changed", "staged update identity no longer matches")
+        content_digest = await asyncio.to_thread(plugin_content_digest, manifest.path.parent)
+        if content_digest != stage.get("content_digest"):
+            raise PluginError("manifest_changed", "staged update content changed after review")
+        diagnostic = self._compatible(manifest)
+        if diagnostic:
+            raise PluginError("incompatible", diagnostic)
+        should_enable = current["enabled"] if enable is None else enable
+        updated = await self.store.set_state(
+            plugin_id,
+            name=manifest.name,
+            version=manifest.version,
+            source_ref=stage["source_ref"],
+            requested_ref=stage["requested_ref"],
+            selected_ref=stage["selected_ref"],
+            resolved_ref=stage["resolved_ref"],
+            root=stage["root"],
+            manifest_path=str(manifest.path),
+            manifest_digest=manifest.digest,
+            content_digest=content_digest,
+            security_digest=manifest.security_digest,
+            approved_digest=self._approval_digest(manifest, content_digest),
+            previous_root=current["root"],
+            enabled=should_enable,
+            lifecycle="enabled" if should_enable else "approved",
+            diagnostic="",
+        )
+        assert updated is not None
+        await self.store.remove_update_stage(plugin_id)
+        self._update_checks[plugin_id] = {
+            "status": "current",
+            "checked_at": time.time(),
+            "current_ref": updated["resolved_ref"] or updated["selected_ref"],
+            "available_ref": updated["resolved_ref"] or updated["selected_ref"],
+        }
+        self._revoke(plugin_id)
+        if should_enable:
+            await self._run_plugin_startup(updated, manifest)
+        log.info(
+            "plugin update approved plugin_id=%s version=%s enabled=%s previous_root=%s",
+            plugin_id,
+            manifest.version,
+            should_enable,
+            current["root"],
+        )
+        return updated
+
+    async def discard_update(self, plugin_id: str) -> dict[str, Any]:
+        await self._record(plugin_id)
+        stage = await self.store.remove_update_stage(plugin_id)
+        if stage is None:
+            raise PluginError("update_not_found", "no staged update is available")
+        self._update_checks.pop(plugin_id, None)
+        log.info("plugin staged update discarded plugin_id=%s", plugin_id)
+        return {"plugin_id": plugin_id, "discarded": True}
+
+    @staticmethod
+    def _git_remote(source: str) -> str:
+        if "://" in source:
+            return source
+        parts = [part for part in source.split("/") if part]
+        if len(parts) < 2:
+            raise PluginError("invalid_source", "GitHub source must be owner/repository")
+        return f"https://github.com/{parts[0]}/{parts[1]}.git"
+
+    async def _check_update(self, record: dict[str, Any]) -> dict[str, Any]:
+        checked_at = time.time()
+        source_path = Path(record["source_ref"])
+        current_ref = record["resolved_ref"] or record["selected_ref"]
+        if source_path.exists():
+            try:
+                manifest = parse_plugin_manifest(source_path)
+                digest = await asyncio.to_thread(plugin_content_digest, manifest.path.parent)
+                return {
+                    "status": "available" if digest != record["content_digest"] else "current",
+                    "checked_at": checked_at,
+                    "current_ref": current_ref,
+                    "available_ref": digest,
+                    "available_version": manifest.version,
+                    "channel": "local",
+                }
+            except (PluginManifestError, OSError) as exc:
+                return {"status": "unavailable", "checked_at": checked_at, "diagnostic": str(exc)}
+        requested = record["requested_ref"]
+        if requested == "latest":
+            selected = await self._latest_release_ref(record["source_ref"])
+            return {
+                "status": "available" if selected != record["selected_ref"] else "current",
+                "checked_at": checked_at,
+                "current_ref": current_ref,
+                "available_ref": selected,
+                "channel": "latest",
+            }
+        remote = self._git_remote(record["source_ref"])
+        patterns = (
+            ["HEAD"]
+            if not requested
+            else [f"refs/heads/{requested}", f"refs/tags/{requested}*"]
+        )
+        result = await run_bounded(
+            ["git", "ls-remote", remote, *patterns],
+            label="plugin update check",
+            timeout_seconds=30,
+            output_limit=16 * 1024,
+            operation_id=uuid.uuid4().hex,
+        )
+        if result.exit_code != 0:
+            return {
+                "status": "unavailable",
+                "checked_at": checked_at,
+                "diagnostic": (result.stderr or result.stdout).decode("utf-8", "replace")[:4096],
+            }
+        refs = {}
+        for line in result.stdout.decode("utf-8", "replace").splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                refs[parts[1]] = parts[0]
+        if requested:
+            branch = refs.get(f"refs/heads/{requested}")
+            if branch:
+                return {
+                    "status": "available" if branch != record["resolved_ref"] else "current",
+                    "checked_at": checked_at,
+                    "current_ref": current_ref,
+                    "available_ref": branch,
+                    "channel": "branch",
+                }
+            if any(key.startswith(f"refs/tags/{requested}") for key in refs):
+                return {
+                    "status": "pinned",
+                    "checked_at": checked_at,
+                    "current_ref": current_ref,
+                    "available_ref": record["selected_ref"] or requested,
+                    "channel": "tag",
+                }
+            return {
+                "status": "unavailable",
+                "checked_at": checked_at,
+                "diagnostic": f"ref {requested!r} was not found",
+            }
+        head = refs.get("HEAD", "")
+        return {
+            "status": "available" if head and head != record["resolved_ref"] else "current",
+            "checked_at": checked_at,
+            "current_ref": current_ref,
+            "available_ref": head,
+            "channel": "default_branch",
+        }
+
+    async def check_updates(self) -> dict[str, Any]:
+        records = [item for item in await self.store.list() if item["source_kind"] == "managed"]
+        semaphore = asyncio.Semaphore(4)
+
+        async def check(record: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+            async with semaphore:
+                try:
+                    return record["id"], await self._check_update(record)
+                except PluginError as exc:
+                    return record["id"], {
+                        "status": "unavailable",
+                        "checked_at": time.time(),
+                        "diagnostic": str(exc),
+                    }
+
+        checked = await asyncio.gather(*(check(record) for record in records))
+        self._update_checks.update(dict(checked))
+        available = [plugin_id for plugin_id, item in checked if item["status"] == "available"]
+        for plugin_id, item in checked:
+            if item["status"] == "unavailable":
+                log.warning(
+                    "plugin update check unavailable plugin_id=%s diagnostic=%s",
+                    plugin_id,
+                    item.get("diagnostic", "unknown"),
+                )
+        log.info(
+            "plugin update scan completed checked=%s available=%s unavailable=%s",
+            len(checked),
+            len(available),
+            sum(1 for _, item in checked if item["status"] == "unavailable"),
+        )
+        return {"checked": len(checked), "available": available, "updates": dict(checked)}
 
     async def _latest_release_ref(self, source: str) -> str:
         repository = _github_repository(source)
@@ -628,7 +1077,16 @@ class PluginManager:
             diagnostic="rollback restored; approval required",
         )
         assert updated is not None
+        await self.store.remove_update_stage(plugin_id)
+        self._update_checks.pop(plugin_id, None)
         self._revoke(plugin_id)
+        log.info(
+            "plugin rolled back plugin_id=%s version=%s root=%s previous_root=%s",
+            plugin_id,
+            manifest.version,
+            previous,
+            current,
+        )
         return updated
 
     async def uninstall(self, plugin_id: str, *, purge: bool = False) -> dict[str, Any]:
@@ -650,6 +1108,8 @@ class PluginManager:
             if task.get_name().startswith(f"plugin:{plugin_id}:"):
                 task.cancel()
         removed = await self.store.remove(plugin_id)
+        await self.store.remove_update_stage(plugin_id)
+        self._update_checks.pop(plugin_id, None)
         if record["source_kind"] == "managed":
             container = self.sources / _safe_name(plugin_id)
             if _within(self.sources, container):
@@ -786,6 +1246,65 @@ class PluginManager:
         snapshot: dict[str, Any] = record.snapshot()
         snapshot["spawn_env"] = {}
         return snapshot
+
+    async def restart_panes(self, plugin_id: str) -> dict[str, Any]:
+        record = await self._record(plugin_id)
+        manifest = await self._load(record, require_enabled=True)
+        pane_ids = {pane.id for pane in manifest.panes}
+        live = [
+            session
+            for session in self.sessions.sessions.values()
+            if session.record.plugin_id == plugin_id
+            and session.record.state not in {"exited", "crashed"}
+            and not session.record.inactive
+        ]
+        missing = sorted(
+            {
+                str(session.record.plugin_entrypoint_id)
+                for session in live
+                if session.record.plugin_entrypoint_id not in pane_ids
+            }
+        )
+        if missing:
+            raise PluginError(
+                "pane_missing",
+                "current manifest removed live pane entrypoints: " + ", ".join(missing),
+            )
+        restarted = []
+        for old in live:
+            old_id = old.record.id
+            pane_id = str(old.record.plugin_entrypoint_id)
+            project_id = old.record.project_id
+            placement = old.record.plugin_placement or "tab"
+            for token, grant in tuple(self._tokens.items()):
+                if grant.session_id == old_id:
+                    self._tokens.pop(token, None)
+            await self.sessions.stop(old_id, reason="plugin development restart")
+            self.sessions.sessions.pop(old_id, None)
+            opened = await self.open_pane(
+                plugin_id,
+                pane_id,
+                {"context": "project", "project_id": project_id},
+            )
+            replacement = self.sessions.resolve(opened["session"]["id"])
+            replacement.record.plugin_placement = placement
+            replacement.publish_update()
+            snapshot = replacement.record.snapshot()
+            snapshot["spawn_env"] = {}
+            restarted.append(
+                {
+                    "old_session_id": old_id,
+                    "session": snapshot,
+                    "placement": placement,
+                }
+            )
+        log.info(
+            "plugin panes restarted plugin_id=%s count=%s version=%s",
+            plugin_id,
+            len(restarted),
+            manifest.version,
+        )
+        return {"plugin_id": plugin_id, "restarted": restarted}
 
     async def link_handlers(self) -> builtins.list[dict[str, Any]]:
         handlers: builtins.list[dict[str, Any]] = []

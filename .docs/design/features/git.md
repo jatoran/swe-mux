@@ -585,11 +585,12 @@ and provider-managed worktrees may live outside that root.
   The suggested branch convention is `worktree-<name>`.
   Branch-field whitespace is normalized to `-` before both branch creation and path derivation.
   It suggests `<worktree_root>/<project-name>-<project-id>/<branch>` with filesystem-safe path segments.
-  The launcher waits only for worktree creation, closes once the durable tree exists, then calls `POST /api/git/worktrees/session` for setup and spawn in the background.
-  A client-only unpanned pending session appears and receives focus immediately, with the selected backend, worktree path, and explicit setup status.
-  While selected it occupies the full workspace without changing the existing pane tree; selecting another session restores that tree with no setup placeholder left visible.
-  The daemon session replaces that pending row in place.
-  If the user moves elsewhere before completion, replacement preserves the newer focus.
+  The client-only pending session appears on submit, before `git worktree add` runs, as an ordinary focused tab in the focused pane carrying the selected backend, the worktree path, and explicit creation-then-setup status.
+  It is a real leaf rather than the unpanned full-workspace surface it used to be: an unpanned view is drawn nowhere on a phone, whose workspace projection reads the layout's tabs, so for the whole of a bootstrap the launch was a sidebar row that tapping did nothing to.
+  The launcher waits only for worktree creation, closes once the durable tree exists, then calls `POST /api/git/worktrees/session` for setup and spawn behind that tab.
+  Creation failures are returned to the still-open form, because a branch that already exists or a parent that does not is what the operator can correct there; setup and spawn failures are ordinary toasts.
+  The daemon session replaces that pending row and its leaf in place.
+  If the user moves elsewhere before completion, replacement preserves the newer focus and restores the pane's own active tab.
   `worktree_root` is a global Settings value under Git and worktrees; its empty/default form resolves to `<data_dir>/worktrees`, normally `~/.mux/worktrees`.
   The daemon creates a missing parent hierarchy only when the target remains below that configured root.
   A manually entered target outside the configured root retains the existing rule that its parent must already exist.

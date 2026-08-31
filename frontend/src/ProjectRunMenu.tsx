@@ -23,7 +23,10 @@ type Props={
   onLaunch:(backend:ProjectBackend,profileId?:string)=>void
   onCustom:()=>void
   onSessions:(sessions:Session[])=>void
-  onWorktreeCreated:(path:string,backend:ProjectBackend)=>void
+  /** Runs the whole worktree launch - `git worktree add`, then bootstrap and spawn behind an
+   *  optimistic pane. Resolves to the creation failure's message, which belongs in this form
+   *  because it is the one the operator can fix here, or `null` once the launch is under way. */
+  onWorktreeLaunch:(draft:WorktreeLaunch)=>Promise<string|null>
   plugins:InstalledPlugin[]
   onPluginPane:(pluginId:string,paneId:string)=>void
   onError:(message:string)=>void
@@ -34,11 +37,11 @@ const sourceLabel:Record<ProjectAction['source'],string>={
 }
 
 type WorktreeDraft={backend:ProjectBackend;branch:string;startPoint:string;path:string;pathEdited:boolean}
-type WorktreeCreateResult={ok:true;path:string}
+export type WorktreeLaunch={path:string;branch:string;startPoint:string;backend:ProjectBackend}
 type ActionsSource={path:string;exists:boolean;text:string;revision:string;starter:boolean}
 type ActionsSaved=ActionsSource&{diagnostics:string[];catalog:ProjectActionCatalog}
 
-export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeCreated,plugins,onPluginPane,onError}:Props){
+export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeLaunch,plugins,onPluginPane,onError}:Props){
   const harnesses=promptDeliveryHarnesses()
   // A harness plus its launch profiles, so "Claude" and "Claude (plan)" sit together
   // rather than in a separate list where the relationship is lost.
@@ -209,14 +212,13 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
     if(!branch){setWorktreeError('New branch is required.');return}
     if(!isAbsolutePath(path)){setWorktreeError('Worktree path must be absolute.');return}
     setBusy('__worktree__');setWorktreeError('')
-    try{
-      const result=await api<WorktreeCreateResult>('POST','/api/git/worktrees',{
-        cwd:project.root,path,branch,start_point:worktree.startPoint.trim()||undefined,
-      },{timeoutMs:30000})
-      onClose()
-      onWorktreeCreated(result.path,worktree.backend)
-    }catch(cause){setWorktreeError(cause instanceof Error?cause.message:String(cause))}
-    finally{setBusy('')}
+    // The pane is already on screen behind this menu, so the form is open only for as long as
+    // `git worktree add` runs - and stays open *on its error*, which is the one failure the
+    // operator can fix from here. Bootstrap and spawn continue after it closes.
+    const failure=await onWorktreeLaunch({path,branch,startPoint:worktree.startPoint.trim(),backend:worktree.backend})
+    setBusy('')
+    if(failure){setWorktreeError(failure);return}
+    onClose()
   }
   const groups=(['native','vscode','package'] as const).map(source=>({source,items:catalog?.actions.filter(item=>item.source===source)||[]})).filter(group=>group.items.length)
   const pluginPanes=projectPluginPanes(plugins)

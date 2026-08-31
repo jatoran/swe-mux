@@ -1686,6 +1686,12 @@ export function App() {
   sessionsRef.current=sessions
   projectsRef.current=projects
   joinAnchor.current={projectId,viewId:focusedViewId||activeId}
+  // The settled focus, readable from a launch's continuation. Worktree setup runs for
+  // minutes, and the `activeId`/`focusedViewId` such a continuation closed over are the
+  // values from the render that started it - which is exactly the question "has the
+  // operator moved on while this was running" needing today's answer rather than that one.
+  const focusNow=useRef<{activeId:string|null;viewId:string|null}>({activeId:null,viewId:null})
+  focusNow.current={activeId,viewId:focusedViewId}
   useEffect(()=>{
     const onProjectRecency=(event:Event)=>{
       const detail=(event as CustomEvent<ProjectRecencyEventDetail>).detail
@@ -1906,8 +1912,34 @@ export function App() {
       if(target.mode==='popup'){setPluginPopupId(target.popupId);return}
       placePluginSessionInWorkspace(detail.session,detail.placement)
     }
+    const restarted=(event:Event)=>{
+      const detail=(event as CustomEvent<{old_session_id:string;session:Session;placement:string}>).detail
+      if(!detail?.session||!detail.old_session_id)return
+      setSessions(current=>[
+        ...current.filter(item=>item.id!==detail.old_session_id&&item.id!==detail.session.id),
+        detail.session,
+      ])
+      if(detail.placement==='popup'){
+        setPluginPopupId(detail.session.id)
+        return
+      }
+      const targetProjectId=detail.session.project_id
+      const project=projectsRef.current.find(item=>item.id===targetProjectId)
+      const current=layoutValues.current[targetProjectId]||parseLayout(project?.layout)
+      const next=terminalIds(current).includes(detail.old_session_id)
+        ?activateContainingStack(replaceTerminal(current,detail.old_session_id,detail.session.id),detail.session.id)
+        :placePluginPane(current,detail.session.id,detail.placement,spawnAnchorId(current))
+      layoutValues.current[targetProjectId]=next
+      setLayoutMap(layouts=>({...layouts,[targetProjectId]:next}))
+      void layoutWriter.write(targetProjectId,next,{quiet:true})
+      setProjectId(targetProjectId);setActiveId(detail.session.id);setFocusedViewId(detail.session.id);setSidebarOpen(false)
+    }
     window.addEventListener('mux:plugin-pane-opened',opened)
-    return()=>window.removeEventListener('mux:plugin-pane-opened',opened)
+    window.addEventListener('mux:plugin-pane-restarted',restarted)
+    return()=>{
+      window.removeEventListener('mux:plugin-pane-opened',opened)
+      window.removeEventListener('mux:plugin-pane-restarted',restarted)
+    }
   },[placePluginSessionInWorkspace])
 
   type AppConfig = {
@@ -3828,59 +3860,128 @@ export function App() {
     openRunMenu(project,element,trigger)
   }
 
-  const startWorktreeSession=async(targetProject:string,path:string,backend:string)=>{
+  // The Run menu's worktree launch, both of its phases, so a pane exists for the whole wait.
+  //
+  // Phase one is `git worktree add`: seconds, and its failures are the operator's to correct
+  // in the form they came from (a branch that already exists, a parent that does not), so its
+  // message is *returned* rather than raised as a toast and the menu stays open on it. Phase
+  // two is bootstrap plus spawn, which can run for minutes; the menu is gone by then and its
+  // failures are toasts like every other launch's.
+  //
+  // The optimistic tab is placed before phase one, and it is a real leaf in the focused pane
+  // rather than the unpanned placeholder this used to mint. Both halves of that were one
+  // complaint: nothing on screen until the checkout existed, and then a sidebar row belonging
+  // to no pane. An unpanned view is drawn as a whole-workspace surface on the desktop and is
+  // drawn *nowhere* on a phone, whose projection reads the layout's tabs - so for the longest
+  // wait swe-mux has, tapping the row did nothing at all. It joins the layout the way every
+  // other launch does instead, and `fleetLayouts.ts` keeps it the pane's active tab across the
+  // refreshes that happen during setup.
+  //
+  // Returns the phase-one failure message, or `null` once the launch is under way.
+  const startWorktreeSession=async(targetProject:string,draft:{path:string;branch:string;startPoint:string;backend:string}):Promise<string|null>=>{
     const target=projectsRef.current.find(item=>item.id===targetProject)
-    if(!target){setError(`Worktree created at ${path}, but its Project is no longer available.`);return}
+    if(!target)return 'That Project is no longer available.'
+    const backend=draft.backend
     const startupOrigin=performance.now()
     const pendingId=`pending-${browserUuid()}`
     const currentLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
-    pendingSpawns.current[pendingId]={projectId:targetProject,placement:null}
+    const focused=targetProject===projectId?openAnchorId(currentLayout,focusedViewId||activeId):spawnAnchorId(currentLayout)
+    const placement:PendingSpawnPlacement={split:false,targetId:focused,position:'after'}
+    pendingSpawns.current[pendingId]={projectId:targetProject,placement}
+    const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)
+    layoutValues.current[targetProject]=optimisticLayout
     setSessions(items=>[...items,pendingTerminal(pendingId,target,backend,{
-      cwd:path,
+      cwd:draft.path,
       name:`setting up ${backend==='shell'?'shell':backend}…`,
-      label:'Setting up worktree…',
-      detail:`Running the repository setup before starting ${backend==='shell'?'the shell':backend}…`,
+      label:'Creating worktree…',
+      detail:`Checking out ${draft.branch} at ${draft.path}…`,
     })])
+    setLayoutMap(current=>({...current,[targetProject]:optimisticLayout}))
     setProjectId(targetProject)
     setActiveId(pendingId)
     setFocusedViewId(pendingId)
     setSidebarOpen(false)
-    try{
-      const result=await api<WorktreeSpawnResult>('POST','/api/git/worktrees/session',{
-        path,spawn:{project_id:targetProject,backend},
-      },{timeoutMs:35*60*1000})
-      if(result.status!=='spawned'||!result.session_id){
-        const setupFailed=result.setup&&['failed','timed_out','error'].includes(result.setup.status)
-        const setupDetail=setupFailed?` Setup also failed (${result.setup?.error||result.setup?.exit_code||result.setup?.status}); the tree is not bootstrapped.`:''
-        throw new Error(`the session failed: ${result.error||'unknown error'}.${setupDetail}`)
-      }
-      const next=result.session||await api<Session>('GET',`/api/sessions/${encodeURIComponent(result.session_id)}`)
-      markProjectRecent(targetProject)
-      startupOrigins.current[next.id]=startupOrigin
-      const browserTiming={api_response:performance.now()-startupOrigin}
-      clientStartupTimingValues.current[next.id]=browserTiming
-      localStorage.setItem('mux.lastBackend',backend)
-      pendingSpawns.current[pendingId].resolvedId=next.id
-      setSessions(items=>[
-        ...items.filter(item=>item.id!==pendingId&&item.id!==next.id),
-        mergeSessionSnapshot(items.find(item=>item.id===next.id),next),
-      ])
-      setActiveId(current=>current===pendingId?next.id:current)
-      setFocusedViewId(current=>current===pendingId?next.id:current)
-      emitTutorialAction({action:'session-launched',backend})
-      if(result.setup&&['failed','timed_out','error'].includes(result.setup.status)){
-        const detail=result.setup.error||(result.setup.exit_code!=null?`exit code ${result.setup.exit_code}`:result.setup.status)
-        setError(`Worktree session started, but setup failed (${detail}). The tree is not bootstrapped; setup output is in the session scrollback.`)
-      }
-      window.setTimeout(()=>{delete pendingSpawns.current[pendingId]},500)
-    }catch(cause){
+    // Drop the optimistic tab and hand focus back to whatever the pane was showing before it.
+    const abandon=()=>{
       delete pendingSpawns.current[pendingId]
       setSessions(items=>items.filter(item=>item.id!==pendingId))
-      const fallback=visibleTerminalIds(layoutValues.current[targetProject]||currentLayout)[0]||terminalIds(currentLayout)[0]||null
+      const failedLayout=removeLeaf(layoutValues.current[targetProject]||optimisticLayout,'terminal',pendingId)
+      layoutValues.current[targetProject]=failedLayout
+      setLayoutMap(current=>({...current,[targetProject]:failedLayout}))
+      const fallback=visibleTerminalIds(failedLayout)[0]||terminalIds(failedLayout)[0]||null
       setActiveId(current=>current===pendingId?fallback:current)
       setFocusedViewId(current=>current===pendingId?fallback:current)
-      setError(`Worktree created at ${path}, but ${cause instanceof Error?cause.message:String(cause)}`)
     }
+    let path=draft.path
+    try{
+      const created=await api<{ok:true;path:string}>('POST','/api/git/worktrees',{
+        cwd:target.root,path:draft.path,branch:draft.branch,start_point:draft.startPoint||undefined,
+      },{timeoutMs:30000})
+      path=created.path
+    }catch(cause){
+      abandon()
+      return cause instanceof Error?cause.message:String(cause)
+    }
+    // The checkout is durable from here on, so the splash stops promising one and starts
+    // reporting the bootstrap - and adopts the path the daemon actually created.
+    setSessions(items=>items.map(item=>item.id===pendingId?{
+      ...item,cwd:path,runtime_cwd:path,
+      pending_label:'Setting up worktree…',
+      pending_detail:`Running the repository setup before starting ${backend==='shell'?'the shell':backend}…`,
+    }:item))
+    // Deliberately not awaited by the caller: the menu closes on a durable checkout, and
+    // setup runs behind the tab that is now showing it.
+    const runSetup=async()=>{
+      try{
+        const result=await api<WorktreeSpawnResult>('POST','/api/git/worktrees/session',{
+          path,spawn:{project_id:targetProject,backend},
+        },{timeoutMs:35*60*1000})
+        if(result.status!=='spawned'||!result.session_id){
+          const setupFailed=result.setup&&['failed','timed_out','error'].includes(result.setup.status)
+          const setupDetail=setupFailed?` Setup also failed (${result.setup?.error||result.setup?.exit_code||result.setup?.status}); the tree is not bootstrapped.`:''
+          throw new Error(`the session failed: ${result.error||'unknown error'}.${setupDetail}`)
+        }
+        const next=result.session||await api<Session>('GET',`/api/sessions/${encodeURIComponent(result.session_id)}`)
+        markProjectRecent(targetProject)
+        startupOrigins.current[next.id]=startupOrigin
+        const browserTiming={api_response:performance.now()-startupOrigin}
+        clientStartupTimingValues.current[next.id]=browserTiming
+        localStorage.setItem('mux.lastBackend',backend)
+        pendingSpawns.current[pendingId].resolvedId=next.id
+        setSessions(items=>[
+          ...items.filter(item=>item.id!==pendingId&&item.id!==next.id),
+          mergeSessionSnapshot(items.find(item=>item.id===next.id),next),
+        ])
+        setActiveId(current=>current===pendingId?next.id:current)
+        setFocusedViewId(current=>current===pendingId?next.id:current)
+        // Swap the real id into the leaf the setup tab already owns. `replaceTerminal`
+        // activates what it writes, which is right while the operator is still watching
+        // setup and wrong once they have moved to a sibling tab during the minutes it can
+        // take - so the pane's own active tab is put back when it is no longer this one.
+        const watching=focusNow.current.viewId===pendingId||focusNow.current.activeId===pendingId
+        const latestLayout=layoutValues.current[targetProject]||optimisticLayout
+        const withPending=terminalIds(latestLayout).includes(pendingId)
+          ?latestLayout
+          :placePendingTerminal(latestLayout,pendingId,placement,watching)
+        const showing=stackForView(withPending,pendingId)?.active_child_id??null
+        const swapped=replaceTerminal(withPending,pendingId,next.id)
+        const nextLayout=!watching&&showing&&showing!==pendingId
+          ?activateContainingStack(swapped,showing)
+          :swapped
+        await updateLayout(targetProject,nextLayout)
+        emitTutorialAction({action:'session-launched',backend})
+        if(result.setup&&['failed','timed_out','error'].includes(result.setup.status)){
+          const detail=result.setup.error||(result.setup.exit_code!=null?`exit code ${result.setup.exit_code}`:result.setup.status)
+          setError(`Worktree session started, but setup failed (${detail}). The tree is not bootstrapped; setup output is in the session scrollback.`)
+        }
+        window.setTimeout(()=>{delete pendingSpawns.current[pendingId]},500)
+      }catch(cause){
+        abandon()
+        setError(`Worktree created at ${path}, but ${cause instanceof Error?cause.message:String(cause)}`)
+      }
+    }
+    void runSetup()
+    return null
   }
 
   const attachActionSessions=async(targetProject:string,nextSessions:Session[])=>{
@@ -8348,7 +8449,7 @@ export function App() {
       </form>
     </div>}
 
-    {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} plugins={commandPlugins} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeCreated={(path,backend)=>void startWorktreeSession(runMenu.project.id,path,backend)} onPluginPane={(pluginId,paneId)=>void openPluginPane(pluginId,paneId,runMenu.project.id)} onError={setError}/>}
+    {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} plugins={commandPlugins} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeLaunch={draft=>startWorktreeSession(runMenu.project.id,draft)} onPluginPane={(pluginId,paneId)=>void openPluginPane(pluginId,paneId,runMenu.project.id)} onError={setError}/>}
 
     {/* Sits above the workspace and takes no focus: the sequence is still being
         typed, and moving focus would end it. Labels come from the live registry, so
