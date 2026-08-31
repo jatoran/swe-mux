@@ -32,7 +32,7 @@ test('the terminal tier default puts away the agent machinery and keeps the rest
   const visible = every.filter(id => !hidden.includes(id))
   // A pure-terminal install should not draw eleven tabs; what remains is what a
   // terminal-first user still owns.
-  assert.deepEqual(visible, ['actions', 'files', 'notes', 'git', 'notifications'])
+  assert.deepEqual(visible, ['notes', 'files', 'actions', 'git', 'notifications'])
   // The badge rule holds for every tier: the one "something needs you" surface stays.
   assert.equal(hidden.includes('notifications'), false)
   // A default may never hide everything - the restore control lives on the tab strip.
@@ -40,8 +40,13 @@ test('the terminal tier default puts away the agent machinery and keeps the rest
   for (const id of hidden) assert.ok(every.includes(id), id)
 })
 
-test('every other tier keeps the shipped default', () => {
-  for (const tier of ['', 'deterministic', 'automations'] as const) {
+test('deterministic also puts Activity away; the unchosen and automations tiers keep the shipped default', () => {
+  // Activity is fed by the model-backed layer the deterministic tier keeps off, so
+  // drawing it there is mostly drawing the three kinds of empty. The empty tier - an
+  // install predating the chooser, or a skipped first run - deliberately keeps the
+  // pre-tier default so nothing shifts under an existing device.
+  assert.deepEqual(defaultHiddenDrawerTabs('deterministic'), ['activity', 'processes'])
+  for (const tier of ['', 'automations'] as const) {
     assert.deepEqual(defaultHiddenDrawerTabs(tier), [...DEFAULT_HIDDEN_DRAWER_TABS], tier)
   }
 })

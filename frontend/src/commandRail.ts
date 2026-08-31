@@ -729,43 +729,83 @@ export const BUILTIN_RAIL: RailItem[] = [
 ]
 
 /**
- * The strip a fresh install starts with.
+ * The rows a fresh install starts with, per device class.
  *
- * Not every catalog id, which is what it used to be: the four pads hold fifteen of
- * them, and placing both the pad and its contents would spend the space the pad
- * exists to save. Everything omitted here is still in the catalog and one drag away
- * in the editor - a pad is a *placement* decision, and this is the default one.
+ * Not every catalog id: the four pads hold fifteen of them, and placing both the
+ * pad and its contents would spend the space the pad exists to save. Everything
+ * omitted here is still in the catalog and one drag away in the editor - a pad is
+ * a *placement* decision, and these are the default ones.
  *
- * Only ids that exist in `BUILTIN_RAIL`; asserted below so a rename cannot silently
- * shorten the default rail.
+ * Desktop and mobile deliberately differ now (they used to seed from one list).
+ * A desktop has a physical keyboard, so its single row drops the terminal-key
+ * chrome (Esc, Enter, Tab, the arrows, the sticky modifiers) and keeps the verbs
+ * a mouse cannot type: copy surfaces, paste, approval, Markdown helpers, the
+ * three pickers. Mobile is the opposite trade - the rail IS the keyboard there -
+ * so it carries the keys, the modifiers, and the pads across two rows, with the
+ * second row holding the long-tail pickers so the first stays reachable under
+ * the thumb. Both layouts were lifted from a long-lived daily-driver install
+ * rather than designed on a whiteboard.
+ *
+ * Only ids that exist in `BUILTIN_RAIL`; asserted in `railPadModel.test.ts` so a
+ * rename cannot silently shorten a default rail.
  */
-export const DEFAULT_RAIL_ORDER: readonly string[] = [
-  'relaunch',
-  'padCopy',
-  'branch',
-  'approveOnce',
-  'paste',
-  'padPickers',
-  'kbdToggle',
-  'esc',
-  'enter',
-  'tab',
-  'shiftTab',
-  'ctrlC',
-  'padArrows',
-  'padJump',
-  'modCtrl',
-  'modAlt',
-  'modShift',
-  'markdownDivider',
-  'markdownCodeFence',
-  'ctrlU',
-  'restoreInput',
-  'newline',
-  'rewind',
-  'endSession',
-  'attach',
-]
+export const DEFAULT_RAIL_ROWS: Record<RailDevice, readonly (readonly string[])[]> = {
+  desktop: [[
+    'attach',
+    'copyReply',
+    'paste',
+    'approveOnce',
+    'markdownDivider',
+    'markdownCodeFence',
+    'copyResume',
+    'padCopy',
+    'copyInput',
+    'rewind',
+    'branch',
+    'clipboardHistory',
+    'skills',
+    'prompts',
+  ]],
+  mobile: [
+    [
+      'kbdToggle',
+      'copyReply',
+      'relaunch',
+      'paste',
+      'esc',
+      'newline',
+      'tab',
+      'markdownCodeFence',
+      'markdownDivider',
+      'branch',
+      'home',
+      'end',
+      'ctrlHome',
+      'ctrlEnd',
+      'rewind',
+      'copyResume',
+      'attach',
+      'approveOnce',
+      'shiftTab',
+      'copyInput',
+      'modCtrl',
+      'modAlt',
+      'modShift',
+      'padJump',
+      'padCopy',
+      'padPickers',
+    ],
+    [
+      'ctrlU',
+      'ctrlC',
+      'padArrows',
+      'skills',
+      'prompts',
+      'clipboardHistory',
+      'actionsDrawer',
+    ],
+  ],
+}
 
 const BUILTIN_BY_ID = new Map(BUILTIN_RAIL.map(item => [item.id, item]))
 
@@ -798,20 +838,21 @@ export function newRailRowId(): string {
 }
 export const defaultRowId = (device: RailDevice, surface: RailSurface): string => `${device}-${surface}`
 
-/** The layout every device starts with: one rail row holding `DEFAULT_RAIL_ORDER`.
- *  Desktop and mobile start identical and diverge from there. */
+/** The layout every device starts with: the `DEFAULT_RAIL_ROWS` for its class.
+ *  Row ids are fixed (`desktop-strip`, `mobile-strip`, `mobile-strip-2`) so an
+ *  untouched layout round-trips byte-identically instead of churning ids. */
 export function defaultRailLayouts(items: readonly RailItem[] = BUILTIN_RAIL): RailLayouts {
   const known = new Set(items.map(item => item.id))
   // Intersected rather than assumed, so a caller seeding from a narrowed catalog
   // (the tests do) gets a layout that only references what it handed in.
-  const ordered = DEFAULT_RAIL_ORDER.filter(id => known.has(id))
-  const seed = (device: RailDevice): RailRow => ({
-    id: defaultRowId(device, 'strip'),
-    items: [...ordered],
-  })
+  const seed = (device: RailDevice): RailRow[] =>
+    DEFAULT_RAIL_ROWS[device].map((row, index) => ({
+      id: index ? `${defaultRowId(device, 'strip')}-${index + 1}` : defaultRowId(device, 'strip'),
+      items: row.filter(id => known.has(id)),
+    }))
   return {
-    desktop: { strip: [seed('desktop')] },
-    mobile: { strip: [seed('mobile')] },
+    desktop: { strip: seed('desktop') },
+    mobile: { strip: seed('mobile') },
   }
 }
 

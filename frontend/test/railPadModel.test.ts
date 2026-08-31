@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import {
   BUILTIN_RAIL,
-  DEFAULT_RAIL_ORDER,
+  DEFAULT_RAIL_ROWS,
   RAIL_PAD_MAX_RINGS,
   RAIL_PAD_MAX_WEDGES,
   defaultPadTriggerMode,
@@ -238,13 +238,25 @@ test('every shipped pad slot names an action that exists, and no pad holds a pad
   }
 })
 
-test('the default order names only real built-ins, and every entry is placed', () => {
+test('the default rows name only real built-ins, and every entry is placed', () => {
   const known = new Set(BUILTIN_RAIL.map(item => item.id))
-  for (const id of DEFAULT_RAIL_ORDER) assert.ok(known.has(id), `${id} is not a built-in`)
-  assert.equal(new Set(DEFAULT_RAIL_ORDER).size, DEFAULT_RAIL_ORDER.length, 'no duplicates')
-  assert.deepEqual(defaultRailConfig().layouts.desktop.strip[0].items, [...DEFAULT_RAIL_ORDER])
-  // Down is inside the arrows pad now, so it is not also a chip of its own.
-  assert.equal(DEFAULT_RAIL_ORDER.includes('down'), false)
+  for (const device of ['desktop', 'mobile'] as const) {
+    const flat = DEFAULT_RAIL_ROWS[device].flat()
+    for (const id of flat) assert.ok(known.has(id), `${device}: ${id} is not a built-in`)
+    assert.equal(new Set(flat).size, flat.length, `${device}: no duplicates across rows`)
+    // Down is inside the arrows pad now, so it is not also a chip of its own.
+    assert.equal(flat.includes('down'), false, device)
+  }
+  const layouts = defaultRailConfig().layouts
+  assert.deepEqual(layouts.desktop.strip.map(row => row.items), DEFAULT_RAIL_ROWS.desktop.map(row => [...row]))
+  assert.deepEqual(layouts.mobile.strip.map(row => row.items), DEFAULT_RAIL_ROWS.mobile.map(row => [...row]))
+  // Row ids are fixed so an untouched layout round-trips byte-identically.
+  assert.deepEqual(layouts.desktop.strip.map(row => row.id), ['desktop-strip'])
+  assert.deepEqual(layouts.mobile.strip.map(row => row.id), ['mobile-strip', 'mobile-strip-2'])
+  // The desktop keeps the approval verb a new user needs most; the mobile rows keep
+  // the keyboard the device does not have.
+  assert.ok(DEFAULT_RAIL_ROWS.desktop.flat().includes('approveOnce'))
+  assert.ok(DEFAULT_RAIL_ROWS.mobile.flat().includes('kbdToggle'))
 })
 
 test('a stored pad is canonicalized, so an untouched copy still equals the shipped one', () => {
@@ -388,16 +400,16 @@ test('a custom pad survives normalization; a saved pad naming no slots is inert,
 })
 
 test('a padded key keeps its spoken alias, because a pad is a placement', () => {
+  // The arrows ship only inside `padArrows`, which the *mobile* default places.
+  // Folding them into a pad must not retire "press up" as a spoken command.
   const config = defaultRailConfig()
-  const phrases = resolveRailVoiceEntries(config, { device: 'desktop', backend: 'claude' })
+  const phrases = resolveRailVoiceEntries(config, { device: 'mobile', backend: 'claude' })
     .flatMap(entry => entry.phrases)
-  // The arrows are reachable only through `padArrows` on the default rail, Down by its
-  // centre. Folding them into a pad must not retire "press up" as a spoken command.
   assert.ok(phrases.includes('press up'), 'the arrow inside the pad is still voiced')
   assert.ok(phrases.includes('press down'), 'including the one in the centre')
   assert.ok(phrases.includes('home key'))
   // The pad chip itself is a container with no behaviour, so it is never voiced.
-  const voicedIds = resolveRailVoiceEntries(config, { device: 'desktop', backend: 'claude' }).map(entry => entry.item.id)
+  const voicedIds = resolveRailVoiceEntries(config, { device: 'mobile', backend: 'claude' }).map(entry => entry.item.id)
   assert.equal(voicedIds.includes('padArrows'), false)
   assert.equal(voicedIds.includes('padJump'), false)
 })

@@ -110,18 +110,18 @@ test('an edit to a project row stays project state', () => {
   const resolved = resolveRail(blob, P)
   const projectRow = resolved.config.layouts.desktop.strip.at(-1)!
   // Drag a *global* item into the project row: legal, and project-local. Any directly
-  // placed built-in would do; `esc` is one the default rail still carries as its own
-  // chip rather than inside a pad.
+  // placed built-in would do; `paste` is one the default desktop rail still carries as
+  // its own chip rather than inside a pad.
   const globalRow = resolved.config.layouts.desktop.strip[0]
-  const escIndex = globalRow.items.indexOf('esc')
-  assert.ok(escIndex >= 0)
+  const pasteIndex = globalRow.items.indexOf('paste')
+  assert.ok(pasteIndex >= 0)
   const next = moveRailEntry(resolved.config,
-    { device: 'desktop', surface: 'strip', rowId: globalRow.id, index: escIndex },
+    { device: 'desktop', surface: 'strip', rowId: globalRow.id, index: pasteIndex },
     { device: 'desktop', surface: 'strip', rowId: projectRow.id, index: 0 })
   const written = applyScopedRail(blob, P, resolved, next)
-  assert.equal(railConfigFromBlob(written).layouts.desktop.strip[0].items.includes('esc'), false)
+  assert.equal(railConfigFromBlob(written).layouts.desktop.strip[0].items.includes('paste'), false)
   const effective = railConfigFromBlob(written, P)
-  assert.deepEqual(effective.layouts.desktop.strip.at(-1)?.items, ['esc', 'custom:skill:ship'])
+  assert.deepEqual(effective.layouts.desktop.strip.at(-1)?.items, ['paste', 'custom:skill:ship'])
   // The other project never sees the project row.
   assert.equal(railConfigFromBlob(written, OTHER).layouts.desktop.strip.some(row => row.items.includes('custom:skill:ship')), false)
 })
@@ -240,20 +240,20 @@ test('a splice re-anchors when global moves around it, and falls back to the end
   let resolved = resolveRail(blob, P)
   const row = resolved.config.layouts.desktop.strip[0]
   const next = insertRailItem(resolved.config, 'custom:skill:ship',
-    { device: 'desktop', surface: 'strip', rowId: row.id, index: row.items.indexOf('esc') + 1 })
+    { device: 'desktop', surface: 'strip', rowId: row.id, index: row.items.indexOf('paste') + 1 })
   blob = applyScopedRail(blob, P, resolved, next)
   // Global gains a button before the anchor: the splice follows the anchor rather
   // than staying at a stored index.
   const global = railConfigFromBlob(blob)
   blob = writeRailConfigBlob(blob, insertRailItem(global, 'home', { device: 'desktop', surface: 'strip', rowId: row.id, index: 0 }))
   let mine = railConfigFromBlob(blob, P).layouts.desktop.strip[0].items
-  assert.equal(mine[mine.indexOf('esc') + 1], 'custom:skill:ship')
+  assert.equal(mine[mine.indexOf('paste') + 1], 'custom:skill:ship')
   // Global drops the anchor entirely: the splice survives at the end of the row.
   const withAnchor = railConfigFromBlob(blob)
-  const escAt = withAnchor.layouts.desktop.strip[0].items.indexOf('esc')
-  blob = writeRailConfigBlob(blob, removeRailEntry(withAnchor, { device: 'desktop', surface: 'strip', rowId: row.id, index: escAt }))
+  const pasteAt = withAnchor.layouts.desktop.strip[0].items.indexOf('paste')
+  blob = writeRailConfigBlob(blob, removeRailEntry(withAnchor, { device: 'desktop', surface: 'strip', rowId: row.id, index: pasteAt }))
   mine = railConfigFromBlob(blob, P).layouts.desktop.strip[0].items
-  assert.equal(mine.includes('esc'), false)
+  assert.equal(mine.includes('paste'), false)
   assert.equal(mine[mine.length - 1], 'custom:skill:ship')
   resolved = resolveRail(blob, P)
   assert.equal(isProjectRailPlacement(resolved, 'desktop', 'strip', row.id, 'custom:skill:ship'), true)
@@ -262,35 +262,35 @@ test('a splice re-anchors when global moves around it, and falls back to the end
 
 test('hiding a shared button removes it here and nowhere else, and unhiding restores it', () => {
   const rowId = railConfigFromBlob(undefined).layouts.desktop.strip[0].id
-  let blob = hideScopedRailEntry(undefined, P, 'esc', 'desktop', 'strip', rowId)
+  let blob = hideScopedRailEntry(undefined, P, 'paste', 'desktop', 'strip', rowId)
   assert.equal(railProjectScopeKind(blob, P), 'delta')
-  assert.equal(railConfigFromBlob(blob, P).layouts.desktop.strip[0].items.includes('esc'), false)
+  assert.equal(railConfigFromBlob(blob, P).layouts.desktop.strip[0].items.includes('paste'), false)
   // The shared row is untouched: every other project still has it.
-  assert.equal(sharedStrip(blob).items.includes('esc'), true)
-  assert.equal(railConfigFromBlob(blob, OTHER).layouts.desktop.strip[0].items.includes('esc'), true)
+  assert.equal(sharedStrip(blob).items.includes('paste'), true)
+  assert.equal(railConfigFromBlob(blob, OTHER).layouts.desktop.strip[0].items.includes('paste'), true)
   // The editors need it back: the resolution reports what was hidden and where.
   const hidden = resolveRail(blob, P).hiddenEntries.get(`desktop|strip|${rowId}`)
-  assert.deepEqual(hidden?.map(entry => entry.item), ['esc'])
+  assert.deepEqual(hidden?.map(entry => entry.item), ['paste'])
   // Unhiding drops the record and the project returns to plain inheritance.
-  blob = unhideScopedRailEntry(blob, P, 'esc', 'desktop', 'strip', rowId)
+  blob = unhideScopedRailEntry(blob, P, 'paste', 'desktop', 'strip', rowId)
   assert.equal(railProjectScopeKind(blob, P), 'global')
   assert.deepEqual(railConfigFromBlob(blob, P), railConfigFromBlob(blob))
 })
 
 test('a hidden button survives an unrelated edit to the same shared row', () => {
   const rowId = railConfigFromBlob(undefined).layouts.desktop.strip[0].id
-  const blob = hideScopedRailEntry(undefined, P, 'esc', 'desktop', 'strip', rowId)
+  const blob = hideScopedRailEntry(undefined, P, 'paste', 'desktop', 'strip', rowId)
   const resolved = resolveRail(blob, P)
   // Reorder two *other* chips from the project's view. The hidden entry is in no
   // row, so it cannot be moved — and it must not be deleted for everybody either.
   const items = resolved.config.layouts.desktop.strip[0].items
   const next = moveRailEntry(resolved.config,
-    { device: 'desktop', surface: 'strip', rowId, index: items.indexOf('tab') },
+    { device: 'desktop', surface: 'strip', rowId, index: items.indexOf('rewind') },
     { device: 'desktop', surface: 'strip', rowId, index: 0 })
   const written = applyScopedRail(blob, P, resolved, next)
-  assert.equal(sharedStrip(written).items.includes('esc'), true)
-  assert.equal(railConfigFromBlob(written, P).layouts.desktop.strip[0].items.includes('esc'), false)
-  assert.equal(railConfigFromBlob(written, P).layouts.desktop.strip[0].items[0], 'tab')
+  assert.equal(sharedStrip(written).items.includes('paste'), true)
+  assert.equal(railConfigFromBlob(written, P).layouts.desktop.strip[0].items.includes('paste'), false)
+  assert.equal(railConfigFromBlob(written, P).layouts.desktop.strip[0].items[0], 'rewind')
 })
 
 test('editing a row that holds a splice round-trips: what you see is what is stored', () => {
@@ -304,7 +304,7 @@ test('editing a row that holds a splice round-trips: what you see is what is sto
   const edits: Array<(items: readonly string[]) => { from: number; to: number }> = [
     items => ({ from: items.indexOf('custom:skill:ship'), to: 0 }),
     items => ({ from: items.indexOf('custom:skill:ship'), to: items.length - 1 }),
-    items => ({ from: items.indexOf('esc'), to: items.indexOf('custom:skill:ship') }),
+    items => ({ from: items.indexOf('paste'), to: items.indexOf('custom:skill:ship') }),
     items => ({ from: items.indexOf('custom:skill:ship'), to: 3 }),
   ]
   blob = applyScopedRail(blob, P, resolved,
@@ -336,16 +336,16 @@ test('a splice naming a deleted project action leaves no dead record behind', ()
 test('a hand-written splice that would duplicate a shared entry is refused', () => {
   // The one-owner-per-id rule: a global action may only be spliced into a row that
   // does not already define it (or that this project hides it from). Without the
-  // rule, the row shows two copies of `esc` that nothing can tell apart.
+  // rule, the row shows two copies of `paste` that nothing can tell apart.
   const rowId = railConfigFromBlob(undefined).layouts.desktop.strip[0].id
-  const delta: RailProjectDelta = { mode: 'delta', splices: { desktop: { strip: [{ row: rowId, item: 'esc', after: null }] } } }
+  const delta: RailProjectDelta = { mode: 'delta', splices: { desktop: { strip: [{ row: rowId, item: 'paste', after: null }] } } }
   const items = resolveDeltaScope(defaultRailConfig(), delta).config.layouts.desktop.strip[0].items
-  assert.equal(items.filter(id => id === 'esc').length, 1)
+  assert.equal(items.filter(id => id === 'paste').length, 1)
   // Paired with a hide of the same id, it *is* the project-local move it claims to be.
-  const moved: RailProjectDelta = { ...delta, hides: { desktop: { strip: [{ row: rowId, item: 'esc' }] } } }
+  const moved: RailProjectDelta = { ...delta, hides: { desktop: { strip: [{ row: rowId, item: 'paste' }] } } }
   const movedItems = resolveDeltaScope(defaultRailConfig(), moved).config.layouts.desktop.strip[0].items
-  assert.equal(movedItems[0], 'esc')
-  assert.equal(movedItems.filter(id => id === 'esc').length, 1)
+  assert.equal(movedItems[0], 'paste')
+  assert.equal(movedItems.filter(id => id === 'paste').length, 1)
 })
 
 // --- fork -> delta reattach ------------------------------------------------------
@@ -360,7 +360,7 @@ test('reattach turns a fork back into a delta that reproduces it', () => {
   const forkStrip = fork.layouts.desktop.strip[0].items
   const edited = { ...fork, layouts: { ...fork.layouts, desktop: { ...fork.layouts.desktop, strip: [{
     ...fork.layouts.desktop.strip[0],
-    items: [...forkStrip.filter(id => id !== 'esc'), 'custom:skill:ship'],
+    items: [...forkStrip.filter(id => id !== 'paste'), 'custom:skill:ship'],
   }] } } }
   blob = writeRailConfigBlob(blob, edited, P)
 
@@ -377,7 +377,7 @@ test('reattach turns a fork back into a delta that reproduces it', () => {
   // Same rail as the fork rendered...
   assert.deepEqual(railConfigFromBlob(after, P).layouts.desktop.strip[0].items, edited.layouts.desktop.strip[0].items)
   // ...and the shared row is global again, so later global edits arrive.
-  assert.equal(sharedStrip(after).items.includes('esc'), true)
+  assert.equal(sharedStrip(after).items.includes('paste'), true)
   assert.equal(sharedStrip(after).items.includes('custom:skill:ship'), false)
   const grown = railConfigFromBlob(after)
   const withNew = writeRailConfigBlob(after, insertRailItem(grown, 'home', { device: 'desktop', surface: 'strip', rowId, index: 0 }))
@@ -388,9 +388,9 @@ test('reattach expresses a reorder of shared buttons, and names what it cannot e
   let blob = detachProjectRail(undefined, P)
   const fork = railConfigFromBlob(blob, P)
   const strip = fork.layouts.desktop.strip[0]
-  // Move `esc` to the head — a project-local reorder of a *global* button, which
+  // Move `paste` to the head — a project-local reorder of a *global* button, which
   // is a hide plus a splice — and rename the shared row, which a delta cannot do.
-  const reordered = ['esc', ...strip.items.filter(id => id !== 'esc')]
+  const reordered = ['paste', ...strip.items.filter(id => id !== 'paste')]
   blob = writeRailConfigBlob(blob, {
     ...fork,
     layouts: { ...fork.layouts, desktop: { ...fork.layouts.desktop, strip: [{ ...strip, label: 'Mine', items: reordered }] } },
@@ -402,7 +402,7 @@ test('reattach expresses a reorder of shared buttons, and names what it cannot e
   const after = applyForkReattach(blob, P, plan)
   assert.deepEqual(railConfigFromBlob(after, P).layouts.desktop.strip[0].items, reordered)
   // The shared definition kept its own order and its own name.
-  assert.equal(sharedStrip(after).items[0], 'relaunch')
+  assert.equal(sharedStrip(after).items[0], 'attach')
   assert.equal(sharedStrip(after).label, undefined)
 })
 

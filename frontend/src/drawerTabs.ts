@@ -5,18 +5,25 @@
 // split tree next to an always-visible launcher rail, so it never covers the Project
 // workspace.
 //
-// Tab order groups by what a tab acts on. First the surfaces that *inject into the
-// focused session* (Actions and the prompt queue), then the passive session surfaces:
+// Tab order: the *navigators* lead (Notes, then Files), then the session-scoped block,
+// then the remaining Project-scoped surfaces, with Notifications last.
+//
+// Notes and Files are project-scoped indexes over documents — narrow-column surfaces
+// that used to cost a permanent workspace tab each. Files opens what you pick into a
+// pane; Notes hosts the editor itself and opens into a pane only on request, because
+// reading or adding to a note without leaving the session on screen is what the tab is
+// for on a phone. They lead because they are the two surfaces that are useful before a
+// single session exists — a fresh workspace has notes to write and files to open while
+// every session tab still has nothing to act on — and because they are the pair reached
+// most often mid-work without reference to the focused terminal.
+//
+// The session block keeps its internal order: first the surfaces that *inject into the
+// focused session* (Actions and the prompt queue), then the passive session surfaces —
 // Transcript reads the focused conversation, Activity reads what the run did, and Agent
-// inventories the CLI environment it did it with. Agent closes the session-scoped block.
-// Then the *navigators* (files, notes): project-scoped indexes over documents rather than
-// surfaces that inject text — narrow-column surfaces that used to cost a permanent
-// workspace tab each. Files opens what you pick into a pane; Notes hosts the editor itself
-// and opens into a pane only on request, because reading or adding to a note without
-// leaving the session on screen is what the tab is for on a phone. Git closes the
-// Project-scoped block: it reads the repository behind the Project rather than opening
-// anything, so it is not a navigator, but it acts on the same thing they do. Notifications
-// is the one application-wide fleet view that earns a permanent tab, and stays last.
+// inventories the CLI environment it did it with. Git reads the repository behind the
+// Project rather than opening anything, so it is not a navigator; it follows the session
+// block with Processes and Schedule beside it. Notifications is the one application-wide
+// fleet view that earns a permanent tab, and stays last.
 //
 // Queue closes the injection block, which is where it belongs and why it is here rather
 // than in a workspace tab or a modal: deciding whether to send is a judgement about the
@@ -80,13 +87,13 @@ export type DrawerTab = {
 // Every title leads with its tab's compact label so the icon controls announce and tooltip the
 // same identity. The longer heading is drawn once inside the active content surface.
 export const DRAWER_TABS: DrawerTab[] = [
+  { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
+  { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'actions', label: 'Actions', heading: 'Actions', title: 'Actions - quick shortcuts, skills, prompt templates, and clipboard history', scope: 'session' },
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
   { id: 'activity', label: 'Activity', heading: 'Activity', title: 'Activity - what this session narrated, what the detectors found, and what it changed', scope: 'session' },
   { id: 'agent', label: 'Agent', heading: 'Agent', title: 'Agent - configuration, tools, and instructions this session is running with', scope: 'session' },
-  { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
-  { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
   { id: 'schedule', label: 'Schedule', heading: 'Scheduled Runs', title: 'Schedule - sessions this Project starts on its own, and what they did last time', scope: 'project' },

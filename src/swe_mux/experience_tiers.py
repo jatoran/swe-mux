@@ -24,6 +24,22 @@ Two rules make a tier safe to offer:
   choosing a tier twice is idempotent. The cost, stated plainly: re-applying a
   tier overwrites hand edits to exactly these keys, which is why the Settings
   control applies on an explicit press rather than on selection.
+
+The first-run panel's granular choices live here for the same reason the tier
+key sets do: the browser must never hold a second copy of the policy. Three
+additions to the plain tier:
+
+- **Autonomy** is a second, orthogonal axis over the prompt queue's
+  auto-delivery keys plus the spawn budget - how much an agent may do without a
+  human pressing send. Same rules as a tier: an absolute assignment of ordinary
+  keys, `supervised` byte-identical to a fresh install, nothing locked.
+- **Overrides** let the first-run panel flip individual boolean switches inside
+  the chosen tier's assignment without recomputing it browser-side: the daemon
+  applies `tier_changes(tier)` and then the named deviations, and refuses any
+  key outside `OVERRIDABLE_KEYS`.
+- **The preview payload** (`GET /api/experience-tiers`) serves every
+  assignment so the panel can *show* what a tier or autonomy level sets
+  without restating it.
 """
 
 from __future__ import annotations
@@ -95,4 +111,57 @@ def tier_changes(tier: str) -> dict[str, Any]:
             attention_observers_enabled=True,
         )
     changes["experience_tier"] = tier
+    return changes
+
+
+#: The keys the first-run panel may deviate from a tier's assignment, one at a
+#: time. Exactly the tier inventory's booleans: the per-harness maps are edited
+#: through their own Settings surface (three checkboxes per harness, or the
+#: install-wide fleet-access choice on the first-run agents page), and the tier
+#: stamp itself is never an override.
+OVERRIDABLE_KEYS = frozenset(
+    key for key, value in _DETERMINISTIC.items() if isinstance(value, bool)
+)
+
+AUTONOMY_LEVELS = ("supervised", "assisted", "autonomous")
+
+#: The install-default (supervised) values of every key an autonomy level
+#: assigns. Same contract as `_DETERMINISTIC`: values must equal the `Config`
+#: field defaults, asserted in `tests/test_experience_tiers.py`, so declining
+#: the choice changes nothing.
+_SUPERVISED: dict[str, Any] = {
+    "auto_delivery_enabled": False,
+    "auto_delivery_max_consecutive": 3,
+    "auto_delivery_session_ttl_minutes": 60,
+    "auto_delivery_reply_window_minutes": 30,
+    "agent_spawn_hourly_budget": 10,
+}
+
+
+def autonomy_changes(level: str) -> dict[str, Any]:
+    """The config assignment for one autonomy level.
+
+    Orthogonal to the tier on purpose: how much swe-mux *watches* (the tier)
+    and how much an agent may *act unattended* (this) are different questions,
+    and the second one is about spend of the operator's attention rather than
+    of tokens. `assisted` turns the auto-delivery master on under the shipped
+    bounds; `autonomous` widens those bounds to fit long-running multi-agent
+    work (more consecutive sends, a longer idle grant and reply window, twice
+    the spawn budget). Every value still sits inside `_validate`'s ranges, and
+    every gate auto-delivery answers to - stability window, quiet hours, the
+    emergency pause, head-of-line order - still applies.
+    """
+    if level not in AUTONOMY_LEVELS:
+        raise ValueError(f"unknown autonomy level {level!r}")
+    changes = dict(_SUPERVISED)
+    if level == "assisted":
+        changes["auto_delivery_enabled"] = True
+    elif level == "autonomous":
+        changes.update(
+            auto_delivery_enabled=True,
+            auto_delivery_max_consecutive=10,
+            auto_delivery_session_ttl_minutes=120,
+            auto_delivery_reply_window_minutes=60,
+            agent_spawn_hourly_budget=20,
+        )
     return changes

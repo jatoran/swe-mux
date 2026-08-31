@@ -1989,12 +1989,17 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   chip group: `.pane-tools` is a fixed-chip row in a bar that cannot wrap, so a readout placed
   there can only ever show a truncated tail.
 - Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
-  It carries a keyboard toggle, terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, Down), Paste, the three sticky modifier chips, and four pads — Copy, Pick, Arrows and Jump — holding the copy actions, the pickers (clipboard history, prompt templates, Skills, Actions), the three upward arrows, and the line/document jumps respectively.
+  **The two device classes ship different default rails** (`DEFAULT_RAIL_ROWS` in `commandRail.ts`), lifted from a long-lived daily-driver install rather than designed on a whiteboard.
+  The desktop default is one row of the verbs a mouse cannot type - Attach, Copy reply, Paste, Approve, the two Markdown helpers, Copy resume, the Copy pad, Copy input, Rewind, Branch, and the three pickers (clipboard history, Skills, prompt templates) - and drops the terminal-key chrome a physical keyboard already provides.
+  The mobile default is two rows carrying the keyboard the device does not have: the keyboard toggle, terminal keys (Esc, Tab, Shift+Tab, newline, the line/document jumps), the copy verbs, the three sticky modifier chips, and the Jump/Copy/Pick pads on the first row, with Ctrl+U, Ctrl+C, the Arrows pad, and the pickers on the second.
+  A pad and its members may coexist on one default row (the mobile row places `padCopy` beside its three members): a chip is one tap, a pad is a flick, and the duplication is a placement choice the editor always allowed.
+  What no default row places stays a closed, deliberate set asserted in `commandRail.test.ts` - notably `enter` (mobile ships the pinned Send instead), `endSession` (the tab's close control is the shipped way to end a session), and `restoreInput`.
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
-  After the pads, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
-  Attach is the final scrolling item on agent rails.
+  **The rail has a per-device-class master switch** (`rail_enabled_desktop` / `rail_enabled_mobile`, Settings → Appearance → Action rail, both on by default, hot-applied).
+  Off suppresses the whole rail block for that device class - on mobile that includes the pinned Send button, which the control's copy states - while the catalog, layouts, and per-Project overrides are retained untouched, so turning it back on restores exactly what was there.
+  It is also one of the first-run Customize switches (`first-run.md`).
   **No message of any kind is drawn inside a rail row.**
   A rail row is chips plus its drawer control, and nothing else competes with them for width.
   The rule was learned the hard way: the selection readout used to ride the last row, in trailing furniture that does not shrink and under a `34vw` cap - viewport units inside a pane that is usually a fraction of the viewport.
@@ -2485,14 +2490,13 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
-  The canonical default order is **Actions**, **Queue**, **Transcript**, **Activity**, **Agent**, **Files**, **Notes**, **Git**, **Processes**, **Schedule**, and **Alerts**.
-  Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
-  Actions leads the session-scoped block because it inserts into the focused work surface, while Queue stages text for a focused agent and Transcript reads the same session back.
-  Activity and Agent close the session-scoped block with passive views of what the selected session did and what it is running with.
-  Files and Notes are the **navigators**: Project-scoped indexes over documents rather than surfaces that type into one.
+  The canonical default order is **Notes**, **Files**, **Actions**, **Queue**, **Transcript**, **Activity**, **Agent**, **Git**, **Processes**, **Schedule**, and **Alerts**.
+  Users may distribute those singleton tabs across a recursive arrangement, but the default order reads as blocks.
+  Notes and Files lead as the **navigators**: Project-scoped indexes over documents rather than surfaces that type into one, and the two surfaces that are useful before a single session exists - a fresh workspace has notes to write and files to open while every session-scoped tab still has nothing to act on.
   Files opens what you select into a pane.
   Notes can do that too but opens *into the drawer* by default, because reading or adding to a note without leaving the session on screen is the whole point of it on a phone.
-  Git closes the Project-scoped block without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
+  The session-scoped block follows and keeps its internal order: Actions leads it because it inserts into the focused work surface, Queue stages text for a focused agent, Transcript reads the same session back, and Activity and Agent close the block with passive views of what the selected session did and what it is running with.
+  Git follows without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
   See `git.md` for the branches, worktrees, dirty/upstream state, and allowed mutations it shows.
   **Processes** continues that block for the same reason: it is Project-scoped and acts on sessions rather than opening panes.
   **Schedule** closes it, immediately after Processes, because the two answer the same question at different times: Processes is what this Project's sessions are running now, Schedule is what it will start later (`scheduled-runs.md`).
@@ -2500,7 +2504,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   It is not made redundant by the Resources dialog that also draws its surface - a modal covers the terminal, and this tab exists to answer "what is *this* session running" beside it, with the focused session pinned first - but that is asked rarely enough not to spend a permanent rail slot on for someone who has not asked for it.
   The default applies only to a browser with no stored visibility choice at all; an explicitly emptied set is a choice and stays empty.
   **Alerts is deliberately not hidden**: it is the only tab that draws an unread badge, so hiding it would remove the one glanceable "something needs you" signal from the rail.
-  **The default is tier-shaped** (`defaultHiddenDrawerTabs`, the sanctioned frontend reader of `experience_tier`): a pure-terminal install additionally puts away Queue, Transcript, Activity, Agent, and Schedule - machinery for the agent layer that tier switched off - leaving Actions, Files, Notes, Git, and Alerts.
+  **The default is tier-shaped** (`defaultHiddenDrawerTabs`, the sanctioned frontend reader of `experience_tier`): a pure-terminal install additionally puts away Queue, Transcript, Activity, Agent, and Schedule - machinery for the agent layer that tier switched off - leaving Notes, Files, Actions, Git, and Alerts; a deterministic install additionally puts away Activity, whose findings and timeline are fed by the model-backed layer that tier keeps off.
   Presentation only, under the same consultation rule: a device with no stored choice re-derives on every config arrival (so applying a tier in Settings takes effect live), and a stored choice is never overwritten (`first-run.md`).
 
 ### Segments and sections

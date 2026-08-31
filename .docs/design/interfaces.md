@@ -2742,8 +2742,9 @@ The single case that cannot be made atomic is the final rename failing after the
 One `configuration_changed` is emitted for the transaction, carrying `changed` and a `keybindings` flag, in place of the two the split pair used to raise.
 `PATCH /api/config` and `PUT /api/keybindings` remain, unchanged, for callers with only one half to write.
 
-`POST /api/experience-tier` takes `{tier}` (`terminal` | `deterministic` | `automations`) and applies that tier's absolute key assignment through the same `update_config` path, answering like a `PATCH /api/config` (`public_dict` plus `hot_applied` and `restart_required`).
-The key sets are daemon policy (`experience_tiers.py`), never computed in a client; an unknown tier is a 422 (`design/features/first-run.md`).
+`POST /api/experience-tier` takes `{tier}` (`terminal` | `deterministic` | `automations`) plus an optional `autonomy` (`supervised` | `assisted` | `autonomous`) and optional `overrides` (individual boolean deviations from the tier's own inventory), and applies the combined absolute assignment through the same `update_config` path, answering like a `PATCH /api/config` (`public_dict` plus `hot_applied` and `restart_required`).
+The key sets are daemon policy (`experience_tiers.py`), never computed in a client; an unknown tier, autonomy level, or override key is a 422 - refused, never dropped, because a dropped override reads exactly like an applied one (`design/features/first-run.md`).
+`GET /api/experience-tiers` serves the policy for display: `{tiers: {<tier>: assignment}, autonomy: {<level>: assignment}, overridable: [key...]}`, which is what the first-run panel's Customize view draws from instead of restating the tables.
 
 ```text
 GET  /api/keybindings?host=<desktop|browser>&platform=<win|mac|linux>

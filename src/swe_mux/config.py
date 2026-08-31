@@ -209,6 +209,7 @@ RESTART_FIELDS = {
     # does not reach already-built adapters.
     "harness_mcp_enabled",
     "harness_instrument_enabled",
+    "harness_cli_enabled",
     "harness_skill_enabled",
 }
 BUILTIN_THEME_PAIRS = {
@@ -895,6 +896,14 @@ class Config:
     # before the setting existed - installing this build changes nothing on screen.
     rail_density_desktop: str = "comfortable"
     rail_density_mobile: str = "comfortable"
+    # Whether the terminal's Action rail is drawn at all, split per device class
+    # like its density: the phone without a rail loses its only touch path to
+    # Esc/arrow keys while the desktop has a physical keyboard, so the two
+    # answers are genuinely independent. Off suppresses the rows; the catalog,
+    # layouts, and per-Project overrides are all retained untouched, so turning
+    # it back on restores exactly what was there.
+    rail_enabled_desktop: bool = True
+    rail_enabled_mobile: bool = True
     middle_click_paste: bool = True
     broadcast_default: bool = False
     mobile_vertical_drag: str = "smart"

@@ -256,6 +256,14 @@ interface Props {
    * column count would leave the host wider than the terminal drawn inside it.
    */
   claudeMaxColumns: number
+  /**
+   * Whether the Action rail is drawn at all, per device class
+   * (`rail_enabled_desktop` / `rail_enabled_mobile`). Absent means on: a daemon
+   * predating the keys sends neither, and the rail is the shipped behaviour.
+   * Off suppresses the whole rail block including the mobile pinned Send, which
+   * is the stated cost of the setting rather than a surprise.
+   */
+  railEnabled?: { desktop: boolean; mobile: boolean }
   /** Open Configure Actions from the rail's trailing gear. */
   onConfigureRail?: () => void
   /** Fork this agent conversation into a sibling pane (rail Branch button). */
@@ -389,7 +397,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, inputBack
   return 'text'
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, railEnabled, onConfigureRail, onBranch }: Props) {
   const utilityPane=!!session.plugin_id
   const host = useRef<HTMLDivElement>(null)
   // Held in a ref rather than closed over: every reader below lives inside the
@@ -3873,7 +3881,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Kept beside the rows because a pad's slots name catalog ids rather than carrying
   // their own behaviour, so resolving one means a lookup the rows themselves do not do.
   const railItems=new Map(railConfig.items.map(entry=>[entry.id,entry]))
-  const railRows=utilityPane?[]:resolveRailRows(railConfig,'strip',{device:currentProfile(),backend:session.backend as RailBackend})
+  // The per-device-class master switch. Resolved at render (not memoized) for the
+  // same reason `loadRailConfig` above is: this pane re-renders on every config
+  // arrival, and the breakpoint change that flips `currentProfile()` re-renders it too.
+  const railOn=railEnabled?.[currentProfile()]??true
+  const railRows=utilityPane||!railOn?[]:resolveRailRows(railConfig,'strip',{device:currentProfile(),backend:session.backend as RailBackend})
   // Only a rail that actually carries an auto-labelled prompt button reads the
   // library; every other rail costs nothing (`promptTitles.ts`).
   const promptTitles=usePromptTitles(session.project_id,railRows.some(row=>row.entries.some(entry=>entry.item.type==='prompt'&&entry.item.autoLabel)))
@@ -4148,7 +4160,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     '--peek-offset':`${peekOffset}px`,
     '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
   } as Record<string,string>
-    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>} {!utilityPane&&<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>} {!utilityPane&&railOn&&<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }

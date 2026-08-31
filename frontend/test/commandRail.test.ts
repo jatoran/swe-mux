@@ -13,60 +13,70 @@ const CLAUDE: RailContext = { device: 'desktop', backend: 'claude' }
 const ids = (config: RailConfig, surface: RailSurface, ctx: RailContext = CLAUDE): string[] =>
   resolveRailRows(config, surface, ctx).flatMap(row => row.entries.map(entry => entry.item.id))
 
-test('the default layout seeds one rail row, identical on both devices', () => {
+test('the default layout seeds one desktop row and two mobile rows, and they differ', () => {
   const config = defaultRailConfig()
-  for (const device of ['desktop', 'mobile'] as const) {
-    assert.equal(config.layouts[device].strip.length, 1)
-  }
-  assert.deepEqual(config.layouts.desktop.strip[0].items, config.layouts.mobile.strip[0].items)
-  // Identical contents, but separate rows with separate ids: the two devices are
-  // never the same row, so editing one can never move the other.
+  assert.equal(config.layouts.desktop.strip.length, 1)
+  assert.equal(config.layouts.mobile.strip.length, 2)
+  // The two device classes ship different rails on purpose: a desktop has a
+  // physical keyboard, so its row drops the terminal-key chrome; on a phone the
+  // rail IS the keyboard, so both rows carry it.
+  assert.notDeepEqual(config.layouts.desktop.strip[0].items, config.layouts.mobile.strip[0].items)
+  // Separate rows with separate ids: editing one device can never move the other.
   assert.notEqual(config.layouts.desktop.strip[0].id, config.layouts.mobile.strip[0].id)
 })
 
-test('default rail places the four pads instead of what they hold, and ends with Attach', () => {
+test('the default desktop rail keeps the mouse-verbs and drops the keyboard chrome', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
-    'relaunch', 'padCopy', 'branch', 'approveOnce', 'paste', 'padPickers', 'kbdToggle',
-    'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'padArrows', 'padJump',
-    'modCtrl', 'modAlt', 'modShift',
-    'markdownDivider', 'markdownCodeFence', 'ctrlU', 'restoreInput',
-    'newline', 'rewind', 'endSession', 'attach',
+    'attach', 'copyReply', 'paste', 'approveOnce', 'markdownDivider', 'markdownCodeFence',
+    'copyResume', 'padCopy', 'copyInput', 'rewind', 'branch',
+    'clipboardHistory', 'skills', 'prompts',
   ])
 })
 
-// The invariant that replaced "one placement per built-in", which the pads deliberately
-// broke: a built-in must still be *reachable* on a fresh install, as its own chip or
-// inside a pad that is placed. Placing both would spend the space the pad exists to save,
-// and placing neither would ship a button nobody can find.
-test('every visible built-in is reachable on the default rail, directly or through a pad', () => {
+/**
+ * What a fresh install can and cannot reach, per device, stated as a closed set.
+ *
+ * Full catalog coverage on the default rail was the old invariant and is deliberately
+ * gone: the desktop default drops the terminal-key chrome a physical keyboard already
+ * provides, and both devices leave `enter` (mobile ships the pinned Send instead),
+ * `restoreInput`, and `endSession` (the tab's close control is the shipped way to end
+ * a session) to the editor. The set being CLOSED is the invariant now - a newly
+ * shipped built-in that lands in no default row has to be added here on purpose,
+ * with its reason, rather than silently shipping unfindable.
+ *
+ * Pads and their contents may now coexist on one rail (the mobile default places
+ * `padCopy` beside its three members): a chip is one tap, a pad is a flick, and the
+ * duplication is a placement choice the editor already allowed.
+ */
+test('what the default rail leaves to the editor is a closed, deliberate set', () => {
   const config = defaultRailConfig()
-  const placed = new Set(ids(config, 'strip'))
-  const reachable = new Set(placed)
-  for (const id of placed) {
-    const item = config.items.find(entry => entry.id === id)
-    if (item) for (const slot of railPadSlotItemIds(item)) reachable.add(slot)
+  const expectUnplaced: Record<'desktop' | 'mobile', string[]> = {
+    desktop: [
+      'relaunch', 'actionsDrawer', 'kbdToggle', 'esc', 'enter', 'tab', 'shiftTab', 'ctrlC',
+      'up', 'down', 'left', 'right', 'home', 'end', 'ctrlHome', 'ctrlEnd',
+      'ctrlU', 'restoreInput', 'newline', 'endSession',
+      'modCtrl', 'modAlt', 'modShift', 'padArrows', 'padJump', 'padPickers',
+    ],
+    mobile: ['enter', 'restoreInput', 'endSession'],
   }
-  assert.deepEqual(
-    [...reachable].sort(),
-    BUILTIN_RAIL.filter(item => railItemVisible(item, 'claude')).map(item => item.id).sort(),
-  )
-})
-
-test('a pad and its contents are never both on the default rail', () => {
-  const config = defaultRailConfig()
-  const placed = ids(config, 'strip')
-  for (const id of placed) {
-    const item = config.items.find(entry => entry.id === id)
-    for (const slot of item ? railPadSlotItemIds(item) : []) {
-      assert.equal(placed.includes(slot), false, `${slot} is both in ${id} and on the rail`)
+  for (const device of ['desktop', 'mobile'] as const) {
+    const reachable = new Set<string>()
+    for (const row of config.layouts[device].strip) {
+      for (const id of row.items) {
+        reachable.add(id)
+        const item = config.items.find(entry => entry.id === id)
+        if (item) for (const slot of railPadSlotItemIds(item)) reachable.add(slot)
+      }
     }
+    const unplaced = BUILTIN_RAIL.map(item => item.id).filter(id => !reachable.has(id))
+    assert.deepEqual(unplaced.sort(), [...expectUnplaced[device]].sort(), device)
   }
 })
 
 test('desktop and mobile layouts are edited independently', () => {
   const config = defaultRailConfig()
   const desktopCount = ids(config, 'strip').length
-  config.layouts.mobile.strip[0].items = ['esc', 'enter']
+  config.layouts.mobile.strip = [{ id: 'm1', items: ['esc', 'enter'] }]
   assert.deepEqual(ids(config, 'strip', { device: 'mobile', backend: 'claude' }), ['esc', 'enter'])
   // The desktop layout is untouched by the mobile edit.
   assert.equal(ids(config, 'strip').length, desktopCount)
@@ -74,7 +84,7 @@ test('desktop and mobile layouts are edited independently', () => {
 
 test('an item placed in no row is simply absent from that device', () => {
   const config = defaultRailConfig()
-  config.layouts.mobile.strip[0].items = []
+  config.layouts.mobile.strip = []
   assert.deepEqual(resolveRailRows(config, 'strip', { device: 'mobile', backend: 'claude' }), [])
 })
 
@@ -117,11 +127,15 @@ test('agent-only built-ins stay out of shell sessions', () => {
   assert.equal(ids(config, 'strip', { device: 'mobile', backend: 'codex' }).includes('attach'), true)
 })
 
-test('end session ships on the rail for every backend', () => {
-  const config = defaultRailConfig()
+test('end session stays in the catalog for every backend, off the default rail', () => {
+  // The tab's own close control is the shipped way to end a session, so the rail
+  // button is an editor placement rather than a default - but it must stay in the
+  // catalog, unfiltered, for every backend, or the editor could not offer it.
+  const endSession = BUILTIN_RAIL.find(item => item.id === 'endSession')
+  assert.ok(endSession)
   for (const backend of ['claude', 'codex', 'shell'] as const) {
-    const ctx = { device: 'mobile', backend } as const
-    assert.equal(ids(config, 'strip', ctx).includes('endSession'), true)
+    assert.equal(railItemVisible(endSession!, backend), true, backend)
+    assert.equal(ids(defaultRailConfig(), 'strip', { device: 'mobile', backend }).includes('endSession'), false)
   }
 })
 
@@ -183,7 +197,9 @@ test('a retired built-in id keeps its exact slot under its replacement', () => {
   const saved = defaultRailConfig()
   const withOldId = (ids: string[]) => ids.map(id => (id === 'ctrlU' ? 'clearInput' : id))
   for (const device of ['desktop', 'mobile'] as const) {
-    saved.layouts[device].strip[0].items = withOldId(saved.layouts[device].strip[0].items)
+    // `ctrlU` ships only on the mobile default now, so the rename is a no-op on
+    // desktop rows - which is itself part of what the migration must preserve.
+    saved.layouts[device].strip = saved.layouts[device].strip.map(row => ({ ...row, items: withOldId(row.items) }))
   }
   saved.items = saved.items.map(item =>
     item.id === 'ctrlU' ? { id: 'clearInput', type: 'action', action: 'clearInput', label: 'Clear' } : item)
@@ -194,11 +210,12 @@ test('a retired built-in id keeps its exact slot under its replacement', () => {
   assert.equal(ctrlU?.type, 'key')
   assert.equal(ctrlU?.bytes, '\x15')
   for (const device of ['desktop', 'mobile'] as const) {
-    // Same position as the shipped default, and appearing exactly once: the migration
-    // must not also append the "newly shipped built-in" copy on top of the migrated one.
-    const strip = ids(config, 'strip', { device, backend: 'claude' })
-    assert.deepEqual(strip, ids(defaultRailConfig(), 'strip', { device, backend: 'claude' }))
-    assert.equal(strip.filter(id => id === 'ctrlU').length, 1)
+    // Same positions as the shipped default, and no duplicate: the migration must
+    // not also append the "newly shipped built-in" copy on top of the migrated one.
+    const rows = normalizeRailConfig(saved).layouts[device].strip.map(row => row.items)
+    assert.deepEqual(rows, config.layouts[device].strip.map(row => row.items))
+    assert.deepEqual(rows, defaultRailConfig().layouts[device].strip.map(row => row.items))
+    assert.equal(rows.flat().filter(id => id === 'ctrlU').length, device === 'mobile' ? 1 : 0)
   }
 })
 
