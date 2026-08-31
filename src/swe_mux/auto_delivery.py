@@ -457,6 +457,31 @@ class AutoDeliveryController:
 
     # -- the bounded reply window ---------------------------------------------
 
+    @staticmethod
+    def merge_solicited_sources(
+        *sources: Callable[
+            [Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]
+        ],
+    ) -> Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]]:
+        """One callable over several open-request pipes, later sources winning.
+
+        The land queue and the settle-watch service each answer "which of these
+        sessions opened a request that is still owed an answer"; the controller
+        deliberately knows neither pipe, so the merge lives here rather than in
+        the composition root's already-full builder. Order the narrower claim
+        last: for a session holding both, the later entry replaces the earlier.
+        """
+
+        async def merged(
+            session_ids: Sequence[str], since: float
+        ) -> dict[str, dict[str, Any]]:
+            windows: dict[str, dict[str, Any]] = {}
+            for source in sources:
+                windows.update(await source(session_ids, since))
+            return windows
+
+        return merged
+
     def set_solicited_requests(
         self,
         source: Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]]
@@ -526,18 +551,37 @@ class AutoDeliveryController:
                 log.warning("auto_delivery_solicited_windows_unreadable")
                 solicited = {}
             for session_id, entry in solicited.items():
+                # An entry may carry its own kind and expiry. The land queue's
+                # do not (its window runs from the last recorded pipeline step,
+                # on this span's clock); a watch's do, because a watch is
+                # bounded by its own deadline rather than by the reply-window
+                # span (`session_watch.origin_windows`). An entry that names
+                # neither gets the land defaults, which is every entry that
+                # existed before kinds were plural.
                 windows[str(session_id)] = {
-                    "kind": "land",
+                    "kind": str(entry.get("kind") or "land"),
                     "thread_id": None,
                     "peer_session_id": None,
                     "sent_at": float(entry.get("updated_at") or 0.0),
-                    "expires_at": float(entry.get("updated_at") or 0.0) + span,
+                    "expires_at": float(
+                        entry.get("expires_at")
+                        or float(entry.get("updated_at") or 0.0) + span
+                    ),
                     "window_minutes": minutes,
                     "thread_messages_used": 0,
                     "thread_messages_limit": 0,
                     **{
                         key: entry[key]
-                        for key in ("request_id", "branch", "request_kind", "state")
+                        for key in (
+                            "request_id",
+                            "branch",
+                            "request_kind",
+                            "state",
+                            "watch_id",
+                            "target_session_id",
+                            "target_name",
+                            "timeout_minutes",
+                        )
                         if key in entry
                     },
                 }

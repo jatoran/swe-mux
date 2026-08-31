@@ -17,7 +17,7 @@ import {
 } from './projectConfig'
 import { useProjectConfig, type ProjectConfigStore } from './projectConfigState'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
-import { allBackendNames, harnessDisplayName } from './harnessRegistry'
+import { allBackendNames, harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { useDismissLevel } from './modalFocus'
 import { byProjectName, projectDropdownOptions } from './projectOptions'
 
@@ -244,6 +244,15 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
       return {...current,default_agent_profiles:Object.keys(next).length?next:undefined}
     })
   }
+  // Repo-only, one text input per agent harness: a model default is a request in
+  // the CLI's own spelling, not an authority, so there is no device layer to
+  // arbitrate - and a stale name degrades at spawn time rather than refusing here,
+  // which is why free text is honest where a picker would imply a validated list.
+  const setAgentModel=(backend:string,value:string)=>setDraft(current=>{
+    const map={...((fieldOf(current,'default_agent_models')||{}) as Record<string,string>)}
+    if(value.trim())map[backend]=value.trim();else delete map[backend]
+    return {...current,default_agent_models:Object.keys(map).length?map:undefined}
+  })
   const setWorktreeSetup=(command:string)=>setDraft(current=>({
     ...current,
     // Only this field of the table. The land queue owns `verify_command` in the same
@@ -376,6 +385,13 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
                 <Dropdown value={values.prompt_library_scope||''} disabled={busy||!config} onChange={value=>editValues({prompt_library_scope:(value||undefined) as PromptLibraryScope|undefined})} options={[{value:'',label:`Inherit (${SCOPE_LABELS[effective?.prompt_library_scope||'both']})`},...(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=>({value:scope,label:SCOPE_LABELS[scope]}))]}/>
               </label>
               <label class="check"><span class="project-setting-name">Allow device notification sounds<em class="project-setting-chip">repo</em></span><input type="checkbox" disabled={busy||!config} checked={values.notification_sounds_enabled!==false} onChange={event=>editValues({notification_sounds_enabled:event.currentTarget.checked})}/></label>
+              <section class="project-setting">
+                <h4>Default models<em class="project-setting-chip">repo</em></h4>
+                <p>Applied when a spawn into this Project names no model - including agent-requested spawns - in each CLI's own spelling (for example <code>opus</code> or <code>gpt-5.1-codex</code>). Blank leaves that CLI on its own sticky default. An explicit model on the spawn always wins, and a name the CLI has retired degrades to a logged diagnostic rather than a failed session.</p>
+                {allBackendNames().filter(isAgentBackend).map(backend=><label key={backend}><span class="project-setting-name">{harnessDisplayName(backend)} model</span>
+                  <input value={((values.default_agent_models||{})[backend])||''} disabled={busy||!config} placeholder="CLI default" onInput={event=>setAgentModel(backend,event.currentTarget.value)}/>
+                </label>)}
+              </section>
               <label><span class="project-setting-name">Additional ignore patterns<em class="project-setting-chip">repo</em></span>
                 <textarea value={(values.ignore_patterns||[]).join('\n')} disabled={busy||!config} onInput={event=>editValues({ignore_patterns:parseIgnorePatternDraft(event.currentTarget.value)})}/>
               </label>

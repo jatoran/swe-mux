@@ -729,19 +729,22 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": ["when_idle", "now"],
                     "description": (
-                        'When to deliver. "when_idle" (the default) waits for the '
-                        "target to finish what it is doing and be at its prompt. "
-                        '"now" also allows delivery into a turn that is already '
+                        "When to deliver - required, because it decides whether "
+                        "the target hears you before or after it finishes what "
+                        'it is doing. "when_idle" waits for the target to be at '
+                        'its prompt, and is right for hand-offs and FYIs. "now" '
+                        "also allows delivery into a turn that is already "
                         "running, which is what you want for something the other "
                         "session should know before it finishes - a correction, a "
-                        "changed constraint, work you have just taken over. It "
+                        "changed constraint, work you have just taken over - and "
+                        "requires a reason saying why it cannot wait. It "
                         "does not stop the turn: the CLI buffers your text and "
                         "takes it at the turn boundary, so what you buy is arriving "
                         "sooner, not preemption. To actually stop a turn, use "
-                        "interrupt. Refused where the target's Project switched "
-                        "mid-turn delivery off (it is granted by default) or the "
-                        "target session opted out; the refusal says which, and "
-                        "sending without this argument always works."
+                        "interrupt. \"now\" is refused where the target's Project "
+                        "switched mid-turn delivery off (it is granted by "
+                        "default) or the target session opted out; the refusal "
+                        'says which, and "when_idle" always works.'
                     ),
                 },
                 "dry_run": {
@@ -755,7 +758,7 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["target", "body"],
+            "required": ["target", "body", "delivery"],
             "additionalProperties": False,
         },
     },
@@ -854,14 +857,53 @@ TOOLS: list[dict[str, Any]] = [
                         "spelling. Which names are accepted is a property of the "
                         "harness, so a name it could not be told is refused here "
                         "with what it does take - call list_models to see what this "
-                        "machine actually has. Omit it to take the Project's "
-                        "default. What the session ends up running is not confirmed "
-                        "until its first turn: read model_status back from "
-                        "get_session."
+                        "machine actually has. Omitted, the target Project's "
+                        "default_agent_models table supplies one for the chosen "
+                        "harness; a Project with no entry leaves the CLI on its "
+                        "own sticky default, which is whatever that CLI last ran "
+                        "and may not be what you expect - name a model when it "
+                        "matters. What the session ends up running is not "
+                        "confirmed until its first turn: read model_status back "
+                        "from get_session."
                     ),
                 },
                 "name": {"type": "string", "description": "Suggested session name"},
                 "reason": {"type": "string", "description": "Why a separate session is warranted"},
+                "watch": {
+                    "type": "boolean",
+                    "description": (
+                        "Also arm a one-shot settle watch on the new session, so "
+                        "exactly one notice enters YOUR prompt queue when it "
+                        "stops working, ends, or the watch times out - the same "
+                        "notice watch_session would arm, without a second call. "
+                        "On the draft path the watch arms only if a human "
+                        "approves the spawn, and only if your conversation has "
+                        "not rolled over by then. A watch that cannot be armed "
+                        "(limit reached, watches disabled) is reported in the "
+                        "result and never fails the spawn."
+                    ),
+                },
+                "watch_timeout_minutes": {
+                    "type": "integer",
+                    "description": (
+                        "Timeout for the watch armed by watch:true (default 30). "
+                        "Set it to roughly how long you expect the work to take."
+                    ),
+                },
+                "pane": {
+                    "type": "string",
+                    "enum": ["split_horizontal", "split_vertical"],
+                    "description": (
+                        "Ask for the new session to be opened in a split pane "
+                        "beside the operator's current view of its Project. A "
+                        "hint, not layout: panes are per-device browser state, "
+                        "so the daemon records the request on the session and "
+                        "the first browser viewing that Project acts on it "
+                        "once. With no browser open the session still spawns "
+                        "normally and appears in the sidebar; the hint simply "
+                        "expires unclaimed."
+                    ),
+                },
                 "correlation_id": {
                     "type": "string",
                     "description": (
@@ -1775,6 +1817,63 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "await_session",
+        "description": (
+            "Wait, inside this call, until another session settles or ends - "
+            "the synchronous sibling of watch_session, for when you are "
+            "blocked on the answer and a queued notice is a detour. The call "
+            "returns when the session leaves working for a settled state and "
+            "holds it (the result says idle or awaiting - awaiting means "
+            "blocked on a person, not finished), when it ends, or when the "
+            "bounded timeout elapses - and the timeout is a normal result "
+            "carrying the current state, not an error: call again to keep "
+            "waiting. Each call is kept short deliberately, so it fits inside "
+            "your own tool-call timeout; a session that is already settled "
+            "and has held it answers immediately. A settle is measured as a "
+            "working -> settled edge that holds, and a session idling with "
+            "its own subagents still running is not counted as settled. "
+            "Nothing is staged, armed, or delivered - the answer is this "
+            "call's return value. For waits measured in many minutes, or to "
+            "wait on several sessions at once, arm watch_session instead. "
+            'Your own Project is the default; pass project:"fleet" or a '
+            "Project name to wait on a session in another."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "Session id or exact name to wait on; cannot be your "
+                        "own session"
+                    ),
+                },
+                "until": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["settled", "ended"]},
+                    "description": (
+                        'What resolves the wait (default both). ["ended"] '
+                        "waits only for the session to end; an ended session "
+                        "always resolves the call whatever this says, because "
+                        "nothing further can happen to it."
+                    ),
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": (
+                        "Upper bound on this one call (default 50, max 600). "
+                        "Keep it under your own tool-call timeout: a timeout "
+                        "here is a re-callable result, while a timeout there "
+                        "is an error that tells you nothing."
+                    ),
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 #: The configurator agent's tools, listed only to a session the daemon launched
@@ -2143,6 +2242,8 @@ class McpService:
         scan_timeline_service: Any = None,
         session_watch: Any = None,
         configurator: Any = None,
+        surface_gate: Any = None,
+        attention_credit: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -2189,6 +2290,21 @@ class McpService:
         # an agent told "no settings exist" would confidently advise nonsense,
         # which is worse than being told the surface is not wired.
         self.configurator = configurator
+        # Phase 23 W4: `backend -> bool`, whether any capability surface (MCP or
+        # the CLI's agent mode) is on for that harness. Absent means everything
+        # is on, which is what every caller before the toggle got. This is what
+        # makes "neither" a state the daemon enforces at the endpoint rather
+        # than a hint each client is trusted to honour
+        # (`agent_surfaces.surface_gate`).
+        self.surface_gate = surface_gate
+        # Evidence sink for the auto-delivery consecutive-send cap: an
+        # authenticated tool call is a session acting through the mux surface,
+        # which is the same "somebody is reading the deliveries" fact a written
+        # reply proves (`auto-delivery.md`). Async `(session_id) -> None`;
+        # absent, nothing is credited. Throttled per session below so a
+        # tool-call burst costs one write, not one per call.
+        self.attention_credit = attention_credit
+        self._attention_credited: dict[str, float] = {}
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -2221,6 +2337,24 @@ class McpService:
             for session in self.sessions.sessions.values():
                 held = getattr(session, "mcp_token", "")
                 if held and secrets.compare_digest(held, token):
+                    if self.surface_gate is not None and not self.surface_gate(
+                        str(getattr(session.record, "backend", "") or "")
+                    ):
+                        # Phase 23 W4 "neither": both capability surfaces are
+                        # off for this harness, so its sessions' tokens
+                        # authenticate nothing - enforced here, at the one
+                        # endpoint both transports share, rather than in any
+                        # client. Answered as an auth failure (401) because to
+                        # this session the surface genuinely does not exist;
+                        # the text says why so an operator reading the log can
+                        # act on it.
+                        self.denied += 1
+                        raise McpAuthError(
+                            "the mux fleet surfaces (MCP and the agent CLI) are "
+                            "switched off for this session's harness on this "
+                            "install; a mux operator can re-enable them in "
+                            "Settings -> Harnesses"
+                        )
                     return session
         self.denied += 1
         raise McpAuthError(_UNKNOWN_TOKEN)
@@ -4957,6 +5091,26 @@ class McpService:
         token's session; there is no sender argument to forge.
         """
         dry_run = bool(args.get("dry_run"))
+        delivery = str(args.get("delivery") or "")
+        # Required rather than defaulted (2026-08-30): with a silent
+        # `when_idle` default, senders never weighed *when* the message should
+        # land, and a correction that should have interrupted a worker's plan
+        # arrived after the worker had finished executing it. The schema says
+        # required; this repeats it because the CLI passthrough and any raw
+        # JSON-RPC caller never saw the schema.
+        if delivery not in {"when_idle", "now"}:
+            raise ValueError(
+                'notify requires delivery: "when_idle" (land at the target\'s '
+                'prompt) or "now" (also allow landing in a running turn). '
+                "Choose deliberately - it decides whether the target hears "
+                "you before or after it finishes what it is doing."
+            )
+        if delivery == "now" and not str(args.get("reason") or "").strip():
+            raise ValueError(
+                'delivery: "now" requires a reason. It lands in a running '
+                "turn and costs the target attention immediately, so say why "
+                "it cannot wait - the reason is kept as provenance."
+            )
         # A dry run stages nothing, so it is not a write. Counting it as one
         # would make "check before you send" look like extra authority spent.
         if not dry_run:
@@ -4973,7 +5127,7 @@ class McpService:
             reason=str(args.get("reason") or ""),
             correlation_id=str(args.get("correlation_id") or "") or None,
             project=project,
-            delivery=str(args.get("delivery") or "when_idle"),
+            delivery=delivery,
             envelope=str(args.get("envelope") or "") or None,
             dry_run=dry_run,
         )
@@ -5011,6 +5165,13 @@ class McpService:
         reason = str(args.get("reason") or "")
         project = str(args.get("project") or "")
         model = str(args.get("model") or "")
+        pane = str(args.get("pane") or "")
+        if pane and pane not in {"split_horizontal", "split_vertical"}:
+            raise ValueError(
+                'pane must be "split_horizontal" or "split_vertical" when given'
+            )
+        watch = bool(args.get("watch"))
+        watch_timeout = args.get("watch_timeout_minutes")
         if self.session_control is not None:
             result = await self.session_control.spawn(
                 caller,
@@ -5021,6 +5182,9 @@ class McpService:
                 correlation_id=str(args.get("correlation_id") or "") or None,
                 project=project,
                 model=model,
+                pane=pane,
+                watch=watch,
+                watch_timeout_minutes=watch_timeout,
             )
         else:
             result = await self._messaging().request_spawn(
@@ -5031,8 +5195,44 @@ class McpService:
                 reason=reason,
                 project=project,
                 model=model,
+                pane=pane,
+                watch=watch,
+                watch_timeout_minutes=watch_timeout,
             )
-        return dict(result)
+        result = dict(result)
+        if watch and result.get("status") == "spawned":
+            # The watch the caller asked for, armed exactly as watch_session
+            # would - and never at the spawn's expense: a spawn that succeeded
+            # is reported as such even when the watch cannot be.
+            result.update(
+                await self._arm_spawn_watch(
+                    caller, str(result.get("session_id") or ""), watch_timeout
+                )
+            )
+        elif watch and result.get("status") == "drafted":
+            result["watch_pending"] = True
+        return result
+
+    async def _arm_spawn_watch(
+        self, caller: Any, target: str, timeout_minutes: Any
+    ) -> dict[str, Any]:
+        if self.session_watch is None:
+            return {"watch_error": "session watches are not available on this daemon"}
+        try:
+            watch = await self.session_watch.watch(
+                caller,
+                target=target,
+                timeout_minutes=timeout_minutes,
+                # The new session may live in another Project; the id is exact,
+                # so widen the scope rather than re-deriving the Project name.
+                project="fleet",
+            )
+        except QueueError as exc:
+            return {"watch_error": f"{exc.code}: {exc}"}
+        except Exception:  # noqa: BLE001 - a failed watch must not fail the spawn
+            log.exception("request_spawn watch arming failed target=%s", target)
+            return {"watch_error": "the watch could not be armed"}
+        return {"watch": dict(watch)}
 
     def _control(self) -> Any:
         if self.session_control is None:
@@ -5216,6 +5416,33 @@ class McpService:
         )
         return dict(result)
 
+    async def await_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.await_session`: block inside this call until the target settles.
+
+        A read that blocks: it shares `watch_session`'s settle rules and sweep
+        (`session_watch.py`) and differs only in the sink - the answer fulfils
+        this call instead of maturing into a queue message, so no staging,
+        arming, delivery, grant, or readiness machinery is involved. This is
+        deliberately NOT the herdr `--wait` messaging model the roadmap rules
+        out (Phase 23): the queue stays asynchronous, replies stay routed
+        through it, and what blocks here is a wait on *state*, bounded under
+        the caller's own tool timeout.
+        """
+        if self.session_watch is None:
+            raise QueueError(
+                "unavailable",
+                "session waits are not available on this daemon.",
+                status=503,
+            )
+        result = await self.session_watch.await_settle(
+            caller,
+            target=str(args.get("target") or ""),
+            until=args.get("until"),
+            timeout_seconds=args.get("timeout_seconds"),
+            project=str(args.get("project") or ""),
+        )
+        return dict(result)
+
     # ------------------------------------------------------- configurator
 
     def _configurator_service(self) -> Any:
@@ -5379,12 +5606,45 @@ class McpService:
 
     # ------------------------------------------------------------ protocol
 
+    #: Floor between two attention credits for one session. The credit is a
+    #: SQLite write; a caller inside the 120-per-minute rate limit could
+    #: otherwise turn every call into one.
+    _ATTENTION_CREDIT_INTERVAL_SECONDS = 30.0
+
+    async def _credit_attention(self, caller: Any) -> None:
+        """An authenticated tool call is evidence this conversation is live.
+
+        The consecutive-send cap exists to stop deliveries into a session
+        nobody is reading. A session acting through the mux surface is being
+        read by construction - every delivered message lands in its own prompt
+        - so the call clears the cap the same way a written reply does. A
+        failure here must never fail the tool call: the credit is bookkeeping
+        about the caller, not part of the answer.
+        """
+        if self.attention_credit is None:
+            return
+        session_id = str(caller.record.id)
+        now = time.monotonic()
+        last = self._attention_credited.get(session_id, 0.0)
+        if now - last < self._ATTENTION_CREDIT_INTERVAL_SECONDS:
+            return
+        self._attention_credited[session_id] = now
+        if len(self._attention_credited) > 512:
+            live = self.sessions.sessions
+            for stale in [sid for sid in self._attention_credited if sid not in live]:
+                self._attention_credited.pop(stale, None)
+        try:
+            await self.attention_credit(session_id)
+        except Exception:  # noqa: BLE001 - bookkeeping must not fail the call
+            log.debug("mcp attention credit failed session=%s", session_id)
+
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
         self.calls += 1
         stats = self.tool_stats.setdefault(
             name, {"calls": 0, "response_bytes": 0, "truncated_results": 0}
         )
         stats["calls"] += 1
+        await self._credit_attention(caller)
         log.info(
             "MCP tool call tool=%s caller_session=%s project=%s requested_project=%s",
             name,
@@ -5419,6 +5679,7 @@ class McpService:
             "code_context": self.code_context,
             "test_gap": self.test_gap,
             "watch_session": self.watch_session,
+            "await_session": self.await_session,
             "notify": self.notify,
             "revoke_message": self.revoke_message,
             "request_spawn": self.request_spawn,

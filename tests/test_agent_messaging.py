@@ -1157,7 +1157,12 @@ async def test_the_mcp_tools_derive_the_sender_from_the_token(harness: Harness) 
                 "name": "notify",
                 # A forged sender argument is not in the schema and is ignored:
                 # identity comes from the token, never from the call.
-                "arguments": {"target": "s2", "body": "hello", "from_session": "s2"},
+                "arguments": {
+                    "target": "s2",
+                    "body": "hello",
+                    "delivery": "when_idle",
+                    "from_session": "s2",
+                },
             },
         },
     )
@@ -1179,7 +1184,10 @@ async def test_a_refused_write_is_a_typed_result_not_a_protocol_error(
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "notify", "arguments": {"target": "s1", "body": "hi"}},
+            "params": {
+                "name": "notify",
+                "arguments": {"target": "s1", "body": "hi", "delivery": "when_idle"},
+            },
         },
     )
     assert response is not None

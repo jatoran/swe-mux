@@ -159,7 +159,13 @@ function describeAuto(status: QueueAutoStatus | null, sessionId: string): string
   // Why the grant is still here rather than lapsed: this conversation is owed an
   // answer — by a peer it messaged, or by the land queue it asked to land a branch.
   if (row.reply_window)
-    parts.push(row.reply_window.kind === 'land' ? 'land in flight' : 'reply window open')
+    parts.push(
+      row.reply_window.kind === 'land'
+        ? 'land in flight'
+        : row.reply_window.kind === 'watch'
+          ? 'watch armed'
+          : 'reply window open',
+    )
   if (status.quiet_hours.active) parts.push('quiet hours — paused')
   return `on · ${parts.join(' · ')}`
 }
@@ -841,6 +847,13 @@ export function QueuePane({
                   Held open by a land request: this session asked to land{' '}
                   {policy.reply_window.branch || 'a branch'} and the queue has not
                   answered yet, so the idle window is not closing its grant.
+                </>
+              ) : policy.reply_window.kind === 'watch' ? (
+                <>
+                  Held open by a settle watch: this session asked to be told when{' '}
+                  {policy.reply_window.target_name || 'another session'} stops
+                  working, and the notice has not matured yet, so the idle window is
+                  not closing its grant.
                 </>
               ) : (
                 <>
