@@ -76,6 +76,7 @@
 - Shared SQLite operation rules: `../technical/backend/sqlite.md`
 - Frontend package responsibilities: `../technical/frontend/packages.md`
 - Workspace state and persistence: `../technical/frontend/workspace-state.md`
+- Plugin repository and authoring workflow: `../technical/plugin-authoring.md`
 
 ## Global invariants
 

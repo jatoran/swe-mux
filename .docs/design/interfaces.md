@@ -3235,5 +3235,7 @@ POST /api/plugins/{id}/links/{handler_id}
 `POST /api/plugins/callback` requires a runtime token in `Authorization: Bearer` or `X-Swemux-Plugin-Token`.
 The body names one of `projects.list`, `sessions.list`, `terminal.write`, `session.stop`, `notify`, or `self.describe`.
 The token's manifest-approved permission is checked before the operation and plugin identity is injected from the token rather than accepted from the body.
+Callback tokens are not durable across daemon generations.
+A supervised pane may remain alive through reload, but it must be reopened before further callbacks.
 
 Plugin errors use `{error, code}` and distinguish missing plugins, stale approval, incompatibility, source conflict, in-use panes, invalid or expired tokens, and denied permissions.
