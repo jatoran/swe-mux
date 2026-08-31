@@ -2372,7 +2372,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="settings-status-grid"><article><strong>Engine</strong><span>{draft.automation_enabled?'On':'Off'}</span></article><article><strong>Rules</strong><span>{automation?.rules.length||0} custom</span></article><article><strong>Queue</strong><span>{automation?.queue.size||0}/{automation?.queue.capacity||0}</span></article><article><strong>Runtime</strong><span>{automation?.diagnostic?'Needs review':'Healthy'}</span></article></div>
           <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation workspace</button></div>
         </section>}
-        {activeTab==='plugins'&&<PluginsSettings focusedProjectId={focusedProjectId}/>}
+        {activeTab==='plugins'&&<PluginsSettings/>}
 
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 

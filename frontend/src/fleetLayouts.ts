@@ -100,7 +100,16 @@ export function planFleetLayouts(input: FleetLayoutInput): FleetLayoutPlan {
     let reconciled = reconcilePreviews(reconcileTerminals(base, layoutLive), previewIds)
     for (const [pendingId, pending] of Object.entries(pendingSpawns)) {
       if (pending.projectId !== project.id || !pending.placement) continue
-      reconciled = placePendingTerminal(reconciled, pending.resolvedId || pendingId, pending.placement, false)
+      const id = pending.resolvedId || pendingId
+      // Re-placing must not steal focus, and must not lose it either. The server layout this
+      // was rebuilt from knows nothing of a pending id, so restoring the pane's stored active
+      // tab is right for a launch the operator has already navigated away from - and wrong for
+      // the one they are watching, which is the same exception `joinSessions` carries. A
+      // worktree launch is what made the difference observable: its bootstrap runs for minutes,
+      // so every refresh in that window used to push the setup splash behind a sibling tab
+      // while focus stayed on it.
+      const watched = joinAnchor.projectId === project.id && joinAnchor.viewId === id
+      reconciled = placePendingTerminal(reconciled, id, pending.placement, watched)
     }
     // Sessions the daemon started on its own - an approved `request_spawn`, the
     // assistant's daemon spawn path, a scheduled run - reach the fleet with no leaf,
