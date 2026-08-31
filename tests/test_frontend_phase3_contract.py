@@ -394,6 +394,7 @@ def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> N
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
     css = (root / "style.css").read_text(encoding="utf-8")
+    sidebar_resize = (root / "sidebarResize.ts").read_text(encoding="utf-8")
 
     assert 'class="app-topbar"' in app
     assert 'class="app-identity"' in app
@@ -403,7 +404,9 @@ def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> N
     assert 'className="stack-tabs" wrapperClassName="stack-tabs-rail"' in app
     assert "role:'tablist','aria-label':'Workspace tabs'" in app
     assert "node.children.map(child=>" in app
-    assert "mux.sidebar.width.v1" in app
+    assert "SIDEBAR_WIDTH_KEY = 'mux.sidebar.width.v1'" in sidebar_resize
+    assert "localStorage.getItem(SIDEBAR_WIDTH_KEY)" in app
+    assert "localStorage.setItem(SIDEBAR_WIDTH_KEY" in app
     assert "mux.sidebar.collapsed.v1" in app
     assert 'class="sidebar-resizer"' in app
     assert ".workspace.sidebar-collapsed" in css

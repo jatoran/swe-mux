@@ -26,12 +26,9 @@ const PREVIEW_SESSION={
   provider_account_hashes:{openai:'preview-account'},
 } as unknown as Session
 
-const PREVIEW_MIN=300,PREVIEW_MAX=900,PREVIEW_DEFAULT=640
-
 export function SessionTopbarSettings(){
   const [config,setConfig]=useState(loadSessionTopbarConfig)
   const [error,setError]=useState('')
-  const [previewWidth,setPreviewWidth]=useState(PREVIEW_DEFAULT)
   const rowConfig=useSessionRowConfig()
   const facts=useMemo(()=>deriveRowFleetFacts([PREVIEW_SESSION],{[PREVIEW_SESSION.id]:2}),[])
 
@@ -70,8 +67,7 @@ export function SessionTopbarSettings(){
     <h3 data-setting="session_topbar">Session top bars</h3>
     <div class="session-topbar-preview-sticky">
       <div class="session-row-preview-heading"><div><strong>Live preview</strong><small>One active session · updates before save completes</small></div></div>
-      <label class="row-size-control"><span>Preview width</span><input type="range" min={PREVIEW_MIN} max={PREVIEW_MAX} value={previewWidth} onInput={event=>setPreviewWidth(event.currentTarget.valueAsNumber)}/><output>{previewWidth}px</output></label>
-      <div class="session-topbar-preview" style={{width:`${previewWidth}px`}}>
+      <div class="session-topbar-preview">
         <SessionTopbar preview session={PREVIEW_SESSION} config={config} rowConfig={rowConfig} facts={facts}
           renderAction={id=><button type="button" class={`pane-tool-label ${id==='approvals'?'approval-chip':`${id.slice('drawer:'.length)}-chip`}`}>{actionLabel(id)}</button>}
           menu={<button type="button" aria-label="More actions">⋯</button>}/>

@@ -3481,9 +3481,9 @@ Every session context menu carries **Configure appearance**, which deep-links to
   The shipped default therefore degraded a token from every section before anybody dragged anything, and a user who enlarged the indicator got the same thresholds over less room.
   A `ResizeObserver` on the probe's inner cell also catches the scrollbar appearing and the indicator being resized, neither of which resizes the sidebar at all.
   The probe deliberately does **not** carry the `.session-row` class: a second element wearing it changes what `querySelector('.session-row')` returns for every other reader, which is too large a side effect for a measuring stick.
-- **The settings preview has its own width control, and measures its budget the same way.**
-  It used to render at a fixed 420 px — wider than the sidebar can be dragged — so the one behaviour a reader cannot predict from the field list was the one behaviour the panel never showed.
-  The width is device-local and unpersisted: it is an inspection control for this visit to the panel, not a property of the layout.
+- **The settings preview uses the current device's real sidebar width, and measures its budget the same way.**
+  Desktop reads this browser's persisted sidebar width, while mobile uses the same `min(285px, 86vw)` envelope as the navigation drawer.
+  The preview has no independent width control because a second geometry would show a layout the current device is not using.
   The preview is sticky below the Settings header on desktop and mobile, so edits never scroll
   their result off screen.
   It draws one active hypothetical session by default and expands explicitly to the four-row

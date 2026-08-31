@@ -350,8 +350,18 @@ for (const [device, viewport] of [['desktop', DESKTOP], ['mobile', PHONE]] as co
     const preview=page.locator('.session-row-preview-sticky')
     const rows=preview.locator('.session-row')
     await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toBeVisible()
     await expect(rows.first()).toHaveClass(/working/)
+    await expect(preview.getByLabel('Preview sidebar width in pixels')).toHaveCount(0)
     expect(await preview.evaluate(node=>getComputedStyle(node).position)).toBe('sticky')
+    const previewBox=await preview.locator('.session-row-preview').evaluate(node=>{
+      const box=node.getBoundingClientRect()
+      return {left:box.left,right:box.right,width:box.width,viewport:innerWidth,inlineWidth:node.style.width}
+    })
+    expect(previewBox.inlineWidth).toBe('')
+    expect(previewBox.width).toBeGreaterThan(100)
+    expect(previewBox.left).toBeGreaterThanOrEqual(0)
+    expect(previewBox.right).toBeLessThanOrEqual(previewBox.viewport)
 
     await preview.getByRole('button',{name:'Show examples'}).click()
     await expect(rows).toHaveCount(4)
@@ -384,6 +394,9 @@ for(const [device,viewport] of [['desktop',DESKTOP],['mobile',PHONE]] as const){
     await expect(page.locator('.settings-content h3',{hasText:/^Theme$/})).toBeHidden()
     const preview=page.locator('.session-topbar-preview-sticky')
     expect(await preview.evaluate(node=>getComputedStyle(node).position)).toBe('sticky')
+    await expect(preview.locator('.session-topbar-preview')).toBeVisible()
+    await expect(preview.locator('input[type="range"]')).toHaveCount(0)
+    expect(await preview.locator('.session-topbar-preview').evaluate(node=>node.style.width)).toBe('')
     await expect(preview.locator('.session-topbar-row')).toHaveCount(1)
     await expect(preview.locator('.approval-chip')).toContainText('appr:wait')
     await expect(preview.locator('.queue-chip')).toContainText('queue:2')
