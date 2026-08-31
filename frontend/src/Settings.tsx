@@ -504,7 +504,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     setBindingRules(data.rules||[])
     setSavedBindings(data.rules||[])
     setBindingCommands(data.commands||[])
-    setBindingPolicy(data.policy||null)
+    // Field-by-field, not `data.policy||null`: the Input tab maps over every one
+    // of these collections unconditionally, so a payload that carries a `policy`
+    // object missing a field (an older daemon, a partial fixture) crashed the
+    // whole tab rather than drawing an empty list. Same defaulting rule every
+    // other adopter in this function already follows.
+    setBindingPolicy(data.policy?{
+      hosts:data.policy.hosts||[],
+      platforms:data.policy.platforms||[],
+      max_sequence:data.policy.max_sequence??3,
+      browser_unreachable:data.policy.browser_unreachable||[],
+      browser_contested:data.policy.browser_contested||{},
+      wm_reserved:data.policy.wm_reserved||{},
+      application_reserved:data.policy.application_reserved||[],
+      terminal_reserved:data.policy.terminal_reserved||{},
+      rules:data.policy.rules||[],
+    }:null)
     setKeymapPresets(data.presets||[])
     setKeymapPreset(data.preset||'')
     setKeymapHost({host:data.host||'browser',platform:data.platform||'win'})
@@ -534,6 +549,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const railSections = rail.tab===activeTab?rail.sections:NO_SECTIONS
   const [activeSection,setActiveSection] = useState('')
   const [selectedSubpages,setSelectedSubpages] = useState<Record<string,string>>(()=>rememberedSections())
+  /** Tabs whose section restoration already happened this mount; a deep link's
+   *  page choice claims its tab here so the restore effect cannot override it. */
+  const restoredFor = useRef('')
   const [expandedTabs,setExpandedTabs] = useState<Set<SettingsTab>>(()=>new Set([initialSection?tabForSection(initialSection):rememberedTab()]))
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
   const [noteChordQuery,setNoteChordQuery] = useState('')
@@ -579,7 +597,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const selectPageForSetting=(root:ParentNode,setting:string)=>{
     if(!pagedSubpages)return
     const page=root.querySelector<HTMLElement>(settingSelector(setting))?.closest<HTMLElement>('section[data-settings-subpage]')?.dataset.settingsSubpage
-    if(page)setSelectedSubpages(current=>({...current,[activeTab]:page}))
+    if(!page)return
+    setSelectedSubpages(current=>({...current,[activeTab]:page}))
+    // This choice IS this visit's section restoration. The restore effect below
+    // fires later, once the rail has been read out of the DOM, and without this
+    // it overwrote the deep link's page with the remembered one - the control
+    // flashed on the right page and was then hidden under the wrong one.
+    restoredFor.current=activeTab
   }
 
   // The experience tier applies through its own endpoint (the key sets are
@@ -837,7 +861,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // It may name a section the live read does not have (the preview it was drawn from
   // cannot see a child component's headings), which lands on the tab and scrolls
   // nowhere rather than guessing at a neighbour.
-  const restoredFor = useRef('')
   useEffect(()=>{
     if(!railSections.length||restoredFor.current===activeTab)return
     restoredFor.current=activeTab
