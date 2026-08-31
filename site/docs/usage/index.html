@@ -307,6 +307,62 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 .hero .lede b { color: var(--fg); }
 
 
+/* -------------------------------------------------------------- live demo */
+/* The interactive demo: the real UI (committed build under `demo/`, see
+   `frontend/vite.demo.config.ts`) in an iframe against an in-page simulated
+   daemon. Iframed rather than inlined so its 500 KB of app CSS cannot fight
+   this page's, and loaded lazily (`data-src`, promoted on approach) so a
+   visitor who never scrolls to it downloads none of it. The phone frame is the
+   same build at a phone's width - the app's own breakpoint does the rest - and
+   in the side-by-side view the two frames share one simulated fleet through a
+   BroadcastChannel, which is the closest a static page can get to the
+   multi-device story the screenshots only assert. */
+.demo { margin-top: clamp(30px, 5vw, 52px); }
+.demo-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  border: 1px solid var(--line-2); border-bottom: 0; background: var(--panel);
+  padding: 7px 12px; font-family: var(--mono); font-size: 12px; }
+.demo-kick { color: var(--fg-3); letter-spacing: 0.16em; }
+.demo-tabs { display: flex; gap: 4px; }
+.demo-tab { font: inherit; background: none; border: 1px solid transparent;
+  color: var(--fg-3); padding: 3px 11px; cursor: pointer; }
+.demo-tab:hover { color: var(--fg); }
+.demo-tab[aria-selected="true"] { color: var(--green); border-color: var(--line-2); background: var(--panel-2); }
+.demo-reset { margin-left: auto; font: inherit; background: none; border: 1px solid transparent;
+  color: var(--fg-4); padding: 3px 8px; cursor: pointer; }
+.demo-reset:hover { color: var(--fg); border-color: var(--line-2); }
+.demo-stage { border: 1px solid var(--line-2); background: var(--panel-2);
+  display: flex; align-items: stretch; justify-content: center; gap: 16px; }
+.demo-frame { overflow: hidden; }
+.demo-frame iframe { display: block; border: 0; width: 100%; height: 100%; background: #0b0d10; }
+.demo-desktop { flex: 1 1 auto; min-width: 0; height: clamp(430px, 52vw, 680px); }
+.demo-phone { flex: none; width: min(348px, calc(100vw - 2 * var(--pad) - 14px));
+  height: clamp(430px, 52vw, 680px); align-self: center;
+  border: 1px solid var(--line-2); border-radius: 12px; margin: 14px 0; background: var(--panel); }
+.demo-stage[data-view="desktop"] .demo-phone { display: none; }
+.demo-stage[data-view="phone"] .demo-desktop { display: none; }
+.demo-stage[data-view="phone"] { padding: 0 12px; }
+.demo-stage[data-view="both"] { padding-right: 14px; }
+.demo-stage[data-view="both"] .demo-phone { width: min(320px, 34vw); }
+/* Beside the phone the desktop frame's box drops under the app's own 760px
+   mobile breakpoint and would render the phone layout twice. Render it at
+   ~1150 CSS px and scale down instead, so "both" really shows both surfaces. */
+.demo-stage[data-view="both"] .demo-desktop iframe {
+  width: calc(100% / 0.7); height: calc(100% / 0.7);
+  transform: scale(0.7); transform-origin: 0 0;
+}
+.demo-note { color: var(--fg-3); font-size: 13px; margin-top: 10px; max-width: 76ch; }
+.demo-note b { color: var(--fg-2); }
+/* Below the app's own mobile breakpoint a "desktop" iframe would render the
+   phone layout anyway, so the toggle loses the pretense and only the phone
+   frame is offered. */
+@media (max-width: 700px) {
+  .demo-tabs { display: none; }
+  .demo-stage .demo-desktop { display: none !important; }
+  .demo-stage .demo-phone { display: block !important; width: 100% !important;
+    margin: 8px 0; height: min(74vh, 640px); border-radius: 8px; align-self: auto; }
+  .demo-stage { padding: 0 8px; }
+}
+
 /* ------------------------------------------------------------- hero visual */
 /* Two real captures rather than the dashed frames that stood here: the desktop
    workspace at full width, with the phone overlapping its lower right. Both are
