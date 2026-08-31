@@ -573,6 +573,23 @@ const ROUTES: Route[] = [
       return { keybindings: keybindingsPayload() }
     },
   },
+  // The device-class settings store. It has to be a real read/write pair rather than the
+  // unmatched-route fallback: `deviceSettings.ts` reads `profiles` off the GET (and an
+  // absent one silently means "every default"), while every Actions and top-bar edit the
+  // visitor makes arrives here as a PUT of just the domains it touched.
+  {
+    method: 'GET', pattern: /^\/api\/settings$/,
+    handler: () => ({ profiles: state.deviceSettings }),
+  },
+  {
+    method: 'PUT', pattern: /^\/api\/settings\/([^/]+)$/,
+    handler: (match, body) => {
+      const profile = decodeURIComponent(match[1])
+      if (!(profile in state.deviceSettings)) return error(404, `Unknown settings profile: ${profile}`)
+      apply({ kind: 'settings-put', profile, domains: (body ?? {}) as Record<string, unknown> })
+      return { profiles: state.deviceSettings }
+    },
+  },
   {
     method: 'POST', pattern: /^\/api\/settings\/apply$/,
     handler: (_match, body) => {
@@ -610,12 +627,28 @@ const ROUTES: Route[] = [
       actions: [], diagnostics: [],
     }),
   },
+  // The configurator launcher, reported as having nothing to launch into - which is the
+  // truth about this install rather than a way of greying a button out. It opens a *real*
+  // agent CLI in a conversation about the operator's own swe-mux, reading their config and
+  // their health report; the demo has no CLI, no config and no health report, and the
+  // canned responder that stands in for an agent elsewhere here would be answering
+  // questions about a machine that does not exist.
+  //
+  // `launchState` turns an empty harness list into a disabled control with a reason, so
+  // the press never happens. The launch route below is answered anyway, because "nothing
+  // reaches it" is an assumption and the failure if it were wrong is the bad one: an
+  // unmatched mutation answers `{ok:true}`, and a spawn that reads `id` off that mints a
+  // pane leaf pointing at `undefined` which then persists into the visitor's layout.
   {
     method: 'GET', pattern: /^\/api\/configurator\/options$/,
     handler: () => ({
-      harnesses: ['claude', 'codex'], default_harness: 'claude', configured_default: '',
+      harnesses: [], default_harness: null, configured_default: '',
       install_mode: 'installed', source_checkout: '', projects: state.projects.length,
     }),
+  },
+  {
+    method: 'POST', pattern: /^\/api\/configurator\/launch$/,
+    handler: () => error(501, 'This demo has no agent CLI to open a configurator session in.'),
   },
   { method: 'GET', pattern: /^\/api\/grants$/, handler: () => grantsPayload() },
   { method: 'GET', pattern: /^\/api\/clipboard$/, handler: () => clipboardPayload() },

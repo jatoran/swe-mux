@@ -200,7 +200,8 @@ What survives is the spacing: `.shotgap` on the block after `.herovis` clears th
 
 ## The interactive demo
 
-Since 2026-08-31 an interactive demo sits between the install callout and the hero film - a deliberate amendment to the hard limit above, because a clickable product outranks a film of one.
+Since 2026-08-31 an interactive demo sits between the install callout and the hero visual - a deliberate amendment to the hard limit above, because a clickable product outranks a picture of one.
+It also replaced the hero film outright on 2026-08-31: a seventy second walkthrough was arguing the same case, at 4.4 MB, one click away from the running product.
 
 What it is: `site/demo/` is the **committed build output** of the real frontend compiled against an in-page simulated daemon - `frontend/vite.demo.config.ts` plus `frontend/src/demo/` (fixtures, a localStorage-persisted store, fake `fetch`/`WebSocket`, canned terminals whose replies are pre-written jokes).
 Nothing in it talks to any network; the page copy says so out loud, which is why the no-caption rule above does not apply to it - "these are simulated sessions" is a claim about what the visitor is touching, not meta-commentary.
@@ -215,6 +216,20 @@ The rules it lives under:
 - The landing page's frame loader promotes `data-src` to `src` only near the viewport and only for visible frames, so visitors who never reach it download none of its ~700 KB gz.
   The desktop/phone/both toggle is three views of the same build; "both" shows the two frames sharing one simulated fleet over a BroadcastChannel, and "reset demo" clears the demo's localStorage namespaces and reloads the frames.
   The head row also observes the stage and tells the frames when the demo is actually on screen, because a frame cannot work that out for itself: an `IntersectionObserver` inside an iframe measures against the *iframe's* viewport, so it would report "visible" for a demo eight screens below the fold.
+- **Each frame renders a device viewport and the picture is scaled, rather than the app being handed the box.**
+  This is the correction to the first cut, made 2026-08-31, and both halves of what it fixes are worth keeping written down.
+  A "desktop" frame narrowed to sit beside a phone falls under the app's own 760px breakpoint and draws the *phone* layout, so "both" was showing the phone layout twice; that half was already worked around with a hardcoded `scale(0.7)`.
+  The half that was not: a phone frame given a 320px box is a 320px phone and the app is honest about it - rows truncate, controls drop - which the visitor reads as the product being cramped rather than as the frame being narrow.
+  So the geometry is now stated once, in `:root`: `--demo-desktop-w` and the `--demo-phone-w` / `--demo-phone-h` pair are *viewports* (1280, and an iPhone 14's 390x844), and `fitDemoFrames` measures the box, divides, and writes `--demo-scale` back for the stylesheet's `transform`.
+  It is JS because it is a ratio of two lengths and CSS cannot divide one by the other; CSS still owns the layout, and the script only reads it back.
+  The scale is capped at 1, because a stage wider than the viewport it stands for should show the app at its own size rather than magnified.
+- **"Both" overlaps rather than sits side by side**, since 2026-08-31.
+  Side by side, each frame paid for the other: the phone took the width that made the desktop frame worth looking at, and the desktop took the scale that made the phone readable, so the view that exists to show two surfaces at once was the worst place to see either.
+  The phone is now absolutely positioned over the desktop frame's bottom right, which is the composition the hero already uses, and the desktop keeps the whole stage.
+- **The phone frame is a drawn handset**, a shell with an earpiece and a home indicator around a rounded screen, rather than a bordered rectangle.
+  The screen carries the height and the `aspect-ratio`; the shell shrink-wraps it, so a view sets one number and the device can never end up a different shape from the viewport rendered inside it.
+  In "both" it is `--demo-phone-drop` (90px) shorter than the desktop frame, because a phone exactly as tall as the monitor beside it reads as a second window.
+  Alone on the stage it is drawn near life size instead, and the stage shrinks to it.
 - Everything in the visitor-facing demo copy obeys section 5, including the no-em-dash rule - the style block is inherited by every generated page, so an em dash in a demo CSS comment fails `build.py`.
 - **An unmatched route must never answer `{}`.**
   This is the one rule here written from a failure rather than from a preference.
@@ -223,6 +238,13 @@ The rules it lives under:
   Seven of the app menu's own rows reached that state, plus five drawer tabs, and the only exit anybody found was "reset demo".
   Every route a visitor can reach is now answered with the shape its reader expects, even when the content is deliberately nothing (`frontend/src/demo/supportPayloads.ts`), and `main.tsx` wraps the app in an error boundary so the next gap degrades to a named message with a reload button instead of a wedge.
   When adding a surface to the demo, answer its route explicitly; do not rely on the fallback.
+
+- **Two device settings are seeded rather than defaulted** (`demoDeviceSettings` in `fixtures.ts`, served by `/api/settings`).
+  The session top bar drops its approval control - it is a live chooser for what an agent may do without asking, and offering it over a fixture is theatre on the one control where theatre is least appropriate - and the phone's Actions rail keeps only its first row, because the product ships two on the reasoning that the rail *is* the keyboard on a real phone, which a demo frame is not.
+  Both are derived from the app's own defaults and then edited, so a default that moves reaches the demo instead of being frozen into a copy here; `demoDirector.test.ts` asserts the edits still bite, because a renamed action id would leave the derivation running happily and silently stop editing anything.
+  `ui_scale_desktop` and `ui_scale_mobile` are seeded at 1.1 for a related reason: both frames are drawn smaller than the device they stand for, and chrome that reads well on a monitor is a smudge at 0.66.
+- **The configurator launcher reports nothing to launch into**, which is the truth about this install rather than a way of greying a button out: it opens a real agent CLI in a conversation about the operator's own config and health report, and the demo has none of those.
+  Its launch route is answered anyway rather than left to the fallback, because "nothing reaches it" is an assumption and the failure if it were wrong is the bad one - an unmatched mutation answers `{ok:true}`, and the spawn path reads `id` off that and mints a pane leaf pointing at `undefined`, which then persists into the visitor's layout.
 
 What the demo populates, and why those and not others:
 
@@ -319,7 +341,7 @@ node scripts/capture-demo.mjs --scenario queue --check         # the CI form
 ```
 
 It exists to delete a risk class rather than to save time.
-The hero film and the landing stills are captured from a *real* install (`trailer/capture_env.py`), so every one of them has to be checked by a person for a path or a name or a number that came from a real machine, and every re-capture checked again.
+The landing stills are captured from a *real* install (`trailer/capture_env.py`), so every one of them has to be checked by a person for a path or a name or a number that came from a real machine, and every re-capture checked again.
 Here there is nothing to check: the install is invented by construction, it talks to no network, and the run is a function of a seed.
 It also drives the **committed** `site/demo/` bundle rather than a dev server, which is the same artifact Pages uploads - so a still that disagrees with the product means the bundle is stale, and rebuilding is the fix.
 
@@ -551,7 +573,7 @@ Toggling updates the `color-scheme` meta too, so form controls and scrollbars fo
 - **Grid seams instead of gaps.** Panel grids use a 1px background line showing through, which reads as a TUI panel grid.
 - **Structure over decoration.** Numbered section rules, `[01]` style indices, `▸` and `[x]` markers, a static block cursor after the headline. It used to blink, which put the only moving thing on the page directly beside the headline and pulled the eye off the words it was there to end; steady, it still reads as a terminal caret, and the `prefers-reduced-motion` override it needed is gone with it. The wordmark, the inline GitHub mark, the menu button's bars, and the footer's X mark are the only imagery in the chrome; there are no decorative icons.
 - **Self-contained.** One HTML file, inline CSS, inline JS, no external fonts, no CDN, no analytics, no third-party requests of any kind.
-  **One deliberate exception, added 2026-08-28: the hero film.** It is a 4.4 MB MP4 served from a GitHub release asset rather than committed, because `.git` is already large and the hero is the asset most likely to be re-cut. The exception is bounded so the rule still holds for anyone who does not press play: `preload="none"` and `controls` rather than `autoplay`, and a `poster` served from this origin, so **loading the page makes no request to github.com** and the hero section renders complete without one. A visitor who presses play has chosen to fetch from GitHub, which is the same act as following the repository link in the top bar. Nothing else on the site may take this exemption: the five short loops are committed and inline precisely because a page that must reach a release asset to draw its own section is broken for as long as that fetch is failing.
+  **There is no longer an exception.** The hero film took one from 2026-08-28 to 2026-08-31 - a 4.4 MB MP4 served from a GitHub release asset, bounded by `preload="none"` and a local `poster` so loading the page still touched nothing third-party - and it is gone with the film. Do not re-take it. A release asset answers `application/octet-stream` with an `attachment` disposition, which no browser will play in a `<video>`, so the film silently did not play at all for as long as it was hosted that way; `tools/check.mjs` now fails any `<video>` pointed at one. Media that earns its place is committed and inline, which is why the five short loops are.
 - **The page must never scroll horizontally.** `tools/check.mjs` asserts `scrollWidth === clientWidth` at 360, 390, 768, and 1440, in both themes. Grid tracks need `minmax(min(Npx, 100%), 1fr)`, and any flex item that should shrink needs `min-width: 0`, because `overflow-x: auto` alone will not do it.
 
 ---
@@ -816,7 +838,6 @@ It remains the specification for a re-shoot.
 | `img/loop-evidence.mp4` | Section 09, the solo row under the alerts pair | Activity to Timeline: phase-labelled records, a dead end, a blocked badge, the budget line. |
 | `img/loop-land.mp4` | Section 06, full width, under the land-queue paragraph | The landing strip: gate named and approved, then the branch landing. |
 | `img/loop-restart.mp4` | Section 04, full width | A counter running through a daemon reload, same sequence numbers on both sides. |
-| the hero film | Hero, the full-width frame, postered by `desktop-workspace.webp` | A GitHub release asset rather than a committed file. See below. |
 
 Each file is used **exactly once**, which is deliberate: the same capture appearing twice on one
 page a few hundred pixels apart reads as filler, and the assignment above is the one that lets all

@@ -225,20 +225,17 @@ console.log('asset reachability')
   if (unreferenced.length) {
     fail(`assets committed under img/ that no page references: ${unreferenced.join(', ')}`)
   }
-  // The hero film is committed under `img/` like every other loop, so the sweep
-  // above already covers "referenced by some page". It is named again here for
-  // the other half: it must be served from Pages and never from a release asset.
-  // A release download answers `application/octet-stream` with an `attachment`
-  // disposition, which no browser will play in a `<video>` - measured 2026-08-30,
-  // and it is why this film silently did not play anywhere for as long as it was
-  // hosted that way. Pages answers `video/mp4`.
-  if (!markup.includes('img/hero.mp4')) {
-    fail('no page references img/hero.mp4')
+  // The hero film used to be named again here, for the half the sweep cannot see:
+  // that it was served from this origin and never from a release asset, which
+  // answers `application/octet-stream` with an `attachment` disposition that no
+  // browser will play in a `<video>` (measured 2026-08-30, and why the film
+  // silently did not play for as long as it was hosted that way). The film is gone
+  // - the interactive demo makes its case better and a click sooner - so the rule
+  // it needed is stated for whatever replaces it rather than for a file by name.
+  if (markup.includes('releases/download/') && /<video[^>]/.test(markup)) {
+    fail('a video is pointed at a release asset; those serve as downloads, not media')
   }
-  if (markup.includes('releases/download/') && markup.includes('hero.mp4')) {
-    fail('the hero video is pointed at a release asset again; those serve as downloads, not media')
-  }
-  console.log(`  ${assets.length} committed assets referenced, plus the hero release asset`)
+  console.log(`  ${assets.length} committed assets referenced`)
 }
 
 // --------------------------------------------- the survival claim matches the default

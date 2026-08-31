@@ -17,10 +17,11 @@
 /demo/assets/*
   Cache-Control: public, max-age=31536000, immutable
 
-# Deliberately NOT `immutable`, because these names carry no hash: `hero.mp4`
-# replaced in place would otherwise stay pinned in every visitor's cache
-# forever. An hour of freshness with a day of stale-while-revalidate keeps the
-# 6 MB of video and screenshots off the wire on repeat visits without that.
+# Deliberately NOT `immutable`, because these names carry no hash: a re-captured
+# loop or screenshot replaced in place would otherwise stay pinned in every
+# visitor's cache forever. An hour of freshness with a day of
+# stale-while-revalidate keeps the video and screenshots off the wire on repeat
+# visits without that.
 /img/*
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 
