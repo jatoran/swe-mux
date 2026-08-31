@@ -1135,6 +1135,14 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     plugin_sub = plugin.add_subparsers(dest="plugin_action", required=True)
     plugin_sub.add_parser("list", help="list installed plugins")
+    plugin_sub.add_parser("refresh", help="detect linked plugin and manifest changes now")
+    plugin_sub.add_parser("discover", help="scan the configured plugin development root")
+    development_root = plugin_sub.add_parser(
+        "development-root", help="show or change the plugin development root"
+    )
+    development_root.add_argument("path", nargs="?")
+    development_root.add_argument("--create", action="store_true")
+    plugin_sub.add_parser("check-updates", help="check managed plugin source channels")
     plugin_sub.add_parser("schema", help="print the manifest and callback reference")
     validate = plugin_sub.add_parser("validate", help="validate an inert plugin manifest")
     validate.add_argument("path")
@@ -1160,6 +1168,16 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         default=None,
         help="replace the stored release channel, branch, or tag; 'latest' follows releases",
     )
+    approve_update = plugin_sub.add_parser(
+        "approve-update", help="approve and activate a staged managed update"
+    )
+    approve_update.add_argument("plugin_id")
+    discard_update = plugin_sub.add_parser("discard-update", help="discard staged update review")
+    discard_update.add_argument("plugin_id")
+    restart_panes = plugin_sub.add_parser(
+        "restart-panes", help="restart a plugin's live panes on approved source"
+    )
+    restart_panes.add_argument("plugin_id")
     uninstall = plugin_sub.add_parser("uninstall")
     uninstall.add_argument("plugin_id")
     uninstall.add_argument("--purge", action="store_true")
@@ -1463,6 +1481,23 @@ def _plugin_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
     action = args.plugin_action
     if action == "list":
         return request("GET", "/api/plugins", base=base), _render_plugins
+    if action == "refresh":
+        return request("POST", "/api/plugins/refresh", {}, base=base, timeout=240), None
+    if action == "discover":
+        return request("GET", "/api/plugins/development", base=base), None
+    if action == "development-root":
+        if args.path:
+            return request(
+                "PUT",
+                "/api/plugins/development",
+                {"path": args.path, "create": args.create},
+                base=base,
+            ), None
+        return request("GET", "/api/plugins/development", base=base), None
+    if action == "check-updates":
+        return request(
+            "POST", "/api/plugins/updates/check", {}, base=base, timeout=240
+        ), None
     if action == "schema":
         from importlib.resources import files
 
@@ -1539,6 +1574,20 @@ def _plugin_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
             "POST",
             f"/api/plugins/{args.plugin_id}/update",
             {"ref": args.ref} if args.ref is not None else {},
+            base=base,
+            timeout=240,
+        ), None
+    if action == "approve-update":
+        return request(
+            "POST", f"/api/plugins/{args.plugin_id}/update/approve", {}, base=base
+        ), None
+    if action == "discard-update":
+        return request("DELETE", f"/api/plugins/{args.plugin_id}/update", base=base), None
+    if action == "restart-panes":
+        return request(
+            "POST",
+            f"/api/plugins/{args.plugin_id}/panes/restart",
+            {},
             base=base,
             timeout=240,
         ), None

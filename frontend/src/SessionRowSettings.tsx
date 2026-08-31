@@ -177,6 +177,7 @@ const STANDING_MODES: Array<{ id: StandingRender; label: string; hint: string }>
 export function SessionRowSettings() {
   const [config, setConfig] = useState(loadSessionRowConfig)
   const [error, setError] = useState('')
+  const [previewExpanded, setPreviewExpanded] = useState(false)
   const thisDevice = currentProfile()
   // Which device class the preview is drawn at. Starts on this device and
   // follows whichever slider was last touched, so dragging the mobile size from
@@ -288,7 +289,60 @@ export function SessionRowSettings() {
   }
 
   return <div class="session-row-settings">
-    <h3>Session rows</h3>
+    <h3 data-setting="session_rows">Session rows</h3>
+    <div class="session-row-preview-sticky">
+      <div class="session-row-preview-heading">
+        <div><strong>Live preview</strong><small>{previewExpanded?'Four representative states':'One active session'}</small></div>
+        <button type="button" aria-expanded={previewExpanded} aria-controls="session-row-preview-list" onClick={()=>setPreviewExpanded(value=>!value)}>
+          {previewExpanded?'Show one row':'Show examples'}
+        </button>
+      </div>
+      {/* The preview carries the size of whichever device class is being edited,
+          rather than the root variable this device is using, so adjusting the
+          mobile size from a desktop browser still shows what it did. */}
+      <label class="row-size-control">
+        <span>Sidebar width</span>
+        <input
+          type="range"
+          min={SIDEBAR_MIN_WIDTH}
+          max={SIDEBAR_MAX_WIDTH}
+          step={1}
+          value={previewWidth}
+          aria-label="Preview sidebar width in pixels"
+          onInput={event => setPreviewWidth(clampSidebarWidth(event.currentTarget.valueAsNumber))}
+        />
+        <output>{previewWidth}px</output>
+      </label>
+      <div
+        class="session-row-preview sidebar"
+        style={{ '--session-dot': `${config[sizeKey(sizeProfile)]}px`, width: `${previewWidth}px` }}
+      >
+        <div id="session-row-preview-list" class="session-list">
+          {/* Same probe the sidebar renders, so the preview's budget is measured
+              the same way rather than computed from the slider's number: the row's
+              text column is the slider minus a gutter the indicator size sets. */}
+          <div ref={previewMetricRef} class="row-metric-probe" aria-hidden="true">
+            <div class="row-metric">
+              <span />
+              <span class="session-copy" data-metric="copy">
+                <span class="row-line top"><span data-metric="top">0000000000</span></span>
+                <span class="row-line bottom"><span data-metric="bottom">0000000000</span></span>
+              </span>
+            </div>
+          </div>
+          {PREVIEW_SESSIONS.slice(0,previewExpanded?PREVIEW_SESSIONS.length:1).map(session => <div key={session.id} class={`session-row agent ${session.state}`}>
+            <StateIndicator
+              session={session}
+              shape={config.dotShape}
+              gauge={sessionContextArc(session, config)}
+              standing={sessionStandingMark(session, config)}
+            />
+            <SessionRowBody session={session} tokens={buildSessionRowTokens(session, config, previewContext)} config={config} />
+          </div>)}
+        </div>
+      </div>
+    </div>
+
     <p>The sidebar row is two lines, each with a left and a right section. A field placed nowhere is off. <strong>When notable</strong> shows a field only when its value is worth reading, so a quiet fleet stays quiet and anything visible earned its place.</p>
     {error && <p class="settings-inline-error" aria-live="polite">{error}</p>}
 
@@ -300,52 +354,6 @@ export function SessionRowSettings() {
         onClick={() => change(presetConfig(preset.id as RowPresetId))}
       >{preset.label}</button>)}
       <button type="button" onClick={() => change(defaultSessionRowConfig())}>Reset to default</button>
-    </div>
-
-    <h4>Preview</h4>
-    {/* The preview carries the size of whichever device class is being edited,
-        rather than the root variable this device is using, so adjusting the
-        mobile size from a desktop browser still shows what it did. */}
-    <label class="row-size-control">
-      <span>Sidebar width</span>
-      <input
-        type="range"
-        min={SIDEBAR_MIN_WIDTH}
-        max={SIDEBAR_MAX_WIDTH}
-        step={1}
-        value={previewWidth}
-        aria-label="Preview sidebar width in pixels"
-        onInput={event => setPreviewWidth(clampSidebarWidth(event.currentTarget.valueAsNumber))}
-      />
-      <output>{previewWidth}px</output>
-    </label>
-    <div
-      class="session-row-preview sidebar"
-      style={{ '--session-dot': `${config[sizeKey(sizeProfile)]}px`, width: `${previewWidth}px` }}
-    >
-      <div class="session-list">
-        {/* Same probe the sidebar renders, so the preview's budget is measured
-            the same way rather than computed from the slider's number: the row's
-            text column is the slider minus a gutter the indicator size sets. */}
-        <div ref={previewMetricRef} class="row-metric-probe" aria-hidden="true">
-          <div class="row-metric">
-            <span />
-            <span class="session-copy" data-metric="copy">
-              <span class="row-line top"><span data-metric="top">0000000000</span></span>
-              <span class="row-line bottom"><span data-metric="bottom">0000000000</span></span>
-            </span>
-          </div>
-        </div>
-        {PREVIEW_SESSIONS.map(session => <div key={session.id} class={`session-row agent ${session.state}`}>
-          <StateIndicator
-            session={session}
-            shape={config.dotShape}
-            gauge={sessionContextArc(session, config)}
-            standing={sessionStandingMark(session, config)}
-          />
-          <SessionRowBody session={session} tokens={buildSessionRowTokens(session, config, previewContext)} config={config} />
-        </div>)}
-      </div>
     </div>
 
     <h4>State indicator</h4>

@@ -1051,6 +1051,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="lede"><p>A swe-mux plugin is an ordinary repository with <code>swe-mux-plugin.toml</code> at its root. It contributes commands and terminal tools without changing the swe-mux checkout or application bundle.</p></div>
       <nav class="toc" aria-label="On this page">
         <a href="#install-from-the-catalog">install from the catalog</a>
+        <a href="#develop-locally">develop locally</a>
+        <a href="#review-updates">review updates</a>
         <a href="#authority">authority</a>
         <a href="#what-a-plugin-can-contribute">what a plugin can contribute</a>
         <a href="#author-and-publish">author and publish</a>
@@ -1063,13 +1065,29 @@ swemux plugin list
 swemux plugin approve PUBLISHER.PLUGIN</pre></div>
         <p class="note">The catalog supplies a literal release tag, which pins the inspected release. A branch is accepted but is a moving channel, and every changed byte still requires approval.</p>
       </div>
+      <div class="docsec" id="develop-locally">
+        <div class="head"><span class="n">#</span><h2>Develop locally</h2><span class="fill"></span></div>
+        <p class="prose">The configurable development root defaults to <code>~/swe-mux-plugins</code>. Settings and <code>swemux plugin discover</code> inspect only direct child repositories with a root manifest. Discovery is inert: each candidate still needs an explicit Link action and content approval. An arbitrary repository remains linkable when a monorepo, worktree, or alternate drive should stay where it is.</p>
+        <div class="code"><pre>swemux plugin development-root ~/swe-mux-plugins --create
+swemux plugin discover
+swemux plugin link ~/swe-mux-plugins/my-plugin
+swemux plugin approve PUBLISHER.PLUGIN</pre></div>
+        <p class="prose">After an edit, run <code>swemux plugin refresh</code>, validate, and approve the current bytes. Actions pick them up on their next run. A live pane remains its old process until it is closed and relaunched or replaced with <code>swemux plugin restart-panes PUBLISHER.PLUGIN</code>.</p>
+      </div>
+      <div class="docsec" id="review-updates">
+        <div class="head"><span class="n">#</span><h2>Review updates</h2><span class="fill"></span></div>
+        <p class="prose">Managed updates are never automatic. Checking reads source-channel metadata only. Downloading creates a separate durable review stage while the active version keeps running. Settings shows exact revision and permission or capability changes before a separate approval promotes those bytes.</p>
+        <div class="code"><pre>swemux plugin check-updates
+swemux plugin update PUBLISHER.PLUGIN
+swemux plugin approve-update PUBLISHER.PLUGIN</pre></div>
+      </div>
       <div class="docsec" id="authority">
         <div class="head"><span class="n">#</span><h2>Authority</h2><span class="fill"></span></div>
         <p class="prose"><b>A plugin process runs as your operating-system user.</b> The permission list limits which cooperative swe-mux callback operations receive a token. It is not a sandbox for files, processes, credentials, or network access.</p>
         <ul class="bullets">
           <li><span>Acquisition, catalog browsing, validation, and inspection execute no plugin code.</span></li>
           <li><span>Approval is bound to the complete source content and security-relevant manifest fields.</span></li>
-          <li><span>An update stages inert content and leaves the prior version available for rollback.</span></li>
+          <li><span>An update review leaves the active version enabled until separate approval.</span></li>
           <li><span>Uninstall retains plugin config and state unless purge is separately confirmed.</span></li>
         </ul>
       </div>

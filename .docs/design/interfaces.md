@@ -2160,7 +2160,7 @@ The MCP tools that marker unlocks are listed only to such a session (`features/c
 
 - `configurator_apply_settings` runs the same `update_config` path as `PATCH /api/config`, reporting `hot_applied` and `restart_required` separately.
 - `configurator_apply_project_settings` runs the same revision-guarded `write_project_config` path as the whole-document half of `PUT /api/project/config`, merging over the existing file and refusing the forbidden project fields.
-- `configurator_edit_device_settings` writes one per-device settings domain through **path-scoped operations** rather than a document, because five of the seven domains are stored opaquely and nothing in the daemon can validate one. It is guarded by a content digest the caller must have read, backs the previous file up, and emits `settings_changed` so every attached browser repaints.
+- `configurator_edit_device_settings` writes one per-device settings domain through **path-scoped operations** rather than a document, because seven of the nine domains are stored opaquely and nothing in the daemon can validate one. It is guarded by a content digest the caller must have read, backs the previous file up, and emits `settings_changed` so every attached browser repaints.
 
 All three refuse as typed results that change nothing, rather than as protocol errors: the agent has to be able to tell "bad value" from "server broke".
 
@@ -3211,6 +3211,10 @@ Lifecycle endpoints:
 
 ```text
 GET    /api/plugins
+POST   /api/plugins/refresh
+GET    /api/plugins/development
+PUT    /api/plugins/development
+POST   /api/plugins/updates/check
 POST   /api/plugins/inspect
 POST   /api/plugins/link
 POST   /api/plugins/install
@@ -3218,7 +3222,10 @@ POST   /api/plugins/execution
 POST   /api/plugins/{id}/approve
 POST   /api/plugins/{id}/enable
 POST   /api/plugins/{id}/update
+POST   /api/plugins/{id}/update/approve
+DELETE /api/plugins/{id}/update
 POST   /api/plugins/{id}/rollback
+POST   /api/plugins/{id}/panes/restart
 DELETE /api/plugins/{id}[?purge=1]
 GET    /api/plugins/logs[?plugin_id=...]
 GET    /api/plugins/marketplace
@@ -3226,7 +3233,11 @@ GET    /api/plugins/marketplace
 
 Managed install accepts `{source, ref?}`.
 `ref = "latest"` resolves the newest GitHub release for GitHub repository sources; a tag pins one release and a branch remains a moving explicit channel.
-Update accepts optional `{ref}` to replace the stored channel and otherwise reuses the channel recorded at install time.
+Refresh returns the current catalogue, linked-change summary, and development-root scan without executing plugin code.
+Development-root `PUT` accepts `{path, create?}`; scanning inspects at most 256 direct child directories with root manifests and never registers them automatically.
+Update checking probes managed source metadata explicitly and leaves linked repositories untouched.
+Update accepts optional `{ref}` to replace the stored channel and otherwise reuses the channel recorded at install time, acquiring an immutable candidate into `plugin_update_stages` without changing the active plugin row.
+Update approval promotes the still-matching staged digest and retains the prior active root for rollback; deleting the staged update discards only its review record.
 
 Marketplace results prefer the validated swemux.dev catalog and expose exact indexed revision, plugin identity and version, official status, release ref, platforms, runtimes, capabilities, permissions, license, and repository metadata.
 When that catalog is unavailable, results fall back to the live unreviewed GitHub-topic shape.
@@ -3236,9 +3247,15 @@ Contribution endpoints:
 ```text
 POST /api/plugins/{id}/actions/{action_id}
 POST /api/plugins/{id}/panes/{pane_id}
+POST /api/plugins/panes/{session_id}/dock
+POST /api/plugins/{id}/panes/restart
 GET  /api/plugins/link-handlers
 POST /api/plugins/{id}/links/{handler_id}
 ```
+
+The pane launch response carries the live session's retained placement when an existing pane is reused.
+Docking accepts only a live plugin-owned pane session, changes its retained placement to `tab`, publishes the session update, and returns the updated session snapshot.
+Pane restart requires current approval and enablement, replaces every live pane process owned by the plugin, and returns old-to-new session mappings with preserved Project and placement.
 
 `POST /api/plugins/callback` requires a runtime token in `Authorization: Bearer` or `X-Swemux-Plugin-Token`.
 The body names one of `projects.list`, `sessions.list`, `terminal.write`, `session.stop`, `notify`, or `self.describe`.

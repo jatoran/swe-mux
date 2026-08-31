@@ -124,6 +124,7 @@ It owns the *kind* too, which decides exactly one thing - whether the fast-forwa
 `_clear_gate` is the one place that decides where a cleared gate leads, so the three ways of clearing it cannot drift apart about it.
 
 And it owns whether the handback may reach its author **unattended** (`_reply_arming`): only the request's own origin session, only on the run that asked, only for an agent's request, only while the Project still permits landing, and once per request.
+The same channel carries a *successful* land when the request set `report_success` - the outcome that used to answer nobody, on the argument that a land announces itself by the trunk moving, which is true for the operator at the Git drawer and false for the session that is idle waiting for it.
 The request is the consent, so the narrowing of the Phase 5 floor is exactly as wide as the request and no wider; the decision and its reason are recorded on the handback event, because a draft nobody delivered otherwise reads exactly like an answer that arrived.
 A **refusal** answers its author through the same `_solicited_reply` under the same bounds (`_refused_body`), and carries a machine-readable `code` plus the resolved worktree root in its detail - a reason string cannot be matched on, and the landing strip has to know which checkout's bytes to offer for approval.
 `origin_windows` is the other half - the open-request evidence `auto_delivery.py` reads so an origin's grant does not lapse while the pipeline is still computing the answer.
@@ -166,6 +167,7 @@ The incoming-paths and already-landed reads run only for a registered worktree a
 - `armed_replies` on the request row (schema version 4, same migration), spent through the conditional `claim_armed_reply` so the per-request cap on unattended handbacks is a claim rather than a read-then-write, and `open_origin_requests`, the live-request-per-origin read behind the reply window.
 - The two partial unique indexes that make one-request-per-branch and one-land-per-trunk properties of the schema rather than of the worker.
 - `kind` on the request row (schema version 5, same migration), backfilled to `'land'` - which here is a fact about the column rather than only about history, since nothing could ask for anything else.
+- `report_success` on the request row (schema version 6, same migration), backfilled to `0` for the same reason: nothing could ask to be told about a success, so none of those rows asked. It is what makes a *land* answer its author, which nothing but a failure ever did.
 - The upserted per-digest record of what a *passing* gate's steps were; a malformed one reads back as no plan, never as a wrong total.
 - The upserted per-`(project_root, tree_oid, digest)` record of a gate verdict that already stands, read under a caller-supplied `not_before` floor. There is deliberately no writer here but the pipeline's own observed pass.
 

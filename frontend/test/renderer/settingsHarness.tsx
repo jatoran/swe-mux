@@ -161,14 +161,16 @@ const RESPONSES: Record<string, unknown> = {
     {id:'p1',name:'Alpha'},
     {id:'p2',name:'Beta'},
   ],
-  '/api/plugins': {
-    execution_enabled:true,
-    host_capabilities:['plugin.actions.v1','plugin.panes.v1'],
-    plugins:[
+    '/api/plugins': {
+      execution_enabled:true,
+      host_capabilities:['plugin.actions.v1','plugin.panes.v1'],
+      development_root:'C:/Users/Test/swe-mux-plugins',
+      plugins:[
       {
         id:'example.switchboard',name:'Session Switchboard',version:'0.2.0',enabled:true,
         lifecycle:'enabled',source_kind:'link',source_ref:'C:/plugins/switchboard',requested_ref:'',selected_ref:'',resolved_ref:'',
-        diagnostic:'',approval_current:true,config_dir:'C:/config/switchboard',state_dir:'C:/state/switchboard',
+          diagnostic:'',approval_current:true,config_dir:'C:/config/switchboard',state_dir:'C:/state/switchboard',
+          running_panes:[{session_id:'plugin-pane',project_id:'p2',pane_id:'switchboard',placement:'split'}],update_check:null,staged_update:null,
         manifest:{id:'example.switchboard',name:'Session Switchboard',version:'0.2.0',
           description:'Compact Project session navigator.',author:'Example',license:'MIT',homepage:'',
           permissions:['sessions.read'],requires:['plugin.panes.v1'],runtime_requirements:['python>=3.10'],
@@ -179,13 +181,19 @@ const RESPONSES: Record<string, unknown> = {
       {
         id:'example.health',name:'Worktree Health',version:'0.2.0',enabled:false,
         lifecycle:'disabled',source_kind:'managed',source_ref:'owner/health',requested_ref:'latest',selected_ref:'v1.0.0',resolved_ref:'abc',
-        diagnostic:'',approval_current:true,config_dir:'C:/config/health',state_dir:'C:/state/health',
+          diagnostic:'',approval_current:true,config_dir:'C:/config/health',state_dir:'C:/state/health',
+          running_panes:[],update_check:{status:'staged',checked_at:1,current_ref:'abc',available_ref:'def',channel:'latest'},
+          staged_update:{version:'0.3.0',current_version:'0.2.0',selected_ref:'v0.3.0',resolved_ref:'def',permissions_added:['sessions.read'],permissions_removed:[],capabilities_added:[],capabilities_removed:[],authority_changed:true,diagnostic:'',created_at:1},
         manifest:{id:'example.health',name:'Worktree Health',version:'0.2.0',description:'Project worktree health.',
           author:'Example',license:'MIT',homepage:'',permissions:['projects.read'],requires:['plugin.panes.v1'],
           runtime_requirements:['python>=3.10'],actions:[],events:[],startup:[],link_handlers:[],panes:[]},
       },
-    ],
-  },
+      ],
+    },
+    '/api/plugins/development': {
+      root:'C:/Users/Test/swe-mux-plugins',exists:true,truncated:false,diagnostic:'',
+      candidates:[{path:'C:/Users/Test/swe-mux-plugins/local-tool',id:'example.local',name:'Local Tool',version:'0.1.0',description:'Local development plugin.',diagnostic:'',linked:false,conflict:false}],
+    },
   '/api/remote/status': REMOTE,
   '/api/remote/firewall': FIREWALL,
   '/api/wsl/bridge': WSL,
@@ -256,6 +264,7 @@ document.documentElement.style.setProperty('--ui-scale', '1')
 
 function Host() {
   const [navOpen, setNavOpen] = useState(false)
+  const params = new URLSearchParams(location.search)
   return <Settings
     activeUiScale={1}
     onUiScalePreview={() => 1}
@@ -263,6 +272,8 @@ function Host() {
     navOpen={navOpen}
     onNavOpenChange={setNavOpen}
     onLaunchConfigurator={() => {}}
+    initialSection={params.get('section')||undefined}
+    initialSetting={params.get('setting')||undefined}
     onClose={() => {}}
   />
 }

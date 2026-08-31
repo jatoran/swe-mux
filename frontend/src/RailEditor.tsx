@@ -503,7 +503,6 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
   }
 
   return <section class="commandrail-settings" ref={rootRef}>
-    <h3>Actions</h3>
     {showIntro && <div class="rail-intro-callout" role="note">
       <strong>How this works</strong>
       <ul>

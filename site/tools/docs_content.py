@@ -2977,6 +2977,43 @@ PLUGINS = Page(
             "The catalog supplies a literal release tag, which pins the inspected release. "
             "A branch is accepted but is a moving channel, and every changed byte still requires approval.",
         ),
+        ("h2", "Develop locally"),
+        (
+            "p",
+            "The configurable development root defaults to <code>~/swe-mux-plugins</code>. "
+            "Settings and <code>swemux plugin discover</code> inspect only direct child "
+            "repositories with a root manifest. Discovery is inert: each candidate still needs "
+            "an explicit Link action and content approval. An arbitrary repository remains "
+            "linkable when a monorepo, worktree, or alternate drive should stay where it is.",
+        ),
+        (
+            "code",
+            "swemux plugin development-root ~/swe-mux-plugins --create\n"
+            "swemux plugin discover\n"
+            "swemux plugin link ~/swe-mux-plugins/my-plugin\n"
+            "swemux plugin approve PUBLISHER.PLUGIN",
+        ),
+        (
+            "p",
+            "After an edit, run <code>swemux plugin refresh</code>, validate, and approve the "
+            "current bytes. Actions pick them up on their next run. A live pane remains its old "
+            "process until it is closed and relaunched or replaced with "
+            "<code>swemux plugin restart-panes PUBLISHER.PLUGIN</code>.",
+        ),
+        ("h2", "Review updates"),
+        (
+            "p",
+            "Managed updates are never automatic. Checking reads source-channel metadata only. "
+            "Downloading creates a separate durable review stage while the active version keeps "
+            "running. Settings shows exact revision and permission or capability changes before "
+            "a separate approval promotes those bytes.",
+        ),
+        (
+            "code",
+            "swemux plugin check-updates\n"
+            "swemux plugin update PUBLISHER.PLUGIN\n"
+            "swemux plugin approve-update PUBLISHER.PLUGIN",
+        ),
         ("h2", "Authority"),
         (
             "p",
@@ -2989,7 +3026,7 @@ PLUGINS = Page(
             [
                 "Acquisition, catalog browsing, validation, and inspection execute no plugin code.",
                 "Approval is bound to the complete source content and security-relevant manifest fields.",
-                "An update stages inert content and leaves the prior version available for rollback.",
+                "An update review leaves the active version enabled until separate approval.",
                 "Uninstall retains plugin config and state unless purge is separately confirmed.",
             ],
         ),

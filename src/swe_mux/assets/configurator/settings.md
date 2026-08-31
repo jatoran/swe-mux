@@ -74,7 +74,7 @@ Read with `configurator_device_settings`, write with
 `configurator_edit_device_settings`. **The rail has its own guide
 (`rail-and-actions`); read it before touching the rail.**
 
-Two of the seven domains - `alerts` and `notifications` - the daemon interprets,
+Two of the nine domains - `alerts` and `notifications` - the daemon interprets,
 because the push sender has to apply the master switch and quiet hours before any
 browser tab is alive to filter. The other five it stores **verbatim**: the browser
 owns their schema and nothing here can tell a valid one from a mangled one.

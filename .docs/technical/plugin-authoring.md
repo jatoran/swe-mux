@@ -20,6 +20,10 @@ A fresh clone is correct without it.
 
 Linked source remains author-owned.
 `swemux plugin link` registers the directory in place and `swemux plugin uninstall` never removes it.
+The default author convention is one standalone repository per direct child of `~/swe-mux-plugins`.
+The Plugins Settings page can configure another absolute development root, create it explicitly, and discover its direct children without linking, approving, or executing them.
+`swemux plugin development-root [PATH] [--create]` and `swemux plugin discover` expose the same flow.
+`swemux plugin link PATH` remains the explicit escape hatch for repositories outside that root, including monorepos, worktrees, and alternate drives.
 Managed source is copied beneath the swe-mux data directory and may be removed by uninstall.
 Config and state have separate lifetimes and survive ordinary uninstall unless the operator explicitly requests purge.
 
@@ -56,6 +60,24 @@ publisher-plugin/
 Only `swe-mux-plugin.toml` has a reserved name.
 The command may target Python, JavaScript, PowerShell, a compiled executable, or another runtime available on the declared host.
 Managed installation does not run a package manager or build step, so published plugins must be directly runnable after acquisition.
+
+## Language and runtime support
+
+The host is language-neutral because it launches argv and never imports plugin code.
+Current managed distribution is not equally mature for every language because it installs repository content without building it or installing a runtime.
+
+| Plugin implementation | Current managed-install position |
+|---|---|
+| Shell or PowerShell | Directly runnable when the named shell exists on the host. |
+| Python | Directly runnable when an external compatible Python exists and dependencies are either standard-library-only or already available. |
+| JavaScript | Directly runnable when a compatible Node or Deno executable exists and the repository needs no install step. |
+| TypeScript | Publish compiled JavaScript in the repository; do not assume `tsx`, a package install, or experimental runtime flags exist. |
+| Rust, Go, C++, or another compiled language | The process model can launch a binary, but public managed distribution has no artifact matrix yet; committed binaries are not the intended workaround. |
+
+`runtime_requirements` is currently declaration-only metadata.
+The host parses and preserves it but does not yet resolve executables or enforce versions before approval, enablement, or invocation.
+Authors must test every declared host today, and a missing runtime currently fails at process launch rather than at inspection.
+Phase 25 makes runtime enforcement the first expansion step: a versioned requirement grammar, bounded executable/version probes, per-platform applicability, Settings verdicts, and a fail-closed diagnostic without automatic runtime installation.
 
 ## Minimal manifest
 
@@ -98,7 +120,9 @@ Changing any source byte or security-relevant manifest field invalidates approva
 Pane placement is `tab`, `split`, or `popup`.
 Tab and split panes are ordinary supervised sessions and enter Project layout state.
 Popup panes are overlay-owned sessions and stop when the popup closes.
-Opening a pane from Settings closes Settings and focuses the new surface.
+The popup header can promote the live session into a persistent Project tab; later launches focus that retained tab.
+Project-scoped pane tools launch from that Project's Run menu or the command palette.
+Settings owns global lifecycle and development operations and carries no Project selector or contribution launcher.
 Opening the same entrypoint again in the same Project focuses its existing live pane.
 Utility panes do not receive the agent command rail; the TUI owns its own compact controls.
 
@@ -169,12 +193,17 @@ After editing linked source:
 
 ```text
 swemux plugin validate .
-swemux plugin list
+swemux plugin refresh
 swemux plugin approve publisher.plugin
 ```
 
-The catalogue detects the changed content digest, marks the plugin changed, and revokes prior approval before new bytes run.
+Refresh recalculates registered manifest and content digests immediately and rescans the configured development root.
+The catalogue also performs the inert digest refresh when the app regains focus.
+Changed content is marked changed and prior approval is revoked before new bytes run.
 Relinking the same directory is allowed but is not required for ordinary source edits.
+Actions and later event deliveries start from approved current bytes.
+An existing pane remains its old process until it is closed and relaunched or replaced explicitly with `swemux plugin restart-panes publisher.plugin`.
+Pane restart preserves each pane's Project and retained placement and issues a fresh callback token.
 
 Exercise lifecycle isolation:
 
@@ -193,10 +222,53 @@ Never use purge as test cleanup against user-owned state.
 
 `swemux plugin install` accepts a local directory, GitHub `owner/repository`, or Git URL plus optional `--ref`.
 Managed acquisition copies immutable content and leaves it inert unless approval and enablement are explicit.
+Installing an existing plugin ID is refused so a repeated install cannot bypass update review.
 A literal tag pins one release, a branch is an explicit moving channel, and `--ref latest` resolves the newest GitHub release each time an install or update is requested.
 The registry retains requested channel, selected tag or branch, and resolved commit as separate provenance.
 `swemux plugin update` reuses that requested channel and stages the result as inert content; `--ref` replaces the stored channel deliberately.
+`swemux plugin check-updates` performs only read-only source-channel probes and does not acquire or execute content.
+`swemux plugin update ID` downloads a candidate into a separate durable review stage while the active version remains enabled and unchanged.
+Settings shows version, revision, compatibility, and permission or capability deltas.
+`swemux plugin approve-update ID` is the explicit promotion and approval act; `swemux plugin discard-update ID` abandons the review without changing the active version.
 `swemux plugin rollback` restores the retained prior source as inert content.
+
+## Planned compiled artifact contract
+
+Compiled artifact distribution is planned Phase 25 work and is not valid manifest v1 syntax yet.
+The intended `[[artifacts]]` matrix selects one immutable release asset by platform and architecture before download:
+
+```toml
+# Planned contract, not accepted by the current parser.
+[[artifacts]]
+platform = "windows"
+architecture = "x86_64"
+url = "https://github.com/publisher/plugin/releases/download/v1.0.0/plugin-windows-x86_64.zip"
+sha256 = "<64 lowercase hexadecimal characters>"
+archive = "zip"
+executable = "plugin.exe"
+```
+
+The future installer must:
+
+- Refuse unsupported or ambiguous platform/architecture matches before the network request.
+- Bound download bytes, expanded bytes, file count, path length, and compression ratio.
+- Reject absolute paths, traversal, unsafe links, Windows device names and alternate data streams, case-folding collisions, duplicate normalized paths, and unsupported archive entries.
+- Extract outside the live source root, verify SHA-256 and the complete manifest, then promote atomically.
+- Grant POSIX execute permission only to the declared executable after verification.
+- Remove Windows `Zone.Identifier` only from verified staged files and report a specific blocked-execution diagnostic if required.
+- Bind approval to the selected artifact digest, security-relevant manifest digest, platform, architecture, archive kind, and executable path.
+- Show that a digest proves byte integrity, not publisher honesty, source correspondence, or binary safety.
+
+The public catalog will expose artifact metadata without downloading the asset.
+The author template will provide an optional native-host release matrix that builds, packages, hashes, verifies, and attaches every declared artifact to the matching version tag.
+Most script plugins should keep the simpler repository path and avoid the artifact contract entirely.
+
+## Future UI boundary
+
+Native React components, CSS, arbitrary DOM, backend routes, middleware, and database migrations are permanently outside the plugin contract.
+Hosted web plugins remain deferred until Roadmap Phase 13 ships a non-terminal browser leaf and defines isolated origin, navigation, authentication, storage, lifecycle, and mobile behavior.
+That browser leaf is a prerequisite rather than implied authority: future hosted content would be isolated per plugin/version and would not gain native frontend or backend injection.
+Dynamic Settings forms and persistent plugin daemons remain separate deferred decisions.
 
 Before publishing:
 
@@ -210,6 +282,7 @@ Before publishing:
 - Confirm uninstall does not remove linked source and retains state.
 - Confirm no secret or absolute machine path appears in source, logs, fixtures, or output.
 - Run repository CI on Windows, Linux, and macOS with the release-matched host validator.
+- Verify every declared runtime and version on each advertised host; current swe-mux does not enforce `runtime_requirements` for the author.
 - Publish a GitHub release whose tag matches the manifest version.
 - Add the `swe-mux-plugin` GitHub topic only after the default branch and release tag both contain a valid manifest.
 
@@ -239,6 +312,6 @@ The public repositories are `jatoran/swe-mux-plugin-fleet-dashboard`, `jatoran/s
 | `../../src/swe_mux/plugin_manifest.py` | Canonical manifest parser and content digest. |
 | `../../src/swe_mux/plugins.py` | Lifecycle, commands, panes, events, tokens, and marketplace. |
 | `../../src/swe_mux/routes/plugins.py` | Management and callback HTTP operations. |
-| `../../frontend/src/PluginsSettings.tsx` | Browser lifecycle and contribution controls. |
+| `../../frontend/src/PluginsSettings.tsx` | Global lifecycle, development discovery, update review, and pane-restart controls. |
 | `../../site/tools/plugins.py` | Public exact-revision catalog validation and generation. |
 | `../../tests/test_plugins.py` | Host contract coverage. |

@@ -189,8 +189,11 @@ void updateLayout(projectId, moveLeafToStack(activeLayout, kind, id, targetStack
 ```
 
 Never persist pending client terminal IDs.
-Ordinary terminal launches insert them into optimistic pane state, then replace/remove them when spawn resolves.
-Worktree setup keeps its pending identity unpanned, so active-session focus can show it as a temporary full-workspace surface without mutating the durable pane tree.
+Every launch this device starts inserts one into optimistic pane state, then replaces or removes it when the spawn resolves.
+Worktree launch is the same path and gets its leaf before `git worktree add` runs, so the setup splash is a real tab in the focused pane for the whole wait rather than an unpanned view.
+That matters because an unpanned view is drawn as a whole-workspace surface on the desktop and is drawn nowhere on a phone, whose projection reads the layout's tabs.
+Because the leaf is client-only, every refresh rebuilds it from the server layout, and `planFleetLayouts` re-places it: without stealing the pane's stored active tab, except when `joinAnchor` says the operator is watching that launch.
+Bootstrap runs for minutes, so without that exception a refresh would push the splash behind a sibling tab while focus still named it.
 
 ## Optimistic session removal
 

@@ -33,6 +33,8 @@ export const SETTING_FLASH_MS = 1800
 export const SETTING_REVEAL_TIMEOUT_MS = 6000
 
 export const SETTING_FLASH_CLASS = 'setting-flash'
+export const SETTING_SECTION_FLASH_CLASS = 'setting-section-flash'
+export const SETTING_SECTION_HEADING_FLASH_CLASS = 'setting-section-heading-flash'
 
 export type RevealOptions = {
   flashMs?: number
@@ -90,6 +92,98 @@ export function flashSetting(element: HTMLElement, flashMs = SETTING_FLASH_MS): 
   return () => {
     window.clearTimeout(timer)
     element.classList.remove(SETTING_FLASH_CLASS)
+  }
+}
+
+/** The most specific heading that introduces `target` inside its Settings section. */
+export function settingsSectionHeading(target: HTMLElement): HTMLElement | null {
+  if (target.matches('h3,h4')) return target
+  const section = target.closest<HTMLElement>('section')
+  if (!section) return null
+  const headings = [...section.querySelectorAll<HTMLElement>('h3,h4')]
+  let nearest: HTMLElement | null = null
+  for (const heading of headings) {
+    if (heading.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING) nearest = heading
+  }
+  return nearest || headings[0] || null
+}
+
+/**
+ * Add context around an exact setting arrival: its heading and the border of the section
+ * that owns it. Search still flashes the exact result, while this second cue answers which
+ * block the result belongs to when the page contains several dense sections.
+ */
+export function flashSettingsSection(target: HTMLElement, flashMs = SETTING_FLASH_MS): () => void {
+  const section = target.closest<HTMLElement>('section')
+  const heading = settingsSectionHeading(target)
+  if (!section || !heading) return () => {}
+  const pairs = [
+    [section, SETTING_SECTION_FLASH_CLASS],
+    [heading, SETTING_SECTION_HEADING_FLASH_CLASS],
+  ] as const
+  for (const [element, className] of pairs) {
+    element.classList.remove(className)
+    void element.offsetWidth
+    element.classList.add(className)
+  }
+  const timer = window.setTimeout(() => {
+    for (const [element, className] of pairs) element.classList.remove(className)
+  }, flashMs)
+  return () => {
+    window.clearTimeout(timer)
+    for (const [element, className] of pairs) element.classList.remove(className)
+  }
+}
+
+/**
+ * Flash a sidebar-selected Settings section once its tab and page have rendered.
+ * Several headings may map to one declared page, so the first visible match owns the cue.
+ */
+export function cueSettingsSection(
+  container: ParentNode,
+  sectionId: string,
+  options: Pick<RevealOptions, 'flashMs' | 'timeoutMs'> = {},
+): () => void {
+  const flashMs = options.flashMs ?? SETTING_FLASH_MS
+  const timeoutMs = options.timeoutMs ?? SETTING_REVEAL_TIMEOUT_MS
+  let cancelled = false
+  let clearFlash: (() => void) | null = null
+  let observer: MutationObserver | null = null
+  let frame = 0
+  let timer = 0
+
+  const stop = () => {
+    observer?.disconnect()
+    observer = null
+    if (timer) { window.clearTimeout(timer); timer = 0 }
+    if (frame) { cancelAnimationFrame(frame); frame = 0 }
+  }
+  const attempt = (): boolean => {
+    const selector = `h3[data-settings-section="${escapeValue(sectionId)}"]`
+    const heading = [...container.querySelectorAll<HTMLElement>(selector)].find(hasLayoutBox)
+    if (!heading) return false
+    stop()
+    frame = requestAnimationFrame(() => {
+      frame = 0
+      if (!cancelled) clearFlash = flashSettingsSection(heading, flashMs)
+    })
+    return true
+  }
+
+  if (!attempt() && typeof MutationObserver !== 'undefined') {
+    observer = new MutationObserver(() => { if (!cancelled) attempt() })
+    observer.observe(container, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-settings-section', 'hidden', 'style', 'class'],
+    })
+    timer = window.setTimeout(stop, timeoutMs)
+  }
+  return () => {
+    cancelled = true
+    stop()
+    clearFlash?.()
   }
 }
 

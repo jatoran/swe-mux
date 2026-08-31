@@ -1780,6 +1780,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         origin_session_id: str,
         origin_run_id: str = "",
         reason: str = "",
+        report_success: bool = False,
     ) -> dict[str, Any]:
         origin = sessions.sessions.get(origin_session_id)
         origin_name = origin.record.name if origin else origin_session_id
@@ -1800,6 +1801,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
                 "from_name": origin_name,
                 "from_run_id": origin_run_id,
                 "project_id": project_id,
+                # Carried so the approval enqueues the request the session actually
+                # made. It is not a permission - approving decides whether the land
+                # runs, never whether its author may hear about it.
+                "report_success": bool(report_success),
                 "status": "pending",
             },
         )

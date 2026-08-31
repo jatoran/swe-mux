@@ -1592,6 +1592,40 @@ async def test_request_land_reads_the_resolved_targetless_worktree(
     assert land.calls[0]["origin_session_id"] == "s1"
     assert land.calls[0]["project_root"] == "D:/repo"
     assert land.calls[0]["kind"] == "land"
+    # A land is silent when it works unless the caller says otherwise, and the absence
+    # of the key means the same thing as `false`.
+    assert land.calls[0]["report_success"] is False
+
+
+async def test_request_land_can_ask_to_be_told_it_landed(
+    selected_land_worktree: None,
+) -> None:
+    """The one outcome the queue never reported, opt-in at the request.
+
+    A land announces itself by the trunk moving, which the session that asked is by
+    definition not watching - it is waiting. Silence stays the default, because a fleet
+    landing six branches would otherwise interrupt six agents that have moved on, and
+    only the requester knows whether it has work gated on the land.
+
+    It is a flag on `request_land` rather than a second tool - unlike `request_verify`,
+    which is separate so the dangerous call is never the default spelling of the safe
+    one - because this asks for the *same* act and changes only who hears about it.
+    """
+    land = LandStub()
+    caller = live_session("s1")
+    caller.record.git_cwd = "D:/worktrees/alpha"
+    await _land_service(caller, land).dispatch_tool(
+        caller, "request_land", {"report_success": True}
+    )
+    assert land.calls[0]["report_success"] is True
+
+    schema = next(item for item in TOOLS if item["name"] == "request_land")["inputSchema"]
+    assert schema["properties"]["report_success"]["type"] == "boolean"
+    # Not offered on the verify tool, whose pass already reports: `additionalProperties`
+    # refuses the key there rather than accepting a no-op.
+    verify = next(item for item in TOOLS if item["name"] == "request_verify")["inputSchema"]
+    assert "report_success" not in verify["properties"]
+    assert verify["additionalProperties"] is False
 
 
 async def test_request_verify_is_the_same_scoping_asking_for_a_different_act(

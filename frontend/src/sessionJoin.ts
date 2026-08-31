@@ -69,10 +69,11 @@ export function unjoinedSessionIds(layout: PaneLayout, ids: string[]): string[] 
  *  active terminal, the focused view) is not this function's business and no caller should move it.
  *
  *  The one exception is a session the operator is *already* looking at. A view the layout has no
- *  leaf for is rendered as a synthetic pane covering the whole workspace, so a worktree session
- *  that finished setup is focused and unpanned at once; joining it while restoring some other tab
- *  would swap the workspace back to the pane tree and hide the very thing on screen. Following
- *  focus there is not stealing it - it is the same session, now with a tab.
+ *  leaf for is rendered as a synthetic pane covering the whole workspace, so such a session is
+ *  focused and unpanned at once; joining it while restoring some other tab would swap the
+ *  workspace back to the pane tree and hide the very thing on screen. Following focus there is
+ *  not stealing it - it is the same session, now with a tab. `fleetLayouts.ts` applies the same
+ *  exception when it re-places a pending launch's optimistic leaf.
  *
  *  Returns the layout unchanged - identity, so a caller can compare - when nothing was missing.
  */
