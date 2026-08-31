@@ -59,7 +59,8 @@ The third is a queue-executed verdict that already stands over this exact tree w
 The hazard the pipeline lives inside is that the worktree it reconciles is a checkout a live agent session owns and may be mid-turn writing into.
 Preconditions are therefore evaluated before **each** mutation rather than once at enqueue, and they fail closed: an unreadable repository blocks exactly like a dirty one, because "the check could not be made" and "the check passed" must never be conflated.
 These safety-critical reads have a 15-second deadline, separate from the interactive Git monitor's 4-second deadline, so verification-gate CPU contention does not manufacture an unreadable repository.
-A deadline expiry still fails closed as a transient hold.
+Fail-closed has a direction, and it is hold, never refuse: every safety read distinguishes Git answering "no" from Git not answering, so a timed-out or failed read reports the repository unreadable - a transient hold - rather than folding into a falsy fact that downstream reads as a permanent refusal ("not a registered worktree", "a linked worktree", "a detached HEAD").
+The two derived questions - the incoming change set and whether the branch is already landed - are asked only of a registered worktree against its own main tree, because a foreign checkout's HEAD handed to `merge-base` produces a fatal answer indistinguishable from an infrastructure failure.
 
 They divide into two dispositions, and the difference is the queue's whole operator experience:
 
