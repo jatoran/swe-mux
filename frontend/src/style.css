@@ -2239,7 +2239,10 @@ body {
 @media(max-width:760px){
   .settings-tabs-drawer{position:absolute;left:0;top:0;bottom:0;z-index:6;width:min(258px,78%);padding:6px 6px 14px;border-right:1px solid var(--line);background:var(--bg);box-shadow:8px 0 0 #0008;transform:translateX(-101%);visibility:hidden;transition:transform .15s ease,visibility 0s linear .15s}
   .settings-tabs-drawer.open{transform:translateX(0);visibility:visible;transition:transform .15s ease,visibility 0s}
-  .settings-nav-scrim{position:absolute;inset:0;z-index:5;border:0!important;background:#020403aa;cursor:pointer}
+  /* The scrim remains the full-body dismissal target but paints nothing. The Settings
+     page stays readable behind the drawer; the drawer's own background, border, and shadow
+     provide the separation instead of a dark veil that reads as an empty page. */
+  .settings-panel .settings-nav-scrim{position:absolute;inset:0;z-index:5;border:0!important;background:transparent;cursor:pointer}
   /* Both openers. The hamburger is the affordance; the title is where the eye already
      is, and on a phone that is the tap most people make. */
   .settings-panel>header>.settings-nav-trigger{flex:none;width:auto;min-height:34px;display:grid;place-items:center;padding:0 4px;margin-left:-4px;color:var(--text)}

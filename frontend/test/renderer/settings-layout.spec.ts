@@ -51,6 +51,8 @@ async function chrome(page: Page) {
       return { x: rect.x, right: rect.right, y: rect.y, bottom: rect.bottom, width: rect.width, height: rect.height }
     }
     const nav = document.querySelector('.settings-tabs') as HTMLElement | null
+    const scrim = document.querySelector('.settings-nav-scrim') as HTMLElement | null
+    const content = document.querySelector('.settings-content') as HTMLElement | null
     return {
       header: box('.settings-panel>header'),
       heading: box('.settings-heading'),
@@ -63,6 +65,8 @@ async function chrome(page: Page) {
       navVisibility: nav ? getComputedStyle(nav).visibility : null,
       isDrawer: !!document.querySelector('.settings-tabs-drawer'),
       scrims: document.querySelectorAll('.settings-nav-scrim').length,
+      scrimBackground: scrim ? getComputedStyle(scrim).backgroundColor : null,
+      contentOpacity: content ? getComputedStyle(content).opacity : null,
       groups: [...document.querySelectorAll('.settings-tab-group>span')]
         .filter(element => getComputedStyle(element).display !== 'none')
         .map(element => element.textContent),
@@ -133,6 +137,8 @@ test('narrow: the hamburger and the title both open the drawer over the content'
     expect(open.content!.width).toBeGreaterThan(PHONE.width - 2)
     expect(open.nav!.right).toBeLessThan(PHONE.width)
     expect(open.scrims).toBe(1)
+    expect(open.scrimBackground).toBe('rgba(0, 0, 0, 0)')
+    expect(open.contentOpacity).toBe('1')
     expect(open.focusableInNav).toBeGreaterThan(10)
     // The categories are the point of borrowing the desktop list.
     expect(open.groups).toEqual(['Workspace', 'Agents', 'Interface', 'System'])
