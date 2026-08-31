@@ -107,11 +107,19 @@ def install_table(
             raise NoSuchProcess(pid)
         return found
 
+    def process_iter(attrs: list[str] | None = None) -> list[Any]:
+        assert attrs == ["pid", "name"]
+        return [
+            SimpleNamespace(pid=pid, info={"pid": pid, "name": item.name()})
+            for pid, item in sorted(table.items())
+        ]
+
     namespace: dict[str, Any] = {
         "Process": build,
         "NoSuchProcess": NoSuchProcess,
         "AccessDenied": AccessDenied,
         "net_connections": lambda **_: [],
+        "process_iter": process_iter,
     }
     if ppid_map:
         namespace["_ppid_map"] = lambda: {
@@ -251,20 +259,22 @@ def test_the_supervisor_is_reserved_but_never_traversed(
     assert reserved == {900, 950}
 
 
-def test_an_ancestor_that_postdates_the_daemon_is_a_recycled_pid(
+def test_the_ancestor_walk_still_finds_the_shell_without_a_process_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A parent that started after its child names a recycled pid, not an ancestor."""
+    """`process_iter` is the same class of psutil private-ish dependency as `_ppid_map`."""
+    from swe_mux import processes
+
+    shell = FakeProcess(800, 1, 50.0, image=APP_IMAGE)
     daemon = FakeProcess(900, 800, 90.0, image=APP_IMAGE, argv=[APP_IMAGE, "--daemon-child"])
-    # pid 800 now belongs to a second app instance started long after this daemon.
-    later = FakeProcess(800, 1, 500.0, image=APP_IMAGE)
-    install_table(monkeypatch, {800: later, 900: daemon}, daemon_pid=900)
+    install_table(monkeypatch, {800: shell, 900: daemon}, daemon_pid=900)
+    monkeypatch.delattr(processes.psutil, "process_iter")
     inspector = inspector_for()
     inspector._refresh_tree()
 
     reserved = {int(handle.pid) for handle in inspector._infrastructure_handles()}
 
-    assert reserved == {900}
+    assert reserved == {800, 900}
 
 
 def test_the_shell_and_its_webview_land_in_the_daemon_footer(
@@ -288,6 +298,74 @@ def test_the_shell_and_its_webview_land_in_the_daemon_footer(
     assert footer["processes"] == 3
     assert footer["memory_bytes"] == 700
     assert {member["pid"] for member in footer["members"]} == {800, 810, 900}
+
+
+def test_a_shell_nothing_points_at_is_still_enumerated_for_the_footer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live shape: reload-daemon left the shell with no link to the daemon at all."""
+    shell = FakeProcess(800, 1, 50.0, image=APP_IMAGE, rss=100)
+    webview = FakeProcess(
+        810, 800, 51.0, image=str(Path(r"C:\Edge\msedgewebview2.exe")), rss=200
+    )
+    # ppid 700 exited with the outgoing daemon; nothing connects 900 to 800.
+    daemon = FakeProcess(
+        900, 700, 90.0, image=APP_IMAGE, argv=[APP_IMAGE, "--daemon-child"], rss=400
+    )
+    install_table(monkeypatch, {800: shell, 810: webview, 900: daemon}, daemon_pid=900)
+    inspector = inspector_for()
+
+    inspector._collect_all(startup=True)
+
+    footer = inspector._daemon_resources
+    assert {member["pid"] for member in footer["members"]} == {800, 810, 900}
+    assert footer["memory_bytes"] == 700
+
+
+def test_the_image_scan_is_not_repeated_on_every_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Constructing a psutil.Process is the most expensive thing in this file."""
+    from swe_mux import processes
+
+    shell = FakeProcess(800, 1, 50.0, image=APP_IMAGE)
+    daemon = FakeProcess(900, 700, 90.0, image=APP_IMAGE, argv=[APP_IMAGE, "--daemon-child"])
+    install_table(monkeypatch, {800: shell, 900: daemon}, daemon_pid=900)
+    scans = 0
+    real_iter = processes.psutil.process_iter
+
+    def counting_iter(attrs: list[str] | None = None) -> list[Any]:
+        nonlocal scans
+        scans += 1
+        return real_iter(attrs)
+
+    monkeypatch.setattr(processes.psutil, "process_iter", counting_iter)
+    inspector = inspector_for()
+
+    inspector._collect_all(startup=True)
+    inspector._collect_all(startup=True)
+    inspector._collect_all(startup=True)
+
+    assert scans == 1
+
+
+def test_a_vanished_shell_is_rescanned_rather_than_enumerated_until_the_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recycled pid must not be enumerated as swe-mux for up to a minute."""
+    shell = FakeProcess(800, 1, 50.0, image=APP_IMAGE)
+    daemon = FakeProcess(900, 700, 90.0, image=APP_IMAGE, argv=[APP_IMAGE, "--daemon-child"])
+    table = {800: shell, 900: daemon}
+    install_table(monkeypatch, table, daemon_pid=900)
+    inspector = inspector_for()
+    inspector._collect_all(startup=True)
+    assert inspector._own_image_pids == {800, 900}
+
+    table.pop(800)
+    inspector._collect_all(startup=True)
+
+    assert inspector._own_image_pids == {900}
+    assert {member["pid"] for member in inspector._daemon_resources["members"]} == {900}
 
 
 def test_terminating_swe_mux_itself_is_refused_even_when_a_row_claims_it(
