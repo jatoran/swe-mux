@@ -1,0 +1,40 @@
+{
+  "id": "emacs",
+  "title": "Emacs",
+  "description": "The C-x prefix and M-x, mapped onto swe-mux's windows and buffers: C-x 2 and C-x 3 split, C-x o walks them, C-x 0 and C-x 1 close and zoom, C-x b lists 'buffers' (sessions) and C-x g opens Git.",
+  "leader": "ctrl+shift+space",
+  "prefix": "ctrl+x",
+  "warning": "C-x is a prefix inside Emacs and inside a readline shell too, so an Emacs running in a pane loses it while this preset is active. C-c, C-a, C-e and C-k are deliberately left alone here: those are the shell bindings people actually feel.",
+  "include": ["leader-tree"],
+  "bindings": {
+    "ctrl+x 2": "pane.splitVertical",
+    "ctrl+x 3": "pane.splitHorizontal",
+    "ctrl+x o": "pane.next",
+    "ctrl+x shift+o": "pane.previous",
+    "ctrl+x 0": "pane.close",
+    "ctrl+x 1": "pane.zoom",
+    "ctrl+x b": "palette.sessions",
+    "ctrl+x ctrl+b": "palette.sessions",
+    "ctrl+x ctrl+f": "palette.files",
+    "ctrl+x k": "session.kill",
+    "ctrl+x g": "drawer.git",
+    "ctrl+x d": "drawer.files",
+    "ctrl+x shift+5 2": "session.spawnShell",
+    "ctrl+x shift+5 0": "pane.close",
+    "ctrl+x p p": "palette.projects",
+    "ctrl+x p f": "palette.files",
+    "ctrl+x p b": "palette.sessions",
+    "ctrl+x r": "settings.open",
+    "ctrl+x h": "history.open",
+    "ctrl+x arrowleft": "pane.focusLeft",
+    "ctrl+x arrowright": "pane.focusRight",
+    "ctrl+x arrowup": "pane.focusUp",
+    "ctrl+x arrowdown": "pane.focusDown",
+    "alt+x": "palette.commands",
+    "ctrl+shift+p": "palette.open",
+    "f1": "palette.open"
+  },
+  "rules": [
+    { "keys": "meta+x", "command": "palette.commands", "platform": "mac" }
+  ]
+}

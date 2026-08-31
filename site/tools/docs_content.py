@@ -317,7 +317,7 @@ FIRST_SESSION = Page(
         (
             "steps",
             [
-                "With a Project selected, press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>. "
+                "With a Project selected, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd>. "
                 "That opens a real terminal at the Project's root - a plain shell, nothing more.",
                 "Type <code>claude</code>, <code>codex</code>, or whichever CLI you use, exactly "
                 "as you normally would.",
@@ -646,7 +646,7 @@ PROJECTS = Page(
         ),
         (
             "note",
-            "Switching Projects: <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> through "
+            "Switching Projects: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd> through "
             "<kbd>9</kbd> activate the first nine in sidebar order, and the command palette "
             "reaches the rest.",
         ),
@@ -1152,7 +1152,8 @@ WORKSPACE = Page(
         ("h2", "The command palette reaches everything"),
         (
             "p",
-            "<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>. Every command in the application is in "
+            "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>, or <kbd>F1</kbd>. Every command in the "
+            "application is in "
             "it, including the ones with no default chord, and every one of them is bindable to a "
             'chord or a mobile gesture. <a href="../keyboard/">The keyboard reference</a> has the '
             "defaults.",
@@ -1750,7 +1751,7 @@ VOICE = Page(
                 ),
                 (
                     "Push to talk",
-                    "Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> for capture with no "
+                    "Hold <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> for capture with no "
                     "endpoint detection at all.",
                 ),
             ],
@@ -2044,7 +2045,7 @@ SETTINGS = Page(
         "per Project, or per device."
     ),
     lede=(
-        "Settings is seventeen tabs in four groups. <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd> "
+        "Settings is seventeen tabs in four groups. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd> "
         "opens it, and the sidebar is the only navigation: the longer tabs are several pages "
         "each rather than one scrolling document."
     ),
@@ -2385,69 +2386,125 @@ KEYBOARD = Page(
         "mobile gestures work."
     ),
     lede=(
-        "Two entry points cover almost everything: "
-        "<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> for a terminal at the Project root, and "
-        "<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd> for the command palette, which reaches every "
-        "command in the application including the ones with no default chord."
+        "Three entry points cover everything: "
+        "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> for a terminal at the Project root, "
+        "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> for the command palette, and "
+        "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> as a leader key that puts all 214 "
+        "commands behind one chord and tells you what to press next."
     ),
     blocks=[
-        ("h2", "The defaults"),
+        ("h2", "The flat defaults"),
+        (
+            "p",
+            "Everything below is on <kbd>Ctrl</kbd>+<kbd>Shift</kbd>, which is what every terminal "
+            "emulator claims for itself, because bare <kbd>Ctrl</kbd>+letter belongs to the shell "
+            "running inside the pane. On macOS the same set is mirrored onto "
+            "<kbd>Cmd</kbd>+<kbd>Shift</kbd>; both work.",
+        ),
         (
             "table",
             (
                 ["Chord", "Command"],
                 [
-                    ["Ctrl+Alt+T", "New terminal in the current Project"],
-                    ["Ctrl+Alt+O", "New terminal, custom"],
-                    ["Ctrl+Alt+P", "Open the command palette"],
-                    ["Ctrl+Alt+S", "Open Settings"],
-                    ["Ctrl+Alt+N", "Open the current Project's notes"],
-                    ["Ctrl+Alt+J", "Jump to a heading in the focused note"],
-                    ["Ctrl+Alt+H", "Split the focused pane right"],
-                    ["Ctrl+Alt+V", "Split the focused pane below"],
-                    ["Ctrl+Alt+Z", "Toggle focused pane zoom"],
-                    ["Ctrl+Alt+D", "Detach the focused pane"],
-                    ["Ctrl+Alt+Right", "Focus the next pane"],
-                    ["Ctrl+Alt+Left", "Focus the previous pane"],
-                    ["Ctrl+Tab", "Focus the next workspace tab"],
-                    ["Ctrl+Shift+Tab", "Focus the previous workspace tab"],
+                    ["Ctrl+Shift+Enter", "New terminal in the current Project"],
+                    ["Ctrl+Shift+P, or F1", "Open the command palette"],
+                    ["Ctrl+Shift+Space", "The leader key (see below)"],
+                    ["Ctrl+Shift+\\", "Split the focused pane right"],
+                    ["Ctrl+Shift+-", "Split the focused pane below"],
+                    ["Ctrl+Shift+Arrows", "Focus the pane in that direction"],
+                    ["Ctrl+Shift+Z", "Toggle focused pane zoom"],
+                    ["Ctrl+Shift+X", "Close the focused pane"],
+                    ["Ctrl+Shift+[ and ]", "Previous and next tab in the focused pane"],
                     ["Ctrl+Shift+F", "Find in the focused terminal"],
-                    ["Ctrl+Alt+1 .. 9", "Activate the first nine Projects, in sidebar order"],
-                    ["Ctrl+Alt+Space (held)", "Push to talk, with no endpoint detection"],
+                    ["Ctrl+Shift+L", "Toggle the side panel"],
+                    ["Ctrl+Shift+E / G / U / K", "Side panel: files, Git, queue, transcript"],
+                    ["Ctrl+Shift+S", "Toggle the Projects sidebar"],
+                    ["Ctrl+Shift+H", "Browse session history"],
+                    ["Ctrl+Shift+,", "Open Settings"],
+                    ["Ctrl+Shift+1 .. 9", "Activate the first nine Projects, in sidebar order"],
+                    ["Ctrl+Tab, Ctrl+Shift+Tab", "Next and previous tab (desktop app only)"],
                 ],
             ),
         ),
-        ("h2", "Commands with no default chord"),
+        ("h2", "The leader key reaches everything else"),
         (
             "p",
-            "Many commands ship unbound on purpose, because they already have a button in view and "
-            "a chord for them would be a shortcut to something you can already see. They are all "
-            "in the palette, and all of them are bindable. Among them: browsing history, opening "
-            "the Projects registry, the global Scratchpad, the usage and quota views, the "
-            "Automation dashboard, session rename and kill, broadcast input, pane stacking and tab "
-            "movement, the sidebar filter, the application menu, and the pinned note outline.",
+            "Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> and an overlay names what the "
+            "next keystroke can be, grouped one letter per area: <kbd>p</kbd> panes, <kbd>s</kbd> "
+            "sessions, <kbd>w</kbd> Projects, <kbd>v</kbd> views, <kbd>n</kbd> notes, <kbd>t</kbd> "
+            "terminal, <kbd>g</kbd> Git, <kbd>d</kbd> the side panel, <kbd>f</kbd> focus, and a "
+            "few more. So a new terminal is leader, <kbd>s</kbd>, <kbd>n</kbd>; the pane to the "
+            "left is leader, <kbd>p</kbd>, <kbd>h</kbd>. <kbd>Escape</kbd> cancels.",
+        ),
+        (
+            "note",
+            "A leader is not decoration. Every keystroke after it is a plain keypress that no "
+            "browser and no window manager competes for, so one reservation buys the whole tree "
+            "where a flat map would need one per command."
+        ),
+        ("h2", "Presets, if you already know another tool"),
+        (
+            "p",
+            "Settings, Input, Keyboard preset. Five ship: swe-mux, tmux, VS Code, Vim-flavoured, "
+            "and Emacs. Each adds its own prefix and its own letters, and each also keeps the "
+            "swe-mux leader tree, so choosing one never removes the route to a command that tool "
+            "has no opinion about. You can pick one during first-time setup too.",
+        ),
+        (
+            "note",
+            "swe-mux is an outer shell, so any chord it claims is claimed from whatever runs "
+            "inside a pane. The tmux preset takes <kbd>Ctrl</kbd>+<kbd>B</kbd> from a tmux running "
+            "in a pane; Vim's takes <kbd>Ctrl</kbd>+<kbd>W</kbd>. Each preset says so before you "
+            "choose it, and each can be rebound afterwards."
         ),
         ("h2", "Rebinding"),
         (
             "p",
-            "Settings, Input, Keyboard shortcuts. A binding needs <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, "
-            "or <kbd>Meta</kbd> plus a non-modifier key; <kbd>Shift</kbd> alone is refused, "
-            "because it shadows typing.",
+            "Settings, Input, Keyboard shortcuts. A binding is one to three chords; only the first "
+            "needs <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or <kbd>Meta</kbd> (or a function key), because "
+            "everything after it is read while the shortcut is already armed. "
+            "<kbd>Shift</kbd> alone is refused, because it shadows typing.",
         ),
         (
             "note",
-            "Overrides are stored in <code>keybindings.json</code> in the data directory. A "
-            "binding for a command that was later renamed is migrated forward rather than dropped, "
-            "so a chord you set does not silently stop working after an upgrade.",
+            "Chords name the physical key rather than the character your layout produces, so a "
+            "shortcut means the same key on QWERTY, AZERTY and Dvorak. Overrides are stored in "
+            "<code>keybindings.json</code> in the data directory, and a binding for a command that "
+            "was later renamed is migrated forward rather than dropped.",
         ),
-        ("h2", "What the terminal keeps"),
+        ("h2", "Why not Ctrl+Alt"),
+        (
+            "p",
+            "Because on most non-US keyboards <kbd>AltGr</kbd> produces exactly "
+            "<kbd>Ctrl</kbd>+<kbd>Alt</kbd>. swe-mux used to default to that namespace, which "
+            "meant a German, French, Polish, Spanish or Nordic user fired application shortcuts "
+            "while typing ordinary characters. No shipped preset uses it, and choosing one "
+            "yourself is allowed but says so.",
+        ),
+        ("h2", "What the terminal, the browser and your desktop keep"),
         (
             "p",
             "swe-mux deliberately does not intercept the chords a shell or a TUI needs. "
             "<kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>, "
             "<kbd>Ctrl</kbd>+<kbd>R</kbd>, <kbd>Ctrl</kbd>+<kbd>L</kbd> and their neighbours reach "
-            "the process, which is why the application's own chords are behind "
-            "<kbd>Ctrl</kbd>+<kbd>Alt</kbd> rather than bare <kbd>Ctrl</kbd>.",
+            "the process, which is why the application's own chords are on "
+            "<kbd>Ctrl</kbd>+<kbd>Shift</kbd> rather than bare <kbd>Ctrl</kbd>.",
+        ),
+        (
+            "p",
+            "Two other layers get there first, and Settings names both. A browser tab keeps "
+            "<kbd>Ctrl</kbd>+<kbd>T</kbd>, <kbd>Ctrl</kbd>+<kbd>W</kbd> and a handful more for "
+            "itself, while the desktop app hands them to swe-mux - so a shortcut can be live in "
+            "one and absent in the other, and the editor says which. Your window manager takes "
+            "more still: on GNOME and KDE, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+arrows switch workspace "
+            "and <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> opens a terminal.",
+        ),
+        (
+            "note",
+            "The list of chords a browser keeps is a guess about your browser, and browsers "
+            "disagree. Settings, Input has a short test that measures it on the browser you are "
+            "actually using, and the measurement overrides the guess. A chord you never test stays "
+            "untested rather than being recorded as blocked."
         ),
         ("h2", "Mobile gestures"),
         (
