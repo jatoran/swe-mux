@@ -20,6 +20,10 @@ A fresh clone is correct without it.
 
 Linked source remains author-owned.
 `swemux plugin link` registers the directory in place and `swemux plugin uninstall` never removes it.
+The default author convention is one standalone repository per direct child of `~/swe-mux-plugins`.
+The Plugins Settings page can configure another absolute development root, create it explicitly, and discover its direct children without linking, approving, or executing them.
+`swemux plugin development-root [PATH] [--create]` and `swemux plugin discover` expose the same flow.
+`swemux plugin link PATH` remains the explicit escape hatch for repositories outside that root, including monorepos, worktrees, and alternate drives.
 Managed source is copied beneath the swe-mux data directory and may be removed by uninstall.
 Config and state have separate lifetimes and survive ordinary uninstall unless the operator explicitly requests purge.
 
@@ -169,12 +173,17 @@ After editing linked source:
 
 ```text
 swemux plugin validate .
-swemux plugin list
+swemux plugin refresh
 swemux plugin approve publisher.plugin
 ```
 
-The catalogue detects the changed content digest, marks the plugin changed, and revokes prior approval before new bytes run.
+Refresh recalculates registered manifest and content digests immediately and rescans the configured development root.
+The catalogue also performs the inert digest refresh when the app regains focus.
+Changed content is marked changed and prior approval is revoked before new bytes run.
 Relinking the same directory is allowed but is not required for ordinary source edits.
+Actions and later event deliveries start from approved current bytes.
+An existing pane remains its old process until it is closed and relaunched or replaced explicitly with `swemux plugin restart-panes publisher.plugin`.
+Pane restart preserves each pane's Project and retained placement and issues a fresh callback token.
 
 Exercise lifecycle isolation:
 
@@ -193,9 +202,14 @@ Never use purge as test cleanup against user-owned state.
 
 `swemux plugin install` accepts a local directory, GitHub `owner/repository`, or Git URL plus optional `--ref`.
 Managed acquisition copies immutable content and leaves it inert unless approval and enablement are explicit.
+Installing an existing plugin ID is refused so a repeated install cannot bypass update review.
 A literal tag pins one release, a branch is an explicit moving channel, and `--ref latest` resolves the newest GitHub release each time an install or update is requested.
 The registry retains requested channel, selected tag or branch, and resolved commit as separate provenance.
 `swemux plugin update` reuses that requested channel and stages the result as inert content; `--ref` replaces the stored channel deliberately.
+`swemux plugin check-updates` performs only read-only source-channel probes and does not acquire or execute content.
+`swemux plugin update ID` downloads a candidate into a separate durable review stage while the active version remains enabled and unchanged.
+Settings shows version, revision, compatibility, and permission or capability deltas.
+`swemux plugin approve-update ID` is the explicit promotion and approval act; `swemux plugin discard-update ID` abandons the review without changing the active version.
 `swemux plugin rollback` restores the retained prior source as inert content.
 
 Before publishing:

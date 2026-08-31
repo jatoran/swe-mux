@@ -6415,6 +6415,7 @@ Current shipped behavior is in `../design/features/plugins.md`, and the agent-ne
 
 The baseline landed on `master` and is deployed.
 It includes the manifest parser, SQLite registry and command ledger, linked and managed source, content-bound approval, lifecycle operations, actions, tab/split/popup terminal panes, EventBus hooks, startup hooks, terminal link handlers, scoped loopback callbacks, Settings, command-palette entries, CLI management, diagnostics, and the unreviewed GitHub-topic browser.
+The management baseline now also includes a configurable direct-child development root, explicit inert refresh, read-only managed update checks, durable update review that leaves the active version usable, authority-delta approval, and placement-preserving pane restart for linked development.
 Four maintained development repositories remain under the primary checkout's ignored `.private/plugin-lab` and are published as independent official repositories.
 Retired Attention Notifier and Project Scratchpad repositories remain recoverable under ignored `.trash/plugin-lab-retired` and are outside the active lab and marketplace.
 No plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
@@ -6453,11 +6454,11 @@ The plugin contract becomes a compatibility commitment once the first third-part
 
 | Surface | Current contract |
 |---|---|
-| Repository | Standalone repository with root `swe-mux-plugin.toml`; local development may use one independent repository per ignored `.private/plugin-lab/` child. |
-| Acquisition | Editable local link or managed local/Git/GitHub copy; no build or package-manager execution. |
+| Repository | Standalone repository with root `swe-mux-plugin.toml`; the configurable development root discovers direct children inertly and arbitrary directories remain explicitly linkable. |
+| Acquisition | Editable local link or managed local/Git/GitHub copy; no build or package-manager execution; update candidates remain separate from the active registry row until approval. |
 | Trust | Content and security digests bind explicit approval; changed content disables itself before execution. |
 | Contributions | Actions, terminal panes, exact EventBus hooks, one-shot startup hooks, and same-plugin terminal link handlers. |
-| UI | Settings management, command-palette entries, and terminal/TUI panes using tab, right-hand split, or popup placement. |
+| UI | Global Settings management without Project targeting, native Project/session launch surfaces, explicit refresh and update review, and terminal/TUI panes using tab, right-hand split, or popup placement. |
 | Runtime | Bounded argv runner, capped logs, concurrency and event bounds, revocable permission-scoped callback tokens, and a global execution kill switch. |
 | Isolation | Plugin source, config, state, trust, and logs stay outside the application and Project repositories; linked source is never deleted by swe-mux. |
 | Examples | Four maintained public official repositories exercise actions and Project utility panes; two unpublished machine-local experiments retain event and link-handler coverage without entering the release closure. |

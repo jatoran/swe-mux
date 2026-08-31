@@ -1906,8 +1906,34 @@ export function App() {
       if(target.mode==='popup'){setPluginPopupId(target.popupId);return}
       placePluginSessionInWorkspace(detail.session,detail.placement)
     }
+    const restarted=(event:Event)=>{
+      const detail=(event as CustomEvent<{old_session_id:string;session:Session;placement:string}>).detail
+      if(!detail?.session||!detail.old_session_id)return
+      setSessions(current=>[
+        ...current.filter(item=>item.id!==detail.old_session_id&&item.id!==detail.session.id),
+        detail.session,
+      ])
+      if(detail.placement==='popup'){
+        setPluginPopupId(detail.session.id)
+        return
+      }
+      const targetProjectId=detail.session.project_id
+      const project=projectsRef.current.find(item=>item.id===targetProjectId)
+      const current=layoutValues.current[targetProjectId]||parseLayout(project?.layout)
+      const next=terminalIds(current).includes(detail.old_session_id)
+        ?activateContainingStack(replaceTerminal(current,detail.old_session_id,detail.session.id),detail.session.id)
+        :placePluginPane(current,detail.session.id,detail.placement,spawnAnchorId(current))
+      layoutValues.current[targetProjectId]=next
+      setLayoutMap(layouts=>({...layouts,[targetProjectId]:next}))
+      void layoutWriter.write(targetProjectId,next,{quiet:true})
+      setProjectId(targetProjectId);setActiveId(detail.session.id);setFocusedViewId(detail.session.id);setSidebarOpen(false)
+    }
     window.addEventListener('mux:plugin-pane-opened',opened)
-    return()=>window.removeEventListener('mux:plugin-pane-opened',opened)
+    window.addEventListener('mux:plugin-pane-restarted',restarted)
+    return()=>{
+      window.removeEventListener('mux:plugin-pane-opened',opened)
+      window.removeEventListener('mux:plugin-pane-restarted',restarted)
+    }
   },[placePluginSessionInWorkspace])
 
   type AppConfig = {
