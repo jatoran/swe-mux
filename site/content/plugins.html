@@ -1,0 +1,40 @@
+<section class="page plugins-page">
+  <div class="wrap">
+    <div class="kick">External tools, ordinary repositories</div>
+    <h1>Plugins</h1>
+    <p class="lede">Add Project tools and automated integrations without modifying swe-mux.
+    Every listing resolves to inspectable source at an exact Git commit, and no plugin runs until you approve its current bytes.</p>
+
+    <div class="plugin-safety note">
+      <b>Plugins run as your user.</b>
+      Manifest permissions limit cooperative swe-mux callbacks.
+      They do not sandbox filesystem, process, credential, or network access.
+    </div>
+
+    <section class="rel" aria-labelledby="catalog-title">
+      <div class="relhead">
+        <h2 id="catalog-title">Catalog</h2>
+        <span class="when" id="plugin-count">loading</span>
+        <span class="fill"></span>
+        <button class="plugin-refresh" id="plugin-refresh" type="button">refresh</button>
+      </div>
+      <p class="prose">Official plugins are maintained with swe-mux.
+      Community listings have a valid manifest and indexed revision but are not security-reviewed or endorsed.</p>
+      <div class="plugin-grid" id="plugin-grid" aria-live="polite"></div>
+      <p class="plugin-empty" id="plugin-empty" hidden></p>
+    </section>
+
+    <section class="rel" aria-labelledby="publish-title">
+      <div class="relhead"><h2 id="publish-title">Publish a plugin</h2></div>
+      <ol class="steps">
+        <li><span>Put <code>swe-mux-plugin.toml</code>, runnable source, tests, README, and a license in one standalone public repository.</span></li>
+        <li><span>Run <code>swemux plugin validate .</code> and test installation from a clean checkout.</span></li>
+        <li><span>Publish a release whose tag matches the manifest version.</span></li>
+        <li><span>Add the <code>swe-mux-plugin</code> GitHub topic.
+        The catalog validates the repository before listing it.</span></li>
+      </ol>
+      <p class="prose">The complete manifest, permission, testing, and lifecycle contract is in the <a href="../docs/plugins/">plugin authoring guide</a>.</p>
+    </section>
+  </div>
+</section>
+<script src="catalog.js"></script>

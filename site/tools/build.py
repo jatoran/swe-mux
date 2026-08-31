@@ -261,6 +261,7 @@ def section(md: str, heading: str) -> str:
 PAGES = [
     ("", "index.html", "swe-mux"),
     ("docs", "docs/index.html", "Docs"),
+    ("plugins", "plugins/index.html", "Plugins"),
     # ("blog", "blog/index.html", "Blog"),  # restore when there are posts to put on it
     ("changelog", "changelog/index.html", "Changelog"),
     ("roadmap", "roadmap/index.html", "Roadmap"),
@@ -645,6 +646,45 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   .dsstep a.next { text-align: left; }
   .dsstep .gap { display: none; }
 }
+
+/* ----------------------------------------------------------- plugin catalog */
+.plugin-safety { margin-top: clamp(20px, 3vw, 28px); }
+.plugin-refresh { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em;
+                  color: var(--fg-2); background: transparent; border: 1px solid var(--line-2);
+                  padding: 6px 10px; cursor: pointer; }
+.plugin-refresh:hover { color: var(--fg); border-color: var(--fg-3); }
+.plugin-refresh:disabled { color: var(--fg-3); cursor: wait; }
+.plugin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+               gap: 12px; margin-top: 20px; }
+.plugin-public-card { border: 1px solid var(--line-2); background: var(--panel);
+                      padding: clamp(14px, 2.4vw, 20px); min-width: 0; }
+.plugin-public-card > header { display: flex; justify-content: space-between; align-items: start;
+                               gap: 14px; }
+.plugin-public-card h3 { margin-top: 7px; font-size: clamp(15px, 2vw, 18px); }
+.plugin-public-card header code { display: block; margin-top: 3px; color: var(--fg-3);
+                                  font-size: 11.5px; overflow-wrap: anywhere; }
+.plugin-badge { display: inline-block; font-family: var(--mono); font-size: 10px;
+                letter-spacing: 0.11em; text-transform: uppercase; color: var(--fg-3);
+                border: 1px solid var(--line-2); padding: 2px 6px; }
+.plugin-badge.official { color: var(--green); border-color: var(--green); }
+.plugin-version { font-family: var(--mono); font-size: 12px; color: var(--fg-3);
+                  white-space: nowrap; }
+.plugin-description { margin-top: 13px; color: var(--fg-2); font-size: 14px; line-height: 1.55; }
+.plugin-public-meta { margin-top: 14px; }
+.plugin-meta-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px;
+                   padding: 5px 0; border-top: 1px solid var(--line); }
+.plugin-meta-row dt { font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
+.plugin-meta-row dd { color: var(--fg-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.plugin-install { display: flex; flex-wrap: wrap; gap: 7px 13px; align-items: center;
+                  margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--line-2); }
+.plugin-install code { flex: 1 1 100%; color: var(--fg); font-size: 11.5px;
+                       overflow-wrap: anywhere; }
+.plugin-install a { font-family: var(--mono); font-size: 11.5px; }
+.plugin-empty { margin-top: 18px; color: var(--fg-2); }
+@media (max-width: 420px) {
+  .plugin-grid { grid-template-columns: minmax(0, 1fr); }
+  .plugin-meta-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
 """
 
 THEME_INIT = """(function () {
@@ -832,6 +872,7 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
         <ul>
           <li><a href="{up}">home</a></li>
           <li><a href="{up}docs/">docs</a></li>
+          <li><a href="{up}plugins/">plugins</a></li>
           <li><a href="{up}changelog/">changelog</a></li>
           <li><a href="{up}roadmap/">roadmap</a></li>
           <li><a href="{up}acknowledgements/">acknowledgements</a></li>
@@ -2284,6 +2325,10 @@ def build_terms(up: str) -> str:
     return (SITE / "content/terms.html").read_text(encoding="utf-8").strip()
 
 
+def build_plugins(up: str) -> str:
+    return (SITE / "content/plugins.html").read_text(encoding="utf-8").strip()
+
+
 # --------------------------------------------------------------------------- main
 
 BUILDERS = {
@@ -2292,6 +2337,12 @@ BUILDERS = {
         "Docs · swe-mux",
         "swe-mux documentation: install it, run a first agent session, reach it from a "
         "phone, and a page for every surface, setting, and command.",
+    ),
+    "plugins": (
+        build_plugins,
+        "Plugins · swe-mux",
+        "Validated swe-mux plugins: exact indexed revisions, declared permissions, supported "
+        "platforms, release channels, and direct installation commands.",
     ),
     "changelog": (
         build_changelog,
@@ -2366,6 +2417,7 @@ PAGE_SCRIPTS = {
     for slug in BUILDERS
     if slug == DOCS_ROOT or slug.startswith(f"{DOCS_ROOT}/")
 }
+PAGE_SCRIPTS["plugins"] = (SITE / "content/plugins.js").read_text(encoding="utf-8").strip()
 
 
 def _write(target: Path, text: str, args: argparse.Namespace, stale: list[str], label: str) -> None:

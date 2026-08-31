@@ -3224,6 +3224,13 @@ GET    /api/plugins/logs[?plugin_id=...]
 GET    /api/plugins/marketplace
 ```
 
+Managed install accepts `{source, ref?}`.
+`ref = "latest"` resolves the newest GitHub release for GitHub repository sources; a tag pins one release and a branch remains a moving explicit channel.
+Update accepts optional `{ref}` to replace the stored channel and otherwise reuses the channel recorded at install time.
+
+Marketplace results prefer the validated swemux.dev catalog and expose exact indexed revision, plugin identity and version, official status, release ref, platforms, runtimes, capabilities, permissions, license, and repository metadata.
+When that catalog is unavailable, results fall back to the live unreviewed GitHub-topic shape.
+
 Contribution endpoints:
 
 ```text

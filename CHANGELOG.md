@@ -15,6 +15,27 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **The plugin marketplace now has one validated public catalog and a real website.**
+  `/plugins/` and the in-app browser share exact-commit manifests discovered from the `swe-mux-plugin` GitHub topic, with explicit official/community labeling, release tags, permissions, platforms, runtimes, licenses, and install commands.
+  The catalog executes no plugin source, excludes invalid repositories, refreshes through the Pages workflow, and falls back to the unreviewed live GitHub topic inside the app if swemux.dev is unavailable.
+- **Managed plugins retain their release channel.**
+  Install and update now store the requested channel or ref, the selected tag or branch, and the resolved commit separately.
+  `--ref latest` follows the newest GitHub release on each explicit update, while a literal tag remains pinned.
+
+### Changed
+
+- **Plugin marketplace selection now fills an immutable release tag, and manual installation exposes an optional ref field.**
+  Expanded plugin details show the selected channel and resolved revision, while acquisition, approval, and enablement remain separate.
+
+### Fixed
+
+- **`swemux plugin validate` is now genuinely local and works in CI without a running daemon.**
+  It calls the same canonical parser used by the daemon and still executes no plugin code.
+- **A linked plugin whose manifest identity changed can still be uninstalled.**
+  Uninstall no longer reloads a broken or renamed manifest merely to disable and unregister its existing record.
+
 ## [0.2.0] - 2026-08-31
 
 ### Added

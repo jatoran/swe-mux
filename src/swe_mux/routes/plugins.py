@@ -141,6 +141,7 @@ async def plugin_update(request: web.Request) -> web.Response:
     try:
         result = await _manager(request).update(
             request.match_info["plugin_id"],
+            ref=str(body["ref"]) if "ref" in body else None,
             approve=bool(body.get("approve")),
             enable=bool(body.get("enable")),
         )

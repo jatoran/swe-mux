@@ -44,7 +44,9 @@ inspect -> approve -> enable -> disable
 ```
 
 `swemux plugin link` registers a mutable developer directory and never removes it.
-`swemux plugin install` copies a local source or resolves a GitHub repository to an immutable checkout under `<data_dir>/plugins/sources`.
+`swemux plugin install` copies a local source or resolves a GitHub repository plus optional release channel, branch, or tag to an immutable checkout under `<data_dir>/plugins/sources`.
+The registry retains the requested ref, the selected release tag or branch, and the resolved commit separately.
+The special `latest` channel resolves the repository's newest GitHub release on each explicit update; a literal tag remains pinned.
 Managed versions use digest-named directories, so a running Windows pane may keep its old cwd while a new version is inspected beside it.
 Update installs new content inert unless it is explicitly approved and enabled.
 Rollback swaps registry identity back to the previous immutable directory and requires approval again.
@@ -127,9 +129,15 @@ Managed source, plugin config, and plugin state have separate lifetimes.
 
 ## Marketplace
 
-The marketplace reads the public GitHub `swe-mux-plugin` topic and marks every result unreviewed.
-It hosts no executable content and grants no authority.
-Selecting a repository only fills the managed-install source; installation still passes through inspection, approval, and enablement.
+The primary marketplace reads `https://swemux.dev/plugins/catalog.json`.
+The catalog builder discovers public GitHub repositories carrying the `swe-mux-plugin` topic, reads no source beyond the root manifest, validates the manifest at an exact commit, and excludes forks, archived repositories, malformed manifests, duplicate plugin IDs, and unsupported manifest versions.
+Official listings are an explicit repository-to-plugin-ID allowlist maintained by swe-mux.
+Every other valid listing remains unreviewed community software.
+Catalog generation executes no plugin code and publishes metadata rather than executable content.
+
+The daemon falls back to the live unreviewed GitHub topic query when the catalog is unavailable.
+Selecting a catalog entry fills the repository and immutable release tag; installation still passes through the ordinary acquisition, inspection, approval, and enablement path.
+The public `/plugins/` page and the in-app marketplace consume the same generated catalog.
 
 ## Key files
 
@@ -140,6 +148,8 @@ Selecting a repository only fills the managed-install source; installation still
 - CLI: `src/swe_mux/cli.py`
 - Session ownership: `src/swe_mux/models.py`
 - Settings UI: `frontend/src/PluginsSettings.tsx`
+- Public catalog builder: `site/tools/plugins.py`
+- Public catalog page: `site/content/plugins.html`, `site/content/plugins.js`
 - Project launch surface: `frontend/src/ProjectRunMenu.tsx`
 - Command-palette integration: `frontend/src/App.tsx`
 - Terminal link routing: `frontend/src/pluginLinks.ts`, `frontend/src/TerminalPane.tsx`

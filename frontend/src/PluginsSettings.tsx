@@ -5,7 +5,11 @@ import {
   type InstalledPlugin, type PluginCatalogue, type PluginProject,
 } from './pluginCatalog.ts'
 
-type MarketRepo={full_name:string;description:string;stars:number;language?:string;license?:string;url:string;unreviewed:boolean}
+type MarketRepo={
+  full_name:string;description:string;stars:number;language?:string;license?:string;url:string
+  unreviewed:boolean;official?:boolean;plugin_name?:string;plugin_version?:string
+  permissions?:string[];platforms?:string[];runtime_requirements?:string[];install_ref?:string
+}
 
 const EMPTY:PluginCatalogue={execution_enabled:true,host_capabilities:[],plugins:[]}
 
@@ -15,6 +19,7 @@ export function PluginsSettings({focusedProjectId=''}:{focusedProjectId?:string}
   const [projectId,setProjectId]=useState('')
   const [expandedId,setExpandedId]=useState<string|null>(null)
   const [source,setSource]=useState('')
+  const [ref,setRef]=useState('')
   const [mode,setMode]=useState<'link'|'install'>('link')
   const [busy,setBusy]=useState('')
   const [message,setMessage]=useState('')
@@ -49,7 +54,9 @@ export function PluginsSettings({focusedProjectId=''}:{focusedProjectId?:string}
     finally{setBusy('')}
   }
   const mutate=(method:string,path:string,body?:unknown)=>api(method,path,body,{timeoutMs:240_000})
-  const install=()=>run(mode==='link'?'Link':'Install',()=>mutate('POST',`/api/plugins/${mode}`,mode==='link'?{path:source}:{source}))
+  const install=()=>run(mode==='link'?'Link':'Install',()=>mutate(
+    'POST',`/api/plugins/${mode}`,mode==='link'?{path:source}:{source,ref:ref.trim()},
+  ))
   const projectContext={context:'project',project_id:projectId}
   const uninstall=(plugin:InstalledPlugin,purge:boolean)=>run(`${purge?'Purge':'Uninstall'} ${plugin.name}`,async()=>{
     await mutate('DELETE',`/api/plugins/${plugin.id}${purge?'?purge=1':''}`)
@@ -85,7 +92,7 @@ export function PluginsSettings({focusedProjectId=''}:{focusedProjectId?:string}
           </header>
           {expanded&&<div class="plugin-card-details">
             {plugin.diagnostic&&<p class="settings-inline-error">{plugin.diagnostic}</p>}
-            <dl><dt>ID</dt><dd><code>{plugin.id}</code></dd><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions?.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
+            <dl><dt>ID</dt><dd><code>{plugin.id}</code></dd><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}{plugin.requested_ref&&<> · {plugin.requested_ref}{plugin.selected_ref&&plugin.selected_ref!==plugin.requested_ref?` → ${plugin.selected_ref}`:''}</>}</dd><dt>Revision</dt><dd>{plugin.resolved_ref?<code>{plugin.resolved_ref}</code>:'local source'}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions?.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
             {!!plugin.manifest&&((plugin.manifest.actions?.length||0)>0||(plugin.manifest.panes?.length||0)>0)&&<div class="plugin-contributions"><h4>Tools</h4><p>Project tools also appear under that Project's Run menu and in the command palette.</p>
               {plugin.enabled&&plugin.manifest.panes?.map(pane=><button disabled={!!busy||!projectId} title={pane.description||pane.command.command.join(' ')} onClick={()=>void openPane(plugin,pane.id,pane.title)}>{pane.title}</button>)}
               {plugin.enabled&&plugin.manifest.actions?.map(action=><button disabled={!!busy||(!projectId&&action.contexts.includes('project'))} title={action.description||action.command.command.join(' ')} onClick={()=>void run(action.title,()=>mutate('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,action.contexts.includes('project')?projectContext:{context:'global'}))}>{action.title}</button>)}
@@ -101,8 +108,8 @@ export function PluginsSettings({focusedProjectId=''}:{focusedProjectId?:string}
       })}</div>
     </section>
 
-    <details class="plugin-add"><summary>Add a plugin</summary><section><label>Source mode<select value={mode} onChange={event=>setMode(event.currentTarget.value as 'link'|'install')}><option value="link">Link local directory</option><option value="install">Managed copy or GitHub owner/repo</option></select></label><label>{mode==='link'?'Directory':'Source'}<input value={source} onInput={event=>setSource(event.currentTarget.value)} placeholder={mode==='link'?'D:\\plugins\\my-plugin':'owner/repository'} /></label><div class="theme-actions"><button class="primary" disabled={!source.trim()||!!busy} onClick={install}>{mode==='link'?'Inspect and link':'Inspect and install'}</button><button disabled={!!busy} onClick={()=>void run('Refresh',load)}>Refresh</button></div></section></details>
-    <details class="plugin-market"><summary>Community marketplace</summary><section><p>Unreviewed GitHub repositories. A listing is not an endorsement.</p><button disabled={!!busy} onClick={()=>void run('Marketplace',async()=>setMarket((await api<{repositories:MarketRepo[]}>('GET','/api/plugins/marketplace',undefined,{timeoutMs:20_000})).repositories))}>Browse marketplace</button>{market?.map(repo=><article class="plugin-market-row"><div><a href={repo.url} target="_blank" rel="noreferrer">{repo.full_name}</a><p>{repo.description}</p></div><span>{repo.stars}★ · {repo.language||'unknown'} · {repo.license||'license unknown'}</span><button onClick={()=>{setMode('install');setSource(repo.full_name)}}>Select</button></article>)}</section></details>
+    <details class="plugin-add"><summary>Add a plugin</summary><section><label>Source mode<select value={mode} onChange={event=>{const next=event.currentTarget.value as 'link'|'install';setMode(next);if(next==='link')setRef('')}}><option value="link">Link local directory</option><option value="install">Managed copy or GitHub owner/repo</option></select></label><label>{mode==='link'?'Directory':'Source'}<input value={source} onInput={event=>setSource(event.currentTarget.value)} placeholder={mode==='link'?'D:\\plugins\\my-plugin':'owner/repository'} /></label>{mode==='install'&&<label>Release channel or ref<input value={ref} onInput={event=>setRef(event.currentTarget.value)} placeholder="latest, a tag, or a branch"/><small><code>latest</code> follows the repository's newest GitHub release. A tag pins one release.</small></label>}<div class="theme-actions"><button class="primary" disabled={!source.trim()||!!busy} onClick={install}>{mode==='link'?'Inspect and link':'Inspect and install'}</button><button disabled={!!busy} onClick={()=>void run('Refresh',load)}>Refresh</button></div></section></details>
+    <details class="plugin-market"><summary>Plugin marketplace</summary><section><p>The catalog validates manifests and exact indexed revisions. Community listings remain unreviewed software.</p><button disabled={!!busy} onClick={()=>void run('Marketplace',async()=>setMarket((await api<{repositories:MarketRepo[]}>('GET','/api/plugins/marketplace',undefined,{timeoutMs:20_000})).repositories))}>Browse marketplace</button>{market?.map(repo=><article class="plugin-market-row"><div><a href={repo.url} target="_blank" rel="noreferrer">{repo.plugin_name||repo.full_name}</a><p>{repo.description}</p><small>{repo.official?'Official · ':''}{repo.plugin_version&&`v${repo.plugin_version} · `}{repo.platforms?.join(', ')||repo.language||'runtime unspecified'}{repo.permissions?.length?` · ${repo.permissions.length} permissions`:''}</small></div><span>{repo.stars}★ · {repo.license||'license unknown'}{repo.install_ref&&` · ${repo.install_ref}`}</span><button onClick={()=>{setMode('install');setSource(repo.full_name);setRef(repo.install_ref||'')}}>Select</button></article>)}</section></details>
     {message&&<p class={message.toLowerCase().includes('failed')?'settings-inline-error':'profile-hint'} role="status">{message}</p>}
   </div>
 }

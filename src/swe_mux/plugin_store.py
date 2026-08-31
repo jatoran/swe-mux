@@ -19,7 +19,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-PLUGIN_SCHEMA_VERSION = 1
+PLUGIN_SCHEMA_VERSION = 2
 PLUGIN_LOG_LIMIT = 1000
 PLUGIN_SCHEMA = """
 CREATE TABLE IF NOT EXISTS plugins(
@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS plugins(
   lifecycle TEXT NOT NULL,
   source_kind TEXT NOT NULL,
   source_ref TEXT NOT NULL DEFAULT '',
+  requested_ref TEXT NOT NULL DEFAULT '',
+  selected_ref TEXT NOT NULL DEFAULT '',
   resolved_ref TEXT NOT NULL DEFAULT '',
   root TEXT NOT NULL,
   manifest_path TEXT NOT NULL,
@@ -76,6 +78,10 @@ def _connect(path: Path) -> sqlite3.Connection:
     db.execute("PRAGMA synchronous=NORMAL")
     db.execute("PRAGMA busy_timeout=5000")
     db.executescript(PLUGIN_SCHEMA)
+    columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(plugins)")}
+    for column in ("requested_ref", "selected_ref"):
+        if column not in columns:
+            db.execute(f"ALTER TABLE plugins ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
     write_schema_version(db, "plugins", PLUGIN_SCHEMA_VERSION)
     db.commit()
     return db
@@ -90,6 +96,8 @@ def _plugin(row: sqlite3.Row) -> dict[str, Any]:
         "lifecycle": str(row["lifecycle"]),
         "source_kind": str(row["source_kind"]),
         "source_ref": str(row["source_ref"]),
+        "requested_ref": str(row["requested_ref"]),
+        "selected_ref": str(row["selected_ref"]),
         "resolved_ref": str(row["resolved_ref"]),
         "root": str(row["root"]),
         "manifest_path": str(row["manifest_path"]),
@@ -157,12 +165,14 @@ class PluginStore:
             ).fetchone()
             self._db.execute(
                 """INSERT INTO plugins(
-                id,name,version,enabled,lifecycle,source_kind,source_ref,resolved_ref,
+                id,name,version,enabled,lifecycle,source_kind,source_ref,requested_ref,selected_ref,resolved_ref,
                 root,manifest_path,manifest_digest,content_digest,security_digest,approved_digest,
                 previous_root,diagnostic,installed_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,version=excluded.version,enabled=excluded.enabled,lifecycle=excluded.lifecycle,
-                source_kind=excluded.source_kind,source_ref=excluded.source_ref,resolved_ref=excluded.resolved_ref,
+                source_kind=excluded.source_kind,source_ref=excluded.source_ref,
+                requested_ref=excluded.requested_ref,selected_ref=excluded.selected_ref,
+                resolved_ref=excluded.resolved_ref,
                 root=excluded.root,manifest_path=excluded.manifest_path,manifest_digest=excluded.manifest_digest,
                 content_digest=excluded.content_digest,
                 security_digest=excluded.security_digest,approved_digest=excluded.approved_digest,
@@ -175,6 +185,8 @@ class PluginStore:
                     record["lifecycle"],
                     record["source_kind"],
                     record.get("source_ref", ""),
+                    record.get("requested_ref", ""),
+                    record.get("selected_ref", ""),
                     record.get("resolved_ref", ""),
                     record["root"],
                     record["manifest_path"],
@@ -209,6 +221,8 @@ class PluginStore:
             "security_digest",
             "name",
             "version",
+            "requested_ref",
+            "selected_ref",
             "resolved_ref",
         }
         fields = [

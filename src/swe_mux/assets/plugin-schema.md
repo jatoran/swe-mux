@@ -2,6 +2,7 @@
 
 `swe-mux-plugin.toml` declares inert metadata and external-process contributions.
 Validate a directory without executing it with `swemux plugin validate PATH`.
+Validation is local and does not require a running daemon.
 
 ```toml
 manifest_version = 1
@@ -60,6 +61,9 @@ Use `SWEMUX_PLUGIN_CONFIG_DIR` and `SWEMUX_PLUGIN_STATE_DIR` for mutable data.
 `swemux plugin link PATH` registers an editable directory in place and never removes it.
 `swemux plugin install SOURCE [--ref REF]` creates a managed immutable copy.
 Managed installation runs no build command, package manager, or post-install script.
+A literal tag pins one release, a branch remains an explicit moving channel, and `--ref latest` resolves the newest GitHub release.
+The registry records the requested channel, selected tag or branch, and resolved commit separately.
+`swemux plugin update ID` reuses the stored channel; `swemux plugin update ID --ref REF` replaces it.
 
 ## Author loop
 
