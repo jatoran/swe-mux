@@ -229,4 +229,3 @@ They are not tracked fixtures, bundled examples, public releases, or dependencie
 | `../../src/swe_mux/routes/plugins.py` | Management and callback HTTP operations. |
 | `../../frontend/src/PluginsSettings.tsx` | Browser lifecycle and contribution controls. |
 | `../../tests/test_plugins.py` | Host contract coverage. |
-
