@@ -193,6 +193,12 @@ const root = document.querySelector<HTMLElement>('#root')!
 document.body.style.margin = '0'
 //: The drawer's documented minimum. Everything here has to fit in it.
 document.body.style.width = '300px'
+//: And its *height* is bounded, which is not decoration either: the pane is
+//: `height:100%` inside a flex column, so an auto-height host gives the list no room to
+//: distribute and nothing that depends on the list being taller than its rows - the
+//: centred empty state, the scroll on a long queue - can be observed at all.
+document.body.style.height = '100vh'
+root.style.height = '100vh'
 document.documentElement.style.setProperty('--ui-scale', '1')
 
 const draw = () => render(<QueuePane sessionId="session" sessions={[session]} />, root)

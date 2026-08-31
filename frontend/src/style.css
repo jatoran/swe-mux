@@ -5057,7 +5057,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-pane-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .queue-pane-header .queue-pane-status{margin-left:auto;color:var(--muted);white-space:nowrap}
 .queue-pane-error{margin:0;padding:6px 10px;border-bottom:1px solid var(--line);color:var(--red)}
-.queue-list{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:8px 10px;list-style:none;display:grid;gap:8px;align-content:start}
+/* The gutter is a variable because the pinned compose row has to cancel the bottom half of
+   it: a sticky offset is measured against the scrollport *minus this padding*, so `bottom:0`
+   parks the row a gutter short of the edge and rows scroll through the gap. Two rules
+   holding the same number by hand is where that comes back. */
+.queue-list{--queue-gutter:8px;flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:var(--queue-gutter) 10px;list-style:none;display:grid;gap:8px;align-content:start}
 .queue-empty{padding:20px 8px;color:var(--muted);line-height:1.45}
 .queue-item{border:1px solid var(--line);background:var(--panel);padding:7px 9px;display:grid;gap:6px}
 .queue-item-head{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
@@ -5126,11 +5130,24 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-edit-interrupt{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:9px;cursor:pointer}
 .queue-edit-interrupt input{margin:0}
 .queue-item-actions .queue-edit-done{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-/* One button, where the composer used to be: the position is muscle memory and the act is
-   the same one. It writes nothing until the draft it opens has text in it. */
-.queue-compose-bar{display:flex;padding:8px 10px;border-top:1px solid var(--line)}
+/* One button, and it is the list's last row rather than the panel's footer. Pinned to the
+   bottom of the tab it sat a screen below the last item on a short queue, and floated
+   under a lone paragraph on an empty one. */
+/* Sticky, so it is the last row on a short queue and stays reachable on a long one. That
+   is not the pinned footer this replaced: a footer sat below the content whatever the list
+   did, while this is *in* the list and only stops travelling once it reaches the edge.
+   Opaque and eating the list's bottom gutter, because rows scrolling under a transparent
+   control read as a rendering fault rather than as scrolling. */
+.queue-compose{display:flex;position:sticky;bottom:calc(-1 * var(--queue-gutter));background:var(--bg);padding-top:6px}
 .queue-new{flex:1 1 auto;display:flex;align-items:center;justify-content:center;gap:6px;min-height:30px;padding:0 10px;border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));background:var(--panel2);color:var(--accent);font:inherit;cursor:pointer}
 .queue-new svg{width:13px;height:13px;display:block}
+/* The one state where the button is the whole content of the tab, so it is centred in it
+   rather than left at the top of an empty column. `align-content` on the list does the
+   vertical half; the row centres itself and sizes to its own text for the horizontal. */
+.queue-list-empty{align-content:center}
+.queue-compose-alone{display:grid;justify-items:center;gap:10px;max-width:320px;margin:0 auto;text-align:center}
+.queue-compose-alone .queue-new{flex:0 0 auto;padding:0 20px}
+.queue-empty-note{margin:0;color:var(--muted);line-height:1.45}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
 /* ---- Delivery readiness, above the auto-delivery strip ---- */
