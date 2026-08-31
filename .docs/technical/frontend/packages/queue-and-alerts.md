@@ -5,7 +5,7 @@ Design: `../../../design/features/prompt-queue.md`, `../../../design/features/sc
 
 ## Prompt queue and fleet queue
 
-`queueApi.ts`, `QueuePane.tsx`, `FleetQueue.tsx`, `deliveryReadiness.ts`
+`queueApi.ts`, `QueuePane.tsx`, `queueDraftSaver.ts`, `FleetQueue.tsx`, `deliveryReadiness.ts`
 
 Neither surface is a conversation, and the daemon owns every safety decision.
 
@@ -20,11 +20,20 @@ Readiness reaches a surface three ways - the session row, the queue's own target
 An unstamped payload loses by construction, and a reading older than a few seconds renders its age: `sessionSnapshots.ts` preserves the last known readiness across raw PTY snapshots, so an unlabelled stale verdict is indistinguishable from a current one.
 The tab's zero-lag paint is the same mechanism: the row's copy is already in memory at mount, so the strip renders before any fetch, and the fetch the pane was making anyway corrects it.
 
-`QueuePane` is strictly session-scoped: ordered list, arm/edit/reorder/cancel/skip/delete, send-now confirmation, stranded retarget, composer, conversation auto-delivery disclosure, and schedule presets.
+`QueuePane` is strictly session-scoped: ordered list, arm/edit/reorder/cancel/skip/delete, send-now confirmation, stranded retarget, the draft editor, conversation auto-delivery disclosure, and schedule presets.
 Its drawer rendering follows focus, and its `queue:` pane leaf pins a target.
+
+There is exactly one text field and it belongs to a row (2026-08-31): `+ New message` appends a blank draft and opens it, the row's pencil opens an existing one, and a double-click on a pending body does the same.
+`queueDraftSaver.ts` autosaves it - a 500 ms debounce per open editor, held **outside** the component because the drawer being swiped shut, or focus moving to another session, unmounts `QueuePane` mid-sentence and would cancel a timer held in its state.
+Blur, `Done`, unmount, retarget, `pagehide` and `visibilitychange` all flush.
+The first non-empty body is a create and every later one a `PATCH`; an empty body is never sent (the daemon refuses it), so an abandoned draft leaves no row and `+` costs nothing.
+Arming is a separate write in every case, and both `Arm` and `Ctrl+Enter` flush first, so neither can authorize the body the daemon happens to still be holding.
+A created draft keeps its own row at the tail while the editor is open, because moving the field into the created row would replace the DOM node under the caret.
+
 Delete uses an inline second-click confirmation, applies to every non-delivering visible state, and is also available from `FleetQueue`.
-It is drawn twice - a compact `x` end-cap on the row and a worded row in the `...` tray - through one `deleteButton` helper, so the arm-then-confirm, the shared confirming id, the busy guard, and the mid-delivery absence cannot drift between the two copies.
-Composer focus on open is gated on `hasSoftKeyboard()`, and the token that requests it is bumped only when the caller means "compose": `App.openQueueForSession(id, compose)` passes `false` for the `queued_behind` and `not_due` reveals, which open the tab to show where an already-written message went.
+It is drawn **once** as of 2026-08-31 - a bin end-cap on the row, through the one `deleteButton` helper - because the tray's worded copy put two copies of a destructive control on screen together whenever the tray was open.
+Edit and copy became marks in the same strip; arm, the delivery mode and the schedule presets keep their words, and the strip wraps as one group so a narrow drawer never orphans the bin on its own line.
+Starting a draft on open is gated on `hasSoftKeyboard()`, and the token that requests it is bumped only when the caller means "compose": `App.openQueueForSession(id, compose)` passes `false` for the `queued_behind` and `not_due` reveals, which open the tab to show where an already-written message went.
 `QueuePane` is the only surface carrying the **install-wide** brakes - pause-all, report-unsafe, proving counters - because it is the only queue surface that delivers and the one a person is already looking at when they decide delivery must stop.
 Its `auto:` strip is also where a grant explains itself, for the same reason: a lapsed grant states the numbers behind the lapse (idle for how long, under what window, how many messages left waiting) and a grant held open by a live exchange says so, since neither is inferable from "off" or "on".
 The idle window itself is a *value* rather than a switch, so the lapse notice links to Settings through `queue.grantWindow` and never offers a grant - `GrantGate` remains reserved for the install master (`../../../design/features/setting-links.md`).

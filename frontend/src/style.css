@@ -5094,29 +5094,59 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-actions .queue-send-confirm{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
 .queue-item-actions .danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
 .queue-item-actions .danger.confirming{background:color-mix(in srgb,var(--red) 14%,var(--panel2));border-color:var(--red)}
-/* The overflow toggle sits hard right so the two acts that matter (send, arm) stay left-
-   aligned across every row, and its tray opens under the row rather than floating. */
-.queue-item-actions .queue-item-menu{margin-left:auto;min-width:28px;color:var(--muted)}
-/* The row's own delete: an end-cap beside the overflow, sized like it so the pair reads as
-   chrome rather than as two more actions competing with Send. It widens on its own when the
-   confirming label replaces the mark. */
-.queue-item-actions .queue-item-delete{min-width:28px;padding:0 6px;text-align:center}
+/* The row's right-hand cluster is chrome: edit, copy, overflow, delete, all mark-sized, all
+   pushed away from the two acts that matter (send, arm) so those keep one left-aligned
+   position on every row. The spacer does the pushing rather than `margin-left:auto` on
+   whichever control happens to come first, because which one that is varies by state. */
+.queue-item-spacer{flex:1 1 0;min-width:0}
+/* The marks travel as one group. At the 300px floor the strip does not fit beside "Send
+   now" and "Arm", and wrapping control by control left a lone red bin on its own line. */
+.queue-item-marks{display:flex;flex-wrap:nowrap;gap:5px;margin-left:auto}
+.queue-item-actions .queue-item-menu{min-width:26px;padding:0 4px;color:var(--muted)}
+/* Icon-only acts. Sized like the overflow so the whole cluster reads as one strip, and
+   drawn as marks rather than words because "edit" and "copy" are the two acts whose glyphs
+   nobody has to learn — which is not true of arm, mid-turn, or a schedule preset, and is
+   why those keep their words. */
+.queue-item-actions .queue-item-icon,.queue-item-actions .queue-item-delete{min-width:28px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center}
+.queue-item-actions .queue-item-icon{color:var(--muted)}
+.queue-item-actions .queue-item-icon:hover{color:var(--text)}
+.queue-item-actions svg{width:13px;height:13px;display:block}
+/* The confirming delete widens on its own when its label replaces the bin. */
+.queue-item-actions .queue-item-delete.confirming{min-width:0}
+.queue-item-actions .queue-armed{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-item-actions .queue-item-menu.open{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-item-more{padding-top:6px;border-top:1px dashed var(--line)}
 /* Terminal-state items are audit, not work: one line until asked for. */
 .queue-done button{width:100%;text-align:left;min-height:26px;padding:0 8px;border:1px dashed var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
-.queue-item-edit{display:grid;gap:6px}
-.queue-item-edit textarea{min-height:80px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
-.queue-composer{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
-.queue-composer textarea{min-height:56px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
-.queue-composer-actions{display:flex;justify-content:flex-end;align-items:center;gap:6px}
-/* The per-message mid-turn ask. First in the row and pushed left, so the two staging
-   buttons keep their right-edge position and the toggle reads as a property of what
-   they will stage. */
-.queue-composer-interrupt{display:flex;align-items:center;gap:4px;margin-right:auto;color:var(--muted);font-size:9px;cursor:pointer}
-.queue-composer-interrupt input{margin:0}
-.queue-composer-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
-.queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+/* A pending body is a shortcut to its own editor; the cursor is the only affordance that
+   fits, and it is a double-click so selecting the text still works. */
+.queue-item-editable{cursor:text}
+.queue-item-edit{display:grid;gap:4px}
+/* Taller than the old two-line composer by about two rows, then grown to its content by
+   the editor. `max-height` is the ceiling rather than a measured viewport, so the clamp
+   holds with a soft keyboard up; `resize:none` because a handle fights the auto-grow. */
+.queue-edit-field{min-height:112px;max-height:40vh;overflow:auto;resize:none;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;line-height:1.4;padding:6px}
+.queue-edit-field:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+/* Autosave has to say something. A field that saves silently is exactly the field nobody
+   trusts with a half-written message, which is what the Save button was standing in for. */
+.queue-edit-status{justify-self:end;color:var(--muted);font-size:9px}
+.queue-edit-saving{color:var(--accent)}
+.queue-edit-pending,.queue-edit-empty{color:var(--amber)}
+.queue-edit-error{margin:0;color:var(--red);font-size:9px;line-height:1.45}
+/* The editing row keeps every control the resting row has; only the two that make no sense
+   over an open field (edit, copy) drop out. */
+.queue-item-editing{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+/* `queue-item-new`, not `queue-item-draft`: the latter is the state class every row in the
+   `draft` state carries, and it dashed all of their borders. */
+.queue-item-new{border-style:dashed}
+.queue-edit-interrupt{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:9px;cursor:pointer}
+.queue-edit-interrupt input{margin:0}
+.queue-item-actions .queue-edit-done{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+/* One button, where the composer used to be: the position is muscle memory and the act is
+   the same one. It writes nothing until the draft it opens has text in it. */
+.queue-compose-bar{display:flex;padding:8px 10px;border-top:1px solid var(--line)}
+.queue-new{flex:1 1 auto;display:flex;align-items:center;justify-content:center;gap:6px;min-height:30px;padding:0 10px;border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));background:var(--panel2);color:var(--accent);font:inherit;cursor:pointer}
+.queue-new svg{width:13px;height:13px;display:block}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
 /* ---- Delivery readiness, above the auto-delivery strip ---- */
@@ -5235,7 +5265,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .observation-request-actions{display:flex;gap:6px;align-items:center}
 .observation-request-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .observation-request-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-@media(max-width:760px){.queue-item-actions button,.queue-item-actions select,.queue-item-actions .dropdown-trigger{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.fleet-queue-controls select,.queue-auto-emergency button,.observation-request-actions button,.fleet-queue-controls .dropdown-trigger{min-height:40px}.fleet-queue-controls{gap:6px}.fleet-queue-controls label{flex:1 1 45%}}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select,.queue-item-actions .dropdown-trigger{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-new{min-height:44px}.queue-item-actions .queue-item-icon,.queue-item-actions .queue-item-delete,.queue-item-actions .queue-item-menu{min-width:38px}.queue-item-actions svg,.queue-new svg{width:15px;height:15px}.queue-edit-field{min-height:132px}.fleet-queue-controls select,.queue-auto-emergency button,.observation-request-actions button,.fleet-queue-controls .dropdown-trigger{min-height:40px}.fleet-queue-controls{gap:6px}.fleet-queue-controls label{flex:1 1 45%}}
 
 /* ---- Project-scoped Git review ---- */
 .git-review-tab{height:100%;min-height:0;overflow:auto;background:var(--bg)}
