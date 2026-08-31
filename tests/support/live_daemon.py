@@ -458,18 +458,22 @@ DAEMON_EXIT_TIMEOUT_SECONDS = 120.0
 
 
 def muxd_executable() -> Path | None:
-    """The real `muxd` console script for the interpreter running the tests.
+    """The real `swemuxd` console script for the interpreter running the tests.
 
     The scripts directory beside `sys.executable` is checked before `PATH`, so a
-    checkout's own virtualenv wins over an unrelated `muxd` an operator happens
+    checkout's own virtualenv wins over an unrelated `swemuxd` an operator happens
     to have installed globally - running the wrong one would prove nothing about
     this tree.
     """
     scripts = Path(sys.executable).parent
-    for candidate in (scripts / "muxd.exe", scripts / "muxd", scripts / "Scripts" / "muxd.exe"):
+    for candidate in (
+        scripts / "swemuxd.exe",
+        scripts / "swemuxd",
+        scripts / "Scripts" / "swemuxd.exe",
+    ):
         if candidate.is_file():
             return candidate
-    found = shutil.which("muxd")
+    found = shutil.which("swemuxd")
     return Path(found) if found else None
 
 
@@ -815,7 +819,7 @@ async def daemon_process(
     """
     executable = muxd_executable()
     assert executable is not None, (
-        "the `muxd` console script is not installed for this interpreter; "
+        "the `swemuxd` console script is not installed for this interpreter; "
         "run `uv sync` in this checkout"
     )
     spec = daemon_spec(where) if isinstance(where, Path) else where

@@ -270,8 +270,11 @@ async def test_the_muxd_entry_point_starts_serves_and_stops_without_orphans(
 
         # The daemon reports through a socket it bound itself rather than through
         # a test server, so its own listener line is evidence the real path ran.
-        listening = f"Running on http://127.0.0.1:{daemon.port}"
-        assert listening in daemon.stdout.decode("utf-8", "replace"), daemon.diagnostics()
+        # A log record on stderr, not stdout: `_announce` deliberately retired
+        # the bare `Running on ...` stdout line (a GUI launcher has no stdout)
+        # and this record is its stated replacement.
+        listening = f"swe-mux is serving http://127.0.0.1:{daemon.port}"
+        assert listening in daemon.stderr.decode("utf-8", "replace"), daemon.diagnostics()
 
         # The default reached a supervisor, and the daemon says which process it
         # is. Asked of the daemon rather than of the discovery file because the
