@@ -47,9 +47,14 @@ else
       # macOS defines `-n` as an increment, which makes `renice -n 10` a
       # different contract from the exact niceness reported on the next line.
       if renice 10 -p $$ >/dev/null 2>&1; then
+        current_nice=$(ps -o nice= -p $$ 2>/dev/null | tr -d '[:space:]' || true)
+      else
+        current_nice=""
+      fi
+      if [[ "$current_nice" == "10" ]]; then
         printf 'priority: niceness 10 (pid %s)\n' "$$" >&2
       else
-        printf 'priority: unchanged (renice refused)\n' >&2
+        printf 'priority: unchanged (renice refused or was not applied)\n' >&2
       fi
       ;;
   esac

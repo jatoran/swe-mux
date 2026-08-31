@@ -27,8 +27,9 @@ from swe_mux.processes import (
     own_executable,
 )
 
-APP_IMAGE = str(Path(r"D:\PROJECTS\swe-mux\dist\swe-mux\swe-mux.exe"))
-OTHER_IMAGE = str(Path(r"C:\Program Files\nodejs\node.exe"))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+APP_IMAGE = str((REPO_ROOT / "dist" / "swe-mux" / "swe-mux.exe").resolve())
+OTHER_IMAGE = str((REPO_ROOT / "foreign-runtime" / "node.exe").resolve())
 
 
 class FakeProcess:
