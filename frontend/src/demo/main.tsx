@@ -2,7 +2,7 @@
  * Demo entry: install the fake daemon (fetch + WebSocket shims) BEFORE the app
  * modules load, then boot the real, unmodified App against it.
  *
- * The import of `../App` is dynamic on purpose — a static import would be
+ * The import of `../App` is dynamic on purpose - a static import would be
  * hoisted above the shim installation and the first fetches would race the
  * fake backend. Everything the visitor does here is simulated in-page; the
  * demo build ships to the static marketing site and talks to nothing.

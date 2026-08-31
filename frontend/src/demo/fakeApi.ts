@@ -2,7 +2,7 @@
  * The demo's `window.fetch`: every `/api/...` request the real UI makes is
  * answered here, from the shared demo store, without touching any network.
  *
- * Route coverage is deliberately partial — the demo enables a handful of key
+ * Route coverage is deliberately partial - the demo enables a handful of key
  * surfaces and lets the rest render their empty states. Unmatched GETs answer
  * `{}` and unmatched mutations answer `{ok:true}`, both logged to the console
  * so extending coverage is a matter of reading what the app just asked for.
@@ -237,7 +237,7 @@ const ROUTES: Route[] = [
       if (!note) {
         note = {
           note_id: noteId, project_id: '', title: 'Scratchpad', revision: 1,
-          updated_at: nowSeconds(), content: '# Scratchpad\n\nShared across every Project. Type here — it even persists (locally).\n',
+          updated_at: nowSeconds(), content: '# Scratchpad\n\nShared across every Project. Type here - it even persists (locally).\n',
         }
         apply({ kind: 'note-add', note })
       }
@@ -456,7 +456,7 @@ export function installFakeFetch(): void {
     const request = new Request(input instanceof URL ? input.toString() : input, init)
     const url = new URL(request.url, location.href)
     // Anything that is not the daemon API (module chunks, wasm, icons, the
-    // preview iframe's own subresources) goes to the real network — those are
+    // preview iframe's own subresources) goes to the real network - those are
     // static files on the same static host as the demo itself.
     if (!url.pathname.startsWith('/api/')) return realFetch(input as RequestInfo, init)
     let body: unknown

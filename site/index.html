@@ -321,7 +321,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
    daemon. Iframed rather than inlined so its 500 KB of app CSS cannot fight
    this page's, and loaded lazily (`data-src`, promoted on approach) so a
    visitor who never scrolls to it downloads none of it. The phone frame is the
-   same build at a phone's width — the app's own breakpoint does the rest — and
+   same build at a phone's width - the app's own breakpoint does the rest - and
    in the side-by-side view the two frames share one simulated fleet through a
    BroadcastChannel, which is the closest a static page can get to the
    multi-device story the screenshots only assert. */
@@ -647,7 +647,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     </div>
 
 
-    <!-- The interactive demo. Everything inside the iframes is `demo/` — the real frontend
+    <!-- The interactive demo. Everything inside the iframes is `demo/` - the real frontend
          compiled against an in-page fake daemon (fixtures, canned terminals, joke replies),
          so a visitor can click around the actual product without installing anything and
          without anything being sent anywhere. Frames load lazily on approach; "reset"
@@ -668,7 +668,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
       </div>
       <p class="demo-note">The real UI, live in your browser against a <b>simulated</b> daemon:
       click around, split and re-stack panes, open the notes and git drawers, launch sessions
-      and previews, type at the agents — they answer, but only with pre-written jokes. Nothing
+      and previews, type at the agents - they answer, but only with pre-written jokes. Nothing
       is installed and nothing is sent anywhere. Pick <b>both</b> and the two surfaces share
       one simulated fleet: act on the desktop and watch the phone follow.</p>
     </div>
@@ -1507,7 +1507,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
 /* The interactive demo's frame loader. Frames carry `data-src` and are promoted
    to `src` only for views the visitor can see, the first time the stage comes
-   near the viewport — so the ~700 KB app download is paid only by visitors who
+   near the viewport - so the ~700 KB app download is paid only by visitors who
    reach it, and "both" pays for its second copy only when chosen. Under file://
    (the layout gate) nothing loads at all, same posture as version.json above. */
 (function () {

@@ -48,7 +48,10 @@ if not style:
 # `docs/<slug>/`, so a one-level glob would have measured `/docs/` and silently
 # skipped the twenty-two pages beneath it. `content/` holds sources rather than
 # pages and `img/`/`tools/` hold neither.
-SKIP = {"img", "tools", "content"}
+# `demo/` is the interactive demo's committed application build and `preview/`
+# its preview-pane fixture pages: neither is a marketing page nor carries the
+# site stylesheet, the same exclusion `check.mjs` makes.
+SKIP = {"img", "tools", "content", "demo", "preview"}
 pages = sorted(
     p
     for p in SITE.glob("**/index.html")

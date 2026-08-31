@@ -1,13 +1,13 @@
 /**
  * The demo's whole "daemon": a JSON state blob, a reducer over named mutations,
- * and two fan-outs — BroadcastChannel (so the desktop and phone iframes on the
+ * and two fan-outs - BroadcastChannel (so the desktop and phone iframes on the
  * marketing page mirror each other live) and localStorage (so a visitor's
  * fiddling survives a reload, which is cute rather than load-bearing).
  *
  * Every fake surface reads through this module: the fetch shim serves GETs from
  * `state`, mutating routes call `apply()`, and the fake sockets subscribe to
  * `onMutation` to push event frames / terminal bytes into the app. Nothing here
- * talks to any network — that is the entire point of the demo build.
+ * talks to any network - that is the entire point of the demo build.
  */
 import type { Preview } from '../processFleet.ts'
 import type { Project, ProjectGroup, Session } from '../types.ts'

@@ -1,7 +1,7 @@
 /**
  * The demo's WebSockets. `installFakeWebSocket()` replaces the constructor so
- * the app's two socket call sites — the `/events` bus and `/pty/{id}` terminal
- * streams — connect to an in-page simulation instead of a daemon.
+ * the app's two socket call sites - the `/events` bus and `/pty/{id}` terminal
+ * streams - connect to an in-page simulation instead of a daemon.
  *
  * The PTY half speaks just enough of the real attach protocol that
  * `TerminalPane` is satisfied: it answers `attach_ready` with an ownership
@@ -170,7 +170,7 @@ class FakePtySocket extends FakeSocketBase {
       apply({ kind: 'term-input', id: this.sessionId, data: String(frame.data ?? '') })
       return
     }
-    // output_ack, terminal_state, client_diagnostic, repaint, presence — the
+    // output_ack, terminal_state, client_diagnostic, repaint, presence - the
     // demo has no use for these, and ignoring them is safe.
   }
 
@@ -228,7 +228,7 @@ function streamReply(id: string, submitted: string): void {
     return
   }
   if (busy.has(id)) {
-    appendOutput(id, `\x1b[38;5;243m(one thing at a time — still typing the last answer)\x1b[0m\r\n${promptFor(kind)}`)
+    appendOutput(id, `\x1b[38;5;243m(one thing at a time - still typing the last answer)\x1b[0m\r\n${promptFor(kind)}`)
     return
   }
   busy.add(id)
@@ -298,7 +298,7 @@ onMutation((mutation, local) => {
     }
   }
   // Everything except pure terminal traffic (which returned above) nudges the
-  // event bus — that is what makes the *other* frame (the phone beside the
+  // event bus - that is what makes the *other* frame (the phone beside the
   // desktop) refetch and follow along.
   for (const socket of eventSockets) socket.notifyChanged()
 })
