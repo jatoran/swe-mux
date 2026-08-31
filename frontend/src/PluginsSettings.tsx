@@ -24,11 +24,20 @@ export function PluginsSettings({focusedProjectId=''}:{focusedProjectId?:string}
 
   const load=async()=>{
     const [plugins,knownProjects]=await Promise.all([
-      api<PluginCatalogue>('GET','/api/plugins'),
+      api<Partial<PluginCatalogue>>('GET','/api/plugins'),
       api<PluginProject[]>('GET','/api/projects'),
     ])
-    const sorted=alphabetizedPluginProjects(knownProjects)
-    setCatalogue(plugins);setProjects(sorted)
+    // Field-by-field rather than adopting the payload wholesale: every field is
+    // mapped or joined unconditionally below, so a payload missing one (an older
+    // daemon, a harness answering `{}`) crashed the whole tab instead of drawing
+    // its empty state.
+    setCatalogue({
+      execution_enabled:plugins?.execution_enabled!==false,
+      host_capabilities:plugins?.host_capabilities||[],
+      plugins:plugins?.plugins||[],
+    })
+    const sorted=alphabetizedPluginProjects(Array.isArray(knownProjects)?knownProjects:[])
+    setProjects(sorted)
     setProjectId(current=>selectedPluginProject(sorted,focusedProjectId,current))
   }
   useEffect(()=>{void load().catch(error=>setMessage(String(error)))},[])
@@ -76,10 +85,10 @@ export function PluginsSettings({focusedProjectId=''}:{focusedProjectId?:string}
           </header>
           {expanded&&<div class="plugin-card-details">
             {plugin.diagnostic&&<p class="settings-inline-error">{plugin.diagnostic}</p>}
-            <dl><dt>ID</dt><dd><code>{plugin.id}</code></dd><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
-            {!!plugin.manifest&&(plugin.manifest.actions.length>0||plugin.manifest.panes.length>0)&&<div class="plugin-contributions"><h4>Tools</h4><p>Project tools also appear under that Project's Run menu and in the command palette.</p>
-              {plugin.enabled&&plugin.manifest.panes.map(pane=><button disabled={!!busy||!projectId} title={pane.description||pane.command.command.join(' ')} onClick={()=>void openPane(plugin,pane.id,pane.title)}>{pane.title}</button>)}
-              {plugin.enabled&&plugin.manifest.actions.map(action=><button disabled={!!busy||(!projectId&&action.contexts.includes('project'))} title={action.description||action.command.command.join(' ')} onClick={()=>void run(action.title,()=>mutate('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,action.contexts.includes('project')?projectContext:{context:'global'}))}>{action.title}</button>)}
+            <dl><dt>ID</dt><dd><code>{plugin.id}</code></dd><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions?.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
+            {!!plugin.manifest&&((plugin.manifest.actions?.length||0)>0||(plugin.manifest.panes?.length||0)>0)&&<div class="plugin-contributions"><h4>Tools</h4><p>Project tools also appear under that Project's Run menu and in the command palette.</p>
+              {plugin.enabled&&plugin.manifest.panes?.map(pane=><button disabled={!!busy||!projectId} title={pane.description||pane.command.command.join(' ')} onClick={()=>void openPane(plugin,pane.id,pane.title)}>{pane.title}</button>)}
+              {plugin.enabled&&plugin.manifest.actions?.map(action=><button disabled={!!busy||(!projectId&&action.contexts.includes('project'))} title={action.description||action.command.command.join(' ')} onClick={()=>void run(action.title,()=>mutate('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,action.contexts.includes('project')?projectContext:{context:'global'}))}>{action.title}</button>)}
             </div>}
             <details onToggle={event=>{if(event.currentTarget.open&&!logs[plugin.id])void api<Array<Record<string,unknown>>>('GET',`/api/plugins/logs?plugin_id=${plugin.id}`).then(items=>setLogs(current=>({...current,[plugin.id]:items})))}}><summary>Recent command log</summary><pre>{JSON.stringify(logs[plugin.id]||[],null,2)}</pre></details>
             <div class="plugin-advanced-actions">
