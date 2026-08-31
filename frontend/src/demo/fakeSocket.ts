@@ -13,7 +13,8 @@
 import { BUSY_SESSION_IDS } from './fixtures.ts'
 import { apply, onMutation, session, state } from './store.ts'
 import {
-  buildReply, busyReply, consumeInput, demoBackendKind, promptFor,
+  buildReply, busyReply, clearComposer, composerBlock, composerInfo,
+  consumeInput, demoBackendKind, promptFor, redrawComposer,
   type LineState,
 } from './terminalSim.ts'
 
@@ -224,54 +225,80 @@ function streamReply(id: string, submitted: string): void {
   const target = session(id)
   if (!target) return
   const kind = demoBackendKind(target.backend)
+  const agent = kind !== 'shell'
+  const info = composerInfo(target)
+  // An agent pane owns a composer, so a submit is: erase the box, print the
+  // prompt line the user just sent as transcript, then let the reply follow.
+  // A shell has no box and simply echoes at its prompt, exactly as the real one
+  // does - the contrast between the two is worth keeping.
+  const openTurn = (): void => {
+    if (agent) appendOutput(id, `${clearComposer()}${promptFor(kind)}${submitted}\r\n`)
+  }
+  const restoreComposer = (working = false): void => {
+    const latest = session(id)
+    appendOutput(id, composerBlock(
+      latest ? { ...composerInfo(latest), working } : { ...info, working }, '',
+    ))
+  }
+
   if (submitted.trim() === '') {
-    appendOutput(id, promptFor(kind))
+    if (agent) appendOutput(id, redrawComposer(info, ''))
+    else appendOutput(id, promptFor(kind))
     return
   }
   if (busy.has(id)) {
-    appendOutput(id, `\x1b[38;5;243m(one thing at a time - still typing the last answer)\x1b[0m\r\n${promptFor(kind)}`)
+    if (agent) appendOutput(id, redrawComposer(info, ''))
+    else appendOutput(id, `\x1b[38;5;243m(one thing at a time - still typing the last answer)\x1b[0m\r\n${promptFor(kind)}`)
     return
   }
   // A permanently-working pane answers rather than running the joke responder,
   // and never leaves `working`: it is the demo's stand-in for a turn in flight,
   // which is exactly the state the real product will not interleave input into.
   if (BUSY_SESSION_IDS.includes(id)) {
+    openTurn()
     const refusal = busyReply(kind)
     refusal.chunks.forEach((chunk, index) => {
       window.setTimeout(() => appendOutput(id, chunk), 260 + index * refusal.pace)
     })
+    window.setTimeout(() => restoreComposer(true), 260 + refusal.chunks.length * refusal.pace)
     return
   }
   busy.add(id)
+  openTurn()
   const reply = buildReply(kind, submitted)
-  const agent = kind !== 'shell'
   const startDelay = agent ? 900 : 120
   if (agent) {
+    const now = Math.floor(Date.now() / 1000)
     apply({
       kind: 'session-patch', id,
-      patch: { state: 'working', state_since: Math.floor(Date.now() / 1000), turn_started_at: Math.floor(Date.now() / 1000) },
+      patch: { state: 'working', state_since: now, turn_started_at: now },
     })
+    // The box stays under the reply while it streams, saying what the pane is
+    // doing - which is what the real CLI shows for the whole of a turn.
+    appendOutput(id, composerBlock({ ...info, working: true }, ''))
   }
   reply.chunks.forEach((chunk, index) => {
     window.setTimeout(() => {
       if (!session(id)) { busy.delete(id); return }
+      if (agent && index === 0) appendOutput(id, clearComposer())
       appendOutput(id, chunk)
       if (index === reply.chunks.length - 1) {
         busy.delete(id)
         if (agent) {
-          const target2 = session(id)
+          const finished = session(id)
           apply({
             kind: 'session-patch', id,
             patch: {
               state: 'idle', state_since: Math.floor(Date.now() / 1000),
               turn_started_at: null,
-              turn_seq: (target2?.turn_seq ?? 0) + 1,
+              turn_seq: (finished?.turn_seq ?? 0) + 1,
               last_turn_end_ts: Math.floor(Date.now() / 1000),
               last_activity_ts: Math.floor(Date.now() / 1000),
-              tokens_in: (target2?.tokens_in ?? 0) + 800 + Math.floor(Math.random() * 600),
-              cost_usd: Math.round(((target2?.cost_usd ?? 0) + 0.03) * 100) / 100,
+              tokens_in: (finished?.tokens_in ?? 0) + 800 + Math.floor(Math.random() * 600),
+              cost_usd: Math.round(((finished?.cost_usd ?? 0) + 0.03) * 100) / 100,
             },
           })
+          restoreComposer(false)
         }
       }
     }, startDelay + index * reply.pace)
@@ -287,9 +314,18 @@ onMutation((mutation, local) => {
     return
   }
   if (mutation.kind === 'term-input') {
-    const result = consumeInput(lineStateFor(mutation.id), mutation.data)
+    const editor = lineStateFor(mutation.id)
+    const result = consumeInput(editor, mutation.data)
     if (local) {
-      if (result.echo) appendOutput(mutation.id, result.echo)
+      // An agent's box is repainted with the whole buffer rather than echoing
+      // the keystroke, which is how a real TUI keeps text inside its border.
+      const typing = session(mutation.id)
+      const inBox = typing && demoBackendKind(typing.backend) !== 'shell'
+      if (result.submitted === null && inBox && result.echo) {
+        appendOutput(mutation.id, redrawComposer(composerInfo(typing), editor.buffer))
+      } else if (result.echo && !inBox) {
+        appendOutput(mutation.id, result.echo)
+      }
       if (result.submitted !== null) streamReply(mutation.id, result.submitted)
     }
     return
