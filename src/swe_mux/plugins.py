@@ -268,6 +268,7 @@ class PluginManager:
         }
 
     async def status(self) -> dict[str, Any]:
+        self._prune_tokens()
         records = await self.store.list()
         return {
             "execution_enabled": self.execution_enabled,
@@ -652,6 +653,7 @@ class PluginManager:
         return await self.invoke_action(plugin_id, handler.action, context, source="link")
 
     def authorize(self, token: str, permission: str) -> PluginToken:
+        self._prune_tokens()
         grant = self._tokens.get(token)
         if grant is None or (grant.expires_at is not None and grant.expires_at < time.time()):
             self._tokens.pop(token, None)
@@ -668,6 +670,21 @@ class PluginManager:
     def _revoke(self, plugin_id: str) -> None:
         for token, grant in tuple(self._tokens.items()):
             if grant.plugin_id == plugin_id:
+                self._tokens.pop(token, None)
+
+    def _prune_tokens(self) -> None:
+        now = time.time()
+        for token, grant in tuple(self._tokens.items()):
+            expired = grant.expires_at is not None and grant.expires_at < now
+            session = (
+                self.sessions.sessions.get(grant.session_id)
+                if grant.session_id is not None
+                else None
+            )
+            pane_ended = grant.session_id is not None and (
+                session is None or session.record.state in {"exited", "crashed"}
+            )
+            if expired or pane_ended:
                 self._tokens.pop(token, None)
 
     async def set_execution_enabled(self, enabled: bool) -> None:
@@ -717,6 +734,7 @@ class PluginManager:
         *,
         lifetime: float | None = 300.0,
     ) -> tuple[dict[str, str], str]:
+        self._prune_tokens()
         config_dir, state_dir = self._directories(manifest.id)
         token = secrets.token_urlsafe(32)
         self._tokens[token] = PluginToken(

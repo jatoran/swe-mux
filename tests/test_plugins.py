@@ -240,6 +240,7 @@ async def test_manager_link_approval_action_pane_event_and_uninstall(tmp_path: P
     with pytest.raises(PluginError, match="stop the plugin panes"):
         await manager.uninstall("tests.utility", purge=True)
     await sessions.stop("pane-1")
+    assert (await manager.status())["runtime_tokens"] == 0
     removed = await manager.uninstall("tests.utility", purge=True)
     assert removed["id"] == "tests.utility"
     assert root.exists(), "unlinking must never remove a developer working tree"
