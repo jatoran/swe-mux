@@ -81,12 +81,13 @@ export interface QueueAutoSession {
     window_minutes: number | null
     pending: number | null
   } | null
-  /** Present while an active exchange is holding the idle lapse off. Two kinds, and
-   *  they are the same fact about two pipes: `message` — this session's own message
-   *  reached a peer recently and it is owed an answer; `land` — this session asked to
-   *  land a branch and the pipeline has not answered yet. It authorizes nothing —
-   *  every other gate still decides each send. An unrecognised `kind` reads as
-   *  `message`, which is the shape every pre-`kind` row had. */
+  /** Present while an active exchange is holding the idle lapse off. Three kinds,
+   *  and they are the same fact about three pipes: `message` — this session's own
+   *  message reached a peer recently and it is owed an answer; `land` — this session
+   *  asked to land a branch and the pipeline has not answered yet; `watch` — this
+   *  session armed a settle watch and the notice has not matured yet. It authorizes
+   *  nothing — every other gate still decides each send. An unrecognised `kind`
+   *  reads as `message`, which is the shape every pre-`kind` row had. */
   reply_window: {
     kind?: string
     thread_id: string | null
@@ -100,6 +101,11 @@ export interface QueueAutoSession {
     request_id?: string
     branch?: string
     state?: string
+    /** `watch` only: which watch is holding it, and on whom. */
+    watch_id?: string
+    target_session_id?: string
+    target_name?: string
+    timeout_minutes?: number
   } | null
 }
 

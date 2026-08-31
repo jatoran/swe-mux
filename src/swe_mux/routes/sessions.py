@@ -75,7 +75,7 @@ from ..spawn_contract import (
     resolve_spawn_model,
 )
 from . import terminal, voice
-from .support import _optional_json
+from .support import _optional_json, refuse_agent_session_caller
 
 log = logging.getLogger(__name__)
 
@@ -355,11 +355,49 @@ async def _spawn_from_body(
                 len(agent_profile.argv),
             )
     resolved_model = ""
-    if spec.model:
+    requested_model = spec.model
+    if not requested_model and is_agent_harness(backend):
+        # The Project's per-harness model default, applied only when the request
+        # names none - an explicit model always wins. Same degrade rule as the
+        # launch-profile default above: a stale name in a committed file must
+        # not stop every session in the Project from starting, so it falls back
+        # to no flag with a diagnostic, where an explicitly requested model
+        # still refuses below.
+        default_model = str(
+            (project_values.get("default_agent_models") or {}).get(backend) or ""
+        )
+        if default_model:
+            try:
+                resolve_spawn_model(backend, default_model)
+            except ValueError as exc:
+                detail = exc.args[0] if exc.args else str(exc)
+                message = (
+                    detail.get("model", str(detail))
+                    if isinstance(detail, dict)
+                    else str(detail)
+                )
+                log.warning(
+                    "project_default_model_unavailable project_id=%s backend=%s model=%s reason=%s",
+                    project_id,
+                    backend,
+                    default_model,
+                    message,
+                )
+                await app[keys.EVENTS].emit(
+                    "project_default_model_unavailable",
+                    source="projects",
+                    project_id=project_id,
+                    backend=backend,
+                    model=default_model,
+                    error=message,
+                )
+            else:
+                requested_model = default_model
+    if requested_model:
         # After the profile slots and before the seed prompt: the model is a flag
         # that replaces whatever those slots set, and the seed prompt is the
         # positional that must stay last on the command line.
-        resolved_model = resolve_spawn_model(backend, spec.model)
+        resolved_model = resolve_spawn_model(backend, requested_model)
         argv = apply_spawn_model(backend, argv, resolved_model)
     if spec.seed_text:
         if not is_agent_harness(backend):
@@ -479,6 +517,7 @@ async def _stage_spawn_text(app: web.Application, session: Any, text: str) -> No
 
 
 async def spawn_session(request: web.Request) -> web.Response:
+    refuse_agent_session_caller(request, operation="spawning a session over HTTP")
     session = await _spawn_from_body(request.app, await request.json())
     return json_response(session.record.snapshot(), 201)
 
@@ -838,6 +877,7 @@ async def delete_session(request: web.Request) -> web.Response:
     took and whether it was live when asked. Keep it: without it, a close that quietly
     starts taking ten seconds is invisible to everyone.
     """
+    refuse_agent_session_caller(request, operation="killing a session over HTTP")
     manager: SessionManager = request.app[keys.SESSIONS]
     session = manager.resolve(request.match_info["sid"])
     started = time.monotonic()
@@ -1195,6 +1235,23 @@ async def report_session_shim(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+async def claim_pane_hint(request: web.Request) -> web.Response:
+    """Atomically take a session's one-shot pane-placement hint.
+
+    Every browser viewing the Project sees `pane_hint` on the session row and
+    races to claim it; the first request wins and acts (opens the split), the
+    rest read `{"hint": ""}` and do nothing. Clearing on read is what makes
+    "the focused client acts on it once" true with several devices attached -
+    the hint is a request, not layout, and layout stays per-device.
+    """
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    hint = str(getattr(session.record, "pane_hint", "") or "")
+    if hint:
+        session.record.pane_hint = ""
+        session.publish_update()
+    return json_response({"hint": hint})
+
+
 ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/sessions", list_sessions),
     web.post("/api/sessions", spawn_session),
@@ -1217,4 +1274,5 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/sessions/{sid}/promote", promote_session),
     web.post("/api/sessions/{sid}/demote", demote_session),
     web.post("/api/sessions/{sid}/shim-report", report_session_shim),
+    web.post("/api/sessions/{sid}/pane-hint/claim", claim_pane_hint),
 )

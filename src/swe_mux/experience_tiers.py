@@ -41,6 +41,12 @@ TIERS = ("terminal", "deterministic", "automations")
 _DETERMINISTIC: dict[str, Any] = {
     "harness_instrument_enabled": {},
     "harness_mcp_enabled": {},
+    # The other two agent-surface maps ride the tier too, so the terminal tier
+    # can actually mean "no fleet plumbing": the CLI capability map (absent key
+    # = on, like MCP) and the skill map (absent key = OFF - its non-Claude half
+    # writes into checkouts, so the empty deterministic map keeps it off).
+    "harness_cli_enabled": {},
+    "harness_skill_enabled": {},
     "agent_shims_on_shell_path": True,
     "agent_messaging_enabled": True,
     "agent_interject_enabled": True,
@@ -71,6 +77,8 @@ def tier_changes(tier: str) -> dict[str, Any]:
         changes.update(
             harness_instrument_enabled=all_off,
             harness_mcp_enabled=dict(all_off),
+            harness_cli_enabled=dict(all_off),
+            harness_skill_enabled=dict(all_off),
             agent_shims_on_shell_path=False,
             agent_messaging_enabled=False,
             agent_interject_enabled=False,

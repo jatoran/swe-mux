@@ -168,6 +168,9 @@ class SessionControlService:
         correlation_id: str | None = None,
         project: str = "",
         model: str = "",
+        pane: str = "",
+        watch: bool = False,
+        watch_timeout_minutes: Any = None,
     ) -> dict[str, Any]:
         """Create a session, or draft the request, per the target Project's grant.
 
@@ -215,12 +218,13 @@ class SessionControlService:
         if grant != "granted":
             result = await self._draft_spawn_request(
                 caller, prompt=text, backend=backend, name=name, reason=reason,
-                project=project, model=model,
+                project=project, model=model, pane=pane, watch=watch,
+                watch_timeout_minutes=watch_timeout_minutes,
             )
         else:
             result = await self._spawn_now(
                 caller, target_project, prompt=text, backend=backend, name=name,
-                reason=reason, model=model,
+                reason=reason, model=model, pane=pane,
             )
         if correlation:
             result = {**result, "correlation_id": correlation}
@@ -248,6 +252,7 @@ class SessionControlService:
         name: str,
         reason: str,
         model: str = "",
+        pane: str = "",
     ) -> dict[str, Any]:
         if self._spawn_op is None:
             raise QueueError(
@@ -277,6 +282,13 @@ class SessionControlService:
         if label:
             body["name"] = label
         session = await self._spawn_op(body)
+        if pane:
+            # A one-shot placement request, not layout: panes are per-device
+            # browser state, so the daemon only records what was asked for and
+            # the first browser viewing the Project claims it
+            # (`routes/sessions.py`, pane-hint claim). Set after the spawn so a
+            # refused spawn records nothing.
+            session.record.pane_hint = pane
         # Recorded before the pane is proven, because the budget counts *attempts*.
         # A spawn that starts a process and dies has spent the same real resources
         # as one that lives, and a request that fails identically every time is

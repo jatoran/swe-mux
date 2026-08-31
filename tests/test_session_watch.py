@@ -13,6 +13,7 @@ timeouts are exercised in microseconds and no test sleeps.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -29,6 +30,7 @@ from swe_mux.session_watch import (
     ARMING_REASON_OK,
     ARMING_REASON_ROLLED,
     ARMING_REASON_UNKNOWN_RUN,
+    AWAIT_MAX_PER_SESSION,
     RUNNING_ACTIVITY_KINDS,
     SETTLE_HOLD_SECONDS,
     SessionWatchService,
@@ -819,3 +821,214 @@ def test_describe_state_disambiguates_the_three_meanings_of_idle() -> None:
     assert "waiting_on_background" in describe_state(handed_off)
     assert "background work running: subagents" in describe_state(handed_off)
     assert running_work(handed_off) and not running_work(finished)
+
+
+# -- synchronous waits (`await_session`) --------------------------------------
+#
+# Same fire rules as a watch, different sink: the answer fulfils the blocked
+# call, so nothing below touches the queue at all - `queue.messages` staying
+# empty is part of what these tests pin.
+
+
+async def _drive(
+    service: SessionWatchService, clock: FakeClock, coro: Any, steps: list[float]
+) -> dict[str, Any]:
+    """Start the wait, then advance the clock and sweep until it resolves."""
+    task = asyncio.ensure_future(coro)
+    await asyncio.sleep(0)  # let the awaiter register before the first sweep
+    for seconds in steps:
+        clock.advance(seconds)
+        await service.tick()
+        await asyncio.sleep(0)
+        if task.done():
+            break
+    return await asyncio.wait_for(task, timeout=1)
+
+
+async def test_await_resolves_on_the_same_edge_and_hold_a_watch_uses() -> None:
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="working")
+    service, queue, clock, _events = build(watcher, target)
+
+    task = asyncio.ensure_future(
+        service.await_settle(watcher, target="t", timeout_seconds=600)
+    )
+    await asyncio.sleep(0)
+    target.record.state = "idle"
+    await service.tick()
+    clock.advance(SETTLE_HOLD_SECONDS + 1)
+    await service.tick()
+    result = await asyncio.wait_for(task, timeout=1)
+
+    assert result["case"] == "settled"
+    assert result["target_state"].startswith("idle")
+    assert result["target_session_id"] == "t"
+    # The answer travelled in-band: nothing was staged, armed, or delivered.
+    assert queue.messages == []
+
+
+async def test_await_timeout_is_a_result_carrying_the_current_state() -> None:
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="working")
+    service, queue, clock, _events = build(watcher, target)
+
+    result = await _drive(
+        service,
+        clock,
+        service.await_settle(watcher, target="t", timeout_seconds=30),
+        [31.0],
+    )
+
+    assert result["case"] == "timeout"
+    assert result["target_state"].startswith("working")
+    assert "normal" in result["note"]
+    assert queue.messages == []
+
+
+async def test_await_answers_an_already_ended_target_immediately() -> None:
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="exited")
+    service, _queue, _clock, _events = build(watcher, target)
+
+    result = await service.await_settle(watcher, target="t")
+
+    assert result["case"] == "ended"
+    assert result["waited_seconds"] == 0
+
+
+async def test_await_answers_a_target_that_already_held_a_settle_immediately() -> None:
+    """`state_since` rescues the between-polls edge: a worker that finished
+    while nobody was waiting answers now rather than only at the timeout."""
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="idle")
+    service, _queue, clock, _events = build(watcher, target)
+    target.record.state_since = clock.now - SETTLE_HOLD_SECONDS - 5
+
+    result = await service.await_settle(watcher, target="t")
+
+    assert result["case"] == "already_settled"
+    assert result["waited_seconds"] == 0
+
+
+async def test_await_ignores_a_recent_settle_that_has_not_held() -> None:
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="idle")
+    service, _queue, clock, _events = build(watcher, target)
+    target.record.state_since = clock.now - 5  # settled five seconds ago: could flap
+
+    result = await _drive(
+        service,
+        clock,
+        service.await_settle(watcher, target="t", timeout_seconds=30),
+        [31.0],
+    )
+
+    assert result["case"] == "timeout"
+
+
+async def test_await_until_ended_ignores_a_settle() -> None:
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="working")
+    service, _queue, clock, _events = build(watcher, target)
+
+    task = asyncio.ensure_future(
+        service.await_settle(watcher, target="t", until=["ended"], timeout_seconds=600)
+    )
+    await asyncio.sleep(0)
+    target.record.state = "idle"
+    await service.tick()
+    clock.advance(SETTLE_HOLD_SECONDS + 10)
+    await service.tick()
+    await asyncio.sleep(0)
+    assert not task.done()
+    target.record.state = "crashed"
+    await service.tick()
+    result = await asyncio.wait_for(task, timeout=1)
+    assert result["case"] == "ended"
+
+
+async def test_await_refusals_are_typed() -> None:
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="working")
+    service, _queue, _clock, _events = build(watcher, target)
+
+    with pytest.raises(WatchRefusal) as bad_until:
+        await service.await_settle(watcher, target="t", until=["blocked"])
+    assert bad_until.value.code == "invalid_until"
+
+    with pytest.raises(WatchRefusal) as bad_timeout:
+        await service.await_settle(watcher, target="t", timeout_seconds=100000)
+    assert bad_timeout.value.code == "invalid_timeout"
+    assert "watch_session" in str(bad_timeout.value)
+
+    with pytest.raises(WatchRefusal) as self_wait:
+        await service.await_settle(watcher, target="w")
+    assert self_wait.value.code == "self_watch"
+
+
+async def test_awaits_are_bounded_per_caller() -> None:
+    watcher = make_session("w", state="working")
+    targets = [
+        make_session(f"t{n}", state="working")
+        for n in range(AWAIT_MAX_PER_SESSION + 1)
+    ]
+    service, _queue, clock, _events = build(watcher, *targets)
+
+    tasks = [
+        asyncio.ensure_future(
+            service.await_settle(watcher, target=f"t{n}", timeout_seconds=30)
+        )
+        for n in range(AWAIT_MAX_PER_SESSION)
+    ]
+    await asyncio.sleep(0)
+    with pytest.raises(WatchRefusal) as caught:
+        await service.await_settle(
+            watcher, target=f"t{AWAIT_MAX_PER_SESSION}", timeout_seconds=30
+        )
+    assert caught.value.code == "await_limit_reached"
+    clock.advance(31)
+    await service.tick()
+    for task in tasks:
+        assert (await asyncio.wait_for(task, timeout=1))["case"] == "timeout"
+
+
+async def test_daemon_stop_resolves_open_awaits_instead_of_abandoning_them() -> None:
+    """An abandoned future raises from a finalizer at some later test's expense
+    (`filterwarnings = error`), so the stop flush answers every open wait."""
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="working")
+    service, _queue, _clock, _events = build(watcher, target)
+
+    task = asyncio.ensure_future(
+        service.await_settle(watcher, target="t", timeout_seconds=600)
+    )
+    await asyncio.sleep(0)
+    await service.stop()
+    result = await asyncio.wait_for(task, timeout=1)
+    assert result["case"] == "daemon_stopped"
+
+
+# -- open watches as reply-window evidence ------------------------------------
+
+
+async def test_origin_windows_reports_open_watches_bounded_by_their_deadline() -> None:
+    watcher = make_session("w", state="working")
+    target = make_session("t", state="working")
+    service, _queue, clock, _events = build(watcher, target)
+    await service.watch(watcher, target="t", timeout_minutes=60)
+
+    windows = await service.origin_windows(["w", "unrelated"], since=0.0)
+
+    assert set(windows) == {"w"}
+    entry = windows["w"]
+    assert entry["kind"] == "watch"
+    assert entry["target_session_id"] == "t"
+    # Bounded by the watch's own deadline plus the delivery grace, never open-ended.
+    assert entry["expires_at"] == pytest.approx(
+        clock.now + 60 * 60 + SessionWatchService.WINDOW_GRACE_SECONDS
+    )
+
+    # A resolved watch stops holding anything.
+    target.record.state = "crashed"
+    await service.tick()
+    assert await service.origin_windows(["w"], since=0.0) == {}
