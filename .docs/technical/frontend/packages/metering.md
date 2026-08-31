@@ -69,6 +69,8 @@ Process rollups reuse App's fleet sample, while sidebar child rows come only fro
 `ProviderAccounts.tsx`, `ResourceUsage.tsx`, `resourceTotals.ts`, `resourceTooling.ts`
 
 Anchored viewport popovers and summaries.
+Each saved-account row names quota periods inline with its figures (`remaining/5h`, `remaining/7d`, `fable`) instead of relying on a detached heading row.
+The quota refresh age stays right-aligned on the account identity line, leaving the quota line to compare usage only.
 The expanded sidebar uses one icon-led row for a boxed live-session count, boxed process-tree count, rounded whole-system CPU, and swe-mux process-tree working set, with full labels in its tooltip and accessible name.
 
 The session count leads because it is the operator's own unit of work and the one figure there that is always knowable.

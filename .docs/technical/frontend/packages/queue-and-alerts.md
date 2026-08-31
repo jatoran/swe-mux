@@ -24,6 +24,8 @@ The tab's zero-lag paint is the same mechanism: the row's copy is already in mem
 Its drawer rendering follows focus, and its `queue:` pane leaf pins a target.
 
 There is exactly one text field and it belongs to a row (2026-08-31): `+ New message` appends a blank draft and opens it, the row's pencil opens an existing one, and a double-click on a pending body does the same.
+The compose control is the list's last row rather than a pinned footer, in three placements from one sticky rule: centred in the tab when nothing is queued, under the last item when the list does not overflow, and stuck to the scrollport's edge once it does.
+It carries an opaque background and a sticky offset of *minus* the list's bottom padding, since that offset is measured against the scrollport without it and `bottom:0` leaves a gutter for rows to scroll through; the padding is a variable so the two cannot drift.
 `queueDraftSaver.ts` autosaves it - a 500 ms debounce per open editor, held **outside** the component because the drawer being swiped shut, or focus moving to another session, unmounts `QueuePane` mid-sentence and would cancel a timer held in its state.
 Blur, `Done`, unmount, retarget, `pagehide` and `visibilitychange` all flush.
 The first non-empty body is a create and every later one a `PATCH`; an empty body is never sent (the daemon refuses it), so an abandoned draft leaves no row and `+` costs nothing.

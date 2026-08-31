@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import signal
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -56,6 +57,25 @@ NO_OUTPUT_SECONDS = 300.0
 # the two genuinely per-tick attributes are re-read. Identity safety is preserved by
 # other means -- see _sample_handle and _owned_live.
 MAX_HANDLE_CACHE = 4096
+# `swe-mux.exe -m swe_mux.<module>` is a helper an agent session spawned inside its
+# own tree -- hook_client runs on every PreToolUse/PostToolUse. It shares the app's
+# image with the shell and the daemon and must stay session-owned, so the image test
+# below excludes it. `packaging/redeploy_desktop.py` draws exactly the same line
+# before killing anything, for the same reason.
+HELPER_MODULE_FLAG = "-m"
+HELPER_MODULE_PREFIX = "swe_mux."
+# How far up the parent chain an infrastructure ancestor is looked for. The real
+# depth is one (shell -> daemon); the bound is here so a corrupt parent map cannot
+# make this walk unbounded.
+MAX_INFRASTRUCTURE_ANCESTORS = 8
+# How often the machine is scanned for processes running our own image. Attribution
+# never waits on this -- a claim is tested directly, on the pid being claimed -- so
+# the scan exists only to *enumerate* swe-mux for the runtime footer, where a shell
+# the daemon has no live link to would otherwise be reported as nothing at all.
+# Constructing a psutil.Process is the most expensive operation in this file, so a
+# whole-machine pass is priced accordingly: once a minute against a long-lived shell,
+# not once per five-second tick.
+OWN_IMAGE_SCAN_SECONDS = 60.0
 PREVIEW_LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 # A wildcard bind means "every local interface", which necessarily includes loopback:
 # a server on 0.0.0.0:5173 really is reachable at 127.0.0.1:5173. Most dev servers
@@ -65,6 +85,36 @@ PREVIEW_LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 # is left alone, because it genuinely is not reachable on loopback.
 WILDCARD_LOOPBACK_HOSTS = {"0.0.0.0": "127.0.0.1", "::": "::1", "::ffff:0.0.0.0": "127.0.0.1"}
 LISTENER_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def own_executable() -> str | None:
+    """The executable file identifying swe-mux itself, when there is one.
+
+    Only the frozen desktop app has one. Its shell, its daemon and its
+    `--daemon-child` successors are all the *same file* on disk, which makes an
+    exact path match a statement about identity rather than about a name: nothing
+    else on the machine is running `dist/swe-mux/swe-mux.exe`.
+
+    Running from source there is deliberately no such file. `sys.executable` is
+    then the venv's `python.exe`, which every agent-spawned Python on the machine
+    also runs, and reserving on that would strip real session processes out of the
+    fleet. A dev daemon therefore keeps to the descendant walk alone.
+    """
+    if not bool(getattr(sys, "frozen", False)):
+        return None
+    try:
+        return str(Path(sys.executable).resolve())
+    except (OSError, ValueError):  # pragma: no cover - resolve() on a live exe
+        return None
+
+
+def is_session_helper_command(command: str) -> bool:
+    """Whether `command` is the app image re-invoked as a session-owned helper."""
+    parts = command.split()
+    return any(
+        flag == HELPER_MODULE_FLAG and module.startswith(HELPER_MODULE_PREFIX)
+        for flag, module in zip(parts, parts[1:], strict=False)
+    )
 
 
 def listener_record(host: str, port: int) -> dict[str, Any]:
@@ -165,6 +215,14 @@ class ProcessInspector:
         # its command line is fixed at exec, so this is read once per handle rather than
         # per pass; cmdline() is a remote-PEB read and was ~40% of the per-process cost.
         self._static: dict[int, tuple[str, str, str]] = {}
+        # The executable this daemon is running, when that identifies swe-mux itself,
+        # and the per-pid answer to "is this that same file, run as infrastructure".
+        # Reading exe() is a remote handle open, so it is cached like the rest of a
+        # process's fixed identity: a live pid never changes its image.
+        self._own_executable = own_executable()
+        self._own_image: dict[int, bool] = {}
+        self._own_image_pids: set[int] = set()
+        self._own_image_scanned_at = 0.0
         # pid -> child pids, rebuilt once per pass from a single system-wide parent map.
         self._children_by_pid: dict[int, list[int]] = {}
         # pid -> parent pid from that same map, used to detect pid reuse for free.
@@ -491,8 +549,18 @@ class ProcessInspector:
         self._children_by_pid = children
         self._parents = table
 
-    def _tree_handles(self, root_pid: int, limit: int) -> list[Any]:
+    def _tree_handles(
+        self, root_pid: int, limit: int, *, stop_pids: set[int] | None = None
+    ) -> list[Any]:
         """Cached psutil handles for ``root_pid`` and its real descendants, root first.
+
+        ``stop_pids`` are included but never traversed. The PTY supervisor is the one
+        that matters: it parents *every* live session, so a walk that descends through
+        it absorbs the whole fleet. The docstring below records that happening once
+        through a recycled parent link; it can also happen through a real one, because
+        a freshly spawned supervisor genuinely is a child of the daemon until the next
+        daemon restart leaves it parentless. Reserving the supervisor as swe-mux's own
+        is right; reserving everything it hosts is not.
 
         **A raw parent map is not a process tree.** Windows never clears a dead
         parent's pid from a child's ppid field and recycles pids aggressively, so the
@@ -513,11 +581,13 @@ class ProcessInspector:
         root = self._handle(root_pid)
         if root is None:
             return []
+        stop = stop_pids or set()
         if not self._children_by_pid:
             try:
-                return [root, *root.children(recursive=True)][:limit]
+                walked = [root, *root.children(recursive=True)]
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 return [root]
+            return self._prune_stopped(walked, root_pid, stop)[:limit]
         try:
             root_started = float(root.create_time())
         except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
@@ -528,10 +598,14 @@ class ProcessInspector:
         # with the root misses the common Windows failure where a long-lived child
         # retains a dead parent pid and that pid is later recycled by a newer,
         # unrelated descendant of the session.
-        stack: list[tuple[int, int, float]] = [
-            (pid, root_pid, root_started)
-            for pid in self._children_by_pid.get(root_pid, ())
-        ]
+        stack: list[tuple[int, int, float]] = (
+            []
+            if root_pid in stop
+            else [
+                (pid, root_pid, root_started)
+                for pid in self._children_by_pid.get(root_pid, ())
+            ]
+        )
         while stack and len(handles) < limit:
             pid, parent_pid, parent_started = stack.pop()
             if pid in seen:
@@ -556,11 +630,47 @@ class ProcessInspector:
                 )
                 continue
             handles.append(handle)
+            if pid in stop:
+                continue
             stack.extend(
                 (child_pid, pid, started)
                 for child_pid in self._children_by_pid.get(pid, ())
             )
         return handles
+
+    @staticmethod
+    def _prune_stopped(walked: list[Any], root_pid: int, stop: set[int]) -> list[Any]:
+        """Drop everything strictly below a ``stop`` pid from a psutil-walked subtree.
+
+        Only reached when ``psutil._ppid_map`` has been withdrawn and the walk fell
+        back to ``children(recursive=True)``, which has no boundary of its own. The
+        subtree is already in hand, so its own parent links are enough to rebuild it;
+        no system-wide snapshot is taken.
+        """
+        if not stop:
+            return walked
+        parents: dict[int, int] = {}
+        for handle in walked:
+            try:
+                parents[int(handle.pid)] = int(handle.ppid())
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                continue
+        kept: list[Any] = []
+        for handle in walked:
+            pid = int(handle.pid)
+            cursor = parents.get(pid)
+            below = False
+            # Bounded by the subtree's own size; a cycle cannot outlast it.
+            for _ in range(len(walked)):
+                if cursor is None or cursor == root_pid:
+                    break
+                if cursor in stop:
+                    below = True
+                    break
+                cursor = parents.get(cursor)
+            if not below:
+                kept.append(handle)
+        return kept
 
     def _handle(self, pid: int) -> Any | None:
         """Return a cached handle for ``pid``, constructing one only when unseen.
@@ -591,6 +701,7 @@ class ProcessInspector:
     def _forget(self, pid: int) -> None:
         self._handles.pop(pid, None)
         self._static.pop(pid, None)
+        self._own_image.pop(pid, None)
 
     def _identity(self, handle: Any, pid: int) -> tuple[str, str, str]:
         """`(name, command, command_hash)` for a handle, read once and then reused."""
@@ -619,14 +730,162 @@ class ProcessInspector:
             self._static[pid] = entry
         return entry
 
-    def _daemon_fingerprints(self, candidates: list[Any] | None = None) -> set[tuple[int, float]]:
-        if psutil is None:
+    def _supervisor_pid(self) -> int | None:
+        """The PTY supervisor this daemon is driving, when there is one.
+
+        The supervisor is swe-mux's own process but is not reachable from the daemon:
+        it is spawned to break away and it survives daemon restarts, so within a
+        restart or two it is parentless. The daemon knows it by pid regardless.
+        """
+        client = getattr(self.sessions, "supervisor", None)
+        pid = getattr(client, "supervisor_pid", None)
+        if not isinstance(pid, int) or pid <= 0:
+            return None
+        return pid
+
+    def _is_own_image(self, pid: int) -> bool:
+        """Whether `pid` is running swe-mux's own executable as infrastructure.
+
+        This is the test an ancestor walk cannot replace. A `reload-daemon` spawns
+        the successor daemon as a child of the *outgoing* one, whose pid is dead
+        within the second, so from the second restart onward there is no live chain
+        upward to the desktop shell at all - and the shell is precisely the process
+        that a redeploy run from inside a session leaves attributed to that session.
+        Identity survives that; lineage does not.
+        """
+        if self._own_executable is None or psutil is None:
+            return False
+        cached = self._own_image.get(pid)
+        if cached is not None:
+            return cached
+        handle = self._handle(pid)
+        answer = False
+        if handle is not None:
+            try:
+                image = str(Path(handle.exe()).resolve())
+            except (
+                AttributeError,
+                psutil.NoSuchProcess,
+                psutil.AccessDenied,
+                OSError,
+                ValueError,
+            ):
+                # An unreadable image is not ours as far as anything here can tell.
+                # That is the safe direction for attribution and the unsafe one for
+                # the action gate, which is why the gate is not the only guard: a
+                # process swe-mux cannot even open is one it cannot signal either.
+                image = ""
+            if image and image == self._own_executable:
+                _, command, _ = self._identity(handle, pid)
+                answer = not is_session_helper_command(command)
+        self._own_image[pid] = answer
+        return answer
+
+    def _scan_own_image_pids(self) -> set[int]:
+        """Every live pid running our own executable, refreshed on a slow cadence.
+
+        Only the enumeration needs this. Reservation asks `_is_own_image` about the
+        pid in front of it and is never delayed by the cadence; what the scan adds is
+        the ability to *find* a desktop shell nothing points at, so the runtime footer
+        can report it. `process_iter` is filtered on the image's file name first,
+        because that is the cheap half of the identity and the exact-path check that
+        decides the answer then runs on a handful of processes rather than on every
+        one the machine has.
+        """
+        if self._own_executable is None or psutil is None:
             return set()
-        handles = (
-            candidates
-            if candidates is not None
-            else self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
+        now = time.monotonic()
+        # A pid that has left the system parent table is gone, and waiting out the
+        # cadence would keep enumerating it - or, once Windows recycles it, something
+        # else entirely. Losing one is therefore the signal to look again now.
+        fresh = self._own_image_pids and (
+            not self._parents or self._own_image_pids <= self._parents.keys()
         )
+        if fresh and now - self._own_image_scanned_at < OWN_IMAGE_SCAN_SECONDS:
+            return self._own_image_pids
+        iterator = getattr(psutil, "process_iter", None)
+        if iterator is None:
+            return self._own_image_pids
+        wanted = Path(self._own_executable).name.casefold()
+        found: set[int] = set()
+        try:
+            for process in iterator(["pid", "name"]):
+                try:
+                    name = str((process.info or {}).get("name") or "")
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, AttributeError):
+                    continue
+                if name.casefold() != wanted:
+                    continue
+                pid = int(process.pid)
+                if self._is_own_image(pid):
+                    found.add(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            return self._own_image_pids
+        self._own_image_pids = found
+        self._own_image_scanned_at = now
+        return found
+
+    def _infrastructure_handles(self) -> list[Any]:
+        """Handles for every process that is swe-mux itself, this daemon included.
+
+        Three sources, because no one of them sees all of it. The descendant walk
+        finds what this daemon started. The ancestor walk finds the desktop shell
+        that started this daemon, while that link is still live. The slow image scan
+        finds the shell after a `reload-daemon` has broken that link, and brings its
+        WebView2 host with it.
+
+        Enumeration and reservation are deliberately separate. A claim is answered by
+        `_is_own_image` on the pid being claimed, immediately and regardless of when
+        this list was last built; the list only decides what the runtime footer can
+        see and report.
+
+        The supervisor is added by pid and made a traversal boundary in the same
+        breath: it is ours, everything it hosts is the fleet's.
+        """
+        if psutil is None:
+            return []
+        # The action gate calls this outside a sampling pass, where the map may be
+        # from the previous tick or absent entirely. Refreshing only when it is empty
+        # keeps the per-tick path at one snapshot and still lets the gate stand on its
+        # own: it must not be correct only because something else ran first.
+        if not self._children_by_pid:
+            self._refresh_tree()
+        supervisor = self._supervisor_pid()
+        stop = {supervisor} if supervisor is not None else set()
+        handles: list[Any] = []
+        seen: set[int] = set()
+
+        def add_tree(root_pid: int) -> None:
+            for handle in self._tree_handles(root_pid, MAX_PROCESSES_PER_SESSION, stop_pids=stop):
+                pid = int(handle.pid)
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                handles.append(handle)
+
+        add_tree(os.getpid())
+        # Deliberately no creation-time check on these edges, unlike every downward
+        # one. There, a recycled parent pid splices in a process that is not ours; here
+        # the edge is only ever followed to a pid the image test has already declared
+        # ours, and a recycled pid running our own executable is swe-mux whether or not
+        # it is really this daemon's parent. The check could not change an answer.
+        cursor = self._parents.get(os.getpid())
+        for _ in range(MAX_INFRASTRUCTURE_ANCESTORS):
+            if cursor is None or cursor in seen or not self._is_own_image(cursor):
+                break
+            add_tree(cursor)
+            cursor = self._parents.get(cursor)
+        for pid in sorted(self._scan_own_image_pids()):
+            if pid not in seen:
+                add_tree(pid)
+        if supervisor is not None and supervisor not in seen:
+            handle = self._handle(supervisor)
+            if handle is not None:
+                seen.add(supervisor)
+                handles.append(handle)
+        return handles
+
+    def _fingerprints(self, handles: list[Any]) -> set[tuple[int, float]]:
         result: set[tuple[int, float]] = set()
         for process in handles:
             try:
@@ -634,6 +893,16 @@ class ProcessInspector:
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 continue
         return result
+
+    def _is_infrastructure(self, key: tuple[int, float], base: set[tuple[int, float]]) -> bool:
+        """Whether a fingerprint is swe-mux's own and must never be session-owned.
+
+        `base` is the enumerated topology; the image test then answers for a pid the
+        enumeration has not reached. Keeping the second half as a predicate rather
+        than folding it into `base` is what makes it cheap: it is asked only about
+        pids some session is actually claiming, never about the machine.
+        """
+        return key in base or self._is_own_image(key[0])
 
     def _has_live_sessions(self) -> bool:
         """Whether any session could own a process this pass.
@@ -700,15 +969,21 @@ class ProcessInspector:
         conn_map = self._connections_by_pid()
         self._refresh_tree()
         daemon_candidates = (
-            self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
+            self._infrastructure_handles()
             if psutil is not None and hasattr(psutil, "Process")
             else []
         )
-        infrastructure = self._daemon_fingerprints(daemon_candidates)
+        infrastructure = self._fingerprints(daemon_candidates)
         now = time.time()
-        for key in infrastructure:
+        # Iterating the retained rows rather than the topology is what lets the image
+        # test reach a row the enumeration cannot: a desktop shell a redeploy left
+        # attributed to a since-ended session is no longer produced by any walk, only
+        # revalidated, so a topology-only sweep never revisits it.
+        for key in list(self.owned):
             existing = self.owned.get(key)
             if existing is None or existing.exited_at is not None:
+                continue
+            if not self._is_infrastructure(key, infrastructure):
                 continue
             self._diagnose_once(
                 "persisted_session_claimed_infrastructure",
@@ -727,7 +1002,7 @@ class ProcessInspector:
 
         source_rank = {"session_root": 3, "job_membership": 2, "parent_walk": 1}
         for key, candidates in claims.items():
-            if key in infrastructure:
+            if self._is_infrastructure(key, infrastructure):
                 self._diagnose_once(
                     "session_claimed_infrastructure",
                     key,
@@ -786,6 +1061,9 @@ class ProcessInspector:
         live_pids = {pid for pid, _ in sampled}
         self._handles = {pid: entry for pid, entry in self._handles.items() if pid in live_pids}
         self._static = {pid: entry for pid, entry in self._static.items() if pid in live_pids}
+        self._own_image = {
+            pid: answer for pid, answer in self._own_image.items() if pid in live_pids
+        }
         self._last_collect = time.monotonic()
         return result
 
@@ -803,6 +1081,12 @@ class ProcessInspector:
         the resource footer additive without counting the same process twice. Detailed
         members let the fleet inspector explain that aggregate without granting session
         process controls over swe-mux itself.
+
+        "Infrastructure" here is the whole of swe-mux, not the daemon's descendants:
+        the desktop shell and its WebView2 host, and the supervisor, are ours and were
+        previously reported as nothing at all. The footer read `processes: 1` on a
+        frozen app whose shell alone held 69 MiB - an undercount of its own footprint,
+        from the same descendant-only definition that let a session claim the shell.
         """
         empty = {
             "pid": os.getpid(),
@@ -815,7 +1099,7 @@ class ProcessInspector:
         }
         if psutil is None or not hasattr(psutil, "Process"):
             return empty
-        candidates = candidates or self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
+        candidates = candidates or self._infrastructure_handles()
         if not candidates:
             return empty
         sampled_at = time.monotonic()
@@ -1526,8 +1810,15 @@ class ProcessInspector:
         item = matches[0]
         if item.attribution_version < PROCESS_ATTRIBUTION_VERSION:
             raise ValueError("process ownership evidence is obsolete; refresh before acting")
-        if (item.pid, float(item.started_at or 0)) in self._daemon_fingerprints():
-            raise ValueError("process is swe-mux infrastructure, not session-owned")
+        # Deliberately re-derived here rather than read off the row's evidence. This
+        # is the last gate before a signal, and it has to hold even when attribution
+        # was wrong: a mislabelled desktop shell offered "Terminate tree" is the UI
+        # closing itself, which no amount of correct escalation elsewhere excuses.
+        if self._is_infrastructure(
+            (item.pid, float(item.started_at or 0)),
+            self._fingerprints(self._infrastructure_handles()),
+        ):
+            raise ValueError("process is swe-mux itself, not session-owned")
         if identity_id and item.identity_id != identity_id:
             raise ValueError("process fingerprint changed; refresh before acting")
         try:
