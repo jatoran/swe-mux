@@ -5,16 +5,18 @@ import { Dropdown } from './Dropdown'
 import { CompactGrantFlag } from './GrantGate'
 import { SettingLink } from './SettingLink'
 import { StateIndicator } from './StateIndicator'
+import { CopyIcon, PlusIcon, RenameIcon, TrashIcon } from './railIcons'
 import { useSessionRowConfig } from './sessionRowPrefs'
 import { agentTargetName, agentTargets } from './agentTargets'
 import {
-  armQueueMessage, cancelQueueMessage, deleteQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
+  armQueueMessage, cancelQueueMessage, deleteQueueMessage, fetchAutoStatus,
   fetchQueue, isPendingQueueState, moveQueueMessage, queueHead, reportUnsafeDelivery,
   retargetQueueMessage, scheduleQueueMessage, scheduleStatus, senderLabel, sendQueueMessage,
   setAutoPaused, setSessionAutoPolicy,
   type QueueAutoSession, type QueueAutoStatus, type QueueConstraints, type QueueMessage,
   type QueueSendOutcome, type QueueTargetView,
 } from './queueApi'
+import { queueDraftSaver, type QueueDraftState } from './queueDraftSaver'
 import type { Session } from './types'
 import {
   describeReadiness, freshestReadiness, readinessAgeLabel, wordReasons,
@@ -44,6 +46,13 @@ import type { EditorHandle } from './insertTarget'
 // The fleet-wide review of *every* target's queue is a modal, reached from the header
 // here. It has no send button, so it needs no terminal beside it.
 //
+// There is one writing surface and it is a queue row. The pane used to carry a permanent
+// composer footer as well, which meant two text fields with different rules — one that
+// staged new items and autosaved nothing, one that edited existing items behind an
+// explicit Save — sharing a 300px column. Composing is now the same act as editing:
+// `+` appends a blank draft, opens it, and autosaves it, so a message is a row from the
+// first keystroke and the drawer can be swiped shut without losing it.
+//
 // Every bound is the daemon's — this view shows state and forwards user acts.
 
 type Props = {
@@ -60,8 +69,26 @@ type Props = {
   /** Pending items across every target, not just this one. Labels the fleet-queue control
    *  so "is anything waiting anywhere" is answerable without opening it. */
   fleetPending?: number
-  /** Deliberate-open counter: focus the composer even when Queue was already selected. */
+  /** Deliberate-open counter: start a draft even when Queue was already selected. */
   openRequestToken?: number
+}
+
+/** The open editor, for a row that exists or for one that does not exist yet.
+ *
+ *  `messageId` is empty only until autosave's first write creates the item; from then on
+ *  this is an ordinary edit of an ordinary queued message, and every act below reads the
+ *  message rather than this. A `floating` editor keeps its own row at the tail of the list
+ *  for as long as it is open, including after the item has been created — moving the
+ *  textarea into the created row would replace the DOM node under the caret and drop
+ *  focus mid-sentence, half a second after the person started typing. */
+type EditingState = {
+  /** Stable identity for the autosave entry and for the editor's DOM node. */
+  key: string
+  messageId: string
+  body: string
+  floating: boolean
+  /** Mid-turn asked for before the item existed; carried into the create. */
+  interrupt: boolean
 }
 
 const STATE_LABEL: Record<string, string> = {
@@ -73,17 +100,6 @@ const STATE_LABEL: Record<string, string> = {
   failed: 'failed',
   cancelled: 'cancelled',
   stranded: 'stranded',
-}
-
-const STATE_NOTE: Record<string, string> = {
-  draft: 'waiting for you to arm it',
-  armed: 'armed — waits for order and readiness',
-  blocked: 'refused; reasons below',
-  delivering: 'delivering…',
-  sent: 'delivered',
-  failed: 'failed — verify the terminal',
-  cancelled: 'cancelled',
-  stranded: 'target ended or was replaced',
 }
 
 function describeOutcome(outcome: QueueSendOutcome): string {
@@ -122,13 +138,28 @@ const DELAY_PRESETS: { label: string; seconds: number }[] = [
   { label: '+1h', seconds: 3600 },
 ]
 
-/** One line, because it is a status the working view carries permanently: two labelled
- *  checkboxes and a sentence cost three wrapped lines of a 380px column, above the thing
- *  the panel was opened for. The controls live behind the disclosure.
- *
- *  Answers for the install first, then for the session. The install-wide states are the
- *  ones that make every other reading a lie, and they are true with no session focused —
- *  which is why this line, and the emergency stop behind it, survive an empty target. */
+/** Autosave, said in the fewest words that still distinguish "your text is on the daemon"
+ *  from "it is not". Silence is the one thing an autosaving field may not do: the whole
+ *  reason this replaced a Save button is that people did not trust the drawer with their
+ *  typing, and a field that never says anything earns exactly that. */
+function draftStatusLabel(state: QueueDraftState | null): string {
+  if (!state) return ''
+  switch (state.status) {
+    case 'saving':
+      return 'saving…'
+    case 'pending':
+      return 'unsaved'
+    case 'saved':
+      return state.dirty ? 'unsaved' : 'saved'
+    case 'empty':
+      return 'empty'
+    case 'error':
+      return 'not saved'
+    default:
+      return ''
+  }
+}
+
 /** The numbers behind a lapse, in the one place a reader is already asking why.
  *
  *  A lapse is the only disable with no act behind it, so "lapsed while the conversation
@@ -178,6 +209,15 @@ const isAgentSession = (session: Session | null): boolean =>
 const isDoneState = (state: QueueMessage['state']): boolean =>
   state === 'sent' || state === 'failed' || state === 'cancelled'
 
+/** Grow the field to its content instead of making the reader drag a resize handle over a
+ *  message they are still writing. The ceiling is CSS (`max-height`), so the clamp holds on
+ *  a phone with the keyboard up without this having to measure the visual viewport. */
+function autoGrow(field: HTMLTextAreaElement | null): void {
+  if (!field) return
+  field.style.height = 'auto'
+  field.style.height = `${field.scrollHeight}px`
+}
+
 export function QueuePane({
   sessionId, sessions, onSelectSession, onOpenAsTab, onOpenFleetQueue, fleetPending = 0,
   openRequestToken,
@@ -189,56 +229,69 @@ export function QueuePane({
   const [confirmId, setConfirmId] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState('')
   const [menuId, setMenuId] = useState('')
-  const [editing, setEditing] = useState<{ id: string; revision: number; body: string } | null>(null)
-  const [composer, setComposer] = useState('')
-  // Whether the next staged message asks for mid-turn delivery. Off by default:
-  // interrupting is a per-message choice, not a mode the pane drifts into.
-  const [composerInterrupt, setComposerInterrupt] = useState(false)
+  const [editing, setEditing] = useState<EditingState | null>(null)
+  const [draftState, setDraftState] = useState<QueueDraftState | null>(null)
   const [retargetFor, setRetargetFor] = useState('')
   const [auto, setAuto] = useState<QueueAutoStatus | null>(null)
   const [autoOpen, setAutoOpen] = useState(false)
   const [showDone, setShowDone] = useState(false)
   const alive = useRef(true)
-  const composerRef = useRef<HTMLTextAreaElement>(null)
-  const composerSessionRef = useRef(sessionId)
-  composerSessionRef.current = sessionId
+  const editorRef = useRef<HTMLTextAreaElement>(null)
+  const editorSessionRef = useRef(sessionId)
+  editorSessionRef.current = sessionId
+  // Read from callbacks that outlive a render (the insert-target handle, teardown).
+  const editingRef = useRef<EditingState | null>(editing)
+  editingRef.current = editing
+  const focusPending = useRef(false)
 
   const session = sessions.find(item => item.id === sessionId) || null
-  const composerTargetLabel = session ? agentTargetName(session) : sessionId || 'No session'
-  const composerHandle = useMemo<EditorHandle>(() => {
+  const editorTargetLabel = session ? agentTargetName(session) : sessionId || 'No session'
+  // An id with no session record is an ended target the daemon still holds a queue for
+  // (the pop-out tab outliving its session); only a *live non-agent* is refused here.
+  const targetable = !!sessionId && (isAgentSession(session) || !session)
+  const live = view?.target.live ?? !!session
+
+  /** The queue's text sink is whichever row is open for editing, and only while one is.
+   *
+   *  With no editor open there is no field to write into, so the handle reports itself
+   *  detached and `chooseInsertTarget` falls back to the focused terminal rather than
+   *  silently swallowing a dictation into a pane with nowhere to put it. */
+  const editorHandle = useMemo<EditorHandle>(() => {
     const targetSessionId = sessionId
     return {
-      get isConnected() { return composerSessionRef.current === targetSessionId && (composerRef.current?.isConnected ?? false) },
+      get isConnected() {
+        return editorSessionRef.current === targetSessionId
+          && !!editingRef.current
+          && (editorRef.current?.isConnected ?? false)
+      },
       insertText: text => {
-        if (composerSessionRef.current !== targetSessionId) return
-        const field = composerRef.current
-        const start = field?.selectionStart ?? 0
-        const end = field?.selectionEnd ?? start
-        setComposer(current => {
-          const safeStart = Math.min(start, current.length)
-          const safeEnd = Math.min(Math.max(end, safeStart), current.length)
-          const next = `${current.slice(0, safeStart)}${text}${current.slice(safeEnd)}`
-          requestAnimationFrame(() => {
-            const caret = safeStart + text.length
-            composerRef.current?.setSelectionRange(caret, caret)
-          })
-          return next
+        if (editorSessionRef.current !== targetSessionId) return
+        const current = editingRef.current
+        if (!current) return
+        const field = editorRef.current
+        const rawStart = field?.selectionStart ?? current.body.length
+        const start = Math.min(rawStart, current.body.length)
+        const end = Math.min(Math.max(field?.selectionEnd ?? start, start), current.body.length)
+        const body = `${current.body.slice(0, start)}${text}${current.body.slice(end)}`
+        setEditing({ ...current, body })
+        queueDraftSaver.edit(current.key, { body })
+        requestAnimationFrame(() => {
+          const caret = start + text.length
+          editorRef.current?.setSelectionRange(caret, caret)
+          autoGrow(editorRef.current)
         })
       },
     }
   }, [sessionId])
-  const composerSurface = {
+  const editorSurface = {
     id: `queue:${sessionId}`,
     kind: 'queue' as const,
-    label: `Queue · ${composerTargetLabel}`,
+    label: `Queue · ${editorTargetLabel}`,
   }
-  useEffect(() => () => forgetEditorFocus(composerHandle), [composerHandle])
+  useEffect(() => () => forgetEditorFocus(editorHandle), [editorHandle])
   useEffect(() => {
-    if (document.activeElement === composerRef.current) noteEditorFocus(composerHandle, composerSurface)
-  }, [sessionId, composerTargetLabel])
-  // An id with no session record is an ended target the daemon still holds a queue for
-  // (the pop-out tab outliving its session); only a *live non-agent* is refused here.
-  const targetable = !!sessionId && (isAgentSession(session) || !session)
+    if (document.activeElement === editorRef.current) noteEditorFocus(editorHandle, editorSurface)
+  }, [sessionId, editorTargetLabel])
 
   const refresh = useCallback(async () => {
     try {
@@ -270,28 +323,51 @@ export function QueuePane({
     }
   }, [sessionId, refresh])
 
+  // The autosave entry reports its own progress; the create in particular is where this
+  // view learns the item's id, because nothing else in the pane performed that write.
+  useEffect(() => queueDraftSaver.subscribe((key, state) => {
+    if (editingRef.current?.key !== key) return
+    setDraftState(state)
+    if (state.messageId && state.messageId !== editingRef.current.messageId) {
+      setEditing(current => (
+        current && current.key === key ? { ...current, messageId: state.messageId } : current
+      ))
+      // The create is the one write this pane did not make itself, so nothing else would
+      // fetch the row it produced — and until it does, the item has no state chip, no
+      // pending count, and no id for the acts that name one.
+      void refresh()
+    }
+  }), [refresh])
+
   // Retargeting drops per-message UI that named a message of the previous target: the
   // drawer's target changes under it every time focus moves to another pane.
-  useEffect(() => {
-    setEditing(null); setConfirmId(''); setDeleteConfirmId(''); setMenuId(''); setRetargetFor(''); setError('')
-  }, [sessionId])
-
-  // A chip or command can open an already-selected Queue tab; the token still earns focus.
   //
-  // Never on a device whose only keyboard is an on-screen one. There, focusing a field is
-  // not a convenience but a layout change: the keyboard rises over most of the drawer, so
-  // opening the Queue to *read* it — which is what the tab is opened for far more often
-  // than composing — arrives with the list already covered and a dismissal to perform.
-  // The desktop caret costs nothing and is kept. `hasSoftKeyboard` rather than the mobile
-  // breakpoint, deliberately: a narrowed desktop window has a real keyboard and a landscape
-  // tablet does not.
+  // The open editor is *saved* rather than dropped. Moving focus to another pane is the
+  // single most common way a half-written message used to disappear, and it is not a
+  // decision to discard anything — so the last keystrokes are flushed on the way out and
+  // the entry is retired only once the daemon has them.
+  useEffect(() => () => {
+    const key = editingRef.current?.key
+    if (key) void queueDraftSaver.flush(key).then(() => queueDraftSaver.close(key))
+  }, [sessionId])
   useEffect(() => {
-    if (openRequestToken && !hasSoftKeyboard()) composerRef.current?.focus()
-  }, [openRequestToken])
+    setEditing(null); setDraftState(null); setConfirmId(''); setDeleteConfirmId('')
+    setMenuId(''); setRetargetFor(''); setError('')
+  }, [sessionId])
 
   const messages = view?.messages ?? []
   const head = useMemo(() => queueHead(messages), [messages])
-  const active = useMemo(() => messages.filter(item => !isDoneState(item.state)), [messages])
+  const editingMessage = editing?.messageId
+    ? messages.find(item => item.id === editing.messageId) ?? null
+    : null
+  const active = useMemo(
+    () => messages.filter(item => !isDoneState(item.state)),
+    [messages],
+  )
+  // A floating editor draws its own row, so the created item must not also draw one.
+  const listed = editing?.floating && editing.messageId
+    ? active.filter(item => item.id !== editing.messageId)
+    : active
   const done = useMemo(() => messages.filter(item => isDoneState(item.state)), [messages])
   const liveAgents = useMemo(
     () => agentTargets(sessions, session?.project_id ?? '').filter(item => item.id !== sessionId),
@@ -311,10 +387,13 @@ export function QueuePane({
     }
   }
 
-  const send = async (message: QueueMessage, confirm: boolean) => {
+  /** `revision` is overridable because an autosaved edit advances it and this view learns
+   *  that from the save's own response, not from a fetch it has not made yet. Sending on
+   *  the fetched revision after editing the row is a guaranteed `revision_conflict`. */
+  const send = async (message: QueueMessage, confirm: boolean, revision = message.revision) => {
     setBusyId(message.id)
     setError('')
-    const outcome = await sendQueueMessage(message.id, message.revision, {
+    const outcome = await sendQueueMessage(message.id, revision, {
       confirm,
       idempotencyKey: browserUuid(),
     })
@@ -335,17 +414,127 @@ export function QueuePane({
     void refresh()
   }
 
-  const add = async (armed: boolean) => {
-    if (!composer.trim()) return
-    await run('composer', async () => {
-      await enqueueMessage(sessionId, composer, {
-        armed,
-        // The default is not sent: an item without the key means what every
-        // item meant before the mode existed (wait for idle).
-        constraints: composerInterrupt ? { delivery: 'now' } : undefined,
-      })
-      setComposer('')
+  // ---------------------------------------------------------------- the editor
+
+  /** Retire whatever editor is open, after the daemon has its text. */
+  const retire = async (key: string) => {
+    await queueDraftSaver.flush(key)
+    queueDraftSaver.close(key)
+  }
+
+  const openEditor = (next: EditingState, revision: number, constraints: QueueConstraints | null) => {
+    const previous = editingRef.current?.key
+    if (previous === next.key) { editorRef.current?.focus(); return }
+    if (previous) void retire(previous)
+    queueDraftSaver.open(next.key, {
+      sessionId,
+      messageId: next.messageId,
+      revision,
+      body: next.body,
+      constraints,
     })
+    setEditing(next)
+    setDraftState(queueDraftSaver.state(next.key))
+    setMenuId('')
+    setDeleteConfirmId('')
+    focusPending.current = true
+  }
+
+  /** `+` — a blank queued item, in edit mode, at the tail of the queue.
+   *
+   *  It writes nothing until there is something to write: an empty draft is purely local,
+   *  which is what makes pressing this cheap and what stops an abandoned one leaving a row
+   *  behind. From the first non-empty keystroke it is an ordinary queued draft. */
+  const startDraft = () => {
+    if (editingRef.current?.floating) { editorRef.current?.focus(); return }
+    openEditor(
+      { key: `draft:${browserUuid()}`, messageId: '', body: '', floating: true, interrupt: false },
+      0,
+      null,
+    )
+  }
+
+  /** Edit an item that already exists. The seed carries the revision the daemon reported
+   *  with this fetch, so the first PATCH is not a guaranteed conflict. */
+  const startEdit = (message: QueueMessage) => {
+    openEditor(
+      {
+        key: `msg:${message.id}`,
+        messageId: message.id,
+        body: message.body,
+        floating: false,
+        interrupt: message.constraints?.delivery === 'now',
+      },
+      message.revision,
+      message.constraints,
+    )
+  }
+
+  const closeEditor = async () => {
+    const current = editingRef.current
+    if (!current) return
+    setBusyId(current.messageId || 'draft')
+    await retire(current.key)
+    setBusyId('')
+    forgetEditorFocus(editorHandle)
+    setEditing(null)
+    setDraftState(null)
+    void refresh()
+  }
+
+  /** Drop a draft that was never persisted. Once autosave has created the item this is not
+   *  reachable — the row's delete, with its confirmation, is. */
+  const discardDraft = () => {
+    const current = editingRef.current
+    if (!current || current.messageId) return
+    queueDraftSaver.close(current.key)
+    forgetEditorFocus(editorHandle)
+    setEditing(null)
+    setDraftState(null)
+  }
+
+  const onEditorInput = (field: HTMLTextAreaElement) => {
+    const current = editingRef.current
+    if (!current) return
+    const body = field.value
+    autoGrow(field)
+    setEditing({ ...current, body })
+    queueDraftSaver.edit(current.key, { body })
+  }
+
+  /** Save, then arm — the "stage it armed" the composer's Ctrl+Enter used to be.
+   *
+   *  Arming is a separate write from the body, deliberately: the item has to exist before
+   *  it can be armed, and flushing first is what stops an arm from authorizing the *previous*
+   *  body while the newest keystrokes are still in the debounce. */
+  const armFromEditor = async (force = false) => {
+    const current = editingRef.current
+    if (!current) return
+    setBusyId(current.messageId || 'draft')
+    const saved = await queueDraftSaver.flush(current.key)
+    setBusyId('')
+    const id = saved?.messageId || current.messageId
+    if (!id) return
+    const known = messages.find(item => item.id === id)
+    const armed = force ? true : !(known?.state === 'armed')
+    await run(id, () => armQueueMessage(id, armed))
+  }
+
+  /** Send from a row, flushing first when that row is the one being edited: delivering the
+   *  body the daemon happens to be holding, rather than the one on screen, is the failure a
+   *  debounce makes possible and an explicit Save used to rule out. The flush's own response
+   *  carries the revision the send has to quote. */
+  const sendFromRow = async (message: QueueMessage, isEditing: boolean, confirm: boolean) => {
+    const key = editingRef.current?.key
+    const saved = isEditing && key ? await queueDraftSaver.flush(key) : null
+    await send(message, confirm, saved?.revision ?? message.revision)
+  }
+
+  /** The arm toggle, in the editor and out of it. */
+  const armFromRow = async (message: QueueMessage | null, isEditing: boolean) => {
+    if (isEditing) { await armFromEditor(); return }
+    if (!message) return
+    await run(message.id, () => armQueueMessage(message.id, message.state !== 'armed'))
   }
 
   /** Flip one pending message between mid-turn and wait-for-idle delivery.
@@ -357,6 +546,17 @@ export function QueuePane({
     const { delivery: _delivery, ...rest } = message.constraints || {}
     const next: QueueConstraints = interrupt ? { ...rest, delivery: 'now' } : rest
     return scheduleQueueMessage(message.id, Object.keys(next).length ? next : null)
+  }
+
+  /** The same choice, whether the item exists yet or not. Before it exists the answer rides
+   *  the create; after it exists it is a PATCH like any other. */
+  const toggleInterrupt = async (message: QueueMessage | null, interrupt: boolean) => {
+    const current = editingRef.current
+    if (current) {
+      setEditing({ ...current, interrupt })
+      queueDraftSaver.edit(current.key, { constraints: interrupt ? { delivery: 'now' } : null })
+    }
+    if (message) await run(message.id, () => setMessageDelivery(message, interrupt))
   }
 
   /** Clear the schedule alone: delivery mode and expiry stay on the item. */
@@ -379,25 +579,39 @@ export function QueuePane({
     await moveQueueMessage(message.id, after)
   }
 
-  /** Delete, in exactly one implementation.
+  /** Delete, in one implementation and drawn once.
    *
-   *  It is drawn twice — on the row itself and inside the overflow — because removing a
-   *  message someone changed their mind about is the one act a reader wanted often enough
-   *  to resent opening a menu for, while the overflow must keep it for the case where the
-   *  row is scrolled or the compact mark is ambiguous. Two copies of a *destructive*
-   *  control is exactly where behaviour drifts, so both call this: same arm-then-confirm
-   *  (one click marks, the second deletes), same `deleteConfirmId` — so confirming from
-   *  either place is the same armed state, not two — same busy guard, and the same absence
-   *  while a message is mid-delivery, which is the one state the daemon will not accept a
-   *  delete in. Only the resting label differs, because a full-width menu row has space
-   *  for a word and an inline row does not. */
-  const deleteButton = (message: QueueMessage, busy: boolean, compact: boolean) => {
-    if (message.state === 'delivering') return null
+   *  It used to be drawn twice — inline and again inside the tray — which put two copies of
+   *  a destructive control on screen together the moment the tray was open, one of them a
+   *  bare `×`. The inline end-cap is the one that survives, now a bin rather than a mark
+   *  that also means "close": it is the copy that is always reachable without opening
+   *  anything, which was the reason for having it inline in the first place.
+   *
+   *  Arm-then-confirm (one click marks, the second deletes), absent while the item is
+   *  `delivering` — the one state the daemon will not accept a delete in — and, for a draft
+   *  autosave has not created yet, a plain local discard, because there is nothing to
+   *  confirm about text no one else has. */
+  const deleteButton = (message: QueueMessage | null, busy: boolean) => {
+    if (message?.state === 'delivering') return null
+    if (!message) {
+      if (!editing || editing.messageId) return null
+      return (
+        <button
+          type="button"
+          class="danger queue-item-delete"
+          aria-label="Discard this draft"
+          title="Discard this draft"
+          onClick={discardDraft}
+        >
+          <TrashIcon />
+        </button>
+      )
+    }
     const armed = deleteConfirmId === message.id
     return (
       <button
         type="button"
-        class={`danger${compact ? ' queue-item-delete' : ''}${armed ? ' confirming' : ''}`}
+        class={`danger queue-item-delete${armed ? ' confirming' : ''}`}
         aria-label={armed ? 'Confirm deleting this message' : 'Delete this message'}
         title={armed ? 'Click again to delete permanently' : 'Delete this message'}
         disabled={busy}
@@ -407,10 +621,15 @@ export function QueuePane({
             return
           }
           setDeleteConfirmId('')
+          if (editingRef.current?.messageId === message.id) {
+            queueDraftSaver.close(editingRef.current.key)
+            setEditing(null)
+            setDraftState(null)
+          }
           void run(message.id, () => deleteQueueMessage(message.id))
         }}
       >
-        {armed ? 'Delete permanently' : compact ? '×' : 'Delete'}
+        {armed ? 'Delete permanently' : <TrashIcon />}
       </button>
     )
   }
@@ -419,23 +638,19 @@ export function QueuePane({
    *  menu: this column scrolls and can be as narrow as 300px, where a popover would need
    *  positioning, portalling, and an outside-click contract to do the same job.
    *
-   *  Splitting them out is what makes the row fit at all: eleven buttons (send, arm,
-   *  edit, two moves, cancel, three schedule presets, copy) wrapped to four lines per
-   *  message at drawer width, which is most of a phone screen for one queued item. */
-  const overflow = (message: QueueMessage, busy: boolean) => {
+   *  Splitting them out is what makes the row fit at all. What stays inline is what is
+   *  wanted often enough to resent a second click for, and what survives as a mark: send,
+   *  arm, edit, copy, delete. The tray keeps the worded, rarer acts — reorder, cancel/skip,
+   *  the delivery mode, the schedule presets — because each of those is a sentence, not a
+   *  glyph. Nothing is drawn in both places: the delivery mode is a checkbox in the open
+   *  editor, so the tray drops its worded copy while that editor is open. */
+  const overflow = (message: QueueMessage, busy: boolean, isEditing: boolean) => {
     const pending = isPendingQueueState(message.state)
     const schedule = scheduleStatus(message)
     return (
       <div class="queue-item-actions queue-item-more">
         {pending && message.state !== 'delivering' && (
           <>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setEditing({ id: message.id, revision: message.revision, body: message.body })}
-            >
-              Edit
-            </button>
             <button type="button" title="Move earlier" disabled={busy} onClick={() => void run(message.id, () => moveMessage(message, -1))}>↑</button>
             <button type="button" title="Move later" disabled={busy} onClick={() => void run(message.id, () => moveMessage(message, 1))}>↓</button>
             <button
@@ -445,16 +660,18 @@ export function QueuePane({
             >
               {head?.id === message.id ? 'Skip' : 'Cancel'}
             </button>
-            <button
-              type="button"
-              title={message.constraints?.delivery === 'now'
-                ? 'Stop asking for mid-turn delivery; wait for the agent to be idle'
-                : 'Ask for delivery into a turn that is already running, when it is safe'}
-              disabled={busy}
-              onClick={() => void run(message.id, () => setMessageDelivery(message, message.constraints?.delivery !== 'now'))}
-            >
-              {message.constraints?.delivery === 'now' ? 'Wait for idle' : 'Deliver mid-turn'}
-            </button>
+            {!isEditing && (
+              <button
+                type="button"
+                title={message.constraints?.delivery === 'now'
+                  ? 'Stop asking for mid-turn delivery; wait for the agent to be idle'
+                  : 'Ask for delivery into a turn that is already running, when it is safe'}
+                disabled={busy}
+                onClick={() => void run(message.id, () => setMessageDelivery(message, message.constraints?.delivery !== 'now'))}
+              >
+                {message.constraints?.delivery === 'now' ? 'Wait for idle' : 'Deliver mid-turn'}
+              </button>
+            )}
             {schedule === 'scheduled' ? (
               <button type="button" disabled={busy} onClick={() => void run(message.id, () => clearSchedule(message))}>
                 Clear schedule
@@ -493,147 +710,166 @@ export function QueuePane({
             Cancel
           </button>
         )}
-        <button type="button" disabled={busy} onClick={() => copyBody(message)}>Copy</button>
-        {deleteButton(message, busy, false)}
       </div>
     )
   }
 
-  const row = (message: QueueMessage) => {
-    const pending = isPendingQueueState(message.state)
-    const isHead = head?.id === message.id
-    const busy = busyId === message.id
-    const isEditing = editing?.id === message.id
-    const schedule = scheduleStatus(message)
-    const from = senderLabel(message)
+  const editorField = () => {
+    if (!editing) return null
+    const status = draftStatusLabel(draftState)
     return (
-      <li
-        key={message.id}
-        class={`queue-item queue-item-${message.state}${isHead ? ' queue-item-head' : ''}`}
-      >
-        <div class="queue-item-meta">
-          <span class={`queue-state queue-state-${message.state}`}>
-            {STATE_LABEL[message.state] || message.state}
+      <div class="queue-item-edit">
+        <textarea
+          ref={editorRef}
+          class="queue-edit-field"
+          value={editing.body}
+          placeholder="Write the message for this agent…"
+          aria-label="Queued message text"
+          title="Saves as you type · Ctrl+Enter saves and arms · Esc closes the editor"
+          onFocus={() => noteEditorFocus(editorHandle, editorSurface)}
+          onInput={event => onEditorInput(event.currentTarget)}
+          // The gesture this whole surface exists for: leaving the field is a save, so
+          // the drawer can be swiped shut in the next frame without losing anything.
+          onBlur={() => { void queueDraftSaver.flush(editing.key) }}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              void closeEditor()
+              return
+            }
+            if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return
+            event.preventDefault()
+            void armFromEditor(true)
+          }}
+        />
+        {status && (
+          <span class={`queue-edit-status queue-edit-${draftState?.status ?? 'idle'}`} role="status">
+            {status}
           </span>
-          {isHead && <span class="queue-next-marker">next</span>}
-          {from && (
-            <span class="queue-item-sender" title={message.origin?.reason || undefined}>
-              {from}
-              {message.chain_depth > 1 ? ` · hop ${message.chain_depth}` : ''}
-            </span>
-          )}
-          {schedule === 'scheduled' && message.constraints?.not_before && (
-            <span class="queue-item-schedule">
-              scheduled {new Date(message.constraints.not_before * 1000).toLocaleTimeString()}
-            </span>
-          )}
-          {pending && message.constraints?.delivery === 'now' && (
-            <span
-              class="queue-item-schedule"
-              title="Asks to land in a running turn when the interject predicate says it is safe; otherwise it waits like any other message"
-            >
-              mid-turn
-            </span>
-          )}
-          {message.blocked_reasons?.length ? (
-            <span class="queue-item-reasons" title={message.blocked_reasons.join(', ')}>
-              {wordReasons(message.blocked_reasons)}
-            </span>
-          ) : null}
-          {message.stranded_reason && (
-            <span class="queue-item-reasons">{message.stranded_reason}</span>
-          )}
-        </div>
-        {isEditing ? (
-          <div class="queue-item-edit">
-            <textarea
-              value={editing.body}
-              disabled={busy}
-              onInput={event => setEditing({ ...editing, body: event.currentTarget.value })}
-            />
-            <div class="queue-item-actions">
-              <button
-                type="button"
-                disabled={busy || !editing.body.trim()}
-                onClick={() =>
-                  void run(message.id, async () => {
-                    await editQueueMessage(editing.id, editing.revision, editing.body)
-                    setEditing(null)
-                  })
-                }
-              >
-                Save
-              </button>
-              <button type="button" disabled={busy} onClick={() => setEditing(null)}>
-                Discard
-              </button>
-            </div>
-          </div>
-        ) : (
-          <pre class={`queue-item-body${message.state === 'sent' ? ' queue-item-sent' : ''}`}>
-            {message.body}
-          </pre>
         )}
-        {!isEditing && (
-          <div class="queue-item-actions">
-            {pending && message.state !== 'delivering' && (
-              <>
-                {isHead &&
-                  (confirmId === message.id ? (
-                    <button
-                      type="button"
-                      class="queue-send queue-send-confirm"
-                      disabled={busy}
-                      onClick={() => void send(message, true)}
-                    >
-                      Send anyway
-                    </button>
-                  ) : (
-                    // Never pre-labelled "Send anyway" on the advisory, and never
-                    // disabled by it. The confirm is always the second press against a
-                    // refusal the daemon issued *this instant*, so a stale reading can
-                    // neither smuggle a confirmation through nor take the override
-                    // away. All the advisory earns here is a hint that a confirmation
-                    // is coming; the strip above says why.
-                    <button
-                      type="button"
-                      class={`queue-send${sendHint ? ' queue-send-hinted' : ''}`}
-                      title={sendHint}
-                      disabled={busy}
-                      onClick={() => void send(message, false)}
-                    >
-                      Send now
-                    </button>
-                  ))}
+        {draftState?.error && <p class="queue-edit-error">{draftState.error}</p>}
+      </div>
+    )
+  }
+
+  /** One action row, editing or not, so opening the editor never hides the controls the
+   *  decision is made with. Losing sight of the arm toggle and the delivery mode behind a
+   *  Save/Cancel pair was the reason staging an armed mid-turn message took four steps. */
+  const actionsRow = (message: QueueMessage | null, busy: boolean, isEditing: boolean) => {
+    const pending = !!message && isPendingQueueState(message.state)
+    const settled = !!message && message.state !== 'delivering'
+    const isHead = !!message && head?.id === message.id
+    // Between the create and the next fetch the item exists and this view has not seen it
+    // yet; nothing that names an id may act in that window.
+    const detached = isEditing && !!editing?.messageId && !message
+    const midTurn = message ? message.constraints?.delivery === 'now' : !!editing?.interrupt
+    const canStage = isEditing && !detached && (!!message || !!editing?.body.trim())
+    return (
+      <div class={`queue-item-actions${isEditing ? ' queue-edit-actions' : ''}`}>
+        {isEditing && (
+          <label
+            class="queue-edit-interrupt"
+            title="Ask for this message to land in a turn that is already running, when the readiness tracker says it is safe. Off, it waits for the agent to be idle like every message before the mode existed."
+          >
+            <input
+              type="checkbox"
+              checked={midTurn}
+              disabled={busy || detached}
+              onChange={event => void toggleInterrupt(message, event.currentTarget.checked)}
+            />
+            <span>Mid-turn</span>
+          </label>
+        )}
+        {(pending && settled) || (isEditing && !message) ? (
+          <>
+            {isHead && message &&
+              (confirmId === message.id ? (
                 <button
                   type="button"
+                  class="queue-send queue-send-confirm"
                   disabled={busy}
-                  onClick={() => void run(message.id, () => armQueueMessage(message.id, message.state !== 'armed'))}
+                  onClick={() => void sendFromRow(message, isEditing, true)}
                 >
-                  {message.state === 'armed' ? 'Unarm' : 'Arm'}
+                  Send anyway
                 </button>
-              </>
-            )}
-            {message.state === 'stranded' &&
-              (retargetFor === message.id ? (
-                <Dropdown
-                  value=""
-                  disabled={busy}
-                  ariaLabel="Retarget this message"
-                  onChange={target => {
-                    setRetargetFor('')
-                    if (target) void run(message.id, () => retargetQueueMessage(message.id, target))
-                  }}
-                  options={[
-                    { value: '', label: 'Retarget to…' },
-                    ...liveAgents.map(item => ({ value: item.id, label: agentTargetName(item) })),
-                  ]}
-                />
               ) : (
-                <button type="button" disabled={busy || !liveAgents.length} onClick={() => setRetargetFor(message.id)}>
-                  Retarget
+                // Never pre-labelled "Send anyway" on the advisory, and never
+                // disabled by it. The confirm is always the second press against a
+                // refusal the daemon issued *this instant*, so a stale reading can
+                // neither smuggle a confirmation through nor take the override
+                // away. All the advisory earns here is a hint that a confirmation
+                // is coming; the strip above says why.
+                <button
+                  type="button"
+                  class={`queue-send${sendHint ? ' queue-send-hinted' : ''}`}
+                  title={sendHint}
+                  disabled={busy}
+                  onClick={() => void sendFromRow(message, isEditing, false)}
+                >
+                  Send now
                 </button>
               ))}
+            <button
+              type="button"
+              class={message?.state === 'armed' ? 'queue-armed' : ''}
+              title={isEditing && !message ? 'Save this draft and arm it (Ctrl+Enter)' : undefined}
+              disabled={busy || (isEditing && !canStage)}
+              onClick={() => void armFromRow(message, isEditing)}
+            >
+              {message?.state === 'armed' ? 'Unarm' : 'Arm'}
+            </button>
+          </>
+        ) : null}
+        {message?.state === 'stranded' &&
+          (retargetFor === message.id ? (
+            <Dropdown
+              value=""
+              disabled={busy}
+              ariaLabel="Retarget this message"
+              onChange={target => {
+                setRetargetFor('')
+                if (target) void run(message.id, () => retargetQueueMessage(message.id, target))
+              }}
+              options={[
+                { value: '', label: 'Retarget to…' },
+                ...liveAgents.map(item => ({ value: item.id, label: agentTargetName(item) })),
+              ]}
+            />
+          ) : (
+            <button type="button" disabled={busy || !liveAgents.length} onClick={() => setRetargetFor(message.id)}>
+              Retarget
+            </button>
+          ))}
+        <span class="queue-item-spacer" />
+        {/* The marks travel together. At the drawer's 300px floor the strip does not fit
+            beside "Send now" and "Arm", and letting it wrap control by control leaves a
+            lone red bin on a line of its own — so it wraps as one right-aligned group. */}
+        <span class="queue-item-marks">
+          {!isEditing && message && pending && settled && (
+            <button
+              type="button"
+              class="queue-item-icon"
+              aria-label="Edit this message"
+              title="Edit this message"
+              disabled={busy}
+              onClick={() => startEdit(message)}
+            >
+              <RenameIcon />
+            </button>
+          )}
+          {!isEditing && message && (
+            <button
+              type="button"
+              class="queue-item-icon"
+              aria-label="Copy this message"
+              title="Copy this message"
+              disabled={busy}
+              onClick={() => copyBody(message)}
+            >
+              <CopyIcon />
+            </button>
+          )}
+          {message && (
             <button
               type="button"
               class={`queue-item-menu${menuId === message.id ? ' open' : ''}`}
@@ -648,18 +884,145 @@ export function QueuePane({
             >
               ⋯
             </button>
-            {/* Last, and after the overflow rather than before it: a destructive control
-                does not sit where a distracted hand aims for the menu. */}
-            {deleteButton(message, busy, true)}
-          </div>
+          )}
+          {/* Last, and after the overflow rather than before it: a destructive control
+              does not sit where a distracted hand aims for the menu. */}
+          {deleteButton(message, busy)}
+        </span>
+        {isEditing && (
+          <button
+            type="button"
+            class="queue-edit-done"
+            title="Close the editor (Esc). Your text is already saved."
+            disabled={busy}
+            onClick={() => void closeEditor()}
+          >
+            Done
+          </button>
         )}
-        {!isEditing && menuId === message.id && overflow(message, busy)}
+      </div>
+    )
+  }
+
+  const itemMeta = (message: QueueMessage) => {
+    const pending = isPendingQueueState(message.state)
+    const isHead = head?.id === message.id
+    const schedule = scheduleStatus(message)
+    const from = senderLabel(message)
+    return (
+      <div class="queue-item-meta">
+        <span class={`queue-state queue-state-${message.state}`}>
+          {STATE_LABEL[message.state] || message.state}
+        </span>
+        {isHead && <span class="queue-next-marker">next</span>}
+        {from && (
+          <span class="queue-item-sender" title={message.origin?.reason || undefined}>
+            {from}
+            {message.chain_depth > 1 ? ` · hop ${message.chain_depth}` : ''}
+          </span>
+        )}
+        {schedule === 'scheduled' && message.constraints?.not_before && (
+          <span class="queue-item-schedule">
+            scheduled {new Date(message.constraints.not_before * 1000).toLocaleTimeString()}
+          </span>
+        )}
+        {pending && message.constraints?.delivery === 'now' && (
+          <span
+            class="queue-item-schedule"
+            title="Asks to land in a running turn when the interject predicate says it is safe; otherwise it waits like any other message"
+          >
+            mid-turn
+          </span>
+        )}
+        {message.blocked_reasons?.length ? (
+          <span class="queue-item-reasons" title={message.blocked_reasons.join(', ')}>
+            {wordReasons(message.blocked_reasons)}
+          </span>
+        ) : null}
+        {message.stranded_reason && (
+          <span class="queue-item-reasons">{message.stranded_reason}</span>
+        )}
+      </div>
+    )
+  }
+
+  const row = (message: QueueMessage) => {
+    const isHead = head?.id === message.id
+    const busy = busyId === message.id
+    const isEditing = editing?.messageId === message.id && !editing.floating
+    const pending = isPendingQueueState(message.state)
+    return (
+      <li
+        key={message.id}
+        class={`queue-item queue-item-${message.state}${isHead ? ' queue-item-head' : ''}${isEditing ? ' queue-item-editing' : ''}`}
+      >
+        {itemMeta(message)}
+        {isEditing ? editorField() : (
+          <pre
+            class={`queue-item-body${message.state === 'sent' ? ' queue-item-sent' : ''}${pending && message.state !== 'delivering' ? ' queue-item-editable' : ''}`}
+            // Double-click, not single: this element is also the only place the message
+            // can be selected from, and a single click would take the selection away.
+            onDblClick={pending && message.state !== 'delivering' ? () => startEdit(message) : undefined}
+          >
+            {message.body}
+          </pre>
+        )}
+        {actionsRow(message, busy, isEditing)}
+        {menuId === message.id && overflow(message, busy, isEditing)}
       </li>
     )
   }
 
+  /** The `+` draft's own row, at the tail of the queue where the item will sit. */
+  const draftRow = () => {
+    if (!editing?.floating) return null
+    const message = editingMessage
+    const busy = busyId === (editing.messageId || 'draft')
+    // `queue-item-new`, not `queue-item-draft`: the latter is already the *state* class
+    // every row in the `draft` state carries, and reusing it dashed all of their borders.
+    return (
+      <li key={editing.key} class="queue-item queue-item-new queue-item-editing">
+        {message ? itemMeta(message) : (
+          <div class="queue-item-meta">
+            <span class="queue-state queue-state-draft">draft</span>
+            <span class="queue-item-reasons">not saved until you type</span>
+          </div>
+        )}
+        {editorField()}
+        {actionsRow(message, busy, true)}
+        {message && menuId === message.id && overflow(message, busy, true)}
+      </li>
+    )
+  }
+
+  // Focus the field the moment its row exists, and size it to whatever it was seeded with.
+  useEffect(() => {
+    if (!editing || !focusPending.current) return
+    focusPending.current = false
+    const field = editorRef.current
+    if (!field) return
+    autoGrow(field)
+    field.focus()
+    const caret = field.value.length
+    field.setSelectionRange(caret, caret)
+  }, [editing?.key])
+
+  // A chip or command can open an already-selected Queue tab; the token still earns a draft.
+  //
+  // Never on a device whose only keyboard is an on-screen one. There, focusing a field is
+  // not a convenience but a layout change: the keyboard rises over most of the drawer, so
+  // opening the Queue to *read* it — which is what the tab is opened for far more often
+  // than composing — arrives with the list already covered and a dismissal to perform.
+  // The desktop caret costs nothing and is kept. `hasSoftKeyboard` rather than the mobile
+  // breakpoint, deliberately: a narrowed desktop window has a real keyboard and a landscape
+  // tablet does not.
+  useEffect(() => {
+    if (!openRequestToken || hasSoftKeyboard()) return
+    if (!targetable || !live) return
+    startDraft()
+  }, [openRequestToken])
+
   const targetLabel = session ? agentTargetName(session) : view?.target.label || sessionId
-  const live = view?.target.live ?? !!session
   // Two readings of the same fact, and neither is reliably the newer one: the row's
   // is kept live by the readiness stream but only for sessions the daemon is
   // following, while the target view's arrived with this pane's own fetch. Taking
@@ -914,11 +1277,12 @@ export function QueuePane({
       )}
 
       <ul class="queue-list">
-        {active.map(row)}
-        {!active.length && (
+        {listed.map(row)}
+        {draftRow()}
+        {!listed.length && !editing?.floating && (
           <li class="queue-empty">
             {targetable
-              ? 'Nothing queued. Messages staged here wait for your explicit “Send now” — nothing is ever delivered on a timer.'
+              ? 'Nothing queued. Press “New message” to stage one — it saves as you type and waits for your explicit “Send now”; nothing is ever delivered on a timer.'
               : 'Focus an agent session to stage messages for it. Shells are never targets: a paste there would execute.'}
           </li>
         )}
@@ -933,51 +1297,16 @@ export function QueuePane({
       </ul>
 
       {targetable && live && (
-        <footer class="queue-composer">
-          <textarea
-            ref={composerRef}
-            value={composer}
-            placeholder="Stage a message for this agent…"
-            title="Ctrl+Enter stages it armed"
-            disabled={busyId === 'composer'}
-            onFocus={() => noteEditorFocus(composerHandle, composerSurface)}
-            onInput={event => setComposer(event.currentTarget.value)}
-            onKeyDown={event => {
-              if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return
-              event.preventDefault()
-              void add(true)
-            }}
-          />
-          <div class="queue-composer-actions">
-            <label
-              class="queue-composer-interrupt"
-              title="Ask for this message to land in a turn that is already running, when the readiness tracker says it is safe. Off, it waits for the agent to be idle like every message before the mode existed."
-            >
-              <input
-                type="checkbox"
-                checked={composerInterrupt}
-                disabled={busyId === 'composer'}
-                onChange={event => setComposerInterrupt(event.currentTarget.checked)}
-              />
-              <span>Mid-turn</span>
-            </label>
-            <button
-              type="button"
-              disabled={busyId === 'composer' || !composer.trim()}
-              onClick={() => void add(false)}
-            >
-              Add draft
-            </button>
-            <button
-              type="button"
-              class="primary"
-              title="Ctrl+Enter"
-              disabled={busyId === 'composer' || !composer.trim()}
-              onClick={() => void add(true)}
-            >
-              Add armed
-            </button>
-          </div>
+        <footer class="queue-compose-bar">
+          <button
+            type="button"
+            class="queue-new"
+            title="Add a queued message. It opens for editing and saves as you type."
+            onClick={startDraft}
+          >
+            <PlusIcon />
+            <span>New message</span>
+          </button>
         </footer>
       )}
     </div>

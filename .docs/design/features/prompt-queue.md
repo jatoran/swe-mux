@@ -76,10 +76,10 @@ separately opt-in.
   is the one thing it was allowed to step over. The `when_idle` default is never persisted, so
   an item without the key means what every item meant before the mode existed
   (`auto-delivery.md`, `delivery-readiness.md`, `agent-messaging.md`).
-  A *human* sender asks for `now` too (2026-08-25): the Queue composer's **Mid-turn**
+  A *human* sender asks for `now` too (2026-08-25): the draft editor's **Mid-turn**
   checkbox (off by default - interrupting is a per-message choice, not a mode the pane
-  drifts into) stages the item with the constraint, a `mid-turn` mark on the row says so,
-  and the overflow flips a pending item between the two modes. The three sender-side gates
+  drifts into) carries the constraint into the create, a `mid-turn` mark on the row says so,
+  and the tray flips a pending item between the two modes when no editor is open on it. The three sender-side gates
   in `agent-messaging.md` (install switch, Project `interject_grant`, receiver opt-out)
   bound *agent* senders at staging time and are not re-imposed on a human staging into
   their own fleet; the delivery-time `interject_state` predicate and the receiver policy on
@@ -175,8 +175,9 @@ separately opt-in.
   `terminal_input_after_completion` is the reason an operator is most likely to read as a bug: the composer really is empty, the session really does read idle, and the queue still refuses, because the guard counts keystrokes and backspaces advance the count too.
   The strip is allowed to say "nothing is sitting in the composer now" beside it, using `unsent_input`, precisely because that is the fact making it look wrong - and it is allowed to do nothing else.
   An estimate that concluded "empty" must never be an input to the verdict (`delivery-readiness.md`, and `composer_input.py`).
-- **The focused Queue composer is a named Conversation text sink.**
-  Voice Send fills the composer at its caret but never stages, arms, delivers, or presses Enter; those remain explicit Queue acts.
+- **The focused Queue draft editor is a named Conversation text sink.**
+  Voice Send fills the open editor at its caret but never stages, arms, delivers, or presses Enter; those remain explicit Queue acts.
+  With no editor open the handle reports itself detached, so a dictation falls back to the focused terminal rather than being swallowed by a pane with nowhere to put it.
 - **The fleet queue is a modal overlay** (`FleetQueue`) over the same message store, not a second drawer tab.
   It partitions rows by explicit authorship (`agents + automation | human | all authors`, opening on non-human) and filters server-side by Project or target session.
   It is a modal because it has no send button: the Queue tab is docked so the target terminal stays visible while the operator decides to interrupt, and a view that decides nothing needs no terminal beside it.
@@ -184,18 +185,36 @@ separately opt-in.
   It reports install-wide auto-delivery state and owns none of it.
   It also projects pending and decided `request_spawn` records as targetless approval rows.
   Approve and dismiss remain explicit human acts; Fleet Queue does not gain general spawn authority and message rows still have no send control.
+- **There is one writing surface and it is a queue row** (2026-08-31).
+  The pane used to carry a permanent composer footer *as well as* a row editor: two text fields with different rules - one that staged new items and autosaved nothing, one that edited existing items behind an explicit Save - sharing a 300 px column.
+  Composing is now the same act as editing.
+  `+ New message` appends a blank draft, opens it, and focuses it; `⋯`'s Edit became a pencil on the row itself, and a double-click on a pending body opens the same editor (double, not single, because the body is also the only place the text can be selected from).
+- **Drafts autosave, and an empty one is never written.**
+  `queueDraftSaver.ts` owns a debounced (500 ms) write per open editor, deliberately outside the component: the Queue tab lives in the right-edge drawer, and swiping the drawer shut - or moving focus to another session, which retargets the whole pane - unmounts `QueuePane` mid-sentence, so a timer held in component state is cancelled by exactly the gesture that most often interrupts someone typing.
+  Blur, closing the editor, unmount, retarget, `pagehide` and `visibilitychange` all flush; the report behind this was "sometimes u might be typing and swipe away the right sidebar without thinking and then u lose what u were typing".
+  The first non-empty body is a `POST` that creates the item, every later one a `PATCH`; a body that is empty or whitespace is never sent, because the daemon refuses it (`invalid_body`) - which is also what makes `+` cheap, since an abandoned draft leaves no row.
+  A `revision_conflict` re-anchors on the revision the daemon reported and retries once.
+  Arming is deliberately not part of the create: an item must exist before it can be armed, so `Arm` (and `Ctrl+Enter`) flush first and then `PATCH {armed}` - which is also what stops an arm authorizing the *previous* body while the newest keystrokes sit in the debounce.
+  Autosave says `saving…`/`saved`/`unsaved` beside the field, because a field that saves silently is precisely the field nobody trusts with a half-written message.
+- **The editor keeps every control the resting row has.**
+  Save/Cancel used to replace the whole action strip, so staging an armed mid-turn message meant Save, re-find the row, arm, open the tray, set the mode.
+  The open editor carries the `Mid-turn` checkbox, `Arm`/`Unarm`, `Send now` when it is the head, the `⋯` tray, delete, and `Done` (`Esc`); the mid-turn choice made before the item exists rides the create rather than being lost.
+  A `+` draft keeps its own row at the tail of the list for as long as it is open, *including after autosave has created it*: moving the field into the created row would replace the DOM node under the caret half a second after the person started typing.
 - **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.**
-  Rows carry `Send now` (head), the arm toggle, and a compact delete end-cap inline; edit, move, cancel/skip, the schedule presets and copy live behind a per-row `⋯` that opens a tray under the row rather than a floating menu.
+  Rows carry `Send now` (head) and the arm toggle inline on the left, then a right-aligned strip of marks - edit, copy, `⋯`, delete - which wraps as one group rather than control by control, because letting it wrap individually left a lone red bin on a line of its own.
+  Only the two acts whose glyphs nobody has to learn became marks; arm, the delivery mode and the schedule presets keep their words, because each of those is a sentence.
+  Move, cancel/skip, the delivery mode and the schedule presets live behind the per-row `⋯` that opens a tray under the row rather than a floating menu.
+  The draft field is about four rows tall before it is typed into and grows to its content up to `40vh`.
   Terminal-state items (sent/failed/cancelled) collapse behind a `N delivered or closed` disclosure instead of rendering crossed out in place.
   The auto-delivery controls collapse to a one-line `auto: …` status with a disclosure.
-  `Ctrl+Enter` in the composer stages armed.
-- **Delete is drawn twice and implemented once.**
-  Removing a message someone changed their mind about was wanted often enough to resent opening a tray for, so the row carries a `×` end-cap beside the `⋯`; the tray keeps its worded copy for the case where the compact mark is ambiguous.
-  Two copies of a *destructive* control is exactly where behaviour drifts, so both call one helper: the same arm-then-confirm (one click marks, the second deletes) through one shared confirming id - so confirming from either place is the same armed state rather than two - the same busy guard, and the same absence while the item is `delivering`, which is the one state the daemon will not accept a delete in.
-  Only the resting label differs, because a full-width tray row has space for a word and an inline row does not.
+- **Delete is drawn once and implemented once** (changed 2026-08-31).
+  It used to be drawn twice - a `×` end-cap inline and a worded copy in the tray - which put two copies of a destructive control on screen together the moment the tray was open.
+  The inline copy is the one that survives, now a bin rather than a mark that also means "close", because it is the one reachable without opening anything.
+  Same arm-then-confirm (one click marks, the second deletes) through one `deleteConfirmId`, the same busy guard, and the same absence while the item is `delivering`, which is the one state the daemon will not accept a delete in.
+  A draft autosave never created is a plain local discard instead: there is nothing to confirm about text no daemon has.
   Delete is also available in the fleet queue.
 - **Opening the Queue to read it is not a request to write in it.**
-  Focus goes to the composer only where a physical keyboard is already present (`hasSoftKeyboard()`, not the mobile breakpoint - a narrowed desktop window has a real keyboard and a landscape tablet does not).
+  A deliberate open starts a draft only where a physical keyboard is already present (`hasSoftKeyboard()`, not the mobile breakpoint - a narrowed desktop window has a real keyboard and a landscape tablet does not).
   On a phone, focusing a field is a layout change rather than a convenience: the on-screen keyboard rises over most of the drawer, so the tab arrives with the list it was opened to show already covered.
   Underneath that, the two *reasons* the tab opens are now distinguished at the caller.
   A queue chip, the palette command, or a keybinding is someone about to write, and earns the caret; a send that came back `queued_behind` or `not_due` opens the same tab to say where an already-written message went, and earns nothing.
