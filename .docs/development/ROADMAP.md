@@ -3050,8 +3050,8 @@ is written down that way rather than counted.**
   and `macos-latest` beside the Windows gate, plus the two `--platform` mypy passes on every
   runner, so both implementations are typechecked wherever the gate runs. The WSL-agent half
   is `wsl_bridge.py` with its live discovery/translation/reachability verification.
-  macOS runs `continue-on-error` - a visible statement that nothing has executed there, not a
-  way to ignore failures; the flag comes off the first time it passes.
+  macOS initially ran `continue-on-error` while its host-specific findings were repaired.
+  The flag came off after the whole platform leg passed on 2026-08-31.
 - [x] Input, resize, Unicode widths, signals, clipboard/paste, replay, shell exit, agent
   promotion, attach ownership, queue delivery, and crash cleanup work on each target.
   On Linux, proven end to end rather than by unit test: `tools/linux_acceptance.sh` drives
@@ -3541,8 +3541,8 @@ the onboarding and launch subsections and is not restated here.
   there is **no `License ::` classifier**, because the PEP 639 expression below is the same fact
   and build backends reject the pair; and there is no `Operating System :: OS Independent`,
   because it would be false - Windows is the proving platform, Linux is claimed from source, and
-  macOS is typechecked but unexercised, which is exactly what the `continue-on-error` CI leg
-  says. `CHANGELOG.md`, `SECURITY.md`, and `RELEASING.md` are the governance half; `SECURITY.md`
+  macOS is exercised from source but has no shipped or manually proven desktop artifact.
+  `CHANGELOG.md`, `SECURITY.md`, and `RELEASING.md` are the governance half; `SECURITY.md`
   states the real trust boundary - a local daemon on loopback and optionally a tailnet, where any
   admitted device holds code-execution authority - rather than boilerplate, and puts an untrusted
   network out of scope instead of implying it is defended.)

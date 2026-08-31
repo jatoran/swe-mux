@@ -278,7 +278,7 @@ Anything else stops the run untouched unless `--stash-unmatched` is given, and e
 ### What the first macOS run actually found (2026-08-27)
 
 The repository went public and `.github/workflows/ci.yml`'s `platform` leg executed on `macos-latest` for the first time.
-Both POSIX implementations had been written and typechecked for macOS and never run there, so the leg is `continue-on-error` until it passes once.
+Both POSIX implementations had been written and typechecked for macOS and never run there, so the leg began as `continue-on-error`.
 It produced exactly two failures, both of which pass on Linux, and they have **two different root causes** rather than one.
 Recording them here because each is a case where the honest answer is "Linux was lucky", not "macOS is different".
 
@@ -302,9 +302,8 @@ macOS ships bash 3.2 as `/bin/sh` while Debian and Ubuntu ship dash, so the test
 The bash measurement is 5.2, not the 3.2 macOS carries - the optimisation is the same longstanding `-c` case in both, but that step is reasoning from bash's behaviour rather than from a macOS run.
 This one is a test-fixture assumption, not a product defect - `reap_process_tree` walks descendants and kills the root either way - and the fix is a trailing statement in the POSIX command so the wrapper stays a wrapper on every shell.
 
-Both fixes were verified on Linux, which is the half that can be executed here: the full container suite still passes, and the ownership fix was measured against the contention that produces the failure.
-Neither is *confirmed on macOS*, because no macOS host was available and none can be licensed onto the proving hardware.
-The next `macos-latest` run is what closes them, and `continue-on-error` stays until it does.
+Both fixes were initially verified on Linux, which was the half that could be executed locally: the full container suite still passed, and the ownership fix was measured against the contention that produced the failure.
+The clean `macos-latest` run on 2026-08-31 confirmed both fixes.
 The general lesson matches the target-order section below: a POSIX implementation verified only on Linux is verified on the shell and the scheduler Linux happens to have.
 
 **3. A file watch had no defined event granularity, so it had whatever the host's notification API happened to give it.**
@@ -321,7 +320,7 @@ Filtering *all* directory-valued paths would have been the wrong reading of the 
 Nothing downstream was mis-handling the extra event as a file, so this was noise rather than corruption (the file browser's worst case was refreshing the parent it had already refreshed); the defect is the undefined contract, which is what makes the next difference the one that does corrupt something.
 
 Verified by execution on Windows and in the Linux container, where the normalization is a no-op and the suite still passes, plus a direct unit test of the projection that asserts the macOS shape on every host without needing a macOS backend to produce it.
-**Not confirmed on macOS**, for the same reason as the two above; the next `macos-latest` run is what closes it.
+The clean `macos-latest` run on 2026-08-31 confirmed the normalization against FSEvents.
 
 **4. Priority lowering is best-effort, including when the host accepts the command and ignores it.**
 `test_the_gates_own_renice_invocation_actually_lowers_a_process` was the only failure in six consecutive macOS jobs after the priority-yielding gate landed: 6,563 tests passed and this one read niceness `0` after `renice -n 10` exited successfully.
@@ -337,6 +336,7 @@ The new infrastructure-reservation suite passed on Windows and failed seven test
 `Path.resolve()` correctly applied the running host's rules: Windows resolved that as the intended executable, while POSIX resolved the backslashes as ordinary filename characters and could never equal the fixture's unnormalized identity.
 The production comparison was correct and unchanged.
 The fake machine now uses an absolute host-native path while retaining the `.exe` image name and frozen-app command shapes each test needs, so every host asks the same identity question.
+The complete macOS platform leg then passed on commit `db753ce0`; `continue-on-error` was removed and the live-daemon tier joined macOS on the following run.
 
 ### What the first WSL Ubuntu run actually found (2026-08-28)
 

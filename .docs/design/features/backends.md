@@ -251,12 +251,12 @@ Exempting a harness means changing its descriptor, never weakening a test.
 | Live (store) | Does a store-backed CLI's exact measurement still read? | `tests/test_live_agent_conformance.py` store canary, marker-gated; opencode runs `opencode run` into an isolated store and asserts `session_measurements` |
 | Live (automations) | Does a real run's facts drive the detectors and memory tools? | `tests/test_live_automations.py`, marker-gated; `test_every_fact_producing_harness_is_covered_by_the_automations_canary` runs without credentials |
 | Live (MCP wire) | Does a real session obey the control tools through `/mcp`? | `tests/test_live_mcp_control.py`, marker-gated; `test_every_mcp_capable_agent_harness_is_covered_by_the_control_canary` runs without credentials |
-| Live (daemon) | Does a daemon start on this host, serve a terminal, and stop clean? | `tests/test_live_daemon.py` (`live_daemon`), run in CI on `ubuntu-latest` and `windows-latest`; `tests/test_live_daemon_guards.py` runs in the default tier |
+| Live (daemon) | Does a daemon start on this host, serve a terminal, and stop clean? | `tests/test_live_daemon.py` (`live_daemon`), run in CI on Windows, Ubuntu and macOS; `tests/test_live_daemon_guards.py` runs in the default tier |
 
 `live_daemon` is the one live tier that is **not** about a harness and **not** gated on credentials.
 Its session half spawns a `shell` backend rather than an agent precisely so it needs no provider, no credential and no quota, which is what lets a public runner run it.
 It covers the daemon itself: every startup phase `/api/health` reports reaching `ready`, the shims and per-adapter hook/MCP artifacts landing on disk, a real pseudoterminal spawned through `POST /api/sessions` and driven over the `/pty/{sid}` websocket, `DELETE /api/sessions/{sid}` reaping the child, and the real `muxd` entry point starting as a subprocess and exiting zero with no orphans and an empty `crash.log`.
-It is held off the macOS leg while that leg is `continue-on-error`, and it is excluded from `.worktree-verify` because it binds ports and spawns shells and landing is meant to be cheap.
+It runs on every CI host and is excluded from `.worktree-verify` because it binds ports and spawns shells and landing is meant to be cheap.
 The startup-phase assertion is derived from `server.py` by an AST walk rather than from a copied list, so a phase added later is covered the day it lands; `test_the_startup_phase_derivation_actually_finds_phases` is the self-check that keeps that derivation from passing vacuously.
 
 The harness live tiers are excluded from `.worktree-verify` and CI because they need an authenticated CLI and consume quota.

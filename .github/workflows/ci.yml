@@ -22,18 +22,12 @@
 # `sys.platform`, because a test that mocks the platform proves nothing about the
 # platform.
 #
-# macOS is `continue-on-error`. That is a deliberate, visible statement rather than
-# a way to ignore failures: every POSIX path is written and typechecked for macOS,
-# but nothing had ever run there, so the first red was expected to be about the
-# runner rather than about a regression. It is wired up so the gap is measured
-# instead of assumed, and the flag comes off the moment it passes once.
-#
 # The runs since 2026-08-27 have produced the host-shaped findings this leg was
 # built to expose: a racy PTY process-group read, a fixture that assumed every
 # `/bin/sh` forks a lone `-c` command, FSEvents directory-granularity noise, and
 # a priority test that treated BSD `renice -n` as an absolute value. Each was
-# fixed at its contract boundary. The flag stays until a run confirms the set
-# on macOS. See
+# fixed at its contract boundary. macOS passed the whole platform leg on
+# 2026-08-31, so it now blocks like Ubuntu and runs the live-daemon tier too. See
 # `.docs/development/CROSS_PLATFORM_FINDINGS.md` § What the first macOS run
 # actually found.
 #
@@ -280,16 +274,12 @@ jobs:
     name: platform (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
-    continue-on-error: ${{ matrix.unproven }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            unproven: false
-          # Run once, two findings fixed but unconfirmed there. See the header.
           - os: macos-latest
-            unproven: true
     steps:
       - uses: actions/checkout@v4
 
@@ -328,19 +318,12 @@ jobs:
           uv run pytest tests -q -n auto --dist loadgroup --durations=25
           -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp and not live_edge_tts and not live_daemon and not live_model_flag"
 
-      # Ubuntu only, and held off macOS deliberately rather than by oversight.
-      # The macOS leg is still `continue-on-error` (see the header), and a new
-      # tier added under that flag is a tier whose first regression is invisible:
-      # it goes red beside an already-red leg and nobody can tell the two apart.
-      # This joins macOS on the run after that flag comes off.
-      #
       # It is the first thing in this workflow that starts a daemon at all. It is
       # safe on a shared runner for the same reason it is safe in a worktree: an
       # OS-allocated port and a `tmp_path` data directory, never 8765 and never
       # `~/.mux`. `install_smoke.py` still starts nothing - the *artifact* is
       # deliberately still unproven as a running daemon on any host.
       - name: pytest (live_daemon)
-        if: matrix.os == 'ubuntu-latest'
         run: uv run pytest tests/test_live_daemon.py -q --durations=10 -m live_daemon
 
       # Everything below builds and installs the artifact, and until 2026-08-28 it
