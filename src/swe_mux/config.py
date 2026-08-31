@@ -696,6 +696,13 @@ class Config:
     # nothing anywhere may branch on this value to decide what a user can do. Its
     # only standing readers are default-density surfaces and the Settings readout.
     experience_tier: str = ""
+    # The keyboard preset chosen at first run (`keymaps.py`, one JSON document per
+    # preset under `assets/keymaps/`), or "" when never chosen and "custom" once
+    # the shortcuts have been hand-edited. Like `experience_tier` this is a record
+    # of a choice rather than a gate: the durable answer is `keybindings.json`,
+    # applying a preset rewrites it absolutely, and nothing may branch on this
+    # value to decide what a user can bind.
+    keymap_preset: str = ""
     # Quest-log entries the user has dismissed for good (`frontend/src/questRegistry.ts`
     # renders the log on the empty workspace stage). A closed three-entry set by
     # construction - a quest log that grows into a todo list is an obligation
@@ -917,6 +924,9 @@ class Config:
     clipboard_history_retention_hours: int = 24
     clipboard_history_redact_secrets: bool = True
     notes_default_open: str = "dock"
+    # Visibility only. The global Scratchpad file is retained while disabled and returns
+    # unchanged when the setting is enabled again.
+    note_scratchpad_enabled: bool = True
     # Note editor (the vendored Continuity Markdown editor). Only what the
     # editor genuinely exposes is here: element properties/attributes
     # (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`,
@@ -1860,6 +1870,20 @@ _RANGE_RULES: tuple[_Range, ...] = (
     _Range("voice_chat_patience_ms", 0, 5000, "must be between 0 and 5000 milliseconds"),
 )
 
+def _keymap_preset_ids() -> tuple[str, ...]:
+    """The shipped preset ids, read from the keymap package rather than listed.
+
+    A local import: `keymaps` reaches `keybindings`, which this module already
+    imports, and keeping the edge here rather than at the top makes the direction
+    of the dependency obvious. A missing or unreadable keymap directory yields an
+    empty tuple, so the choice degrades to "" and "custom" instead of taking the
+    daemon down over data it can reinstall.
+    """
+    from .keymaps import preset_ids
+
+    return preset_ids()
+
+
 _CHOICE_RULES: tuple[_Choice, ...] = (
     _Choice(
         "host",
@@ -1872,6 +1896,14 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
         "experience_tier",
         ("", "terminal", "deterministic", "automations"),
         "must be terminal, deterministic, automations, or empty (never chosen)",
+    ),
+    # The shipped preset ids plus "custom" (hand-edited) and "" (never chosen).
+    # Read from the keymap package rather than transcribed, so adding a preset
+    # file is the whole of adding a preset.
+    _Choice(
+        "keymap_preset",
+        ("", "custom", *_keymap_preset_ids()),
+        "must be a shipped keymap preset id, custom, or empty (never chosen)",
     ),
     _Choice("notes_default_open", ("dock", "popout"), "must be dock or popout"),
     _Choice("note_syntax", ("markdown", "plain"), "must be markdown or plain"),

@@ -102,6 +102,17 @@ A conflict and a failed gate both need intelligence and both belong to the branc
 The verification command is *not* a Project Action: an action's cwd is bounded by the Project root and deliberately denied the sibling-worktree widening, so landing borrows only the exact-content approval.
 That is what stops an agent approving the command its own land runs - editing the command and approving it stay two acts against two routes, and a write can never produce an approved command because the approval is a digest over the bytes it just moved.
 
+### `agent_worktree_context.py`
+
+Targetless checkout resolution for agent land and verify requests.
+It preserves a live linked-worktree cwd as the first choice, then admits a persisted current-run selection only when the live cwd is the Project's primary checkout.
+`use_worktree` validates the earlier selection against the exact Git worktree registry, branch identity, trunk and detached exclusions, and exclusive live-session occupancy.
+Every later resolution repeats the registry, branch, run, and occupancy checks.
+`SessionRecord` holds the selection so supervisor adoption preserves it, while an `agent_run_id` mismatch makes a conversation rollover fail closed.
+`session_occupies_worktree` is also the land queue's Codex-aware busy predicate.
+
+**Not:** queuing, Git mutation, verification, or accepting a checkout path on `request_land` or `request_verify`.
+
 ### `land_queue.py`
 
 `LandQueueService`: the install switch, the per-Project `land_queue` opt-in and its `off`/`draft`/`granted` grant, the per-origin hourly budget, the supervised sweep, the fixed four-command git vocabulary of reconcile, verify, fast-forward, and abort, plus the bounded redacted handback template and the refusal-versus-hold decision.
@@ -140,6 +151,9 @@ The closed documentation allowlist, the `git diff --raw -z` parser it runs over,
 
 One consistent reading of both checkouts and the disposition it implies: `ready`, a transient `hold` (busy tree, working session, unreadable repository), or a permanent `refuse` (a trunk that is a linked worktree, the wrong branch, an unregistered checkout).
 It fails closed, and identifies the main tree by `--absolute-git-dir` versus `--git-common-dir` rather than by name.
+Its safety-critical Git reads use a 15-second deadline rather than the interactive monitor's 4-second deadline, so a lowered-priority verification gate cannot misclassify ordinary host contention as an unreadable checkout.
+A failed or timed-out read raises `_SafetyReadFailed` and reports `readable=False` - a transient hold - rather than folding into a falsy fact, because a falsy `worktree_registered`, `trunk_is_main_tree`, or branch reads downstream as a permanent refusal.
+The incoming-paths and already-landed reads run only for a registered worktree against its own main tree; a foreign HEAD handed to `merge-base` answers with a fatal error indistinguishable from infrastructure failure.
 
 **Not:** which sessions are busy, injected by `server.py` at build time, or mutation of any kind.
 

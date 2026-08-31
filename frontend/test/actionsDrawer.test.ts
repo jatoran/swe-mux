@@ -16,10 +16,12 @@ test('the drawer exposes one Actions tab with three named catalog views', () => 
   assert.ok(drawer.includes("case 'actions':"))
   assert.doesNotMatch(drawer, /case 'commands':|case 'prompts':/)
   assert.ok(actions.includes("const ACTION_VIEWS = ['skills', 'prompts', 'clipboard']"))
-  assert.ok(actions.includes('class="actions-view-tabs"'))
+  assert.ok(actions.includes('className="actions-view-tabs"'))
+  assert.ok(actions.includes('<DrawerViewTabs'), 'Actions uses the shared drawer view rail')
   assert.ok(actions.includes("view==='skills'"))
   assert.ok(actions.includes("view==='prompts'"))
   assert.ok(actions.includes("view==='clipboard'"))
+  assert.ok(actions.includes("Target: {session ? sessionDisplayName(session) : 'No focused session'}"), 'mobile keeps the mutation target visible')
   assert.ok(actions.includes('drawer-skill-detail'), 'skills use compact recognition rows with inline detail')
 })
 

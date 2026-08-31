@@ -1,5 +1,8 @@
 import { render } from 'preact'
+import { useState } from 'preact/hooks'
 import { MobileTerminalDraft } from '../../src/TerminalDraftComposer'
+import { PaneRunTrigger } from '../../src/PaneRunTrigger'
+import { OverflowRail } from '../../src/RailScroller'
 import '../../src/style.css'
 
 // The pane's own layout, with the real components and the real stylesheet. What it exists
@@ -23,6 +26,7 @@ const draft = parameters.get('draft') === '1'
 // A faulted pane is the rare rendering, so it is opt-in here: the marker must survive beside
 // a name too long for the bar, which is the case where a fixed-size glyph is easiest to lose.
 const fault = parameters.get('fault') === '1'
+const tabs = parameters.get('tabs') === '1'
 
 const pane = <section class="terminal-pane focused">
   <div class="pane-bar agent-pane-bar">
@@ -47,14 +51,28 @@ const pane = <section class="terminal-pane focused">
   </div>
 </section>
 
+function TabRailHarness() {
+  const [expanded,setExpanded]=useState(false)
+  return <section class="pane-stack focused-pane">
+    <OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey="one" stripProps={{role:'tablist','aria-label':'Workspace tabs'}}>
+      <div class="stack-tab-shell" style="order:0"><button role="tab" aria-selected="true" class="tab-main active">first tab</button></div>
+      <div class="stack-tab-shell" style="order:1"><button role="tab" aria-selected="false" class="tab-main">second tab</button></div>
+      <PaneRunTrigger projectName="swe-mux" mobile={mobile} expanded={expanded} order={2} onOpen={()=>setExpanded(value=>!value)}/>
+    </OverflowRail>
+    <div class="stack-active">{pane}</div>
+  </section>
+}
+
 const root = document.querySelector('#root')!
 root.setAttribute('style', 'width:100%;height:100dvh;display:grid;grid-template-rows:minmax(0,1fr);margin:0')
 document.body.setAttribute('style', 'margin:0')
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
-  <>{mobile
-    ? <div class="mobile-unified-active">{pane}</div>
-    : <div class="pane-grid count-1">{pane}</div>}
+  <>{tabs
+    ? <TabRailHarness/>
+    : mobile
+      ? <div class="mobile-unified-active">{pane}</div>
+      : <div class="pane-grid count-1">{pane}</div>}
   </>,
   root,
 )

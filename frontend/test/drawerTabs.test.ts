@@ -70,7 +70,7 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   ])
   for (const tab of DRAWER_TABS) {
     assert.ok(tab.label.length <= 10, `${tab.id} label is too long to also serve as a name`)
-    assert.ok(tab.heading.length > 0, `${tab.id} needs a visible content heading`)
+    assert.ok(tab.heading.length > 0, `${tab.id} needs a canonical content heading`)
     assert.ok(tab.title.startsWith(tab.label), `${tab.id} title should lead with its label`)
   }
   // The icons live in `railIcons.tsx`, which this module must not import: it stays JSX-free so
@@ -95,14 +95,13 @@ test('App restores desktop state per Project without persisting mobile visibilit
   assert.ok(app.includes('noteTargetClaimToken={drawerNoteClaimRequest?.projectId===projectId'), 'the claim must be scoped to the current Project and selected note')
 })
 
-test('each drawer body shows a compact heading with the rail tooltip description', () => {
+test('headered bodies keep compact headings while content-first bodies start with their rails', () => {
   const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
   const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
   assert.ok(host.includes('class={`drawer-body drawer-body-${selected}`}'))
-  // The *segment's* heading when a tab has one, falling back to the tab's own: "Change Map"
-  // is what that pane is, and "Activity" is only where it lives.
   assert.ok(host.includes('<h2 class="drawer-panel-title" title={active.title}>{heading}</h2>'))
-  assert.ok(host.includes("const heading = (segment && drawerSegment(selected, segment)?.heading) || active.heading"))
+  assert.ok(host.includes('!contentFirst && <div class="drawer-pane-heading">'))
+  assert.ok(host.includes('<DrawerSegmentControl'))
   assert.match(css, /\.drawer-panel-title\{[^}]*border:[^}]*background:/)
   assert.ok(css.includes('padding-left:calc(var(--drawer-panel-title-width) + 13px)'), 'existing top chrome must make room for the heading')
 })

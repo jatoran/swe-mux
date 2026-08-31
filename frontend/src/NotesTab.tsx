@@ -51,6 +51,8 @@ type Props={
   onAllProjects:(value:boolean)=>void
   onOpenNote:(projectId:string,noteId:string,title:string,place:NotePlacement)=>void
   onOpenScratchpad:(place:NotePlacement)=>void
+  scratchpadEnabled:boolean
+  onScratchpadEnabled:(enabled:boolean)=>Promise<void>
   onDone:()=>void
   selectedResourceId:string|null
   editor:ComponentChildren
@@ -64,15 +66,18 @@ const LONG_PRESS_MS=550
 const DELETE_HINT='Click again to move this note to the Project note trash'
 const PROTECTED_HINT='A Project keeps at least one note. Rename this one, or create another note first.'
 const noteKey=(note:Pick<ProjectNoteSummary,'project_id'|'note_id'>)=>`${note.project_id}:${note.note_id}`
-type NoteMenu={note:ProjectNoteSummary;x:number;y:number}
+type NoteMenu=
+  |{kind:'project';note:ProjectNoteSummary;x:number;y:number}
+  |{kind:'scratchpad';x:number;y:number}
 type NoteTitlePrompt={mode:'create'|'rename';title:string;note?:ProjectNoteSummary}
 
-export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScratchpad,onDone,selectedResourceId,editor,onPopSelected}:Props){
+export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScratchpad,scratchpadEnabled,onScratchpadEnabled,onDone,selectedResourceId,editor,onPopSelected}:Props){
   const [items,setItems]=useState<ProjectNoteSummary[]|null>(null)
   const [query,setQuery]=useState('')
   const [error,setError]=useState('')
   const [deleteConfirm,setDeleteConfirm]=useState('')
   const [deleting,setDeleting]=useState('')
+  const [scratchpadBusy,setScratchpadBusy]=useState(false)
   const [menu,setMenu]=useState<NoteMenu|null>(null)
   // The row menu and its inline delete confirmation close together, because the
   // confirmation has no existence outside the menu that hosts it.
@@ -206,14 +211,14 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   // as an explicit tab click.
   useEffect(()=>{
     if(allProjects||!project||!scopedItems)return
-    const fallback=fallbackNoteTab(selectedResourceId,projectItems)
+    const fallback=fallbackNoteTab(selectedResourceId,projectItems,scratchpadEnabled)
     if(fallback===selectedTabId)return
     if(fallback===SCRATCHPAD_TAB_ID)onOpenScratchpad('drawer')
     else{
       const note=projectItems.find(item=>projectNoteTabId(item.note_id)===fallback)
       if(note)onOpenNote(note.project_id,note.note_id,note.title,'drawer')
     }
-  },[allProjects,scopedItems,project?.id,projectItems,selectedResourceId,selectedTabId])
+  },[allProjects,scopedItems,project?.id,projectItems,selectedResourceId,selectedTabId,scratchpadEnabled])
 
   // Selecting a drawer sub-tab keeps the panel visible. Moving a note to a workspace tab
   // hands the screen back on mobile.
@@ -224,6 +229,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     if(place==='tab')onDone()
   }
   const openScratchpad=(place:NotePlacement)=>{
+    if(!scratchpadEnabled)return
     setBrowseOpen(false)
     if(allProjects)onAllProjects(false)
     onOpenScratchpad(place)
@@ -238,7 +244,13 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   const openMenu=(note:ProjectNoteSummary,x:number,y:number)=>{
     setDeleteConfirm('')
     menuOpenedAt.current=performance.now()
-    setMenu({note,x,y})
+    setMenu({kind:'project',note,x,y})
+  }
+  const openScratchpadMenu=(x:number,y:number)=>{
+    setDeleteConfirm('')
+    touchPress.current=false
+    menuOpenedAt.current=performance.now()
+    setMenu({kind:'scratchpad',x,y})
   }
   // The pending press is watched on `window`, not on the pressed element. A rail tab sits
   // inside `OverflowRail`, which captures the pointer for its own horizontal pan the moment
@@ -284,6 +296,13 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     openMenu(note,box.left,box.bottom)
     return true
   }
+  const openScratchpadMenuFromKeyboard=(event:JSX.TargetedKeyboardEvent<HTMLButtonElement>)=>{
+    if(event.key!=='ContextMenu'&&!(event.key==='F10'&&event.shiftKey))return false
+    event.preventDefault()
+    const box=event.currentTarget.getBoundingClientRect()
+    openScratchpadMenu(box.left,box.bottom)
+    return true
+  }
   const suppressLongPressClick=(event:JSX.TargetedMouseEvent<HTMLElement>)=>{
     if(!suppressClick.current)return
     suppressClick.current=false;event.preventDefault();event.stopPropagation()
@@ -293,7 +312,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     if(lastNoteInProject(note,noteCounts))return
     if(deleteConfirm!==key){setDeleteConfirm(key);return}
     const fallback=note.project_id===project?.id
-      ?noteTabAfterDelete(selectedResourceId,note.note_id,projectItems)
+      ?noteTabAfterDelete(selectedResourceId,note.note_id,projectItems,scratchpadEnabled)
       :null
     setDeleting(key)
     try{
@@ -309,6 +328,12 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     }catch(cause){
       setDeleteConfirm('');setError(cause instanceof Error?cause.message:String(cause));void load()
     }finally{setDeleting('')}
+  }
+  const toggleScratchpad=async()=>{
+    setScratchpadBusy(true)
+    try{await onScratchpadEnabled(!scratchpadEnabled);setMenu(null)}
+    catch{/* App reports the durable save failure. */}
+    finally{setScratchpadBusy(false)}
   }
   const noteActions=(note:ProjectNoteSummary)=>{
     const key=noteKey(note)
@@ -384,18 +409,29 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
         wrapperClassName="notes-subtabs-rail"
         activeKey={selectedTabId||''}
         touchDrag
-        stripProps={{role:'tablist','aria-label':'Notes in this Project'}}
+        stripProps={{
+          role:'tablist','aria-label':'Notes in this Project',
+          onContextMenu:event=>{
+            if(event.target instanceof Element&&event.target.closest('button'))return
+            event.preventDefault();event.stopPropagation()
+            openScratchpadMenu(event.clientX,event.clientY)
+          },
+        }}
       >
-        <button
+        {scratchpadEnabled&&<button
           role="tab"
           aria-selected={selectedTabId===SCRATCHPAD_TAB_ID}
           tabIndex={selectedTabId===SCRATCHPAD_TAB_ID?0:-1}
           class={selectedTabId===SCRATCHPAD_TAB_ID?'active':''}
-          title="Global Scratchpad"
+          title="Global Scratchpad · right-click for visibility"
           disabled={!project}
           onClick={()=>openScratchpad('drawer')}
-          onKeyDown={event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)}}
-        >Scratchpad</button>
+          onContextMenu={event=>{event.preventDefault();event.stopPropagation();openScratchpadMenu(event.clientX,event.clientY)}}
+          onKeyDown={event=>{
+            if(openScratchpadMenuFromKeyboard(event))return
+            if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)
+          }}
+        >Scratchpad</button>}
         {projectItems.map(note=>{
           const resourceId=projectNoteTabId(note.note_id)
           const active=selectedTabId===resourceId
@@ -461,30 +497,36 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
             </section>}
         </div>}
       </div>
-      <p class="notes-footnote">Scratchpad is global. Project notes stay in creation order and remain in the tab rail. Deleting one moves it to <code>.swe-mux/notes/trash/</code>; a Project always keeps its last note.</p>
+      <p class="notes-footnote">{scratchpadEnabled?'Scratchpad is global. ':'Scratchpad is disabled and its content is retained. '}Project notes stay in creation order and remain in the tab rail. Deleting one moves it to <code>.swe-mux/notes/trash/</code>; a Project always keeps its last note.</p>
     </section>}
     {menu&&<div
       class="context-menu note-row-menu"
       ref={el=>{menuPanel.current=el;fitMenuInViewport(el)}}
       role="menu"
-      aria-label={`Actions for ${menu.note.title}`}
+      aria-label={menu.kind==='project'?`Actions for ${menu.note.title}`:'Scratchpad visibility'}
       style={{left:clampContextMenuLeft(menu.x,window.innerWidth),top:Math.max(4,menu.y)}}
-      onClickCapture={event=>{if(performance.now()-menuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}
+      onClickCapture={event=>{if(touchPress.current&&performance.now()-menuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}
     >
-      <div class="context-title"><strong>{menu.note.title}</strong></div>
-      <button role="menuitem" onClick={()=>{const note=menu.note;setMenu(null);openNote(note,'tab')}}>Open in workspace tab</button>
-      <button role="menuitem" onClick={()=>{setTitleError('');setTitlePrompt({mode:'rename',title:menu.note.title,note:menu.note})}}>Rename…</button>
-      <div class="context-rule" />
-      <button
-        role="menuitem"
-        class={`danger ${deleteConfirm===noteKey(menu.note)?'confirming':''}`}
-        disabled={deleting===noteKey(menu.note)||lastNoteInProject(menu.note,noteCounts)}
-        title={lastNoteInProject(menu.note,noteCounts)?PROTECTED_HINT:DELETE_HINT}
-        onClick={()=>void deleteProjectNote(menu.note)}
-      >{deleting===noteKey(menu.note)?'Deleting…':deleteConfirm===noteKey(menu.note)?'Confirm delete':'Delete note'}</button>
-      <p class="context-note">{lastNoteInProject(menu.note,noteCounts)
-        ?PROTECTED_HINT
-        :'Deleted notes move to the Project note trash and can be restored from disk.'}</p>
+      {menu.kind==='scratchpad'?<>
+        <div class="context-title"><strong>GLOBAL SCRATCHPAD</strong></div>
+        <button role="menuitem" disabled={scratchpadBusy} onClick={()=>void toggleScratchpad()}>{scratchpadBusy?'Saving…':scratchpadEnabled?'Disable Scratchpad':'Enable Scratchpad'}</button>
+        <p class="context-note">Disabling hides Scratchpad and closes its workspace views without deleting its content. Right-click empty rail space or use Settings → Notes to enable it again.</p>
+      </>:<>
+        <div class="context-title"><strong>{menu.note.title}</strong></div>
+        <button role="menuitem" onClick={()=>{const note=menu.note;setMenu(null);openNote(note,'tab')}}>Open in workspace tab</button>
+        <button role="menuitem" onClick={()=>{setTitleError('');setTitlePrompt({mode:'rename',title:menu.note.title,note:menu.note})}}>Rename…</button>
+        <div class="context-rule" />
+        <button
+          role="menuitem"
+          class={`danger ${deleteConfirm===noteKey(menu.note)?'confirming':''}`}
+          disabled={deleting===noteKey(menu.note)||lastNoteInProject(menu.note,noteCounts)}
+          title={lastNoteInProject(menu.note,noteCounts)?PROTECTED_HINT:DELETE_HINT}
+          onClick={()=>void deleteProjectNote(menu.note)}
+        >{deleting===noteKey(menu.note)?'Deleting…':deleteConfirm===noteKey(menu.note)?'Confirm delete':'Delete note'}</button>
+        <p class="context-note">{lastNoteInProject(menu.note,noteCounts)
+          ?PROTECTED_HINT
+          :'Deleted notes move to the Project note trash and can be restored from disk.'}</p>
+      </>}
     </div>}
     {titlePrompt&&<div class="modal-layer note-title-layer" onPointerDown={event=>{if(event.target===event.currentTarget&&!titleBusy){setTitlePrompt(null);setTitleError('')}}}>
       <form ref={titlePanel} class="modal note-title-modal" role="dialog" aria-modal="true" aria-label={titlePrompt.mode==='create'?'Create note':'Rename note'} onPointerDown={event=>event.stopPropagation()} onSubmit={event=>void submitTitle(event)}>

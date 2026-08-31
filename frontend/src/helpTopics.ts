@@ -131,6 +131,14 @@ export const HELP_TOPICS: HelpTopic[] = [
     anchor: { tab: 'actions' },
     docs: 'sessions',
   },
+  {
+    // No `anchor`: the keyboard is not a drawer tab, and this is the one topic
+    // somebody looks for before they know where anything is.
+    id: 'keybindings',
+    title: 'Keyboard shortcuts',
+    blurb: 'Every command behind one leader key, a preset for whichever tool you already know, and an honest answer about which chords your browser will actually give the app.',
+    docs: 'keyboard',
+  },
 ]
 
 export const helpTopic = (id: string): HelpTopic | null => HELP_TOPICS.find(topic => topic.id === id) ?? null

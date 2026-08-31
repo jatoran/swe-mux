@@ -971,7 +971,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <li><b>Spoken navigation</b><span>Projects and sessions are addressed by number, following the order the sidebar draws them, so "Project 2, Session 3" resolves both coordinates at once without needing a list read out first.</span></li>
           <li><b>Standby and stop</b><span><em>Standby</em> keeps the microphone on and ignores everything except a resume or a stop. <em>Stop</em> releases the microphone.</span></li>
           <li><b>Hold and proceed</b><span>The brainstorm pair. Plain speech buffers instead of becoming turns until "go ahead" releases it as one consolidated turn.</span></li>
-          <li><b>Push to talk</b><span>Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> for capture with no endpoint detection at all.</span></li>
+          <li><b>Push to talk</b><span>Hold <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> for capture with no endpoint detection at all.</span></li>
         </ul>
         <p class="prose">Playback leaves capture open, so you can interrupt. Speech immediately ducks the audio, waits for the echo to drain, and stops the stream if what it heard was really you - and restores playback if it was the echo.</p>
         <p class="note"><b>The microphone needs a secure context.</b> On a phone that means HTTPS, which is what the Tailscale Serve step on the <a href="../phone/">phone page</a> is for.</p>

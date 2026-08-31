@@ -16,7 +16,7 @@ import { clearProjectRailBlob, railConfigFromBlob, writeRailConfigBlob, type Rai
 import { resolveRail, type ResolvedRail } from './railScope.ts'
 
 export type SettingsProfile = 'desktop' | 'mobile'
-export type SettingsDomain = 'alerts' | 'sounds' | 'notifications' | 'commandRail' | 'fileTree' | 'drawerTabs' | 'sessionRows'
+export type SettingsDomain = 'alerts' | 'sounds' | 'notifications' | 'commandRail' | 'fileTree' | 'drawerTabs' | 'sessionRows' | 'keyboard'
 type ProfileSettings = Partial<Record<SettingsDomain, Record<string, unknown>>>
 type AllSettings = Record<SettingsProfile, ProfileSettings>
 

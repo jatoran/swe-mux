@@ -108,3 +108,22 @@ test("a Project's only note offers a disabled delete and says why", async ({ pag
   await expect(menu.getByRole('menuitem', { name: 'Delete note' })).toBeDisabled()
   await expect(menu.locator('.context-note')).toContainText('keeps at least one note')
 })
+
+test('Scratchpad can be disabled from its tab and restored from empty rail space', async ({ page }) => {
+  await page.goto('/notes-tab-harness.html?notes=one')
+  await page.getByRole('tab',{name:'Scratchpad'}).click({button:'right'})
+  const menu=page.getByRole('menu',{name:'Scratchpad visibility'})
+  await expect(menu.getByRole('menuitem',{name:'Disable Scratchpad'})).toBeVisible()
+  await menu.getByRole('menuitem',{name:'Disable Scratchpad'}).click()
+  await expect(page.getByRole('tab',{name:'Scratchpad'})).toHaveCount(0)
+  expect(await page.evaluate(()=>(globalThis as {__scratchpadEnabled?:boolean}).__scratchpadEnabled)).toBe(false)
+
+  const rail=page.locator('.notes-subtabs')
+  const box=await rail.boundingBox()
+  if(!box)throw new Error('Notes rail is not visible')
+  await page.mouse.click(box.x+box.width-5,box.y+box.height/2,{button:'right'})
+  await expect(menu.getByRole('menuitem',{name:'Enable Scratchpad'})).toBeVisible()
+  await menu.getByRole('menuitem',{name:'Enable Scratchpad'}).click()
+  await expect(page.getByRole('tab',{name:'Scratchpad'})).toBeVisible()
+  expect(await page.evaluate(()=>(globalThis as {__scratchpadEnabled?:boolean}).__scratchpadEnabled)).toBe(true)
+})

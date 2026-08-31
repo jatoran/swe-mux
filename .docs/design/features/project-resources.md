@@ -10,11 +10,15 @@ The file tree and notes collection are utility-drawer tabs.
 ## Notes
 
 - Scratchpad is the singleton global note.
-- Scratchpad is pinned under `GLOBAL` at the top of the Notes drawer in both Project and all-Projects scopes.
+- Scratchpad is the first Notes-rail tab in both Project and all-Projects scopes while `note_scratchpad_enabled` is true.
 - Scratchpad has the fixed `global-note:scratchpad` resource identity and can move between the drawer and a workspace pane like a Project note.
 - Scratchpad is stored at `<data_dir>/notes/items/scratchpad.md`, outside every Project and repository.
 - The Scratchpad file is created lazily on first save, has the fixed title `Scratchpad`, and cannot be renamed or deleted.
-- `notes.scratchpad` opens Scratchpad directly.
+- `note_scratchpad_enabled` is an install-wide, hot-reloadable visibility setting that defaults on.
+  Disabling removes Scratchpad from the Notes rail, disables `notes.scratchpad`, and closes its workspace leaves without deleting `<data_dir>/notes/items/scratchpad.md`.
+  Re-enabling restores the rail tab with the retained content.
+  The Scratchpad tab and empty Notes-rail space open the same right-click visibility menu; Settings → Notes exposes the same toggle.
+- `notes.scratchpad` opens Scratchpad directly while the setting is enabled.
 - Notes are a flat Project-owned collection.
 - The complete `.swe-mux/notes/` tree is local application state and is Git-ignored by the Project's generated `.swe-mux/.gitignore` plus the existing defensive `.swe-mux/notes/.gitignore` containing `*`.
   Project initialization creates the parent manifest immediately and lists `notes`, `attachments`, `seeds`, `preview-shots`, and `observations.json` while leaving portable siblings visible.
@@ -114,10 +118,10 @@ The file tree and notes collection are utility-drawer tabs.
 - The collection is reached from a Project's sidebar context menu, the main menu, the
   `notes.open`/`notes.browse`/`notes.browseProject` commands, and the desktop launcher.
 - The main Notes surface is a non-wrapping sub-tab rail followed by the selected editor.
-  Scratchpad is the fixed first tab and every note in the active Project is a non-closeable tab in stable creation order.
+  Scratchpad is the first tab when enabled, followed by every note in the active Project as non-closeable tabs in stable creation order.
   The active tab scrolls into view automatically.
   New notes become selected tabs immediately.
-  Deleting the selected note chooses the next surviving tab, then the previous one, and uses Scratchpad only when no Project notes remain.
+  Deleting the selected note chooses the next surviving tab, then the previous one, and uses Scratchpad only when it is enabled and no Project notes remain.
   That last fallback is now only reachable through an external deletion or a stale listing, since a Project's own last note cannot be deleted from the app.
   A separate searchable browser provides Project and all-Project discovery plus rename, delete, and open-in-workspace actions without turning the browser into the normal landing page.
 - Scope follows how you arrived, the same rule the rest of the app's browsers use. Reaching the
@@ -254,7 +258,7 @@ The file tree and notes collection are utility-drawer tabs.
 
 ### Editor preferences
 
-- Settings → Text editor configures the one shared editor, so every Markdown surface moves together:
+- Settings → Notes configures the one shared editor, so every Markdown surface moves together:
   spellcheck, Markdown projection on/off (`plain` keeps undo, multi-cursor, list continuation,
   and autosave and only stops the rendering), what `Tab` does, typography, the touch command
   rail, and the editor's own keyboard shortcuts.
@@ -369,9 +373,10 @@ The file tree and notes collection are utility-drawer tabs.
 - A pick hands keyboard focus back to the control that opened the panel, because the panel
   unmounts on click and a keyboard user needs somewhere to stand. A button raises no soft
   keyboard, which is the point of not focusing the note.
-- Three ways in, the same claim protocol as find: the resource-header button, a `mux:outline`
-  button on the touch rail (long notes are mostly read on the phone, where the header has no
-  room to spare), and a `note.outline` command for the palette, a gesture, or a chord.
+- The resource-header button, the `mux:outline` touch-rail button, and the `note.outline` command share one claim protocol.
+  A single-finger pull down on the Notes document rail, a Project note's save-status header, or the editor's touch command rail opens the same outline.
+  The gesture names the Project-note editor it started over, so touching chrome does not need to move focus or make the note the insertion target.
+  Scratchpad and editable Markdown files retain their buttons and commands but do not claim the Notes-workspace pull-down gesture.
 - Unlike find, the outline paints no decorations, so there is nothing to keep in step with an
   edit; the list is re-derived when the panel opens and refreshed on commits while it is open.
 

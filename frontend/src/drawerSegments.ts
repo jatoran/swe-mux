@@ -52,8 +52,6 @@ export type DrawerSegment = {
   kind: DrawerSegmentKind
   /** Drawn in the segmented control. Short enough for three across a 300px column. */
   label: string
-  /** Drawn as the pane heading while this segment is selected. Segments only. */
-  heading?: string
   /** Tooltip, and the text of the generated palette command. */
   title: string
   /**
@@ -77,14 +75,14 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // focused agent, and a mode switch between "the thing I want to send" and "the other
   // thing I want to send" is a click that buys nothing.
   { tab: 'actions', id: 'skills', kind: 'section', label: 'Skills', title: 'Skills - what the focused session’s CLI can actually see' },
-  { tab: 'actions', id: 'prompts', kind: 'section', label: 'Prompt templates', title: 'Prompt templates - saved reusable messages' },
+  { tab: 'actions', id: 'prompts', kind: 'section', label: 'Prompts', title: 'Prompt templates - saved reusable messages' },
   { tab: 'actions', id: 'clipboard', kind: 'section', label: 'Clipboard', title: 'Clipboard history - insert a recent copy' },
 
   // Activity. What this session said it was doing, what the detectors concluded, and
   // what it actually wrote. Three readings of one run, which is why they are one tab.
-  { tab: 'activity', id: 'timeline', kind: 'segment', label: 'Timeline', heading: 'Scan Timeline', title: 'Timeline - the scan narration of this session’s run', available: hasTranscript },
-  { tab: 'activity', id: 'findings', kind: 'segment', label: 'Findings', heading: 'Findings', title: 'Findings - durable run notes from the detectors and observers' },
-  { tab: 'activity', id: 'changes', kind: 'segment', label: 'Changes', heading: 'Change Map', title: 'Changes - what this session edited, and what those edits reach', keepMounted: true },
+  { tab: 'activity', id: 'timeline', kind: 'segment', label: 'Timeline', title: 'Timeline - the scan narration of this session’s run', available: hasTranscript },
+  { tab: 'activity', id: 'findings', kind: 'segment', label: 'Findings', title: 'Findings - durable run notes from the detectors and observers' },
+  { tab: 'activity', id: 'changes', kind: 'segment', label: 'Changes', title: 'Changes - what this session edited, and what those edits reach', keepMounted: true },
 
   // Agent. The three halves of "what is this agent actually running with".
   //
@@ -93,12 +91,12 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // back to it rather than to an empty tab. That fallback is what the old Context tab
   // did by being a separate, Project-scoped tab, and it is preserved by `available`
   // rather than by keeping two tabs.
-  { tab: 'agent', id: 'config', kind: 'segment', label: 'Config', heading: 'Agent Configuration', title: 'Config - runtime, policies, feature flags, and the configuration sources behind them', available: isAgent },
-  { tab: 'agent', id: 'tools', kind: 'segment', label: 'Tools', heading: 'Tools & Extensions', title: 'Tools - built-in tools, skills, MCP servers, plugins, hooks, and custom agents', available: isAgent },
+  { tab: 'agent', id: 'config', kind: 'segment', label: 'Config', title: 'Config - runtime, policies, feature flags, and the configuration sources behind them', available: isAgent },
+  { tab: 'agent', id: 'tools', kind: 'segment', label: 'Tools', title: 'Tools - built-in tools, skills, MCP servers, plugins, hooks, and custom agents', available: isAgent },
   // "Instructions" rather than "Context" or "Memory": bounded by Config and Tools it
   // reads as "the prose this agent was given", and learned memory files are auto-loaded
   // instructions in effect. The heading carries the longer, exact name.
-  { tab: 'agent', id: 'instructions', kind: 'segment', label: 'Instructions', heading: 'Instructions & Memory', title: 'Instructions - instruction files and learned project memory this agent reads' },
+  { tab: 'agent', id: 'instructions', kind: 'segment', label: 'Instructions', title: 'Instructions - instruction files and learned project memory this agent reads' },
 
   // Files. The tree and the Recent list are two readings of the same Project, and Recent
   // was a pressed icon inside the search row until now - a mode with no name anywhere in
@@ -108,14 +106,14 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // pressed state. The labels are the headings rather than shorter chips: "File Explorer"
   // is what this surface is called everywhere else, and abbreviating it here to fit a chip
   // would rename it for no reason.
-  { tab: 'files', id: 'explorer', kind: 'segment', label: 'File Explorer', heading: 'File Explorer', title: 'File Explorer - browse and search this Project’s tree' },
-  { tab: 'files', id: 'recent', kind: 'segment', label: 'Recent', heading: 'Recent', title: 'Recent - what Git says was touched here, uncommitted work first' },
+  { tab: 'files', id: 'explorer', kind: 'segment', label: 'File Explorer', title: 'File Explorer - browse and search this Project’s tree' },
+  { tab: 'files', id: 'recent', kind: 'segment', label: 'Recent', title: 'Recent - what Git says was touched here, uncommitted work first' },
 
   // Git. Registered rather than left on local state, so the drawer has one mechanism for
   // this idea instead of two. Lifting it also buys "open Git Log" as a voice phrase.
-  { tab: 'git', id: 'map', kind: 'segment', label: 'Map', heading: 'Worktree Map', title: 'Map - one row per worktree, with its files, changes, and live sessions' },
-  { tab: 'git', id: 'log', kind: 'segment', label: 'Log', heading: 'Commit Log', title: 'Log - the repository’s commit graph' },
-  { tab: 'git', id: 'provenance', kind: 'segment', label: 'Provenance', heading: 'Commit Provenance', title: 'Provenance - which session and run produced each commit' },
+  { tab: 'git', id: 'map', kind: 'segment', label: 'Map', title: 'Map - one row per worktree, with its files, changes, and live sessions' },
+  { tab: 'git', id: 'log', kind: 'segment', label: 'Log', title: 'Log - the repository’s commit graph' },
+  { tab: 'git', id: 'provenance', kind: 'segment', label: 'Provenance', title: 'Provenance - which session and run produced each commit' },
 ]
 
 /**

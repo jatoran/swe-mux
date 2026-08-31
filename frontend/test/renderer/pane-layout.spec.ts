@@ -174,3 +174,28 @@ test('a pane-local float stays below modal overlays', async ({ page }) => {
   })
   expect(bands.paneFloat).toBeLessThan(bands.modal)
 })
+
+test('desktop pane tabs end with the Project Run trigger, while mobile omits it', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 })
+  await page.goto('/pane-harness.html?tabs=1')
+  const tabs = page.locator('.stack-tab-shell')
+  const trigger = page.getByRole('button', { name: 'Run in swe-mux' })
+  await expect(tabs).toHaveCount(2)
+  await expect(trigger).toBeVisible()
+  await expect(trigger).toHaveText('+')
+  await expect(trigger).toHaveAttribute('aria-haspopup','menu')
+  const geometry = await page.evaluate(() => {
+    const box=(element:Element)=>{const bounds=element.getBoundingClientRect();return{left:bounds.left,right:bounds.right,width:bounds.width,height:bounds.height}}
+    const tabs=[...document.querySelectorAll('.stack-tab-shell')]
+    return {last:box(tabs[tabs.length-1]),trigger:box(document.querySelector('.pane-run-trigger')!),rail:box(document.querySelector('.stack-tabs')!)}
+  })
+  expect(geometry.trigger.left).toBeGreaterThanOrEqual(geometry.last.right-1)
+  expect(geometry.trigger.right).toBeLessThanOrEqual(geometry.rail.right+1)
+  expect(Math.round(geometry.trigger.width)).toBe(34)
+  expect(Math.round(geometry.trigger.height)).toBe(Math.round(geometry.rail.height)-1)
+  await trigger.click()
+  await expect(trigger).toHaveAttribute('aria-expanded','true')
+
+  await page.goto('/pane-harness.html?tabs=1&mobile=1')
+  await expect(page.locator('.pane-run-trigger')).toHaveCount(0)
+})

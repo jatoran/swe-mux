@@ -58,6 +58,9 @@ The third is a queue-executed verdict that already stands over this exact tree w
 
 The hazard the pipeline lives inside is that the worktree it reconciles is a checkout a live agent session owns and may be mid-turn writing into.
 Preconditions are therefore evaluated before **each** mutation rather than once at enqueue, and they fail closed: an unreadable repository blocks exactly like a dirty one, because "the check could not be made" and "the check passed" must never be conflated.
+These safety-critical reads have a 15-second deadline, separate from the interactive Git monitor's 4-second deadline, so verification-gate CPU contention does not manufacture an unreadable repository.
+Fail-closed has a direction, and it is hold, never refuse: every safety read distinguishes Git answering "no" from Git not answering, so a timed-out or failed read reports the repository unreadable - a transient hold - rather than folding into a falsy fact that downstream reads as a permanent refusal ("not a registered worktree", "a linked worktree", "a detached HEAD").
+The two derived questions - the incoming change set and whether the branch is already landed - are asked only of a registered worktree against its own main tree, because a foreign checkout's HEAD handed to `merge-base` produces a fatal answer indistinguishable from an infrastructure failure.
 
 They divide into two dispositions, and the difference is the queue's whole operator experience:
 
@@ -667,8 +670,14 @@ Both leave an audit record (`land_verify_command_changed`, `land_verify_approved
 
 ## The agent surface
 
-`request_land` and `request_verify` (`mux-mcp.md`), two callers over the same service.
-Neither has a **target argument**: the checkout comes from the caller's own live cwd, so "an agent acts on the checkout it is working in, and no other" is true by construction rather than by a check something could be routed around.
+`request_land` and `request_verify` (`mux-mcp.md`) are two targetless callers over the same service.
+A live linked-worktree cwd is authoritative, which keeps the native Claude worktree flow unchanged.
+When a Codex session creates a worktree after startup while its host cwd remains on the primary checkout, `use_worktree` establishes a separate run-bound selection and `worktree_context` reports it.
+The selection accepts only an exact linked worktree from the Project's Git registry, rejects trunk, detached, changed-branch, and live-session-owned targets, persists across daemon restart, and expires across conversation rollover.
+The land calls themselves still accept no checkout path.
+
+Busy-session detection includes both live cwd and the current run's selection.
+A Codex session still working in its selected checkout therefore holds the request exactly as a Claude session whose process lives there does.
 
 They are **two tools rather than one tool with a flag**, and the reason is which call is the default spelling.
 A flag would make the request that moves a repository's trunk the plain form of the request that moves nothing, so a caller that omitted it would land; and it would put both under one grant, when the grant exists for the trunk.
