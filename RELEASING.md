@@ -70,7 +70,7 @@ Until then, prefer the `grep` above to the table: it asks the tree rather than a
 - Regenerate the site and commit it in the same commit: `python site/tools/build.py`, then
   `git add site/`.
   `site/changelog/index.html` and its thirty siblings are **committed build output**, and
-  `pages.yml` deploys `site/` verbatim without ever running the generator - so a release commit
+  `deploy-site.yml` deploys `site/` verbatim without ever running the generator - so a release commit
   that edits `CHANGELOG.md` and not the page publishes a site that does not mention the version a
   user just installed.
   That is exactly what 0.1.3 did: `swemux.dev/changelog/` showed 0.1.2 for a day while 0.1.3 was
@@ -208,7 +208,7 @@ Its contract:
   anything is staged; it never decides this quietly.
 - Write `version.json` into the static site (latest version, artifact URLs and hashes, and a
   changelog pointer). That file is the in-app update-check endpoint; the site workflow deploys
-  `site/` to GitHub Pages from the same repository.
+  `site/` to Cloudflare Workers from the same repository.
 
 The ordinary `ci` workflow still runs the full gate on Windows and the platform legs on
 Linux and macOS; the release workflow does not replace it and does not re-litigate it.
@@ -297,18 +297,20 @@ happens for the first time on a tag is the compile over the **real** 120 MB app 
 `[Files]` path that only exists in a real build, or an `lzma2/max` pass over several hundred
 megabytes, is not exercised by the cycle job.
 
-**A push-triggered Pages deploy can publish content older than itself.**
-`pages.yml` stages its bytes at checkout and deploys them after the `pages` concurrency queue
-clears. On v0.1.2 the release commit's Pages run restored `version.json` at 00:30:57, when the
-newest release was still v0.1.0; `release.yml` published the correct 0.1.2 manifest at 00:37:25;
-the queued Pages deploy finished at 00:38:56 and overwrote it. The site advertised 0.1.0 while
-PyPI served 0.1.2.
+**A push-triggered site deploy can publish content older than itself.**
+`deploy-site.yml` stages its bytes at checkout and deploys them after the `deploy-site`
+concurrency queue clears. On v0.1.2 the release commit's run restored `version.json` at 00:30:57,
+when the newest release was still v0.1.0; `release.yml` published the correct 0.1.2 manifest at
+00:37:25; the queued deploy finished at 00:38:56 and overwrote it. The site advertised 0.1.0
+while PyPI served 0.1.2.
 
-The `concurrency` group does not prevent this - it serialises the two deployments, and the loser
-is whichever *finishes* first, not whichever holds newer content. `pages.yml` now also triggers
-on `workflow_run` of `release`, so the last deployment is the newest one. **After any release,
-confirm `https://swemux.dev/version.json` actually names the new version**, rather than assuming
-the job that wrote it was the job that won.
+Moving the site to Cloudflare Workers on 2026-08-31 changed nothing about this: Cloudflare also
+serves whichever deployment finished last. The `concurrency` group does not prevent it - it
+serialises the two deployments, and the loser is whichever *finishes* first, not whichever holds
+newer content. `deploy-site.yml` also triggers on `workflow_run` of `release`, so the last
+deployment is the newest one. **After any release, confirm
+`https://swemux.dev/version.json` actually names the new version**, rather than assuming the job
+that wrote it was the job that won.
 
 ## What 0.1.3 taught, 2026-08-29
 

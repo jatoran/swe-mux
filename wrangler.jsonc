@@ -1,0 +1,37 @@
+// swemux.dev, deployed as a Cloudflare Worker serving static assets.
+//
+// **Why Cloudflare rather than GitHub Pages.** Pages' 100 GB/month bandwidth cap
+// is about 33k engaged visits at this site's ~3 MB blended weight, which one
+// front-page day spends outright. The cap is a soft limit enforced by a human,
+// and `swemux.dev/version.json` is a published client contract that every
+// install polls daily (`update_check.py`) - so the failure mode of outgrowing
+// Pages was "somebody at GitHub turns off the update endpoint", not "the landing
+// page gets slow". Cloudflare's bandwidth is unmetered.
+//
+// **Why a Worker rather than a Pages project.** Cloudflare's own static hosting
+// has moved to Workers Assets; the dashboard's drag-and-drop now creates a
+// Worker, and Pages ships a migration guide pointing this way. It is also the
+// simpler of the two here: Pages projects carry a production-vs-preview *branch*
+// model that Direct Upload projects cannot even configure from the dashboard,
+// and a `--branch` that silently disagrees with the project's production branch
+// turns every deploy into a preview that never reaches the custom domain and
+// still exits 0. Workers have versions instead, and no such trap.
+//
+// **No `main`.** This is an assets-only Worker: every request is answered from
+// `site/` and no script runs. If server-side logic is ever wanted here - the
+// obvious candidate is computing `version.json` from the Releases API instead of
+// restoring it from a release asset in CI - it arrives as a `main` entry point
+// and this comment is where to start.
+//
+// Deployment is `wrangler deploy` from `.github/workflows/deploy-site.yml` and
+// from `release.yml`'s `update-manifest` job. Never deploy this by hand: both
+// callers first regenerate `site/plugins/catalog.json` and restore
+// `site/version.json`, neither of which is committed, so a local `wrangler
+// deploy` would publish a site missing both.
+{
+  "name": "swe-mux",
+  "compatibility_date": "2026-08-31",
+  "assets": {
+    "directory": "./site"
+  }
+}
