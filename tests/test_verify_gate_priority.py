@@ -107,7 +107,7 @@ def test_the_gates_own_powershell_command_actually_lowers_a_process() -> None:
 def test_the_gates_own_renice_invocation_actually_lowers_a_process() -> None:
     """Same shipped-bytes rule for the POSIX branch: the niceness value is read
     out of the script so a changed number stays tested."""
-    match = re.search(r"renice -n (\d+) -p", _gate_text())
+    match = re.search(r"renice (\d+) -p", _gate_text())
     assert match, ".worktree-verify no longer carries the renice lowering command"
     niceness = int(match.group(1))
     if os.getpriority(os.PRIO_PROCESS, 0) > niceness:

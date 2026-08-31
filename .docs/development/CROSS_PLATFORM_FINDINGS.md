@@ -323,6 +323,14 @@ Nothing downstream was mis-handling the extra event as a file, so this was noise
 Verified by execution on Windows and in the Linux container, where the normalization is a no-op and the suite still passes, plus a direct unit test of the projection that asserts the macOS shape on every host without needing a macOS backend to produce it.
 **Not confirmed on macOS**, for the same reason as the two above; the next `macos-latest` run is what closes it.
 
+**4. BSD `renice -n` is relative, while the gate claimed an absolute result.**
+`test_the_gates_own_renice_invocation_actually_lowers_a_process` was the only failure in six consecutive macOS jobs after the priority-yielding gate landed: 6,563 tests passed and this one read niceness `0` after `renice -n 10` exited successfully.
+The gate printed `priority: niceness 10`, and its behavioral test asserted exactly `10`, so an increment operation was the wrong command even on a host where the starting value happened to make the result look right.
+macOS follows the BSD interface and defines `-n` as an increment to the current priority; the absolute form is `renice 10 -p <pid>`.
+The gate now uses that absolute form, which is also accepted by util-linux, and the test extracts and executes the shipped absolute command rather than restating it.
+This is a worktree-gate defect rather than a daemon defect, but leaving it red had a second cost: pytest stopped the matrix job before the macOS wheel build and clean-install smoke could run.
+The next `macos-latest` run confirms the command on Darwin and restores the artifact half of the leg.
+
 ### What the first WSL Ubuntu run actually found (2026-08-28)
 
 An operator ran the daemon on WSL Ubuntu.

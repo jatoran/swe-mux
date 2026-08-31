@@ -43,7 +43,10 @@ else
       fi
       ;;
     *)
-      if renice -n 10 -p $$ >/dev/null 2>&1; then
+      # Use the absolute-priority form shared by BSD/macOS and util-linux.
+      # macOS defines `-n` as an increment, which makes `renice -n 10` a
+      # different contract from the exact niceness reported on the next line.
+      if renice 10 -p $$ >/dev/null 2>&1; then
         printf 'priority: niceness 10 (pid %s)\n' "$$" >&2
       else
         printf 'priority: unchanged (renice refused)\n' >&2

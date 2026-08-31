@@ -28,12 +28,12 @@
 # runner rather than about a regression. It is wired up so the gap is measured
 # instead of assumed, and the flag comes off the moment it passes once.
 #
-# It has now run once (2026-08-27) and produced exactly the two findings it was
-# built to produce, both since fixed: an unsynchronised read of a PTY child's
-# process group that any contended POSIX host loses, and a test fixture that
-# assumed `/bin/sh` forks a lone `-c` command, which dash does and the bash macOS
-# ships as `/bin/sh` does not. Neither could be confirmed without a macOS host,
-# so the flag stays until a run is green. See
+# The runs since 2026-08-27 have produced the host-shaped findings this leg was
+# built to expose: a racy PTY process-group read, a fixture that assumed every
+# `/bin/sh` forks a lone `-c` command, FSEvents directory-granularity noise, and
+# a priority test that treated BSD `renice -n` as an absolute value. Each was
+# fixed at its contract boundary. The flag stays until a run confirms the set
+# on macOS. See
 # `.docs/development/CROSS_PLATFORM_FINDINGS.md` § What the first macOS run
 # actually found.
 #
@@ -274,7 +274,7 @@ jobs:
       # stale one is exactly the failure this is here to name. No video is recorded and no
       # encoder is needed; it costs about a minute.
       - name: Demo capture determinism
-        run: npm --prefix frontend run capture:demo -- --scenario queue --check
+        run: npm --prefix frontend run capture:demo:check
 
   platform:
     name: platform (${{ matrix.os }})

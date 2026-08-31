@@ -33,6 +33,7 @@ tighter one passes while a document still names a dead command.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -142,13 +143,27 @@ def _python_string_document(text: str) -> str:
 
 
 def scan() -> list[str]:
-    """Every code span in the tree that invokes a launcher this project removed."""
+    """Every repository code span that invokes a launcher this project removed.
+
+    Tracked files and untracked, non-ignored files are both candidates.
+    Gitignored operator state, cached verification clones, dependency trees and
+    build output are not repository content and must not change this answer.
+    """
     removed = set(REMOVED_LAUNCHERS)
     found: list[str] = []
-    for path in sorted(REPO_ROOT.rglob("*")):
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    relative_paths = sorted(
+        item.decode("utf-8") for item in listed.split(b"\0") if item
+    )
+    for relative in relative_paths:
+        path = REPO_ROOT / relative
         if path.suffix not in SCANNED_SUFFIXES or not path.is_file():
             continue
-        relative = path.relative_to(REPO_ROOT).as_posix()
         if any(part in SKIP_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
             continue
         if relative in EXEMPT_FILES:
