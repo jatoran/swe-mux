@@ -9,7 +9,6 @@ test('the drawer exposes one Actions tab with three named catalog views', () => 
   const tabs = source('drawerTabs.ts')
   const drawer = source('UtilityDrawer.tsx')
   const actions = source('ActionsTab.tsx')
-  const modal = source('ActionEditorModal.tsx')
 
   assert.ok(tabs.includes("id: 'actions', label: 'Actions'"))
   assert.doesNotMatch(tabs, /id: 'commands'|id: 'prompts'/)
@@ -25,32 +24,38 @@ test('the drawer exposes one Actions tab with three named catalog views', () => 
   assert.ok(actions.includes('drawer-skill-detail'), 'skills use compact recognition rows with inline detail')
 })
 
-test('Configure Actions is a standalone modal reachable from every intended entry point', () => {
+test('Configure Actions is a Settings tab reached from every intended entry point', () => {
   const app = source('App.tsx')
   const settings = source('Settings.tsx')
   const terminal = source('TerminalPane.tsx')
   const actions = source('ActionsTab.tsx')
-  const modal = source('ActionEditorModal.tsx')
+  const panel = source('ActionEditorModal.tsx')
+  const tabs = source('settingsTabs.ts')
 
   assert.ok(app.includes("id: 'actions.configure'"), 'command palette registry needs Configure Actions')
   // Project context is passed so detached projects can open directly and Global can offer
   // a one-step detach for projects that still follow it.
-  assert.ok(app.includes('<ActionEditorModal projectId='))
-  assert.ok(modal.includes("railProjectScopeKind(blob, projectId) === 'fork' ? projectId : ''"))
-  assert.ok(modal.includes('contextProjectId={projectId}'))
+  assert.ok(tabs.includes("{id:'actions',label:'Actions',group:'Interface'}"))
+  assert.ok(settings.includes('<ActionEditorPanel projectId={focusedProjectId}/>'))
+  assert.ok(panel.includes("railProjectScopeKind(blob, projectId) === 'fork' ? projectId : ''"))
+  assert.ok(panel.includes('contextProjectId={projectId}'))
+  assert.doesNotMatch(panel,/modal-layer|role="dialog"|useModalFocus/)
+  assert.ok(app.includes("openSettings('Actions')"))
+  assert.doesNotMatch(app,/<ActionEditorModal|actionEditorOpen/)
   assert.ok(app.includes("runNamedCommand('actions.configure')"), 'main menu must use the shared command')
-  // Every row's drawer popover reaches the full modal directly, including empty rows.
+  // Every row's drawer popover reaches the full Settings tab, including empty rows.
   const strip = source('RailStrip.tsx')
   const popover = source('RailOverflowPopover.tsx')
   assert.ok(!strip.includes('class="rail-config"'), 'the strip must not draw its own gear')
   assert.ok(strip.includes('onConfigure={onConfigure}'), 'the row must hand Configure to its popover')
-  assert.ok(popover.includes('aria-label="Configure Actions"'), 'the overflow popover must reach the full modal')
+  assert.ok(popover.includes('aria-label="Configure Actions"'), 'the overflow popover must reach the Settings editor')
   assert.ok(terminal.includes('onConfigure={()=>onConfigureRail?.()}'))
   assert.doesNotMatch(terminal, /RailInlineEditor|railEditOpen/)
   assert.ok(source('RailEditor.tsx').includes('Detach {contextProjectName} to edit directly'))
   assert.doesNotMatch(actions, /onConfigureActions|Configure command rail/, 'Actions no longer duplicates command-rail configuration')
   assert.doesNotMatch(actions, /id="quick"|Quick actions/)
-  assert.doesNotMatch(settings, /RailEditor|commandrail:/)
+  assert.ok(settings.includes('<h3>Action rail</h3>'))
+  assert.ok(settings.includes('<h3>Action layout</h3>'))
 })
 
 // The rail's three pickers are one pattern, and a fourth surface would be a fourth

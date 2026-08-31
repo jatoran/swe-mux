@@ -3063,7 +3063,7 @@ body {
 /* Below this the columns are narrower than a dropdown can usefully be, so the picture gives
    way to a list rather than becoming an unreadable version of itself. */
 @media(max-width:560px){.rail-pad-grid{grid-template-columns:minmax(0,1fr)!important}}
-.action-editor-layer{z-index:82}.action-editor-modal{width:min(1180px,calc(100vw - 24px));height:min(860px,calc(100dvh - 24px));display:grid;grid-template-rows:auto minmax(0,1fr) auto}.action-editor-body{min-height:0;overflow:auto;padding:14px 18px}.action-editor-body>.commandrail-settings>h3{margin-top:0}
+.action-editor-body{min-height:0}.settings-content .action-editor-body{padding:0}
 .terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 /* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored
    above the action rail so it never covers the newest line it points at. */

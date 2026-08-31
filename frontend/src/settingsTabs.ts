@@ -26,6 +26,7 @@ export const settingsTabs = [
   {id:'plugins',label:'Plugins',group:'Agents'},
   {id:'usage',label:'Usage',group:'Agents'},
   {id:'appearance',label:'Appearance',group:'Interface'},
+  {id:'actions',label:'Actions',group:'Interface'},
   {id:'input',label:'Input',group:'Interface'},
   {id:'notes',label:'Notes',group:'Interface'},
   {id:'voice',label:'Voice',group:'Interface'},
@@ -66,7 +67,7 @@ export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
 
 const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
   appearance:{
-    'Theme':'interface','Right sidebar':'interface','Interface scale':'interface','Action rail':'interface',
+    'Theme':'interface','Right sidebar':'interface','Interface scale':'interface',
     'Session rows':'session-rows',
     'Session top bars':'session-top-bars',
   },

@@ -177,7 +177,6 @@ import { HarnessSetup } from './HarnessSetup'
 import { VoiceSetup } from './VoiceSetup'
 import { QuestLog } from './QuestLog'
 import { withQuestDismissed, type QuestId, type QuestSignals } from './questRegistry.ts'
-import { ActionEditorModal } from './ActionEditorModal'
 import { GuidedTutorial } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, firstRunSurface, mobileTutorialChrome, resetTutorial, shouldStartTutorial, type TutorialStepId } from './tutorial'
 import { HelpModal } from './HelpModal'
@@ -794,7 +793,6 @@ export function App() {
     const handle = idle(() => void loadSettingsChunk(), { timeout: 4000 })
     return () => window.cancelIdleCallback?.(handle)
   }, [workspaceLoaded, SettingsView, loadSettingsChunk])
-  const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
   // user left off" - Settings remembers its own last tab, so an unqualified open must
   // stay unqualified rather than assert General.
@@ -3243,7 +3241,7 @@ export function App() {
     setSettingsNavOpen(false)
     setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null)
   }
-  const openActionEditor = () => { setActionEditorOpen(true); setMainMenuOpen(false); setProjectMenu(null); setContextMenu(null) }
+  const openActionSettings = () => { setContextMenu(null); openSettings('Actions') }
   const noteIdForTarget=(target:NoteTarget)=>target.kind==='worktree-file'
     ? target.worktree?worktreeFileResourceId(target.worktree,target.resourceId):''
     : noteResourceId(target.kind,target.resourceId)
@@ -5817,7 +5815,7 @@ export function App() {
       run: () => openHelp(topic.id),
       voice: { phrases: [`help with ${topic.title.toLowerCase()}`, `explain ${topic.title.toLowerCase()}`] },
     })),
-    { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionEditor },
+    { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionSettings },
     // Two dialogs. The ids are unchanged so keybindings and menu rows that already name a
     // surface keep working and keep landing on it — `usage.open` most of all, which has
     // been called "Open usage analytics" the whole time while opening a segment of the
@@ -7342,7 +7340,7 @@ export function App() {
         onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
       />}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} onConfigureRail={openActionSettings} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
@@ -8821,8 +8819,6 @@ export function App() {
     />}
     {voiceSetupOpen && <VoiceSetup onClose={()=>setVoiceSetupOpen(false)}
     />}
-
-    {actionEditorOpen && <ActionEditorModal projectId={active?.project_id || activeProject?.id} onClose={() => setActionEditorOpen(false)} />}
 
     {/* Resolved from the live list each render, so a session that ends or is removed
         under the dialog closes it instead of leaving it aimed at a pane that is gone. */}

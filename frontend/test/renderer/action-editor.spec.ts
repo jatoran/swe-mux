@@ -2,7 +2,7 @@ import { expect, test } from 'playwright/test'
 import { chooseDropdown, dropdownValue } from './dropdown'
 
 /**
- * The Configure Actions modal, end to end against the stubbed daemon: the
+ * The Settings Actions panel, end to end against the stubbed daemon: the
  * progressive-disclosure shape, the plain-language catalog controls, the
  * preview-as dimmer, and the project delta scope (additions overlay the live
  * global layout and revert cleanly). These are the behaviors the redesign
