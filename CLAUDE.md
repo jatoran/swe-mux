@@ -105,7 +105,7 @@ keys live in a password manager.
 
 **A red badge is the first thing a visitor sees.** CI (`.github/workflows/ci.yml`) runs on
 every push to `master`: the full Windows gate, plus Ubuntu and macOS legs, plus a `site` job.
-macOS is `continue-on-error` until it passes cleanly; Ubuntu, Windows and `site` block.
+Ubuntu, macOS, Windows and `site` all block.
 
 **The site's pages are committed build output, and the release commit is where that bites.**
 `site/tools/build.py` writes `site/changelog/index.html` and thirty siblings out of
@@ -354,10 +354,7 @@ It needs no provider, no credential and no quota, because its session half spawn
 rather than an agent - which is what lets it run on a public runner and answer the question
 none of the other 5400 tests do: does a daemon start on this host, serve a terminal, and stop
 without leaving processes behind.
-It runs on `ubuntu-latest` and `windows-latest` on every push, in ~40s.
-It is **held off macOS deliberately** until that leg stops being `continue-on-error`: a new
-tier added under that flag goes red beside an already-red leg, and its first real regression
-would be indistinguishable from the noise.
+It runs on `ubuntu-latest`, `macos-latest` and `windows-latest` on every push.
 `.worktree-verify` deselects it like every sibling, because it binds ports and spawns shells
 and landing is meant to be cheap; run it by hand with
 `uv run pytest tests/test_live_daemon.py -m live_daemon`.

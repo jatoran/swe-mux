@@ -21,18 +21,17 @@ On a machine with both installed, PATH order decides which one runs.
 An installed copy reports `0.1.0` and carries `swe_mux/static/index.html` with its 39 hashed JS assets, so it serves the interface without Node ever being present.
 A package install is now the primary path, and the source install is for people changing swe-mux rather than running it.
 
-**The platform matrix is: the wheel installs on all three hosts, the source daemon starts under test on Windows and Linux, and the shipped product is proven only on Windows.**
+**The platform matrix is: the wheel installs on all three hosts, the source daemon starts under test on all three hosts, and the shipped product is proven only on Windows.**
 That is drawn from `.github/workflows/ci.yml` rather than from any summary, including this one.
 The `verify` job runs on `windows-latest` and carries the full gate plus the wheel build, artifact validation, install smoke, and the Playwright renderer suite.
-The `platform` job is a matrix of `ubuntu-latest` (`unproven: false`, blocking) and `macos-latest` (`unproven: true`, so `continue-on-error` is true for that leg), and since 2026-08-28 both legs also build the wheel, validate it, and run the install smoke.
+The blocking `platform` job is a matrix of `ubuntu-latest` and `macos-latest`, and since 2026-08-28 both legs also build the wheel, validate it, and run the install smoke.
 So "the wheel builds and installs and the CLI runs" is a question CI asks on all three hosts, and it was answered green on all three on 2026-08-28.
 Read the badge for today's answer rather than this sentence: those steps sit after the suite in the job, so a test failure on a leg skips them, and a skipped step is not a passing one.
 
 **What is proven nowhere is a running daemon built from the published artifact.**
 `install_smoke.py` says so in its own docstring and means it: it starts no daemon and binds no port, because the daemon owns a fixed port and a single data directory and a CI job that started one would be a second writer against whatever else is running.
 Since 2026-08-28 one CI step does start a daemon, and the distinction between the two is the whole content of this paragraph.
-The `live_daemon` tier (`tests/test_live_daemon.py`) runs on `ubuntu-latest` and `windows-latest` and starts a daemon **from the source checkout** on an OS-allocated port under the test's own temp data directory - never 8765, never `~/.mux` - so it proves that this tree's daemon reaches `status: ready` through all sixteen startup phases, writes its shims and hook artifacts, spawns a real shell through a real pseudoterminal, serves it over the terminal websocket, and exits cleanly with no orphaned children.
-It is deliberately not on the macOS leg while that leg is `continue-on-error`.
+The `live_daemon` tier (`tests/test_live_daemon.py`) runs on Windows, Ubuntu and macOS and starts a daemon **from the source checkout** on an OS-allocated port under the test's own temp data directory - never 8765, never `~/.mux` - so it proves that this tree's daemon reaches `status: ready` through all sixteen startup phases, writes its shims and hook artifacts, spawns a real shell through a real pseudoterminal, serves it over the terminal websocket, and exits cleanly with no orphaned children.
 Three claims it does **not** support: it runs no agent (its session is a shell, so no provider, credential or quota is involved), it never runs the installed wheel or the frozen desktop app, and it says nothing about a daemon on the operator's real port and data directory.
 Do not let "installs and the CLI runs" or "the source daemon starts under pytest" be read as "verified working end to end" - they are three different claims, and the third one still has no evidence on any host.
 `pyproject.toml` declares `Operating System :: Microsoft :: Windows` and `Operating System :: POSIX :: Linux` and deliberately no macOS classifier and no `OS Independent`, which is the same distinction expressed in metadata.

@@ -166,7 +166,7 @@ Say "installable PWA over your own tailnet with no relay", not "the only one wit
 Every one of these will surface in a comment thread.
 Conceding them in the post costs nothing and buys the thread.
 
-- **Windows-first is unusual here and costs adoption.** Windows is the only platform that proves the product running from what a user installs. CI install-smokes the wheel on all three hosts and the `live_daemon` tier starts a daemon from the source checkout on Linux and Windows, but no CI job starts one from a published artifact, and macOS is still `continue-on-error`.
+- **Windows-first is unusual here and costs adoption.** Windows is the only platform that proves the product running from what a user installs. CI install-smokes the wheel and starts a source-checkout daemon on all three hosts, but no CI job starts one from a published artifact and no macOS desktop artifact exists.
 - **It is a lot of software.** The surface is large and the tutorial covers a small slice of it. "Not magic, it is a lot of software" is already in the launch draft; keep it.
 - **Almost all of it is off until you turn it on.** This is the concession the claim audit added, and it is a real one: a fresh install has no automations, no land queue opt-in, no behaviour timeline, no attention ranking, no read-aloud, and the daemon owns the PTYs rather than a supervisor. That is defensible as a safety posture and indefensible as a surprise, so the copy says it and the onboarding proposal in § Open decisions exists to shorten the distance.
 - **No signed desktop installer.** The installer exists as of v0.1.2 and is unsigned, so SmartScreen warns on first run for anyone who is not installing from PyPI.
