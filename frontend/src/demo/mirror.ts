@@ -88,7 +88,8 @@ const OVERLAY_COMMANDS: Record<string, string> = {
   'Prompt library': 'prompts.open',
   Help: 'help.open',
   Automation: 'hooks.open',
-  'Configure Actions': 'actions.configure',
+  // Configure Actions is not here because it is no longer a modal: it is a section of
+  // Settings, so it mirrors as `Settings` plus the generic tablist rule below.
   Settings: 'settings.open',
   'Command palette': 'palette.open',
 }

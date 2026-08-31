@@ -134,8 +134,10 @@ function desktopSteps(): Step[] {
       id: 'resources',
       eyebrow: 'THE MACHINE',
       title: 'What the fleet is actually consuming.',
-      selectors: ['.sidebar-footer button[aria-label*="resource"]', '.sidebar-footer'],
-      advance: { kind: 'click', selectors: ['.sidebar-footer button'] },
+      // The summary button by its own class rather than "a button in the footer": the
+      // footer carries several now, and any of them would have satisfied the step.
+      selectors: ['.resource-usage-summary', '.sidebar-footer'],
+      advance: { kind: 'click', selectors: ['.resource-usage-summary'] },
       hint: 'Open the resource summary',
       body: <>
         <p>Processes, listeners, bandwidth, disk, and the durable telemetry behind
