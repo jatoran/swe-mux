@@ -604,6 +604,7 @@ class PluginManager:
             exe=command[0],
             args=list(command[1:]),
             extra_env=env,
+            retain_extra_env=False,
             project_label=project.name,
             start_cwd=str(cwd),
             completion_mode="interactive",
@@ -620,7 +621,9 @@ class PluginManager:
             session.record.id,
             project.id,
         )
-        return {"session": session.record.snapshot(), "placement": pane.placement}
+        snapshot = session.record.snapshot()
+        snapshot["spawn_env"] = {}
+        return {"session": snapshot, "placement": pane.placement}
 
     async def link_handlers(self) -> builtins.list[dict[str, Any]]:
         handlers: builtins.list[dict[str, Any]] = []
