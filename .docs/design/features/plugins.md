@@ -59,6 +59,7 @@ Source updates do not rewrite a pane that is already running.
 Tab placement enters the focused terminal stack and split placement opens to its right.
 The fleet reconciler routes those sessions from their retained `plugin_placement`, so an event-driven refresh cannot race the pane-open response.
 Popup placement renders the same session in a modal, is excluded from durable layout reconciliation, and stops the session when the modal closes.
+Opening any pane contribution closes Settings and focuses the resulting workspace pane or popup.
 
 ### Startup hooks
 
