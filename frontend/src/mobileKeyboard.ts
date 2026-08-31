@@ -41,6 +41,8 @@
 // The predicates and the shadow walk are duck-typed rather than written against
 // `HTMLInputElement`/`ShadowRoot` so they can be unit-tested without a DOM.
 
+import { isWheelReportBurst } from './terminalWheelPacing.ts'
+
 export type FocusedField = {
   tagName?: string
   type?: string|null
@@ -287,6 +289,26 @@ export function nextPeekOffset(offset:number, trigger:PeekTrigger, inset:number)
   if(trigger==='hiddenOutput')return Math.max(0,inset)
   if(trigger==='output')return clampPeekOffset(offset,inset)
   return 0
+}
+
+/**
+ * Whether a run of input bytes is the reader typing, for the purpose of ending a peek.
+ *
+ * The `input` trigger reads "typing means the reader has stopped reading" — but not
+ * everything that reaches the input chokepoint was typed. A drag that pans the peek
+ * window to its end chains the leftover travel into the application's own viewport as
+ * wheel reports, and those reports come back through the same `onData` path as a
+ * keystroke. Counting them as typing snapped the peek back to the composer the instant
+ * a scroll-up gesture ran past the pan — the one moment the reader had just said they
+ * were reading — and it kept snapping until the keyboard went down.
+ *
+ * A wheel report *is* the reading gesture, so it is the one shape excluded. Everything
+ * else still ends the peek, including non-wheel mouse reports: a tap or click is the
+ * reader acting on the composer's half of the grid, which is the same statement a
+ * keystroke makes.
+ */
+export function inputEndsPeek(data:string):boolean {
+  return !isWheelReportBurst(data)
 }
 
 /**
