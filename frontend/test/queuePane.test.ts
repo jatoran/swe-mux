@@ -38,8 +38,16 @@ test('there is one writing surface and it is a queue row', () => {
   // made "the thing I typed disappeared" possible in two different ways.
   assert.ok(!queuePane.includes('queue-composer'), 'the composer footer should be gone')
   assert.equal(queuePane.split('<textarea').length - 1, 1)
-  assert.match(queuePane, /class="queue-compose-bar"/)
   assert.match(queuePane, /const startDraft = \(\)/)
+  // The compose control belongs to the list rather than to the panel's chrome: pinned to
+  // the bottom of the tab it sat a screen below the last item on a short queue.
+  assert.ok(!queuePane.includes('queue-compose-bar'), 'the pinned footer should be gone')
+  assert.ok(!/<footer/.test(queuePane), 'the queue pane should have no footer element')
+  const list = queuePane.slice(queuePane.indexOf('<ul class={`queue-list'))
+  assert.match(list, /class=\{`queue-compose\$\{listEmpty \? ' queue-compose-alone' : ''\}`\}/)
+  // Drawn once, in one place, in both states: the empty state adds a paragraph beside the
+  // button rather than a second copy of it somewhere else.
+  assert.equal(queuePane.split('class="queue-new"').length - 1, 1)
 })
 
 test('the editor claims focus only where a keyboard is already there', () => {

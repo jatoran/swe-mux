@@ -28,7 +28,7 @@ test('the tab opens with no field, and + is the way in', async ({ page }) => {
   // Nothing to type into until something is asked for: the permanent composer is gone.
   await expect(page.locator('.queue-pane textarea')).toHaveCount(0)
   await expect(page.locator('.queue-new')).toBeVisible()
-  await expect(page.locator('.queue-empty')).toContainText('New message')
+  await expect(page.locator('.queue-empty-note')).toContainText('nothing is ever delivered on a timer')
 
   await page.locator('.queue-new').click()
   const field = page.locator('.queue-edit-field')
@@ -203,8 +203,95 @@ test('an empty draft that is abandoned leaves nothing behind', async ({ page }) 
   await page.locator('.queue-new').click()
   await page.locator('.queue-edit-actions').getByRole('button', { name: 'Discard this draft' }).click()
   await expect(page.locator('.queue-edit-field')).toHaveCount(0)
-  await expect(page.locator('.queue-empty')).toBeVisible()
+  await expect(page.locator('.queue-empty-note')).toBeVisible()
   expect(await writesOf(page)).toEqual([])
+})
+
+/**
+ * Where the compose control sits. It is the list's last row rather than the panel's
+ * footer, and the three placements below are the whole reason for that: pinned to the
+ * bottom of the tab it drew a button a screen below the last item on a short queue, and
+ * floated under a lone paragraph on an empty one. Geometry, so these live here - no
+ * source-shape assertion can see a button in the wrong place.
+ */
+
+const boxOf = async (page: import('playwright/test').Page, selector: string) => {
+  const box = await page.locator(selector).boundingBox()
+  if (!box) throw new Error(`${selector} has no box`)
+  return box
+}
+
+const addMessage = async (page: import('playwright/test').Page, text: string) => {
+  await page.locator('.queue-new').click()
+  await page.locator('.queue-edit-field').fill(text)
+  await expect(page.locator('.queue-edit-status')).toHaveText('saved')
+  await page.locator('.queue-edit-actions').getByRole('button', { name: 'Done' }).click()
+  await expect(page.locator('.queue-edit-field')).toHaveCount(0)
+}
+
+test('an empty queue centres the compose control in the tab', async ({ page }) => {
+  // The one state where the button is the whole content, so it is centred in the tab
+  // rather than left at the top of an empty column with a paragraph under it.
+  await page.goto('/queue-draft-harness.html')
+  await page.waitForSelector('.queue-new')
+  const list = await boxOf(page, '.queue-list')
+  const row = await boxOf(page, '.queue-compose')
+  // Both axes, against the list's own centre rather than against a pixel count.
+  expect(Math.abs((row.y + row.height / 2) - (list.y + list.height / 2))).toBeLessThan(4)
+  expect(Math.abs((row.x + row.width / 2) - (list.x + list.width / 2))).toBeLessThan(4)
+  // And it sizes to its label instead of spanning the column, which is what makes it
+  // read as a call to action rather than as a bar.
+  const button = await boxOf(page, '.queue-new')
+  expect(button.width).toBeLessThan(list.width * 0.75)
+})
+
+test('a short queue puts the compose control under the last item', async ({ page }) => {
+  await page.goto('/queue-draft-harness.html')
+  await addMessage(page, 'first')
+  await addMessage(page, 'second')
+
+  const items = page.locator('.queue-item')
+  await expect(items).toHaveCount(2)
+  const last = (await items.nth(1).boundingBox())!
+  const row = await boxOf(page, '.queue-compose')
+  const list = await boxOf(page, '.queue-list')
+  // Directly under the last item...
+  expect(row.y - (last.y + last.height)).toBeLessThan(20)
+  // ...and nowhere near the bottom of the tab, which is where it used to be. Asserted
+  // against the space actually left over rather than a pixel count, so the test does not
+  // depend on the harness's height.
+  const slackBelow = (list.y + list.height) - (row.y + row.height)
+  expect(slackBelow).toBeGreaterThan(row.height * 2)
+  // Nothing scrolls, so nothing is being pinned here.
+  const scrolls = await page.evaluate(() => {
+    const el = document.querySelector('.queue-list')!
+    return el.scrollHeight > el.clientHeight
+  })
+  expect(scrolls).toBe(false)
+})
+
+test('a long queue keeps the compose control at the edge, opaquely', async ({ page }) => {
+  // The half the report did not ask about and the design has to answer anyway: once the
+  // list scrolls, a row that travelled with the content would be a scroll away from
+  // "add". Sticky, so it is the last row when it fits and the edge when it does not.
+  await page.goto('/queue-draft-harness.html')
+  for (let i = 0; i < 7; i += 1) await addMessage(page, `filler number ${i} with some length`)
+  await page.locator('.queue-list').evaluate(el => { el.scrollTop = 0 })
+
+  const list = await boxOf(page, '.queue-list')
+  const row = await boxOf(page, '.queue-compose')
+  // Flush with the scrollport's edge. It is not: a sticky offset is measured against the
+  // scrollport *minus the container's padding*, so a plain `bottom:0` parks it a gutter
+  // short and rows scroll visibly through the gap.
+  expect(Math.abs((row.y + row.height) - (list.y + list.height))).toBeLessThan(1.5)
+  // Still the first item on screen, so the row really is pinned rather than merely last.
+  const first = (await page.locator('.queue-item').first().boundingBox())!
+  expect(first.y).toBeLessThan(row.y)
+  // Opaque, because rows passing under a transparent control read as a rendering fault.
+  const background = await page.locator('.queue-compose').evaluate(
+    el => getComputedStyle(el).backgroundColor,
+  )
+  expect(background).not.toBe('rgba(0, 0, 0, 0)')
 })
 
 test('everything fits the drawer minimum without a horizontal scrollbar', async ({ page }) => {
