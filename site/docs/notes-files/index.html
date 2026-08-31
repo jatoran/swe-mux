@@ -1073,7 +1073,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="docsec" id="files">
         <div class="head"><span class="n">#</span><h2>Files</h2><span class="fill"></span></div>
-        <p class="prose">A bounded file tree over the Project root with editors, ignore patterns, and a reveal into the host file manager. Picking a file opens it into a pane, so reading code beside a running agent does not cost you the terminal.</p>
+        <p class="prose">A bounded file tree over the Project root with editors, ignore patterns, and a reveal into the host file manager. Picking a file opens it as a tab in the Files panel itself, so reading code beside a running agent costs you neither the terminal nor the browser you found it in.</p>
+        <p class="prose">Move one into a <b>pane</b> when you want the width: <code>⇥</code> beside the file rail, <b>Open in a pane</b> on the file's tab or on its row in the tree, ctrl/cmd-click on a row, or drag the row onto the pane you want it in. A file lives in exactly one of the two hosts at a time, because two editors on one file share one save queue and the later write would silently discard the earlier one.</p>
         <p class="prose">Text edits are <b>revision-checked</b>: an edit carries the revision it was made against and is refused if the file moved underneath it. That is the difference between a conflict you are told about and a change you silently lost.</p>
         <p class="prose"><b>Watches are leased.</b> A watch on a directory is non-recursive and expires unless it is renewed, which is what stops a browser tab left open for a week holding filesystem watches on a repository nobody is looking at.</p>
       </div>

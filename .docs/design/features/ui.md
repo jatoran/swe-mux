@@ -2498,8 +2498,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The canonical default order is **Notes**, **Files**, **Actions**, **Queue**, **Transcript**, **Activity**, **Agent**, **Git**, **Processes**, **Schedule**, and **Alerts**.
   Users may distribute those singleton tabs across a recursive arrangement, but the default order reads as blocks.
   Notes and Files lead as the **navigators**: Project-scoped indexes over documents rather than surfaces that type into one, and the two surfaces that are useful before a single session exists - a fresh workspace has notes to write and files to open while every session-scoped tab still has nothing to act on.
-  Files opens what you select into a pane.
-  Notes can do that too but opens *into the drawer* by default, because reading or adding to a note without leaving the session on screen is the whole point of it on a phone.
+  Both open what you select *into the drawer* by default, and put it in a pane only when asked, because reading a note or a file without leaving the session on screen is the whole point of them on a phone.
   The session-scoped block follows and keeps its internal order: Actions leads it because it inserts into the focused work surface, Queue stages text for a focused agent, Transcript reads the same session back, and Activity and Agent close the block with passive views of what the selected session did and what it is running with.
   Git follows without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
   See `git.md` for the branches, worktrees, dirty/upstream state, and allowed mutations it shows.
@@ -2527,6 +2526,14 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   That is a mode with no name anywhere in the chrome: unreachable by command or by voice, not persisted, and told apart only by inspecting `aria-pressed` on an icon.
   As `File Explorer` and `Recent` they are named, addressable, and persisted per Project like every other view choice, and the search field still outranks both because searching is an explicit act.
   The labels are the full headings rather than shorter chips - "File Explorer" is what this surface is called everywhere else, and abbreviating it to fit a chip would rename it for no reason.
+- **Files has a second rail below that one**, holding the files open in the drawer, and the two are deliberately not merged.
+  The segment rail is a registry: two entries, fixed, addressable by palette and by voice, persisted per Project.
+  The file rail is documents: device-local, however many you opened, and gone when you close them.
+  Folding open files into the registry would have made a filename look like a palette command, and would have pushed "File Explorer" - which the line above is explicit about not abbreviating - off the row the moment two files were open.
+- **Exactly one of the two rails owns the selection, and the other says so.**
+  While a file is showing, the segment control *stands down*: its `active` chip stays focusable and faintly marked, because that is still where "back" goes, but it reports `aria-selected="false"` and drops its highlight (`DrawerViewTabs`'s `selected`, rendered as `.standing-down`).
+  Two lit chips over one body is a lie to a screen reader and, with a highlight on both, to everyone else.
+  Clicking either segment is what hands the selection back, and it closes nothing.
   A **section** is a co-visible region of one scroller, reached by scrolling to it and flashing it through the same `settingReveal.ts` arrival the Settings deep links use (`setting-links.md`).
 - Segments are **registered, not local state**, and that is the point rather than tidiness.
   Every registered tab generates two palette commands and three voice phrases; a segment reached only by clicking would have none, so folding Clipboard into Actions and Change Map into Activity would have *deleted* "open Clipboard" and "open Change Map" as commands and as spoken navigation.
@@ -2726,6 +2733,23 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   outside the layout, and on desktop the drawer is an in-flow column, so a file row can still be
   dragged onto any pane.
   Files can remain visible beside Clipboard or another utility body when the user places them in separate drawer panes.
+- **Files hosts what it opens**, as a chip in the second rail described above, and a plain click on a tree row, a search hit, or a Recent row lands there.
+  It used to insert a leaf into the workspace layout, which cost two things at once on a phone: the drawer closed, and the file covered the session that was being read.
+  The second of those is the reason this is a correctness change and not only an ergonomic one.
+  `project.layout` is persisted server-side and **shared across devices**, so opening a file from a phone permanently rearranged the desktop's panes - the exact hazard `drawerNotes.ts` was written to avoid, with Files as the last surface still committing it.
+  The open set is device-local (`drawerFiles.ts`, `mux.drawer.files.v1`), per Project, and touches no layout.
+- **A file has one live editor per browser, and only the *showing* chip is mounted.**
+  Files opened from the tree save through the same module-scoped queue notes use (`fileSaveTarget`), so two mounted editors on one file discard one side's text with no conflict the daemon can see.
+  The other chips are rail entries with no editor, which is what makes a *set* of open files safe at all; and a pane leaf whose file the drawer is showing renders the same "open in the panel" placeholder a claimed note's leaf does.
+  A closed drawer holds no editor, so the pane takes the file back - `drawerOpen` is part of the predicate for the same reason it is for notes.
+- **The pane placement is four gestures, because it stopped being the default.**
+  `⇥` beside the rail moves the file being shown; the chip's own menu offers `Open in a pane`; the tree row menu offers it too; and mod-click on a row (Ctrl, or Cmd on macOS, where Ctrl-click is the secondary click) goes straight there.
+  Dragging a row onto a pane is unchanged and was always the fifth.
+  Moving a file to a pane **closes its drawer chip**, unlike a popped note, which keeps its rail entry: a note's entry is the Project's note whether or not you are reading it, while a file chip means "open here" and leaving one behind a pane that now owns the file would offer a click that has to be refused.
+- **Chips close, and the set is capped at eight**, both because files are unbounded where a Project's notes are not.
+  Eviction is by least-recent selection rather than by position, and it **refuses to evict anything with unsaved edits** even when that means exceeding the cap: the cap is a convenience and the text is not.
+  A chip with unsaved work is marked, and closing it is a two-click confirm - the same shape the note delete control uses, and for the same reason a dialog would be wrong for something this frequent.
+  A chip is a basename, widened by as many parent segments as it takes to be unique among the open set, because two chips both reading `index.ts` name the wrong file with complete confidence.
 - **Notes** is a flat Project-owned collection *and* an editor, and a note is open in exactly one of the two hosts at a time.
   A non-wrapping sub-tab rail shows Scratchpad first when enabled and then every note in the active Project in stable creation order.
   These tabs are the primary navigation and cannot be closed.

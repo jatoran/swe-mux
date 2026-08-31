@@ -26,6 +26,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Changed
 
+- **The Files tab now opens files into itself, as tabs, instead of into a workspace pane.**
+  A second rail below `File Explorer | Recent` holds what you have open; a plain click on a tree row, a search hit, or a Recent row lands there, and the side panel stays open over the session you were reading.
+  A file moves into a pane on request - `⇥` beside the rail, `Open in a pane` on its tab or on its row in the tree, ctrl/cmd-click on a row, or the row drag that already worked - and it lives in exactly one of the two places at a time.
+  This also fixes a real cross-device fault: opening a file used to insert a tab into the Project layout, which is shared, so browsing files on a phone permanently rearranged the desktop's panes.
+  Open files are remembered per Project on the device, capped at eight, evicted by least-recent use, never evicted while they hold unsaved edits, and marked and guarded when they do.
 - **Plugins is now a first-class app-menu destination.**
   The row opens plugin management directly, while Project-scoped plugin tools remain in each Project's Run menu.
 - **Plugin marketplace selection now fills an immutable release tag, and manual installation exposes an optional ref field.**

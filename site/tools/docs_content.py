@@ -588,7 +588,8 @@ PROJECTS = Page(
                 (
                     "Notes and files",
                     "A Project-owned note collection and a bounded file tree with ignore rules. "
-                    "Both open into a pane rather than only into the drawer.",
+                    "Both open what you pick as a tab in the side panel, and move into a pane "
+                    "when you ask for one.",
                 ),
                 (
                     "History",
@@ -1513,8 +1514,17 @@ NOTES_FILES = Page(
         (
             "p",
             "A bounded file tree over the Project root with editors, ignore patterns, and a reveal "
-            "into the host file manager. Picking a file opens it into a pane, so reading code "
-            "beside a running agent does not cost you the terminal.",
+            "into the host file manager. Picking a file opens it as a tab in the Files panel "
+            "itself, so reading code beside a running agent costs you neither the terminal nor the "
+            "browser you found it in.",
+        ),
+        (
+            "p",
+            "Move one into a <b>pane</b> when you want the width: <code>⇥</code> beside the file "
+            "rail, <b>Open in a pane</b> on the file's tab or on its row in the tree, "
+            "ctrl/cmd-click on a row, or drag the row onto the pane you want it in. A file lives "
+            "in exactly one of the two hosts at a time, because two editors on one file share one "
+            "save queue and the later write would silently discard the earlier one.",
         ),
         (
             "p",

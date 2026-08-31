@@ -20,7 +20,7 @@ import {
 } from './coldSession.ts'
 import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
-import { ProjectResource } from './ProjectResource'
+import { FILE_DRAFT_EVENT, ProjectResource, unsavedFilePaths } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
 import { composerInsertion } from './composerInsertion'
 import { QueuePane } from './QueuePane'
@@ -99,6 +99,11 @@ import {
   DRAWER_NOTE_KEY, claimDrawerNote, drawerNoteFor, isDrawerOwned, parseDrawerNotes,
   pruneDrawerNotes, serializeDrawerNotes, type DrawerNoteMap,
 } from './drawerNotes'
+import {
+  DRAWER_FILES_KEY, closeDrawerFile, closeOtherDrawerFiles, drawerFilesFor, isDrawerFileOwned,
+  openDrawerFile, parseDrawerFiles, pruneDrawerFiles, serializeDrawerFiles, showDrawerFileIndex,
+  type DrawerFileMap,
+} from './drawerFiles'
 import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
@@ -715,6 +720,15 @@ export function App() {
   // The shared layout is never mutated merely by selecting a drawer tab. See `drawerNotes.ts`
   // for why one editor per note per browser is a correctness rule and not a preference.
   const [drawerNotes,setDrawerNotes]=useState<DrawerNoteMap>(()=>parseDrawerNotes(localStorage.getItem(DRAWER_NOTE_KEY)))
+  // Which files each Project has open in the drawer's Files tab. Device-local for the same two
+  // reasons the note claim is, and the second one is why this exists at all: opening a file from
+  // the drawer used to insert a leaf into `project.layout`, which is persisted server-side and
+  // shared, so browsing files on a phone permanently rearranged the desktop's panes.
+  const [drawerFiles,setDrawerFiles]=useState<DrawerFileMap>(()=>parseDrawerFiles(localStorage.getItem(DRAWER_FILES_KEY)))
+  // Files with edits that are not on disk. The draft cache behind them is a plain module map in
+  // `ProjectResource`, so this mirrors it on the transition event rather than polling it, and
+  // the rail can mark a chip and refuse to close it without asking.
+  const [unsavedFiles,setUnsavedFiles]=useState<ReadonlySet<string>>(()=>new Set<string>())
   const [drawerNoteClaimRequest,setDrawerNoteClaimRequest]=useState<{token:number;projectId:string;resourceId:string}|null>(null)
   const drawerNoteClaimSequence=useRef(0)
   useEffect(()=>{
@@ -1222,10 +1236,27 @@ export function App() {
     })
   },[projectId,drawerLegacySettingsReady])
   useEffect(()=>{localStorage.setItem(DRAWER_NOTE_KEY,serializeDrawerNotes(drawerNotes))},[drawerNotes])
+  useEffect(()=>{localStorage.setItem(DRAWER_FILES_KEY,serializeDrawerFiles(drawerFiles))},[drawerFiles])
+  // Mirror the draft cache for the active Project. Reading it on the transition event (rather
+  // than on every keystroke, which the event deliberately does not fire on) keeps this a set of
+  // at most a handful of strings, rebuilt a handful of times per session.
+  useEffect(()=>{
+    const sync=()=>setUnsavedFiles(projectId?unsavedFilePaths(projectId):new Set<string>())
+    sync()
+    window.addEventListener(FILE_DRAFT_EVENT,sync)
+    return()=>window.removeEventListener(FILE_DRAFT_EVENT,sync)
+  },[projectId])
   /** A pane placement of the selected drawer note closes the drawer, ending its temporary
-   * editor ownership without erasing the remembered Notes sub-tab. */
+   * editor ownership without erasing the remembered Notes sub-tab.
+   *
+   * A file released the same way keeps the drawer open and returns the Files tab to its index
+   * instead: the tab is a browser as well as a host, and closing the whole panel to hand one
+   * file back would take the tree away with it. */
   const releaseIfDrawerHolds=(targetProject:string,resourceId:string)=>{
     if(drawerNoteFor(drawerNotes,targetProject)===resourceId)setClipboardOpen(false)
+    const file=parseNoteResourceId(resourceId)
+    if(file?.kind==='file')setDrawerFiles(current=>
+      drawerFilesFor(current,targetProject).active===file.id?closeDrawerFile(current,targetProject,file.id):current)
   }
   // A deleted Project must not keep a slot in device-local storage forever. Guarded on a
   // non-empty list because `projects` is empty until the first load answers, and pruning
@@ -1233,6 +1264,7 @@ export function App() {
   useEffect(()=>{
     if(!projects.length)return
     setDrawerNotes(current=>pruneDrawerNotes(current,projects.map(project=>project.id)))
+    setDrawerFiles(current=>pruneDrawerFiles(current,projects.map(project=>project.id)))
     setDrawerProjectPresentations(current=>{
       const updated=pruneDrawerProjectPresentations(current,projects.map(project=>project.id))
       if(updated!==current)storeDrawerValue(DRAWER_PROJECT_PRESENTATIONS_KEY,serializeDrawerProjectPresentations(updated,drawerLayoutRef.current))
@@ -4761,6 +4793,38 @@ export function App() {
     if(!target){setError('This resource is no longer linked to a durable owner.');return}
     void showResourceForTarget(target,undefined,true)
   }
+  // ---- Drawer-hosted files -------------------------------------------------------------
+  // The Files tab hosts what it opens instead of pushing it into a pane. `drawerFiles.ts` holds
+  // why that is a correctness change and not only a nicer one: the pane placement wrote the
+  // shared `project.layout`, so opening a file on a phone rearranged the desktop's workspace,
+  // and one file per browser has one live editor for the same save-queue reason a note does.
+  const drawerFileState=drawerFilesFor(drawerFiles,projectId)
+  const openFileInDrawer=(path:string,targetProject=projectId)=>{
+    if(!targetProject)return
+    setProjectId(targetProject)
+    // The cap never evicts a file with unsaved work: it is a convenience, and text is not.
+    setDrawerFiles(current=>openDrawerFile(current,targetProject,path,{keep:unsavedFilePaths(targetProject)}))
+    openDrawerTab('files',targetProject)
+  }
+  const closeDrawerFileTab=(path:string,targetProject=projectId)=>
+    setDrawerFiles(current=>closeDrawerFile(current,targetProject,path))
+  const closeOtherDrawerFileTabs=(path:string,targetProject=projectId)=>
+    setDrawerFiles(current=>closeOtherDrawerFiles(current,targetProject,path))
+  const showDrawerFilesIndex=(targetProject=projectId)=>
+    setDrawerFiles(current=>showDrawerFileIndex(current,targetProject))
+  /** Hand a file back to a workspace pane.
+   *
+   * The drawer tab closes rather than being kept the way a popped note's rail entry is. A note
+   * rail entry is permanent - it is the Project's note whether or not you are reading it - so
+   * keeping it says nothing false. A file tab means "open here", and leaving one behind a pane
+   * that now owns the file would offer a click that has to be refused. */
+  const popDrawerFileToPane=(path:string,targetProject=projectId)=>{
+    const project=projects.find(item=>item.id===targetProject)
+    if(!project){setError('A live Project is required to open this file.');return}
+    setDrawerFiles(current=>closeDrawerFile(current,targetProject,path))
+    openProjectFile(project,path)
+    if(mobileWorkspace)setClipboardOpen(false)
+  }
   const placeNoteResourceInFocusedPane=async(resourceId:string,targetProject:string)=>{
     const identity=noteTargetForResource(resourceId,targetProject)
     if(!identity){setError('This resource is no longer linked to a durable owner.');setNoteMenu(null);return}
@@ -7362,6 +7426,13 @@ export function App() {
         <span>This note is being edited in the side panel. It stays in one place at a time so an edit cannot be lost to the other copy.</span>
         <button onClick={()=>popDrawerNoteToTab(node.id,activeProject.id)}>Move it back here</button>
       </section>
+      // Same rule, same reason, for a file the drawer's Files rail is showing. Only the
+      // *showing* tab is mounted, so only it can be the second editor (`drawerFiles.ts`).
+      if(identity.kind==='file'&&isDrawerFileOwned(drawerFiles,activeProject.id,identity.id,clipboardOpen))return <section class="workspace-leaf-placeholder note-in-drawer">
+        <strong>Open in the panel</strong>
+        <span>This file is open in the side panel's Files tab. It stays in one place at a time so an edit cannot be lost to the other copy.</span>
+        <button onClick={()=>{setDrawerFiles(current=>closeDrawerFile(current,activeProject.id,identity.id));setFocusedViewId(node.id)}}>Move it back here</button>
+      </section>
       return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(identity.kind==='worktree-file'){openWorktreeFile(activeProject,identity.worktree,path);return}if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={identity.kind==='worktree-file'?undefined:(path,event)=>beginFileTabDrag(event,path)} onSendToAgent={setSendToAgent} onPreviewFile={path=>void openStaticPreview(activeProject,path,identity.kind==='worktree-file'?identity.worktree:undefined,node.id)}/>
     }
     if(node.kind==='history')return <section class="workspace-leaf-placeholder"><strong>History moved</strong><span>Session history is now a full-screen overlay.</span><button onClick={()=>{setHistoryOpen(true);void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'history',node.id))}}>Open History</button></section>
@@ -8273,6 +8344,18 @@ export function App() {
           if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}
           if(activeProject)openProjectFile(activeProject,path)
         }}
+        drawerFiles={drawerFileState}
+        unsavedFiles={unsavedFiles}
+        onOpenDrawerFile={path=>{
+          // Same drag-ghost guard as the pane path above: a row drag ends in a click on the row
+          // it started from, and the drop already placed the file.
+          if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}
+          openFileInDrawer(path)
+        }}
+        onCloseDrawerFile={path=>closeDrawerFileTab(path)}
+        onCloseOtherDrawerFiles={path=>closeOtherDrawerFileTabs(path)}
+        onShowFilesIndex={()=>showDrawerFilesIndex()}
+        onPopDrawerFileToPane={path=>popDrawerFileToPane(path)}
         onOpenWorktreeFile={(worktree,path)=>{if(activeProject)openWorktreeFile(activeProject,worktree,path)}}
         // The drawer names no view of its own, so the preview lands in the pane you were last
         // in — the same anchor rule opening a file from here already follows.
