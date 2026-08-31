@@ -1597,6 +1597,28 @@ export function App() {
   // The pane a joining session should prefer, kept fresh every render because `refresh` runs from
   // intervals and sockets whose closures are older than the current focus.
   const joinAnchor=useRef<{projectId:string;viewId:string|null}>({projectId:'',viewId:null})
+  // One-shot pane placement asked for by an agent spawn (`request_spawn(pane=...)`).
+  // Panes are per-device state, so the daemon only records the ask: every browser
+  // sees `pane_hint` on the session row and races the claim, the daemon clears it
+  // atomically, and the winner opens the split - exactly one device acts however
+  // many are attached. Only a visible tab competes, and a claim this client already
+  // made (won or lost) is never repeated.
+  const paneHintClaims=useRef<Set<string>>(new Set())
+  const openInSplitRef=useRef<((session:Session,direction:SplitDirection)=>Promise<void>)|null>(null)
+  const claimPaneHints=(rows:Session[]):void=>{
+    if(typeof document!=='undefined'&&document.visibilityState!=='visible')return
+    for(const row of rows){
+      const hint=row.pane_hint
+      if(!hint||row.pending||paneHintClaims.current.has(row.id))continue
+      paneHintClaims.current.add(row.id)
+      void api<{hint:string}>('POST',`/api/sessions/${row.id}/pane-hint/claim`)
+        .then(result=>{
+          if(!result.hint)return // another device won the race and is acting
+          void openInSplitRef.current?.(row,result.hint==='split_horizontal'?'horizontal':'vertical')
+        })
+        .catch(()=>paneHintClaims.current.delete(row.id))
+    }
+  }
   const spawning = useRef(false)
   const relaunching = useRef(false)
   const longPressTimer = useRef<number | null>(null)
@@ -1783,6 +1805,7 @@ export function App() {
         const optimistic=current.filter(session=>session.pending&&pendingSpawns.current[session.id]&&!pendingSpawns.current[session.id].resolvedId)
         return reconcileSessionSnapshots(current,visible,optimistic)
       })
+      claimPaneHints(visible)
     }
     if (nextProjects) {
       setProjects(nextProjects)
@@ -4867,6 +4890,7 @@ export function App() {
     await updateLayout(session.project_id, splitTerminal(layoutMap[session.project_id] || emptyLayout(), targetId, session.id, direction,position))
     setContextMenu(null)
   }
+  openInSplitRef.current = openInSplit
 
   const moveTabDirection=async(leaf:PaneLeaf,targetProject:string,direction:PaneDirection)=>{
     const current=resolveLayout(layoutMap[targetProject],projects.find(project=>project.id===targetProject)?.layout)

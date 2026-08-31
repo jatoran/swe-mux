@@ -16,18 +16,27 @@ explicitly; nothing installs it silently.
   bundle all carry `assets/skills/`, so `swemux --skill` always prints the copy matching the
   running release and guidance cannot drift from the binary.
   There is no registry, no `npx`, and no network anywhere in this feature.
-- **The skill refuses to enumerate commands.** Its body teaches exactly three things: the
-  `MUX_SESSION_ID` environment check (first, so an agent outside swe-mux stops before touching
-  anyone's sessions), "prefer the mux MCP tools when they are visible", and "otherwise
-  `swemux --help` is the authority - read ids out of returned JSON".
-  A skill that listed subcommands would be stale by the next release; this one cannot be.
+- **The skill is surface-aware, and refuses to enumerate tool verbs.** Its body teaches
+  the `MUX_SESSION_ID` environment check (first, so an agent outside swe-mux stops before
+  touching anyone's sessions), then how to read `MUX_SURFACES` - the per-pane statement of
+  which capability surfaces this session holds (`agent_surfaces.py`): prefer the mux MCP
+  tools when visible (they carry identity implicitly and need no shell quoting), otherwise
+  use the CLI's agent mode, where `swemux agent tools` is the authority for what this
+  session may call and `swemux --help` for the command surface. It names the two agent-mode
+  entry points (`agent tools`, `agent call`) and nothing narrower, because the tool set
+  behind them is served by the daemon and cannot rot in a file; a skill that listed tool
+  verbs would be stale by the next release.
   `tests/test_skill_install.py::test_the_shipped_skill_teaches_no_commands` pins the shape:
   no fenced block in the skill invokes `swemux`.
-- **The CLI is named but never made the authority path.** The loopback API is unauthenticated
-  today (`ROADMAP.md` Phase 23 W1), so the skill explicitly marks session-acting commands
-  (send, kill, spawn, reload, update) as operator surface and tells the agent not to run them
-  unsolicited.
-  The skill may widen only after W1/W2 land an authenticated agent mode.
+- **The operator verbs stay off-limits, and since 2026-08-30 that is enforced, not prose.**
+  Phase 23 W1/W2 landed the authenticated agent mode this rule was waiting for: `swemux
+  agent` authenticates as the calling session against `/mcp` and inherits every MCP bound,
+  while the session-acting operator verbs (send, kill, spawn) are refused at the route for
+  a request carrying an agent session's identity headers, with the refusal naming the agent
+  surface (`routes/support.py::refuse_agent_session_caller`). The skill still says so -
+  an honest client should not need the refusal - and `reload-daemon` deliberately stays
+  reachable, because the session-preserving reload is a documented agent flow in this
+  repository's own development loop.
 - **One name everywhere.** Claude keys a skill by its directory name and Codex by its
   frontmatter `name:`, so the directory and the frontmatter agree (`swe-mux`) and the
   invocation is `/swe-mux`, `$swe-mux`, or `/skill:swe-mux` per the descriptor's
@@ -91,11 +100,17 @@ browser states the difference rather than drawing symmetric options:
   deletes from a checkout - and the Settings copy names `swemux install-skill --remove` as
   the way back.
 
-The Settings → Harnesses control phrases this as capability, not transport: "Fleet access"
-per harness, whose options are MCP tools (registered automatically), the skill file (with
-its route named), both, or neither.
-Both is reachable but never the default for an MCP-capable harness, because it is strictly
-more setup for no gain; pi, with no MCP client, is the case the skill route exists for.
+The Settings → Harnesses control phrases this as the surface model: two *capability*
+checkboxes (MCP tools; the agent CLI, `harness_cli_enabled`, absent-key ON like the MCP
+map because it grants nothing MCP does not) and one *instruction* checkbox (the skill,
+with its delivery route named). The incoherent combinations are legal - an operator
+mid-reconfiguration passes through them - but warned about in place and in `swemux doctor`
+(`agent_surfaces.coherence_warnings`): a skill with both capabilities off teaches commands
+that will fail, and a CLI-only surface with no skill is a capability nothing ever tells
+the agent about, because MCP tools advertise themselves and the CLI cannot. pi, with no
+MCP client, is the case the CLI + skill pair exists for. Both capabilities off is the
+enforced "neither" state: the daemon refuses that harness's session tokens at the
+endpoint (`mux-mcp.md`).
 
 ## The boundary: global writes are disclosed, never silent
 

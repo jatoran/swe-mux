@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from typing import Any
 
 from aiohttp import web
@@ -15,8 +16,65 @@ from .. import (
     git_review,
 )
 from ..git_projects import ProjectIdentity
+from ..harness import is_agent_harness
 
 log = logging.getLogger(__name__)
+
+
+def refuse_agent_session_caller(request: web.Request, *, operation: str) -> None:
+    """Refuse an operator-only mutation arriving from an *agent* session's pane.
+
+    Phase 23 W1: the CLI stamps its calling session onto every request
+    (`X-Mux-Caller-Session` / `X-Mux-Caller-Token`, from the pane env), and an
+    operator-only route refuses when that identity resolves to a live
+    agent-backed session - naming the agent surface instead of acting, so the
+    capability gap between the two transports is closed at the route rather
+    than in any one client's prose.
+
+    Scope, stated honestly: this constrains *well-behaved* callers. The
+    same-host trust decision stands (`agent-messaging.md`), so an agent that
+    strips its own identity headers still reaches the route - what changes is
+    that the discoverable, documented path refuses, which is what stops the
+    capability being one `swemux kill` away for every honestly-written agent.
+    A shell pane's operator carries the same headers and passes, because the
+    check is the session's backend; an unknown or mismatched identity passes
+    too, because guessing about a forged header would refuse the person the
+    route exists for.
+    """
+    headers = getattr(request, "headers", None) or {}
+    session_id = headers.get("X-Mux-Caller-Session", "")
+    token = headers.get("X-Mux-Caller-Token", "")
+    if not session_id or not token:
+        return
+    session = request.app[keys.SESSIONS].sessions.get(session_id)
+    if session is None:
+        return
+    held = str(getattr(session, "mcp_token", "") or "")
+    if not held or not secrets.compare_digest(held, token):
+        return
+    if not is_agent_harness(str(getattr(session.record, "backend", "") or "")):
+        return
+    log.info(
+        "operator_route_refused_for_agent_session session=%s operation=%s path=%s",
+        session_id,
+        operation,
+        request.path,
+    )
+    raise web.HTTPForbidden(
+        text=json.dumps(
+            {
+                "error": (
+                    f"{operation} is operator surface. This request came from "
+                    "an agent session's pane; use the mux MCP tools or "
+                    "`swemux agent` instead - they take the same actions "
+                    "through the queues, budgets, and provenance that make "
+                    "agent-to-agent acts reviewable."
+                ),
+                "code": "operator_route",
+            }
+        ),
+        content_type="application/json",
+    )
 
 
 def _registered_identity(project) -> ProjectIdentity:  # type: ignore[no-untyped-def]

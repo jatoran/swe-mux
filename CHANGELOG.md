@@ -15,7 +15,48 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **`swemux agent` - the mux fleet tools over a second transport.** Inside any swe-mux
+  pane, `swemux agent tools` lists exactly the tools that session may call and
+  `swemux agent call <tool> key=value ...` calls one (`key:=value` for JSON-typed values,
+  `--input` for a whole JSON object). It authenticates as the calling session with the
+  credentials every pane already carries and speaks to the same endpoint the MCP client
+  uses, so it inherits every authority check, budget, and provenance record - and it is a
+  pure passthrough, so new tools appear in it with no CLI change. A new per-harness
+  "Agent CLI" toggle sits beside the MCP one under Settings → Harnesses → Fleet access;
+  with both capabilities off, that harness's sessions hold no fleet surface at all and the
+  daemon refuses their tokens. Every agent pane now carries `MUX_SURFACES` naming what it
+  holds, and the shipped skill teaches whichever surface is present. In exchange, the
+  session-acting operator commands (`swemux send`, `kill`, `spawn`) now refuse requests
+  from an agent session's pane and name the agent surface instead.
+- **`await_session` - wait for another session inside one tool call.** The synchronous
+  sibling of `watch_session`: it blocks until the target leaves working and holds a settled
+  state, ends, or a bounded timeout elapses - and the timeout is a normal result carrying
+  the current state, so a caller re-calls to keep waiting without ever outliving its own
+  tool-call timeout. Nothing is staged or delivered; the answer is the call's return value.
+- **`request_spawn` can now watch, place, and model its spawn in one call.** `watch:true`
+  arms the settle watch you would otherwise arm separately (deferred through human approval
+  on the draft path), `pane:"split_horizontal"|"split_vertical"` asks the first browser
+  viewing the Project to open the new session in a split beside it, and an omitted `model`
+  now genuinely takes the target Project's new `default_agent_models` table (Projects →
+  Repository options, or `.swe-mux/config.toml`) before falling back to the CLI's own
+  sticky default.
+- **Monitoring agents now hear their answers without a human pumping the queue.** An open
+  settle watch holds the watcher's auto-delivery grant open for the watch's own lifetime
+  (previously any watch longer than the idle window lapsed the grant, and the notice
+  arrived with nothing to deliver it), and any authenticated mux tool call now counts as
+  the "somebody is reading this" evidence that resets the consecutive-send cap - so an
+  orchestrator that reacts to notices by acting, rather than by writing replies, no longer
+  goes silently deaf after three deliveries.
+
 ### Changed
+
+- **`notify` now requires the `delivery` argument** (`"when_idle"` or `"now"`, and `"now"`
+  requires a reason). With a silent default, senders never weighed whether the target
+  should hear them before or after finishing its current turn; now the choice is made at
+  every call. The message size cap also rose from 4,000 to 8,000 characters - a real task
+  brief with acceptance criteria did not fit, and what got trimmed was the constraints.
 
 - **On Windows, `swe-mux` now works on a plain `uv tool install swe-mux` or
   `pip install swe-mux`, with no terminal, no extra and no download.** `pystray` and
