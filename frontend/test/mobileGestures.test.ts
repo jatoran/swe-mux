@@ -143,9 +143,11 @@ test('each region is recognized from the composed path, and everything else is n
   assert.equal(regionForPath(region('.mobile-unified-tabs')), 'tabRail')
   assert.equal(regionForPath(region('.voice-dock-head')), 'voiceDock')
   assert.equal(regionForPath(region('.mobile-project-name')), 'projectName')
-  // The note rail is named by the shadow part Continuity exports, not by the internal
-  // class behind it — the class is free to be renamed by a version bump, the part is not.
+  // Continuity's editor rail is named by its exported shadow part, not by the internal
+  // class behind it. The Notes rail and Project-note header are ordinary light-DOM regions.
   assert.equal(regionForPath(region('[part~="command-rail"]')), 'noteRail')
+  assert.equal(regionForPath(region('.notes-subtabs-row')), 'noteRail')
+  assert.equal(regionForPath(region('.project-resource[data-resource-kind="note"]>header')), 'noteRail')
   assert.equal(regionForPath(region('.command-rail-buttons')), null)
   // The rest of the mobile top bar.
   assert.equal(regionForPath(region('.rail-quota')), 'quotaChip')
@@ -246,8 +248,8 @@ test('the tab rail and the note rail claim only the directions they mean', () =>
   // Horizontal on the tab rail is its own pan, and always was.
   assert.equal(surfaceGestureFor('tabRail', 'left'), null)
   assert.equal(surfaceGestureFor('tabRail', 'right'), null)
-  assert.equal(surfaceGestureFor('noteRail', 'up'), 'noteRail.outline')
-  assert.equal(surfaceGestureFor('noteRail', 'down'), null)
+  assert.equal(surfaceGestureFor('noteRail', 'down'), 'noteRail.outline')
+  assert.equal(surfaceGestureFor('noteRail', 'up'), null)
   // The command rail resolves through the slot system instead, so it has no surface act.
   for (const direction of ['up', 'down', 'left', 'right'] as const) {
     assert.equal(surfaceGestureFor('commandRail', direction), null)

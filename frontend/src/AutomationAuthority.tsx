@@ -10,7 +10,7 @@ import { Dropdown } from './Dropdown'
 // though, and for the same reason: this is THE editor for both scopes, which is
 // what keeps the additive-only grant path elsewhere sound.
 //
-// Three positions on the Project cell, not two. "Follow global" writes null and
+// Three positions on the Project cell, not two. "Use global" writes null and
 // the daemon *removes* the key; picking a level writes it. Collapsing those
 // into two positions is what made the install default look broken during
 // design review of this feature: the old Projects-registry dropdown always
@@ -40,42 +40,37 @@ export type AuthorityRowProject={
 const AUTHORITY_COPY:{setting:string;levels:Record<string,string>;note:string}[]=[
   {
     setting: 'session_control_grant',
-    levels:{draft:'A human approves each one',granted:'Acts directly'},
-    note:'Needs the Agent session control opt-in above.',
+    levels:{draft:'Approve each',granted:'Direct'},
+    note:'Needs Agent session control.',
   },
   {
     setting: 'spawn_grant',
-    levels:{draft:'A human approves each one',granted:'Creates them directly'},
-    note:'Also gated by Agent session control. Still bounded by a per-origin budget.',
+    levels:{draft:'Approve each',granted:'Direct'},
+    note:'Needs Agent session control. Per-origin limit applies.',
   },
   {
     setting: 'land_grant',
-    levels:{draft:'A human approves each one',granted:'Starts the pipeline directly'},
-    note:'Needs the Land queue opt-in above. The pipeline is fast-forward-only either way.',
+    levels:{draft:'Approve each',granted:'Direct'},
+    note:'Needs Land queue. Fast-forward only.',
   },
   {
     setting: 'land_verify_grant',
-    levels:{draft:'You approve the bytes each time',granted:'Edits made here just run'},
-    note:'Needs the Land queue opt-in above. Granted covers only bytes this machine'
-      +' authored - an uncommitted edit, or a branch commit by your git identity. A gate'
-      +' anyone else put on the branch presents for approval whatever this says, which is'
-      +' what keeps landing a contributor’s branch from running their script.',
+    levels:{draft:'Approve each',granted:'Run directly'},
+    note:'Needs Land queue. Direct covers only this machine’s edits.',
   },
   {
     setting: 'interject_grant',
-    levels:{off:'Never (waits for the queue)',granted:'May interject'},
-    note:'Granted still requires the receiving session to be interruptible.',
+    levels:{off:'Queue only',granted:'Interject'},
+    note:'The receiving session must be interruptible.',
   },
   {
     setting: 'message_envelope',
     levels:{
-      full:'Full trust statement',
-      compact:'Sender, authority, reply route',
-      bare:'Nothing (looks like you typed it)',
+      full:'Full context',
+      compact:'Sender + reply',
+      bare:'Message only',
     },
-    note:'What a delivered agent message says about its sender, on top of the text.'
-      +' A sender may ask for more than this and never less. Attribution is kept in the'
-      +' queue and the audit trail at every level.',
+    note:'Disclosure added to delivered agent messages.',
   },
 ]
 
@@ -133,32 +128,33 @@ export function AutomationAuthority({fields,defaults,ceiling,projects,projectId,
     const own=project?.authority[spec.field]??null
     const effective=project?.authority_effective[spec.field]||spec.builtin
     const options=spec.levels.map(level=>({value:level,label:levelLabel(spec.field,level)}))
+    const custom=pinned(spec.field)
     const reach=locked
-      ?`all ${projects.length}`
-      :`${projects.length-pinned(spec.field)} of ${projects.length}`
+      ?`${projects.length} enforced`
+      :`${projects.length-custom} inherit${custom?` · ${custom} custom`:''}`
     return <div class={`automation-matrix-row automation-authority-row${inert?' globally-off':''}`} key={spec.field} role="row">
       <div class="automation-matrix-name">
-        <span class="project-setting-name"><b>{spec.label}</b>
-          {locked&&<em class="project-setting-chip">enforced</em>}
-        </span>
+        <span class="project-setting-name"><b>{spec.label}</b></span>
         <p class="project-automation-deps">{copyFor(spec.field)?.note||''}</p>
       </div>
       <div class="automation-matrix-cell automation-authority-global">
         <Dropdown ariaLabel={`Install default for ${spec.label}`} value={defaults[spec.field]||spec.builtin}
           disabled={busy} options={options} onChange={level=>setDefault(spec.field,level)}/>
-        <label class="check" title="Override Projects that set their own value">
-          <input type="checkbox" disabled={busy} checked={locked} onChange={()=>toggleLock(spec.field)}/>
-          <span>enforce everywhere</span>
-        </label>
-        <small>applies to {reach} Projects{locked?'':`, ${pinned(spec.field)} set their own`}</small>
+        <div class="automation-authority-meta">
+          <label class="check" title="Override Projects that set their own value">
+            <input type="checkbox" disabled={busy} checked={locked} onChange={()=>toggleLock(spec.field)}/>
+            <span>enforce</span>
+          </label>
+          <small>{reach}</small>
+        </div>
       </div>
       <div class="automation-matrix-cell" data-setting={spec.field}>
         <Dropdown ariaLabel={`${spec.label} in this Project`} value={own??''}
           disabled={busy||!project||project.status==='read-only'}
-          options={[{value:'',label:`Follow global (${levelLabel(spec.field,defaults[spec.field]||spec.builtin)})`},...options]}
+          options={[{value:'',label:'Use global'},...options]}
           onChange={level=>onWriteProject({[spec.field]:level||null})}/>
         {locked&&own!=null&&own!==effective&&
-          <small class="automation-authority-overridden">Enforced down to {levelLabel(spec.field,effective)}.</small>}
+          <small class="automation-authority-overridden">Capped at {levelLabel(spec.field,effective)}.</small>}
       </div>
       <span class="automation-matrix-fleet">{projects.filter(item=>
         (item.authority_effective[spec.field]||spec.builtin)===spec.levels[spec.levels.length-1]
@@ -170,9 +166,6 @@ export function AutomationAuthority({fields,defaults,ceiling,projects,projectId,
     <div class="automation-matrix-head" role="row" data-setting="agent_authority">
       <span>agent authority</span><span>global</span><span>{project?.project_name||'project'}</span><span>widest</span>
     </div>
-    <h5 class="project-automation-group">Agent authority
-      <span>whether an agent still needs a human, once the automation above is on</span>
-    </h5>
     {fields.map(row)}
   </div>
 }

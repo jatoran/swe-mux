@@ -1169,6 +1169,10 @@ class ProviderAccountManager:
             "refreshing": self._refresh_lock.locked(),
             "login": {provider: self._login_state(provider) for provider in PROVIDERS},
             "login_commands": {provider: self._login_command(provider) for provider in PROVIDERS},
+            # Computed here rather than joined in the browser, so the phone, the
+            # popover and Settings cannot disagree about how many sessions are
+            # still on the outgoing login.
+            "sessions": self.session_counts(),
         }
 
     def _login_command(self, provider: Provider) -> str:
@@ -1305,29 +1309,124 @@ class ProviderAccountManager:
         await self.refresh(str(account["id"]))
         return self.snapshot()
 
-    def live_sessions(self, provider: Provider) -> list[str]:
-        """IDs of running sessions for a provider, which share the system auth file."""
+    def _live_records(self, provider: Provider) -> list[tuple[str, Any]]:
+        """Running sessions of a provider, as (session id, record) pairs."""
         manager = self.sessions
         sessions = getattr(manager, "sessions", None) if manager is not None else None
         if not isinstance(sessions, dict):
             return []
-        live: list[str] = []
+        live: list[tuple[str, Any]] = []
         for session_id, session in sessions.items():
             record = getattr(session, "record", None)
             if record is None or str(getattr(record, "backend", "")) != provider:
                 continue
             if str(getattr(record, "state", "")) in LIVE_SESSION_STATES:
-                live.append(str(session_id))
+                live.append((str(session_id), record))
         return live
 
-    async def select(self, provider_value: str, account_id: str) -> dict[str, Any]:
-        """Switch the live login, including for sessions already running.
+    def live_sessions(self, provider: Provider) -> list[str]:
+        """IDs of running sessions for a provider, which share the system auth file."""
+        return [session_id for session_id, _ in self._live_records(provider)]
 
-        Provider processes re-read the shared credential file when its mtime
-        changes, so a switch reaches every live session of that provider without
-        restarting anything. It is therefore never refused: the one case that
-        used to justify refusing it — the outgoing login rotating its token back
-        over the swap — is handled afterwards by the selection guard instead.
+    def spawn_attribution(self, backend: str) -> dict[str, str | None] | None:
+        """Which account a session started right now would authenticate as.
+
+        Read once, at spawn, and stamped on the session record: a provider CLI
+        reads its credential file when the process starts, so this is the only
+        moment the answer is knowable for that process. `None` for every harness
+        that has no managed provider, which is every harness but these two.
+
+        Deliberately reads the reconciliation cache rather than the credential
+        files. Spawn sits on the terminal-startup path, which never waits for
+        provider I/O; the cache is refreshed at daemon startup, on every quota
+        poll, and after every mutation, and a stamp one reconciliation stale is
+        a better answer than a slow one.
+        """
+        if backend not in PROVIDERS:
+            return None
+        provider = backend
+        current = self._current.get(provider)
+        if current is None:
+            return None
+        state = str(current.get("state") or "")
+        if state not in {"saved", "external"}:
+            return None
+        return {
+            "provider": provider,
+            # None while the live login is one mux has not saved. That is a real
+            # state - a fresh install sits in it - and its sessions still have to
+            # be counted somewhere.
+            "account_id": _string(current.get("account_id")) if state == "saved" else None,
+            "provider_account_id": _string(current.get("provider_account_id")),
+        }
+
+    def session_counts(self) -> dict[str, Any]:
+        """Live sessions grouped by the account they were **spawned under**.
+
+        Not "sessions using this account", and the distinction is the whole of
+        why it is worth reporting. mux records what it had selected the moment
+        the process started; it cannot see a `/login` typed inside a pane, and a
+        CLI already running may hold the credential it read at startup rather
+        than following a later switch. Every surface drawing these numbers says
+        "spawned under" for that reason.
+
+        Resolved through the provider's own account id before the local slot,
+        which is the rule the durable quota samples already follow and for the
+        same reason: a slot that has since been re-authenticated into a different
+        account must not inherit the sessions of the account it used to hold.
+        Those land in `unsaved` beside the ones started on an external login,
+        because "not on any account you have saved" is what both of them mean.
+        `unattributed` is a session that carries no stamp at all - adopted from a
+        daemon predating the field, or started while the provider was signed out.
+        """
+        accounts_by_id = {str(account["id"]): account for account in self._accounts()}
+        slot_by_owner: dict[str, str] = {}
+        for account_id, account in accounts_by_id.items():
+            owner = _string(account.get("provider_account_id"))
+            if owner is not None:
+                slot_by_owner.setdefault(owner, account_id)
+        by_account: dict[str, int] = {}
+        unsaved: dict[str, int] = {}
+        unattributed: dict[str, int] = {}
+        for provider in PROVIDERS:
+            for _, record in self._live_records(provider):
+                slot = _string(getattr(record, "spawn_provider_account_id", None))
+                owner = _string(getattr(record, "spawn_provider_account_uuid", None))
+                resolved = slot_by_owner.get(owner) if owner is not None else None
+                if resolved is None and slot is not None and slot in accounts_by_id:
+                    holder = _string(accounts_by_id[slot].get("provider_account_id"))
+                    # Only while the slot cannot be shown to have changed hands.
+                    # A verified owner that disagrees with the one it holds now
+                    # means this session's account is simply no longer saved.
+                    if owner is None or holder is None:
+                        resolved = slot
+                if resolved is not None:
+                    by_account[resolved] = by_account.get(resolved, 0) + 1
+                elif _string(getattr(record, "spawn_provider", None)) == provider:
+                    unsaved[provider] = unsaved.get(provider, 0) + 1
+                else:
+                    unattributed[provider] = unattributed.get(provider, 0) + 1
+        return {
+            "by_account": by_account,
+            "unsaved": unsaved,
+            "unattributed": unattributed,
+        }
+
+    async def select(self, provider_value: str, account_id: str) -> dict[str, Any]:
+        """Switch the live login. Never refused, and never retroactive.
+
+        Every process started after this reads the new credential. A process
+        already running may not: a CLI that read its auth file at startup and
+        holds the token in memory keeps spending the outgoing account until it
+        is restarted, which is observed behaviour for Codex. This used to claim
+        the opposite - that live sessions re-read the file on an mtime change -
+        and nothing ever measured it.
+
+        It is still never refused and never confirmed, because the operator
+        asking for a switch is not helped by a dialog: what they need is to be
+        able to see which sessions stayed behind, which is `session_counts`.
+        The selection guard remains for the narrower case it was written for, an
+        outgoing refresh already in flight when the swap lands.
         """
         provider = _provider(provider_value)
         async with self._mutation_lock:

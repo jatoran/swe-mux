@@ -61,6 +61,8 @@ import { INSTALL_CONFIG_CHANGED } from './installSwitches'
 import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
+import { PaneRunTrigger } from './PaneRunTrigger'
+import { SCRATCHPAD_TAB_ID } from './noteTabs'
 import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
   DRAWER_DEFAULT_WIDTH, DRAWER_MIN_WIDTH, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
@@ -80,7 +82,7 @@ import {
   type DrawerEdge, type DrawerLayout, type DrawerProjectPresentation,
   type DrawerProjectPresentationMap,
 } from './drawerLayout'
-import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS } from './drawerSegments'
+import { DRAWER_SEGMENTS, RETIRED_DRAWER_SEGMENTS, resolveDrawerSegment } from './drawerSegments'
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
@@ -226,7 +228,7 @@ import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
 import { composeBackTarget, viewBackEnabled, viewHistory, type ViewEntry, type ViewNavigator, type ViewPosition } from './viewHistory.ts'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
+import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from './viewState'
 import {
   DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_DRAG, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
   reorderForHover, reorderTargetFromContainer, type DropSide, type ListDropTarget, type PointerDragActivation, type ReorderAxis, type ReorderTarget,
@@ -423,7 +425,7 @@ type GrantsCatalogue={
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
-type RunMenuState={project:Project;x:number;y:number}
+type RunMenuState={project:Project;x:number;y:number;trigger?:string}
 type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
 type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
 
@@ -728,6 +730,13 @@ export function App() {
   const [experienceTierUnchosen, setExperienceTierUnchosen] = useState(false)
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false)
   const [questSignals, setQuestSignals] = useState<QuestSignals>({})
+  // The sidebar's "add a provider account" invitation, which the status block shows
+  // only while no provider has a credential on this host. Machine-side like the
+  // quest dismissals above and for the same reason: it invites you to add a login
+  // to the daemon host, so putting it away at the desk must also put it away on
+  // the phone. Undefined until `/api/config` settles, which is what keeps the
+  // invitation from flashing on an install that has already dismissed it.
+  const [accountPromptDismissed, setAccountPromptDismissed] = useState<boolean | undefined>(undefined)
   const questAction = (id: QuestId): void => {
     if (id === 'voice') setVoiceSetupOpen(true)
     else if (id === 'worktrees') showDrawerTab('git')
@@ -740,6 +749,13 @@ export function App() {
     const next = withQuestDismissed(questSignals.quests_dismissed, id)
     setQuestSignals(current => ({ ...current, quests_dismissed: next }))
     void api('PATCH', '/api/config', { quests_dismissed: next }).catch(() => {})
+  }
+  // Optimistic and machine-side, exactly like the quest dismissal above. There is
+  // deliberately no control to bring it back: it answers itself the moment a
+  // credential exists, because the status block is derived rather than remembered.
+  const dismissAccountPrompt = (): void => {
+    setAccountPromptDismissed(true)
+    void api('PATCH', '/api/config', { provider_accounts_prompt_dismissed: true }).catch(() => {})
   }
   // False until the first `/api/config` call settles, either way. Whether the first-run
   // harness panel is going to lead is a fact only the daemon holds, and it arrives after
@@ -965,6 +981,7 @@ export function App() {
     ()=>parseHiddenDrawerTabs(localStorage.getItem(DRAWER_HIDDEN_KEY)))
   const drawerLauncherTabs=useMemo(()=>drawerTabs(drawerLayout).map(drawerTab),[drawerLayout])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
+  const [scratchpadEnabled,setScratchpadEnabled]=useState(true)
   // A momentary drawer belongs only to the Project that opened it. Clear the state
   // after any Project switch so returning later cannot revive a stale Actions peek.
   useEffect(()=>setTransientDrawer(null),[projectId])
@@ -1817,6 +1834,7 @@ export function App() {
     terminal_renderer:TerminalRendererPreference
     drawer_tab_display?:'icon'|'title'
     utility_rail_display?:'icon'|'title'
+    note_scratchpad_enabled?:boolean
   }&Record<string,unknown>
 
   // Scale previews have to update both authorities in the browser: the root custom
@@ -1863,6 +1881,7 @@ export function App() {
       stt_enabled: config.stt_enabled === true,
       quests_dismissed: Array.isArray(config.quests_dismissed) ? config.quests_dismissed as string[] : [],
     })
+    setAccountPromptDismissed(config.provider_accounts_prompt_dismissed === true)
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
     applyRailDensity(config)
@@ -1887,6 +1906,7 @@ export function App() {
     setSurfaceGestures(surfaceGesturesEnabled(config))
     setViewBack(viewBackEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
+    setScratchpadEnabled(config.note_scratchpad_enabled!==false)
     setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
     setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')
   }
@@ -1924,6 +1944,16 @@ export function App() {
       .catch(()=>{})
       // Settled, not succeeded: an unreachable daemon must not suppress the tour forever.
       .finally(()=>setFirstRunResolved(true))
+
+  const persistScratchpadEnabled=async(next:boolean):Promise<void>=>{
+    try{
+      const config=await api<AppConfig>('PATCH','/api/config',{note_scratchpad_enabled:next})
+      applyConfig(config,false)
+    }catch(cause){
+      setError(`Scratchpad visibility could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)
+      throw cause
+    }
+  }
 
   const scheduleUiScalePersist = (scale:UiScale):void => {
     const field=uiScaleConfigKey(currentProfile())
@@ -3064,7 +3094,7 @@ export function App() {
 
   useEffect(() => {
     if(!focusHydrated)return
-    const session=sessions.find(item=>item.id===activeId&&item.project_id===projectId&&!isEndedSession(item))
+    const session=sessions.find(item=>item.id===activeId&&item.project_id===projectId)
     // Persist the focused view (note/file/terminal) alongside the active session so a
     // later return to this project reopens exactly what was last looked at here.
     const focusView=leaves(activeLayout).some(leaf=>leaf.id===focusedViewId)?focusedViewId:null
@@ -3110,14 +3140,10 @@ export function App() {
 
   useEffect(() => {
     if(!focusHydrated)return
-    const live = sessions.filter(session => session.project_id === projectId && !['exited', 'crashed'].includes(session.state))
     if (zoomedId && !leaves(activeLayout).some(leaf => leaf.id === zoomedId)) setZoomedId(null)
-    if (live.some(session => session.id === activeId)) return
-    const liveIds = new Set(live.map(session => session.id))
-    const nextId = visibleTerminalIds(activeLayout).find(id => liveIds.has(id))
-      ?? terminalIds(activeLayout).find(id => liveIds.has(id))
-      ?? live[0]?.id
-      ?? null
+    const nextId = resolveActiveSession(
+      sessions, projectId, activeId, visibleTerminalIds(activeLayout), terminalIds(activeLayout),
+    )
     if (nextId === activeId) return
     setActiveId(nextId)
     // Follow the active terminal with focus only when the current focus is stale (its
@@ -3155,6 +3181,7 @@ export function App() {
     if(place==='drawer')openTargetInDrawer(target);else void showResourceForTarget(target)
   }
   const openScratchpad=(place:NotePlacement='drawer')=>{
+    if(!scratchpadEnabled){setError('Enable the global Scratchpad under Settings → Notes first.');return}
     const targetProject=projectId||activeProject?.id||projects[0]?.id
     if(!targetProject){setError('Create a Project before opening the Scratchpad in a workspace.');return}
     const target:NoteTarget={projectId:targetProject,kind:'global-note',resourceId:'scratchpad'}
@@ -3695,9 +3722,9 @@ export function App() {
     setProjectMenu({project,x,y})
   }
 
-  const openRunMenu=(project:Project,element:HTMLElement)=>{
+  const openRunMenu=(project:Project,element:HTMLElement,trigger?:string)=>{
     const rect=element.getBoundingClientRect()
-    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50)})
+    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50),trigger})
     setProjectMenu(null);setMainMenuOpen(false)
   }
 
@@ -3708,9 +3735,9 @@ export function App() {
   // scrim was covering — a click right after a dismissal is that toggle closing,
   // not a fresh open. Sidebar project rows keep the plain open: clicking another
   // Project's ▶ while a menu is up should switch to it, never just close.
-  const toggleRunMenu=(project:Project,element:HTMLElement)=>{
-    if(runMenu?.project.id===project.id||Date.now()-runMenuClosedAt.current<350){setRunMenu(null);return}
-    openRunMenu(project,element)
+  const toggleRunMenu=(project:Project,element:HTMLElement,trigger='project-run')=>{
+    if((runMenu?.project.id===project.id&&runMenu.trigger===trigger)||Date.now()-runMenuClosedAt.current<350){setRunMenu(null);return}
+    openRunMenu(project,element,trigger)
   }
 
   const startWorktreeSession=async(targetProject:string,path:string,backend:string)=>{
@@ -4480,6 +4507,17 @@ export function App() {
   // the winner persisted.
   const updateLayout = layoutWriter.write
 
+  // Disabling Scratchpad removes its view from every Project layout but never deletes the
+  // global note file. Re-enabling restores the Notes-rail entry with its previous content.
+  useEffect(()=>{
+    if(scratchpadEnabled)return
+    for(const project of projects){
+      const current=resolveLayout(layoutMap[project.id],project.layout)
+      if(!leaves(current,'note').some(leaf=>leaf.id===SCRATCHPAD_TAB_ID))continue
+      void updateLayout(project.id,removeLeaf(current,'note',SCRATCHPAD_TAB_ID))
+    }
+  },[scratchpadEnabled,projects,layoutMap])
+
   const showResourceForTarget = async (target:NoteTarget,targetViewId?:string,preserveDrawerSelection=false) => {
     const resourceId=noteIdForTarget(target)
     const targetProject=projects.some(project=>project.id===target.projectId)?target.projectId:(activeProject?.id||projects[0]?.id)
@@ -4934,25 +4972,11 @@ export function App() {
     if (failure) setError(failure)
   }
 
-  // Resume targets the history entry of the conversation the pane was last on,
-  // which is its run rather than its session: a pane that rolled its
-  // conversation (/clear) or inherited one (a previous resume) owns a row keyed
-  // by the run id, and asking for the session id there finds nothing.
+  // A retained pane resumes in place. The session route delegates agent work to the
+  // shared History resume authority, proves the replacement, swaps the layout identity,
+  // then removes the dead row. History's own Resume stays additive because it may name
+  // a conversation with no retained pane to replace.
   const resumeSession = async (session: Session) => {
-    try {
-      const resumed = await api<Session>('POST', `/api/history/${session.agent_run_id || session.id}/resume`, { project_id: session.project_id })
-      markProjectRecent(resumed.project_id)
-      setSessions(items => [...items, resumed])
-      setActiveId(resumed.id)
-      // The replacement takes the original's place in the layout, so focus has to move
-      // with it: the leaf it was on is about to stop existing.
-      requestFocusView(resumed.id)
-      setContextMenu(null)
-      await updateLayout(session.project_id, replaceTerminal(layoutMap[session.project_id] || emptyLayout(), session.id, resumed.id))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-  }
-
-  const resumeInactiveSession = async (session: Session) => {
     try {
       const { session: resumed } = await api<{session: Session; replaced: string}>(
         'POST', `/api/sessions/${session.id}/resume`, {},
@@ -4960,14 +4984,14 @@ export function App() {
       markProjectRecent(resumed.project_id)
       startupOrigins.current[resumed.id] = performance.now()
       setSessions(items => [...items.filter(item => item.id !== session.id && item.id !== resumed.id), resumed])
-      if (activeId === session.id) setActiveId(resumed.id)
-      if (focusedViewId === session.id) requestFocusView(resumed.id)
+      setProjectId(resumed.project_id)
+      setActiveId(resumed.id)
+      requestFocusView(resumed.id)
       if (zoomedId === session.id) setZoomedId(resumed.id)
       setContextMenu(null)
+      setSidebarOpen(false)
       await refresh()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
   // Delegated rather than reimplemented: the sidebar row and the tab strip resolve
@@ -5718,7 +5742,7 @@ export function App() {
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('policy',activeProject?.id);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
-    { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
+    { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: scratchpadEnabled&&!!activeProject, disabledReason:scratchpadEnabled?'No project workspace available':'Global Scratchpad is disabled under Settings → Notes', run: () => openScratchpad('drawer') },
     { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
     { id: 'notes.browse', label: 'Browse all notes', category: 'view', available: true, run: () => openNotesBrowser(null) },
     { id: 'notes.browseProject', label: 'Browse this project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
@@ -5896,7 +5920,7 @@ export function App() {
     { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill and remove focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill and remove selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
     { id: 'session.standDown', label: 'Stand down selected session', category: 'session', available: !!commandSession && !isEndedSession(commandSession), disabledReason: 'Select a live session', run: () => commandSession && void standDownSession(commandSession) },
-    { id: 'session.resumeInactive', label: commandSession?.backend === 'shell' ? 'Restart inactive terminal' : 'Resume inactive session', category: 'session', available: !!commandSession && isInactiveSession(commandSession), disabledReason: 'Select an inactive session', run: () => commandSession && void resumeInactiveSession(commandSession) },
+    { id: 'session.resumeInactive', label: commandSession?.backend === 'shell' ? 'Restart inactive terminal' : 'Resume inactive session', category: 'session', available: !!commandSession && isInactiveSession(commandSession), disabledReason: 'Select an inactive session', run: () => commandSession && void resumeSession(commandSession) },
     { id: 'session.clearEnded', label: `Remove all ended sessions from sidebar${clearEndedCount > 1 ? ` (${clearEndedCount})` : ''}`, category: 'session', available: clearEndedCount > 0, disabledReason: 'No ended sessions in this Project', run: () => void clearEndedSessions(clearEndedTarget) },
     { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
     // Same endpoint, different framing: for a recovered shell this is not
@@ -6062,7 +6086,7 @@ export function App() {
     { id: 'session.reveal', label: 'Reveal selected working directory', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api('POST', '/api/reveal', { path: commandSession.cwd }); setContextMenu(null) } },
     { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.project_id, 'horizontal') } } },
     { id: 'session.broadcastMembership', label: commandSession?.broadcast ? 'Remove selected session from broadcast' : 'Add selected session to broadcast', category: 'input', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api<Session>('POST', `/api/sessions/${commandSession.id}/broadcast-set`, { include: !commandSession.broadcast }).then(updated => { updateSession(updated); setContextMenu(null) }) } },
-    { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && !isInactiveSession(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
+    { id: 'session.resume', label: 'Resume selected agent', category: 'history', available: !!commandSession && isAgent(commandSession) && !isInactiveSession(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
     // Offered on a live pane too, and that is the point: "pick this up on Tuesday" is
     // asked about work in progress far more often than about something already ended.
     { id: 'session.resumeLater', label: 'Resume selected agent later…', category: 'history', available: !!commandSession && isAgent(commandSession), disabledReason: 'Select an agent session', run: () => commandSession && scheduleResumeFromSession(commandSession) },
@@ -7056,6 +7080,17 @@ export function App() {
       const previewIds=dragStackTab?.targetStackId===node.id&&dragStackTab.zone==='tabs'?dragStackTab.previewIds:node.children.map(child=>child.id)
       const paneDropClass=dragStackTab?.targetStackId===node.id?`tab-drop-active drop-zone-${dragStackTab.zone}`:''
       const focusedPane=!!focusedViewId&&node.children.some(child=>child.id===focusedViewId)
+      const runTrigger=<PaneRunTrigger
+        projectName={activeProject?.name}
+        mobile={mobileWorkspace}
+        expanded={runMenu?.project.id===activeProject?.id&&runMenu?.trigger===`pane:${node.id}`}
+        order={previewIds.length}
+        onOpen={element=>{
+          if(!activeProject)return
+          setFocusedViewId(activeChild.id)
+          toggleRunMenu(activeProject,element,`pane:${node.id}`)
+        }}
+      />
       const closeTab=(child:PaneLeaf,label:string,session?:Session)=>{
         const terminal=child.kind==='terminal'
         const confirming=terminal&&confirmKillId===child.id
@@ -7105,7 +7140,7 @@ export function App() {
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
           return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''} ${session&&isColdSession(session)?'cold':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
-        })}
+         })}{runTrigger}
       </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
         .map(child=>renderPaneNode(child,`${path}t`,true,child.id===activeChild.id))}</div></section>
@@ -7238,15 +7273,16 @@ export function App() {
       </div>
       {isEndedSession(session)&&<EndedPaneBanner
         session={session}
-        onResume={isAgent(session)?()=>void (isInactiveSession(session) ? resumeInactiveSession(session) : resumeSession(session)):undefined}
-        onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeInactiveSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
-        onOpenTranscript={hasHarnessTranscript(session.backend)?()=>void openTranscriptForSession(session.id):undefined}
+        onResume={isAgent(session)?()=>void resumeSession(session):undefined}
+        onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
+        onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
       />}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
       <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{voiceGlyph(session,tabVoiceMode(session))}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <PaneRunTrigger projectName={activeProject?.name} mobile={mobileWorkspace} expanded={runMenu?.project.id===activeProject?.id&&runMenu?.trigger===`pane:${id}`} order={1} onOpen={element=>{if(!activeProject)return;setFocusedViewId(id);toggleRunMenu(activeProject,element,`pane:${id}`)}}/>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -7603,10 +7639,13 @@ export function App() {
       case 'navToggle.open': runNamedCommand('sidebar.open'); return
       case 'drawerToggle.open': runNamedCommand('drawer.open'); return
       case 'noteRail.outline': {
-        // `note.outline` asks "who has focus?", and a rail is not focus — touching it
-        // never made that note the insert target. The gesture already knows the editor
-        // it started on, so it names it and skips the question.
-        const editor=inPath((element):element is HTMLElement=>element.tagName==='CONTINUITY-EDITOR')
+        // `note.outline` asks "who has focus?", while pulling the Notes rail or resource
+        // header does not move focus. Resolve the Project-note editor from the gesture's
+        // own surface and name it explicitly. Scratchpad is excluded by resource kind.
+        const direct=inPath((element):element is HTMLElement=>element.tagName==='CONTINUITY-EDITOR')
+        const resource=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('project-resource')&&element.dataset.resourceKind==='note')
+        const notes=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('notes-tab'))
+        const editor=direct||resource?.querySelector<HTMLElement>('continuity-editor')||notes?.querySelector<HTMLElement>('.project-resource[data-resource-kind="note"] continuity-editor')
         if(!editor)return
         window.dispatchEvent(new CustomEvent('mux:note-outline',{cancelable:true,detail:{editor}}))
         return
@@ -7633,7 +7672,7 @@ export function App() {
       <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginMobileTabDrag(event,leaf,label,openMobileTabMenu)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation()}}>{glyph}{visibleLabel}</button>
     </div>
   }
-  // With no new-tab button left in the rail, an empty projection would render a
+  // Mobile intentionally has no pane Run trigger, so an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
     {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
@@ -7782,7 +7821,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><VoiceControl conversation={conversation} configured={!!voiceStatus?.stt_enabled} dock={voiceDock.state} pendingActions={assistantPendingActions} unseen={assistantUnseen} onToggleDock={()=>dispatchVoiceDock({kind:'toggle'})}/> {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id&&runMenu?.trigger==='project-run'} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.static-preview-entry,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setStaticPreviewMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
@@ -7958,7 +7997,11 @@ export function App() {
             </>}
         </div>
         <div class="sidebar-status">
-          <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
+          {/* The one surface that carries the empty-state invitation. `firstRun` holds
+              it back while the harness panel or the tour is on screen: the tour has an
+              account step of its own, and two invitations to the same thing at once is
+              the overwhelm the first-run work exists to remove. */}
+          <AccountSwitcher onManage={()=>openSettings('Accounts')} promptDismissed={accountPromptDismissed!==false} promptSuppressed={firstRun!=='none'} onDismissPrompt={dismissAccountPrompt}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
         <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button
@@ -8002,10 +8045,9 @@ export function App() {
           <ResourceUsageSummary compact snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
           <AccountSwitcher variant="rail" placement="up" onManage={()=>openSettings('Accounts')}/>
         </div>
-        {/* Run stays reachable while the sidebar is collapsed: the top-bar Run
-            has no room in the 40px rail column, and tab strips no longer carry
-            a new-tab button. */}
-        <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
+        {/* Run stays reachable while the sidebar is collapsed, including before a Project
+            has any pane tabs whose local + could open it. */}
+        <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id&&runMenu?.trigger==='project-run'} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
         {/* The footer's configurator button has to exist here too: collapsing the
             sidebar must not remove a control, and an expand round-trip to ask a
             question about the app is the round-trip this button exists to avoid. */}
@@ -8094,6 +8136,8 @@ export function App() {
           openBrowsedNote(targetProject,noteId,place)
         }}
         onOpenScratchpad={openScratchpad}
+        scratchpadEnabled={scratchpadEnabled}
+        onScratchpadEnabled={persistScratchpadEnabled}
         drawerNoteId={drawerNoteId}
         noteTargetClaimToken={drawerNoteClaimRequest?.projectId===projectId&&drawerNoteClaimRequest.resourceId===drawerNoteId?drawerNoteClaimRequest.token:undefined}
         onNoteTargetClaimed={token=>setDrawerNoteClaimRequest(current=>current?.token===token?null:current)}
@@ -8251,7 +8295,7 @@ export function App() {
       {/* No `Open in focused pane`. Clicking the row already does it, from the same list
           the menu was opened on, so the row existed only to say so a second time. */}
       {isInactiveSession(contextMenu.session)&&<button class="menu-row" onClick={() => runNamedCommand('session.resumeInactive')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">{contextMenu.session.backend==='shell'?'Restart terminal':'Resume'}</span></button>}
-      {!isInactiveSession(contextMenu.session)&&['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.resume')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">Resume as new…</span></button>}
+      {!isInactiveSession(contextMenu.session)&&['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.resume')}><span class="menu-row-icon" aria-hidden="true"><ResumeIcon/></span><span class="menu-row-label">Resume</span></button>}
       {canRestartCold(contextMenu.session) && <button class="menu-row" onClick={() => runNamedCommand('session.restartCold')}><span class="menu-row-icon" aria-hidden="true"><RefreshIcon/></span><span class="menu-row-label">Restart terminal</span></button>}
       {activityBadges(contextMenu.session).length>0&&<button class="menu-row" onClick={() => runNamedCommand('session.clearStandingActivity')}><span class="menu-row-icon" aria-hidden="true"><ClearIcon/></span><span class="menu-row-label">Clear standing activity</span></button>}
       {contextMenu.session.state==='awaiting'&&contextMenu.session.awaiting_reason==='approval'&&<button class="menu-row" onClick={() => runNamedCommand('session.approveOnce')}><span class="menu-row-icon" aria-hidden="true"><CheckIcon/></span><span class="menu-row-label">Approve this request</span></button>}
@@ -8497,12 +8541,20 @@ export function App() {
       {drawerDisplayMenu.tab&&(()=>{
         const tab=drawerDisplayMenu.tab
         const blocked=!canHideDrawerTab(hiddenDrawerTabs,tab)
-        return <button
-          role="menuitem"
-          disabled={blocked}
-          title={blocked?'The side panel must keep at least one tab.':undefined}
-          onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
-        >Hide {drawerTab(tab).label}</button>
+        const segment=resolveDrawerSegment(tab,activeDrawerPresentation.selected_segments[tab],{
+          hasTranscript:hasHarnessTranscript(active?.backend),
+          isAgentSession:!!active&&isAgentBackend(active.backend),
+        })
+        const topic=helpTopicForDrawer(tab,segment)
+        return <>
+          {topic&&<button role="menuitem" onClick={()=>{setDrawerDisplayMenu(null);openHelp(topic.id)}}>Help: {topic.title}</button>}
+          <button
+            role="menuitem"
+            disabled={blocked}
+            title={blocked?'The side panel must keep at least one tab.':undefined}
+            onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
+          >Hide {drawerTab(tab).label}</button>
+        </>
       })()}
       <MenuGroup
         id="drawer-visible-tabs"

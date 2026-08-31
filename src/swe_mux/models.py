@@ -380,6 +380,24 @@ class SessionRecord:
     # adoptable; SessionManager reconstructs them from the retained spawn argv.
     spawn_backend: Backend | None = None
     spawn_native_session_id: str | None = None
+    # The provider account mux had selected when this process started, stamped
+    # once and never updated. A provider CLI reads its credential file at
+    # startup, so a switch made afterwards does not move a running session; the
+    # only moment this is knowable for a given process is the moment it spawns.
+    #
+    # This is what mux *selected*, not proof of what the process authenticates
+    # as - a ``/login`` typed inside the pane is invisible here - so every
+    # surface reading it says "spawned under", never "using".
+    #
+    # Both halves are kept for the reason the durable quota samples keep both:
+    # the local slot is what a UI names, and the provider's own account id is
+    # what still identifies the account after that slot has been renamed,
+    # removed, or re-authenticated into a different one. ``spawn_provider`` is
+    # set with an empty ``spawn_provider_account_id`` when the live login was one
+    # mux had not saved, which distinguishes it from a record carrying no stamp.
+    spawn_provider: str | None = None
+    spawn_provider_account_id: str | None = None
+    spawn_provider_account_uuid: str | None = None
     # Set only when this PTY was spawned to continue a conversation that already
     # owns a history row: Claude's ``--resume`` appends to the same transcript
     # under the same conversation id, so the pane inherits that run instead of
@@ -443,6 +461,16 @@ class SessionRecord:
     run_cwd: str | None = None
     run_project_scope_id: str | None = None
     run_repo_group_id: str | None = None
+    # A targetless land-queue selection for agents whose host process stays in
+    # the primary checkout while their commands run in a worktree (Codex's
+    # per-command `workdir` model). This never replaces runtime cwd telemetry:
+    # a real linked-worktree `git_cwd` remains authoritative, which preserves
+    # Claude's native worktree behavior. Bound to one agent run so `/clear` or
+    # `/new` cannot inherit a checkout decision it was never told about.
+    land_worktree_root: str | None = None
+    land_worktree_branch: str | None = None
+    land_worktree_run_id: str | None = None
+    land_worktree_bound_at: float | None = None
     # Set when the followed transcript has gone quiet while this PTY is still
     # producing output and no switch could be corroborated: the conversation moved
     # somewhere we cannot prove. Observation then fails closed — hooks resume

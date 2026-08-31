@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 const app=readFileSync(join(import.meta.dirname,'..','src','App.tsx'),'utf8')
+const endedPane=readFileSync(join(import.meta.dirname,'..','src','EndedPaneBanner.tsx'),'utf8')
 
 const section=(start:string,end:string)=>{
   const from=app.indexOf(start)
@@ -69,6 +70,22 @@ test('session menus act on the session and never open another surface',()=>{
 
   const tabMenu=section('{tabMenu&&<div', 'Close tab</button>')
   assert.doesNotMatch(tabMenu,/spawnTerminal\(/, 'resource tab menus do not spawn terminals either')
+})
+
+test('ended-session actions name and target the retained conversation directly',()=>{
+  assert.doesNotMatch(app,/Resume as new/)
+  assert.doesNotMatch(endedPane,/Resume as new/)
+  assert.match(endedPane,/<button onClick=\{onResume\}>Resume<\/button>/)
+  assert.match(
+    app,
+    /onOpenTranscript=\{hasHarnessTranscript\(session\.backend\)\?\(\)=>showHistoryEntry\(session\.agent_run_id\|\|session\.id\):undefined\}/,
+    'the recovered-pane transcript action must name its own History run',
+  )
+  assert.match(
+    app,
+    /'POST', `\/api\/sessions\/\$\{session\.id\}\/resume`, \{\}/,
+    'pane Resume must use the in-place retained-session transaction',
+  )
 })
 
 test('the Project menu acts on this Project, each row with its own mark',()=>{

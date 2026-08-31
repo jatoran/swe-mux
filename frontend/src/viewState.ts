@@ -39,16 +39,49 @@ export function resolveInitialFocus(
   remembered: FocusMemory,
 ): { projectId: string; sessionId: string | null } {
   const live = sessions.filter(session => !['exited', 'crashed'].includes(session.state))
-  const requestedSession = live.find(session => session.id === requested.sessionId)
+  // A URL or remembered selection names what the operator was reading, not an
+  // input target. Ended sessions keep readable panes, so they remain valid
+  // selections even though live sessions still win the unprompted fallback.
+  const requestedSession = sessions.find(session => session.id === requested.sessionId)
   if (requestedSession) return { projectId: requestedSession.project_id, sessionId: requestedSession.id }
 
   const validProject = (value: string | null) => value && projectIds.includes(value) ? value : null
   const projectId = validProject(requested.projectId) ?? validProject(remembered.lastProject) ?? projectIds[0] ?? ''
   const candidates = [remembered.byProject[projectId], ...(visibleByProject[projectId] ?? [])]
-  const sessionId = candidates.find(id => live.some(session => session.id === id && session.project_id === projectId))
+  const sessionId = candidates.find(id => sessions.some(session => session.id === id && session.project_id === projectId))
     ?? live.find(session => session.project_id === projectId)?.id
+    ?? sessions.find(session => session.project_id === projectId)?.id
     ?? null
   return { projectId, sessionId }
+}
+
+/** Keep an explicit terminal selection regardless of lifecycle.
+ *
+ * A session becoming terminal does not make its pane stale. If the selected
+ * identity actually disappeared, recovery prefers a visible live terminal,
+ * then any live terminal, then a retained ended terminal. This keeps ordinary
+ * work primary without making post-mortem panes impossible to read.
+ */
+export function resolveActiveSession(
+  sessions: FocusSession[],
+  projectId: string,
+  activeId: string | null,
+  visibleIds: string[],
+  layoutIds: string[],
+): string | null {
+  const projectSessions = sessions.filter(session => session.project_id === projectId)
+  if (activeId && projectSessions.some(session => session.id === activeId)) return activeId
+
+  const live = projectSessions.filter(session => !['exited', 'crashed'].includes(session.state))
+  const liveIds = new Set(live.map(session => session.id))
+  const retainedIds = new Set(projectSessions.map(session => session.id))
+  return visibleIds.find(id => liveIds.has(id))
+    ?? layoutIds.find(id => liveIds.has(id))
+    ?? live[0]?.id
+    ?? visibleIds.find(id => retainedIds.has(id))
+    ?? layoutIds.find(id => retainedIds.has(id))
+    ?? projectSessions[0]?.id
+    ?? null
 }
 
 /** What focus should become once the layout has settled, given a view we asked for.

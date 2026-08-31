@@ -26,7 +26,7 @@ export const settingsTabs = [
   {id:'usage',label:'Usage',group:'Agents'},
   {id:'appearance',label:'Appearance',group:'Interface'},
   {id:'input',label:'Input',group:'Interface'},
-  {id:'notes',label:'Text editor',group:'Interface'},
+  {id:'notes',label:'Notes',group:'Interface'},
   {id:'voice',label:'Voice',group:'Interface'},
   {id:'notifications',label:'Alerts',group:'System'},
   {id:'remote',label:'Remote',group:'System'},
@@ -75,6 +75,34 @@ const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
 /** The declared page that owns one rendered heading. */
 export function settingsSubpageId(tab:SettingsTab,heading:string):string {
   return groupedHeadings[tab]?.[heading.trim()]||subpageSlug(heading)
+}
+
+/**
+ * How many heading levels a search result names after its tab. Two is the depth the
+ * panel actually nests to (`<h3>` block, `<h4>` group); a deeper path would be a
+ * result row that wraps rather than one that places itself.
+ */
+export const BREADCRUMB_HEADINGS = 2
+
+/**
+ * Where a search result lives, as one line: tab, then the page that owns it, then
+ * its headings. The page is named only when a heading does not already say it —
+ * Input's pages *are* its `<h3>`s, so "Input · Keyboard shortcuts · View" repeats
+ * nothing, while Voice groups several headings onto one page and "Voice · Read
+ * aloud · Voice and engine" is the only form that says where to click.
+ *
+ * It lives here rather than in the search index because the page mapping does: the
+ * index walks markup and knows nothing about which tabs paginate.
+ */
+export function settingsBreadcrumb(tab:SettingsTab,tabLabel:string,path:readonly string[]):string {
+  const crumbs=[tabLabel]
+  const pages=settingsSubpages[tab]||[]
+  if(pages.length>1&&path.length){
+    const page=pages.find(entry=>entry.id===settingsSubpageId(tab,path[0]))
+    if(page&&page.label.trim().toLowerCase()!==path[0].trim().toLowerCase())crumbs.push(page.label)
+  }
+  crumbs.push(...path.slice(-BREADCRUMB_HEADINGS))
+  return crumbs.join(' · ')
 }
 
 /**

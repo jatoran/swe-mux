@@ -126,6 +126,13 @@ not a description of its shipped binaries.
 
 ## Verification
 
+Development runs on CPython 3.12: the committed `.python-version` pins it, so
+`uv sync` selects it for every fresh venv regardless of what newer interpreters
+the machine has. The pin exists because `requires-python` deliberately has no
+ceiling (that is published metadata, and the packages that cannot build on a
+newer interpreter are dev-only), and `tests/test_python_pin.py` keeps the CI
+workflows and both mypy configs agreeing with it.
+
 Run the full gate before opening a pull request:
 
 ```bash

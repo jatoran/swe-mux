@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from '../src/viewState.ts'
+import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from '../src/viewState.ts'
 
 const sessions = [
   { id: 'first', project_id: 'default', state: 'running' },
@@ -17,6 +17,17 @@ test('URL session wins and carries its actual project', () => {
     { lastProject: 'default', byProject: { default: 'first' }, viewByProject: {} },
   )
   assert.deepEqual(selected, { projectId: 'work', sessionId: 'wanted' })
+})
+
+test('an explicit URL may select a retained ended session', () => {
+  const selected = resolveInitialFocus(
+    sessions,
+    ['default', 'work'],
+    { default: ['first'], work: ['wanted', 'ended'] },
+    parseViewPreference('?session=ended'),
+    { lastProject: 'default', byProject: { default: 'first' }, viewByProject: {} },
+  )
+  assert.deepEqual(selected, { projectId: 'work', sessionId: 'ended' })
 })
 
 test('per-device focus wins before the first visible session', () => {
@@ -47,6 +58,24 @@ test('parse tolerates legacy focus memory without a view map', () => {
   const parsed = parseFocusMemory('{"lastProject":"work","byProject":{"work":"wanted"}}')
   assert.deepEqual(parsed, { lastProject: 'work', byProject: { work: 'wanted' }, viewByProject: {} })
   assert.equal(rememberedView(parsed, 'work'), null)
+})
+
+test('an ended selection stays active while an unrelated live sibling exists', () => {
+  assert.equal(
+    resolveActiveSession(sessions, 'work', 'ended', ['ended'], ['wanted', 'ended']),
+    'ended',
+  )
+})
+
+test('a missing selection falls back to live work before retained ended panes', () => {
+  assert.equal(
+    resolveActiveSession(sessions, 'work', 'removed', ['ended'], ['ended', 'wanted']),
+    'wanted',
+  )
+  assert.equal(
+    resolveActiveSession(sessions.filter(session => session.id !== 'wanted'), 'work', 'removed', ['ended'], ['ended']),
+    'ended',
+  )
 })
 
 test('view URL preserves unrelated parameters and hash without navigation history noise', () => {

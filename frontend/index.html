@@ -12,6 +12,12 @@
          that height the composer cannot be kept above the keyboard at all. Under `resizes-visual`
          the shrunken `visualViewport` *is* the measurement (`softKeyboardInset`). -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual" />
+    <!-- The browser UI follows the app's palette, and browsers must not auto-transform an
+         explicitly selected theme. theme.ts keeps both metadata values current after boot. -->
+    <meta name="color-scheme" content="only dark" />
+    <!-- Dark Reader's documented opt-out. swe-mux owns complete light and dark palettes;
+         applying another transformation corrupts the selected theme and terminal colours. -->
+    <meta name="darkreader-lock" />
     <meta name="theme-color" content="#0b0d10" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="mobile-web-app-capable" content="yes" />
