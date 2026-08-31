@@ -24,6 +24,14 @@
   A root agent's run id is otherwise pinned to its session id, and adoption repairs any other
   value as misattribution, so `agent_run_seq > 0` is what marks a differing id as the daemon's
   own successor run rather than corruption.
+- `SessionRecord.land_worktree_root`, `land_worktree_branch`, `land_worktree_run_id`, and
+  `land_worktree_bound_at`: the optional targetless land checkout selected by `use_worktree`
+  for an agent whose host process remains on the primary checkout.
+  The fields never replace cwd telemetry; a live linked-worktree `git_cwd` stays authoritative.
+  The recorded run id makes conversation rollover invalidate the selection, while snapshot
+  round-tripping preserves it across a session-preserving daemon restart.
+  Git registration, branch identity, and exclusive live-session ownership are revalidated on
+  every use (`features/mux-mcp.md`, `features/land-queue.md`).
 - `SessionRecord.agent_process_pid`, `console_contention`, `agent_launch_pending`: volatile,
   run-scoped, and all three cleared together at every promotion and demotion
   (`_reset_console_identity`), because a pid is not an identity on Windows and carrying one

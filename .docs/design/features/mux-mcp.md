@@ -198,13 +198,26 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 | `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Acts directly under the default `granted` grant (since 2026-08-25); a Project lowered to `draft` gets an inert approval instead |
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Acts directly under the default `granted` grant; a Project lowered to `draft` gets an inert approval instead |
+| `worktree_context` | read-only resolution of the checkout `request_land` and `request_verify` would use: live linked-worktree cwd, a valid run-bound selection, or an actionable refusal explaining why neither exists |
+| `use_worktree` | selects one exact Git-listed linked worktree for a session whose host process remains on the primary checkout; omitting `worktree_root` clears the selection. The binding is exclusive among live sessions, records the branch and agent run, persists with the session record, and is revalidated before use |
 | `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
 | `request_verify` | the same pipeline stopped before its last step: reconcile, run the repository's verification command, report the verdict back, move no trunk. A pass is kept against the exact (git tree, command digest) it ran over, so a later `request_land` of that content skips the gate; a trunk that moved in between produces different content and the gate runs again. Gated on the same automation, and the `draft` grant **enqueues** it rather than drafting it - it moves nothing there is anything to approve in advance (`land-queue.md`) |
 
-`request_land` and `request_verify` deliberately take no target. The checkout comes from the
-caller's own live cwd, so "an agent acts on the checkout it is working in, and no other"
-holds by construction rather than by a check that could be routed around. There is nothing
-in either call to forge.
+`request_land` and `request_verify` deliberately take no target.
+Resolution has two ordered paths because Claude and Codex expose worktrees differently.
+A caller whose live cwd resolves to a linked worktree uses that checkout, preserving Claude's native worktree behavior unchanged.
+A caller whose live cwd still resolves to the Project's primary checkout may use only the selection established earlier by `use_worktree`, which is the Codex path when per-command `workdir` values never move the host process.
+The dangerous calls still contain nothing to forge.
+
+`use_worktree` is separate because selection and landing have different authority.
+It accepts an absolute path only for the earlier metadata operation, proves the path is an exact linked worktree in the Project's Git registry, rejects the primary checkout, trunk branch, detached checkout, and a checkout occupied or selected by another live session, then records the exact branch and current `agent_run_id`.
+Every land resolution re-reads the Git registry and branch, and a conversation rollover invalidates the selection by run mismatch.
+The binding rides `SessionRecord.snapshot()` into supervisor metadata, so a session-preserving daemon restart does not return a Codex agent to the misleading primary-checkout answer.
+`worktree_context` exposes the resolution and any stale or expired binding without changing it.
+Calling `use_worktree` without `worktree_root` clears the binding.
+
+The land queue's busy-session predicate treats a current-run selection as worktree occupancy beside live cwd.
+Without that second path, a trunk-hosted Codex agent could request a land while working and the queue would reconcile underneath the checkout because no session appeared to live there.
 
 They are **two tools rather than one tool with a flag**, and the reason is which call ends up
 being the default spelling. A flag would make the request that moves a repository's trunk the
