@@ -26,11 +26,20 @@ export function PluginsSettings(){
 
   const load=async()=>{
     const [plugins,knownProjects]=await Promise.all([
-      api<Catalogue>('GET','/api/plugins'),
+      api<Partial<Catalogue>>('GET','/api/plugins'),
       api<Project[]>('GET','/api/projects'),
     ])
-    setCatalogue(plugins);setProjects(knownProjects)
-    setProjectId(current=>current||knownProjects[0]?.id||'')
+    // Field-by-field rather than adopting the payload wholesale: every field is
+    // mapped or joined unconditionally below, so a payload missing one (an older
+    // daemon, a harness answering `{}`) crashed the whole tab instead of drawing
+    // its empty state.
+    setCatalogue({
+      execution_enabled:plugins?.execution_enabled!==false,
+      host_capabilities:plugins?.host_capabilities||[],
+      plugins:plugins?.plugins||[],
+    })
+    setProjects(Array.isArray(knownProjects)?knownProjects:[])
+    setProjectId(current=>current||(Array.isArray(knownProjects)?knownProjects[0]?.id:'')||'')
   }
   useEffect(()=>{void load().catch(error=>setMessage(String(error)))},[])
 
@@ -62,7 +71,7 @@ export function PluginsSettings(){
         <header><div><strong>{plugin.name}</strong><code>{plugin.id}</code></div><span>{plugin.version} · {plugin.lifecycle}</span></header>
         {plugin.manifest?.description&&<p>{plugin.manifest.description}</p>}
         {plugin.diagnostic&&<p class="settings-inline-error">{plugin.diagnostic}</p>}
-        <dl><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
+        <dl><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions?.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
         <div class="theme-actions">
           {!plugin.approval_current&&<button class="primary" disabled={!!busy} onClick={()=>void run(`Approve ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/approve`,{enable:true}))}>Approve and enable</button>}
           {plugin.approval_current&&<button disabled={!!busy} onClick={()=>void run(`${plugin.enabled?'Disable':'Enable'} ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/enable`,{enabled:!plugin.enabled}))}>{plugin.enabled?'Disable':'Enable'}</button>}
@@ -72,9 +81,9 @@ export function PluginsSettings(){
             ?<><button class="danger" disabled={!!busy} onClick={()=>void run(`${confirming.purge?'Purge':'Uninstall'} ${plugin.name}`,async()=>{await mutate('DELETE',`/api/plugins/${plugin.id}${confirming.purge?'?purge=1':''}`);setConfirming(null)})}>Confirm {confirming.purge?'purge':'uninstall'}</button><button disabled={!!busy} onClick={()=>setConfirming(null)}>Cancel</button></>
             :<><button disabled={!!busy} onClick={()=>setConfirming({id:plugin.id,purge:false})}>Uninstall</button><button class="danger" disabled={!!busy} onClick={()=>setConfirming({id:plugin.id,purge:true})}>Purge</button></>}
         </div>
-        {plugin.enabled&&!!plugin.manifest?.actions.length&&<div class="plugin-contributions"><h4>Actions</h4>{plugin.manifest.actions.map(action=><button disabled={!!busy||(!projectId&&action.contexts.includes('project'))} title={action.description||action.command.command.join(' ')} onClick={()=>void run(action.title,()=>mutate('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,action.contexts.includes('project')?projectContext:{context:'global'}))}>{action.title}</button>)}</div>}
-        {plugin.enabled&&!!plugin.manifest?.panes.length&&<div class="plugin-contributions"><h4>Panes</h4>{plugin.manifest.panes.map(pane=><button disabled={!!busy||!projectId} title={pane.description||pane.command.command.join(' ')} onClick={()=>void run(pane.title,async()=>{const result=await api<{session:Record<string,unknown>&{id:string};placement:string}>('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,projectContext);window.dispatchEvent(new CustomEvent('mux:plugin-pane-opened',{detail:{session:result.session,placement:result.placement}}))})}>{pane.title}</button>)}</div>}
-        {(plugin.manifest?.actions.length||plugin.manifest?.panes.length)&&<label>Target Project<select value={projectId} onChange={event=>setProjectId(event.currentTarget.value)}>{projects.map(project=><option value={project.id}>{project.name}</option>)}</select></label>}
+        {plugin.enabled&&!!plugin.manifest?.actions?.length&&<div class="plugin-contributions"><h4>Actions</h4>{plugin.manifest.actions.map(action=><button disabled={!!busy||(!projectId&&action.contexts.includes('project'))} title={action.description||action.command.command.join(' ')} onClick={()=>void run(action.title,()=>mutate('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,action.contexts.includes('project')?projectContext:{context:'global'}))}>{action.title}</button>)}</div>}
+        {plugin.enabled&&!!plugin.manifest?.panes?.length&&<div class="plugin-contributions"><h4>Panes</h4>{plugin.manifest.panes.map(pane=><button disabled={!!busy||!projectId} title={pane.description||pane.command.command.join(' ')} onClick={()=>void run(pane.title,async()=>{const result=await api<{session:Record<string,unknown>&{id:string};placement:string}>('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,projectContext);window.dispatchEvent(new CustomEvent('mux:plugin-pane-opened',{detail:{session:result.session,placement:result.placement}}))})}>{pane.title}</button>)}</div>}
+        {!!(plugin.manifest?.actions?.length||plugin.manifest?.panes?.length)&&<label>Target Project<select value={projectId} onChange={event=>setProjectId(event.currentTarget.value)}>{projects.map(project=><option value={project.id}>{project.name}</option>)}</select></label>}
         <details onToggle={event=>{if(event.currentTarget.open&&!logs[plugin.id])void api<Array<Record<string,unknown>>>('GET',`/api/plugins/logs?plugin_id=${plugin.id}`).then(items=>setLogs(current=>({...current,[plugin.id]:items})))}}><summary>Command log</summary><pre>{JSON.stringify(logs[plugin.id]||[],null,2)}</pre></details>
       </article>)}
     </section>

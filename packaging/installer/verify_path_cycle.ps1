@@ -232,6 +232,11 @@ try {
   # that starts shipping `mux.exe` again fails here rather than quietly
   # re-entering the collision.
   $aliasResolved = @(& where.exe mux 2>$null)
+  # `where.exe` exits 1 when nothing matches, which is the expected answer here -
+  # and GitHub's pwsh shell appends `exit $LASTEXITCODE`, so a lingering 1 from
+  # this probe would fail the whole green run. Reset it: the assertion below is
+  # the verdict, not the probe's exit code.
+  $global:LASTEXITCODE = 0
   Assert (-not ($aliasResolved -contains (Join-Path $cliDir 'mux.exe'))) `
     "the install ships no 'mux' alias (found '$($aliasResolved -join ', ')')"
 
