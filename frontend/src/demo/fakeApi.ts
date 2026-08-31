@@ -12,6 +12,21 @@ import type { Preview } from '../processFleet.ts'
 import type { PaneLayout, PaneLeaf, PaneNode } from '../layout.ts'
 import type { Session } from '../types.ts'
 import { PREVIEW_PAGE_IDS } from './fixtures.ts'
+import {
+  commitChangesPayload, graphPayload, landPayload, provenancePayload,
+  sweMuxSetupPayload, verifyCommandPayload, worktreesPayload,
+} from './gitFixtures.ts'
+import {
+  networkPayload, operationalPayload, processesPayload, storagePayload, workloadsPayload,
+} from './fleetFixtures.ts'
+import {
+  agentEnvironmentPayload, attentionInboxPayload, automationDashboardPayload,
+  automationMatrixPayload, clipboardPayload, filesTreePayload, grantsPayload,
+  historyProjectsPayload, injectionSafetyPayload, lastReplyPayload, projectAutomationsPayload,
+  projectConfigPayload, promptsPayload, providerAccountsPayload, queueAutoPayload,
+  queueMailboxPayload, queueMessagesPayload, queueSummaryPayload, schedulesPayload,
+  skillsPayload, usagePayload,
+} from './supportPayloads.ts'
 import { KEYMAP_FIXTURE } from './keymapFixture.ts'
 import { apply, demoId, nowSeconds, project, session, state } from './store.ts'
 import { composerInfo, spawnScrollback } from './terminalSim.ts'
@@ -232,6 +247,70 @@ function createPreview(body: Record<string, unknown>): unknown {
   return { preview, project: project(owner.project_id) }
 }
 
+/**
+ * `GET /api/sessions/{id}/transcript`.
+ *
+ * Read out of the store rather than invented per request, so the reader shows the
+ * turn the visitor just drove - which is the whole reason the tab is worth putting
+ * in a demo. A shell has no conversation and says so through `reason`, exactly as
+ * the daemon does, instead of rendering an empty list that looks like a failure.
+ */
+function transcriptPayload(sessionId: string): unknown {
+  const target = session(sessionId)
+  const messages = state.transcripts[sessionId] ?? []
+  const reason = !target ? 'no_transcript'
+    : target.backend === 'shell' ? 'not_agent'
+      : messages.length ? null : 'no_transcript'
+  return {
+    session_id: sessionId,
+    agent_run_id: target?.agent_run_id ?? null,
+    backend: target?.backend ?? '',
+    messages: reason === 'not_agent' ? [] : messages,
+    trailing_tool_calls: [],
+    hidden: reason ? 0 : 4,
+    abandoned_messages: 0,
+    truncated: false,
+    reason,
+  }
+}
+
+/** `GET /api/sessions/{id}/scan-timeline`. */
+function scanTimelinePayload(sessionId: string): unknown {
+  const target = session(sessionId)
+  const records = state.timelines[sessionId] ?? []
+  const agent = Boolean(target) && target?.backend !== 'shell'
+  return {
+    session_id: sessionId,
+    project_id: target?.project_id ?? null,
+    agent_run_id: target?.agent_run_id ?? null,
+    global_enabled: state.config.scan_timeline_enabled !== false,
+    project_enabled: true,
+    run_enabled: agent,
+    auto_enable: true,
+    run_decided: true,
+    model: String(state.config.scan_timeline_model || 'demo-observer'),
+    daily_budget: { tokens: null, usd: 1, mode: 'usd' },
+    spend_today: { tokens: 4_820, cost_usd: 0.02, unpriced_calls: 0 },
+    run_budget: { tokens: null, usd: 0.25, mode: 'usd' },
+    run_spend: { tokens: 1_140, cost_usd: 0.004 },
+    metrics: { record_reads: records.length, rehydrations: 0, rehydration_rate: 0 },
+    gates: [
+      { id: 'run', label: 'this run', unit: 'usd', used: 0.004, limit: 0.25 },
+      { id: 'daily', label: 'today', unit: 'usd', used: 0.02, limit: 1 },
+      { id: 'calls', label: 'hourly calls', unit: 'calls', used: records.length, limit: 1_200 },
+    ],
+    skip_reason: agent ? null : 'this is a shell session, so there is no conversation to scan',
+    last_scan_at: records.length ? records[records.length - 1].t1 : null,
+    scanning: false,
+    records,
+    boundaries: [],
+    backfill: {
+      state: 'idle', processed_chunks: 0, total_chunks: 0,
+      created_records: 0, reason: null,
+    },
+  }
+}
+
 // -------------------------------------------------------------------- routes
 
 const ROUTES: Route[] = [
@@ -433,11 +512,14 @@ const ROUTES: Route[] = [
   },
   {
     method: 'GET', pattern: /^\/api\/processes$/,
-    handler: () => ({
-      available: false, diagnostic: 'Process telemetry is not part of the demo.',
-      sessions: [], totals: { processes: 0, cpu_pct: 0, memory_bytes: 0, listeners: 0, connections: 0 },
-    }),
+    handler: (_match, _body, url) => processesPayload(url.searchParams.get('session') || undefined),
   },
+  { method: 'POST', pattern: /^\/api\/processes\/action$/, handler: () => ({ ok: true, applied: false, diagnostic: 'The demo does not stop invented processes.' }) },
+  { method: 'GET', pattern: /^\/api\/telemetry\/workloads$/, handler: () => workloadsPayload() },
+  { method: 'GET', pattern: /^\/api\/telemetry\/operational$/, handler: () => operationalPayload() },
+  { method: 'GET', pattern: /^\/api\/diagnostics\/network$/, handler: () => networkPayload() },
+  { method: 'DELETE', pattern: /^\/api\/diagnostics\/network$/, handler: () => ({ ok: true }) },
+  { method: 'GET', pattern: /^\/api\/diagnostics\/storage$/, handler: () => storagePayload() },
   { method: 'GET', pattern: /^\/api\/keybindings$/, handler: () => keybindingsPayload() },
   {
     method: 'PUT', pattern: /^\/api\/keybindings$/,
@@ -498,12 +580,143 @@ const ROUTES: Route[] = [
       install_mode: 'installed', source_checkout: '', projects: state.projects.length,
     }),
   },
-  { method: 'GET', pattern: /^\/api\/grants$/, handler: () => ({ items: [] }) },
-  { method: 'GET', pattern: /^\/api\/clipboard$/, handler: () => ({ items: [], enabled: true }) },
-  { method: 'GET', pattern: /^\/api\/prompts$/, handler: () => ({ items: [], projects: [] }) },
+  { method: 'GET', pattern: /^\/api\/grants$/, handler: () => grantsPayload() },
+  { method: 'GET', pattern: /^\/api\/clipboard$/, handler: () => clipboardPayload() },
+  { method: 'GET', pattern: /^\/api\/prompts$/, handler: () => promptsPayload() },
   { method: 'GET', pattern: /^\/api\/history$/, handler: () => ({ items: [], total: 0 }) },
-  { method: 'GET', pattern: /^\/api\/schedules$/, handler: () => ({ items: [] }) },
-  { method: 'GET', pattern: /^\/api\/queue$/, handler: () => ({ items: [] }) },
+  { method: 'GET', pattern: /^\/api\/history\/projects$/, handler: () => historyProjectsPayload() },
+  { method: 'GET', pattern: /^\/api\/history\/backfills$/, handler: () => ({ items: [] }) },
+  { method: 'GET', pattern: /^\/api\/schedules$/, handler: () => schedulesPayload() },
+
+  // ---------------------------------------------------------------- the queue
+  { method: 'GET', pattern: /^\/api\/queue$/, handler: () => queueSummaryPayload() },
+  { method: 'GET', pattern: /^\/api\/queue\/auto$/, handler: () => queueAutoPayload() },
+  {
+    method: 'GET', pattern: /^\/api\/queue\/messages$/,
+    handler: (_match, _body, url) => queueMessagesPayload(url.searchParams.get('target_session_id') || ''),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/queue\/mailbox$/,
+    handler: (_match, _body, url) => queueMailboxPayload(url.searchParams.get('author') || 'non_human'),
+  },
+
+  // ------------------------------------------------------------- the fleet's
+  // conversation surfaces, both read out of the same store the panes write to.
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/transcript$/,
+    handler: match => transcriptPayload(decodeURIComponent(match[1])),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/scan-timeline$/,
+    handler: match => scanTimelinePayload(decodeURIComponent(match[1])),
+  },
+  {
+    // Arming is per conversation in the product; the demo has nothing to arm, so it
+    // answers with the same state rather than pretending the switch did something.
+    method: 'PUT', pattern: /^\/api\/sessions\/([^/]+)\/scan-timeline$/,
+    handler: match => scanTimelinePayload(decodeURIComponent(match[1])),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/scan-timeline\/([^/]+)$/,
+    handler: match => {
+      const records = state.timelines[decodeURIComponent(match[1])] ?? []
+      const record = records.find(item => item.id === decodeURIComponent(match[2]))
+      return {
+        source: record
+          ? [{ note: 'The demo stores no source messages; this record is a fixture.', record_id: record.id }]
+          : [],
+        metrics: { record_reads: records.length, rehydrations: 1, rehydration_rate: 1 / Math.max(1, records.length) },
+      }
+    },
+  },
+  { method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/last-reply$/, handler: () => lastReplyPayload() },
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/agent-environment$/,
+    handler: match => agentEnvironmentPayload(decodeURIComponent(match[1])),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/agent-environment\/mcp-tools$/,
+    handler: () => ({
+      server: 'mux', backend: '', evidence: 'swe_mux_owned', status: 'ok',
+      tools: [
+        { name: 'list_sessions', description: 'Sibling sessions and their live status', read_only: true },
+        { name: 'read_transcript', description: 'A pageable read of another session’s conversation', read_only: true },
+      ],
+      total: 2, truncated: false, note: 'Invented for the demo.', diagnostic: '',
+      observed_at: nowSeconds(), ttl_ms: 60_000, cache_scope: 'public',
+      server_version: '0.0.0-demo', fingerprint: 'demo', cached: false,
+    }),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/skills$/,
+    handler: match => skillsPayload(decodeURIComponent(match[1])),
+  },
+
+  // -------------------------------------------------------------------- git
+  {
+    method: 'GET', pattern: /^\/api\/git\/worktrees$/,
+    handler: (_match, _body, url) => worktreesPayload(
+      url.searchParams.get('project_id') || '',
+      url.searchParams.get('detail') || 'summary',
+      url.searchParams.get('worktree') || '',
+    ),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/git\/graph$/,
+    handler: (_match, _body, url) => graphPayload(
+      url.searchParams.get('project_id') || '',
+      Number(url.searchParams.get('limit')) || 80,
+      url.searchParams.get('grep') || '',
+      url.searchParams.get('author') || '',
+    ),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/git\/provenance$/,
+    handler: (_match, _body, url) => provenancePayload(
+      url.searchParams.get('project_id') || '',
+      url.searchParams.get('subject') || '',
+    ),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/git\/commits\/([^/]+)\/changes$/,
+    handler: (match, _body, url) => commitChangesPayload(
+      url.searchParams.get('project_id') || '',
+      decodeURIComponent(match[1]),
+    ) ?? error(404, 'Unknown commit.'),
+  },
+  { method: 'GET', pattern: /^\/api\/git\/swe-mux-setup$/, handler: () => sweMuxSetupPayload() },
+  {
+    method: 'GET', pattern: /^\/api\/land$/,
+    handler: (_match, _body, url) => landPayload(url.searchParams.get('project_id') || ''),
+  },
+  { method: 'GET', pattern: /^\/api\/land\/verify-command$/, handler: () => verifyCommandPayload() },
+
+  // ------------------------------------------------------- money and policy
+  { method: 'GET', pattern: /^\/api\/usage$/, handler: () => usagePayload() },
+  { method: 'GET', pattern: /^\/api\/attention\/inbox$/, handler: () => attentionInboxPayload() },
+  { method: 'GET', pattern: /^\/api\/attention\/rules$/, handler: () => ({ rules: [] }) },
+  { method: 'GET', pattern: /^\/api\/automation\/dashboard$/, handler: () => automationDashboardPayload() },
+  { method: 'GET', pattern: /^\/api\/automation\/projects$/, handler: () => automationMatrixPayload() },
+  { method: 'GET', pattern: /^\/api\/automation\/injection-safety$/, handler: () => injectionSafetyPayload() },
+  { method: 'GET', pattern: /^\/api\/automation\/batches$/, handler: () => ({ items: [] }) },
+  { method: 'GET', pattern: /^\/api\/automation\/rules$/, handler: () => ({ text: '# The demo ships no automation rules.\n' }) },
+  { method: 'GET', pattern: /^\/api\/automation\/notifications$/, handler: () => ({ items: [] }) },
+  { method: 'GET', pattern: /^\/api\/provider-accounts$/, handler: () => providerAccountsPayload() },
+  { method: 'GET', pattern: /^\/api\/experiences$/, handler: () => ({ items: [] }) },
+
+  // ------------------------------------------------------------ per-Project
+  {
+    method: 'GET', pattern: /^\/api\/project\/config$/,
+    handler: (_match, _body, url) => projectConfigPayload(url.searchParams.get('project_id') || ''),
+  },
+  { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/automations$/, handler: () => projectAutomationsPayload() },
+  { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/schedules$/, handler: () => schedulesPayload() },
+  {
+    method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/files\/tree$/,
+    handler: match => filesTreePayload(decodeURIComponent(match[1])),
+  },
+  { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/files\/recent$/, handler: () => ({ items: [] }) },
+  { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/observations$/, handler: () => ({ items: [] }) },
 ]
 
 // ------------------------------------------------------------------ install

@@ -377,7 +377,45 @@ export function spawnScrollback(info: ComposerInfo): string {
 
 // ---------------------------------------------------------------- responders
 
-type Reply = { chunks: string[]; /** ms between chunks */ pace: number }
+export type ReplyTool = { id: string; name: string; input?: unknown }
+
+type Reply = {
+  chunks: string[]
+  /** ms between chunks */
+  pace: number
+  /**
+   * The same reply as prose, and the tool calls inside it.
+   *
+   * The drawer's Transcript tab reads merged messages rather than bytes, so a demo
+   * that only produced ANSI would leave that tab permanently one turn behind the
+   * pane beside it. Deriving both from one authored body is what stops the two
+   * surfaces telling different stories about the same turn.
+   */
+  plain: string
+  tools: ReplyTool[]
+}
+
+/** Placeholder dialect (`●`, `§bold§`, `¶dim¶`) removed, for the transcript reader. */
+const unpaint = (text: string): string =>
+  text.replace(/^● /, '').replace(/[§¶]/g, '').trimEnd()
+
+/** Native tool calls an authored body performs, read off its `§Name§(args)` lines. */
+function replyTools(body: string[], prefix: string): ReplyTool[] {
+  const tools: ReplyTool[] = []
+  body.forEach((text, index) => {
+    const match = /^●\s+§([A-Za-z]+)§\(([^)]*)\)/.exec(text)
+    if (match) tools.push({ id: `${prefix}:${index}`, name: match[1], input: match[2] })
+  })
+  return tools
+}
+
+/** The prose half of an authored body: the lines that are not a tool invocation. */
+const replyProse = (body: string[]): string =>
+  body
+    .filter(text => !/^●\s+§[A-Za-z]+§\(/.test(text) && !/^\s*¶/.test(text))
+    .map(unpaint)
+    .join('\n')
+    .trim()
 
 /** Agent replies, written entirely out of 2026's most-complained-about tells. */
 const AGENT_JOKES: string[][] = [
@@ -503,20 +541,37 @@ let busyCursor = Math.floor(Math.random() * BUSY_REPLIES.length)
 /** The refusal a busy pane answers with, instead of running the responder. */
 export function busyReply(kind: DemoBackendKind): Reply {
   busyCursor = (busyCursor + 1) % BUSY_REPLIES.length
-  const body = BUSY_REPLIES[busyCursor].map(text => line(paint(kind, text)))
-  return { chunks: [line(), ...body, line()], pace: 160 }
+  const source = BUSY_REPLIES[busyCursor]
+  const body = source.map(text => line(paint(kind, text)))
+  return {
+    chunks: [line(), ...body, line()],
+    pace: 160,
+    plain: replyProse(source),
+    tools: [],
+  }
 }
 
 export function buildReply(kind: DemoBackendKind, input: string): Reply {
   if (kind === 'shell') {
     const body = shellReply(input)
-    return { chunks: [...body.map(text => line(text)), promptFor(kind)], pace: 30 }
+    return {
+      chunks: [...body.map(text => line(text)), promptFor(kind)],
+      pace: 30,
+      plain: body.map(text => bare(text)).join('\n'),
+      tools: [],
+    }
   }
   jokeCursor = (jokeCursor + 1) % AGENT_JOKES.length
-  const joke = AGENT_JOKES[jokeCursor].map(text => line(paint(kind, text)))
+  const source = AGENT_JOKES[jokeCursor]
+  const joke = source.map(text => line(paint(kind, text)))
   // No trailing prompt: an agent pane's caller redraws the composer once the
   // last chunk has landed, which is what puts the box back under the reply.
-  return { chunks: [line(), ...joke, line()], pace: 220 }
+  return {
+    chunks: [line(), ...joke, line()],
+    pace: 220,
+    plain: replyProse(source),
+    tools: replyTools(source, `joke-${jokeCursor}`),
+  }
 }
 
 /**

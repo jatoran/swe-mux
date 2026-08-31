@@ -11,6 +11,7 @@ import type { Preview } from '../processFleet.ts'
 import type { PaneLayout } from '../layout.ts'
 import type { Project, Session } from '../types.ts'
 import type { DemoNote, DemoState } from './store.ts'
+import { initialTimelines, initialTranscripts } from './conversation.ts'
 import {
   claudeScrollback, codexScrollback, composerInfo, rageScrollback,
   shellScrollback, spawnScrollback, vibeScrollback, workingScrollback,
@@ -22,6 +23,12 @@ const now = Math.floor(Date.now() / 1000)
 export const DEMO_PROJECT_ID = 'p-rocket'
 export const DEMO_PROJECT2_ID = 'p-garden'
 export const DEMO_PREVIEW_ID = 'demo-preview'
+export const DEMO_ROOT = '/code/rocket-shop'
+export const DEMO_ROOT2 = '/code/meme-garden'
+/** Linked checkouts of the first Project, so the Git tab's Map has more than one
+ *  row and a couple of them have a live session standing in them. */
+export const DEMO_WORKTREE_COUPON = '/code/.worktrees/coupon-table'
+export const DEMO_WORKTREE_PROFILE = '/code/.worktrees/cart-profile'
 /** Static pages committed under site/preview/<id>/ - the iframe target of a
  *  preview pane is the absolute path `/preview/<id>/`, so every preview the
  *  demo can ever mint must map to one of these. */
@@ -32,12 +39,16 @@ function makeSession(input: {
   state: Session['state']; model?: string; tokens?: number; cost?: number
   contextPct?: number; turnSeq?: number; git?: Partial<Session['git']>
   workedMs?: number; ageSeconds?: number
+  /** Where this session is standing. Defaults to the Project root; a linked
+   *  worktree is what puts a live row on that checkout in the Git tab's Map. */
+  cwd?: string
   /** Seconds this session's open turn has been running. Only for `working`
    *  rows: it is what makes the status dot pulse and the turn clock tick, and
    *  the clock ticks by itself because the UI measures it against wall time. */
   workingForSeconds?: number
 }): Session {
   const created = now - (input.ageSeconds ?? 3600)
+  const cwd = input.cwd ?? DEMO_ROOT
   const turnStarted = input.workingForSeconds === undefined
     ? undefined
     : now - input.workingForSeconds
@@ -47,7 +58,7 @@ function makeSession(input: {
     project_id: input.project,
     backend: input.backend,
     native_session_id: `native-${input.id}`,
-    cwd: '/code/rocket-shop',
+    cwd,
     exe: input.backend === 'shell' ? 'bash' : input.backend,
     args: [],
     pid: 40000 + Math.abs(hash(input.id)) % 9000,
@@ -81,7 +92,7 @@ function makeSession(input: {
     compaction_count: 0,
     model: input.model,
     measurement_source: input.backend === 'shell' ? undefined : 'transcript',
-    runtime_cwd: '/code/rocket-shop',
+    runtime_cwd: cwd,
     runtime_cwd_live: true,
     runtime_cwd_source: 'demo',
     runtime_cwd_dropped: 0,
@@ -90,7 +101,7 @@ function makeSession(input: {
     agent_run_started_at: created,
     git: {
       branch: 'feature/faster-cart', dirty: 2, ahead: 2, behind: 0,
-      added: 18, removed: 6, root: '/code/rocket-shop',
+      added: 18, removed: 6, root: DEMO_ROOT,
       compare_ref: 'master', compare_added: 64, compare_removed: 12, compare_files: 5,
       ...input.git,
     },
@@ -115,8 +126,21 @@ export const BUSY_SESSION_IDS: readonly string[] = ['s-working', 's-migrate']
 
 const GARDEN_GIT: Partial<Session['git']> = {
   branch: 'main', dirty: 0, ahead: 0, behind: 0, added: 0, removed: 0,
-  root: '/code/meme-garden', compare_ref: null, compare_added: null,
+  root: DEMO_ROOT2, compare_ref: null, compare_added: null,
   compare_removed: null, compare_files: null,
+}
+
+/** The linked checkout `s-working` occupies, so the Map draws it beside that row. */
+const COUPON_GIT: Partial<Session['git']> = {
+  branch: 'agent/coupon-table', dirty: 4, ahead: 3, behind: 1,
+  added: 91, removed: 34, root: DEMO_WORKTREE_COUPON,
+  compare_ref: 'master', compare_added: 214, compare_removed: 66, compare_files: 9,
+}
+
+const PROFILE_GIT: Partial<Session['git']> = {
+  branch: 'agent/cart-profile', dirty: 1, ahead: 1, behind: 0,
+  added: 12, removed: 4, root: DEMO_WORKTREE_PROFILE,
+  compare_ref: 'master', compare_added: 26, compare_removed: 8, compare_files: 2,
 }
 
 const SESSIONS: Session[] = [
@@ -137,12 +161,13 @@ const SESSIONS: Session[] = [
     backend: 'claude', state: 'working', model: 'claude-opus-4-8',
     tokens: 33100, cost: 1.12, contextPct: 0.24, turnSeq: 6, workedMs: 12 * 60_000,
     ageSeconds: 55 * 60, workingForSeconds: 96,
+    cwd: DEMO_WORKTREE_COUPON, git: COUPON_GIT,
   }),
   makeSession({
     id: 's-codex', name: 'profile cart endpoint', project: DEMO_PROJECT_ID,
     backend: 'codex', state: 'idle', model: 'gpt-demo',
     tokens: 21050, cost: 0.62, contextPct: 0.18, turnSeq: 2, workedMs: 5 * 60_000,
-    ageSeconds: 90 * 60,
+    ageSeconds: 90 * 60, cwd: DEMO_WORKTREE_PROFILE, git: PROFILE_GIT,
   }),
   makeSession({
     id: 's-shell', name: 'shell', project: DEMO_PROJECT_ID,
@@ -152,19 +177,19 @@ const SESSIONS: Session[] = [
     id: 's-garden', name: 'water the memes', project: DEMO_PROJECT2_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 9800, cost: 0.31, contextPct: 0.09, turnSeq: 1, ageSeconds: 20 * 60,
-    git: GARDEN_GIT,
+    cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
   makeSession({
     id: 's-vibe', name: 'make it work', project: DEMO_PROJECT2_ID,
     backend: 'codex', state: 'idle', model: 'gpt-demo',
     tokens: 64300, cost: 1.97, contextPct: 0.67, turnSeq: 9, workedMs: 23 * 60_000,
-    ageSeconds: 70 * 60, git: GARDEN_GIT,
+    ageSeconds: 70 * 60, cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
   makeSession({
     id: 's-migrate', name: 'migrate the meme schema', project: DEMO_PROJECT2_ID,
     backend: 'codex', state: 'working', model: 'gpt-demo',
     tokens: 12750, cost: 0.38, contextPct: 0.44, turnSeq: 2, workedMs: 4 * 60_000,
-    ageSeconds: 18 * 60, workingForSeconds: 402, git: GARDEN_GIT,
+    ageSeconds: 18 * 60, workingForSeconds: 402, cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
 ]
 
@@ -223,7 +248,7 @@ const P2_LAYOUT: PaneLayout = {
 
 const PROJECTS: Project[] = [
   {
-    id: DEMO_PROJECT_ID, name: 'rocket-shop', root: '/code/rocket-shop',
+    id: DEMO_PROJECT_ID, name: 'rocket-shop', root: DEMO_ROOT,
     position: 0, group_id: null, layout: P1_LAYOUT, layout_revision: 3,
     sidebar_visible: true, created_at: now - 30 * 86400, last_used_at: now - 300,
     last_activity: now - 45, history_count: 12, root_available: true,
@@ -234,7 +259,7 @@ const PROJECTS: Project[] = [
     },
   },
   {
-    id: DEMO_PROJECT2_ID, name: 'meme-garden', root: '/code/meme-garden',
+    id: DEMO_PROJECT2_ID, name: 'meme-garden', root: DEMO_ROOT2,
     position: 1, group_id: null, layout: P2_LAYOUT, layout_revision: 1,
     sidebar_visible: true, created_at: now - 9 * 86400, last_used_at: now - 7200,
     last_activity: now - 1200, history_count: 3, root_available: true,
@@ -251,7 +276,7 @@ const PREVIEWS: Preview[] = [
     id: DEMO_PREVIEW_ID, session_id: '', project_id: DEMO_PROJECT_ID,
     url: '', host: '', port: 0, source: 'demo', viewport: 'desktop', listed: true,
     kind: 'static', label: 'landing.html', entry: 'index.html',
-    doc_root: '/code/rocket-shop/site', doc_root_relative: 'site', worktree: '',
+    doc_root: `${DEMO_ROOT}/site`, doc_root_relative: 'site', worktree: '',
   },
 ]
 
@@ -405,8 +430,11 @@ export function demoConfig(): Record<string, unknown> {
     project_card_daily_budget: { tokens: null, usd: 0.25, mode: 'usd' },
     project_card_max_input_tokens: 6000,
     project_card_max_output_tokens: 600,
-    scan_timeline_enabled: false,
-    scan_timeline_model: '',
+    // On, so the Activity tab's Timeline demonstrates the surface rather than the
+    // grant gate in front of it. Every model-backed switch stays off; the demo's
+    // records are fixtures, not observations, and nothing here can call a provider.
+    scan_timeline_enabled: true,
+    scan_timeline_model: 'demo-observer',
     attention_daily_interrupt_budget: 4,
     attention_hourly_interrupt_cap: 2,
     attention_incident_window_seconds: 3600.0,
@@ -511,7 +539,7 @@ export function demoConfig(): Record<string, unknown> {
 }
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 8
+export const DEMO_STATE_VERSION = 9
 
 export function initialDemoState(): DemoState {
   return {
@@ -535,6 +563,8 @@ export function initialDemoState(): DemoState {
       's-vibe': vibeScrollback(composerFor('s-vibe')),
       's-migrate': workingScrollback(composerFor('s-migrate'), 'migrate the meme schema to v3, keep the old ids'),
     },
+    transcripts: initialTranscripts(now),
+    timelines: initialTimelines(now),
     seq: 1,
   }
 }

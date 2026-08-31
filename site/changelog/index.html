@@ -341,8 +341,11 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   color: var(--fg-3); padding: 3px 11px; cursor: pointer; }
 .demo-tab:hover { color: var(--fg); }
 .demo-tab[aria-selected="true"] { color: var(--green); border-color: var(--line-2); background: var(--panel-2); }
-.demo-reset { margin-left: auto; font: inherit; background: none; border: 1px solid transparent;
+/* Both trailing controls; only the first of them takes the auto margin, so they sit
+   together at the right end of the head row rather than at opposite ends of it. */
+.demo-reset { font: inherit; background: none; border: 1px solid transparent;
   color: var(--fg-4); padding: 3px 8px; cursor: pointer; }
+.demo-reset:first-of-type { margin-left: auto; }
 .demo-reset:hover { color: var(--fg); border-color: var(--line-2); }
 .demo-stage { border: 1px solid var(--line-2); background: var(--panel-2);
   display: flex; align-items: stretch; justify-content: center; gap: 16px; }
