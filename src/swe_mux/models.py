@@ -598,9 +598,11 @@ class SessionRecord:
     # daemon: a configurator adopted after a session-preserving restart that came
     # back without its tools would look like the feature silently breaking.
     configurator: bool = False
-    # Immutable ownership for a terminal/TUI pane contributed by an external
-    # plugin.  Optional fields preserve snapshots written by older daemons and
-    # keep ordinary shells and agents byte-for-byte unchanged.
+    # Ownership for a terminal/TUI pane contributed by an external plugin.
+    # Identity fields are immutable after launch; placement may change from a
+    # popup to a durable tab when the operator docks it. Optional fields
+    # preserve snapshots written by older daemons and keep ordinary shells and
+    # agents byte-for-byte unchanged.
     plugin_id: str | None = None
     plugin_version: str | None = None
     plugin_entrypoint_id: str | None = None

@@ -38,28 +38,18 @@ def test_terminal_creation_is_visible_optimistically_before_the_api_returns() ->
     assert "pending-terminal-body" in source
 
 
-def test_agent_pane_headers_omit_the_working_directory() -> None:
+def test_agent_pane_headers_use_the_configurable_cwd_metric() -> None:
     root = Path(__file__).parents[1]
     source = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+    topbar = (root / "frontend" / "src" / "sessionTopbarConfig.ts").read_text(
+        encoding="utf-8"
+    )
 
     assert "const agentSession=isAgent(session)" in source
+    assert "<SessionTopbar session={session}" in source
+    assert "{kind:'metric',id:'cwd',mode:'notable'}" in topbar
+    # Pending terminals still use their fixed pre-session header and omit cwd for agents.
     assert "{!agentSession&&<div class=\"pane-path\">{session.cwd}</div>}" in source
-    assert (
-        ":!agentSession&&<div class={`pane-path "
-        "${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`}"
-        in source
-    )
-    assert "const remoteBoundary=session.runtime_boundary==='remote'" in source
-    assert "const boundaryUnknown=session.runtime_boundary==='unknown'" in source
-    assert "pane-bar ${agentSession?'agent-pane-bar':''}" in source
-    # No per-variant grid template any more. The path is the item that comes and goes - an
-    # agent header omits it, and a touch header hides it for every backend - so one template
-    # of three tracks serves both: a two-item header puts the tools in the flexible track and
-    # leaves the trailing `auto` track at zero width. Counting children was never safe, since
-    # the count depends on pointer type as well as on backend.
-    assert ".pane-bar.agent-pane-bar {" not in css
-    assert ".pane-tools { justify-content:flex-end }" in css
 
 
 def test_pane_headers_name_the_session_instead_of_restating_its_state() -> None:
@@ -84,10 +74,7 @@ def test_pane_headers_name_the_session_instead_of_restating_its_state() -> None:
     # session. Deciding it inline here is what made the marker fire on all 17 live sessions.
     assert 'class="pane-fault"' in source
     assert "const paneFaults=sessionFaults(session)" in source
-    assert (
-        ".pane-bar { grid-auto-flow:column;"
-        "grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }" in css
-    )
+    assert ".session-topbar .pane-identity{min-width:0;max-width:35cqw" in css
     assert ".pane-title { min-width:0;overflow:hidden;text-overflow:ellipsis" in css
 
 

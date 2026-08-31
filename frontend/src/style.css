@@ -40,21 +40,8 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
 .main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
-/* A shell header is [name] [cwd] [tools]; an agent header omits cwd, and a touch header hides it
-   for every backend. `grid-auto-flow:column` keeps every variant on one row. Without it an item
-   beyond the declared column count auto-places into a second row, which is how a variable-length
-   control set would silently wrap the pane tools under the name.
-   The name track is `fit-content(35%)`, NOT `auto`: it sizes to the name while one fits, but a
-   long generated title is clamped at just over a third of the bar. An `auto` track takes its
-   max-content size before the flexible track is expanded, so a wordy title would have eaten the
-   cwd and squeezed the tools down to their 50px floor — the controls are what the header
-   is for, and a name is still readable truncated (the whole of it is in the title attribute).
-   Three tracks are declared for every variant deliberately, rather than one template per
-   variant. The path is the item that comes and goes, so a two-item header puts the tools in the
-   flexible track and leaves the trailing `auto` track empty — and an `auto` track holding
-   nothing is zero wide, so it costs no gap at the right edge. That is what lets the same
-   template serve [name][cwd][tools] and [name][tools] without counting children, which is a
-   count that already depends on pointer type as well as on backend. */
+/* Baseline for the fixed pending-session header. Live sessions use `.session-topbar` near
+   the end of this file, where persistent configured rows replace this one-row template. */
 .pane-bar { grid-auto-flow:column;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }
 /* Right-aligned from inside, so the group sits at the bar's right edge whether it landed in the
    trailing `auto` track (where this is a no-op) or in the flexible one. */
@@ -797,16 +784,11 @@ body {
 .pane-grid {
   background:var(--line);
 }
-/* Header, then the terminal surface, and nothing else — the pane carries no voice
-   surface at all now, and anything added here later must float from a zero-height anchor
-   rather than take a track: a pane whose row count changes with a toggle resizes the PTY
-   under a live agent, and the agent's TUI does not reflow back when it closes.
-   This declaration wins over the one in the base layer, so the two must list the SAME
-   number of tracks: the surface is placed by row index, and a template short one track
-   leaves it in an `auto` implicit row while the real `1fr` track stays empty — which
-   reads as a band of dead black space eating the terminal's height. */
+/* Header, then the terminal surface, and nothing else. The header's configured row count
+   is persistent and intrinsic; transient features still float rather than take a track,
+   because state-driven rows would repeatedly resize the PTY under a live agent. */
 .terminal-pane {
-  grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr);
+  grid-template-rows:auto minmax(0,1fr);
 }
 /* A recently-viewed terminal kept mounted behind the active tab (warmPanes.ts), so
    returning to it costs no buffer replay. Keep its box measurable while removing it
@@ -1711,18 +1693,17 @@ body {
 
 /* Compact sidebar commands and project resource editing. */
 .sidebar-footer{justify-content:flex-start;gap:8px}
-.sidebar-footer .notify-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer :is(.configurator-trigger,.notify-trigger,.settings-trigger){width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
 .sidebar-footer .notify-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notify-trigger.off{color:#5a6470}
 .sidebar-footer .notify-trigger.off:hover{color:#8ee69a}
 .sidebar-footer .notify-trigger svg{display:block}
-@media(max-width:760px){.sidebar-footer .notify-trigger{min-height:44px}}
-/* The configurator launcher, beside the bell. Chromeless like the bell rather than
-   boxed like the menu button, because the footer's boxed slot belongs to the one
-   control that opens something and these two act in place. The `width:auto` override
-   is the same one the bell needs: `.sidebar-footer button:not(:first-child)` pins a
-   32px box that a padded icon button must escape. */
-.sidebar-footer .configurator-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer .settings-trigger:hover{border:0;background:transparent;color:#a8eab3}
+.sidebar-footer .settings-trigger svg{display:block;width:15px;height:15px}
+@media(max-width:760px){.sidebar-footer :is(.configurator-trigger,.notify-trigger,.settings-trigger){min-height:44px}}
+/* The configurator launcher leads the bell in the footer's left control group.
+   Both are chromeless app-wide controls; the menu and Settings form the right
+   navigation group. */
 .sidebar-footer .configurator-trigger:hover:not(:disabled){border:0;background:transparent;color:#a8eab3}
 /* Disabled means a prerequisite is missing (no agent CLI, no Project), and the
    title says which. Dimmed rather than hidden: a control that vanishes teaches
@@ -1896,7 +1877,7 @@ body {
   .project-row{grid-template-columns:12px minmax(0,1fr)}
   .pane-split,.pane-branch{display:contents}
   .pane-divider{display:none}
-  .pane-stack:not(.focused-pane):not(.empty-workspace-pane):not(.mobile-unified-workspace){display:none}
+  .pane-stack:not(.focused-pane):not(.empty-workspace-pane):not(.mobile-unified-workspace):not(.plugin-popup-stack){display:none}
 }
 
 /* Notes follow their durable owner in the sidebar instead of masquerading as layout branches. */
@@ -1958,9 +1939,27 @@ body {
   44%{outline-color:var(--green);background:color-mix(in srgb,var(--green) 32%,transparent)}
   100%{outline-color:color-mix(in srgb,var(--green) 50%,transparent);background:transparent}
 }
+/* Sidebar page/section navigation and search add context around the exact arrival:
+   the owning heading pulses while an inset border traces the whole section. Inset keeps
+   the cue visible when a section is flush with the scrolling pane's clipped edges. */
+.setting-section-heading-flash{
+  outline:2px solid var(--green);outline-offset:2px;
+  background:color-mix(in srgb,var(--green) 20%,transparent);
+  animation:setting-flash 1.8s ease-out 1 both
+}
+.setting-section-flash{animation:setting-section-border-flash 1.8s ease-out 1 both}
+@keyframes setting-section-border-flash{
+  0%{box-shadow:inset 0 0 0 2px var(--green)}
+  22%{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 22%,transparent)}
+  44%{box-shadow:inset 0 0 0 2px var(--green)}
+  100%{box-shadow:inset 0 0 0 1px transparent}
+}
 /* Reduced motion keeps the cue and drops the pulsing: the outline and tint carry the
    information, the animation is only what makes them noticed. */
-@media(prefers-reduced-motion:reduce){.setting-flash{animation:none}}
+@media(prefers-reduced-motion:reduce){
+  .setting-flash,.setting-section-heading-flash{animation:none}
+  .setting-section-flash{animation:none;box-shadow:inset 0 0 0 2px var(--green)}
+}
 /* The one control every gated surface offers, in two shapes: `inline` sits inside a sentence,
    the default stands on its own. One component (`SettingLink.tsx`), so a new gated surface
    cannot invent a fifth appearance for "take me to the switch". */
@@ -2222,7 +2221,10 @@ body {
 @media(max-width:760px){
   .settings-tabs-drawer{position:absolute;left:0;top:0;bottom:0;z-index:6;width:min(258px,78%);padding:6px 6px 14px;border-right:1px solid var(--line);background:var(--bg);box-shadow:8px 0 0 #0008;transform:translateX(-101%);visibility:hidden;transition:transform .15s ease,visibility 0s linear .15s}
   .settings-tabs-drawer.open{transform:translateX(0);visibility:visible;transition:transform .15s ease,visibility 0s}
-  .settings-nav-scrim{position:absolute;inset:0;z-index:5;border:0!important;background:#020403aa;cursor:pointer}
+  /* The scrim remains the full-body dismissal target but paints nothing. The Settings
+     page stays readable behind the drawer; the drawer's own background, border, and shadow
+     provide the separation instead of a dark veil that reads as an empty page. */
+  .settings-panel .settings-nav-scrim{position:absolute;inset:0;z-index:5;border:0!important;background:transparent;cursor:pointer}
   /* Both openers. The hamburger is the affordance; the title is where the eye already
      is, and on a phone that is the tap most people make. */
   .settings-panel>header>.settings-nav-trigger{flex:none;width:auto;min-height:34px;display:grid;place-items:center;padding:0 4px;margin-left:-4px;color:var(--text)}
@@ -2538,13 +2540,10 @@ body {
 @media(max-width:700px){.branch-point-list{max-height:46vh}.branch-point-action{margin-left:0}}
 
 /* Unified note discovery: the footer is the global entry point; editors remain contextual. */
-/* menu pinned left, the alerts switch pinned right. The footer used to end in a
-   projects button and a settings cog; both moved to where they belong — Projects to
-   the PROJECTS header beside the tree it edits, Settings to the one menu row that
-   already named it. `space-between` is still not used: the left item's own
-   `margin-right:auto` survives either button coming back. */
+/* Configurator and alerts stay at the left edge. The menu's auto margin begins the
+   right navigation group, with the direct Settings button after it. */
 .sidebar-footer{justify-content:flex-start}
-.sidebar-footer .menu-trigger{margin-right:auto}
+.sidebar-footer .menu-trigger{width:auto!important;margin-left:auto;margin-right:0}
 .sidebar-footer .notes-shelf-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;margin-left:auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:right;font:inherit}
 .sidebar-footer .notes-shelf-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notes-shelf-trigger span{margin-right:6px;color:#8ee69a}
@@ -3064,7 +3063,7 @@ body {
 /* Below this the columns are narrower than a dropdown can usefully be, so the picture gives
    way to a list rather than becoming an unreadable version of itself. */
 @media(max-width:560px){.rail-pad-grid{grid-template-columns:minmax(0,1fr)!important}}
-.action-editor-layer{z-index:82}.action-editor-modal{width:min(1180px,calc(100vw - 24px));height:min(860px,calc(100dvh - 24px));display:grid;grid-template-rows:auto minmax(0,1fr) auto}.action-editor-body{min-height:0;overflow:auto;padding:14px 18px}.action-editor-body>.commandrail-settings>h3{margin-top:0}
+.action-editor-body{min-height:0}.settings-content .action-editor-body{padding:0}
 .terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 /* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored
    above the action rail so it never covers the newest line it points at. */
@@ -3300,13 +3299,9 @@ body {
      definite remaining height after the in-flow session/voice headers. */
   .mobile-unified-active{height:100%;min-height:0;overflow:hidden}
   .mobile-unified-active>.terminal-pane{display:flex!important;flex-direction:column;height:100%;min-height:0;overflow:hidden}
-  /* The session header is one row on a phone: the session name at the left, appr/queue/
-     transcript/⋯ at the right. The cwd column is dropped here — it is the pane's least useful
-     field on a narrow screen, and as an extra item it was silently wrapping the tools onto a
-     second row. `.pane-bar>div` (0,1,1) also out-specifies the legacy `.pane-path{display:none}`
-     mobile rule (0,1,0), which is why the path showed at all, so hide it from the bar itself.
-     With the path gone the tools take the flexible column and right-align inside it; the name
-     track is capped so it cannot squeeze the group out of the bar. */
+  /* The configured session header keeps the same one-to-three-row layout on a phone.
+     Each row remains a no-wrap left/right pair, and the title keeps a narrower yielding cap
+     so configured shortcuts cannot be pushed off the edge. */
   .pane-bar>.pane-path{display:none}
   .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:fit-content(45%) minmax(0,1fr) auto;padding:5px 6px 1px 10px}
   .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
@@ -3320,11 +3315,8 @@ body {
   /* Font size only — the min/max that bound the auto-grow are in `em`, so they follow it
      without being restated. 16px keeps mobile browsers from zooming the viewport on focus. */
   .dictation-draft{padding:6px 7px;font-size:16px;user-select:text;-webkit-user-select:text;touch-action:auto}
-  /* No touch override for the pane tools. `appr:` is one of them now rather than a voice chip
-     with its own metrics, and the group's job on a phone is to fit unscrolled at 390–412 px
-     (where phones actually are) beside the capped name track — three labelled chips plus the
-     overflow menu is already the width the bar can hold there. Sizing them up would ellipsize
-     `transcript` to buy touch height the bar has no room for. */
+  /* Configured top-bar shortcuts keep compact metrics on a phone rather than adopting the
+     general 44px control floor, because several persistent rows must leave room for xterm. */
   .mobile-unified-active>.terminal-pane>.terminal-surface{flex:1 1 0;height:auto;min-height:0;overflow:hidden}
   .mobile-unified-active .terminal-host{height:auto;min-height:0}
   .terminal-host .xterm{touch-action:none}
@@ -5094,29 +5086,59 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-actions .queue-send-confirm{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
 .queue-item-actions .danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
 .queue-item-actions .danger.confirming{background:color-mix(in srgb,var(--red) 14%,var(--panel2));border-color:var(--red)}
-/* The overflow toggle sits hard right so the two acts that matter (send, arm) stay left-
-   aligned across every row, and its tray opens under the row rather than floating. */
-.queue-item-actions .queue-item-menu{margin-left:auto;min-width:28px;color:var(--muted)}
-/* The row's own delete: an end-cap beside the overflow, sized like it so the pair reads as
-   chrome rather than as two more actions competing with Send. It widens on its own when the
-   confirming label replaces the mark. */
-.queue-item-actions .queue-item-delete{min-width:28px;padding:0 6px;text-align:center}
+/* The row's right-hand cluster is chrome: edit, copy, overflow, delete, all mark-sized, all
+   pushed away from the two acts that matter (send, arm) so those keep one left-aligned
+   position on every row. The spacer does the pushing rather than `margin-left:auto` on
+   whichever control happens to come first, because which one that is varies by state. */
+.queue-item-spacer{flex:1 1 0;min-width:0}
+/* The marks travel as one group. At the 300px floor the strip does not fit beside "Send
+   now" and "Arm", and wrapping control by control left a lone red bin on its own line. */
+.queue-item-marks{display:flex;flex-wrap:nowrap;gap:5px;margin-left:auto}
+.queue-item-actions .queue-item-menu{min-width:26px;padding:0 4px;color:var(--muted)}
+/* Icon-only acts. Sized like the overflow so the whole cluster reads as one strip, and
+   drawn as marks rather than words because "edit" and "copy" are the two acts whose glyphs
+   nobody has to learn — which is not true of arm, mid-turn, or a schedule preset, and is
+   why those keep their words. */
+.queue-item-actions .queue-item-icon,.queue-item-actions .queue-item-delete{min-width:28px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center}
+.queue-item-actions .queue-item-icon{color:var(--muted)}
+.queue-item-actions .queue-item-icon:hover{color:var(--text)}
+.queue-item-actions svg{width:13px;height:13px;display:block}
+/* The confirming delete widens on its own when its label replaces the bin. */
+.queue-item-actions .queue-item-delete.confirming{min-width:0}
+.queue-item-actions .queue-armed{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-item-actions .queue-item-menu.open{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-item-more{padding-top:6px;border-top:1px dashed var(--line)}
 /* Terminal-state items are audit, not work: one line until asked for. */
 .queue-done button{width:100%;text-align:left;min-height:26px;padding:0 8px;border:1px dashed var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
-.queue-item-edit{display:grid;gap:6px}
-.queue-item-edit textarea{min-height:80px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
-.queue-composer{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
-.queue-composer textarea{min-height:56px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
-.queue-composer-actions{display:flex;justify-content:flex-end;align-items:center;gap:6px}
-/* The per-message mid-turn ask. First in the row and pushed left, so the two staging
-   buttons keep their right-edge position and the toggle reads as a property of what
-   they will stage. */
-.queue-composer-interrupt{display:flex;align-items:center;gap:4px;margin-right:auto;color:var(--muted);font-size:9px;cursor:pointer}
-.queue-composer-interrupt input{margin:0}
-.queue-composer-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
-.queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+/* A pending body is a shortcut to its own editor; the cursor is the only affordance that
+   fits, and it is a double-click so selecting the text still works. */
+.queue-item-editable{cursor:text}
+.queue-item-edit{display:grid;gap:4px}
+/* Taller than the old two-line composer by about two rows, then grown to its content by
+   the editor. `max-height` is the ceiling rather than a measured viewport, so the clamp
+   holds with a soft keyboard up; `resize:none` because a handle fights the auto-grow. */
+.queue-edit-field{min-height:112px;max-height:40vh;overflow:auto;resize:none;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;line-height:1.4;padding:6px}
+.queue-edit-field:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+/* Autosave has to say something. A field that saves silently is exactly the field nobody
+   trusts with a half-written message, which is what the Save button was standing in for. */
+.queue-edit-status{justify-self:end;color:var(--muted);font-size:9px}
+.queue-edit-saving{color:var(--accent)}
+.queue-edit-pending,.queue-edit-empty{color:var(--amber)}
+.queue-edit-error{margin:0;color:var(--red);font-size:9px;line-height:1.45}
+/* The editing row keeps every control the resting row has; only the two that make no sense
+   over an open field (edit, copy) drop out. */
+.queue-item-editing{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+/* `queue-item-new`, not `queue-item-draft`: the latter is the state class every row in the
+   `draft` state carries, and it dashed all of their borders. */
+.queue-item-new{border-style:dashed}
+.queue-edit-interrupt{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:9px;cursor:pointer}
+.queue-edit-interrupt input{margin:0}
+.queue-item-actions .queue-edit-done{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+/* One button, where the composer used to be: the position is muscle memory and the act is
+   the same one. It writes nothing until the draft it opens has text in it. */
+.queue-compose-bar{display:flex;padding:8px 10px;border-top:1px solid var(--line)}
+.queue-new{flex:1 1 auto;display:flex;align-items:center;justify-content:center;gap:6px;min-height:30px;padding:0 10px;border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));background:var(--panel2);color:var(--accent);font:inherit;cursor:pointer}
+.queue-new svg{width:13px;height:13px;display:block}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
 /* ---- Delivery readiness, above the auto-delivery strip ---- */
@@ -5235,7 +5257,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .observation-request-actions{display:flex;gap:6px;align-items:center}
 .observation-request-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .observation-request-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-@media(max-width:760px){.queue-item-actions button,.queue-item-actions select,.queue-item-actions .dropdown-trigger{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.fleet-queue-controls select,.queue-auto-emergency button,.observation-request-actions button,.fleet-queue-controls .dropdown-trigger{min-height:40px}.fleet-queue-controls{gap:6px}.fleet-queue-controls label{flex:1 1 45%}}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select,.queue-item-actions .dropdown-trigger{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-new{min-height:44px}.queue-item-actions .queue-item-icon,.queue-item-actions .queue-item-delete,.queue-item-actions .queue-item-menu{min-width:38px}.queue-item-actions svg,.queue-new svg{width:15px;height:15px}.queue-edit-field{min-height:132px}.fleet-queue-controls select,.queue-auto-emergency button,.observation-request-actions button,.fleet-queue-controls .dropdown-trigger{min-height:40px}.fleet-queue-controls{gap:6px}.fleet-queue-controls label{flex:1 1 45%}}
 
 /* ---- Project-scoped Git review ---- */
 .git-review-tab{height:100%;min-height:0;overflow:auto;background:var(--bg)}
@@ -5832,11 +5854,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Settings → Appearance → Session rows. */
 .session-row-settings h4{margin:14px 0 4px;font-size:11px}
 .session-row-settings h5{margin:0 0 3px;color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+.session-row-preview-sticky{position:sticky;top:0;z-index:2;display:grid;gap:7px;margin:8px 0 12px;padding:8px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 96%,var(--green));box-shadow:0 6px 12px #0008}
+.session-row-preview-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.session-row-preview-heading>div{min-width:0;display:grid;gap:2px}.session-row-preview-heading strong{color:var(--text)}.session-row-preview-heading small{color:var(--muted)}
+.session-row-preview-heading>button{flex:none;min-height:27px;padding:0 8px}
 /* Width comes from the panel's own control, not from a cap here: it used to be
    pinned at 420px — wider than the sidebar can be dragged — so the panel showed
    every setting except the one a reader cannot predict from the field list. */
 .session-row-preview{max-width:100%;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 .session-row-preview .session-row{cursor:default}
+.session-row-preview .session-list{overflow:visible;padding:0 5px}
 /* Slider plus a live readout, because a size in pixels is a number the user has
    to be able to say back — a bare track leaves "how big is it now" unanswerable
    and makes the two device values impossible to compare. */
@@ -5860,7 +5887,37 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-field-pool{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:7px;color:var(--muted);font-size:9px}
 .row-field-pool button{padding:2px 6px;border:1px dashed var(--line);border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;font-size:9px}
 .row-field-pool button:hover{border-style:solid;color:var(--text)}
-@media(max-width:760px){.row-section-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){.session-row-preview-sticky{margin-inline:0;padding:7px}.row-section-grid{grid-template-columns:minmax(0,1fr)}}
+
+/* Configurable session pane top bars. Their row count is persistent layout state, so the
+   terminal gives the bar its intrinsic height and keeps the remaining track for xterm. */
+.terminal-pane{grid-template-rows:auto minmax(0,1fr)}
+.pane-bar.session-topbar{--topbar-row-h:calc(34px*var(--ui-scale));height:auto;min-height:var(--topbar-row-h);display:grid;grid-auto-flow:row;grid-template-columns:minmax(0,1fr);align-content:start;padding:0}
+.pane-bar.session-topbar[data-density=compact]{--topbar-row-h:calc(28px*var(--ui-scale))}
+.pane-bar.session-topbar[data-density=comfortable]{--topbar-row-h:calc(40px*var(--ui-scale))}
+.pane-bar.session-topbar>.session-topbar-row{container-type:inline-size;min-width:0;min-height:var(--topbar-row-h);display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:7px;padding:0 6px 0 10px}
+.pane-bar.session-topbar>.session-topbar-row+.session-topbar-row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.pane-bar.session-topbar>.session-topbar-row:first-child:before{content:none}
+.session-topbar-section{min-width:0;display:flex;align-items:center;gap:0;overflow:hidden;white-space:nowrap}
+.session-topbar-section.right{justify-content:flex-end}.session-topbar-item{min-width:0;display:flex;align-items:center}.session-topbar-separator{flex:none;margin:0 5px;color:var(--muted)}
+.session-topbar-metric{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}.session-topbar-metric .row-title{color:var(--text)}
+.session-topbar .pane-identity{min-width:0;max-width:35cqw;display:flex;align-items:center;gap:5px}.session-topbar .pane-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-topbar-section .pane-tool-label,.session-topbar-menu>button{width:auto;min-width:28px;height:calc(21px*var(--ui-scale));padding:0 4px;border:0;background:transparent;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.session-topbar-section .pane-tool-label:hover:not(:disabled),.session-topbar-menu>button:hover{background:var(--panel2);color:var(--text)}
+.session-topbar-section .pane-tool-label:disabled{opacity:.38;cursor:not-allowed}.session-topbar-section .has-pending{color:var(--accent)}
+.session-topbar .approval-chip-wrap{min-width:0}.session-topbar .approval-chip.approval-on{color:var(--amber)}
+.session-topbar-menu{display:flex;align-items:center}
+@media(max-width:760px){.mobile-unified-active>.terminal-pane>.pane-bar.session-topbar{min-height:0;display:grid;grid-template-columns:minmax(0,1fr);padding:0}.pane-bar.session-topbar>.session-topbar-row{padding-inline:7px 5px}.session-topbar .pane-identity{max-width:45cqw}.session-topbar-section .pane-tool-label{min-width:34px}}
+
+/* Settings → Appearance → Session top bars. */
+.session-topbar-settings h4{margin:0}.session-topbar-settings h5{margin:0 0 4px;color:var(--muted);text-transform:uppercase}
+.session-topbar-preview-sticky{position:sticky;top:0;z-index:3;display:grid;gap:7px;margin:8px 0 12px;padding:8px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 96%,var(--green));box-shadow:0 6px 12px #0008}
+.session-topbar-preview{max-width:100%;border:1px solid var(--line);background:var(--bg);overflow:hidden}.session-topbar-preview .session-topbar{width:100%}
+.topbar-row-editor{margin:10px 0;padding:9px;border:1px solid var(--line);background:var(--bg)}.topbar-row-editor>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}.topbar-row-editor>header>button{min-height:26px;color:var(--red)}
+.topbar-section-editor ul{list-style:none;display:grid;gap:4px;margin:0;padding:0}.topbar-section-editor>p{margin:0;color:var(--muted)}
+.topbar-slot{display:grid;grid-template-columns:minmax(80px,1fr) minmax(90px,auto) minmax(72px,auto) auto;align-items:center;gap:5px;padding:4px;border:1px solid var(--line);background:var(--panel2)}.topbar-slot>em{color:var(--muted);font-style:normal}.topbar-slot-actions{display:flex;gap:2px}.topbar-slot-actions button{width:22px;height:22px;padding:0;border:1px solid var(--line);background:var(--panel);color:var(--muted)}.topbar-slot-actions button.danger{color:var(--red)}
+.topbar-add-items{margin-top:8px;border:1px solid var(--line)}.topbar-add-items>summary{padding:7px;cursor:pointer}.topbar-add-items>div{display:flex;flex-wrap:wrap;gap:4px;padding:7px;border-top:1px solid var(--line)}.topbar-add-items strong{flex-basis:100%;color:var(--muted)}.topbar-add-items button{min-height:26px;padding:0 7px}.topbar-add-row{min-height:31px;padding:0 10px}
+@media(max-width:760px){.session-topbar-preview-sticky{padding:7px}.topbar-slot{grid-template-columns:minmax(0,1fr) minmax(88px,auto) auto;grid-template-areas:"name mode actions" "name row actions"}.topbar-slot>span:first-child{grid-area:name}.topbar-slot>.dropdown-trigger:nth-of-type(1){grid-area:mode}.topbar-slot>.dropdown-trigger:nth-of-type(2){grid-area:row}.topbar-slot-actions{grid-area:actions;flex-wrap:wrap;width:48px}}
 
 /* Ended and recovered sessions keep their tab and their pane, so both need to
    read as inert at a glance. Same 0.62 the sidebar row already used, applied to
@@ -5881,4 +5938,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .terminal-action-rail .rail-icon-label svg{flex:none}
 .plugins-settings{display:flex;flex-direction:column;gap:8px}.plugins-settings>section,.plugins-settings>details{margin:0}.plugin-host-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-block:8px!important}.plugin-host-row>div{min-width:0}.plugin-host-row h3,.plugin-host-row p{margin:0}.plugin-host-row p{margin-top:3px;color:var(--muted)}.plugin-host-row .check{flex:none;display:flex;align-items:center;gap:7px}.plugin-list-section{padding:0!important}.plugin-list-heading{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 8px;border-bottom:1px solid var(--line)}.plugin-list-heading>div{display:flex;align-items:baseline;gap:8px}.plugin-list-heading h3{margin:0}.plugin-list-heading span{color:var(--muted)}.plugin-list-heading label{display:flex!important;align-items:center;grid-template-columns:none!important;gap:7px!important;color:var(--muted)}.plugin-list-heading select{min-width:220px}.plugin-card-list{display:grid}.plugin-card{margin:0;border:0;border-bottom:1px solid var(--line);background:var(--panel)}.plugin-card.enabled{box-shadow:inset 2px 0 color-mix(in srgb,var(--green) 70%,var(--line))}.plugin-card>header{min-height:46px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:5px 7px}.plugin-card-summary{min-width:0;display:grid!important;grid-template-columns:9px minmax(0,1fr) auto;align-items:center;gap:8px!important;padding:0 5px!important;border:0!important;background:transparent!important;color:var(--text);text-align:left;cursor:pointer}.plugin-card-summary>span:nth-child(2){min-width:0;display:grid;gap:2px}.plugin-card-summary strong,.plugin-card-summary small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.plugin-card-summary small{color:var(--muted);font-weight:400}.plugin-card-summary em{color:var(--muted);font-style:normal;white-space:nowrap}.plugin-state-dot{width:7px;height:7px;border:1px solid var(--muted);border-radius:50%}.plugin-state-dot.enabled{border-color:var(--green);background:var(--green)}.plugin-card-actions{display:flex;align-items:center;gap:4px}.plugin-card-actions button,.plugin-advanced-actions button{min-height:28px;padding:0 8px}.plugin-card-actions .plugin-expand{min-width:28px;padding:0}.plugin-card-details{display:grid;gap:9px;padding:8px 14px 12px 24px;border-top:1px solid color-mix(in srgb,var(--line) 65%,transparent);background:var(--panel2)}.plugin-card-details dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;margin:0}.plugin-card-details dt{color:var(--muted)}.plugin-card-details dd{margin:0;overflow-wrap:anywhere}.plugin-card-details details pre{max-height:220px;overflow:auto;padding:7px;background:var(--bg);font-size:9px}.plugin-contributions{display:flex;flex-wrap:wrap;align-items:center;gap:5px}.plugin-contributions h4{width:100%;margin:0}.plugin-contributions p{width:100%;margin:0;color:var(--muted)}.plugin-contributions button{min-height:28px}.plugin-advanced-actions{display:flex;flex-wrap:wrap;gap:5px;padding-top:7px;border-top:1px solid var(--line)}.plugin-add,.plugin-market{border:1px solid var(--line);background:var(--panel)}.plugin-add>summary,.plugin-market>summary{padding:9px;cursor:pointer;color:var(--text)}.plugin-add>section,.plugin-market>section{display:grid;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--panel2)}.plugin-market-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}.plugin-market-row p{margin:2px 0;color:var(--muted)}.plugin-market-row>span{color:var(--muted);white-space:nowrap}.plugin-utility-pane>.pane-bar .pane-path{color:var(--muted)}
 @media(max-width:700px){.plugin-host-row{align-items:flex-start}.plugin-list-heading{align-items:flex-start;flex-direction:column}.plugin-list-heading label{width:100%}.plugin-list-heading select{min-width:0;width:100%}.plugin-card>header{grid-template-columns:1fr}.plugin-card-actions{padding-left:22px;overflow-x:auto}.plugin-card-summary{grid-template-columns:9px minmax(0,1fr)}.plugin-card-summary em{grid-column:2}.plugin-card-details{padding-left:12px}.plugin-card-details dl,.plugin-market-row{grid-template-columns:1fr}.plugin-card-details dt{margin-top:3px}}
-.plugin-popup-layer{z-index:95}.plugin-popup-modal{display:flex;flex-direction:column;width:min(90vw,1000px);height:min(82vh,720px);padding:0;overflow:hidden}.plugin-popup-modal>header{display:flex;align-items:center;justify-content:space-between;min-height:38px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel2)}.plugin-popup-modal>header button{min-width:28px;min-height:28px}.plugin-popup-terminal{flex:1;min-height:0}.plugin-popup-terminal>.terminal-pane{height:100%}
+.plugin-popup-layer{z-index:95}.plugin-popup-modal{display:flex;flex-direction:column;width:min(90vw,1000px);height:min(82vh,720px);padding:0;overflow:hidden}.plugin-popup-modal>header{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:38px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel2)}.plugin-popup-modal>header>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.plugin-popup-actions{display:flex;align-items:center;gap:5px;flex:none}.plugin-popup-modal>header button{min-width:28px;min-height:28px}.plugin-popup-terminal{flex:1;min-height:0}.plugin-popup-terminal>.pane-stack{height:100%}
+@media(max-width:760px){.plugin-popup-modal{width:calc(100vw - 12px);height:calc(100dvh - 12px)}.plugin-popup-modal>header{padding:max(6px,env(safe-area-inset-top)) max(6px,env(safe-area-inset-right)) 6px max(6px,env(safe-area-inset-left))}.plugin-popup-actions button{min-height:38px}.plugin-popup-terminal>.plugin-popup-stack{display:grid}}
+.plugin-host-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:wrap}.plugin-host-actions>button{min-height:30px}.plugin-launch-note{margin:0;color:var(--muted)}.plugin-update-status{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px 9px;padding:7px 8px;border:1px solid var(--line);background:var(--panel)}.plugin-update-status strong{color:var(--text)}.plugin-update-status span{color:var(--muted)}.plugin-update-status.available{border-color:color-mix(in srgb,var(--green) 55%,var(--line))}.plugin-update-status.unavailable{border-color:color-mix(in srgb,var(--red) 55%,var(--line))}.plugin-update-review{display:grid;gap:8px;padding:9px;border:1px solid color-mix(in srgb,var(--amber) 55%,var(--line));background:var(--panel)}.plugin-update-review>header{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.plugin-update-review>header>div{display:flex;align-items:baseline;gap:8px}.plugin-update-review>header span,.plugin-update-review>header em{color:var(--muted);font-style:normal}.plugin-update-review dl{margin:0}.plugin-development{border:1px solid var(--line);background:var(--panel)}.plugin-development>summary{padding:9px;cursor:pointer;color:var(--text)}.plugin-development>section{display:grid;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--panel2)}.plugin-development>section>p{margin:0;color:var(--muted)}.plugin-development-list{display:grid;border-top:1px solid var(--line)}.plugin-development-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line)}.plugin-development-row>div{min-width:0;display:grid;gap:2px}.plugin-development-row code,.plugin-development-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.plugin-development-row small,.plugin-development-row>span{color:var(--muted)}.plugin-development-row.invalid strong{color:var(--red)}
+.plugin-card-summary .plugin-card-badges{display:flex;align-items:center;justify-content:flex-end;gap:3px;white-space:normal}.plugin-card-badges>span{padding:2px 4px;border:1px solid var(--line);background:var(--panel2);white-space:nowrap;font-size:8px}.plugin-card-badges>span.attention{border-color:color-mix(in srgb,var(--amber) 60%,var(--line));color:var(--amber)}
+@media(max-width:700px){.plugin-host-actions{justify-content:flex-start}.plugin-host-row{display:grid}.plugin-development-row{grid-template-columns:minmax(0,1fr)}.plugin-update-review>header{align-items:flex-start;flex-direction:column}}

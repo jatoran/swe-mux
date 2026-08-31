@@ -51,6 +51,8 @@ async function chrome(page: Page) {
       return { x: rect.x, right: rect.right, y: rect.y, bottom: rect.bottom, width: rect.width, height: rect.height }
     }
     const nav = document.querySelector('.settings-tabs') as HTMLElement | null
+    const scrim = document.querySelector('.settings-nav-scrim') as HTMLElement | null
+    const content = document.querySelector('.settings-content') as HTMLElement | null
     return {
       header: box('.settings-panel>header'),
       heading: box('.settings-heading'),
@@ -63,6 +65,8 @@ async function chrome(page: Page) {
       navVisibility: nav ? getComputedStyle(nav).visibility : null,
       isDrawer: !!document.querySelector('.settings-tabs-drawer'),
       scrims: document.querySelectorAll('.settings-nav-scrim').length,
+      scrimBackground: scrim ? getComputedStyle(scrim).backgroundColor : null,
+      contentOpacity: content ? getComputedStyle(content).opacity : null,
       groups: [...document.querySelectorAll('.settings-tab-group>span')]
         .filter(element => getComputedStyle(element).display !== 'none')
         .map(element => element.textContent),
@@ -133,6 +137,8 @@ test('narrow: the hamburger and the title both open the drawer over the content'
     expect(open.content!.width).toBeGreaterThan(PHONE.width - 2)
     expect(open.nav!.right).toBeLessThan(PHONE.width)
     expect(open.scrims).toBe(1)
+    expect(open.scrimBackground).toBe('rgba(0, 0, 0, 0)')
+    expect(open.contentOpacity).toBe('1')
     expect(open.focusableInNav).toBeGreaterThan(10)
     // The categories are the point of borrowing the desktop list.
     expect(open.groups).toEqual(['Workspace', 'Agents', 'Interface', 'System'])
@@ -266,6 +272,19 @@ test('the active Settings tab adds no marker or indentation', async ({ page }) =
   expect(after[0].textLeft).toBe(after[1].textLeft)
 })
 
+test('Actions owns rail policy and the embedded layout editor',async({page})=>{
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  await page.locator('.settings-tabs [role="tab"]',{hasText:/^Actions$/}).click()
+  await expect(page.locator('.settings-content h3',{hasText:/^Action rail$/})).toBeVisible()
+  await expect(page.locator('.settings-content h3',{hasText:/^Action layout$/})).toBeVisible()
+  await expect(page.locator('.settings-content .commandrail-settings')).toBeVisible()
+  await expect(page.locator('.action-editor-modal,.action-editor-layer')).toHaveCount(0)
+
+  await page.locator('.settings-tabs [role="tab"]',{hasText:/^Appearance$/}).click()
+  await expect(page.locator('.settings-content h3',{hasText:/^Action rail$/})).toHaveCount(0)
+})
+
 test('every paged Settings tab exposes working page links in the sidebar', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')
@@ -320,6 +339,81 @@ test('every paged Settings tab exposes working page links in the sidebar', async
   }
 })
 
+for (const [device, viewport] of [['desktop', DESKTOP], ['mobile', PHONE]] as const) {
+  test(`Session rows owns a sticky, expandable live preview on ${device}`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    await page.goto('/settings-harness.html?section=Appearance&setting=session_rows')
+    const heading=page.locator('.settings-content h3',{hasText:/^Session rows$/})
+    await expect(heading).toBeVisible()
+    await expect(page.locator('.settings-content h3',{hasText:/^Theme$/})).toBeHidden()
+
+    const preview=page.locator('.session-row-preview-sticky')
+    const rows=preview.locator('.session-row')
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toHaveClass(/working/)
+    expect(await preview.evaluate(node=>getComputedStyle(node).position)).toBe('sticky')
+
+    await preview.getByRole('button',{name:'Show examples'}).click()
+    await expect(rows).toHaveCount(4)
+    await preview.getByRole('button',{name:'Show one row'}).click()
+    await expect(rows).toHaveCount(1)
+
+    await page.locator('.settings-content').evaluate(node=>{node.scrollTop=600})
+    await expect.poll(async()=>preview.evaluate(node=>{
+      const box=node.getBoundingClientRect()
+      const scroller=node.closest('.settings-content')!.getBoundingClientRect()
+      return Math.abs(box.top-scroller.top)
+    })).toBeLessThan(1)
+  })
+}
+
+test('the sticky session-row preview updates before its settings write finishes', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html?section=Appearance&setting=session_rows')
+  const row=page.locator('.session-row-preview .session-row').first()
+  await expect(row).toContainText('5-codex')
+  await page.getByRole('button',{name:'Minimal',exact:true}).click()
+  await expect(row).not.toContainText('5-codex')
+})
+
+for(const [device,viewport] of [['desktop',DESKTOP],['mobile',PHONE]] as const){
+  test(`Session top bars owns a sticky realtime preview on ${device}`,async({page})=>{
+    await page.setViewportSize(viewport)
+    await page.goto('/settings-harness.html?section=Appearance&setting=session_topbar')
+    await expect(page.locator('.settings-content h3',{hasText:/^Session top bars$/})).toBeVisible()
+    await expect(page.locator('.settings-content h3',{hasText:/^Theme$/})).toBeHidden()
+    const preview=page.locator('.session-topbar-preview-sticky')
+    expect(await preview.evaluate(node=>getComputedStyle(node).position)).toBe('sticky')
+    await expect(preview.locator('.session-topbar-row')).toHaveCount(1)
+    await expect(preview.locator('.approval-chip')).toContainText('appr:wait')
+    await expect(preview.locator('.queue-chip')).toContainText('queue:2')
+    await expect(preview.locator('.transcript-chip')).toContainText('transcript')
+    await expect(preview.getByRole('button',{name:'More actions'})).toBeVisible()
+    const addRow=page.getByRole('button',{name:'Add row',exact:true})
+    await addRow.click();await addRow.click()
+    await page.locator('.settings-content').evaluate(node=>{node.scrollTop=600})
+    await expect.poll(async()=>preview.evaluate(node=>Math.abs(node.getBoundingClientRect().top-node.closest('.settings-content')!.getBoundingClientRect().top))).toBeLessThan(1)
+  })
+}
+
+test('top-bar row count and shortcuts update the preview immediately',async({page})=>{
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html?section=Appearance&setting=session_topbar')
+  const preview=page.locator('.session-topbar-preview')
+  const addRow=page.getByRole('button',{name:'Add row',exact:true})
+  await addRow.click();await expect(preview.locator('.session-topbar-row')).toHaveCount(2)
+  await addRow.click();await expect(preview.locator('.session-topbar-row')).toHaveCount(3)
+  await expect(addRow).toBeDisabled()
+
+  const transcriptSlot=page.locator('.topbar-slot').filter({hasText:'Transcript'}).first()
+  await transcriptSlot.getByTitle('Remove').click()
+  await expect(preview.locator('.transcript-chip')).toHaveCount(0)
+  const add=page.locator('.topbar-add-items').first()
+  await add.locator('summary').click()
+  await add.getByRole('button',{name:'Processes',exact:true}).click()
+  await expect(preview.getByRole('button',{name:'processes',exact:true})).toBeVisible()
+})
+
 test('an unpaged tab lists its rendered sections in the sidebar, and the chevron collapses them', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')
@@ -365,6 +459,44 @@ test('a tab discloses its sections before it has ever been on screen', async ({ 
   await nav.getByRole('button',{name:'Firewall',exact:true}).click()
   await expect(row.locator('[role="tab"]')).toHaveAttribute('aria-selected','true')
   await expect(page.locator('.settings-content h3',{hasText:/^Firewall$/})).toBeInViewport()
+})
+
+test('sidebar pages and sections cue their destination heading and section border', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+
+  const remote=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:/^Remote$/})})
+  await remote.locator('.settings-tab-expand').click()
+  await remote.locator('xpath=following-sibling::div[contains(@class,"settings-subtabs")][1]').getByRole('button',{name:'Firewall',exact:true}).click()
+  const firewall=page.locator('.settings-content h3',{hasText:/^Firewall$/})
+  await expect(firewall).toHaveClass(/setting-section-heading-flash/)
+  await expect(firewall.locator('xpath=ancestor::section[1]')).toHaveClass(/setting-section-flash/)
+
+  const input=page.locator('.settings-tab-row',{has:page.locator('[role="tab"]',{hasText:/^Input$/})})
+  await input.locator('[role="tab"]').click()
+  const pages=input.locator('xpath=following-sibling::div[contains(@class,"settings-subtabs")][1]')
+  await pages.getByRole('button',{name:'Clipboard history',exact:true}).click()
+  const clipboard=page.locator('.settings-content h3',{hasText:/^Clipboard history$/})
+  await expect(clipboard).toHaveClass(/setting-section-heading-flash/)
+  const clipboardSection=clipboard.locator('xpath=ancestor::section[1]')
+  await expect(clipboardSection).toHaveClass(/setting-section-flash/)
+  await expect(clipboard).not.toHaveClass(/setting-section-heading-flash/,{timeout:4000})
+  await expect(clipboardSection).not.toHaveClass(/setting-section-flash/)
+})
+
+test('Settings search flashes the exact result and its section context', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  const search=page.getByRole('combobox',{name:'Search settings'})
+  await search.fill('scrollback bytes')
+  await page.locator('.settings-search-results').getByRole('option',{name:/Scrollback bytes/}).click()
+
+  const target=page.locator('.settings-content label').filter({hasText:'Scrollback bytes'}).first()
+  const section=target.locator('xpath=ancestor::section[1]')
+  const heading=section.locator('h3').first()
+  await expect(target).toHaveClass(/setting-flash/)
+  await expect(heading).toHaveClass(/setting-section-heading-flash/)
+  await expect(section).toHaveClass(/setting-section-flash/)
 })
 
 test('switching tabs never files one tab sections under another', async ({ page }) => {
@@ -422,7 +554,7 @@ test('every tab renders, and every marked control is really in its DOM', async (
   // fails to register vanishes loudly rather than being silently skipped by the
   // walk below.
   const tabs = await page.locator('.settings-tabs [role="tab"]').allTextContents()
-  expect(tabs.length).toBe(18)
+  expect(tabs.length).toBe(settingsTabs.length)
 
   const marked = new Set<string>()
   for (const label of tabs) {

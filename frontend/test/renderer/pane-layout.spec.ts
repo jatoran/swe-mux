@@ -1,8 +1,8 @@
 import { expect, test } from 'playwright/test'
 
 /**
- * The pane geometry contract (`design/features/ui.md`): a terminal pane is two rows —
- * header and surface — and the surface owns the whole of the second one. The pane's
+ * The pane geometry contract (`design/features/ui.md`): a terminal pane is an intrinsic-height
+ * configured header plus one flexible surface. The pane's
  * remaining height *is* the PTY's row count, so any layout change that moves or resizes
  * `.terminal-surface` resizes a live agent's terminal and makes its TUI reflow; the damage
  * outlives whatever caused it, because the reflowed scrollback does not come back.
@@ -55,7 +55,7 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }
     await expect(page.locator('.terminal-surface')).toBeVisible()
     const on = await page.evaluate(bounds)
 
-    // The pane is one column and two rows, and the surface owns all of both.
+    // The pane is one column: the surface begins exactly after the configured bar.
     expect(on.surface.width).toBe(on.pane.width)
     expect(on.surface.x).toBe(on.pane.x)
     expect(on.surface.y).toBe(on.bar.y + on.bar.height)
@@ -96,6 +96,7 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
       const title = document.querySelector<HTMLElement>('.pane-title')!
       return {
         bar: at('.pane-bar'), title: at('.pane-title'), chip: at('.pane-tools .approval-chip'), tools: at('.pane-tools'),
+        menu:at('.session-topbar-menu'),
         transcript: at('.pane-tools .transcript-chip'),
         clipped: title.scrollWidth > title.clientWidth,
         // No status text left in the bar; the state reading it replaced lives in the tooltip.
@@ -108,12 +109,13 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
     // The tools keep their full width, and everything stays on the one row.
     expect(header.chip.width).toBeGreaterThan(0)
     expect(header.title.right).toBeLessThanOrEqual(header.tools.x)
-    // `appr:` leads the group, and the group is flush with the bar's right edge — the agent
-    // header has no path, so the tools hold the flexible track and right-align inside it.
+    // `appr:` leads the configured group. The fixed menu remains flush with the edge as the
+    // recovery path even when every optional shortcut is removed.
     // A left-aligned group here reads as a bar that failed to lay out.
     expect(header.chip.x).toBeLessThan(header.transcript.x)
-    expect(header.tools.right).toBeLessThanOrEqual(header.bar.right)
-    expect(header.bar.right - header.tools.right).toBeLessThanOrEqual(14)
+    expect(header.tools.right).toBeLessThanOrEqual(header.menu.x+1)
+    expect(header.menu.right).toBeLessThanOrEqual(header.bar.right)
+    expect(header.bar.right-header.menu.right).toBeLessThanOrEqual(14)
     expect(Math.round(header.title.middle)).toBe(Math.round(header.tools.middle))
   })
 
@@ -150,6 +152,21 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, 
     expect(Math.round(header.fault.middle)).toBe(Math.round(header.title.middle))
   })
 }
+
+test('one to three configured top-bar rows take only their intrinsic height',async({page})=>{
+  await page.setViewportSize({width:900,height:700})
+  const heights:number[]=[]
+  for(const rows of [1,2,3]){
+    await page.goto(`/pane-harness.html?rows=${rows}`)
+    const geometry=await page.evaluate(bounds)
+    heights.push(geometry.bar.height)
+    expect(geometry.surface.y).toBe(geometry.bar.y+geometry.bar.height)
+    expect(geometry.surface.height).toBe(geometry.pane.height-geometry.bar.height)
+    await expect(page.locator('.session-topbar-row')).toHaveCount(rows)
+  }
+  expect(heights[1]).toBeGreaterThan(heights[0])
+  expect(heights[2]).toBeGreaterThan(heights[1])
+})
 
 /**
  * The pane's floating surfaces sit in a band below the app's modal layers, so a palette or

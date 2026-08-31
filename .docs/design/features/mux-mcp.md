@@ -214,7 +214,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Acts directly under the default `granted` grant; a Project lowered to `draft` gets an inert approval instead |
 | `worktree_context` | read-only resolution of the checkout `request_land` and `request_verify` would use: live linked-worktree cwd, a valid run-bound selection, or an actionable refusal explaining why neither exists |
 | `use_worktree` | selects one exact Git-listed linked worktree for a session whose host process remains on the primary checkout; omitting `worktree_root` clears the selection. The binding is exclusive among live sessions, records the branch and agent run, persists with the session record, and is revalidated before use |
-| `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
+| `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. `report_success` (off by default) also answers the caller when it *works* - a land otherwise announces itself only by the trunk moving, which the waiting session is not watching. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
 | `request_verify` | the same pipeline stopped before its last step: reconcile, run the repository's verification command, report the verdict back, move no trunk. A pass is kept against the exact (git tree, command digest) it ran over, so a later `request_land` of that content skips the gate; a trunk that moved in between produces different content and the gate runs again. Gated on the same automation, and the `draft` grant **enqueues** it rather than drafting it - it moves nothing there is anything to approve in advance (`land-queue.md`) |
 
 `request_land` and `request_verify` deliberately take no target.
@@ -507,7 +507,7 @@ work any session is doing - which is why they are a separate contract list rathe
 additions to the read/write sets here.
 
 The device-settings write is the one whose *shape* is unusual and worth knowing here: it
-takes path-scoped operations rather than a document, because five of the seven device
+takes path-scoped operations rather than a document, because seven of the nine device
 domains are stored opaquely and nothing in this process can tell a valid one from a mangled
 one. Everything an operation did not name is untouched by construction, which is the only
 safety available where validation is not.

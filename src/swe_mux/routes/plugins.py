@@ -33,6 +33,46 @@ async def plugin_list(request: web.Request) -> web.Response:
     return web.json_response(await _manager(request).list())
 
 
+async def plugin_refresh(request: web.Request) -> web.Response:
+    summary = await _manager(request).refresh_all()
+    development = await _manager(request).scan_development_root()
+    catalogue = await _manager(request).list(refresh=False)
+    await request.app[keys.EVENTS].emit(
+        "plugin_changed", source="user", operation="refresh", changed=summary["changed"]
+    )
+    return web.json_response(
+        {"summary": summary, "development": development, "catalogue": catalogue}
+    )
+
+
+async def plugin_development(request: web.Request) -> web.Response:
+    try:
+        if request.method == "PUT":
+            body = await _optional_json(request)
+            return web.json_response(
+                await _manager(request).set_development_root(
+                    str(body.get("path") or ""), create=bool(body.get("create"))
+                )
+            )
+        return web.json_response(await _manager(request).scan_development_root())
+    except PluginError as exc:
+        return _failure(exc)
+
+
+async def plugin_updates_check(request: web.Request) -> web.Response:
+    try:
+        result = await _manager(request).check_updates()
+        await request.app[keys.EVENTS].emit(
+            "plugin_updates_checked",
+            source="user",
+            checked=result["checked"],
+            available=result["available"],
+        )
+        return web.json_response(result)
+    except PluginError as exc:
+        return _failure(exc)
+
+
 async def plugin_schema(request: web.Request) -> web.Response:
     text = files("swe_mux.assets").joinpath("plugin-schema.md").read_text(encoding="utf-8")
     return web.Response(text=text, content_type="text/markdown")
@@ -142,14 +182,58 @@ async def plugin_update(request: web.Request) -> web.Response:
         result = await _manager(request).update(
             request.match_info["plugin_id"],
             ref=str(body["ref"]) if "ref" in body else None,
-            approve=bool(body.get("approve")),
-            enable=bool(body.get("enable")),
         )
         await request.app[keys.EVENTS].emit(
             "plugin_changed",
             source="user",
             plugin_id=result["id"],
             operation="update",
+        )
+        return web.json_response(result)
+    except PluginError as exc:
+        return _failure(exc)
+
+
+async def plugin_update_approve(request: web.Request) -> web.Response:
+    body = await _optional_json(request)
+    try:
+        result = await _manager(request).approve_update(
+            request.match_info["plugin_id"],
+            enable=bool(body["enable"]) if "enable" in body else None,
+        )
+        await request.app[keys.EVENTS].emit(
+            "plugin_changed",
+            source="user",
+            plugin_id=result["id"],
+            operation="approve_update",
+        )
+        return web.json_response(result)
+    except PluginError as exc:
+        return _failure(exc)
+
+
+async def plugin_update_discard(request: web.Request) -> web.Response:
+    try:
+        result = await _manager(request).discard_update(request.match_info["plugin_id"])
+        await request.app[keys.EVENTS].emit(
+            "plugin_changed",
+            source="user",
+            plugin_id=result["plugin_id"],
+            operation="discard_update",
+        )
+        return web.json_response(result)
+    except PluginError as exc:
+        return _failure(exc)
+
+
+async def plugin_panes_restart(request: web.Request) -> web.Response:
+    try:
+        result = await _manager(request).restart_panes(request.match_info["plugin_id"])
+        await request.app[keys.EVENTS].emit(
+            "plugin_panes_restarted",
+            source="user",
+            plugin_id=result["plugin_id"],
+            count=len(result["restarted"]),
         )
         return web.json_response(result)
     except PluginError as exc:
@@ -189,6 +273,22 @@ async def plugin_pane(request: web.Request) -> web.Response:
             session_id=result["session"]["id"],
         )
         return web.json_response(result, status=201)
+    except PluginError as exc:
+        return _failure(exc)
+
+
+async def plugin_pane_dock(request: web.Request) -> web.Response:
+    try:
+        result = _manager(request).dock_pane(request.match_info["session_id"])
+        await request.app[keys.EVENTS].emit(
+            "plugin_pane_docked",
+            source="user",
+            plugin_id=result["plugin_id"],
+            pane_id=result["plugin_entrypoint_id"],
+            session_id=result["id"],
+            project_id=result["project_id"],
+        )
+        return web.json_response(result)
     except PluginError as exc:
         return _failure(exc)
 
@@ -308,6 +408,10 @@ async def plugin_callback(request: web.Request) -> web.Response:
 
 ROUTES = (
     web.get("/api/plugins", plugin_list),
+    web.post("/api/plugins/refresh", plugin_refresh),
+    web.get("/api/plugins/development", plugin_development),
+    web.put("/api/plugins/development", plugin_development),
+    web.post("/api/plugins/updates/check", plugin_updates_check),
     web.get("/api/plugins/schema", plugin_schema),
     web.post("/api/plugins/inspect", plugin_inspect),
     web.post("/api/plugins/link", plugin_link),
@@ -317,10 +421,14 @@ ROUTES = (
     web.get("/api/plugins/link-handlers", plugin_links),
     web.get("/api/plugins/marketplace", plugin_marketplace),
     web.post("/api/plugins/callback", plugin_callback),
+    web.post("/api/plugins/panes/{session_id}/dock", plugin_pane_dock),
     web.post("/api/plugins/{plugin_id}/approve", plugin_approve),
     web.post("/api/plugins/{plugin_id}/enable", plugin_enable),
     web.post("/api/plugins/{plugin_id}/rollback", plugin_rollback),
     web.post("/api/plugins/{plugin_id}/update", plugin_update),
+    web.post("/api/plugins/{plugin_id}/update/approve", plugin_update_approve),
+    web.delete("/api/plugins/{plugin_id}/update", plugin_update_discard),
+    web.post("/api/plugins/{plugin_id}/panes/restart", plugin_panes_restart),
     web.delete("/api/plugins/{plugin_id}", plugin_uninstall),
     web.post("/api/plugins/{plugin_id}/actions/{action_id}", plugin_action),
     web.post("/api/plugins/{plugin_id}/panes/{pane_id}", plugin_pane),

@@ -1722,7 +1722,10 @@ TOOLS: list[dict[str, Any]] = [
             "resolved for you. By default this is not granted, and the call writes "
             "an inert request a human approves. A live linked-worktree cwd is used "
             "automatically. If this session started on trunk and created a worktree "
-            "later, call use_worktree first; request_land itself remains targetless."
+            "later, call use_worktree first; request_land itself remains targetless. "
+            "A land is otherwise silent when it works - it announces itself by the "
+            "trunk moving, which you will not see while you wait - so pass "
+            "report_success when you have work that starts once it lands."
         ),
         "inputSchema": {
             "type": "object",
@@ -1730,6 +1733,17 @@ TOOLS: list[dict[str, Any]] = [
                 "reason": {
                     "type": "string",
                     "description": "Why the branch is ready (recorded, shown to a human)",
+                },
+                "report_success": {
+                    "type": "boolean",
+                    "description": (
+                        "Be told when this lands, not only when it does not. Off by "
+                        "default: a queue whose promise is that many branches land "
+                        "while a human touches only the one that conflicted must not "
+                        "interrupt every requester to say so. Ask for it when "
+                        "something of yours is waiting on the land - otherwise let it "
+                        "land quietly."
+                    ),
                 },
             },
             "additionalProperties": False,
@@ -1992,7 +2006,8 @@ CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
         "name": "configurator_device_settings",
         "description": (
             "The per-device UI settings - the command rail, sounds, alerts, push "
-            "notifications, drawer tabs, sidebar rows, the file tree. A different "
+            "notifications, drawer tabs, sidebar rows, session top bars, the file tree. "
+            "A different "
             "store from install-wide config, and where most 'change how the UI is "
             "arranged' questions actually live. "
             "With no arguments it answers the index: which profiles hold which "
@@ -2013,14 +2028,15 @@ CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "alerts, sounds, notifications, commandRail, fileTree, "
-                        "drawerTabs, or sessionRows. Omit for the index."
+                        "drawerTabs, sessionRows, or sessionTopbar. Omit for the index."
                     ),
                 },
                 "profile": {
                     "type": "string",
                     "description": (
                         "desktop or mobile. Omit and the right one is chosen - "
-                        "notably `commandRail` is always under `desktop`."
+                        "notably `commandRail`, `sessionRows`, and `sessionTopbar` "
+                        "are always under `desktop`."
                     ),
                 },
             },
@@ -5381,6 +5397,9 @@ class McpService:
                 origin_session_id=str(record.id),
                 origin_run_id=str(getattr(record, "agent_run_id", "") or ""),
                 reason=str(args.get("reason") or ""),
+                # Only `request_land` offers it; a verify-only pass already reports,
+                # and its schema refuses the key rather than accepting a no-op.
+                report_success=bool(args.get("report_success")),
             )
         except LandRefusal as refusal:
             # The service's refusals are the ordinary answers here — the branch is

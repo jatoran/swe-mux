@@ -119,7 +119,8 @@ Then read it back and tell the operator what the row is now.
 ## Related surfaces in the same store
 
 `drawerTabs` is the utility drawer's tab order. `sessionRows` is the sidebar row
-layout. `fileTree` is which directories are expanded, per Project. `sounds` is
+layout. `sessionTopbar` is the one-to-three-row session pane header layout, including
+metrics and drawer shortcuts. `fileTree` is which directories are expanded, per Project. `sounds` is
 per-event sound choices. All are edited the same way and all are opaque to the
 daemon.
 

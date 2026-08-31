@@ -34,10 +34,11 @@ and reattachable browser viewports.
   resolves. Temporary IDs never reach Project persistence or PTY routes; success atomically
   replaces the placeholder with the daemon session, while failure removes it and restores a
   surviving focus target.
-- Worktree launch uses the same optimistic lifecycle after `git worktree add` succeeds.
-  Its pending row names worktree setup, uses the new worktree as its displayed cwd, and receives initial focus while the daemon runs setup and spawn.
-  The worktree placeholder stays outside the durable pane tree: while selected it temporarily occupies the full workspace, and leaving it restores the existing split/tab layout without leaving setup visible in another pane.
-  Resolution replaces the pending identity and follows it only when the pending identity still owns active-session focus.
+- Worktree launch uses the same optimistic lifecycle, and enters it *before* `git worktree add` rather than after.
+  Its placeholder is an ordinary tab in the focused pane from the press, focused, naming first the checkout being created and then the setup being run, with the new worktree as its displayed cwd.
+  It is a tab rather than the unpanned full-workspace surface it used to be, because an unpanned view is drawn nowhere at all on a phone and worktree bootstrap is the longest wait swe-mux has.
+  Refreshes during that wait re-place the client-only leaf without disturbing the pane, except that a launch the operator is watching stays the pane's active tab.
+  Resolution replaces the pending identity and follows it only when the pending identity still owns active-session focus, at both the focus and the layout level.
 - Spawn preparation runs independent Git identity probes concurrently and briefly caches the
   stable result for repeated launches. Synchronous ConPTY creation runs outside the daemon event
   loop, keeping existing terminals, events, and HTTP responsive during Windows process startup.

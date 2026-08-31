@@ -26,6 +26,7 @@ export const settingsTabs = [
   {id:'plugins',label:'Plugins',group:'Agents'},
   {id:'usage',label:'Usage',group:'Agents'},
   {id:'appearance',label:'Appearance',group:'Interface'},
+  {id:'actions',label:'Actions',group:'Interface'},
   {id:'input',label:'Input',group:'Interface'},
   {id:'notes',label:'Notes',group:'Interface'},
   {id:'voice',label:'Voice',group:'Interface'},
@@ -59,11 +60,17 @@ const subpages = (...labels:string[]):SettingsSubpage[] => labels.map(label=>({i
 export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
   accounts:subpages('Provider accounts','Model provider','Models'),
   queue:subpages('Overview','Auto-delivery','Approvals','Agent messaging','Agent actuation','Queue history'),
+  appearance:subpages('Interface','Session rows','Session top bars'),
   input:subpages('Pointer','Mobile terminal','Clipboard history','Touch gestures','Keyboard shortcuts'),
   voice:subpages('Read aloud','Talk & dictation','Voice commands','Mux assistant','Diagnostics'),
 }
 
 const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
+  appearance:{
+    'Theme':'interface','Right sidebar':'interface','Interface scale':'interface',
+    'Session rows':'session-rows',
+    'Session top bars':'session-top-bars',
+  },
   // The OpenRouter block (the API key, and the catalogue it fetches) is a second
   // section on the Model provider page, rendered only while that provider is
   // selected. Undeclared it matched no page, so it was hidden on every one of

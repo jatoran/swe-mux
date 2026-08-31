@@ -75,6 +75,13 @@ def test_drawer_tab_domain_is_stored_opaquely(tmp_path: Path) -> None:
     assert store.all()["profiles"]["desktop"]["drawerTabs"] == {"order": ["retired-tab"]}
 
 
+def test_session_topbar_domain_is_stored_opaquely(tmp_path: Path) -> None:
+    store = SettingsStore(tmp_path)
+    payload = {"version": 1, "density": "standard", "rows": [{"left": [], "right": []}]}
+    store.update("desktop", {"sessionTopbar": payload})
+    assert store.all()["profiles"]["desktop"]["sessionTopbar"] == payload
+
+
 def test_update_persists_across_instances(tmp_path: Path) -> None:
     SettingsStore(tmp_path).update("desktop", {"sounds": {"volume": 0.2}})
     assert SettingsStore(tmp_path).all()["profiles"]["desktop"] == {"sounds": {"volume": 0.2}}

@@ -7,11 +7,12 @@ own localStorage (unshareable, invisible to the push sender that runs on the
 server), settings live here keyed by a device *class* — ``desktop`` or
 ``mobile`` — and every device can read and edit either profile.
 
-The ``sounds``, ``commandRail``, ``fileTree``, ``drawerTabs`` and ``sessionRows``
+The ``sounds``, ``commandRail``, ``fileTree``, ``drawerTabs``, ``sessionRows`` and ``sessionTopbar``
 domains are stored
 opaquely: the browser owns their schema and normalization (custom sound data URLs,
 per-event sound ids, the file-tree's ``{projectId: expandedPaths[]}`` blob, the
-utility drawer's ``{order: tabId[]}``, the sidebar row layout). The ``alerts`` and
+utility drawer's ``{order: tabId[]}``, the sidebar row layout, the session pane top-bar
+layout). The ``alerts`` and
 ``notifications`` domains
 are interpreted server-side because the Web Push sender must apply the shared
 master, quiet hours, and push-channel policy before any tab is alive to filter it.
@@ -42,6 +43,7 @@ DOMAINS: tuple[str, ...] = (
     "fileTree",
     "drawerTabs",
     "sessionRows",
+    "sessionTopbar",
     # What this device class measured about its own keyboard, and whether it may
     # take the browser's reserved chords in fullscreen. Both are properties of a
     # *browser*, not of the install: the daemon's shipped table says what a browser

@@ -11,6 +11,8 @@ import { useDismissLevel } from './modalFocus'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
 import { SessionRowSettings } from './SessionRowSettings'
+import { SessionTopbarSettings } from './SessionTopbarSettings'
+import { ActionEditorPanel } from './ActionEditorModal'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { commonestParent } from './projectCreate'
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
@@ -42,7 +44,7 @@ import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestHeadings, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
-import { flashSetting, revealSetting, settingSelector } from './settingReveal'
+import { cueSettingsSection, flashSetting, flashSettingsSection, revealSetting, settingSelector } from './settingReveal'
 import {
   railSectionIds, rememberedSections, rememberedTab, rememberSection, rememberTab,
   sameRailSections, SECTION_RAIL_MIN, settingsBreadcrumb, settingsSubpageId, settingsSubpages, settingsTabGroups, settingsTabs, tabForSection,
@@ -564,6 +566,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [query,setQuery] = useState('')
   const [highlight,setHighlight] = useState(0)
   const [jump,setJump] = useState<{entry:SettingsSearchEntry}|null>(null)
+  const [sectionCue,setSectionCue] = useState<{tab:SettingsTab;id:string;token:number}|null>(null)
   const [themePickerOpen,setThemePickerOpen] = useState(false)
   const declaredSubpages=settingsSubpages[activeTab]||[]
   const pagedSubpages=declaredSubpages.length>1
@@ -927,12 +930,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   /** Every route to a different tab, so none of them leaves the drawer standing open
    *  over the tab it just switched to: the rail, a search result, a deep link. */
   const selectTab=useCallback((tab:SettingsTab)=>{setActiveTab(tab);setNavOpen(false)},[setNavOpen])
+  const requestSectionCue=(tab:SettingsTab,id:string)=>
+    setSectionCue(current=>({tab,id,token:(current?.token||0)+1}))
   const toggleTabExpanded=(tab:SettingsTab)=>setExpandedTabs(current=>{
     const next=new Set(current)
     if(next.has(tab))next.delete(tab);else next.add(tab)
     return next
   })
   const selectSubpage=(tab:SettingsTab,id:string)=>{
+    requestSectionCue(tab,id)
     setSelectedSubpages(current=>({...current,[tab]:id}))
     setExpandedTabs(current=>new Set(current).add(tab))
     selectTab(tab)
@@ -943,6 +949,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
    * because the heading it names does not exist in the DOM until then.
    */
   const openSection=(tab:SettingsTab,id:string)=>{
+    requestSectionCue(tab,id)
     if(tab===activeTab){scrollToSection(id);setNavOpen(false);return}
     pendingSection.current=id
     selectTab(tab)
@@ -1160,7 +1167,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const arrive=()=>{
       for(let node=target.parentElement;node;node=node.parentElement)if(node instanceof HTMLDetailsElement)node.open=true
       target.scrollIntoView({block:'center'})
-      return flashSetting(target)
+      const clearTarget=flashSetting(target)
+      const clearSection=flashSettingsSection(target)
+      return()=>{clearTarget();clearSection()}
     }
     const page=target.closest<HTMLElement>('section[data-settings-subpage]')?.dataset.settingsSubpage
     if(pagedSubpages&&page&&page!==selectedSubpage){
@@ -1170,6 +1179,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
     return arrive()
   },[jump,pagedSubpages,selectedSubpage,activeTab])
+
+  // Sidebar pages and scroll anchors get the same contextual arrival cue as search.
+  // The target can belong to a tab that has not rendered yet, or to a page that is still
+  // hidden during this commit, so the cue waits for the first visible matching heading.
+  useEffect(() => {
+    if(!sectionCue||sectionCue.tab!==activeTab)return
+    const root=panel.current
+    if(!root)return
+    return cueSettingsSection(root,sectionCue.id)
+  },[sectionCue,activeTab,draft!==null])
 
   // Reveal a control a gated surface deep-linked to (`settingTargets.ts`). Unlike the search
   // jump above, this can arrive before the panel has anything to show: the bundle is still in
@@ -2353,7 +2372,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="settings-status-grid"><article><strong>Engine</strong><span>{draft.automation_enabled?'On':'Off'}</span></article><article><strong>Rules</strong><span>{automation?.rules.length||0} custom</span></article><article><strong>Queue</strong><span>{automation?.queue.size||0}/{automation?.queue.capacity||0}</span></article><article><strong>Runtime</strong><span>{automation?.diagnostic?'Needs review':'Healthy'}</span></article></div>
           <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation workspace</button></div>
         </section>}
-        {activeTab==='plugins'&&<PluginsSettings focusedProjectId={focusedProjectId}/>}
+        {activeTab==='plugins'&&<PluginsSettings/>}
 
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
@@ -2755,7 +2774,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
           <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
-          </section><section><SessionRowSettings /></section><section>
+          </section><section><SessionRowSettings /></section><section><SessionTopbarSettings /></section><section>
           <h3>Right sidebar</h3>
           <label>Drawer tabs<Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
           <label>Right rail<Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
@@ -2774,13 +2793,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
           <p><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>-</kbd>, and <kbd>Ctrl</kbd>+<kbd>0</kbd> also drive the active value. The note editor keeps its own typography under <strong>Notes</strong>.</p>
-          </section><section><h3>Action rail</h3>
+          </section></Fragment>}
+
+        {activeTab==='actions'&&<Fragment><section><h3>Action rail</h3>
           <label class="check" data-setting="rail_enabled_desktop"><span>Show the rail on desktop</span><input type="checkbox" checked={draft.rail_enabled_desktop} onChange={e=>change('rail_enabled_desktop',e.currentTarget.checked)} /></label>
           <label class="check" data-setting="rail_enabled_mobile"><span>Show the rail on mobile</span><input type="checkbox" checked={draft.rail_enabled_mobile} onChange={e=>change('rail_enabled_mobile',e.currentTarget.checked)} /></label>
           <p>The row of keys and actions under each terminal. Turning a device class off hides the whole rail there — on mobile that includes the pinned Send button — while your configured layout is kept and comes back untouched.</p>
           <label data-setting="rail_density_desktop">Desktop rail density<Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <label data-setting="rail_density_mobile">Mobile rail density<Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
-          <p>How tightly the Action rail under each terminal packs its buttons. Below Comfortable, a phone's buttons drop under the 44px touch target, which is why the two devices are set separately.</p></section></Fragment>}
+          <p>How tightly the Action rail under each terminal packs its buttons. Below Comfortable, a phone's buttons drop under the 44px touch target, which is why the two devices are set separately.</p></section><section><h3>Action layout</h3><ActionEditorPanel projectId={focusedProjectId}/></section></Fragment>}
   </Fragment>
 
   // Built here rather than beside the sidebar because it needs `tabContent`, and built
@@ -2790,7 +2811,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // which is the rule the search index already follows for the same call.
   //
   // Measured in the renderer harness over five opens: 6.5ms on the first (cold) build
-  // and 1.1-2.4ms after, for thirteen tabs. The four paged tabs are skipped and they
+  // and 1.1-2.4ms after, for thirteen tabs. The five paged tabs are skipped and they
   // are the two largest — Voice's command reference and Accounts' model routing — so
   // the preview costs less than a search does for the same reason it is affordable
   // at all.

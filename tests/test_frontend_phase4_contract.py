@@ -27,7 +27,8 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     assert "mobileWorkspaceProjection" in combined
     assert "mobile-unified-tabs" in combined
     assert (
-        ".pane-stack:not(.focused-pane):not(.empty-workspace-pane):not(.mobile-unified-workspace){display:none}"
+        ".pane-stack:not(.focused-pane):not(.empty-workspace-pane)"
+        ":not(.mobile-unified-workspace):not(.plugin-popup-stack){display:none}"
         in css
     )
     # Mobile menus carry no geometry or ordering controls at all now — the touch
@@ -691,15 +692,24 @@ def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> N
     assert "Create worktree" not in app
     run_menu = source("ProjectRunMenu.tsx")
     assert "New worktree session" in run_menu
-    assert "'/api/git/worktrees'" in run_menu
-    assert "onWorktreeCreated(result.path,worktree.backend)" in run_menu
+    # Both phases of the launch are App's, so the optimistic pane can exist before the checkout
+    # does. The form only collects the draft and renders the creation failure it gets back.
+    assert "'/api/git/worktrees'" not in run_menu
+    assert "onWorktreeLaunch({path,branch,startPoint:worktree.startPoint.trim()," in run_menu
+    assert "'/api/git/worktrees'" in app
     assert "'/api/git/worktrees/session'" in app
     assert "pendingTerminal(pendingId,target,backend,{" in app
-    assert "label:'Setting up worktree…'" in app
-    assert "placement:null" in app
-    # The refresh pass that replays pending placements moved into the layout planner.
+    assert "label:'Creating worktree…'" in app
+    assert "pending_label:'Setting up worktree…'" in app
+    # A worktree launch owns a real leaf in the focused pane like every other launch, because an
+    # unpanned view is drawn nowhere at all on a phone.
+    assert "const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)" in app
+    # The refresh pass that replays pending placements moved into the layout planner, which keeps
+    # a launch the operator is watching as the pane's active tab across a long bootstrap.
     planner = source("fleetLayouts.ts")
     assert "if (pending.projectId !== project.id || !pending.placement) continue" in planner
+    watched = "const watched = joinAnchor.projectId === project.id && joinAnchor.viewId === id"
+    assert watched in planner
     assert "selectPendingTerminal(current,session.id)" in app
     assert "setActiveId(current=>current===pendingId?next.id:current)" in app
     assert "normalizeWorktreeBranchInput(value)" in run_menu
@@ -808,6 +818,7 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     the markers are drawn at all.
     """
     app = source("App.tsx")
+    topbar = source("sessionTopbarConfig.ts")
     drawer = source("UtilityDrawer.tsx")
     tab = source("TranscriptTab.tsx")
     view = source("transcriptView.ts")
@@ -838,14 +849,16 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     opener = app[opener_start : app.index("/** Pop one target's queue", opener_start)]
     assert "if (session) await selectSession(session)" in opener
     assert "openDrawerTab('transcript',session?.project_id||projectId)" in opener
-    tools_start = app.index('<div class="pane-tools">')
-    tools = app[tools_start : app.index('</div>', tools_start)]
+    tools_start = app.index("renderAction={(actionId:SessionTopbarActionId)=>")
+    tools = app[tools_start : app.index("menu={<button", tools_start)]
     assert "hasHarnessTranscript(session.backend)" in tools
-    assert 'class="pane-tool-label transcript-chip"' in tools
-    assert "openQueueForSession(session.id)" in tools
-    assert "openTranscriptForSession(session.id)" in tools
-    assert tools.index("openQueueForSession(session.id)") < tools.index(
-        "openTranscriptForSession(session.id)"
+    assert "deliversHarnessPrompts(session.backend)" in tools
+    assert "openQueueForSession(id)" in tools
+    assert "openTranscriptForSession(id)" in tools
+    default_start = topbar.index("export function defaultSessionTopbarConfig")
+    default = topbar[default_start : topbar.index("const METRIC_IDS", default_start)]
+    assert default.index("action',id:'drawer:queue'") < default.index(
+        "action',id:'drawer:transcript'"
     )
 
     # The drawer unmounts a tab body on every tab switch, so anything that has to

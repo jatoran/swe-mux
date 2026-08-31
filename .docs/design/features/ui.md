@@ -227,24 +227,21 @@ responsive controls.
   tree it edits, and `menu → Projects`, between the viewers and Configure Actions. The header
   button is discoverable only once the sidebar is open and its header is in view, while the
   app menu is where every other app-wide surface is looked for.
-- The sidebar footer is three controls: `menu` at the left edge, then the alerts bell and the
-  configurator gear at the right.
-  It once held four different ones. `projects` moved into the `PROJECTS` header, beside the
-  tree it edits, and the settings cog was removed: `menu → Settings` sits one row away from the
-  button next to it, and a second permanent door to the same panel cost a footer slot for a
-  saving of nothing. A named menu row is also searchable and keyboard-reachable, which an icon
-  is not.
-  The rule that removal established is "app-wide switches, not navigation", and the
-  configurator gear is worth restating it for: it is **not** a door to an existing surface, it
-  starts an agent session about this install (`configurator.md`), so it belongs to the whole
-  app rather than to the tree above it. A plain press launches the default harness; right-click,
-  shift-click, or alt-click opens a harness chooser, and only when more than one agent is
-  available. A missing prerequisite dims it with the reason in its title rather than hiding it,
-  because a control that vanishes teaches nothing.
+- The sidebar footer has two stable control groups.
+  The left group is the configurator gear followed by the alerts bell.
+  The right group is `menu` followed by a Settings cog that opens the Settings panel directly.
+  Settings remains in the app menu and command registry for search, keyboard, and voice access;
+  the persistent cog is the direct pointer route to a primary app-wide surface.
+  The configurator gear starts an agent session about this install (`configurator.md`) rather
+  than opening an existing surface.
+  A plain press launches the default harness; right-click, shift-click, or alt-click opens a
+  harness chooser only when more than one agent is available.
+  A missing prerequisite dims the configurator with the reason in its title rather than hiding
+  it, because a control that vanishes teaches nothing.
   It has a twin in the collapsed rail: collapsing the sidebar must not remove a control, and
   an expand round-trip to ask a question about the app is the round-trip it exists to avoid.
-  The row still uses the left item's own `margin-right:auto` rather than `space-between`, so a
-  removed button can come back without the layout re-deciding itself.
+  The menu owns `margin-left:auto` rather than the footer using `space-between`, so the two
+  groups stay stable when a control is unavailable or later returns.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
@@ -669,14 +666,14 @@ Its rules, and what each one is defending:
   It is the one control in the panel that rewrites the whole saved configuration on a single click, is not staged behind Save, discards unsaved edits, and cannot be undone.
   The confirmation is an `alertdialog` and its own dismiss level, so back, Escape, and the scrim all back out of it before they reach the panel; the click that opens it sends nothing.
   Its failure is visible for the same reason every other write's is - a refused reset used to be an unhandled rejection, leaving the panel showing a draft the daemon no longer held with no indication that anything had gone wrong.
-- **One tab names one subsystem.** Seventeen tabs are grouped into four runs, declared once
+- **One tab names one subsystem.** Nineteen tabs are grouped into four runs, declared once
   in `settingsTabs.ts` and rendered from that single order by both layouts:
 
   | Group | Tabs |
   | --- | --- |
   | Workspace | General, Projects, Terminals, Git, Processes |
-  | Agents | Harnesses, Accounts, Prompt queue, Automation, Usage |
-  | Interface | Appearance, Input, Notes, Voice |
+  | Agents | Harnesses, Accounts, Prompt queue, Automation, Plugins, Usage |
+  | Interface | Appearance, Actions, Input, Notes, Voice |
   | System | Alerts, Remote, Diagnostics |
 
   A group is a contiguous *run* of the array, not a declared membership list, so a tab that
@@ -713,6 +710,8 @@ Its rules, and what each one is defending:
     accessibility tree without hiding elements that are still focusable, and still animates
     because the transform is what moves. Picking a section closes it, by every route into a
     tab: the list, a search result, a deep link.
+    Its full-body dismissal scrim is transparent, so the current Settings page remains visible
+    behind the drawer while taps outside it still close the navigation.
   - The header therefore reads `SETTINGS` over the **current tab's name** rather than
     `CONFIG::V6` over `Settings`. What the panel is, is the one thing already obvious when it
     owns the whole screen; where you are in it is not.
@@ -790,13 +789,16 @@ Its rules, and what each one is defending:
   The panel is opened, scanned, and closed many times in a session, and landing on General
   every time re-charges the navigation that reached the tab someone actually lives in.
 - **The sidebar is the panel's only in-tab navigation, and only genuinely long tabs are pages.**
-  A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Input, Voice).
+  A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Appearance, Input, Voice).
   A page holding two controls costs a navigation step to show less than a glance would - which is how the Projects tab briefly grew a "Project resources" page that rendered two sentences and no control.
   Every other tab renders as one scrolling column, and the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
   **A tab discloses what it contains whether or not it has been opened**, so the sidebar describes one kind of tab rather than two: the section count is the rule, never the visit.
   Pages come from the declaration and sections come from the tab's own markup - read from the live DOM while the tab is on screen and from its vnodes otherwise, which is the same walk the settings search index uses to reach an unmounted tab.
   Reading only the DOM is what used to give a tab its chevron on the second visit and not the first.
   A section link on a tab that is not on screen selects that tab first and scrolls once its own rail exists, because the heading it names is not in the document until then.
+  Clicking a declared page or section link briefly highlights the destination heading and the
+  border of its whole section, so arrival remains visible inside a dense page.
+  Settings search keeps its exact-result flash and adds the same heading and section-border cue.
   Two limits are deliberate and neither can change whether a chevron is drawn.
   The vnode read cannot see headings a child component renders (`<AccountSettings/>`, the Alerts panel), so a preview is a floor that the live read replaces on arrival; and it is built once per open rather than per render, so a heading whose rendering is conditional on an edit made in this session is corrected by visiting the tab.
   Tabs with a single section - Git, Automation, Alerts - are given no disclosure at all, which is `SECTION_RAIL_MIN` doing its job: listing one section is a row spent saying what one glance already shows.
@@ -1008,10 +1010,10 @@ Its rules, and what each one is defending:
   (restoring defaults rewrites the entire saved config immediately, outside the draft/Save
   cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones.
   Per-section resets that genuinely are scoped, such as gesture defaults and shortcut defaults, stay with their own section.
-- Action layout is not a Settings section.
-  **Configure Actions** opens as a standalone modal from the main menu, command palette, or a rail-row popover.
+- Action layout and rail policy share Settings → Actions.
+  **Configure Actions** opens that tab from the main menu, command palette, or a rail-row popover.
   The Actions drawer does not link to configuration because its job is using actions, not arranging the command rail.
-  This surface owns the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
+  The Settings tab owns the rail master switches and density beside the shared catalog, action appearance, custom action creation, and the separate Desktop and Mobile rail placements.
 - Keyboard shortcuts are a rule list rather than a chord map, and the Input tab edits
   the list: the preset picker, the per-command recorder, and the report of what this
   host cannot receive. `design/features/keybindings.md` owns the design; three things
@@ -1897,18 +1899,20 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   maps to the same backend-aware payload: Claude/Codex receive `ESC+CR` to insert a composer newline,
   while shells retain `CR` submit. Agent submission is the fixed rail **Send** action, never the
   soft-keyboard Enter key.
-- A terminal pane is two rows: the header bar, then the terminal surface (terminal + action
-  rail). No feature may add a third.
+- A terminal pane is an intrinsic-height configured header followed by one flexible terminal
+  surface (terminal + action rail).
+  The header may contain one to three persistent rows; no transient feature may add another
+  pane track.
   The read-aloud player strip that once sat between them is retired: read aloud is operated
   entirely from the voice dock's `tts` tab, and which sessions speak is marked on the sidebar
   row and the workspace tab.
-- The pane tools row carries `note`, `queue[:N]` (agent sessions only - focuses that session
-  and opens the drawer's Queue tab on it, the count is its pending items;
-  `features/prompt-queue.md`), `transcript` (transcript-capable sessions only - focuses that
-  session and opens the drawer's Transcript tab), and the `⋯` session menu.
-  The shared pane header supplies the same controls on desktop and in the mobile projection.
-  Labelled chips either report session state or directly open a primary session-bound surface;
-  `proc` did neither, and remains in the drawer.
+- The pane top bar is a persistent one-to-three-row arrangement of shared session metrics and
+  shortcuts (`session-topbars.md`).
+  Its shipped one-row default carries title, conditional cwd, approvals, Queue, Transcript,
+  and the fixed `⋯` session menu.
+  Every metric and optional shortcut can be moved or removed; the fixed menu cannot, so a pane
+  always retains a recovery path.
+  The same configured header renders on desktop and in the mobile projection.
 - The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
   toggle and the separate "accept agent messages armed" switch. Both are checked by default
@@ -1922,17 +1926,14 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
   opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
   operation with nothing open (`features/auto-delivery.md`).
-- The pane header is `[name] [cwd] [tools]` and **must stay one row**.
-  It uses `grid-auto-flow:column`, so an item beyond the declared column count cannot auto-place into a second row.
-  There is no pane-local voice chip group: read-aloud is the voice panel's `tts` tab, workspace talk is the app-level voice dock, and `appr:` - the last chip that group held - is a pane tool now.
-  `.pane-tools` is the one right-aligned group, ordered `appr:` then `queue` then `transcript` then the overflow menu: the standing *mode* leads, and the surfaces that open on click follow it.
-  Three grid tracks are declared for every variant, because the cwd is the item that comes and goes.
-  A two-item header therefore puts the tools in the flexible track and leaves the trailing `auto` track empty, and an `auto` track holding nothing is zero wide, so the group stays flush with the bar's right edge without a spacer element and without one template per variant.
-  `.pane-tools` right-aligns its own contents (`justify-content:flex-end`), which is a no-op when it lands in the trailing track.
-  Phones drop the cwd column, and every device caps the name track so the group keeps room.
+- The pane header is the configured `sessionTopbar` layout (`session-topbars.md`).
+  Each persistent row is a no-wrap left/right pair, with the fixed overflow menu at the first
+  row's right edge.
+  Desktop and mobile read the same rows; width pressure ellipsizes values rather than wrapping
+  configured items into an unrequested row.
 - The header's first field is the session's display name (`sessionNames.ts`), not its status.
   State is already carried by the tab, the sidebar row, and the terminal being read, while the name is the field those surfaces crop: a tab is only as wide as its strip allows.
-  The name track is `fit-content()` rather than `auto`, because an `auto` track takes its max-content size before the flexible track expands - a sentence-length generated title would take the cwd's space and squeeze the pane tools to their floor.
+  The configured title metric keeps a bounded container-relative width, because a sentence-length generated title must yield before shortcuts do.
   The rendered name ellipsizes; the whole of it leads the `title` tooltip, followed by the status line, any faults, and delivery readiness.
   Faults keep a visible marker beside the name (`.pane-fault`) because they have no other pane-level surface - an agent header draws no path chip, which is where a non-local boundary is otherwise reported - and because a stale observation is the one fault that looks like a healthy session.
   Routine state never re-enters the bar: that is what the tab and the row are for.
@@ -1942,8 +1943,10 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The daemon writes `parser_diagnostic` on every observed session as routine detail (`tailing <id>.jsonl`, `schema v2: 801/801 recognized`), so reading its presence as a fault marked 17 of 17 live sessions when it shipped - an alarm that is always on reports nothing.
   A predicate for a visible marker therefore belongs in a unit-tested module and not inline in the surface: `sessionStatus.test.ts` pins that a healthy session carrying both strings has no faults.
   Faults deliberately do not touch the dot, the tab, or the status line, because a session can be perfectly `idle` while reporting on a conversation it no longer owns - which is precisely what a state axis cannot say.
-- **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
-  The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
+- **A pane has two tracks: intrinsic configured header and flexible terminal surface.**
+  The persistent header may contain one to three rows.
+  Nothing a transient feature toggles may add another track.
+  The pane's remaining height is the PTY's row count, so an in-flow strip that appears with session state would resize the terminal under a live agent and make its TUI reflow and repaint.
   The pane's only remaining float is the mobile Draft composer, which overlays the terminal host from inside the surface.
   Anything added later must float from a zero-height anchor sharing the surface's track rather than take a row of its own.
   The Talk toggle is app chrome directly before Run on mobile and desktop.
@@ -1999,7 +2002,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
-  **The rail has a per-device-class master switch** (`rail_enabled_desktop` / `rail_enabled_mobile`, Settings → Appearance → Action rail, both on by default, hot-applied).
+  **The rail has a per-device-class master switch** (`rail_enabled_desktop` / `rail_enabled_mobile`, Settings → Actions → Action rail, both on by default, hot-applied).
   Off suppresses the whole rail block for that device class - on mobile that includes the pinned Send button, which the control's copy states - while the catalog, layouts, and per-Project overrides are retained untouched, so turning it back on restores exactly what was there.
   It is also one of the first-run Customize switches (`first-run.md`).
   **No message of any kind is drawn inside a rail row.**
@@ -2030,7 +2033,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Dismissal is always deliberate: an outside press, Escape, or the small absolutely positioned close control at the panel's top-right corner.
   The panel has no heading bar and no `stays open` copy.
   It is capped in width and height, right-aligned to the drawer cluster, and grows upward.
-  A Configure Actions icon sits in the bottom-right footer on every row's panel and opens the full modal directly.
+  A Configure Actions icon sits in the bottom-right footer on every row's panel and opens Settings → Actions directly.
   The panel closes during that handoff.
 - **Every command-rail overlay is glass: the popover and each of the drop-ups.**
   Panel, chips, and rows are translucent over a backdrop blur, with borders and text at full opacity.
@@ -2203,7 +2206,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The compass names the first pads shipped with are still read forever when loading a layout, the same durability rule the retired-id table exists for: a layout is device-local, per-Project and arbitrarily old, and an unrecognised key is silently a binding the operator loses.
 - Configured chips — a skill, a slash command, a prompt template, a literal — **size to their own label** with symmetric padding, and their `min-width` is a floor for a short one rather than a width every one of them is stretched to.
   The rail's shared 74px minimum stays right for the built-in labelled buttons, whose wording is fixed and whose even widths are the row's rhythm; it was wrong for a label the user chose, and it padded a five-character skill out to the width of `Copy resume`.
-  The row popover's Configure Actions control opens the full modal directly.
+  The row popover's Configure Actions control opens Settings → Actions directly.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
   The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
   It keeps its 44px tap height and its accessible name; only the width fell.
@@ -2305,8 +2308,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   What a delta cannot express is named on the plan with the global value that wins: a renamed shared row, a reordered set of shared rows, a project row interleaved between them, and an action whose definition the fork edited.
   A row that survives none of that is redone with every id floated, which always reproduces it at the cost of no longer tracking global changes to that row.
   It is user-invoked and never automatic: a fork is somebody's arrangement, and a migration that happens to you is one you could not review first.
-- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) is the only rail editor.
-  It opens from the main menu, command palette, and every row popover rather than replacing the live rail inline or living inside Settings.
+- **Settings → Actions** (`ActionEditorModal.tsx`, `RailEditor.tsx`, and `Settings.tsx`) is the only rail editor.
+  It opens from the Settings sidebar, main menu, command palette, and every row popover rather than replacing the live rail inline.
   It discloses progressively: one device's rail layout first (defaulting to the device this browser is, with a Desktop/Mobile switch at every width), custom-action creation collapsed below it, and the complete catalog collapsed at the bottom behind a filterable "All actions" disclosure.
   The former permanent two-column device view is gone: it doubled the visual load for the rare cross-device drag that the catalog's placement checkboxes already cover.
   A dismissible first-open callout carries the orientation (per-device rails, the drawer popover, and the catalog) instead of a standing paragraph.
@@ -3322,6 +3325,7 @@ Detailed UI behavior belongs with the owning feature:
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`
 - Global Talk, registry-backed navigation, fleet speech, and guarded approvals: `voice.md`
+- Configurable session pane top bars: `session-topbars.md`
 
 ## Diagnostics
 
@@ -3351,6 +3355,9 @@ restatement is logged as `terminal_repaint_requested` with its trigger reason.
 A sidebar session row is a fixed gutter holding the state indicator, plus two lines.
 Each line has a left-aligned and a right-aligned section, and each section is an ordered list of field slots.
 The layout is user-configurable in Settings → Appearance → Session rows.
+Session rows is a separate Appearance page rather than one section among Theme, sidebar chrome,
+scale, and Action rail settings.
+Every session context menu carries **Configure appearance**, which deep-links to that page.
 
 - **The indicator is not a field.**
   It sits outside both sections, is always drawn, and its colour, pulse, and hollow "engaged" variant are not configurable.
@@ -3453,6 +3460,10 @@ The layout is user-configurable in Settings → Appearance → Session rows.
 - **The settings preview has its own width control, and measures its budget the same way.**
   It used to render at a fixed 420 px — wider than the sidebar can be dragged — so the one behaviour a reader cannot predict from the field list was the one behaviour the panel never showed.
   The width is device-local and unpersisted: it is an inspection control for this visit to the panel, not a property of the layout.
+  The preview is sticky below the Settings header on desktop and mobile, so edits never scroll
+  their result off screen.
+  It draws one active hypothetical session by default and expands explicitly to the four-row
+  representative fleet; every edit updates whichever form is visible immediately.
 - **The empty bottom line is kept on desktop and dropped on mobile.**
   Constant row height is what makes a list scannable, and the blank reads as "nothing to report"; on a phone the vertical space is worth more.
 - **One duration field, and within a turn it measures one thing.**

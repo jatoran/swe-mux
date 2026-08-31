@@ -6,7 +6,8 @@ Design: `../../../design/features/setting-links.md`, `../../../design/features/b
 ## Settings
 
 `Settings.tsx`, `settingsTabs.ts`, `settingsDraft.ts`, `settingsSave.ts`, `settingsSearch.ts`,
-`fuzzyText.ts`, `AutomationPolicyView.tsx`, `HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
+`fuzzyText.ts`, `ActionEditorModal.tsx`, `RailEditor.tsx`, `AutomationPolicyView.tsx`,
+`HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
 
 Global non-automation options only, including the machine-wide worktree root.
 Global and per-Project automation policy belongs to the Automation workspace.
@@ -54,9 +55,14 @@ A group is a run of the array rather than a declared membership, and `tabForSect
 
 ### Separate pages and the sidebar as sole navigation
 
-`settingsSubpages` declares the pages of the genuinely long tabs (Accounts, Prompt queue, Input, Voice) before those tabs mount; every other tab is one scrolling column.
+`settingsSubpages` declares the pages of the genuinely long tabs (Accounts, Prompt queue, Appearance, Input, Voice) before those tabs mount; every other tab is one scrolling column.
+Appearance separates ordinary interface controls, Session rows, and Session top bars.
+Both session appearance editors have sticky live previews and substantial placement models, so
+each owns a page.
 `settingsSubpageId` maps related implementation headings to the user-facing page that owns them.
 The sidebar is the only in-tab navigation: the desktop column and the mobile slide-in drawer both list a paged tab's pages below it, and an unpaged tab's rendered sections as scroll anchors (from `SECTION_RAIL_MIN` sections, scroll-spy highlighted).
+The mobile drawer overlays the current page with a transparent dismissal scrim, keeping that
+page readable while preserving tap-outside close behavior.
 Sections are read from the live DOM while a tab is on screen and from `harvestHeadings` over its vnodes otherwise, so a tab's disclosure is decided by its section count rather than by whether it has been visited - reading only the DOM gave a tab its chevron on the second visit and not the first.
 The preview is built once per open (measured at 6.5ms cold, 1.1-2.4ms after, for the thirteen unpaged tabs) rather than keyed on the draft the way the search index is, because `change()` replaces the draft on every keystroke and thirteen vnode trees per keypress is the cost that index exists to avoid.
 What that gives up is bounded and checked: a heading a child component renders is invisible to the walk, and a heading whose rendering is conditional on a session edit is stale - the four that exist are on paged tabs or on a tab with six other headings, so neither can change whether a chevron is drawn, and the live read corrects the list on arrival.
@@ -70,6 +76,9 @@ The content pane carries no duplicate row of page links.
 Arriving on a tab by any route expands its links; only the chevron collapses them, and never automatically.
 Clicking the tab navigates to its remembered page.
 Only the selected page is visible, but search and deep links select its owner before calling `revealSetting`, so hidden pages remain addressable.
+Clicking a sidebar page or section calls `cueSettingsSection`, which waits for the destination
+heading to become visible and briefly highlights that heading plus the owning section border.
+Search results retain the exact-result flash and add the same section context.
 Reference bodies may still fold inside a page behind `<details class="settings-disclosure">`.
 Settings → Voice is the worked case, pinned by `test/renderer/voice-settings.spec.ts`; the sidebar and page behavior is pinned by `test/renderer/settings-layout.spec.ts`.
 

@@ -41,7 +41,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-LAND_SCHEMA_VERSION = 5
+LAND_SCHEMA_VERSION = 6
 
 #: What a request asked the pipeline for. `land` is the whole pipeline through the
 #: fast-forward; `verify` stops after the gate and moves no trunk. One column rather
@@ -130,6 +130,18 @@ CREATE TABLE IF NOT EXISTS land_requests(
   -- machine already allows only one terminal handback, and a cap that depends on
   -- another invariant staying true is not a cap.
   armed_replies INTEGER NOT NULL DEFAULT 0,
+  -- Whether this request's author asked to be told when it *succeeds*.
+  --
+  -- Off by default, and that default is the design rather than caution: a land
+  -- announces itself by the trunk moving, and a queue whose whole promise is that N
+  -- branches land while the operator touches only the one that conflicted must not
+  -- interrupt N agents to say so. Only the requester knows whether it has work gated
+  -- on the land, so only the requester can answer it - which is exactly the shape of
+  -- every other bound on the reply: the request is the consent.
+  --
+  -- Persisted rather than held by the caller because the answer is written minutes
+  -- later, by the pipeline, possibly across a daemon restart.
+  report_success INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
   started_at REAL,
@@ -256,6 +268,7 @@ def _row_to_request(row: sqlite3.Row) -> dict[str, Any]:
         "landed_oid": str(row["landed_oid"] or ""),
         "handback_message_id": str(row["handback_message_id"] or ""),
         "armed_replies": int(row["armed_replies"] or 0),
+        "report_success": bool(row["report_success"]),
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
         "started_at": row["started_at"],
@@ -358,6 +371,13 @@ class LandStore:
             self._db.execute(
                 "ALTER TABLE land_requests ADD COLUMN kind TEXT NOT NULL DEFAULT 'land'"
             )
+        if columns and "report_success" not in columns:
+            # Zero for every pre-migration row, and here that is a fact about the column
+            # rather than only about history: nothing could ask to be told about a
+            # success, so none of those rows asked.
+            self._db.execute(
+                "ALTER TABLE land_requests ADD COLUMN report_success INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _open(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, check_same_thread=False)
@@ -423,6 +443,7 @@ class LandStore:
         origin_session_id: str = "",
         origin_run_id: str = "",
         correlation_id: str = "",
+        report_success: bool = False,
         event: LandEvent | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
@@ -450,8 +471,8 @@ class LandStore:
                 self._db.execute(
                     "INSERT INTO land_requests(id,project_id,project_root,worktree_root,branch,"
                     "kind,requested_oid,trunk_ref,origin,origin_session_id,origin_run_id,"
-                    "correlation_id,state,created_at,updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)",
+                    "correlation_id,report_success,state,created_at,updated_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)",
                     (
                         request_id,
                         project_id,
@@ -465,6 +486,7 @@ class LandStore:
                         origin_session_id,
                         origin_run_id,
                         correlation_id,
+                        1 if report_success else 0,
                         moment,
                         moment,
                     ),
