@@ -15,6 +15,10 @@ import { expect, test } from 'playwright/test'
 interface Column { width: number; gapBefore: number; headMid: number; valueMid: number; clipped: boolean }
 
 async function columns(page: import('playwright/test').Page, width: number, scale: number) {
+  // The harness renders after `load`, so `page.goto` alone is a bet on module
+  // execution beating this evaluate - one a busy CI runner loses (`.sidebar` was
+  // null there while every local run passed). Wait for the rendered condition.
+  await page.waitForSelector('.sidebar .account-summary > button')
   await page.evaluate(s => document.documentElement.style.setProperty('--ui-scale', String(s)), scale)
   return page.evaluate(w => {
     document.querySelector<HTMLElement>('.sidebar')!.style.width = `${w}px`

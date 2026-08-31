@@ -372,14 +372,17 @@ test('every tab renders, and every marked control is really in its DOM', async (
   const errors: string[] = []
   let visiting = ''
   // Attributed to the tab being opened, because "something threw" is unactionable across
-  // seventeen of them and the stack from a bundled build names no section.
+  // eighteen of them and the stack from a bundled build names no section.
   page.on('pageerror', error => errors.push(`${visiting}: ${error}`))
   await page.setViewportSize(DESKTOP)
   await page.goto('/settings-harness.html')
   await page.waitForSelector('.settings-tabs button', { state: 'attached' })
 
+  // 18 since the Plugins tab (2026-08-31). The count is asserted so a tab that
+  // fails to register vanishes loudly rather than being silently skipped by the
+  // walk below.
   const tabs = await page.locator('.settings-tabs [role="tab"]').allTextContents()
-  expect(tabs.length).toBe(17)
+  expect(tabs.length).toBe(18)
 
   const marked = new Set<string>()
   for (const label of tabs) {
