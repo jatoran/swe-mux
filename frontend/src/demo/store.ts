@@ -50,6 +50,9 @@ export type DemoState = {
   transcripts: Record<string, TranscriptMessage[]>
   /** Scan-timeline records per session, one written per completed turn. */
   timelines: Record<string, DemoScanRecord[]>
+  /** Which saved provider account is selected, per provider. Held here rather than in
+   *  the payload builder so a switch survives a reload and reaches the other frame. */
+  providerSelection: Record<string, string>
   /** Event-bus watermark; monotonic across every frame via the reducer. */
   seq: number
 }
@@ -75,6 +78,7 @@ export type DemoMutation =
   /** One side of the conversation, appended as the fake turn produces it. */
   | { kind: 'transcript-append'; id: string; message: TranscriptMessage }
   | { kind: 'timeline-append'; id: string; record: DemoScanRecord }
+  | { kind: 'provider-select'; provider: string; accountId: string }
   | { kind: 'reset' }
 
 const STORAGE_KEY = 'swemux-demo-state-v1'
@@ -269,6 +273,9 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
       next.timelines = { ...current.timelines, [mutation.id]: [...existing, mutation.record] }
       return next
     }
+    case 'provider-select':
+      next.providerSelection = { ...current.providerSelection, [mutation.provider]: mutation.accountId }
+      return next
     case 'reset':
       return initialDemoState()
   }

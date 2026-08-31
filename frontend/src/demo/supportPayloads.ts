@@ -336,17 +336,136 @@ export function grantsPayload(): unknown {
   }
 }
 
+/**
+ * The two providers swe-mux manages accounts for, taken from the demo's own agent
+ * sessions rather than named here.
+ *
+ * Reading them off the fleet keeps this module free of harness-name literals (the rule
+ * `tests/test_harness_name_literals.py` enforces), and means the switcher can only ever
+ * offer providers the demo actually demonstrates.
+ */
+export const demoProviders = (): string[] =>
+  [...new Set(state.sessions.filter(session => session.backend !== 'shell').map(session => session.backend))]
+
+/** Two saved accounts per provider, so the switcher has something to switch between. */
+type DemoAccount = {
+  suffix: string
+  label: string
+  email: string
+  organization: string
+  plan: string
+  /** Percent used of the rolling five-hour window, then of the week. Whole percent,
+   *  which is the scale `used_percent` carries - a fraction here rendered as "1%". */
+  session: number
+  weekly: number
+  /** Minutes until the five-hour window rolls over, and until the weekly one does.
+   *  Varied per account so the column does not read as one figure repeated. */
+  resetsIn: number
+  weeklyResetsIn: number
+  verified: boolean
+}
+
+const ACCOUNTS: DemoAccount[][] = [
+  [
+    {
+      suffix: 'personal', label: 'personal', email: 'demo@example.invalid',
+      organization: 'Personal', plan: 'Max 20x',
+      session: 62, weekly: 41, resetsIn: 94, weeklyResetsIn: 4 * 24 * 60, verified: true,
+    },
+    {
+      suffix: 'work', label: 'rocket-shop work', email: 'demo@rocket-shop.invalid',
+      organization: 'Rocket Shop', plan: 'Team',
+      session: 18, weekly: 77, resetsIn: 212, weeklyResetsIn: 2 * 24 * 60 + 9 * 60, verified: true,
+    },
+  ],
+  [
+    {
+      suffix: 'personal', label: 'personal', email: 'demo@example.invalid',
+      organization: 'Personal', plan: 'Pro',
+      session: 35, weekly: 22, resetsIn: 41, weeklyResetsIn: 6 * 24 * 60 + 2 * 60, verified: true,
+    },
+    {
+      suffix: 'team', label: 'meme-garden team', email: 'bots@meme-garden.invalid',
+      organization: 'Meme Garden', plan: 'Business',
+      session: 88, weekly: 53, resetsIn: 17, weeklyResetsIn: 24 * 60 + 15 * 60, verified: false,
+    },
+  ],
+]
+
+const accountId = (provider: string, suffix: string): string => `acct-${provider}-${suffix}`
+
+/** The account each provider is signed in as. The visitor's own choice wins. */
+function selectedFor(provider: string, index: number): string {
+  const chosen = state.providerSelection[provider]
+  const rows = ACCOUNTS[index] || ACCOUNTS[0]
+  if (chosen && rows.some(row => accountId(provider, row.suffix) === chosen)) return chosen
+  // A different default per provider, so the demo shows a fleet that is genuinely
+  // signed in to two different places at once rather than the first row twice.
+  return accountId(provider, rows[index % rows.length].suffix)
+}
+
 export function providerAccountsPayload(): unknown {
+  const now = nowSeconds()
+  const providers = demoProviders()
+  const window = (usedPercent: number, minutes: number, resetsIn: number | null) => ({
+    used_percent: usedPercent,
+    window_minutes: minutes,
+    resets_at: resetsIn === null ? null : now + resetsIn * 60,
+  })
+  const accounts = providers.flatMap((provider, index) =>
+    (ACCOUNTS[index] || ACCOUNTS[0]).map(row => ({
+      id: accountId(provider, row.suffix),
+      provider,
+      label: row.label,
+      email: row.email,
+      organization: row.organization,
+      provider_account_id: `${provider}-${row.suffix}-0000`,
+      identity_source: row.verified ? 'token' : 'cli',
+      identity_verified_at: row.verified ? now - 3 * HOUR : null,
+      created_at: now - 30 * 86400,
+      updated_at: now - HOUR,
+      quota: {
+        session: window(row.session, 300, row.resetsIn),
+        weekly: window(row.weekly, 10_080, row.weeklyResetsIn),
+        status: 'ok',
+        error: null,
+        refreshed_at: now - 240,
+        attempted_at: now - 240,
+        source: 'demo',
+        plan: row.plan,
+      },
+      conflict: null,
+    })))
+  const selected = Object.fromEntries(providers.map((provider, index) => [provider, selectedFor(provider, index)]))
   return {
-    providers: [],
-    selected: {},
-    current: {},
-    accounts: [],
+    providers,
+    selected,
+    current: Object.fromEntries(providers.map(provider => [provider, {
+      state: 'saved',
+      account_id: selected[provider],
+      email: accounts.find(item => item.id === selected[provider])?.email ?? null,
+      organization: accounts.find(item => item.id === selected[provider])?.organization ?? null,
+      provider_account_id: accounts.find(item => item.id === selected[provider])?.provider_account_id ?? null,
+      identity_source: 'token',
+      match_hint: null,
+    }])),
+    accounts,
     poll_minutes: 15,
     stale_minutes: 60,
     refreshing: false,
-    login: {},
-    login_commands: {},
+    reset_alert: { count: 0, items: [] },
+    login: Object.fromEntries(providers.map(provider => [provider, null])),
+    login_commands: Object.fromEntries(providers.map(provider => [provider, `${provider} login`])),
+    // What each account was spawned under, which is what the daemon can honestly count:
+    // it stamps the selection at spawn and cannot see a `/login` typed inside a pane.
+    sessions: {
+      by_account: Object.fromEntries(providers.map((provider, index) => [
+        selectedFor(provider, index),
+        state.sessions.filter(session => session.backend === provider).length,
+      ])),
+      unsaved: {},
+      unattributed: {},
+    },
   }
 }
 

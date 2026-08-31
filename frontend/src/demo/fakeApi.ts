@@ -702,6 +702,27 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: /^\/api\/automation\/rules$/, handler: () => ({ text: '# The demo ships no automation rules.\n' }) },
   { method: 'GET', pattern: /^\/api\/automation\/notifications$/, handler: () => ({ items: [] }) },
   { method: 'GET', pattern: /^\/api\/provider-accounts$/, handler: () => providerAccountsPayload() },
+  {
+    // Switching accounts is the one act on this surface the demo can honestly perform:
+    // it is a choice about which saved credential is current, and the demo owns both.
+    method: 'POST', pattern: /^\/api\/provider-accounts\/([^/]+)\/([^/]+)\/select$/,
+    handler: match => {
+      apply({
+        kind: 'provider-select',
+        provider: decodeURIComponent(match[1]),
+        accountId: decodeURIComponent(match[2]),
+      })
+      return providerAccountsPayload()
+    },
+  },
+  // A refresh re-reads quotas the demo invents, so it answers with the same figures
+  // rather than pretending to have gone anywhere.
+  { method: 'POST', pattern: /^\/api\/provider-accounts\/refresh$/, handler: () => providerAccountsPayload() },
+  { method: 'POST', pattern: /^\/api\/provider-accounts\/([^/]+)\/verify$/, handler: () => providerAccountsPayload() },
+  {
+    method: 'POST', pattern: /^\/api\/provider-accounts\/([^/]+)\/login$/,
+    handler: () => error(400, 'Signing in reaches a real provider, so the demo does not offer it.'),
+  },
   { method: 'GET', pattern: /^\/api\/experiences$/, handler: () => ({ items: [] }) },
 
   // ------------------------------------------------------------ per-Project

@@ -539,7 +539,7 @@ export function demoConfig(): Record<string, unknown> {
 }
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 9
+export const DEMO_STATE_VERSION = 10
 
 export function initialDemoState(): DemoState {
   return {
@@ -551,20 +551,22 @@ export function initialDemoState(): DemoState {
     notes: NOTES.map(item => ({ ...item })),
     config: demoConfig(),
     keymapPreset: 'swemux',
-    // Each transcript ends with that session's own composer, so the status line
-    // under the box reports the same model and context the sidebar row does.
+    // Transcript only. The composer is screen state each attached pane draws for
+    // itself at its own size (`fakeSocket.ts`), which is what pins it to the bottom of
+    // the pane and lets a desktop and a phone show one session at two heights.
     terminals: {
-      's-claude': claudeScrollback(composerFor('s-claude')),
-      's-rage': rageScrollback(composerFor('s-rage')),
+      's-claude': claudeScrollback(),
+      's-rage': rageScrollback(),
       's-working': workingScrollback(composerFor('s-working'), 'pull the coupon table out of the request path'),
-      's-codex': codexScrollback(composerFor('s-codex')),
+      's-codex': codexScrollback(),
       's-shell': shellScrollback(),
       's-garden': spawnScrollback(composerFor('s-garden')),
-      's-vibe': vibeScrollback(composerFor('s-vibe')),
+      's-vibe': vibeScrollback(),
       's-migrate': workingScrollback(composerFor('s-migrate'), 'migrate the meme schema to v3, keep the old ids'),
     },
     transcripts: initialTranscripts(now),
     timelines: initialTimelines(now),
+    providerSelection: {},
     seq: 1,
   }
 }

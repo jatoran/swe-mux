@@ -14,9 +14,9 @@ import { liveScanRecord } from './conversation.ts'
 import { BUSY_SESSION_IDS } from './fixtures.ts'
 import { apply, nowSeconds, onMutation, session, state } from './store.ts'
 import {
-  buildReply, busyReply, clearComposer, composerBlock, composerInfo,
-  consumeInput, demoBackendKind, promptFor, redrawComposer,
-  type LineState, type ReplyTool,
+  buildReply, busyReply, CLEAR_SCREEN, clearComposer, COMPOSER_HEIGHT, composerFrame,
+  composerInfo, consumeInput, demoBackendKind, promptFor, redrawComposer, renderedRows,
+  type ComposerInfo, type LineState, type ReplyTool,
 } from './terminalSim.ts'
 
 const encoder = new TextEncoder()
@@ -136,10 +136,52 @@ class FakePtySocket extends FakeSocketBase {
   readonly sessionId: string
   private epoch = 0
   private replayed = false
+  /** This pane's geometry, which is the socket's business and not the store's: the
+   *  desktop and the phone attach to one session at two different sizes. */
+  private cols = 80
+  private rows = 24
 
   constructor(url: string, sessionId: string) {
     super(url)
     this.sessionId = sessionId
+  }
+
+  /** Whether this pane draws a composer at all. A shell has none, and the contrast
+   *  between the two is worth keeping - it echoes at a prompt, exactly as ours does. */
+  private get hasComposer(): boolean {
+    const target = session(this.sessionId)
+    return Boolean(target) && demoBackendKind(target!.backend) !== 'shell'
+  }
+
+  private composerInfoNow(working?: boolean): ComposerInfo | null {
+    const target = session(this.sessionId)
+    if (!target) return null
+    const info = composerInfo(target)
+    return working === undefined ? info : { ...info, working }
+  }
+
+  /**
+   * Draw the box, with the caret inside it, over whatever is there now.
+   *
+   * The composer is *not* in the stored scrollback any more, and that is the change
+   * that makes both of its old defects go away. It was bytes in a shared string, so it
+   * could only ever be wherever the transcript happened to end, and two panes of
+   * different heights had to share one placement. It is screen state, so it belongs to
+   * the pane: each attached socket paints its own, at its own size.
+   */
+  private paintComposer(working?: boolean): void {
+    if (!this.hasComposer) return
+    const info = this.composerInfoNow(working)
+    if (!info) return
+    this.deliverBytes(composerFrame(info, lineStateFor(this.sessionId).buffer))
+  }
+
+  /** Repaint after a keystroke or a state change, in place. */
+  redrawComposerNow(working?: boolean): void {
+    if (!this.replayed || !this.hasComposer) return
+    const info = this.composerInfoNow(working)
+    if (!info) return
+    this.deliverBytes(redrawComposer(info, lineStateFor(this.sessionId).buffer))
   }
 
   protected override opened(): void {
@@ -158,9 +200,9 @@ class FakePtySocket extends FakeSocketBase {
     try { frame = JSON.parse(data) as Record<string, unknown> } catch { return }
     const type = String(frame.type ?? '')
     if (type === 'attach_ready') {
-      const cols = Number(frame.cols) || 80
-      const rows = Number(frame.rows) || 24
-      this.deliverJson({ type: 'geometry', cols, rows })
+      this.cols = Number(frame.cols) || 80
+      this.rows = Number(frame.rows) || 24
+      this.deliverJson({ type: 'geometry', cols: this.cols, rows: this.rows })
       this.epoch += 1
       this.deliverJson({ type: 'input_owner', active: true, epoch: this.epoch })
       this.startReplay()
@@ -174,7 +216,17 @@ class FakePtySocket extends FakeSocketBase {
     if (type === 'resize') {
       const cols = Number(frame.cols)
       const rows = Number(frame.rows)
-      if (Number.isFinite(cols) && Number.isFinite(rows)) this.deliverJson({ type: 'geometry', cols, rows })
+      if (!Number.isFinite(cols) || !Number.isFinite(rows)) return
+      const moved = cols !== this.cols || rows !== this.rows
+      this.cols = cols
+      this.rows = rows
+      this.deliverJson({ type: 'geometry', cols, rows })
+      // A resize changes where the bottom is, so the pane is repainted from the top -
+      // which is what a real CLI does with its own screen for the same reason.
+      if (moved && this.replayed && this.hasComposer) {
+        this.deliverBytes(`${CLEAR_SCREEN}`)
+        this.startReplay()
+      }
       return
     }
     if (type === 'input') {
@@ -188,19 +240,45 @@ class FakePtySocket extends FakeSocketBase {
     // demo has no use for these, and ignoring them is safe.
   }
 
+  /**
+   * Repaint the whole pane: pad, transcript, composer.
+   *
+   * The pad is what pins the box to the bottom of the pane, and it is written *above*
+   * the transcript rather than below it. Real agent CLIs anchor their composer at the
+   * foot of the terminal, and the only way to do that while the conversation is still
+   * short - without a scroll region, which would keep the transcript out of the
+   * terminal's scrollback - is to push the transcript down to meet it. Once the
+   * conversation is longer than the pane the pad is zero and the screen simply scrolls,
+   * which leaves the box at the bottom for free.
+   */
   private startReplay(): void {
     this.replayed = false
     this.deliverJson({ type: 'replay_start', reason: 'attach' })
     const scrollback = state.terminals[this.sessionId] ?? ''
+    const pad = this.hasComposer
+      ? Math.max(0, this.rows - COMPOSER_HEIGHT - renderedRows(scrollback, this.cols))
+      : 0
+    if (pad) this.deliverBytes('\r\n'.repeat(pad))
     if (scrollback) this.deliverBytes(scrollback)
     this.deliverJson({ type: 'replay_end', position: encoder.encode(scrollback).byteLength })
     this.replayed = true
+    this.paintComposer()
     const snapshot = session(this.sessionId)
     if (snapshot) this.sendState(snapshot)
   }
 
+  /**
+   * Transcript bytes, threaded past the composer.
+   *
+   * The box occupies the last four rows of the pane, so new output has to erase it,
+   * print where it was, and have it drawn again underneath. A shell has no box and the
+   * bytes simply land.
+   */
   writeLive(text: string): void {
-    if (this.replayed) this.deliverBytes(text)
+    if (!this.replayed) return
+    if (!this.hasComposer) { this.deliverBytes(text); return }
+    this.deliverBytes(`${clearComposer()}${text}`)
+    this.paintComposer()
   }
 
   sendState(snapshot: object): void {
@@ -231,6 +309,18 @@ const lineStateFor = (id: string): LineState => {
 
 function appendOutput(id: string, text: string): void {
   apply({ kind: 'term-append', id, data: text })
+}
+
+/**
+ * Redraw the composer in every pane showing this session, at each pane's own size.
+ *
+ * The box is screen state rather than scrollback, so it is never appended to the store
+ * - which is what lets a desktop pane and a phone pane, attached to one session and
+ * sized differently, each keep it pinned to their own bottom row.
+ */
+function repaintComposers(id: string, working?: boolean): void {
+  const attached = ptySockets.get(id)
+  if (attached) for (const socket of attached) socket.redrawComposerNow(working)
 }
 
 /** Record what the visitor said, so the Transcript tab shows it immediately rather
@@ -281,28 +371,23 @@ function streamReply(id: string, submitted: string): void {
   if (!target) return
   const kind = demoBackendKind(target.backend)
   const agent = kind !== 'shell'
-  const info = composerInfo(target)
-  // An agent pane owns a composer, so a submit is: erase the box, print the
-  // prompt line the user just sent as transcript, then let the reply follow.
-  // A shell has no box and simply echoes at its prompt, exactly as the real one
-  // does - the contrast between the two is worth keeping.
+  // An agent pane owns a composer, so a submit prints the prompt line the user just
+  // sent as transcript and lets the reply follow; the box itself is screen state each
+  // attached pane draws for itself, so nothing about it goes into the stored bytes. A
+  // shell has no box and simply echoes at its prompt, exactly as the real one does -
+  // the contrast between the two is worth keeping.
   const openTurn = (): void => {
-    if (agent) appendOutput(id, `${clearComposer()}${promptFor(kind)}${submitted}\r\n`)
+    if (agent) appendOutput(id, `${promptFor(kind)}${submitted}\r\n`)
   }
-  const restoreComposer = (working = false): void => {
-    const latest = session(id)
-    appendOutput(id, composerBlock(
-      latest ? { ...composerInfo(latest), working } : { ...info, working }, '',
-    ))
-  }
+  const restoreComposer = (working = false): void => repaintComposers(id, working)
 
   if (submitted.trim() === '') {
-    if (agent) appendOutput(id, redrawComposer(info, ''))
+    if (agent) repaintComposers(id)
     else appendOutput(id, promptFor(kind))
     return
   }
   if (busy.has(id)) {
-    if (agent) appendOutput(id, redrawComposer(info, ''))
+    if (agent) repaintComposers(id)
     else appendOutput(id, `\x1b[38;5;243m(one thing at a time - still typing the last answer)\x1b[0m\r\n${promptFor(kind)}`)
     return
   }
@@ -339,12 +424,11 @@ function streamReply(id: string, submitted: string): void {
     })
     // The box stays under the reply while it streams, saying what the pane is
     // doing - which is what the real CLI shows for the whole of a turn.
-    appendOutput(id, composerBlock({ ...info, working: true }, ''))
+    repaintComposers(id, true)
   }
   reply.chunks.forEach((chunk, index) => {
     window.setTimeout(() => {
       if (!session(id)) { busy.delete(id); return }
-      if (agent && index === 0) appendOutput(id, clearComposer())
       appendOutput(id, chunk)
       if (index === reply.chunks.length - 1) {
         busy.delete(id)
@@ -381,16 +465,15 @@ onMutation((mutation, local) => {
   if (mutation.kind === 'term-input') {
     const editor = lineStateFor(mutation.id)
     const result = consumeInput(editor, mutation.data)
+    const typing = session(mutation.id)
+    const inBox = Boolean(typing) && demoBackendKind(typing!.backend) !== 'shell'
+    // An agent's box is repainted with the whole buffer rather than echoing the
+    // keystroke, which is how a real TUI keeps text inside its border - and it is
+    // repainted in *every* frame, not only the one that typed, because the buffer is
+    // shared state and a box that disagrees with it is worse than one that lags.
+    if (inBox && result.submitted === null && result.echo) repaintComposers(mutation.id)
     if (local) {
-      // An agent's box is repainted with the whole buffer rather than echoing
-      // the keystroke, which is how a real TUI keeps text inside its border.
-      const typing = session(mutation.id)
-      const inBox = typing && demoBackendKind(typing.backend) !== 'shell'
-      if (result.submitted === null && inBox && result.echo) {
-        appendOutput(mutation.id, redrawComposer(composerInfo(typing), editor.buffer))
-      } else if (result.echo && !inBox) {
-        appendOutput(mutation.id, result.echo)
-      }
+      if (result.echo && !inBox) appendOutput(mutation.id, result.echo)
       if (result.submitted !== null) streamReply(mutation.id, result.submitted)
     }
     return
@@ -409,6 +492,9 @@ onMutation((mutation, local) => {
     if (snapshot && 'state' in mutation.patch) {
       const attached = ptySockets.get(mutation.id)
       if (attached) for (const socket of attached) socket.sendState(snapshot)
+      // The status line under the box reports the turn, so a state change is a repaint
+      // wherever the pane is drawn - including the frame that did not cause it.
+      repaintComposers(mutation.id)
     }
   }
   if (mutation.kind === 'session-remove') {
