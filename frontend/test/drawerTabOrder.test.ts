@@ -16,17 +16,16 @@ test('a stored arrangement round-trips', () => {
 test('every retired tab id folds into the tab that absorbed it, keeping its position', () => {
   // `prompts`, `commands`, and `clipboard` all became Actions; `insight` and `changemap`
   // both became Activity. An order is a list of tabs, so several retired ids collapsing
-  // onto one survivor must produce one entry, at the first of their positions.
+  // onto one survivor must produce one entry, at the first of their positions. Both of
+  // these stored fragments happen to preserve canonical relative order, so the merge
+  // reproduces the full default exactly.
   assert.deepEqual(
     normalizeDrawerTabOrder(['files', 'prompts', 'clipboard', 'commands', 'queue']),
-    ['files', 'notes', 'git', 'processes', 'schedule', 'notifications', 'actions', 'queue', 'transcript', 'activity', 'agent'],
+    DEFAULT_DRAWER_TAB_ORDER,
   )
-  // Four retired ids collapse to two survivors here, and the tabs the stored order never
-  // knew about rejoin at their canonical predecessors rather than being appended — which
-  // is why Actions/Queue/Transcript land ahead of the pair rather than after it.
   assert.deepEqual(
     normalizeDrawerTabOrder(['changemap', 'insight', 'timeline', 'context', 'agent']),
-    ['actions', 'queue', 'transcript', 'activity', 'agent', 'files', 'notes', 'git', 'processes', 'schedule', 'notifications'],
+    DEFAULT_DRAWER_TAB_ORDER,
   )
 })
 
@@ -61,13 +60,13 @@ test('a tab the stored order predates lands beside its default neighbour, not at
   assert.deepEqual(normalizeDrawerTabOrder(beforeQueue), DEFAULT_DRAWER_TAB_ORDER)
 
   // The merge is relative to where the predecessor sits in the *user's* arrangement, not
-  // where it sat in the default one: `notes` rejoins `files` wherever the user moved it.
+  // where it sat in the default one: `queue` rejoins `actions` wherever the user moved it.
   const custom = ['notifications', 'files', 'actions']
   assert.deepEqual(
     normalizeDrawerTabOrder(custom),
-    ['notifications', 'files', 'notes', 'git', 'processes', 'schedule', 'actions', 'queue', 'transcript', 'activity', 'agent'],
+    ['notes', 'notifications', 'files', 'actions', 'queue', 'transcript', 'activity', 'agent', 'git', 'processes', 'schedule'],
   )
 
   // A first tab the order predates goes to the front rather than after everything.
-  assert.deepEqual(normalizeDrawerTabOrder(['notes'])[0], 'actions')
+  assert.deepEqual(normalizeDrawerTabOrder(['files'])[0], 'notes')
 })

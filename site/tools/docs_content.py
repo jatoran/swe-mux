@@ -1053,6 +1053,17 @@ WORKSPACE = Page(
                 ["Tab", "Acts on", "What it is for"],
                 [
                     [
+                        "Notes",
+                        "the Project",
+                        "The note collection and the editor itself, so you can read or add to a "
+                        "note without losing the terminal on a phone.",
+                    ],
+                    [
+                        "Files",
+                        "the Project",
+                        "A bounded file tree with editors. Picking a file opens it in a pane.",
+                    ],
+                    [
                         "Actions",
                         "the focused session",
                         "Rail keys, prompt templates, discovered agent skills, and the clipboard "
@@ -1080,17 +1091,6 @@ WORKSPACE = Page(
                         "the focused session",
                         "What this agent is running with: its tools, its policies, and its "
                         "instruction files.",
-                    ],
-                    [
-                        "Files",
-                        "the Project",
-                        "A bounded file tree with editors. Picking a file opens it in a pane.",
-                    ],
-                    [
-                        "Notes",
-                        "the Project",
-                        "The note collection and the editor itself, so you can read or add to a "
-                        "note without losing the terminal on a phone.",
                     ],
                     [
                         "Git",

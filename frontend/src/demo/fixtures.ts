@@ -478,6 +478,8 @@ export function demoConfig(): Record<string, unknown> {
     ui_scale_mobile: 1.0,
     rail_density_desktop: 'comfortable',
     rail_density_mobile: 'comfortable',
+    rail_enabled_desktop: true,
+    rail_enabled_mobile: true,
     middle_click_paste: true,
     broadcast_default: false,
     mobile_vertical_drag: 'smart',
@@ -509,7 +511,7 @@ export function demoConfig(): Record<string, unknown> {
 }
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 7
+export const DEMO_STATE_VERSION = 8
 
 export function initialDemoState(): DemoState {
   return {

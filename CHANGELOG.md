@@ -49,8 +49,36 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   the "somebody is reading this" evidence that resets the consecutive-send cap - so an
   orchestrator that reacts to notices by acting, rather than by writing replies, no longer
   goes silently deaf after three deliveries.
+- **First-run setup asks the questions that used to wait for Settings.** The tier page now
+  carries a live-previewed theme picker and a Customize fold-out with two new axes: an
+  **agent autonomy** level (Supervised / Assisted / Autonomous - whether queued messages
+  deliver themselves, and under how wide a set of caps) and one checkbox per switch the
+  chosen tier sets, applied atomically with the tier through the same daemon-owned policy
+  route (`POST /api/experience-tier` now takes `autonomy` and `overrides`;
+  `GET /api/experience-tiers` serves the tables the panel draws). The agents page gains an
+  install-wide **fleet access** choice - MCP + CLI, MCP only, CLI + skill, or none -
+  answered once instead of per harness. And setup now ends on a **first steps** page: the
+  same three-quest card the empty workspace shows, so finishing setup hands off into the
+  guided voice, worktree, and phone setups rather than closing on a blank stage.
+- **The command rail can be switched off per device class.** Settings → Appearance →
+  Action rail: `rail_enabled_desktop` / `rail_enabled_mobile`, both on by default,
+  hot-applied, and offered during first-run Customize. Turning one off hides the whole
+  rail there (on mobile that includes the pinned Send button) while the configured layout
+  is kept and comes back untouched.
 
 ### Changed
+
+- **The side panel leads with Notes and Files, and the default rails differ per device.**
+  On a fresh install (or a device that never rearranged its tabs) the utility drawer's
+  default order is now Notes, Files, then the session block - the two surfaces that are
+  useful before a single session exists come first. The deterministic tier's default also
+  puts the Activity tab away, since everything that feeds it is model-backed and off in
+  that tier; choosing Automations brings it back. The Action rail's shipped layout is now
+  a desktop row of mouse-verbs (copy surfaces, paste, approve, Markdown helpers, the
+  pickers) and two mobile rows that keep the terminal keys, modifiers, and pads - lifted
+  from a long-lived daily-driver configuration instead of one identical row on both.
+  Existing arrangements and rail layouts are untouched; defaults only ever apply where
+  nothing was stored.
 
 - **`notify` now requires the `delivery` argument** (`"when_idle"` or `"now"`, and `"now"`
   requires a reason). With a silent default, senders never weighed whether the target
@@ -100,9 +128,14 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Fixed
 
-Everything in this group came from one testing session on a clean Windows 11 machine that is
-not the development host, which is the first time swe-mux had been run on one. They share a
-cause: a property of the development host was written down as a fact about Windows.
+- **Turning the per-harness Agent CLI toggle off is now reported as restart-scoped**, like
+  its MCP and instrumentation neighbours. It was documented and rendered as needing a
+  restart while the daemon classified it as hot-applied, so the response claimed an apply
+  that never reached already-built adapters.
+
+Everything in the following group came from one testing session on a clean Windows 11 machine
+that is not the development host, which is the first time swe-mux had been run on one. They
+share a cause: a property of the development host was written down as a fact about Windows.
 
 - **Claude Code sessions report their lifecycle again on machines without Git Bash.** The
   hook command named the interpreter in the MSYS form (`/c/Users/...`), which only Git Bash

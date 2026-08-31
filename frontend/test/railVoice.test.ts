@@ -4,23 +4,32 @@ import { defaultRailConfig, type RailItem } from '../src/commandRail.ts'
 import { resolveRailVoiceEntries } from '../src/railVoice.ts'
 
 const context = (backend='codex') => ({ device: 'desktop' as const, backend })
+const mobileContext = (backend='codex') => ({ device: 'mobile' as const, backend })
 
 test('default rail voice exposes only explicit safe session actions', () => {
+  // Voice reachability follows placement, and the two device classes ship different
+  // rails now: the mobile default carries the terminal keys (the rail is the keyboard
+  // there), while the desktop default keeps only the mouse-verbs - so the key phrases
+  // are asserted against the mobile rail and `paste` against both.
+  const mobile=resolveRailVoiceEntries(defaultRailConfig(),mobileContext())
+  const mobileIds=mobile.map(entry=>entry.item.id)
+  assert.equal(mobileIds.includes('paste'),true)
+  assert.equal(mobileIds.includes('esc'),true)
+  assert.equal(mobileIds.includes('tab'),true)
+  assert.equal(mobileIds.includes('ctrlC'),true)
+  assert.equal(mobileIds.includes('newline'),true)
   const entries=resolveRailVoiceEntries(defaultRailConfig(),context())
   const ids=entries.map(entry=>entry.item.id)
   assert.equal(ids.includes('paste'),true)
-  assert.equal(ids.includes('esc'),true)
-  assert.equal(ids.includes('enter'),true)
-  assert.equal(ids.includes('ctrlC'),true)
-  assert.equal(ids.includes('newline'),true)
   assert.deepEqual(entries.find(entry=>entry.item.id==='paste')?.request,{action:'pasteText'})
   // `ctrlU` is a raw key and would be voice-reachable the moment it grew a phrase, so
   // its omission is the enforced half of the rule: destroying an unseen draft is not a
-  // thing a spoken caller may do, while `restoreInput` — the recovering half — is voiced.
+  // thing a spoken caller may do. (`restoreInput` - the voiced, recovering half - is an
+  // editor placement now rather than a default one on either device.)
   for(const excluded of ['attach','kbdToggle','endSession','relaunch','branch','ctrlU','copyInput','copyReply','copyResume']){
     assert.equal(ids.includes(excluded),false,`${excluded} must not be voice-accessible`)
+    assert.equal(mobileIds.includes(excluded),false,`${excluded} must not be voice-accessible on mobile`)
   }
-  assert.equal(ids.includes('restoreInput'),true)
 })
 
 test('placement controls voice availability and duplicate placements collapse', () => {

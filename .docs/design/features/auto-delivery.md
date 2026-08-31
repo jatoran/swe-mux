@@ -240,6 +240,12 @@ status line.
   back-off, quiet hours). The queue strip's "off for this install" note names that control, and
   a lapse notice links to the idle window here. Both windows carry `data-setting` marks so a
   deep link lands on the control rather than on the panel.
+- **First run** can set the master switch and a subset of the bounds as one named *autonomy
+  level* (`supervised`/`assisted`/`autonomous`, `experience_tiers.py`, `first-run.md`): an
+  absolute assignment over `auto_delivery_enabled`, the consecutive-send cap, the idle and
+  reply windows, and the spawn budget. A level widens bounds, never the gate set - every
+  check in this document still decides every send - and `supervised` is byte-identical to a
+  fresh install, so declining the choice changes nothing.
 
 ## API surface
 

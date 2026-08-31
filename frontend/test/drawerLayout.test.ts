@@ -68,8 +68,8 @@ test('missing shipped tabs join their canonical predecessor without moving exist
   // the retired one sat, not append it.
   const layout = normalizeDrawerLayout({ type: 'stack', id: 'one', tabs: ['notifications', 'files', 'clipboard'] })
   assert.deepEqual(drawerTabs(layout), [
-    'notifications', 'files', 'notes', 'git', 'processes', 'schedule',
-    'actions', 'queue', 'transcript', 'activity', 'agent',
+    'notes', 'notifications', 'files', 'actions', 'queue',
+    'transcript', 'activity', 'agent', 'git', 'processes', 'schedule',
   ])
 })
 
@@ -202,7 +202,8 @@ test('v1 Project state migrates to v2 without duplicating the global layout', ()
   }), layout)
   assert.equal(map.p1.focused_tab, 'git')
   assert.equal(map.p1.desktop_expanded, true)
-  assert.equal(map.p2.focused_tab, 'actions')
+  // An unknown stored tab falls back to the layout's first tab, which is Notes now.
+  assert.equal(map.p2.focused_tab, 'notes')
   assert.equal(map.p3.focused_tab, 'actions')
   const serialized = serializeDrawerProjectPresentations(map, layout)
   assert.deepEqual(parseDrawerProjectPresentations(serialized, layout), map)

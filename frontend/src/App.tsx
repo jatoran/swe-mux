@@ -1005,6 +1005,11 @@ export function App() {
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
   const [claudeMaxColumns, setClaudeMaxColumns] = useState<number>(DEFAULT_CLAUDE_MAX_COLUMNS)
+  // Whether the Action rail is drawn, per device class. Value-compared on update for
+  // the same reason `windowsPty` below is: it feeds TerminalPane props, and a fresh
+  // object identity on an unchanged pair would re-render every live terminal per
+  // config arrival.
+  const [railEnabled, setRailEnabled] = useState<{desktop:boolean;mobile:boolean}>({desktop:true,mobile:true})
   // Chrome scale as a number. Every other surface reads it as a CSS custom property, but
   // xterm owns its own font and derives the cell grid from it, so the terminal has to be
   // handed the value rather than inheriting it.
@@ -1950,6 +1955,11 @@ export function App() {
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
     setClaudeMaxColumns(claudeMaxColumnsFrom(config))
+    // `!== false` so a daemon predating the keys keeps the rail on.
+    setRailEnabled(current => {
+      const next = {desktop: config.rail_enabled_desktop !== false, mobile: config.rail_enabled_mobile !== false}
+      return current.desktop === next.desktop && current.mobile === next.mobile ? current : next
+    })
     // Value-compared for the same reason as mobileInput below: this feeds
     // TerminalPane's mount effect, so a fresh object identity on an unchanged
     // machine descriptor would dispose and rebuild every live terminal.
@@ -7355,7 +7365,7 @@ export function App() {
         onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
       />}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
@@ -8824,6 +8834,9 @@ export function App() {
         reasoning is on the function. */}
     {firstRun === 'harness' && <HarnessSetup
       tierNeeded={experienceTierUnchosen}
+      questSignals={questSignals}
+      onQuestAction={questAction}
+      onQuestDismiss={dismissQuest}
       onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}}
       // Handing off to Settings → Agents is a choice to configure by hand, so the tour must
       // not open on top of that. It is suppressed for this session only and NOT marked

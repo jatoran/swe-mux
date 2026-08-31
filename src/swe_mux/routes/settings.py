@@ -178,6 +178,31 @@ async def patch_config(request: web.Request) -> web.Response:
     return response
 
 
+async def get_experience_tiers(request: web.Request) -> web.Response:
+    """Every tier and autonomy assignment, for the first-run panel to draw from.
+
+    The panel's granular view shows what a tier sets before applying it, and
+    the only honest source for that is the module that owns the policy - a
+    table restated in the browser is the second copy `POST /api/experience-tier`
+    exists to avoid. Values only; nothing here writes.
+    """
+    from ..experience_tiers import (
+        AUTONOMY_LEVELS,
+        OVERRIDABLE_KEYS,
+        TIERS,
+        autonomy_changes,
+        tier_changes,
+    )
+
+    return json_response(
+        {
+            "tiers": {tier: tier_changes(tier) for tier in TIERS},
+            "autonomy": {level: autonomy_changes(level) for level in AUTONOMY_LEVELS},
+            "overridable": sorted(OVERRIDABLE_KEYS),
+        }
+    )
+
+
 async def apply_experience_tier(request: web.Request) -> web.Response:
     """Apply one experience tier's absolute key assignment (`experience_tiers.py`).
 
@@ -186,8 +211,21 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
     The write itself goes through `update_config` exactly like a PATCH, so
     validation, revision bumping, hot/restart classification, and the
     `configuration_changed` event are all the ordinary ones.
+
+    Two optional refinements ride the same write so the first-run panel's
+    granular choices land atomically with the tier: `autonomy` names one of the
+    orthogonal auto-delivery assignments, and `overrides` names individual
+    boolean deviations from the tier's own inventory. Both are validated
+    against the closed sets the tier module owns - an unknown key is refused,
+    never dropped, because a dropped override reads exactly like an applied one.
     """
-    from ..experience_tiers import TIERS, tier_changes
+    from ..experience_tiers import (
+        AUTONOMY_LEVELS,
+        OVERRIDABLE_KEYS,
+        TIERS,
+        autonomy_changes,
+        tier_changes,
+    )
 
     config: Config = request.app[keys.CONFIG]
     body = await request.json()
@@ -197,11 +235,48 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
             {"error": "invalid configuration", "fields": {"tier": f"must be one of {TIERS}"}},
             422,
         )
-    hot, restart = update_config(config, tier_changes(tier))
+    changes = tier_changes(tier)
+    autonomy = body.get("autonomy")
+    if autonomy is not None:
+        if autonomy not in AUTONOMY_LEVELS:
+            return json_response(
+                {
+                    "error": "invalid configuration",
+                    "fields": {"autonomy": f"must be one of {AUTONOMY_LEVELS}"},
+                },
+                422,
+            )
+        changes.update(autonomy_changes(autonomy))
+    overrides = body.get("overrides")
+    if overrides is not None:
+        if not isinstance(overrides, dict):
+            return json_response(
+                {
+                    "error": "invalid configuration",
+                    "fields": {"overrides": "must be an object of tier keys to booleans"},
+                },
+                422,
+            )
+        unknown = sorted(set(overrides) - OVERRIDABLE_KEYS)
+        if unknown:
+            return json_response(
+                {
+                    "error": "invalid configuration",
+                    "fields": {key: "not an overridable tier key" for key in unknown},
+                },
+                422,
+            )
+        changes.update(overrides)
+    hot, restart = update_config(config, changes)
     apply_runtime_config(request.app, hot)
     log.info(
         "experience tier applied",
-        extra={"tier": tier, "restart_required": ",".join(sorted(restart))},
+        extra={
+            "tier": tier,
+            "autonomy": autonomy or "",
+            "overrides": ",".join(sorted(overrides)) if overrides else "",
+            "restart_required": ",".join(sorted(restart)),
+        },
     )
     await request.app[keys.EVENTS].emit(
         "configuration_changed", source="experience-tier", changed=sorted(hot | restart)
@@ -675,6 +750,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/config", get_config),
     web.get("/api/settings/bundle", settings_bundle),
     web.patch("/api/config", patch_config),
+    web.get("/api/experience-tiers", get_experience_tiers),
     web.post("/api/experience-tier", apply_experience_tier),
     web.post("/api/keymap-preset", apply_keymap_preset),
     web.post("/api/settings/apply", apply_settings),

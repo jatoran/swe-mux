@@ -67,6 +67,13 @@ export type ExperienceTierChoice = '' | 'terminal' | 'deterministic' | 'automati
  * Agent, Schedule, and Processes. Alerts stays for the reason
  * `DEFAULT_HIDDEN_DRAWER_TABS` records: it is the one tab with an unread badge.
  *
+ * The deterministic tier also puts Activity away: its findings and timeline are
+ * fed by the model-backed layer that tier keeps off (automation, the scan
+ * timeline, the observers), so the tab would mostly draw the three kinds of
+ * empty. Choosing automations brings it back by default, and the empty tier -
+ * an install predating the chooser, or a skipped first run - keeps the
+ * pre-tier default so nothing shifts under an existing device.
+ *
  * Same consultation rule as the base default: applied only while the device has
  * no stored choice (`mux.drawer.hidden.v1` absent). The moment the user touches
  * the visibility menu, their set - including the empty set - wins forever, so a
@@ -75,6 +82,9 @@ export type ExperienceTierChoice = '' | 'terminal' | 'deterministic' | 'automati
 export function defaultHiddenDrawerTabs(tier: ExperienceTierChoice): DrawerTabId[] {
   if (tier === 'terminal') {
     return ['queue', 'transcript', 'activity', 'agent', 'schedule', 'processes']
+  }
+  if (tier === 'deterministic') {
+    return ['activity', 'processes']
   }
   return [...DEFAULT_HIDDEN_DRAWER_TABS]
 }
