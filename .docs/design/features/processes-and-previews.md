@@ -65,7 +65,51 @@
   server is hung or auto-kills it.
 - Stable provenance records `attribution_version`, `attribution_source` (`session_root`, `parent_walk`, or `job_membership`), `last_attributed_at`, and `last_job_confirmed_at` independently of mutable evidence state/reason.
   Process actions and server presentation require current-version ownership.
-  The daemon and its descendant infrastructure fingerprints are reserved from session ownership, and equal-strength claims from multiple sessions are quarantined rather than assigned arbitrarily.
+  swe-mux's own processes are reserved from session ownership, and equal-strength claims from multiple sessions are quarantined rather than assigned arbitrarily.
+- **"swe-mux's own" is an identity, not a descent.** Reservation used to mean "a descendant
+  of this daemon", which the desktop shell is not: it is the daemon's *parent*, and after one
+  `reload-daemon` the successor daemon's parent pid belongs to the outgoing daemon and is dead
+  within the second, so no live chain reaches the shell at all. A redeploy run from inside a
+  session - the flow `CLAUDE.md` calls safe - therefore left the shell attributed to that
+  session by the parent walk, and when the session was killed the shell escalated to
+  `suspected_orphan` with Terminate armed on it. It was the live UI window (observed
+  2026-08-31).
+  Three sources now answer the question together, because no one of them sees all of it: the
+  descendant walk finds what this daemon started, the ancestor walk finds the shell while that
+  link is live, and an **exact match on the executable file this daemon is itself running**
+  finds it afterwards, along with its WebView2 host. The image test is deliberately not a name or a directory match - the
+  frozen shell, daemon and `--daemon-child` successors are all literally the same file, and
+  nothing else on the machine runs it. It is also gated on `sys.frozen`: running from source
+  `sys.executable` is a shared `python.exe`, and reserving on that would strip real session
+  processes out of the fleet, so a dev daemon keeps to the walks alone.
+  One exclusion is load-bearing: `swe-mux.exe -m swe_mux.<module>` is a helper an agent
+  session spawned in its own tree (`hook_client` runs on every tool call). It shares the image
+  and stays session-owned. `packaging/redeploy_desktop.py` draws the same line before killing
+  anything, for the same reason.
+  **Reservation and enumeration are separated on purpose, and the cost is why.** A claim is
+  answered by testing the image of the pid being claimed - immediately, on a handful of pids,
+  never on the machine. *Finding* a shell nothing points at needs a whole-machine scan, and
+  constructing a `psutil.Process` is the most expensive operation in this file, so that scan
+  runs once a minute against a long-lived shell rather than once per five-second tick, filtered
+  on the image's file name before the exact-path check runs. A pid leaving the system parent
+  table forces an immediate rescan, so a dead shell is never enumerated - and never becomes a
+  recycled pid enumerated as swe-mux - for the rest of the interval. Nothing about attribution
+  waits on the cadence; only what the runtime footer can see does.
+  The upward edges deliberately carry **no** creation-time check, unlike every downward one.
+  There a recycled parent pid splices in a process that is not ours; here the edge is only
+  followed to a pid the image test has already declared ours, and a recycled pid running our
+  own executable is swe-mux whether or not it is really this daemon's parent. The check could
+  not change an answer, so it is not written.
+- **The supervisor is reserved and is a traversal boundary in the same breath.** It parents
+  every live session, so a walk that descends *through* it absorbs the whole fleet. It is
+  reserved by pid - the daemon knows it directly, which matters because it is spawned to break
+  away and outlives daemon restarts - and never traversed. The hazard is not only the recycled
+  parent link recorded above: a freshly spawned supervisor genuinely is a child of the daemon
+  until the next restart leaves it parentless.
+- **The daemon footer reports all of swe-mux, not the daemon's descendants.** It read
+  `processes: 1` on a frozen app whose shell alone held 69 MiB, because the shell, its
+  WebView2 host and the supervisor were all outside the descendant walk. Same root cause as
+  the mislabel, so it is fixed by the same definition.
 - Ownership rejections emit bounded command-free diagnostics in the process snapshot and structured rolling daemon log.
   Diagnostics cover causally impossible edges, infrastructure contamination, ambiguous multi-session claims, and legacy-evidence retirement.
 - Descendants leaving the current tree become `escaped`. After an ended root session's
@@ -93,6 +137,12 @@
 - Interrupt, terminate-process, and terminate-tree include the durable identity fingerprint
   and re-check PID creation time plus live ownership immediately before acting. A request
   for a PID owned by another session or a reused fingerprint is rejected.
+- **The action gate re-derives whether the target is swe-mux itself rather than reading it
+  off the row's evidence**, and refuses on the answer. This is deliberate duplication: the
+  reservation above is what should make such a row impossible, and the gate is what has to
+  hold when it does not. A mislabelled desktop shell offered "Terminate tree" is the UI
+  closing itself and its WebView2 host, which no amount of correct escalation elsewhere
+  excuses. The two are tested separately for that reason.
 - Terminating a root process can correctly leave its session in `crashed`, but session
   finalization releases the ended ConPTY host. Its `OpenConsole.exe`/`conhost.exe`
   infrastructure member therefore disappears from daemon accounting while the terminal's
