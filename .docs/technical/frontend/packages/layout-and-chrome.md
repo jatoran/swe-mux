@@ -165,15 +165,18 @@ Section targets reuse `settingReveal.ts` under a `drawer.<tab>.<id>` namespace r
 
 ## Appearance
 
-`theme.ts`, `ThemePicker.tsx`, `uiScale.ts`, `style.css`
+`index.html`, `theme.ts`, `ThemePicker.tsx`, `uiScale.ts`, `style.css`
 
 Pure config to root custom properties.
 
-- `theme.ts` owns the selectable catalog, xterm palette tokens, and preview-color projection.
+- `index.html` declares the pre-script `only dark` default and Dark Reader opt-out.
+- `theme.ts` owns the selectable catalog, xterm palette tokens, preview-color projection, and document presentation metadata.
+  `applyTheme` derives light/dark browser treatment from the effective canvas and atomically updates the root scheme, `color-scheme` metadata, and `theme-color`; every theme preview therefore moves native controls and browser chrome with the app palette and reverts through the same path.
 - `ThemePicker.tsx` owns the keyboard-accessible fixed-column swatch listbox.
   It is the design `Dropdown` is modelled on and stays its own component: every row carries a swatch strip, and highlighting one *applies* the theme without committing it, which is a preview contract no generic picker has.
 - `uiScale.ts` owns `--ui-scale`, per-device-class resolution, discrete step movement, fixed keyboard classification, and high-resolution wheel accumulation.
 - `style.css` owns shared theme-derived chrome, including compact scrollbars and the one `--check-size` rule that sizes every native checkbox and radio.
+  Every fixed palette declares `color-scheme: only light|dark`, forbidding user-agent auto-transformation without opting out of forced-colors accessibility.
   That rule is fixed px, not `--ui-scale`, because that property multiplies type and the rows holding a line of type, never glyph-sized controls.
   A container rule shaped `<panel> input { width/height … }` must exclude `[type=checkbox]`, or it stretches the ticks inside that panel into full-width text-field boxes.
 - `App.tsx` is the one scale controller: it captures fixed scale inputs before browser and xterm handling, updates chrome and the numeric xterm prop together, reports through `InteractionHud`, and debounces persistence outside the Settings draft.

@@ -20,7 +20,11 @@ import pytest
 
 from swe_mux.config import LaunchProfile
 from swe_mux.profiles import derive_capabilities, wsl_distro_of
-from swe_mux.wsl_bridge import _default_gateway_from_proc, rewrite_ingress_for_distro
+from swe_mux.wsl_bridge import (
+    _default_gateway_from_proc,
+    rewrite_ingress_for_distro,
+    wsl_available,
+)
 
 WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="WSL is a Windows host feature")
 
@@ -236,3 +240,93 @@ def test_the_probe_callers_report_failure_rather_than_leaking_the_tree(
 
     assert wsl_bridge._run_in_distro("Ubuntu", "true") is None
     assert proc.killed and grandchild[0].killed
+
+
+def _stub_availability(monkeypatch: pytest.MonkeyPatch, *, on_path: bool, registered: bool) -> None:
+    from swe_mux import wsl_bridge
+
+    wsl_bridge.wsl_available.cache_clear()
+    monkeypatch.setattr(wsl_bridge, "IS_WINDOWS", True)
+    monkeypatch.setattr(
+        wsl_bridge.shutil,
+        "which",
+        lambda _n: r"C:\Windows\system32\wsl.exe" if on_path else None,
+    )
+    monkeypatch.setattr(wsl_bridge, "_wsl_subsystem_registered", lambda: registered)
+
+
+def test_the_windows_11_wsl_stub_is_not_read_as_an_installed_subsystem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`wsl.exe` on PATH is a guaranteed false positive on Windows 11.
+
+    The OS ships `C:\\Windows\\System32\\wsl.exe` whether or not the subsystem is
+    installed, so PATH-only availability made every such machine WSL-capable and
+    paid an 8s blocked-then-tree-killed probe every 30s status cycle for a feature
+    it does not have. Nothing about the binary distinguishes the two states; the
+    registry does.
+    """
+    from swe_mux import wsl_bridge
+
+    _stub_availability(monkeypatch, on_path=True, registered=False)
+    assert wsl_available() is False
+    wsl_bridge.wsl_available.cache_clear()
+
+
+def test_a_real_wsl_install_is_still_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    from swe_mux import wsl_bridge
+
+    _stub_availability(monkeypatch, on_path=True, registered=True)
+    assert wsl_available() is True
+    wsl_bridge.wsl_available.cache_clear()
+
+
+def test_an_unavailable_host_never_spawns_the_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point: no subsystem means no subprocess, not a bounded hang."""
+    from swe_mux import wsl_bridge
+
+    _stub_availability(monkeypatch, on_path=True, registered=False)
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(
+        wsl_bridge,
+        "_run_wsl",
+        lambda argv, **_kw: spawned.append(argv),  # type: ignore[misc,return-value]
+    )
+
+    assert wsl_bridge.running_distros() == set()
+    assert wsl_bridge.bridge_status("Ubuntu").available is False
+    assert wsl_bridge.setup_status(daemon_port=8765, enabled=False)["supported"] is False
+    assert spawned == []
+    wsl_bridge.wsl_available.cache_clear()
+
+
+def test_a_wsl_command_never_inherits_the_daemons_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inherited console handle is what the stub blocks on.
+
+    The daemon spawns windowless, so `stdin=None` handed the child a handle to a
+    console this process does not own; the same command run with a console
+    attached returns instantly. DEVNULL makes a read return EOF, which is an
+    answer rather than a wait.
+    """
+    from swe_mux import wsl_bridge
+
+    seen: dict[str, object] = {}
+
+    class _Immediate:
+        def communicate(self, input=None, timeout=None):  # noqa: A002
+            return ("", "")
+
+        returncode = 0
+
+    def _popen(_argv: list[str], **kwargs: object) -> _Immediate:
+        seen.update(kwargs)
+        return _Immediate()
+
+    monkeypatch.setattr(wsl_bridge.subprocess, "Popen", _popen)
+    wsl_bridge._run_wsl(["wsl.exe", "--list"], timeout=1)
+    assert seen["stdin"] is subprocess.DEVNULL
+
+    wsl_bridge._run_wsl(["wsl.exe", "sh"], timeout=1, stdin_payload="echo hi")
+    assert seen["stdin"] is subprocess.PIPE

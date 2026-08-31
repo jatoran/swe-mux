@@ -31,8 +31,11 @@ Design: `../../../design/features/terminal-input.md`.
 `terminalInputDiagnostics.ts` owns content-free physical-input sequence correlation, bounded pending probes, native-event clock normalization, input-to-ack and input-to-render stage arithmetic, and the one shared browser main-thread stall clock.
 
 `pasteTrace.ts` is the paste-trace instrument: the pure payload summary (codepoint count, bracketed-wrapper detection, bounded head/tail excerpt, position-flagged non-printable-ASCII codepoints) and the pure composer snapshot (cursor, `ComposerRegion`, bounded region row text) recorded before a paste and again after its echo settles.
-It fires for every paste into a backend `composerRegionForBackend` can read, recognizing a paste by the native event source or by the bracketed wrapper alone so button- and voice-driven pastes are caught too.
+It fires for every paste into a backend `composerRegionForBackend` can read.
+Recognition is explicit rather than inferred: a write the pane's paste path produced declares its `PasteOrigin` and whether it is the payload or the newline keys lifted out ahead of it, so exactly one report is filed per paste and a single-line rail paste - which carries no wrapper and raises no native event - is caught for the first time.
+The old heuristic (native event source, or the bracketed wrapper alone) remains the fallback for bytes that did not come through that path, where it is itself the finding.
 Unlike `terminalInputDiagnostics.ts` it deliberately carries bounded pasted content - an invisible codepoint in the payload is the diagnosis it exists for - so its report persists as the separate `terminal_paste_trace` event type (`../../../design/features/terminal-input.md`).
+It also names the `PASTE_UNCLAIMED_PHASE` its content-free sibling reports under, for a native paste that reached xterm's own handler instead of the pane's.
 
 `terminalCaretPlacement.ts` is the tap-routing and caret-steering arithmetic, and the single declared home for per-harness caret deviations.
 Routing keys on the terminal's **measured mouse mode** rather than on a harness name, so any application that negotiated tracking is handed a forwarded touch tap and positions its own caret.
@@ -152,3 +155,5 @@ Plain-text URLs (the web-links addon) and OSC 8 hyperlinks (`term.options.linkHa
 An agent gets Resume and a shell gets Restart, because replaying an agent's argv would start a fresh conversation while re-injecting the old one's `--session-id`.
 `EndedPaneBanner.tsx` renders it above the terminal; `App.tsx` owns the actions it invokes and the layout rule that keeps an ended session's leaf (`../../../design/features/session-recovery.md`).
 The same banner renders an inactive session as intentional, names that no process is running, and offers Resume for agents or Restart terminal for shells.
+`viewState.resolveActiveSession` keeps an explicit ended selection and only falls back when the selected identity disappears.
+The banner's transcript action opens the exact History run, while its Resume action uses the retained-session replacement endpoint and focuses the returned identity.

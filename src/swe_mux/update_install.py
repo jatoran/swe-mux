@@ -118,6 +118,7 @@ from .redeploy_launch import (
     spawn_redeploy,
 )
 from .supervisor import discovery_path
+from .tls_trust import trusting_connector
 from .update_check import (
     MALFORMED,
     MANIFEST_URL,
@@ -423,7 +424,7 @@ async def http_download(
         total=DOWNLOAD_TIMEOUT_SECONDS, sock_read=DOWNLOAD_CHUNK_TIMEOUT_SECONDS
     )
     async with aiohttp.ClientSession(
-        timeout=timeout, cookie_jar=aiohttp.DummyCookieJar()
+        timeout=timeout, cookie_jar=aiohttp.DummyCookieJar(), connector=trusting_connector()
     ) as session:
         async with session.get(
             url, headers=dict(headers or {}), allow_redirects=True

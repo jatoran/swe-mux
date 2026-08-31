@@ -127,11 +127,13 @@ export const SETTINGS_CONFIG_FIXTURE = {
     "pi": "pi"
   },
   "harness_instrument_enabled": {},
+  "tool_paths": {},
   "harness_mcp_enabled": {},
   "harness_skill_enabled": {},
   "experience_tier": "",
   "quests_dismissed": [],
   "harness_setup_complete": false,
+  "provider_accounts_prompt_dismissed": false,
   "history_limit": 200,
   "host": "127.0.0.1",
   "land_hold_timeout_seconds": 1800.0,

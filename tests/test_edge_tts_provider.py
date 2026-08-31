@@ -13,13 +13,16 @@ from swe_mux import app_keys as keys
 from swe_mux.config import load_config, update_config
 from swe_mux.edge_tts_provider import (
     EDGE_RISK_ACK_VERSION,
+    EDGE_TTS_REQUIREMENT,
     EDGE_TTS_VERSION,
+    PYPI_SIMPLE_INDEX,
     EdgeTtsError,
     EdgeTtsProvider,
     EdgeVoiceCatalog,
     _safe_error_message,
     managed_interpreter,
     normalize_edge_voices,
+    select_provision_plan,
 )
 from swe_mux.routes.voice import edge_provider_install
 from swe_mux.tts_profiles import resolve_tts_profile
@@ -161,6 +164,10 @@ def test_provider_startup_sweeps_only_its_abandoned_text_inputs(tmp_path: Path) 
     assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
+async def _no_preflight() -> None:
+    """Stand in for the reachability preflight so the suite makes no network call."""
+
+
 async def test_managed_install_stages_verifies_and_activates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -190,6 +197,10 @@ async def test_managed_install_stages_verifies_and_activates(
         return {"ok": True, "version": "7.2.8"}
 
     monkeypatch.setattr(provider, "_run_install_command", run)
+    # The gate must never dial PyPI. Stubbed rather than left to succeed on a
+    # connected host, which is what made these tests silently make a real
+    # request the first time the preflight was added.
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
     monkeypatch.setattr(provider, "_invoke_unlocked", invoke)
     assert provider.start_managed_install() is True
     assert provider.start_managed_install() is False
@@ -250,6 +261,10 @@ async def test_failed_repair_keeps_the_working_managed_environment(
         raise EdgeTtsError("install_failed", "registry unavailable")
 
     monkeypatch.setattr(provider, "_run_install_command", run)
+    # The gate must never dial PyPI. Stubbed rather than left to succeed on a
+    # connected host, which is what made these tests silently make a real
+    # request the first time the preflight was added.
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
     assert provider.start_managed_install() is True
     await provider.wait_install()
     managed = provider.managed_status()
@@ -298,6 +313,10 @@ async def test_a_failure_after_activation_restores_the_previous_environment(
         write_state(state)
 
     monkeypatch.setattr(provider, "_run_install_command", run)
+    # The gate must never dial PyPI. Stubbed rather than left to succeed on a
+    # connected host, which is what made these tests silently make a real
+    # request the first time the preflight was added.
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
     monkeypatch.setattr(provider, "_invoke_unlocked", invoke)
     monkeypatch.setattr(provider, "_write_install_state", refuse_the_first_success_write)
     assert provider.start_managed_install() is True
@@ -412,3 +431,240 @@ async def test_automatic_failures_back_off_without_calling_or_falling_back(
     assert calls == 1
     assert not (tmp_path / "one.mp3").exists()
     assert not (tmp_path / "two.mp3").exists()
+
+
+async def test_connectivity_is_checked_before_the_multi_minute_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An install that cannot reach PyPI must fail in seconds, not after 80 of them.
+
+    The observed failure spent 44.8s creating an environment and 36s installing a
+    package before anything went wrong, then reported at the step furthest from
+    the cause. Nothing may run before the preflight.
+    """
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
+    order: list[str] = []
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        order.append(argv[1])
+
+    async def refuse() -> None:
+        order.append("preflight")
+        raise EdgeTtsError("install_index_unreachable", "could not reach PyPI")
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_preflight_index_reachable", refuse)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    assert order == ["preflight"]
+    managed = provider.managed_status()
+    assert managed["status"] == "error"
+    assert "could not reach" in str(managed["error"])
+    assert not (tmp_path / "integrations" / "edge-tts" / "current").exists()
+
+
+async def test_a_verify_timeout_says_what_that_step_actually_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Edge TTS status timed out" sent a reader hunting a network fault.
+
+    That step imports the package and reads its version; it makes no request at
+    all. The message has to say so, or the next person spends the same hour on
+    TLS and proxies.
+    """
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: "uv.exe")
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        if argv[1] == "venv":
+            python = provider.managed_python(Path(argv[-1]))
+            python.parent.mkdir(parents=True)
+            python.write_bytes(b"python")
+
+    async def time_out(*_args: Any, **_options: Any) -> dict[str, Any]:
+        raise EdgeTtsError("timeout", "Edge TTS status timed out")
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
+    monkeypatch.setattr(provider, "_invoke_unlocked", time_out)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    error = str(provider.managed_status()["error"])
+    assert "makes no network request" in error
+    assert "120s" in error
+
+
+def test_uv_is_preferred_when_it_is_available() -> None:
+    """Not a coin flip: uv provisions the interpreter as well as the environment."""
+    plan = select_provision_plan(
+        which=lambda _name: "/usr/bin/uv", interpreter="/usr/bin/python3", frozen=False
+    )
+    assert plan is not None
+    assert plan.kind == "uv"
+    assert plan.create_argv(Path("/staging"))[:3] == ["/usr/bin/uv", "venv", "--python"]
+
+
+def test_a_source_install_without_uv_falls_back_to_venv() -> None:
+    """The case this fallback exists for: a real Python on PATH, no uv."""
+    plan = select_provision_plan(
+        which=lambda _name: None, interpreter="/usr/bin/python3", frozen=False
+    )
+    assert plan is not None
+    assert plan.kind == "venv"
+    staging = Path("/staging")
+    assert plan.create_argv(staging) == ["/usr/bin/python3", "-m", "venv", str(staging)]
+    staging_python = staging / "bin" / "python"
+    argv = plan.install_argv(staging_python)
+    # The created environment's own python runs pip, never the daemon's, so
+    # nothing can land outside the staging directory.
+    assert argv[0] == str(staging_python)
+    assert argv[1:4] == ["-m", "pip", "install"]
+    assert EDGE_TTS_REQUIREMENT in argv
+    # Same pinned artifact from the same index as the uv path.
+    assert "--index-url" in argv and PYPI_SIMPLE_INDEX in argv
+
+
+def test_the_frozen_app_never_offers_its_own_bundle_as_an_interpreter() -> None:
+    """`sys.executable` is the PyInstaller bundle there, not a Python.
+
+    It has no `venv` module, and running it with `-m` re-enters swe-mux rather
+    than Python - a confusing failure at best and a second daemon at worst.
+    """
+    assert select_provision_plan(
+        which=lambda _name: None, interpreter="/app/swe-mux.exe", frozen=True
+    ) is None
+
+
+def test_no_uv_and_no_interpreter_is_no_plan() -> None:
+    assert select_provision_plan(which=lambda _name: None, interpreter="", frozen=False) is None
+
+
+async def test_the_refusal_names_both_ways_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"uv is required" was a dead end for someone who has a working Python."""
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: None)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.sys.frozen", True, raising=False)
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    error = str(provider.managed_status()["error"])
+    assert "uv" in error
+    # Both remedies, because on the frozen app installing uv is the only one that
+    # can work and on a source install the external override may be quicker.
+    assert "external Python" in error
+
+
+async def test_the_venv_path_installs_the_same_pin_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    commands: list[list[str]] = []
+
+    # No uv anywhere, and a real interpreter to fall back to.
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: None)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.sys.executable", "/usr/bin/python3")
+    monkeypatch.setattr("swe_mux.edge_tts_provider.sys.frozen", False, raising=False)
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del label, operation_id
+        commands.append(argv)
+        if argv[:3] == ["/usr/bin/python3", "-m", "venv"]:
+            python = provider.managed_python(Path(argv[-1]))
+            python.parent.mkdir(parents=True)
+            python.write_bytes(b"python")
+
+    async def invoke(executable: str, operation: str, *_a: str, **_o: Any) -> dict[str, Any]:
+        del executable, operation
+        return {"ok": True, "version": EDGE_TTS_VERSION}
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
+    monkeypatch.setattr(provider, "_invoke_unlocked", invoke)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    managed = provider.managed_status()
+    assert managed["status"] == "ready"
+    assert managed["version"] == EDGE_TTS_VERSION
+    assert commands[0][:3] == ["/usr/bin/python3", "-m", "venv"]
+    assert commands[1][1:4] == ["-m", "pip", "install"]
+    assert EDGE_TTS_REQUIREMENT in commands[1]
+
+
+async def test_a_missing_python3_venv_package_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Debian ships `venv` without `ensurepip`, which is the likely way this fails.
+
+    The raw message is long enough that the apt command in it can be lost to the
+    tail slice, and it is the one environment failure with a specific remedy.
+    """
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: None)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.sys.executable", "/usr/bin/python3")
+    monkeypatch.setattr("swe_mux.edge_tts_provider.sys.frozen", False, raising=False)
+
+    async def run(argv: list[str], *, label: str, operation_id: str) -> None:
+        del argv, label, operation_id
+        raise EdgeTtsError(
+            "install_failed",
+            "exited with status 1: ensurepip is not available. On Debian systems "
+            "you need to install the python3-venv package",
+        )
+
+    monkeypatch.setattr(provider, "_run_install_command", run)
+    monkeypatch.setattr(provider, "_preflight_index_reachable", _no_preflight)
+    assert provider.start_managed_install() is True
+    await provider.wait_install()
+
+    error = str(provider.managed_status()["error"])
+    assert "python3-venv" in error
+    assert "apt install" in error
+
+
+def test_the_status_reports_which_method_would_be_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The button gates on this, not on `uv_available`.
+
+    Gating on uv alone would keep offering the manual-only path to exactly the
+    users the fallback covers.
+    """
+    config = load_config(tmp_path / "config.toml")
+    provider = EdgeTtsProvider(config)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.shutil.which", lambda command: None)
+    monkeypatch.setattr("swe_mux.edge_tts_provider.sys.executable", "/usr/bin/python3")
+    monkeypatch.setattr("swe_mux.edge_tts_provider.sys.frozen", False, raising=False)
+    status = provider.managed_status()
+    assert status["uv_available"] is False
+    assert status["install_method"] == "venv"
+
+
+def test_the_verify_budget_is_larger_than_a_cold_import(tmp_path: Path) -> None:
+    """20s was the budget and a cold venv on a slow machine blew straight through it.
+
+    The steady-state call budget is deliberately separate: a slow answer there is a
+    real fault, whereas here it is a first-ever import with a scanner reading every
+    new file.
+    """
+    from swe_mux.edge_tts_provider import (
+        EDGE_BRIDGE_TIMEOUT_SECONDS,
+        EDGE_VERIFY_TIMEOUT_SECONDS,
+    )
+
+    del tmp_path
+    assert EDGE_VERIFY_TIMEOUT_SECONDS >= 120.0
+    assert EDGE_VERIFY_TIMEOUT_SECONDS > EDGE_BRIDGE_TIMEOUT_SECONDS

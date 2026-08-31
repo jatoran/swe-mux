@@ -72,6 +72,12 @@ Related events:
 - `terminal_repaint_requested`: daemon or browser forced the CLI to restate its screen.
 - `terminal_paste_trace`: one record per paste into a readable composer - payload shape (codepoint count, flagged non-ASCII codepoints, head/tail excerpt) plus the composer region, its row text, and the cursor before the paste and 600 ms after.
   Adjudicates the transient caret-lands-short-of-the-tail paste defect after the fact: hidden codepoints in the payload, or an after-cursor that disagrees with the after-rows' text end, each name a different culprit.
+  It also carries the paste's provenance - `origin` (`native` for Ctrl+V, else `rail`/`insert`/`mobile`/`manual`/`attachment`), `captureSource`, `backend`, and `bracketedPasteMode`.
+  Read those first when the report names a control: without `origin` every path looks identical here, and `bracketed` says what the bytes carried rather than whether the child was going to honour it.
+  An `origin` of `null` means the bytes did not come through the pane's paste path.
+- `terminal_paste_unclaimed`: a native text paste reached xterm's own textarea handler, so the pane's capture-phase claim was bypassed and the payload went out with whatever xterm's mode mirror decided.
+  Content-free (length, mode, multiline flag, target tag).
+  This is the one event that separates "Ctrl+V went out wrong" from "Ctrl+V behaved exactly like the button": the trace fires from `onData`, downstream of both, and cannot see which DOM listener produced the bytes.
 
 ## Adjudication
 
