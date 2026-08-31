@@ -27,6 +27,7 @@ from packaging.version import InvalidVersion, Version
 from . import __version__
 from .background_tasks import background
 from .bounded_subprocess import run_bounded
+from .errors import NotFound
 from .plugin_manifest import (
     HOST_CAPABILITIES,
     CommandSpec,
@@ -718,7 +719,11 @@ class PluginManager:
                     existing.record.id,
                     project.id,
                 )
-                return {"session": snapshot, "placement": pane.placement, "reused": True}
+                return {
+                    "session": snapshot,
+                    "placement": existing.record.plugin_placement or pane.placement,
+                    "reused": True,
+                }
             # The PTY can outlive the daemon generation that issued its callback token.
             # Launching the tool again is an explicit request for a usable pane, so replace
             # that stale process instead of focusing a UI whose callbacks can only fail.
@@ -753,6 +758,34 @@ class PluginManager:
         snapshot = session.record.snapshot()
         snapshot["spawn_env"] = {}
         return {"session": snapshot, "placement": pane.placement, "reused": False}
+
+    def dock_pane(self, session_id: str) -> dict[str, Any]:
+        """Make a live plugin utility session a durable Project tab."""
+
+        try:
+            session = self.sessions.resolve(session_id)
+        except NotFound as exc:
+            raise PluginError("plugin_pane_not_found", "plugin pane session was not found") from exc
+        record = session.record
+        if not record.plugin_id or not record.plugin_entrypoint_id:
+            raise PluginError("plugin_pane_not_found", "session is not owned by a plugin pane")
+        if record.state in {"exited", "crashed"} or record.inactive:
+            raise PluginError("plugin_pane_inactive", "plugin pane session is not live")
+        previous = record.plugin_placement
+        record.plugin_placement = "tab"
+        session.publish_update()
+        log.info(
+            "plugin pane docked plugin_id=%s pane_id=%s session_id=%s "
+            "project_id=%s previous_placement=%s",
+            record.plugin_id,
+            record.plugin_entrypoint_id,
+            record.id,
+            record.project_id,
+            previous,
+        )
+        snapshot: dict[str, Any] = record.snapshot()
+        snapshot["spawn_env"] = {}
+        return snapshot
 
     async def link_handlers(self) -> builtins.list[dict[str, Any]]:
         handlers: builtins.list[dict[str, Any]] = []
