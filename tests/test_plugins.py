@@ -167,8 +167,10 @@ class FakeSessions:
     def __init__(self) -> None:
         self.sessions: dict[str, Any] = {}
         self.spawn_args: dict[str, Any] = {}
+        self.spawn_count = 0
 
     async def spawn(self, **kwargs: Any) -> Any:
+        self.spawn_count += 1
         self.spawn_args = kwargs
         record = SessionRecord(
             "pane-1",
@@ -220,6 +222,12 @@ async def test_manager_link_approval_action_pane_event_and_uninstall(tmp_path: P
     assert pane["session"]["spawn_env"] == {}
     assert sessions.spawn_args["retain_extra_env"] is False
     assert sessions.spawn_args["exe"] == sys.executable
+    same_pane = await manager.open_pane(
+        "tests.utility", "dashboard", {"context": "project", "project_id": "p1"}
+    )
+    assert same_pane["reused"] is True
+    assert same_pane["session"]["id"] == "pane-1"
+    assert sessions.spawn_count == 1
     await events.emit("project_created", source="tests", project_id="p1")
     event_file = manager.states / "tests.utility" / "event.json"
     for _ in range(100):
@@ -267,9 +275,12 @@ async def test_manifest_change_revokes_enablement(tmp_path: Path) -> None:
     )
     listing = await manager.list()
     changed = listing["plugins"][0]
+    assert changed["name"] == "Changed utility"
     assert changed["enabled"] is False
     assert changed["lifecycle"] == "changed"
     assert changed["approval_current"] is False
+    approved = await manager.approve("tests.utility")
+    assert approved["name"] == "Changed utility"
     await manager.stop()
 
 

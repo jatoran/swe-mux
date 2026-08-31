@@ -1,21 +1,19 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
+import {
+  alphabetizedPluginProjects, selectedPluginProject,
+  type InstalledPlugin, type PluginCatalogue, type PluginProject,
+} from './pluginCatalog.ts'
 
-type CommandSpec={command:string[];cwd:string;timeout_seconds:number}
-type Action={id:string;title:string;description:string;contexts:string[];command:CommandSpec}
-type Pane={id:string;title:string;description:string;placement:string;contexts:string[];command:CommandSpec}
-type Manifest={id:string;name:string;version:string;description:string;author:string;license:string;homepage:string;permissions:string[];requires:string[];runtime_requirements:string[];actions:Action[];panes:Pane[];events:Array<{id:string;on:string}>;startup:Array<{id:string}>;link_handlers:Array<{id:string;title:string;pattern:string}>}
-type Plugin={id:string;name:string;version:string;enabled:boolean;lifecycle:string;source_kind:string;source_ref:string;resolved_ref:string;diagnostic:string;approval_current:boolean;config_dir:string;state_dir:string;manifest:Manifest|null}
-type Catalogue={execution_enabled:boolean;host_capabilities:string[];plugins:Plugin[]}
-type Project={id:string;name:string}
 type MarketRepo={full_name:string;description:string;stars:number;language?:string;license?:string;url:string;unreviewed:boolean}
 
-const EMPTY:Catalogue={execution_enabled:true,host_capabilities:[],plugins:[]}
+const EMPTY:PluginCatalogue={execution_enabled:true,host_capabilities:[],plugins:[]}
 
-export function PluginsSettings(){
-  const [catalogue,setCatalogue]=useState<Catalogue>(EMPTY)
-  const [projects,setProjects]=useState<Project[]>([])
+export function PluginsSettings({focusedProjectId=''}:{focusedProjectId?:string}){
+  const [catalogue,setCatalogue]=useState<PluginCatalogue>(EMPTY)
+  const [projects,setProjects]=useState<PluginProject[]>([])
   const [projectId,setProjectId]=useState('')
+  const [expandedId,setExpandedId]=useState<string|null>(null)
   const [source,setSource]=useState('')
   const [mode,setMode]=useState<'link'|'install'>('link')
   const [busy,setBusy]=useState('')
@@ -26,8 +24,8 @@ export function PluginsSettings(){
 
   const load=async()=>{
     const [plugins,knownProjects]=await Promise.all([
-      api<Partial<Catalogue>>('GET','/api/plugins'),
-      api<Project[]>('GET','/api/projects'),
+      api<Partial<PluginCatalogue>>('GET','/api/plugins'),
+      api<PluginProject[]>('GET','/api/projects'),
     ])
     // Field-by-field rather than adopting the payload wholesale: every field is
     // mapped or joined unconditionally below, so a payload missing one (an older
@@ -38,8 +36,9 @@ export function PluginsSettings(){
       host_capabilities:plugins?.host_capabilities||[],
       plugins:plugins?.plugins||[],
     })
-    setProjects(Array.isArray(knownProjects)?knownProjects:[])
-    setProjectId(current=>current||(Array.isArray(knownProjects)?knownProjects[0]?.id:'')||'')
+    const sorted=alphabetizedPluginProjects(Array.isArray(knownProjects)?knownProjects:[])
+    setProjects(sorted)
+    setProjectId(current=>selectedPluginProject(sorted,focusedProjectId,current))
   }
   useEffect(()=>{void load().catch(error=>setMessage(String(error)))},[])
 
@@ -52,46 +51,58 @@ export function PluginsSettings(){
   const mutate=(method:string,path:string,body?:unknown)=>api(method,path,body,{timeoutMs:240_000})
   const install=()=>run(mode==='link'?'Link':'Install',()=>mutate('POST',`/api/plugins/${mode}`,mode==='link'?{path:source}:{source}))
   const projectContext={context:'project',project_id:projectId}
+  const uninstall=(plugin:InstalledPlugin,purge:boolean)=>run(`${purge?'Purge':'Uninstall'} ${plugin.name}`,async()=>{
+    await mutate('DELETE',`/api/plugins/${plugin.id}${purge?'?purge=1':''}`)
+    setConfirming(null);if(expandedId===plugin.id)setExpandedId(null)
+  })
+  const openPane=(plugin:InstalledPlugin,paneId:string,title:string)=>run(title,async()=>{
+    const result=await api<{session:Record<string,unknown>&{id:string};placement:string}>('POST',`/api/plugins/${plugin.id}/panes/${paneId}`,projectContext)
+    window.dispatchEvent(new CustomEvent('mux:plugin-pane-opened',{detail:{session:result.session,placement:result.placement}}))
+  })
 
   return <div class="plugins-settings">
-    <section><h3>Plugin host</h3>
-      <p>Plugins are full-trust external programs. API permissions limit cooperative callbacks; they do not sandbox filesystem or network access.</p>
-      <label class="check"><span>Allow plugin execution</span><input type="checkbox" checked={catalogue.execution_enabled} onChange={event=>void run('Execution policy',()=>mutate('POST','/api/plugins/execution',{enabled:event.currentTarget.checked}))}/></label>
-      <p class="profile-hint">Host capabilities: {catalogue.host_capabilities.join(', ')||'unavailable'}</p>
-    </section>
-    <section><h3>Add a plugin</h3>
-      <label>Source mode<select value={mode} onChange={event=>setMode(event.currentTarget.value as 'link'|'install')}><option value="link">Link local directory</option><option value="install">Managed copy or GitHub owner/repo</option></select></label>
-      <label>{mode==='link'?'Directory':'Source'}<input value={source} onInput={event=>setSource(event.currentTarget.value)} placeholder={mode==='link'?'D:\\plugins\\my-plugin':'owner/repository'} /></label>
-      <div class="theme-actions"><button class="primary" disabled={!source.trim()||!!busy} onClick={install}>{mode==='link'?'Inspect and link':'Inspect and install'}</button><button disabled={!!busy} onClick={()=>void run('Refresh',load)}>Refresh</button></div>
-      <p>New content stays inert until you inspect and approve it below. Installation never runs build or package-manager commands.</p>
-    </section>
-    <section><h3>Installed plugins</h3>
+    <section class="plugin-host-row"><div><h3>Plugins</h3><p>External tools run as your user. Permissions limit swe-mux callbacks, not filesystem or network access.</p></div><label class="check"><span>Execution</span><input type="checkbox" checked={catalogue.execution_enabled} onChange={event=>void run('Execution policy',()=>mutate('POST','/api/plugins/execution',{enabled:event.currentTarget.checked}))}/></label></section>
+
+    <section class="plugin-list-section"><header class="plugin-list-heading"><div><h3>Installed</h3><span>{catalogue.plugins.length} plugins</span></div>{projects.length>0&&<label>Test Project<select value={projectId} onChange={event=>setProjectId(event.currentTarget.value)}>{projects.map(project=><option value={project.id}>{project.name}</option>)}</select></label>}</header>
       {!catalogue.plugins.length&&<p>No plugins installed.</p>}
-      {catalogue.plugins.map(plugin=><article class={`plugin-card ${plugin.enabled?'enabled':''}`} key={plugin.id}>
-        <header><div><strong>{plugin.name}</strong><code>{plugin.id}</code></div><span>{plugin.version} · {plugin.lifecycle}</span></header>
-        {plugin.manifest?.description&&<p>{plugin.manifest.description}</p>}
-        {plugin.diagnostic&&<p class="settings-inline-error">{plugin.diagnostic}</p>}
-        <dl><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions?.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
-        <div class="theme-actions">
-          {!plugin.approval_current&&<button class="primary" disabled={!!busy} onClick={()=>void run(`Approve ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/approve`,{enable:true}))}>Approve and enable</button>}
-          {plugin.approval_current&&<button disabled={!!busy} onClick={()=>void run(`${plugin.enabled?'Disable':'Enable'} ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/enable`,{enabled:!plugin.enabled}))}>{plugin.enabled?'Disable':'Enable'}</button>}
-          {plugin.source_kind==='managed'&&<button disabled={!!busy} onClick={()=>void run(`Update ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/update`,{}))}>Check and stage update</button>}
-          <button disabled={!!busy||!plugin.resolved_ref} onClick={()=>void run(`Rollback ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/rollback`,{}))}>Rollback</button>
-          {confirming?.id===plugin.id
-            ?<><button class="danger" disabled={!!busy} onClick={()=>void run(`${confirming.purge?'Purge':'Uninstall'} ${plugin.name}`,async()=>{await mutate('DELETE',`/api/plugins/${plugin.id}${confirming.purge?'?purge=1':''}`);setConfirming(null)})}>Confirm {confirming.purge?'purge':'uninstall'}</button><button disabled={!!busy} onClick={()=>setConfirming(null)}>Cancel</button></>
-            :<><button disabled={!!busy} onClick={()=>setConfirming({id:plugin.id,purge:false})}>Uninstall</button><button class="danger" disabled={!!busy} onClick={()=>setConfirming({id:plugin.id,purge:true})}>Purge</button></>}
-        </div>
-        {plugin.enabled&&!!plugin.manifest?.actions?.length&&<div class="plugin-contributions"><h4>Actions</h4>{plugin.manifest.actions.map(action=><button disabled={!!busy||(!projectId&&action.contexts.includes('project'))} title={action.description||action.command.command.join(' ')} onClick={()=>void run(action.title,()=>mutate('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,action.contexts.includes('project')?projectContext:{context:'global'}))}>{action.title}</button>)}</div>}
-        {plugin.enabled&&!!plugin.manifest?.panes?.length&&<div class="plugin-contributions"><h4>Panes</h4>{plugin.manifest.panes.map(pane=><button disabled={!!busy||!projectId} title={pane.description||pane.command.command.join(' ')} onClick={()=>void run(pane.title,async()=>{const result=await api<{session:Record<string,unknown>&{id:string};placement:string}>('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,projectContext);window.dispatchEvent(new CustomEvent('mux:plugin-pane-opened',{detail:{session:result.session,placement:result.placement}}))})}>{pane.title}</button>)}</div>}
-        {!!(plugin.manifest?.actions?.length||plugin.manifest?.panes?.length)&&<label>Target Project<select value={projectId} onChange={event=>setProjectId(event.currentTarget.value)}>{projects.map(project=><option value={project.id}>{project.name}</option>)}</select></label>}
-        <details onToggle={event=>{if(event.currentTarget.open&&!logs[plugin.id])void api<Array<Record<string,unknown>>>('GET',`/api/plugins/logs?plugin_id=${plugin.id}`).then(items=>setLogs(current=>({...current,[plugin.id]:items})))}}><summary>Command log</summary><pre>{JSON.stringify(logs[plugin.id]||[],null,2)}</pre></details>
-      </article>)}
+      <div class="plugin-card-list">{catalogue.plugins.map(plugin=>{
+        const expanded=expandedId===plugin.id
+        const confirmingThis=confirming?.id===plugin.id&&!confirming.purge
+        return <article class={`plugin-card ${plugin.enabled?'enabled':''} ${expanded?'expanded':''}`} key={plugin.id}>
+          <header>
+            <button class="plugin-card-summary" aria-expanded={expanded} onClick={()=>setExpandedId(expanded?null:plugin.id)}>
+              <span class={`plugin-state-dot ${plugin.enabled?'enabled':'disabled'}`} aria-hidden="true"/>
+              <span><strong>{plugin.name}</strong><small>{plugin.manifest?.description||plugin.id}</small></span>
+              <em>{plugin.version} · {plugin.enabled?'on':plugin.lifecycle}</em>
+            </button>
+            <div class="plugin-card-actions">
+              {!plugin.approval_current
+                ?<button class="primary" disabled={!!busy} onClick={()=>void run(`Approve ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/approve`,{enable:true}))}>Approve</button>
+                :<button disabled={!!busy} onClick={()=>void run(`${plugin.enabled?'Disable':'Enable'} ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/enable`,{enabled:!plugin.enabled}))}>{plugin.enabled?'Disable':'Enable'}</button>}
+              {confirmingThis?<><button class="danger" disabled={!!busy} onClick={()=>void uninstall(plugin,false)}>Confirm uninstall</button><button disabled={!!busy} onClick={()=>setConfirming(null)}>Cancel</button></>:<button disabled={!!busy} onClick={()=>setConfirming({id:plugin.id,purge:false})}>Uninstall</button>}
+              <button class="plugin-expand" aria-label={`${expanded?'Collapse':'Expand'} ${plugin.name}`} aria-expanded={expanded} onClick={()=>setExpandedId(expanded?null:plugin.id)}>{expanded?'▴':'▾'}</button>
+            </div>
+          </header>
+          {expanded&&<div class="plugin-card-details">
+            {plugin.diagnostic&&<p class="settings-inline-error">{plugin.diagnostic}</p>}
+            <dl><dt>ID</dt><dd><code>{plugin.id}</code></dd><dt>Source</dt><dd>{plugin.source_kind}: {plugin.source_ref}</dd><dt>Permissions</dt><dd>{plugin.manifest?.permissions?.join(', ')||'none'}</dd><dt>Config</dt><dd><code>{plugin.config_dir}</code></dd><dt>State</dt><dd><code>{plugin.state_dir}</code></dd></dl>
+            {!!plugin.manifest&&((plugin.manifest.actions?.length||0)>0||(plugin.manifest.panes?.length||0)>0)&&<div class="plugin-contributions"><h4>Tools</h4><p>Project tools also appear under that Project's Run menu and in the command palette.</p>
+              {plugin.enabled&&plugin.manifest.panes?.map(pane=><button disabled={!!busy||!projectId} title={pane.description||pane.command.command.join(' ')} onClick={()=>void openPane(plugin,pane.id,pane.title)}>{pane.title}</button>)}
+              {plugin.enabled&&plugin.manifest.actions?.map(action=><button disabled={!!busy||(!projectId&&action.contexts.includes('project'))} title={action.description||action.command.command.join(' ')} onClick={()=>void run(action.title,()=>mutate('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,action.contexts.includes('project')?projectContext:{context:'global'}))}>{action.title}</button>)}
+            </div>}
+            <details onToggle={event=>{if(event.currentTarget.open&&!logs[plugin.id])void api<Array<Record<string,unknown>>>('GET',`/api/plugins/logs?plugin_id=${plugin.id}`).then(items=>setLogs(current=>({...current,[plugin.id]:items})))}}><summary>Recent command log</summary><pre>{JSON.stringify(logs[plugin.id]||[],null,2)}</pre></details>
+            <div class="plugin-advanced-actions">
+              {plugin.source_kind==='managed'&&<button disabled={!!busy} onClick={()=>void run(`Update ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/update`,{}))}>Stage update</button>}
+              <button disabled={!!busy||!plugin.resolved_ref} onClick={()=>void run(`Rollback ${plugin.name}`,()=>mutate('POST',`/api/plugins/${plugin.id}/rollback`,{}))}>Rollback</button>
+              {confirming?.id===plugin.id&&confirming.purge?<><button class="danger" disabled={!!busy} onClick={()=>void uninstall(plugin,true)}>Confirm purge data</button><button disabled={!!busy} onClick={()=>setConfirming(null)}>Cancel</button></>:<button class="danger" disabled={!!busy} onClick={()=>setConfirming({id:plugin.id,purge:true})}>Purge data</button>}
+            </div>
+          </div>}
+        </article>
+      })}</div>
     </section>
-    <section><h3>Community marketplace</h3>
-      <p>The marketplace is an unreviewed GitHub-topic index. A listing is not a security review or endorsement.</p>
-      <button disabled={!!busy} onClick={()=>void run('Marketplace',async()=>setMarket((await api<{repositories:MarketRepo[]}>('GET','/api/plugins/marketplace',undefined,{timeoutMs:20_000})).repositories))}>Browse marketplace</button>
-      {market?.map(repo=><article class="plugin-market-row"><div><a href={repo.url} target="_blank" rel="noreferrer">{repo.full_name}</a><p>{repo.description}</p></div><span>{repo.stars}★ · {repo.language||'unknown'} · {repo.license||'license unknown'}</span><button onClick={()=>{setMode('install');setSource(repo.full_name)}}>Select</button></article>)}
-    </section>
+
+    <details class="plugin-add"><summary>Add a plugin</summary><section><label>Source mode<select value={mode} onChange={event=>setMode(event.currentTarget.value as 'link'|'install')}><option value="link">Link local directory</option><option value="install">Managed copy or GitHub owner/repo</option></select></label><label>{mode==='link'?'Directory':'Source'}<input value={source} onInput={event=>setSource(event.currentTarget.value)} placeholder={mode==='link'?'D:\\plugins\\my-plugin':'owner/repository'} /></label><div class="theme-actions"><button class="primary" disabled={!source.trim()||!!busy} onClick={install}>{mode==='link'?'Inspect and link':'Inspect and install'}</button><button disabled={!!busy} onClick={()=>void run('Refresh',load)}>Refresh</button></div></section></details>
+    <details class="plugin-market"><summary>Community marketplace</summary><section><p>Unreviewed GitHub repositories. A listing is not an endorsement.</p><button disabled={!!busy} onClick={()=>void run('Marketplace',async()=>setMarket((await api<{repositories:MarketRepo[]}>('GET','/api/plugins/marketplace',undefined,{timeoutMs:20_000})).repositories))}>Browse marketplace</button>{market?.map(repo=><article class="plugin-market-row"><div><a href={repo.url} target="_blank" rel="noreferrer">{repo.full_name}</a><p>{repo.description}</p></div><span>{repo.stars}★ · {repo.language||'unknown'} · {repo.license||'license unknown'}</span><button onClick={()=>{setMode('install');setSource(repo.full_name)}}>Select</button></article>)}</section></details>
     {message&&<p class={message.toLowerCase().includes('failed')?'settings-inline-error':'profile-hint'} role="status">{message}</p>}
   </div>
 }

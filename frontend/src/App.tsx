@@ -160,7 +160,8 @@ import {
   createFleetRefreshController, describeFleetFailures, fetchFleetSlices, type FleetRefreshController,
 } from './fleetRefresh.ts'
 import { planFleetLayouts, type PendingSpawn } from './fleetLayouts.ts'
-import { pluginPaneTarget } from './pluginPanes.ts'
+import { placePluginPane, pluginPaneTarget } from './pluginPanes.ts'
+import type { InstalledPlugin } from './pluginCatalog.ts'
 import { createLayoutWriter } from './layoutWriter.ts'
 import { currentProfile, hasSoftKeyboard, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
@@ -923,13 +924,16 @@ export function App() {
   // The Queue drawer tab's deliberate-open counter focuses the composer even when the
   // same chip is clicked twice.
   const [queueOpenToken,setQueueOpenToken]=useState(0)
-  type PluginContribution={id:string;title:string;description:string;contexts:string[]}
-  type CommandPlugin={id:string;name:string;enabled:boolean;manifest:null|{actions:PluginContribution[];panes:PluginContribution[]}}
-  const [commandPlugins,setCommandPlugins]=useState<CommandPlugin[]>([])
+  const [commandPlugins,setCommandPlugins]=useState<InstalledPlugin[]>([])
   const [pluginPopupId,setPluginPopupId]=useState<string|null>(null)
-  const loadCommandPlugins=useCallback(()=>api<{plugins:CommandPlugin[]}>('GET','/api/plugins')
+  const loadCommandPlugins=useCallback(()=>api<{plugins:InstalledPlugin[]}>('GET','/api/plugins')
     .then(result=>setCommandPlugins(result.plugins.filter(plugin=>plugin.enabled&&plugin.manifest)))
     .catch(()=>{}),[])
+  const openPluginPane=useCallback((pluginId:string,paneId:string,targetProjectId:string)=>
+    api<{session:Session;placement:string}>('POST',`/api/plugins/${pluginId}/panes/${paneId}`,{
+      context:'project',project_id:targetProjectId,
+    }).then(result=>window.dispatchEvent(new CustomEvent('mux:plugin-pane-opened',{detail:result})))
+      .catch(error=>setError(error instanceof Error?error.message:String(error))),[])
   useEffect(()=>{
     void loadCommandPlugins()
     window.addEventListener('focus',loadCommandPlugins)
@@ -1870,6 +1874,15 @@ export function App() {
       setSettingsOpen(false);setSettingsNavOpen(false)
       const target=pluginPaneTarget(detail.session,detail.placement)
       if(target.mode==='popup'){setPluginPopupId(target.popupId);return}
+      const project=projectsRef.current.find(item=>item.id===target.projectId)
+      const current=layoutValues.current[target.projectId]||parseLayout(project?.layout)
+      const anchor=target.projectId===joinAnchor.current.projectId
+        ?joinAnchor.current.viewId
+        :spawnAnchorId(current)
+      const next=placePluginPane(current,target.sessionId,detail.placement,anchor)
+      layoutValues.current[target.projectId]=next
+      setLayoutMap(layouts=>({...layouts,[target.projectId]:next}))
+      void layoutWriter.write(target.projectId,next,{quiet:true})
       setProjectId(target.projectId);setActiveId(target.sessionId);setFocusedViewId(target.sessionId);setSidebarOpen(false)
     }
     window.addEventListener('mux:plugin-pane-opened',opened)
@@ -5751,7 +5764,7 @@ export function App() {
         const available=action.contexts.includes(context.context)
         return {id:`plugin.${plugin.id}.action.${action.id}`,label:`${plugin.name}: ${action.title}`,category:'input' as const,available,disabledReason:'Select a supported Project or session context',run:()=>void api('POST',`/api/plugins/${plugin.id}/actions/${action.id}`,context).catch(error=>setError(error instanceof Error?error.message:String(error)))}
       }),
-      ...(plugin.manifest?.panes||[]).map(pane=>({id:`plugin.${plugin.id}.pane.${pane.id}`,label:`${plugin.name}: Open ${pane.title}`,category:'pane' as const,available:!!activeProject&&pane.contexts.includes('project'),disabledReason:'Select a Project first',run:()=>{if(activeProject)void api<{session:Session;placement:string}>('POST',`/api/plugins/${plugin.id}/panes/${pane.id}`,{context:'project',project_id:activeProject.id}).then(result=>{setSessions(current=>current.some(item=>item.id===result.session.id)?current:[...current,result.session]);if(result.placement==='popup')setPluginPopupId(result.session.id)}).catch(error=>setError(error instanceof Error?error.message:String(error)))}})),
+      ...(plugin.manifest?.panes||[]).map(pane=>({id:`plugin.${plugin.id}.pane.${pane.id}`,label:`${plugin.name}: Open ${pane.title}`,category:'pane' as const,available:!!activeProject&&pane.contexts.includes('project'),disabledReason:'Select a Project first',run:()=>{if(activeProject)void openPluginPane(plugin.id,pane.id,activeProject.id)}})),
     ]),
     // The palette is where someone looks who does not yet know the footer button
     // exists, which is exactly the person this launches something for. The
@@ -7315,10 +7328,12 @@ export function App() {
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
-    const terminalPane=<section key={id} class={`terminal-pane ${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
+    const terminalPane=<section key={id} class={`terminal-pane ${session.plugin_id?'plugin-utility-pane ':''}${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
         <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
-        {!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
+        {session.plugin_id
+          ?<div class="pane-path plugin-utility-label" title={`${session.plugin_id} · ${session.plugin_entrypoint_id||'pane'}`}>plugin tool · {session.plugin_id}</div>
+          :!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         {/* `appr:` leads the tools group. It is a standing *mode* rather than a one-shot
             action, so it reads first and the two surfaces that open a panel (`queue`,
             `transcript`) follow it, with the overflow menu last. It stays on every agent
@@ -8306,7 +8321,7 @@ export function App() {
       </form>
     </div>}
 
-    {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeCreated={(path,backend)=>void startWorktreeSession(runMenu.project.id,path,backend)} onError={setError}/>}
+    {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} plugins={commandPlugins} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeCreated={(path,backend)=>void startWorktreeSession(runMenu.project.id,path,backend)} onPluginPane={(pluginId,paneId)=>void openPluginPane(pluginId,paneId,runMenu.project.id)} onError={setError}/>}
 
     {/* Sits above the workspace and takes no focus: the sequence is still being
         typed, and moving focus would end it. Labels come from the live registry, so
@@ -8801,7 +8816,7 @@ export function App() {
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
     {pluginPopupId&&sessions.some(item=>item.id===pluginPopupId)&&<div class="modal-layer plugin-popup-layer" role="dialog" aria-modal="true" aria-label="Plugin popup"><div class="modal plugin-popup-modal"><header><strong>{sessionName(sessions.find(item=>item.id===pluginPopupId)!)}</strong><button aria-label="Close plugin popup" onClick={()=>{const id=pluginPopupId;setPluginPopupId(null);void api('DELETE',`/api/sessions/${id}`).then(()=>setSessions(current=>current.filter(item=>item.id!==id))).catch(error=>setError(error instanceof Error?error.message:String(error)))}}>×</button></header><div class="plugin-popup-terminal">{renderPaneNode(terminalLeaf(pluginPopupId),'plugin-popup',false,true)}</div></div></div>}
-    {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false); void loadCommandPlugins() }} />}
+    {settingsOpen && SettingsView && <SettingsView activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} focusedProjectId={projectId} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onStartVoiceSetup={()=>{setSettingsOpen(false);setSettingsNavOpen(false);setVoiceSetupOpen(true)}} onLaunchConfigurator={harness=>void launchConfigurator(harness)} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen('agents')}} onOpenAutomation={()=>{setSettingsOpen(false);openAutomation('policy')}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false); void loadCommandPlugins() }} />}
 
     {/* Both first-run surfaces are drawn from ONE decision (`firstRunSurface`), so
         "exactly one of them, ever" is a property of the function rather than of two

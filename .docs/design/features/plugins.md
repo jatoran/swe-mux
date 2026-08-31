@@ -70,6 +70,9 @@ Tab placement enters the focused terminal stack and split placement opens to its
 The fleet reconciler routes those sessions from their retained `plugin_placement`, so an event-driven refresh cannot race the pane-open response.
 Popup placement renders the same session in a modal, is excluded from durable layout reconciliation, and stops the session when the modal closes.
 Opening any pane contribution closes Settings and focuses the resulting workspace pane or popup.
+Each plugin entrypoint is single-instance per Project while its pane is live.
+Launching it again focuses the existing pane instead of creating a duplicate.
+Plugin utility panes use ordinary terminal input and context menus but omit the agent-oriented command rail.
 
 ### Startup hooks
 
@@ -112,7 +115,10 @@ The permission layer prevents accidental control-plane widening and provides aud
 
 ## Management surfaces
 
-Settings contains a Plugins tab for the global kill switch, link and install, inspection and approval, enablement, update, rollback, uninstall, purge, contributions, command logs, source/config/state paths, and the unreviewed marketplace.
+Settings contains a compact Plugins list with inline enablement and uninstall controls.
+Each row expands for trust details, source/config/state paths, contribution testing, update, rollback, purge, and command logs.
+The shared test Project defaults to the Project focused when Settings opened, while its choices are alphabetical.
+Project-scoped pane contributions appear in that Project's Run menu, and every enabled contribution remains discoverable in the command palette.
 The command palette receives one entry per enabled action and pane plus a stable Manage plugins command.
 The `swemux plugin` CLI exposes the same lifecycle and contribution operations for recovery and scripts.
 The shipped local-development loop is validate, link, inspect, approve, enable, invoke, inspect logs, disable, uninstall, and relink.
@@ -134,6 +140,7 @@ Selecting a repository only fills the managed-install source; installation still
 - CLI: `src/swe_mux/cli.py`
 - Session ownership: `src/swe_mux/models.py`
 - Settings UI: `frontend/src/PluginsSettings.tsx`
+- Project launch surface: `frontend/src/ProjectRunMenu.tsx`
 - Command-palette integration: `frontend/src/App.tsx`
 - Terminal link routing: `frontend/src/pluginLinks.ts`, `frontend/src/TerminalPane.tsx`
 - Backend tests: `tests/test_plugins.py`
