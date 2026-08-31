@@ -62,6 +62,7 @@ import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
 import { PaneRunTrigger } from './PaneRunTrigger'
+import { SCRATCHPAD_TAB_ID } from './noteTabs'
 import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
   DRAWER_DEFAULT_WIDTH, DRAWER_MIN_WIDTH, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
@@ -945,6 +946,7 @@ export function App() {
     ()=>parseHiddenDrawerTabs(localStorage.getItem(DRAWER_HIDDEN_KEY)))
   const drawerLauncherTabs=useMemo(()=>drawerTabs(drawerLayout).map(drawerTab),[drawerLayout])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
+  const [scratchpadEnabled,setScratchpadEnabled]=useState(true)
   // A momentary drawer belongs only to the Project that opened it. Clear the state
   // after any Project switch so returning later cannot revive a stale Actions peek.
   useEffect(()=>setTransientDrawer(null),[projectId])
@@ -1797,6 +1799,7 @@ export function App() {
     terminal_renderer:TerminalRendererPreference
     drawer_tab_display?:'icon'|'title'
     utility_rail_display?:'icon'|'title'
+    note_scratchpad_enabled?:boolean
   }&Record<string,unknown>
 
   // Scale previews have to update both authorities in the browser: the root custom
@@ -1867,6 +1870,7 @@ export function App() {
     setSurfaceGestures(surfaceGesturesEnabled(config))
     setViewBack(viewBackEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
+    setScratchpadEnabled(config.note_scratchpad_enabled!==false)
     setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
     setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')
   }
@@ -1904,6 +1908,16 @@ export function App() {
       .catch(()=>{})
       // Settled, not succeeded: an unreachable daemon must not suppress the tour forever.
       .finally(()=>setFirstRunResolved(true))
+
+  const persistScratchpadEnabled=async(next:boolean):Promise<void>=>{
+    try{
+      const config=await api<AppConfig>('PATCH','/api/config',{note_scratchpad_enabled:next})
+      applyConfig(config,false)
+    }catch(cause){
+      setError(`Scratchpad visibility could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)
+      throw cause
+    }
+  }
 
   const scheduleUiScalePersist = (scale:UiScale):void => {
     const field=uiScaleConfigKey(currentProfile())
@@ -3128,6 +3142,7 @@ export function App() {
     if(place==='drawer')openTargetInDrawer(target);else void showResourceForTarget(target)
   }
   const openScratchpad=(place:NotePlacement='drawer')=>{
+    if(!scratchpadEnabled){setError('Enable the global Scratchpad under Settings → Notes first.');return}
     const targetProject=projectId||activeProject?.id||projects[0]?.id
     if(!targetProject){setError('Create a Project before opening the Scratchpad in a workspace.');return}
     const target:NoteTarget={projectId:targetProject,kind:'global-note',resourceId:'scratchpad'}
@@ -4453,6 +4468,17 @@ export function App() {
   // the winner persisted.
   const updateLayout = layoutWriter.write
 
+  // Disabling Scratchpad removes its view from every Project layout but never deletes the
+  // global note file. Re-enabling restores the Notes-rail entry with its previous content.
+  useEffect(()=>{
+    if(scratchpadEnabled)return
+    for(const project of projects){
+      const current=resolveLayout(layoutMap[project.id],project.layout)
+      if(!leaves(current,'note').some(leaf=>leaf.id===SCRATCHPAD_TAB_ID))continue
+      void updateLayout(project.id,removeLeaf(current,'note',SCRATCHPAD_TAB_ID))
+    }
+  },[scratchpadEnabled,projects,layoutMap])
+
   const showResourceForTarget = async (target:NoteTarget,targetViewId?:string,preserveDrawerSelection=false) => {
     const resourceId=noteIdForTarget(target)
     const targetProject=projects.some(project=>project.id===target.projectId)?target.projectId:(activeProject?.id||projects[0]?.id)
@@ -5691,7 +5717,7 @@ export function App() {
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('policy',activeProject?.id);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
-    { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
+    { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: scratchpadEnabled&&!!activeProject, disabledReason:scratchpadEnabled?'No project workspace available':'Global Scratchpad is disabled under Settings → Notes', run: () => openScratchpad('drawer') },
     { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
     { id: 'notes.browse', label: 'Browse all notes', category: 'view', available: true, run: () => openNotesBrowser(null) },
     { id: 'notes.browseProject', label: 'Browse this project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
@@ -7271,10 +7297,13 @@ export function App() {
       case 'navToggle.open': runNamedCommand('sidebar.open'); return
       case 'drawerToggle.open': runNamedCommand('drawer.open'); return
       case 'noteRail.outline': {
-        // `note.outline` asks "who has focus?", and a rail is not focus — touching it
-        // never made that note the insert target. The gesture already knows the editor
-        // it started on, so it names it and skips the question.
-        const editor=inPath((element):element is HTMLElement=>element.tagName==='CONTINUITY-EDITOR')
+        // `note.outline` asks "who has focus?", while pulling the Notes rail or resource
+        // header does not move focus. Resolve the Project-note editor from the gesture's
+        // own surface and name it explicitly. Scratchpad is excluded by resource kind.
+        const direct=inPath((element):element is HTMLElement=>element.tagName==='CONTINUITY-EDITOR')
+        const resource=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('project-resource')&&element.dataset.resourceKind==='note')
+        const notes=inPath((element):element is HTMLElement=>element instanceof HTMLElement&&element.classList.contains('notes-tab'))
+        const editor=direct||resource?.querySelector<HTMLElement>('continuity-editor')||notes?.querySelector<HTMLElement>('.project-resource[data-resource-kind="note"] continuity-editor')
         if(!editor)return
         window.dispatchEvent(new CustomEvent('mux:note-outline',{cancelable:true,detail:{editor}}))
         return
@@ -7761,6 +7790,8 @@ export function App() {
           openBrowsedNote(targetProject,noteId,place)
         }}
         onOpenScratchpad={openScratchpad}
+        scratchpadEnabled={scratchpadEnabled}
+        onScratchpadEnabled={persistScratchpadEnabled}
         drawerNoteId={drawerNoteId}
         noteTargetClaimToken={drawerNoteClaimRequest?.projectId===projectId&&drawerNoteClaimRequest.resourceId===drawerNoteId?drawerNoteClaimRequest.token:undefined}
         onNoteTargetClaimed={token=>setDrawerNoteClaimRequest(current=>current?.token===token?null:current)}

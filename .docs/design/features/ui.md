@@ -668,7 +668,7 @@ Its rules, and what each one is defending:
   | --- | --- |
   | Workspace | General, Projects, Terminals, Git, Processes |
   | Agents | Harnesses, Accounts, Prompt queue, Automation, Usage |
-  | Interface | Appearance, Input, Text editor, Voice |
+  | Interface | Appearance, Input, Notes, Voice |
   | System | Alerts, Remote, Diagnostics |
 
   A group is a contiguous *run* of the array, not a declared membership list, so a tab that
@@ -1418,7 +1418,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 - **Some swipes belong to a piece of chrome rather than to the screen.**
   A **region** is chrome that answers to a swipe of its own, because the channel the rest of the
   app reserves is dead there (`GESTURE_REGION_SELECTORS`): the terminal's command rail, the mobile
-  tab rail, the voice panel's header, the note editor's command rail, and every control on the
+  tab rail, the voice panel's header, the Notes document rail, Project-note headers, the note editor's command rail, and every control on the
   mobile top bar - the two quota chips, the Project name, the microphone, Run, and the two edge
   toggles.
   On the top bar most of these do what the control's own *tap* does, and that is the point rather
@@ -1466,7 +1466,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   a **tab on the mobile tab rail** opens that tab's menu on either vertical direction - the same
   menu its 350 ms hold opens, reached faster, which is the shape the "reaching a menu should never
   require a hold on touch" rule prefers;
-  the **note editor's command rail** opens the heading outline;
+  the **Notes document rail**, a **Project-note header**, and the **note editor's command rail** open the heading outline on a downward pull;
   a **quota chip** opens Accounts and **Run** opens the launcher, both on a downward drag, because
   what they open is drawn below the bar and the drag is the pull that brings it down;
   the **microphone** reveals the voice panel downward and puts it away upward - the one control
@@ -1483,9 +1483,9 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Four of the nine resolve to ordinary commands, so a chord, the palette and a swipe reach the
   same code. Three cannot, because no command id can name "the tab I just swiped" - they read
   their target back out of the composed path the recognizer kept.
-  The note rail's is the instructive one: `note.outline` asks *who has focus*, and touching a rail
-  never made its note the insert target, so the swipe names its editor in the event's `detail`
-  and the claim protocol skips the question. A caller that does not name one keeps the focus rule.
+  The note surface is the instructive one: `note.outline` asks *who has focus*, and touching the Notes rail, note header, or editor rail never made that note the insert target.
+  The swipe resolves the Project-note editor within the touched Notes workspace, names it in the event's `detail`, and the claim protocol skips the focus question.
+  A caller that does not name an editor keeps the focus rule.
   The note rail is also matched by the CSS shadow **part** Continuity exports rather than by the
   `.command-rail-buttons` class behind it: the part is the contract, the class is an internal a
   version bump may rename.
@@ -2630,11 +2630,13 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   dragged onto any pane.
   Files can remain visible beside Clipboard or another utility body when the user places them in separate drawer panes.
 - **Notes** is a flat Project-owned collection *and* an editor, and a note is open in exactly one of the two hosts at a time.
-  A non-wrapping sub-tab rail pins Scratchpad first and then shows every note in the active Project in stable creation order.
+  A non-wrapping sub-tab rail shows Scratchpad first when enabled and then every note in the active Project in stable creation order.
   These tabs are the primary navigation and cannot be closed.
   The selected tab scrolls into view automatically, and compact scroll controls handle ordinary overflow.
   A separate searchable browser handles large collections, all-Project discovery, and note management.
   Scratchpad is global, has no rename/delete controls, and uses the same drawer and workspace-tab placements as Project notes.
+  Right-clicking Scratchpad or empty Notes-rail space toggles its install-wide visibility; Settings → Notes exposes the same setting.
+  Disabling closes Scratchpad workspace views and hides its command without deleting its retained content.
   The browser lists explicit notes, including empty notes, searchable over title, Project, and excerpt and scoped to this Project or to all Projects.
   It creates and renames notes through title prompts.
   Selecting a rail tab or browser row opens that note **in the drawer**; `⇥` moves it to a workspace tab instead.
@@ -2642,7 +2644,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Desktop right-click and guarded mobile long-press expose open, rename, and revision-checked delete actions.
   Deletion submits the revision carried by the listing, refuses a concurrent edit with `409 revision_conflict`, logs the user action, and emits the normal note-change event with revision `missing`.
   An open clean editor follows that event to a deleted state; an editor with unsaved local work keeps its text and reaches the existing revision-conflict path instead of being silently cleared.
-  Deleting the selected note selects the next Project note, then the previous note if needed, and falls back to Scratchpad only when none remain.
+  Deleting the selected note selects the next Project note, then the previous note if needed, and falls back to Scratchpad only when it is enabled and none remain.
   Terminals and History do not create or own notes.
 - **Why one host at a time is a rule and not a preference.** `noteSaveQueue` keys one entry per
   `(scope, resource)` at module scope, so two mounted editors on one note share it: each submits

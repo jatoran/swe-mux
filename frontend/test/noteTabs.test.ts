@@ -28,6 +28,8 @@ test('selection restoration canonicalizes migrated session-note ids', () => {
   assert.equal(fallbackNoteTab('note:missing', ordered), projectNoteTabId('first-a'))
   assert.equal(fallbackNoteTab(SCRATCHPAD_TAB_ID, ordered), SCRATCHPAD_TAB_ID)
   assert.equal(fallbackNoteTab(null, []), SCRATCHPAD_TAB_ID)
+  assert.equal(fallbackNoteTab(SCRATCHPAD_TAB_ID, ordered, false), projectNoteTabId('first-a'))
+  assert.equal(fallbackNoteTab(null, [], false), null)
 })
 
 test('a Project protects its last note, counted per Project across a mixed listing', () => {
@@ -51,4 +53,5 @@ test('deleting the selected tab chooses its next neighbour, then its previous ne
   assert.equal(noteTabAfterDelete(projectNoteTabId('later'), 'later', ordered), projectNoteTabId('first-b'))
   assert.equal(noteTabAfterDelete(projectNoteTabId('first-a'), 'later', ordered), null)
   assert.equal(noteTabAfterDelete(projectNoteTabId('only'), 'only', [{ note_id: 'only', created_at: 1 }]), SCRATCHPAD_TAB_ID)
+  assert.equal(noteTabAfterDelete(projectNoteTabId('only'), 'only', [{ note_id: 'only', created_at: 1 }], false), null)
 })

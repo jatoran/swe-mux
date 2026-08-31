@@ -1502,7 +1502,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='loading'?'Loading…'
     :status==='error'?null
     :'This resource is read-only.'
-  return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
+  return <section class="project-resource file-editor" data-resource-kind={resource.kind} onKeyDown={handleFindKey}>
     <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{autosaved?<>{isGlobalNote&&<><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">Global</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={`Save status: ${saveIndicator.label}`} title={`Save status: ${saveIndicator.label}`}/></>:<span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||canPreviewDocument||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}

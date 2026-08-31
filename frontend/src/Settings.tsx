@@ -109,6 +109,7 @@ type Config = {
   clipboard_history_enabled:boolean;clipboard_history_persist:boolean
   clipboard_history_limit:number;clipboard_history_entry_max_chars:number
   clipboard_history_retention_hours:number;clipboard_history_redact_secrets:boolean
+  note_scratchpad_enabled:boolean
   note_spellcheck:boolean;note_syntax:'markdown'|'plain'
   note_tab_behavior:'indent'|'focus';note_shortcut_policy:ShortcutPolicy
   note_font_family:string;note_font_size_px:number;note_line_height:number
@@ -1680,6 +1681,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             Colours are absent on purpose: the theme already drives the editor's
             colour variables, and a second source for them would fight it. */}
         {activeTab==='notes'&&<Fragment>
+          <section><h3>Notes workspace</h3>
+            <label class="check" data-setting="note_scratchpad_enabled"><span>Global Scratchpad</span><input type="checkbox" checked={draft.note_scratchpad_enabled} onChange={e=>change('note_scratchpad_enabled',e.currentTarget.checked)}/><small>Show the cross-Project Scratchpad in the Notes rail. Turning it off closes its workspace views but keeps its content.</small></label>
+          </section>
           <section><h3>Note editor</h3>
             <label class="check"><span>Spellcheck</span><input type="checkbox" checked={draft.note_spellcheck} onChange={e=>change('note_spellcheck',e.currentTarget.checked)}/><small>The browser's spellchecker; it also underlines code, paths, and identifiers.</small></label>
             <label class="check"><span>Indent guides</span><input type="checkbox" checked={draft.note_indent_guides} onChange={e=>change('note_indent_guides',e.currentTarget.checked)}/><small>Vertical rules marking each enclosing indent level; the caret's level draws brighter.</small></label>
@@ -2447,7 +2451,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Desktop interface scale<Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
-          <p><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>-</kbd>, and <kbd>Ctrl</kbd>+<kbd>0</kbd> also drive the active value. The note editor keeps its own typography under <strong>Text editor</strong>.</p>
+          <p><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>-</kbd>, and <kbd>Ctrl</kbd>+<kbd>0</kbd> also drive the active value. The note editor keeps its own typography under <strong>Notes</strong>.</p>
           </section><section><h3>Rail density</h3>
           <label data-setting="rail_density_desktop">Desktop rail density<Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <label data-setting="rail_density_mobile">Mobile rail density<Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
