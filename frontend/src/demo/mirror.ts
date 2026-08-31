@@ -24,10 +24,16 @@
  * the Project record, so a split made on the desktop is already in the phone's copy -
  * it just draws it as a tab rail, which is what the phone layout is *for*.
  */
-import { state } from './store.ts'
+import { trueRandom } from './determinism.ts'
+import {
+  clickProject, clickSession, clickTab, delay, mirrorableTablist, narrow,
+  pressEscape, runCommand as run, text, visible,
+} from './drive.ts'
 
 const CHANNEL_NAME = 'swemux-demo-view-v1'
-const FRAME_ID = `view-${Math.random().toString(36).slice(2, 10)}`
+/** The real entropy source even under determinism, like the store's frame id: two frames
+ *  that minted the same identity would each discard everything the other said. */
+const FRAME_ID = `view-${trueRandom().toString(36).slice(2, 10)}`
 
 /** One correction per tick, then look again: an act can change more than it names. */
 const SETTLE_MS = 140
@@ -93,24 +99,6 @@ const OVERLAY_COMMANDS: Record<string, string> = {
   Settings: 'settings.open',
   'Command palette': 'palette.open',
 }
-
-const narrow = (): boolean => window.matchMedia('(max-width: 760px)').matches
-
-const text = (value: string | null | undefined): string => (value || '').replace(/\s+/g, ' ').trim()
-
-const visible = (element: Element): boolean =>
-  element.getClientRects().length > 0
-
-/**
- * Segmented controls this frame must not drive.
- *
- * The side panel's own tab strip is a tablist, and clicking its selected tab collapses
- * the panel - so mirroring it generically would close the panel it had just opened.
- * The pane tab rails are a tablist too, and they are pane geometry, which is the one
- * thing this mirror deliberately leaves alone.
- */
-const mirrorableTablist = (strip: Element): boolean =>
-  !strip.querySelector('[data-drawer-tab-id]') && !strip.classList.contains('stack-tabs')
 
 /**
  * A modal, as opposed to a panel that happens to be one on a phone.
@@ -193,50 +181,6 @@ function readView(): ViewState {
 const same = (left: ViewState, right: ViewState): boolean =>
   JSON.stringify(left) === JSON.stringify(right)
 
-const run = (command: string): void => {
-  window.dispatchEvent(new CustomEvent('mux:command', { detail: command }))
-}
-
-/** The app's own dismiss stack, reached the way a person reaches it. Only ever sent
- *  when this frame has something open and the other does not, so it can never reach
- *  the terminal underneath. */
-const pressEscape = (): void => {
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-}
-
-function clickProject(projectId: string): boolean {
-  const name = state.projects.find(item => item.id === projectId)?.name
-  if (!name) return false
-  for (const row of document.querySelectorAll<HTMLElement>('.project-row')) {
-    if (text(row.querySelector('.project-name-text')?.textContent) !== name) continue
-    row.click()
-    return true
-  }
-  return false
-}
-
-function clickSession(sessionId: string): boolean {
-  const row = document.querySelector<HTMLElement>(
-    `[data-sidebar-session-id="${CSS.escape(sessionId)}"]`,
-  )
-  if (!row) return false
-  row.click()
-  return true
-}
-
-function clickTab(label: string, wanted: string): boolean {
-  for (const strip of document.querySelectorAll('[role="tablist"][aria-label]')) {
-    if (strip.getAttribute('aria-label') !== label || !mirrorableTablist(strip)) continue
-    for (const tab of strip.querySelectorAll<HTMLElement>('[role="tab"]')) {
-      if (text(tab.textContent) !== wanted) continue
-      if (tab.getAttribute('aria-selected') === 'true') return false
-      tab.click()
-      return true
-    }
-  }
-  return false
-}
-
 /**
  * One step toward the other frame's state, or `false` when there is nothing left to do.
  *
@@ -303,13 +247,11 @@ function applyOneDifference(mine: ViewState, want: ViewState, tried: Set<string>
   return false
 }
 
-const delay = (ms: number): Promise<void> => new Promise(resolve => { window.setTimeout(resolve, ms) })
-
-// The walkthrough's leadership, decided over the same channel. Module state rather
-// than closure state because `requestCoachLead` is called by the coach component,
-// which knows nothing about the mirror beyond wanting an answer.
+// The director's leadership, decided over the same channel. Module state rather than
+// closure state because `requestDirectorLead` is called by the director, which knows
+// nothing about the mirror beyond wanting an answer.
 let mirrorChannel: BroadcastChannel | null = null
-let coachLead = false
+let directorLead = false
 /** The best rival claim heard recently, and when a live leader last said so.
  *
  *  Both are *accumulated* rather than cleared when this frame claims. The frames boot
@@ -373,8 +315,8 @@ export function installViewMirror(): void {
     const payload = event.data as { kind?: string; from?: string; view?: ViewState; score?: number }
     if (!payload || payload.from === FRAME_ID) return
     peerSeen = true
-    if (payload.kind === 'coach-claim') {
-      if (coachLead) { channel.postMessage({ kind: 'coach-taken', from: FRAME_ID }); return }
+    if (payload.kind === 'director-claim') {
+      if (directorLead) { channel.postMessage({ kind: 'director-taken', from: FRAME_ID }); return }
       if (typeof payload.score !== 'number') return
       const stale = Date.now() - rivalClaim.at > CLAIM_TTL_MS
       rivalClaim = {
@@ -383,7 +325,7 @@ export function installViewMirror(): void {
       }
       return
     }
-    if (payload.kind === 'coach-taken') { takenAt = Date.now(); return }
+    if (payload.kind === 'director-taken') { takenAt = Date.now(); return }
     if (payload.kind !== 'view' || !payload.view) return
     desired = payload.view
     void converge()
@@ -407,27 +349,43 @@ export function installViewMirror(): void {
 }
 
 /**
- * Whether this frame should run the walkthrough.
+ * Whether this frame should run the director - the walkthrough, or any scenario.
  *
- * With the desktop and phone frames side by side they are two copies of one app, and
- * two tours flashing two different controls at once is noise rather than instruction -
- * especially on a 320px phone frame, where the card covers the thing it points at.
+ * With the desktop and phone frames side by side they are two copies of one app, and two
+ * scripts driving two different controls at once is noise rather than instruction -
+ * especially on a 320px phone frame, where the caption covers the thing it points at.
  * So exactly one frame runs it, the wider one by preference, and the mirror means its
  * steps visibly drive the other: pressing the rail on the desktop lights the phone up
- * too, which demonstrates more than a second tour would.
+ * too, which demonstrates more than a second copy would.
  *
  * A frame that is alone always wins, because nobody answers.
  */
-export async function requestCoachLead(mobile: boolean): Promise<boolean> {
+export async function requestDirectorLead(mobile: boolean): Promise<boolean> {
   if (!mirrorChannel) return true
   // The wider frame leads, with a random low half so two frames of the same width
-  // still settle on one rather than both deciding they won.
-  const score = (mobile ? 1 : 2) * 1_000_000 + Math.floor(Math.random() * 1_000_000)
-  mirrorChannel.postMessage({ kind: 'coach-claim', from: FRAME_ID, score })
+  // still settle on one rather than both deciding they won. `trueRandom` for the same
+  // reason as the frame id: a seeded draw would give both frames the same tiebreak.
+  const score = (mobile ? 1 : 2) * 1_000_000 + Math.floor(trueRandom() * 1_000_000)
+  mirrorChannel.postMessage({ kind: 'director-claim', from: FRAME_ID, score })
   await delay(600)
   const heardRecently = Date.now() - rivalClaim.at < CLAIM_TTL_MS
   if (Date.now() - takenAt < CLAIM_TTL_MS) return false
   if (heardRecently && rivalClaim.score > score) return false
-  coachLead = true
+  directorLead = true
   return true
+}
+
+/**
+ * Give the lead back.
+ *
+ * The election was written for a walkthrough that ran once and was over. A director runs
+ * a scenario, ends, and may be asked for another one minutes later - and a frame that
+ * kept `directorLead` forever would answer every future claim with "taken", so the other
+ * frame could never lead even after this one had finished. Releasing on end makes each
+ * run its own election, which is what `CLAIM_TTL_MS` already assumed.
+ */
+export function releaseDirectorLead(): void {
+  directorLead = false
+  rivalClaim = { score: 0, at: 0 }
+  takenAt = 0
 }
