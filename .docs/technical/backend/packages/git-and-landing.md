@@ -140,6 +140,8 @@ The closed documentation allowlist, the `git diff --raw -z` parser it runs over,
 
 One consistent reading of both checkouts and the disposition it implies: `ready`, a transient `hold` (busy tree, working session, unreadable repository), or a permanent `refuse` (a trunk that is a linked worktree, the wrong branch, an unregistered checkout).
 It fails closed, and identifies the main tree by `--absolute-git-dir` versus `--git-common-dir` rather than by name.
+Its safety-critical Git reads use a 15-second deadline rather than the interactive monitor's 4-second deadline, so a lowered-priority verification gate cannot misclassify ordinary host contention as an unreadable checkout.
+A deadline expiry still fails closed as a transient hold.
 
 **Not:** which sessions are busy, injected by `server.py` at build time, or mutation of any kind.
 

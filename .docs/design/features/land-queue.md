@@ -58,6 +58,8 @@ The third is a queue-executed verdict that already stands over this exact tree w
 
 The hazard the pipeline lives inside is that the worktree it reconciles is a checkout a live agent session owns and may be mid-turn writing into.
 Preconditions are therefore evaluated before **each** mutation rather than once at enqueue, and they fail closed: an unreadable repository blocks exactly like a dirty one, because "the check could not be made" and "the check passed" must never be conflated.
+These safety-critical reads have a 15-second deadline, separate from the interactive Git monitor's 4-second deadline, so verification-gate CPU contention does not manufacture an unreadable repository.
+A deadline expiry still fails closed as a transient hold.
 
 They divide into two dispositions, and the difference is the queue's whole operator experience:
 
