@@ -16,9 +16,9 @@ export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=serverNow())
   const seconds=Math.max(0,Math.ceil(resetsAt-nowSeconds))
   if(seconds<60)return '<1m'
   const minutes=Math.ceil(seconds/60),days=Math.floor(minutes/1440),hours=Math.floor((minutes%1440)/60)
-  if(days)return `${days}d${hours}h`
+  if(days)return `${days}d${hours?`${hours}h`:''}`
   const mins=minutes%60
-  return hours?`${hours}h${mins}m`:`${minutes}m`
+  return hours?`${hours}h${mins?`${mins}m`:''}`:`${minutes}m`
 }
 
 export const quotaWindowSummary=(window?:QuotaWindowDisplay|null,nowSeconds=serverNow())=>window?`${percent(window)}${window.resets_at?` ${formatResetRemaining(window.resets_at,nowSeconds)}`:''}`:'—'
@@ -112,10 +112,7 @@ export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=
   }))
 }
 
-export type QuotaRowCell={key:QuotaGridSegment['key'];percent:string;reset:string}
-
-/** The heading each quota column carries, in the same vocabulary the tooltips use. */
-export const QUOTA_COLUMN_HEADINGS:Record<QuotaRowCell['key'],string>={session:'5h',weekly:'weekly',fable:'fable'}
+export type QuotaRowCell={key:QuotaGridSegment['key'];percent:string;reset:string;qualifier:'/5h'|'/7d'|'fable'}
 
 /** Whether any account in a provider's list reports a Fable window.
  *
@@ -148,6 +145,7 @@ export function quotaRowCells(account:QuotaAccountDisplay|undefined,fable:boolea
     // Fable reports no reset instant of its own; the weekly window beside it is the one
     // that rolls over, and printing that time twice would claim two clocks.
     reset:key==='fable'?'':formatResetRemaining(window?.resets_at,nowSeconds),
+    qualifier:key==='session'?'/5h':key==='weekly'?'/7d':'fable',
   })
   const cells=[cell('session',quota?.session),cell('weekly',quota?.weekly)]
   if(fable)cells.push(cell('fable',quota?.fable))

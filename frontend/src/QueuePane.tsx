@@ -369,6 +369,10 @@ export function QueuePane({
     ? active.filter(item => item.id !== editing.messageId)
     : active
   const done = useMemo(() => messages.filter(item => isDoneState(item.state)), [messages])
+  /** Nothing on screen but the compose control - not merely "no pending items", because a
+   *  collapsed `N delivered or closed` disclosure is content and centring around it would
+   *  put the button over the top of it. */
+  const listEmpty = !listed.length && !editing?.floating && !done.length
   const liveAgents = useMemo(
     () => agentTargets(sessions, session?.project_id ?? '').filter(item => item.id !== sessionId),
     [sessions, session, sessionId],
@@ -1276,14 +1280,21 @@ export function QueuePane({
         </p>
       )}
 
-      <ul class="queue-list">
+      {/* The compose control belongs to the list, not to the panel's chrome.
+         *
+         * As a pinned footer it sat at the bottom of the tab whatever the list did, so a
+         * queue with two items in it drew a button a screen away from the last one and an
+         * *empty* queue drew it under a paragraph with nothing else on screen at all. It
+         * is the last row instead: after the final item when the list is short, and
+         * centred with its explanation when there is nothing queued, which is the one
+         * state where the button is the whole content of the tab. */}
+      <ul class={`queue-list${listEmpty ? ' queue-list-empty' : ''}`}>
         {listed.map(row)}
         {draftRow()}
-        {!listed.length && !editing?.floating && (
+        {!targetable && (
           <li class="queue-empty">
-            {targetable
-              ? 'Nothing queued. Press “New message” to stage one — it saves as you type and waits for your explicit “Send now”; nothing is ever delivered on a timer.'
-              : 'Focus an agent session to stage messages for it. Shells are never targets: a paste there would execute.'}
+            Focus an agent session to stage messages for it. Shells are never targets:
+            a paste there would execute.
           </li>
         )}
         {done.length > 0 && (
@@ -1294,21 +1305,29 @@ export function QueuePane({
           </li>
         )}
         {showDone && done.map(row)}
+        {targetable && live && (
+          <li class={`queue-compose${listEmpty ? ' queue-compose-alone' : ''}`}>
+            <button
+              type="button"
+              class="queue-new"
+              title="Add a queued message. It opens for editing and saves as you type."
+              onClick={startDraft}
+            >
+              <PlusIcon />
+              <span>New message</span>
+            </button>
+            {/* Said beside the button rather than instead of it: with the control right
+                there, "press New message" was a sentence explaining a thing already on
+                screen, and the part worth keeping is the queue's contract. */}
+            {listEmpty && (
+              <p class="queue-empty-note">
+                Nothing queued. A message saves as you type and waits for your explicit
+                “Send now” — nothing is ever delivered on a timer.
+              </p>
+            )}
+          </li>
+        )}
       </ul>
-
-      {targetable && live && (
-        <footer class="queue-compose-bar">
-          <button
-            type="button"
-            class="queue-new"
-            title="Add a queued message. It opens for editing and saves as you type."
-            onClick={startDraft}
-          >
-            <PlusIcon />
-            <span>New message</span>
-          </button>
-        </footer>
-      )}
     </div>
   )
 }

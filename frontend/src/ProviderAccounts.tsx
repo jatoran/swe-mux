@@ -4,7 +4,7 @@ import { api } from './api'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { currentProfile } from './deviceSettings'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, quotaWindowSummary, shownUsageBand, spawnedSessionCount, strandedSessionNotice, strandedSessions, visibleProviders, QUOTA_COLUMN_HEADINGS, type LoginDisplay, type QuotaWindowDisplay, type SessionCountsDisplay } from './providerAccountDisplay'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, quotaWindowSummary, shownUsageBand, spawnedSessionCount, strandedSessionNotice, strandedSessions, visibleProviders, type LoginDisplay, type QuotaWindowDisplay, type SessionCountsDisplay } from './providerAccountDisplay'
 import { serverNow } from './serverClock.ts'
 import { emitTutorialAction } from './tutorial'
 // Provider marks live in `harnessIcons.tsx`, which every surface naming a harness reads. This
@@ -231,7 +231,6 @@ export function AccountSwitcher({variant='full',placement,onManage,promptDismiss
         // Decided once per provider, then handed to every row, so the columns are the
         // section's rather than each account's. See `hasFableWindow`.
         const sectionFable=hasFableWindow(saved)
-        const columns=quotaRowCells(undefined,sectionFable).map(cell=>cell.key)
         return <section>
         {/* Sign-in lives here, not only in Settings. With nothing saved this popover
             used to print "No saved accounts" and offer a `manage…` button, which is
@@ -240,14 +239,6 @@ export function AccountSwitcher({variant='full',placement,onManage,promptDismiss
         <div class="account-section-head"><h4>{provider}</h4><button class="account-signin" disabled={!!busy||login?.state==='running'} title={signInTitle(status?.login_commands,provider)} onClick={()=>startLogin(provider)}>+ sign in</button></div>
         {current?.state!=='saved'&&<p class={`account-current-notice ${current?.state||'signed_out'}`}>{currentDescription(current,active)}{current?.match_hint?` ${hintDescription(current)}`:''}</p>}
         <LoginProgress login={login} busy={!!busy} onDismiss={()=>dismissLogin(provider)}/>
-        {/* Named once, above the rows, rather than on each of them: the labels are what
-            make a bare column of percentages readable, and repeating them per account
-            would be three more words per row on a 340px popover. Hidden from assistive
-            technology because each row already carries the same windows named in full,
-            in its own accessible label. */}
-        {!!saved.length&&<div class={`quota-columns${sectionFable?' has-fable':''}`} aria-hidden="true">
-          {columns.map(key=><span key={key}>{QUOTA_COLUMN_HEADINGS[key]}</span>)}
-        </div>}
         {saved.map(account=>{
           // Sessions this account was selected for when they started. Deliberately not
           // "sessions using it": mux cannot see a `/login` typed inside a pane, and a
@@ -257,11 +248,10 @@ export function AccountSwitcher({variant='full',placement,onManage,promptDismiss
           const spawned=spawnedSessionCount(status?.sessions,account.id)
           const spawnedTitle=`${spawned} live session${spawned===1?'':'s'} spawned under this account. That is what mux had selected when each started, not proof of what it authenticates as now.`
           const state=account.conflict&&!account.conflict.is_primary?'duplicate account, polling suspended':quotaTitle(account)
-          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
+          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong>{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}<small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
           {account.quota?.status==='error'
             ?<em class="quota-row-note">unavailable</em>
-            :quotaRowCells(account,sectionFable).map(cell=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}><b>{cell.percent}</b><i>{cell.reset}</i></span>)}
-          {account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}
+            :quotaRowCells(account,sectionFable).map((cell,index)=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}>{index>0&&<i class="quota-separator" aria-hidden="true"> • </i>}<b>{cell.percent}</b>{' '}{cell.reset&&<i class="quota-reset">{cell.reset}</i>}<i class="quota-window-label">{cell.qualifier}</i></span>)}
         </span>}{spawned>0&&<i class="account-session-count" aria-hidden="true" title={spawnedTitle}>{spawned}×</i>}</small></button>
         })}
         {!saved.length&&!login&&<button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>No saved accounts — <strong>sign in to {provider}</strong></button>}
