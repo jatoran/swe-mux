@@ -120,6 +120,8 @@ type Props = {
   onNotesAllProjects: (value: boolean) => void
   onOpenNote: (projectId: string, noteId: string, title: string, place: NotePlacement) => void
   onOpenScratchpad: (place: NotePlacement) => void
+  scratchpadEnabled: boolean
+  onScratchpadEnabled: (enabled: boolean) => Promise<void>
   /** Processes: its Project scope, owned by the caller so it survives a tab switch and a
    *  Project change. The tab subscribes to the shared full-snapshot feed itself — trees and
    *  evidence are not in the reduced sample the sidebar rail polls. */
@@ -309,6 +311,8 @@ export function UtilityDrawer(props: Props) {
         onAllProjects={props.onNotesAllProjects}
         onOpenNote={props.onOpenNote}
         onOpenScratchpad={props.onOpenScratchpad}
+        scratchpadEnabled={props.scratchpadEnabled}
+        onScratchpadEnabled={props.onScratchpadEnabled}
         onDone={onDone}
         selectedResourceId={props.drawerNoteId}
         onPopSelected={() => {

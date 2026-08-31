@@ -173,6 +173,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   },
   "note_shortcut_policy": "browser-safe",
   "note_spellcheck": false,
+  "note_scratchpad_enabled": true,
   "note_syntax": "markdown",
   "note_tab_behavior": "indent",
   "observer_titler_enabled": false,

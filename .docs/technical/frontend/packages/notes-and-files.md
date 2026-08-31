@@ -13,6 +13,7 @@ Design: `../../../design/features/project-resources.md`.
 `fileSearchLimit.ts`
 
 - Project notes plus the `global-note:scratchpad` editor, and canonical and exact-worktree file editors.
+- `NotesTab.tsx` owns the Scratchpad and empty-rail context menus; `App.tsx` mirrors the hot `note_scratchpad_enabled` config, persists direct toggles, and removes disabled Scratchpad leaves from Project layouts without deleting note storage.
 - Right-click and guarded-long-press exclusive canonical creation, with pure destination selection.
 - Bounded CSV/TSV parsing with a virtualized table preview, and revision-pinned allowlisted image display.
 - Root-aware save and watch isolation.
@@ -96,6 +97,8 @@ work still owed to the daemon, and dropping it would turn a loop guard into data
 `noteFind.ts` produces substring match ranges.
 `noteOutline.ts` produces the ATX heading list with its fenced-code exclusion, position-to-heading lookup, and distinct-level depth ladder.
 The lookup is fed the first visible line, since a jump moves the viewport and never the caret.
+`mobileGestures.ts` treats the Notes document rail, Project-note header, and Continuity command-rail part as one downward-pull outline region.
+`App.tsx` resolves the editor within the touched Project-note surface and names it in the existing `mux:note-outline` claim event.
 
 `noteScroll.ts` is the measured jump: a DOM-free convergence loop over a four-call `ViewportScroller` (visible line window, scroll offset, scroll-to, viewport height) that brings a source line to the top of the projection without any pixels-to-lines conversion, which the editor deliberately does not export.
 
