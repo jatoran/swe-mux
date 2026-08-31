@@ -23,7 +23,7 @@ out of `index.html` at generation time, so there is exactly one copy of the
 tokens and exactly one stylesheet for `tools/contrast.py` to audit. Adding a
 second copy is how the light theme breaks on one page only.
 
-The output is committed. GitHub Pages deploys `site/` as a directory, so a page
+The output is committed. The deploy uploads `site/` as a directory, so a page
 built in CI would mean the deploy needed a build step; regenerating locally and
 committing keeps the deploy a file copy. `--check` is what keeps that honest.
 """
@@ -1547,7 +1547,7 @@ def _section_of(page: docs_content.Page) -> str:
 # ----------------------------------------------------------------- the search index
 #
 # A prebuilt index plus a small amount of vanilla JavaScript, because the site is
-# static files on GitHub Pages with no build step and no server, and a search that
+# static files on a CDN with no build step and no server, and a search that
 # needed either would be a search that does not work here.
 #
 # It is a **script** rather than a JSON file, and that is not a style choice. The

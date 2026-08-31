@@ -1328,8 +1328,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Both resolve through `helpTopicForDrawer(tab, segment)`; a tab with no registered topic gets no control rather than an empty modal.
   The scan timeline is Activity's **Timeline** segment, so that is where its help opens from.
 - Each topic links to `https://swemux.dev/docs/<id>/` for the full page. The trailing slash is
-  load-bearing under the Pages Actions source, and the retired `/docs/#<slug>` fragment form
-  must not come back (`site/README.md`).
+  load-bearing - the unslashed form costs a redirect on either host - and the retired
+  `/docs/#<slug>` fragment form must not come back (`site/README.md`).
 
 ## Guided first-run tutorial
 

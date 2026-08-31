@@ -3746,6 +3746,8 @@ requires one; crash telemetry or license infrastructure would, and both are out 
   GitHub Pages via the Actions source (`actions/upload-pages-artifact` over `site/` +
   `actions/deploy-pages` on push), so site updates ship with ordinary commits and no
   `gh-pages` branch holds build output; the `swemux.dev` custom domain with enforced HTTPS.
+  Cloudflare Pages is the alternative if its free analytics are wanted - the same
+  one-repo layout works there unchanged.
   (Workflow landed 2026-08-27, W2, as `.github/workflows/pages.yml`. It shares a `concurrency`
   group with the release workflow's deploy, which is not incidental: the host serves whichever
   deployment finished last, so a site commit landing during a release would otherwise publish a

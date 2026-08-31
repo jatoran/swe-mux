@@ -138,7 +138,7 @@ steps are kept below, struck through, because restoring those DNS records is the
 - [x] Fill the three `data-todo` placeholders in `site/index.html` (docs, blog, repository URLs). All three are filled; `TODO_VALUES` in `site/tools/build.py` and `check.mjs` is now empty and the guard stays. Verify with `grep -rn data-todo site/`, which should find only the guards themselves.
 - [x] Re-run the site's own gates after editing: `node site/tools/check.mjs` and `python site/tools/contrast.py`.
       No longer a manual step as of 2026-08-29: `ci.yml`'s `site` job runs both on every push, alongside `python site/tools/build.py --check` and `python site/tools/check_changelog.py --require-tags`.
-      The fourth of those is why the job exists. `site/changelog/index.html` is committed build output and `pages.yml` deploys `site/` verbatim, so the 0.1.3 release commit updated `CHANGELOG.md`, left the page alone, and `swemux.dev/changelog/` advertised 0.1.2 for a day while 0.1.3 was live everywhere else.
+      The fourth of those is why the job exists. `site/changelog/index.html` is committed build output and `deploy-site.yml` deploys `site/` verbatim, so the 0.1.3 release commit updated `CHANGELOG.md`, left the page alone, and `swemux.dev/changelog/` advertised 0.1.2 for a day while 0.1.3 was live everywhere else.
       Still run them by hand while iterating on the site; the point of the job is that forgetting is no longer a way to publish.
 
 ## 6. PyPI
