@@ -15,7 +15,7 @@ import { expect, test, type Locator } from 'playwright/test'
  *  - a failure carries its reason, which is the only copy of it that exists.
  */
 
-test('several accounts stack into quota columns rather than into sentences of different lengths', async ({ page }) => {
+test('each account names its quota periods inline without a detached heading row', async ({ page }) => {
   await page.goto('/account-switcher-harness.html?accounts=multi')
   await page.click('.account-summary > button >> nth=0')
 
@@ -40,13 +40,26 @@ test('several accounts stack into quota columns rather than into sentences of di
     nodes.map(node => Math.round(node.getBoundingClientRect().right)))
   expect(new Set(rights).size).toBe(1)
 
-  // The headings sit over the columns they name, which is what makes a bare column of
-  // percentages readable at all.
-  const headings = page.locator('.account-popover .quota-columns span')
-  await expect(headings).toHaveText(['5h', 'weekly', 'fable'])
-  const headingLefts = await left(page.locator('.account-popover .quota-columns span'))
-  const firstCells = await left(rows.first().locator('.quota-cell'))
-  expect(headingLefts).toEqual(firstCells)
+  await expect(page.locator('.account-popover .quota-columns')).toHaveCount(0)
+  await expect(rows.first()).toHaveText('5% 4h3m/5h • 63% 3d1h/7d • 30% fable')
+  const tones = await rows.first().evaluate(row => {
+    const style = (selector: string) => getComputedStyle(row.querySelector(selector)!)
+    return {
+      percent: style('.quota-cell b').color,
+      reset: style('.quota-reset').color,
+      resetOpacity: Number(style('.quota-reset').opacity),
+      qualifier: style('.quota-window-label').color,
+      qualifierOpacity: Number(style('.quota-window-label').opacity),
+    }
+  })
+  expect(tones.percent).not.toBe(tones.reset)
+  expect(tones.qualifier).toBe(tones.reset)
+  expect(tones.qualifierOpacity).toBeLessThan(tones.resetOpacity)
+
+  const refreshAge = page.locator('.account-popover section > button > .account-refresh-age').first()
+  await expect(refreshAge).toHaveText('now')
+  const identityTop = await page.locator('.account-popover section > button > strong').first().evaluate(node => Math.round(node.getBoundingClientRect().top))
+  expect(await refreshAge.evaluate(node => Math.round(node.getBoundingClientRect().top))).toBe(identityTop)
 
   // A failed poll invalidates the whole account rather than one window of it, and says so
   // in place of a stale mix that would read as current.
@@ -96,10 +109,10 @@ test('the popover counts live sessions per account and names the ones a switch l
 test('the codex section carries two quota columns, not an empty fable one', async ({ page }) => {
   await page.goto('/account-switcher-harness.html?accounts=multi')
   await page.click('.account-summary > button >> nth=0')
-  // Claude reports Fable; Codex has no saved account here at all, so no columns are drawn
-  // for it. The column set belongs to the section, never to the popover.
-  await expect(page.locator('.account-popover .quota-columns')).toHaveCount(1)
-  await expect(page.locator('.account-popover .quota-columns.has-fable')).toHaveCount(1)
+  // Claude reports Fable, so its rows carry the implicit third value. Codex has no saved
+  // account here at all, and no detached heading survives for either provider.
+  await expect(page.locator('.account-popover .quota-row.has-fable')).toHaveCount(3)
+  await expect(page.locator('.account-popover .quota-columns')).toHaveCount(0)
 })
 
 test('a machine signed in to nothing is invited, not reported at', async ({ page }) => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginCommand, loginOf, loginRunning, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, shownUsageBand, signInTitle, spawnedSessionCount, strandedSessionNotice, strandedSessions, usageBand, visibleProviders, QUOTA_COLUMN_HEADINGS } from '../src/providerAccountDisplay.ts'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginCommand, loginOf, loginRunning, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, shownUsageBand, signInTitle, spawnedSessionCount, strandedSessionNotice, strandedSessions, usageBand, visibleProviders } from '../src/providerAccountDisplay.ts'
 
 test('quota windows come from the selected account of each provider, never another slot',()=>{
   const accounts=[
@@ -95,6 +95,8 @@ test('quota summaries include compact 5-hour and weekly reset countdowns',()=>{
   const account={quota:{status:'ready',session:{used_percent:5,resets_at:now+4*3600+3*60},weekly:{used_percent:63,resets_at:now+3*86400+3600},fable:{used_percent:30}}}
   assert.equal(formatResetRemaining(now+4*3600+3*60,now),'4h3m')
   assert.equal(formatResetRemaining(now+3*86400+3600,now),'3d1h')
+  assert.equal(formatResetRemaining(now+5*3600,now),'5h')
+  assert.equal(formatResetRemaining(now+7*86400,now),'7d')
   assert.equal(quotaSummary(account,now),'5% 4h3m - 63% 3d1h · 30% Fable')
 })
 
@@ -105,18 +107,18 @@ test('every account of a provider emits the same quota cells, so the switcher re
   // into a sentence and stacked.
   const second={quota:{status:'ready',session:{used_percent:100,resets_at:now+22*60},weekly:{used_percent:7,resets_at:now+6*86400+23*3600}}}
   assert.deepEqual(quotaRowCells(first,true,now),[
-    {key:'session',percent:'5%',reset:'4h3m'},
-    {key:'weekly',percent:'63%',reset:'3d1h'},
+    {key:'session',percent:'5%',reset:'4h3m',qualifier:'/5h'},
+    {key:'weekly',percent:'63%',reset:'3d1h',qualifier:'/7d'},
     // Fable reports no reset instant of its own; the weekly window beside it is what rolls over.
-    {key:'fable',percent:'30%',reset:''},
+    {key:'fable',percent:'30%',reset:'',qualifier:'fable'},
   ])
   // The second account has no Fable reading at all, and still carries the column: a row
   // that omitted it would shift every column after it, which is the defect rather than a
   // smaller version of it.
   assert.deepEqual(quotaRowCells(second,true,now),[
-    {key:'session',percent:'100%',reset:'22m'},
-    {key:'weekly',percent:'7%',reset:'6d23h'},
-    {key:'fable',percent:'—',reset:''},
+    {key:'session',percent:'100%',reset:'22m',qualifier:'/5h'},
+    {key:'weekly',percent:'7%',reset:'6d23h',qualifier:'/7d'},
+    {key:'fable',percent:'—',reset:'',qualifier:'fable'},
   ])
   // A provider that never reports Fable gets two columns, not an empty third on every row.
   assert.deepEqual(quotaRowCells(second,false,now).map(cell=>cell.key),['session','weekly'])
@@ -136,10 +138,6 @@ test('an errored poll empties every quota cell rather than showing a stale mix',
   const account={quota:{status:'error',error:'claude usage endpoint returned 500',session:{used_percent:12},weekly:{used_percent:99},fable:{used_percent:4}}}
   assert.deepEqual(quotaRowCells(account,true).map(cell=>cell.percent),['—','—','—'])
   assert.deepEqual(quotaRowCells(undefined,false).map(cell=>cell.percent),['—','—'])
-})
-
-test('the quota column headings use the same window names the tooltips do',()=>{
-  assert.deepEqual(QUOTA_COLUMN_HEADINGS,{session:'5h',weekly:'weekly',fable:'fable'})
 })
 
 test('only a running sign-in tightens the poll; a finished one is a result to read',()=>{
