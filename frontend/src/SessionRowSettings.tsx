@@ -29,7 +29,7 @@ import {
 } from './sessionRowFields'
 import { loadSessionRowConfig, saveSessionRowConfig, useRowBudget } from './sessionRowPrefs'
 import {
-  SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, clampSidebarWidth,
+  SIDEBAR_WIDTH_KEY, storedSidebarWidth,
 } from './sidebarResize'
 import type { Session } from './types'
 
@@ -124,9 +124,8 @@ const PREVIEW_SESSIONS: Session[] = [
  * Everything about the preview except how much room it has.
  *
  * The budget is measured off the preview itself, so the panel demonstrates the
- * width ladder instead of hiding it: this preview used to render at a fixed 420px
- * — wider than the sidebar can be dragged — so the one behaviour a reader cannot
- * predict from the field list was the one behaviour it never showed.
+ * width ladder at the current device's real navigation width. This keeps the
+ * result tied to the layout the operator is actually using.
  */
 const PREVIEW_FLEET = deriveRowContext(
   PREVIEW_SESSIONS, { 'preview-worktree': 2 }, NOW, undefined, undefined,
@@ -179,15 +178,10 @@ export function SessionRowSettings() {
   const [error, setError] = useState('')
   const [previewExpanded, setPreviewExpanded] = useState(false)
   const thisDevice = currentProfile()
-  // Which device class the preview is drawn at. Starts on this device and
-  // follows whichever slider was last touched, so dragging the mobile size from
-  // a desktop browser shows the mobile result instead of leaving the preview
-  // inert and the change unverifiable until you pick up the phone.
-  const [sizeProfile, setSizeProfile] = useState<SettingsProfile>(thisDevice)
-  // The width the preview is drawn at, and therefore the width the ladder is
-  // demonstrated at. Device-local and unpersisted on purpose: it is an inspection
-  // control for this visit to the panel, not a property of the layout.
-  const [previewWidth, setPreviewWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
+  // Desktop previews use this browser's persisted sidebar width. Mobile CSS uses
+  // the navigation drawer's viewport-derived width. There is no second preview
+  // geometry for the operator to configure.
+  const previewWidth = storedSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY))
   const previewMetricRef = useRef<HTMLDivElement>(null)
   const previewBudget = useRowBudget(previewMetricRef)
   const previewContext = useMemo(
@@ -297,25 +291,12 @@ export function SessionRowSettings() {
           {previewExpanded?'Show one row':'Show examples'}
         </button>
       </div>
-      {/* The preview carries the size of whichever device class is being edited,
-          rather than the root variable this device is using, so adjusting the
-          mobile size from a desktop browser still shows what it did. */}
-      <label class="row-size-control">
-        <span>Sidebar width</span>
-        <input
-          type="range"
-          min={SIDEBAR_MIN_WIDTH}
-          max={SIDEBAR_MAX_WIDTH}
-          step={1}
-          value={previewWidth}
-          aria-label="Preview sidebar width in pixels"
-          onInput={event => setPreviewWidth(clampSidebarWidth(event.currentTarget.valueAsNumber))}
-        />
-        <output>{previewWidth}px</output>
-      </label>
       <div
-        class="session-row-preview sidebar"
-        style={{ '--session-dot': `${config[sizeKey(sizeProfile)]}px`, width: `${previewWidth}px` }}
+        class="session-row-preview"
+        style={{
+          '--session-dot': `${config[sizeKey(thisDevice)]}px`,
+          '--session-row-preview-width': `${previewWidth}px`,
+        }}
       >
         <div id="session-row-preview-list" class="session-list">
           {/* Same probe the sidebar renders, so the preview's budget is measured
@@ -374,7 +355,6 @@ export function SessionRowSettings() {
         value={config[sizeKey(profile.id)]}
         aria-label={`${profile.label} indicator size in pixels`}
         onInput={event => {
-          setSizeProfile(profile.id)
           changeContinuous({
             ...config,
             [sizeKey(profile.id)]:
