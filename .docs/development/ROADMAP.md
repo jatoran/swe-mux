@@ -178,7 +178,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                                 -> Phase 11  Public packaging and release  [open]
 
 Phase 14  Land queue: serialized branch landing   [built, not landed; live run outstanding]
-Phase 25  Plugin system: external-process extensions without forks          [open; blocked on Phase 23 W1]
+Phase 25  Plugin system: external-process extensions without forks          [baseline shipped; public-release hardening open]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -257,7 +257,7 @@ A phase here may depend on one, but none of them is a phase.
 | `AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md` | active plan, nothing committed | Would replace the passive Agent Environment scan with evidence-tagged runtime inventory. Deliberately unscheduled: it needs a product decision on probe cost before it earns a phase. |
 | `CROSS_PLATFORM_FINDINGS.md` | research | Feeds Phases 10 and 11; holds the platform-interface inventory and verification matrix those phases would otherwise duplicate. |
 | `NEW_USER_RELEASE_READINESS.md` | active plan | Feeds Phases 7 and 11; holds the fresh-machine onboarding detail those phases depend on: the remote-connection connect flow (connection state, phone DNS, QR), Windows Defender Firewall repair, agent instrumentation toggles, the onboarding-prerequisites surface, and first-use download costs. Records the audit finding that the shippable code is free of hardcoded identity, absolute personal paths, and a hardcoded daemon host, so agnosticism here is a defaults-and-onboarding concern rather than an un-hardcoding one. |
-| `PLUGIN_SYSTEM_FINDINGS.md` | scheduled reference | Evidence and architectural decisions for Phase 25. Phase 25 owns the implementation checklist and acceptance contract. |
+| `PLUGIN_SYSTEM_FINDINGS.md` | research and decision record | Herdr evidence and the architectural decisions behind Phase 25. Current behavior lives in `design/features/plugins.md`; repository workflow lives in `technical/plugin-authoring.md`. |
 | `HARNESS_EXPANSION_CANDIDATES.md` | research | Feeds Phase 12. Holds the per-candidate parity study for the agent CLIs not yet in the registry: what each one can give the declared capability axes, which registry gates it clears, and which candidates are rejected and why. Phase 12 sequences the work; this document holds the evidence behind each descriptor. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
@@ -6381,13 +6381,17 @@ the download button.
 
 ## Phase 25 - Plugin system: external-process extensions without forks
 
-Recorded 2026-08-30 and scheduled.
-The evidence and architectural decisions are in `PLUGIN_SYSTEM_FINDINGS.md`; this phase is the authoritative implementation checklist and acceptance contract.
+Recorded 2026-08-30.
+The external evidence and architectural decisions are in `PLUGIN_SYSTEM_FINDINGS.md`.
+Current shipped behavior is in `../design/features/plugins.md`, and the agent-neutral repository and author workflow is in `../technical/plugin-authoring.md`.
 
-Implementation candidate completed 2026-08-30 on `worktree-plugin-system` and intentionally remains unlanded for operator review.
-The branch gate passes 6,535 backend tests plus ruff, full and per-platform mypy, frontend source and test typechecks, and 2,335 frontend tests.
-Three high-utility test plugins live as independent Git repositories under the primary checkout's ignored `.private/plugin-lab`; no plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
-Checkboxes remain open until review and landing make the implementation part of `master`.
+The baseline landed on `master` and is deployed.
+It includes the manifest parser, SQLite registry and command ledger, linked and managed source, content-bound approval, lifecycle operations, actions, tab/split/popup terminal panes, EventBus hooks, startup hooks, terminal link handlers, scoped loopback callbacks, Settings, command-palette entries, CLI management, diagnostics, and the unreviewed GitHub-topic browser.
+Six high-utility development plugins live as independent Git repositories under the primary checkout's ignored `.private/plugin-lab`; no plugin source, fixture, or artifact is tracked by the swe-mux branch or release.
+
+The checkboxes in this phase are the complete public-release and hardening contract.
+An open checkbox may describe a stricter version of a capability whose baseline already exists.
+Do not infer that the whole workstream is absent from an unchecked hardening item.
 
 ### Outcome
 
@@ -6395,15 +6399,16 @@ A user can install, inspect, enable, update, disable, and remove third-party ext
 A plugin can contribute actions, terminal/TUI panes, bounded event-triggered commands, one-shot startup restoration, and terminal link handlers through stable public host capabilities.
 Ordinary swe-mux updates preserve plugin source, config, state, trust, and logs, and an incompatible or broken plugin cannot block daemon readiness or session recovery.
 
-This phase is sequenced after Phase 23 W1, the server-side distinction between operator-originated, session-originated, and other delegated callers.
-Manifest, registry, validation, and acquisition work may proceed earlier, but no plugin token or contributed action ships while authorization exists only in a client.
+The baseline shipped before Phase 23 W1 and uses plugin-specific token and permission checks in `routes/plugins.py`.
+Moving those checks into the shared operation-boundary authorization service remains open and is required before the callback surface can claim transport-wide caller classification.
 The first public release is not blocked on this phase.
 The plugin contract becomes a compatibility commitment once the first third-party manifest is advertised, so breadth is deliberately smaller than Herdr's six extension types.
 
 ### Product boundary
 
 - **External processes only.** The daemon imports no plugin Python, JavaScript, native library, route, middleware, database migration, React component, stylesheet, or script.
-- **The public control surface is the plugin API.** Plugin commands use the same typed operation services reached by `swemux`, HTTP, and MCP rather than a second privileged implementation API.
+- **The public control surface is the plugin API.** Plugin commands use the versioned loopback callback operations in `routes/plugins.py`.
+  Convergence with the shared typed operation services reached by browser, CLI, and MCP remains Phase 23-dependent hardening.
 - **Plugin UI is a terminal/TUI in v1.** It opens as an ordinary supervised session in the existing tab and split model.
   Native frontend injection is permanently out of scope, and hosted web UI requires a separate isolated-origin or Preview design.
 - **Full-trust host code, scoped swe-mux authority.** A plugin process runs as the user and is not sandboxed.
@@ -6413,6 +6418,29 @@ The plugin contract becomes a compatibility commitment once the first third-part
   Newly acquired or changed bytes execute only after explicit approval and enablement.
 - **No second rules engine.** Plugin event hooks consume the normalized EventBus through an exact-subscription adapter with shared bounds and diagnostics.
   They do not become Universal hooks, and Universal hooks retain their deliberate no-command authority.
+
+### Shipped baseline
+
+| Surface | Current contract |
+|---|---|
+| Repository | Standalone repository with root `swe-mux-plugin.toml`; local development may use one independent repository per ignored `.private/plugin-lab/` child. |
+| Acquisition | Editable local link or managed local/Git/GitHub copy; no build or package-manager execution. |
+| Trust | Content and security digests bind explicit approval; changed content disables itself before execution. |
+| Contributions | Actions, terminal panes, exact EventBus hooks, one-shot startup hooks, and same-plugin terminal link handlers. |
+| UI | Settings management, command-palette entries, and terminal/TUI panes using tab, right-hand split, or popup placement. |
+| Runtime | Bounded argv runner, capped logs, concurrency and event bounds, revocable permission-scoped callback tokens, and a global execution kill switch. |
+| Isolation | Plugin source, config, state, trust, and logs stay outside the application and Project repositories; linked source is never deleted by swe-mux. |
+| Examples | Six clean machine-local repositories exercise every contribution family and all three pane placements without entering the release closure. |
+
+### Known baseline limits
+
+- Callback authorization is plugin-specific and has not joined the Phase 23 shared caller-classification service.
+- Pane callback tokens are daemon-generation state.
+  The supervisor may preserve the process and terminal through reload, but callback-dependent panes must be reopened.
+- Managed install does not support a first-class prebuilt artifact matrix or archive safety budget.
+- Action inputs, hosted web UI, native frontend injection, dynamic Settings forms, and persistent plugin daemons are absent.
+- The marketplace is a live unreviewed GitHub-topic query, not a validated manifest index with retained commit metadata or popularity analytics.
+- The private plugin lab is not a public template, compatibility harness, CI fixture, or published example set.
 
 ### Workstream A - manifest and host capability contract
 
