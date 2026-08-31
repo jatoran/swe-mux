@@ -10,7 +10,7 @@
 import type { Preview } from '../processFleet.ts'
 import type { PaneLayout } from '../layout.ts'
 import type { Project, Session } from '../types.ts'
-import type { DemoNote, DemoState } from './store.ts'
+import type { DemoLandRequest, DemoNote, DemoState } from './store.ts'
 import { initialTimelines, initialTranscripts } from './conversation.ts'
 import {
   claudeScrollback, codexScrollback, composerInfo, rageScrollback,
@@ -18,6 +18,14 @@ import {
   type ComposerInfo,
 } from './terminalSim.ts'
 
+/**
+ * The instant every fixture offset is measured from, read once at module load.
+ *
+ * Under deterministic mode (`determinism.ts`, installed before this module is even
+ * imported) this is the fixed epoch rather than the wall clock, which is what makes two
+ * runs produce byte-identical timestamps - and why the import order in `main.tsx` is
+ * load-bearing rather than cosmetic.
+ */
 const now = Math.floor(Date.now() / 1000)
 
 export const DEMO_PROJECT_ID = 'p-rocket'
@@ -112,11 +120,21 @@ function makeSession(input: {
   }
 }
 
-function hash(text: string): number {
+/**
+ * A stable number from a string.
+ *
+ * Exported because the spawn route needs the same derivation: a pid drawn at random made
+ * a scripted spawn produce a different session on every run, and a fixture's pid is data
+ * about that session rather than an entropy source.
+ */
+export function hashText(text: string): number {
   let value = 0
   for (let index = 0; index < text.length; index += 1) value = (value * 31 + text.charCodeAt(index)) | 0
   return value
 }
+
+/** The seeded sessions' own alias, kept so their fixtures read unchanged. */
+const hash = hashText
 
 /** Sessions the demo keeps permanently mid-turn. They pulse, their turn clock
  *  ticks, and typing into one is answered by `busyReply` instead of the joke
@@ -538,8 +556,39 @@ export function demoConfig(): Record<string, unknown> {
   }
 }
 
+/**
+ * The one land request the demo starts with: finished, on the checkout `s-codex` stands
+ * in, and skipped verification because the incoming diff was documentation only.
+ *
+ * It sits in the store rather than in `gitFixtures.ts` now, because the land queue became
+ * a state machine when the director needed to drive one through it - and a payload
+ * builder that invented its own rows could not have shown a second one arriving beside
+ * this one.
+ */
+const LANDS: DemoLandRequest[] = [
+  {
+    id: 'land-demo-1',
+    project_id: DEMO_PROJECT_ID,
+    branch: 'agent/cart-profile',
+    worktree_root: DEMO_WORKTREE_PROFILE,
+    state: 'landed',
+    requested_by: 's-codex',
+    requested_by_name: 'profile cart endpoint',
+    created_at: now - 2 * 3600,
+    updated_at: now - 2 * 3600 + 220,
+    landed_at: now - 2 * 3600 + 220,
+    verification: { kind: 'skipped', reason: 'documentation only', duration_s: 0 },
+    events: [
+      { at: now - 2 * 3600, state: 'queued', note: 'Requested from the session standing in this checkout.' },
+      { at: now - 2 * 3600 + 90, state: 'reconciling', note: 'Merged master into agent/cart-profile cleanly.' },
+      { at: now - 2 * 3600 + 150, state: 'verifying', note: 'Every incoming path was documentation, so the gate was skipped.' },
+      { at: now - 2 * 3600 + 220, state: 'landed', note: 'Fast-forwarded master to agent/cart-profile.' },
+    ],
+  },
+]
+
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 10
+export const DEMO_STATE_VERSION = 11
 
 export function initialDemoState(): DemoState {
   return {
@@ -567,6 +616,15 @@ export function initialDemoState(): DemoState {
     transcripts: initialTranscripts(now),
     timelines: initialTimelines(now),
     providerSelection: {},
+    // The control plane starts genuinely empty, and that is the honest state: nothing has
+    // queued a prompt, nothing has fired, nobody has asked for a session. A scenario
+    // fills them, which is what makes the arrival visible - a seeded queue would show a
+    // list rather than a delivery.
+    queue: [],
+    notifications: [],
+    spawnRequests: [],
+    lands: LANDS.map(item => ({ ...item, events: [...item.events] })),
+    autoDelivery: [],
     seq: 1,
   }
 }
