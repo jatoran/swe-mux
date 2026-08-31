@@ -37,6 +37,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   It calls the same canonical parser used by the daemon and still executes no plugin code.
 - **A linked plugin whose manifest identity changed can still be uninstalled.**
   Uninstall no longer reloads a broken or renamed manifest merely to disable and unregister its existing record.
+- **The desktop app is no longer reported as one of its own sessions' orphaned processes.**
+  Rebuilding and relaunching the app from inside a swe-mux session left the desktop window attributed to that session; when the session ended, the live UI appeared in the process fleet as a suspected orphan with Terminate offered on it.
+  swe-mux now recognizes its own shell, daemon and PTY supervisor by identity rather than by descent, and the terminate actions refuse a process that is swe-mux itself regardless of what the fleet believes owns it.
+- **The "swe-mux runtime" row now reports swe-mux's whole footprint.**
+  It counted only the daemon and its descendants, so the desktop window, its embedded browser, and the supervisor were reported as nothing at all.
 
 ## [0.2.0] - 2026-08-31
 
