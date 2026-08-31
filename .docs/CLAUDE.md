@@ -113,6 +113,33 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing keyboard shortcuts - the chord vocabulary, sequences and the leader, the
+  bindable command registry, the shipped keymap presets, `when` scopes, or what a host
+  or platform is said to reserve: `design/features/keybindings.md`,
+  `design/features/ui.md`, `design/features/first-run.md`,
+  `design/features/desktop-shell.md`, `design/interfaces.md`,
+  `src/swe_mux/keychords.py`, `src/swe_mux/keybindings.py`, `src/swe_mux/keymaps.py`.
+  Four rules the design turns on, and none is a preference.
+  **A chord names a physical key** (`KeyboardEvent.code`), because `.key` is the
+  layout's answer - a binding recorded on Dvorak would move, and `Ctrl+Shift+5` reports
+  `%`, so a `.key`-derived chord could never match a table written unshifted, which is
+  exactly tmux's `prefix %`.
+  **Only a binding's FIRST chord is judged against the host**, which is the whole
+  practical argument for a leader: one interceptable chord buys 200 commands instead of
+  one per command.
+  **Nothing is refused for being reserved** except the fixed UI-scale chords. The
+  previous list refused `ctrl+f` as browser-reserved while `Settings.tsx` was
+  intercepting Ctrl+F in the same browser, so a chord is now accepted and *reported*
+  per host - and a real measurement from the live browser
+  (`frontend/src/hostKeyboardProbe.ts`) overrides the shipped table, where only a
+  *tested* chord moves the answer.
+  **Ctrl+Alt is AltGr on most non-US layouts**, which is why 24 of the 26 previous
+  defaults fired while the user was typing; no shipped preset may use it, and a test
+  says so.
+  The registry and the frontend must describe each other in both directions
+  (`tests/test_keybinding_registry.py`): a command the palette offers but nothing
+  registers cannot be bound at all, and an id registered with nothing behind it accepts
+  a chord and does nothing. Both had happened, silently, at the same time.
 - Adding or moving an OpenRouter model setting, or changing how one is chosen or priced:
   `design/features/ui.md`, `technical/frontend/packages.md`, plus the owning feature's doc
   (`design/features/scan-timeline.md`, `design/features/voice.md`,
@@ -859,7 +886,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   brainstorm hold. One deferral per utterance, so the wait is bounded structurally; the model is
   never instructed to return nothing; queue-merge stays the safety net; and every deferral is
   reported to `POST /api/voice/deferral-diagnostic` with its trigger token so the
-  false-positive rate is measurable before anyone tunes the word lists. Hold `Ctrl+Alt+Space` for push-to-talk with
+  false-positive rate is measurable before anyone tunes the word lists. Hold `Alt+Shift+Space` for push-to-talk with
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
   `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.
