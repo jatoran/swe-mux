@@ -1711,18 +1711,17 @@ body {
 
 /* Compact sidebar commands and project resource editing. */
 .sidebar-footer{justify-content:flex-start;gap:8px}
-.sidebar-footer .notify-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer :is(.configurator-trigger,.notify-trigger,.settings-trigger){width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
 .sidebar-footer .notify-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notify-trigger.off{color:#5a6470}
 .sidebar-footer .notify-trigger.off:hover{color:#8ee69a}
 .sidebar-footer .notify-trigger svg{display:block}
-@media(max-width:760px){.sidebar-footer .notify-trigger{min-height:44px}}
-/* The configurator launcher, beside the bell. Chromeless like the bell rather than
-   boxed like the menu button, because the footer's boxed slot belongs to the one
-   control that opens something and these two act in place. The `width:auto` override
-   is the same one the bell needs: `.sidebar-footer button:not(:first-child)` pins a
-   32px box that a padded icon button must escape. */
-.sidebar-footer .configurator-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer .settings-trigger:hover{border:0;background:transparent;color:#a8eab3}
+.sidebar-footer .settings-trigger svg{display:block;width:15px;height:15px}
+@media(max-width:760px){.sidebar-footer :is(.configurator-trigger,.notify-trigger,.settings-trigger){min-height:44px}}
+/* The configurator launcher leads the bell in the footer's left control group.
+   Both are chromeless app-wide controls; the menu and Settings form the right
+   navigation group. */
 .sidebar-footer .configurator-trigger:hover:not(:disabled){border:0;background:transparent;color:#a8eab3}
 /* Disabled means a prerequisite is missing (no agent CLI, no Project), and the
    title says which. Dimmed rather than hidden: a control that vanishes teaches
@@ -2538,13 +2537,10 @@ body {
 @media(max-width:700px){.branch-point-list{max-height:46vh}.branch-point-action{margin-left:0}}
 
 /* Unified note discovery: the footer is the global entry point; editors remain contextual. */
-/* menu pinned left, the alerts switch pinned right. The footer used to end in a
-   projects button and a settings cog; both moved to where they belong — Projects to
-   the PROJECTS header beside the tree it edits, Settings to the one menu row that
-   already named it. `space-between` is still not used: the left item's own
-   `margin-right:auto` survives either button coming back. */
+/* Configurator and alerts stay at the left edge. The menu's auto margin begins the
+   right navigation group, with the direct Settings button after it. */
 .sidebar-footer{justify-content:flex-start}
-.sidebar-footer .menu-trigger{margin-right:auto}
+.sidebar-footer .menu-trigger{width:auto!important;margin-left:auto;margin-right:0}
 .sidebar-footer .notes-shelf-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;margin-left:auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:right;font:inherit}
 .sidebar-footer .notes-shelf-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notes-shelf-trigger span{margin-right:6px;color:#8ee69a}

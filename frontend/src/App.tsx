@@ -8092,7 +8092,7 @@ export function App() {
           <AccountSwitcher onManage={()=>openSettings('Accounts')} promptDismissed={accountPromptDismissed!==false} promptSuppressed={firstRun!=='none'} onDismissPrompt={dismissAccountPrompt}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
-        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button
+        <div class="sidebar-footer"><button
           type="button"
           class={`configurator-trigger${configuratorLaunch.enabled?'':' off'}`}
           disabled={!configuratorLaunch.enabled}
@@ -8103,14 +8103,10 @@ export function App() {
             if(opensChooser(event,configuratorOptions)){setConfiguratorMenu({x:event.clientX,y:event.clientY});return}
             void launchConfigurator()
           }}
-        ><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.9M8 12.5v1.9M14.4 8h-1.9M3.5 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5"/></svg></button>{/* Three controls, and the third is the reason the old rule needed
-            restating. The rule was "app-wide switches, not navigation", which is why
-            the gear that used to sit beside this bell is gone: Settings is one click
-            inside the menu, and a second permanent door to it saved nothing. The
-            configurator button is not a door — it starts an agent session about this
-            install — and the footer is where a control that belongs to the whole app
-            rather than to the tree above it goes. The Projects registry still lives on
-            the PROJECTS header, beside the tree it edits. */}</div>
+        ><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.9M8 12.5v1.9M14.4 8h-1.9M3.5 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5"/></svg></button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button type="button" data-tutorial="menu" class="menu-trigger" aria-haspopup="menu" aria-expanded={mainMenuOpen} onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class="settings-trigger" title="Settings" aria-label="Open Settings" onClick={()=>openSettings()}><CogIcon/></button>{/* App-wide controls form two stable groups: configurator and alerts on the left,
+            navigation on the right. Settings is direct because it is a primary app-wide
+            destination; the Projects registry stays in the PROJECTS header beside the tree
+            it edits. */}</div>
       </aside>
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}

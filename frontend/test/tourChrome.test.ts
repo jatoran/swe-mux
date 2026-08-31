@@ -67,6 +67,21 @@ test('every class selector the tour spotlights exists in a component', () => {
   }
 })
 
+test('the sidebar footer keeps its two control groups and direct Settings route', () => {
+  const start = app.indexOf('<div class="sidebar-footer">')
+  const end = app.indexOf('</div>', start)
+  assert.ok(start >= 0 && end > start, 'the sidebar footer must render')
+  const footer = app.slice(start, end)
+  const controls = ['configurator-trigger', 'notify-trigger', 'menu-trigger', 'settings-trigger']
+  let previous = -1
+  for (const control of controls) {
+    const position = footer.indexOf(control)
+    assert.ok(position > previous, `${control} is out of order in the sidebar footer`)
+    previous = position
+  }
+  assert.match(footer, /class="settings-trigger"[^>]*onClick=\{\(\)=>openSettings\(\)\}/)
+})
+
 test('every Settings path the tour names resolves to a real tab', () => {
   for (const path of TUTORIAL_CHROME_CLAIMS.settingsPaths) {
     const section = path.replace(/^Settings\s*→\s*/, '')
