@@ -8400,6 +8400,7 @@ export function App() {
           from a menu whose other rows all act on the session immediately, and both are
           a command and a drawer tab away in the place you already are. */}
       {contextMenu.source==='pane'&&<button class="menu-row" onClick={() => runNamedCommand('session.copyCwd')}><span class="menu-row-icon" aria-hidden="true"><CopyPathIcon/></span><span class="menu-row-label">Copy working directory</span></button>}
+      <button class="menu-row" onClick={()=>openSettingTarget('appearance.sessionRows')}><span class="menu-row-icon" aria-hidden="true"><CogIcon/></span><span class="menu-row-label">Configure appearance</span></button>
       {/* No context menu touches tab order or pane geometry on any platform — not split,
           stack, dissolve, or move. They answer "how is the workspace laid out", which is
           not the question a menu opened on a session or a tab is asked, and the direction

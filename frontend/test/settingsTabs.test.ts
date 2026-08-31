@@ -106,6 +106,13 @@ test('declared subpages are unique, plural, and belong to live tabs', () => {
   }
 })
 
+test('Appearance separates session rows from the rest of the interface controls', () => {
+  assert.deepEqual(settingsSubpages.appearance?.map(page=>page.label), ['Interface','Session rows'])
+  for(const heading of ['Theme','Right sidebar','Interface scale','Action rail'])
+    assert.equal(settingsSubpageId('appearance',heading),'interface')
+  assert.equal(settingsSubpageId('appearance','Session rows'),'session-rows')
+})
+
 test('a breadcrumb places a result without repeating the heading that names its page', () => {
   // Input's pages *are* its h3s, so naming the page as well would say it twice.
   assert.equal(settingsBreadcrumb('input', 'Input', ['Keyboard shortcuts', 'View']),

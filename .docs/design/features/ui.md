@@ -789,7 +789,7 @@ Its rules, and what each one is defending:
   The panel is opened, scanned, and closed many times in a session, and landing on General
   every time re-charges the navigation that reached the tab someone actually lives in.
 - **The sidebar is the panel's only in-tab navigation, and only genuinely long tabs are pages.**
-  A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Input, Voice).
+  A tab earns separate pages when it is several screens long and each page is itself substantial (`settingsSubpages`: Accounts, Prompt queue, Appearance, Input, Voice).
   A page holding two controls costs a navigation step to show less than a glance would - which is how the Projects tab briefly grew a "Project resources" page that rendered two sentences and no control.
   Every other tab renders as one scrolling column, and the sidebar lists its rendered sections as scroll anchors (at `SECTION_RAIL_MIN` sections or more), with the scroll-spy highlighting the current one.
   **A tab discloses what it contains whether or not it has been opened**, so the sidebar describes one kind of tab rather than two: the section count is the rule, never the visit.
@@ -3353,6 +3353,9 @@ restatement is logged as `terminal_repaint_requested` with its trigger reason.
 A sidebar session row is a fixed gutter holding the state indicator, plus two lines.
 Each line has a left-aligned and a right-aligned section, and each section is an ordered list of field slots.
 The layout is user-configurable in Settings → Appearance → Session rows.
+Session rows is a separate Appearance page rather than one section among Theme, sidebar chrome,
+scale, and Action rail settings.
+Every session context menu carries **Configure appearance**, which deep-links to that page.
 
 - **The indicator is not a field.**
   It sits outside both sections, is always drawn, and its colour, pulse, and hollow "engaged" variant are not configurable.
@@ -3455,6 +3458,10 @@ The layout is user-configurable in Settings → Appearance → Session rows.
 - **The settings preview has its own width control, and measures its budget the same way.**
   It used to render at a fixed 420 px — wider than the sidebar can be dragged — so the one behaviour a reader cannot predict from the field list was the one behaviour the panel never showed.
   The width is device-local and unpersisted: it is an inspection control for this visit to the panel, not a property of the layout.
+  The preview is sticky below the Settings header on desktop and mobile, so edits never scroll
+  their result off screen.
+  It draws one active hypothetical session by default and expands explicitly to the four-row
+  representative fleet; every edit updates whichever form is visible immediately.
 - **The empty bottom line is kept on desktop and dropped on mobile.**
   Constant row height is what makes a list scannable, and the blank reads as "nothing to report"; on a phone the vertical space is worth more.
 - **One duration field, and within a turn it measures one thing.**
