@@ -671,6 +671,13 @@ Runtime token grants are therefore daemon-generation state rather than durable p
 `plugin_command_logs` is keyed by invocation ID and stores plugin and contribution identity, invocation source, correlation ID, bounded context, start and finish timestamps, outcome, exit code, duration, capped stdout and stderr, truncation flags, and diagnostics.
 The ledger retains the newest 1,000 rows across plugins.
 
-Plugin source lives beneath `<data_dir>/plugins/sources/<plugin-id>/<manifest-digest>`.
+`plugin_update_stages` is keyed by plugin ID and stores the independently acquired immutable candidate, source-channel provenance, manifest snapshot, content and security digests, and review timestamp.
+It never replaces the active `plugins` row; approval promotes it atomically and moves the former active root into rollback provenance.
+Each stage also retains its active-root base digest so concurrent rollback, reinstall, or source changes invalidate stale review.
+
+`plugin_settings` stores the global execution switch and configurable development root.
+Development discovery scans only direct children and stores no candidate merely because a manifest exists.
+
+Managed plugin source lives beneath `<data_dir>/plugins/sources/<plugin-id>/<content-digest-prefix>`.
 Editable config and durable state live in separate `<data_dir>/plugins/config/<plugin-id>` and `<data_dir>/plugins/state/<plugin-id>` directories.
 Uninstall removes managed source while retaining config and state; purge removes all three only after separate confirmation.
