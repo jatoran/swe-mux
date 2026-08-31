@@ -81,11 +81,19 @@ def test_an_override_that_no_longer_exists_falls_through(
 def test_an_override_expands_environment_variables(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Each platform's own variable spelling, because that is the contract.
+
+    `os.path.expandvars` reads `%VAR%` only on Windows; POSIX expands `$VAR`.
+    An override is typed by a user on their machine in their shell's spelling,
+    so the test asserts the spelling that platform actually documents rather
+    than exporting this host's syntax to every runner.
+    """
     binary = tmp_path / "git"
     binary.write_text("", encoding="utf-8")
     monkeypatch.setenv("MUX_TEST_TOOL_ROOT", str(tmp_path))
     monkeypatch.setattr(tool_locations, "which_real", lambda command: None)
-    location = tool_locations.locate_tool("git", override="%MUX_TEST_TOOL_ROOT%/git")
+    spelling = "%MUX_TEST_TOOL_ROOT%/git" if os.name == "nt" else "$MUX_TEST_TOOL_ROOT/git"
+    location = tool_locations.locate_tool("git", override=spelling)
     assert location.source == "override"
 
 

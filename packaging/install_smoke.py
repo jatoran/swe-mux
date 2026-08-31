@@ -335,12 +335,12 @@ def smoke(wheel: Path, workdir: Path) -> Report:
         return Report(wheel=str(wheel), ok=False, checks=checks, evidence=evidence)
 
     # `--help` for both, and for the same reason: it exercises the console script
-    # and the module behind it while starting nothing. `muxd` has no `--version`
+    # and the module behind it while starting nothing. `swemuxd` has no `--version`
     # (the daemon takes no such flag); the installed version is read from the
     # metadata by the import probe instead, which is where a user's `pip show`
     # reads it from too.
-    checks.append(_check_console_script(venv, workdir, "mux", "--help"))
-    checks.append(_check_console_script(venv, workdir, "muxd", "--help"))
+    checks.append(_check_console_script(venv, workdir, "swemux", "--help"))
+    checks.append(_check_console_script(venv, workdir, "swemuxd", "--help"))
 
     observed, imported = _probe(venv, workdir)
     checks.append(imported)

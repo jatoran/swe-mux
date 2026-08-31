@@ -226,9 +226,14 @@ try {
   $resolved = @(& where.exe swemux 2>$null)
   Assert ($resolved.Count -ge 1 -and $resolved[0] -eq (Join-Path $cliDir 'swemux.exe')) `
     "swemux resolves to $cliDir\swemux.exe (got '$($resolved -join ', ')')"
+  # The `mux` alias was deliberately given up on 2026-08-30 (pyproject.toml
+  # carries why: shipping a launcher under a contested name is what creates the
+  # collision). Asserted as an absence so the decision is pinned: an installer
+  # that starts shipping `mux.exe` again fails here rather than quietly
+  # re-entering the collision.
   $aliasResolved = @(& where.exe mux 2>$null)
-  Assert ($aliasResolved.Count -ge 1 -and $aliasResolved[0] -eq (Join-Path $cliDir 'mux.exe')) `
-    "mux resolves to $cliDir\mux.exe (got '$($aliasResolved -join ', ')')"
+  Assert (-not ($aliasResolved -contains (Join-Path $cliDir 'mux.exe'))) `
+    "the install ships no 'mux' alias (found '$($aliasResolved -join ', ')')"
 
   # And it is a real program rather than a file with the right name. The second
   # call is the exit-code contract: `swe_mux.cli.main` *returns* its code, so a
