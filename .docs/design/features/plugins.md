@@ -45,11 +45,19 @@ inspect -> approve -> enable -> disable
 ```
 
 `swemux plugin link` registers a mutable developer directory and never removes it.
+The configurable development root defaults to `~/swe-mux-plugins`; scanning inspects only direct child directories carrying a root manifest and registers nothing automatically.
+An explicitly linked arbitrary directory remains supported for monorepos, worktrees, alternate drives, and existing repository layouts.
 `swemux plugin install` copies a local source or resolves a GitHub repository plus optional release channel, branch, or tag to an immutable checkout under `<data_dir>/plugins/sources`.
+Installing an existing plugin ID is refused; every replacement must use the update review flow.
 The registry retains the requested ref, the selected release tag or branch, and the resolved commit separately.
 The special `latest` channel resolves the repository's newest GitHub release on each explicit update; a literal tag remains pinned.
 Managed versions use digest-named directories, so a running Windows pane may keep its old cwd while a new version is inspected beside it.
-Update installs new content inert unless it is explicitly approved and enabled.
+Update checks are explicit, read-only source-channel probes.
+Downloading an available update writes a separate durable review stage and does not change the active registry record, enabled state, running panes, config, or state.
+The review reports version, exact revision, compatibility, and added or removed permissions and capabilities.
+Only explicit update approval atomically promotes the staged root, binds approval to those bytes, and retains the former active root for rollback.
+Approval refuses a review whose recorded active-root digest no longer matches the current registry row.
+Discarding review removes its registry stage without touching the active version.
 Rollback swaps registry identity back to the previous immutable directory and requires approval again.
 Uninstall refuses while a live plugin pane still owns a session, removes managed source, and retains config and state unless purge is separately confirmed.
 
@@ -69,6 +77,7 @@ Panes launch through `SessionManager.spawn` as ordinary shell sessions and the e
 The supervisor can keep a live plugin pane process and terminal session alive across a daemon restart.
 Callback bearer grants are currently daemon-generation scoped, so a callback-dependent pane must be reopened after reload before it can call swe-mux again.
 Source updates do not rewrite a pane that is already running.
+The explicit development restart operation replaces every live pane owned by one plugin, preserving Project ownership and retained tab, split, or popup placement while issuing fresh callback tokens.
 Tab placement enters the focused terminal stack and split placement opens to its right.
 The fleet reconciler routes those sessions from their retained `plugin_placement`, so an event-driven refresh cannot race the pane-open response.
 Popup placement renders the same session in a modal and is excluded from durable layout reconciliation while it remains a popup.
@@ -123,8 +132,11 @@ The permission layer prevents accidental control-plane widening and provides aud
 
 Settings contains a compact Plugins list with inline enablement and uninstall controls.
 The app menu's Plugins row and the `plugins.open` command both open that Settings section.
-Each row expands for trust details, source/config/state paths, contribution testing, update, rollback, purge, and command logs.
-The shared test Project defaults to the Project focused when Settings opened, while its choices are alphabetical.
+Each row expands for trust details, source/config/state paths, running pane ownership, update review, linked-source validation and restart, rollback, purge, and command logs.
+Plugin lifecycle is global and Settings carries no Project selector or contribution launcher.
+Refresh explicitly recalculates linked content and manifest digests, while browser focus performs the same inert refresh for author convenience.
+The development-root scanner discovers direct children inertly, and each candidate requires a separate Link action followed by approval.
+Managed update checks perform network metadata reads only after an explicit user action, and update acquisition remains separate from approval.
 Project-scoped pane contributions appear in that Project's Run menu, and every enabled contribution remains discoverable in the command palette.
 The command palette receives one entry per enabled action and pane plus a stable Manage plugins command.
 Popup pane headers expose `Keep as Project tab`; docking preserves the running utility process and focuses its new Project tab.
