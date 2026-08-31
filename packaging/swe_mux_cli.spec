@@ -115,11 +115,24 @@ PROJECT = ROOT.parent
 # layout. Declaring both names would have encoded one runner's shape - the same
 # mistake as a size floor measured on one host. Excluding the import removes the
 # variance instead of describing it, and takes 3 MiB with it.
+# `truststore` and `certifi` are the OS-trust closure `swe_mux.tls_trust`
+# reaches for, and they arrived in this bundle on 2026-08-31 when
+# `voice_models` gained a module-scope `from .tls_trust import ...` - which
+# `doctor_local` reaches lazily, so the client's analysis collected the pair
+# plus the `urllib3`/`requests`/`cryptography` subtree behind them: 10 MB for a
+# client that never opens a TLS connection (its `aiohttp` is already excluded,
+# so `trusting_connector` cannot run here at all).
+#
+# Cutting them is safe by construction, the same shape as `win32evtlog` below:
+# both imports sit inside `try: ... except Exception` in `tls_trust.
+# client_ssl_context`, which falls back to `ssl.create_default_context()` -
+# the stdlib default this bundle shipped with before the module existed.
 EXCLUDES = [
     "PIL",
     "_tkinter",
     "aiohttp",
     "av",
+    "certifi",
     "edge_tts",
     "faster_whisper",
     "mcp",
@@ -134,6 +147,7 @@ EXCLUDES = [
     "tkinter",
     "tree_sitter",
     "tree_sitter_language_pack",
+    "truststore",
     "webview",
     "win32evtlog",
     "win32evtlogutil",
