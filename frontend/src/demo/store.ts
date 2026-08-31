@@ -11,8 +11,10 @@
  */
 import type { PaneLayout, PaneNode } from '../layout.ts'
 import type { Preview } from '../processFleet.ts'
+import type { QueueMessage, SpawnRequestRow } from '../queueApi.ts'
 import type { TranscriptMessage } from '../transcriptView.ts'
 import type { Project, ProjectGroup, Session } from '../types.ts'
+import { demoRandom, DETERMINISTIC, nextOrdinal, trueRandom } from './determinism.ts'
 import { initialDemoState } from './fixtures.ts'
 import type { DemoScanRecord } from './conversation.ts'
 
@@ -23,6 +25,47 @@ export type DemoNote = {
   revision: number
   updated_at: number
   content: string
+}
+
+/**
+ * One record in the demo's notification history, shaped as `NotificationsTab` reads it.
+ *
+ * Held in the store rather than answered flat because a scenario's whole point is that
+ * something *arrives*: the app toasts and badges only the ids it has not seen, so a
+ * constant list can never fire a notification, however many events are broadcast at it.
+ */
+export type DemoNotification = {
+  id: string
+  session_id?: string
+  kind: string
+  title: string
+  message: string
+  severity: string
+  created_at: number
+  read_at?: number
+}
+
+/**
+ * A land-queue request, in the shape `GET /api/land` returns.
+ *
+ * The land surface was a constant too, and a landing is the one control-plane act whose
+ * interest is entirely in its *transitions* - queued, reconciling, verifying, landed -
+ * so a fixture that showed only the last of them demonstrated a row rather than a queue.
+ */
+export type DemoLandRequest = {
+  id: string
+  project_id: string
+  branch: string
+  worktree_root: string
+  state: string
+  requested_by: string
+  requested_by_name: string
+  created_at: number
+  updated_at: number
+  landed_at?: number | null
+  error?: string
+  verification?: { kind: string; reason?: string; duration_s?: number; step?: string }
+  events: Array<{ at: number; state: string; note: string }>
 }
 
 export type DemoState = {
@@ -53,6 +96,21 @@ export type DemoState = {
   /** Which saved provider account is selected, per provider. Held here rather than in
    *  the payload builder so a switch survives a reload and reaches the other frame. */
   providerSelection: Record<string, string>
+  /**
+   * The control plane, which is the half of the product a terminal recording cannot
+   * show. All four were read-only constants until the scenario director needed them to
+   * move; they are state now for the same reason the fleet is - a surface that cannot
+   * change cannot demonstrate anything, and a scenario that mutated a payload builder
+   * would not reach the other frame.
+   */
+  queue: QueueMessage[]
+  notifications: DemoNotification[]
+  spawnRequests: SpawnRequestRow[]
+  lands: DemoLandRequest[]
+  /** Sessions opted in to auto-delivery, by id. A list rather than a flag because the
+   *  product's switch is per session inside a per-install master, and the demo's point
+   *  is that a prompt delivers into *this* pane because someone allowed it to. */
+  autoDelivery: string[]
   /** Event-bus watermark; monotonic across every frame via the reducer. */
   seq: number
 }
@@ -79,6 +137,20 @@ export type DemoMutation =
   | { kind: 'transcript-append'; id: string; message: TranscriptMessage }
   | { kind: 'timeline-append'; id: string; record: DemoScanRecord }
   | { kind: 'provider-select'; provider: string; accountId: string }
+  // ---------------------------------------------------------------- control plane
+  | { kind: 'queue-add'; message: QueueMessage }
+  | { kind: 'queue-patch'; id: string; patch: Partial<QueueMessage> }
+  | { kind: 'queue-remove'; id: string }
+  | { kind: 'notification-add'; notification: DemoNotification }
+  | { kind: 'notification-patch'; id: string; patch: Partial<DemoNotification> }
+  /** `id: ''` marks every record, which is what the tab's "dismiss all" does. */
+  | { kind: 'notification-read-all'; read: boolean }
+  | { kind: 'spawn-request-add'; request: SpawnRequestRow }
+  | { kind: 'spawn-request-patch'; id: string; patch: Partial<SpawnRequestRow> }
+  | { kind: 'land-add'; request: DemoLandRequest }
+  | { kind: 'land-patch'; id: string; patch: Partial<DemoLandRequest>; event?: { state: string; note: string } }
+  | { kind: 'land-remove'; id: string }
+  | { kind: 'auto-delivery-set'; id: string; enabled: boolean }
   | { kind: 'reset' }
 
 const STORAGE_KEY = 'swemux-demo-state-v1'
@@ -86,7 +158,8 @@ const CHANNEL_NAME = 'swemux-demo-v1'
 /** Scrollback kept per session; beyond this the oldest bytes fall off. */
 const SCROLLBACK_CAP = 120_000
 
-const FRAME_ID = `frame-${Math.random().toString(36).slice(2, 10)}`
+/** Deliberately off the *real* random source even under determinism - see `trueRandom`. */
+const FRAME_ID = `frame-${trueRandom().toString(36).slice(2, 10)}`
 
 /**
  * Pull every open turn back to the recent past.
@@ -104,7 +177,7 @@ function rebaseWorkingTurns(loaded: DemoState): DemoState {
     sessions: loaded.sessions.map(item => {
       const started = item.turn_started_at
       if (item.state !== 'working' || !started || now - started <= CEILING_SECONDS) return item
-      const fresh = now - (30 + Math.floor(Math.random() * 240))
+      const fresh = now - (30 + Math.floor(demoRandom() * 240))
       return {
         ...item,
         turn_started_at: fresh,
@@ -116,6 +189,10 @@ function rebaseWorkingTurns(loaded: DemoState): DemoState {
 }
 
 function loadPersisted(): DemoState | null {
+  // A deterministic run starts from the seed and nowhere else: loading a visitor's saved
+  // fleet would make the run a function of their history, and writing an epoch-stamped
+  // one back would leave the *next* visitor with sessions dated 2026-03-14.
+  if (DETERMINISTIC) return null
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
@@ -140,7 +217,9 @@ export function onMutation(listener: MutationListener): () => void {
 
 let persistTimer: number | undefined
 function schedulePersist(): void {
-  if (persistTimer !== undefined) return
+  // Outside a browser there is no `window.setTimeout` and no storage to write to; the
+  // unit suite drives this reducer directly to check the control plane's shapes.
+  if (DETERMINISTIC || typeof window === 'undefined' || persistTimer !== undefined) return
   persistTimer = window.setTimeout(() => {
     persistTimer = undefined
     try {
@@ -276,14 +355,87 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
     case 'provider-select':
       next.providerSelection = { ...current.providerSelection, [mutation.provider]: mutation.accountId }
       return next
+    case 'queue-add':
+      next.queue = [...current.queue.filter(item => item.id !== mutation.message.id), mutation.message]
+      return next
+    case 'queue-patch':
+      next.queue = current.queue.map(item => (item.id === mutation.id
+        // The revision moves on every patch, because the app sends the revision it holds
+        // back with an edit and a queue that never bumped one could not refuse a stale
+        // write - which is the single most load-bearing thing about the real queue.
+        ? { ...item, ...mutation.patch, revision: item.revision + 1, updated_at: nowSeconds() }
+        : item))
+      return next
+    case 'queue-remove':
+      next.queue = current.queue.filter(item => item.id !== mutation.id)
+      return next
+    case 'notification-add':
+      next.notifications = [...current.notifications, mutation.notification]
+      return next
+    case 'notification-patch':
+      next.notifications = current.notifications.map(item =>
+        item.id === mutation.id ? { ...item, ...mutation.patch } : item)
+      return next
+    case 'notification-read-all':
+      next.notifications = current.notifications.map(item => ({
+        ...item,
+        ...(mutation.read ? { read_at: nowSeconds() } : { read_at: undefined }),
+      }))
+      return next
+    case 'spawn-request-add':
+      next.spawnRequests = [
+        ...current.spawnRequests.filter(item => item.id !== mutation.request.id),
+        mutation.request,
+      ]
+      return next
+    case 'spawn-request-patch':
+      next.spawnRequests = current.spawnRequests.map(item =>
+        item.id === mutation.id ? { ...item, ...mutation.patch } : item)
+      return next
+    case 'land-add':
+      next.lands = [...current.lands.filter(item => item.id !== mutation.request.id), mutation.request]
+      return next
+    case 'land-patch': {
+      const stamp = nowSeconds()
+      next.lands = current.lands.map(item => (item.id === mutation.id
+        ? {
+          ...item,
+          ...mutation.patch,
+          updated_at: stamp,
+          // The trail is append-only on purpose: a refusal has to go on saying it
+          // happened, which is the same rule the real land queue's event trail follows.
+          events: mutation.event
+            ? [...item.events, { at: stamp, state: mutation.event.state, note: mutation.event.note }]
+            : item.events,
+        }
+        : item))
+      return next
+    }
+    case 'land-remove':
+      next.lands = current.lands.filter(item => item.id !== mutation.id)
+      return next
+    case 'auto-delivery-set':
+      next.autoDelivery = mutation.enabled
+        ? [...new Set([...current.autoDelivery, mutation.id])]
+        : current.autoDelivery.filter(item => item !== mutation.id)
+      return next
     case 'reset':
       return initialDemoState()
   }
 }
 
-const channel: BroadcastChannel | null = typeof BroadcastChannel === 'function'
-  ? new BroadcastChannel(CHANNEL_NAME)
-  : null
+/**
+ * The cross-frame fan-out, in a browser only.
+ *
+ * `typeof BroadcastChannel === 'function'` is not enough on its own: Node has one too, so
+ * importing this module in the unit suite opened a real channel, and an open channel is a
+ * live handle that keeps the event loop alive - the run simply never exited. The `window`
+ * check says what was actually meant, which is "there is another frame to mirror to".
+ */
+const channel: BroadcastChannel | null
+  = typeof window !== 'undefined' && typeof BroadcastChannel === 'function'
+    ? new BroadcastChannel(CHANNEL_NAME)
+    : null
 
 channel?.addEventListener('message', event => {
   const payload = event.data as { from?: string; mutation?: DemoMutation }
@@ -312,5 +464,16 @@ export function project(id: string): Project | undefined {
 
 export const nowSeconds = (): number => Math.floor(Date.now() / 1000)
 
+/**
+ * A fresh id for something the demo mints.
+ *
+ * Counter-based under determinism, and the timestamp is what had to go: an id carrying
+ * `Date.now()` is unique twice over but reproducible neither time, so a scenario that
+ * spawned a pane could not name the pane it had just spawned on the second run. Outside
+ * determinism the timestamp stays, because two *frames* mint ids independently and a
+ * bare counter would collide across them.
+ */
 let idCounter = 0
-export const demoId = (prefix: string): string => `${prefix}-${Date.now().toString(36)}-${(idCounter += 1)}`
+export const demoId = (prefix: string): string => (DETERMINISTIC
+  ? `${prefix}-d${nextOrdinal()}`
+  : `${prefix}-${Date.now().toString(36)}-${(idCounter += 1)}`)

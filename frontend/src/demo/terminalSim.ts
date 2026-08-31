@@ -14,6 +14,8 @@
  * actually help is free to be the caricature, and it lands better than filler.
  */
 
+import { demoRandom } from './determinism.ts'
+
 const ESC = '\x1b'
 const RESET = `${ESC}[0m`
 const DIM = `${ESC}[38;5;243m`
@@ -424,7 +426,7 @@ export function spawnScrollback(info: ComposerInfo): string {
 
 export type ReplyTool = { id: string; name: string; input?: unknown }
 
-type Reply = {
+export type Reply = {
   chunks: string[]
   /** ms between chunks */
   pace: number
@@ -551,6 +553,17 @@ const SHELL_CANNED: Record<string, string[]> = {
     '',
     `${GREEN}12 passing${RESET}`,
   ],
+  // The preview scenario's own command. A listener is the one thing a shell can produce
+  // that the rest of swe-mux reacts to, so the banner names the port the demo's invented
+  // dev-server process is already reported on (`fleetFixtures.ts`) rather than a new one.
+  'npm run dev': [
+    `${DIM}> rocket-shop@1.0.0 dev${RESET}`,
+    '',
+    `  ${GREEN}ready${RESET} in 412 ms`,
+    '',
+    `  ${BOLD}local${RESET}   http://127.0.0.1:5173/`,
+    `  ${DIM}press h to show help${RESET}`,
+  ],
   whoami: ['definitely-a-real-user'],
   pwd: ['/code/rocket-shop'],
   uptime: ['up 14 years, 3 espressos'],
@@ -580,8 +593,12 @@ function paint(kind: DemoBackendKind, text: string): string {
     .replace(/¶([^¶]*)¶/g, `${DIM}$1${RESET}`)
 }
 
-let jokeCursor = Math.floor(Math.random() * AGENT_JOKES.length)
-let busyCursor = Math.floor(Math.random() * BUSY_REPLIES.length)
+// Where the joke pools start, so two visitors in a row do not read the same first reply.
+// The demo's own stream (`determinism.ts`) rather than the global one: which joke a pane
+// tells ends up in the scrollback and in the Transcript tab, so it is fixture data, and a
+// capture has to be able to reproduce it.
+let jokeCursor = Math.floor(demoRandom() * AGENT_JOKES.length)
+let busyCursor = Math.floor(demoRandom() * BUSY_REPLIES.length)
 
 /** The refusal a busy pane answers with, instead of running the responder. */
 export function busyReply(kind: DemoBackendKind): Reply {
@@ -593,6 +610,23 @@ export function busyReply(kind: DemoBackendKind): Reply {
     pace: 160,
     plain: replyProse(source),
     tools: [],
+  }
+}
+
+/**
+ * A reply somebody wrote, painted for a harness.
+ *
+ * Same derivation as the joke pool: one authored body in the placeholder dialect yields
+ * the ANSI the pane streams, the prose the Transcript tab reads, and the tool calls
+ * between them. Scenarios hand their lines here rather than assembling escape sequences,
+ * so a scripted turn cannot end up telling the reader a different story from the pane.
+ */
+export function authoredReply(kind: DemoBackendKind, body: string[], pace = 190): Reply {
+  return {
+    chunks: [line(), ...body.map(text => line(paint(kind, text))), line()],
+    pace,
+    plain: replyProse(body),
+    tools: replyTools(body, `scripted-${body.length}`),
   }
 }
 

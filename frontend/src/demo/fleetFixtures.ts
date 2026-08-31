@@ -12,6 +12,7 @@
  */
 import type { DaemonProcesses, FleetSnapshot, ProcessItem, SessionProcesses } from '../processFleet.ts'
 import type { Session } from '../types.ts'
+import { DETERMINISTIC } from './determinism.ts'
 import { DEMO_PROJECT_ID } from './fixtures.ts'
 import { nowSeconds, state } from './store.ts'
 
@@ -34,6 +35,11 @@ const MEGABYTE = 1024 * 1024
  * and phone frames report the same reading.
  */
 function wobble(key: string, amplitude: number): number {
+  // Deterministic mode stills it outright. The wobble is a function of the wall clock by
+  // design, and the clock is rebased rather than frozen there (`determinism.ts`), so a
+  // capture would read a different CPU figure depending on how long the page had been
+  // open - the one number on this surface that a still could not reproduce.
+  if (DETERMINISTIC) return 0
   const phase = (Date.now() / 40_000) + seed(key) / 997
   return Math.sin(phase * Math.PI * 2) * amplitude
 }

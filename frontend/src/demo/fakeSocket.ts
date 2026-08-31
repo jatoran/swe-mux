@@ -11,12 +11,14 @@
  * the demo store mutates, which is what drives the app's fleet refetch.
  */
 import { liveScanRecord } from './conversation.ts'
+import { demoRandom } from './determinism.ts'
 import { BUSY_SESSION_IDS } from './fixtures.ts'
 import { apply, nowSeconds, onMutation, session, state } from './store.ts'
 import {
-  buildReply, busyReply, CLEAR_SCREEN, clearComposer, COMPOSER_HEIGHT, composerFrame,
-  composerInfo, consumeInput, demoBackendKind, promptFor, redrawComposer, renderedRows,
-  type ComposerInfo, type LineState, type ReplyTool,
+  authoredReply, buildReply, busyReply, CLEAR_SCREEN, clearComposer, COMPOSER_HEIGHT,
+  composerFrame, composerInfo, consumeInput, demoBackendKind, promptFor, redrawComposer,
+  renderedRows,
+  type ComposerInfo, type LineState, type Reply, type ReplyTool,
 } from './terminalSim.ts'
 
 const encoder = new TextEncoder()
@@ -118,14 +120,14 @@ class FakeEventsSocket extends FakeSocketBase {
 
   /** A typed daemon frame, for the surfaces that listen for one by name rather
    *  than refetching on any change - the transcript reader above all. */
-  notifyEvent(type: string, sessionId: string): void {
-    this.deliverJson({ type, session_id: sessionId, seq: state.seq })
+  notifyEvent(type: string, sessionId: string, payload?: Record<string, unknown>): void {
+    this.deliverJson({ type, session_id: sessionId, payload: payload ?? {}, seq: state.seq })
   }
 }
 
 /** Push one typed frame into every attached events socket in this frame. */
-function broadcastEvent(type: string, sessionId: string): void {
-  for (const socket of eventSockets) socket.notifyEvent(type, sessionId)
+function broadcastEvent(type: string, sessionId: string, payload?: Record<string, unknown>): void {
+  for (const socket of eventSockets) socket.notifyEvent(type, sessionId, payload)
 }
 
 // ---------------------------------------------------------------------- pty
@@ -366,6 +368,119 @@ function recordReply(id: string, ask: string, text: string, tools: ReplyTool[]):
   }
 }
 
+/**
+ * Run one agent turn to completion: prompt line, working state, streamed reply, idle.
+ *
+ * Split out of `streamReply` so the scenario director can drive an *authored* turn
+ * through exactly the same plumbing a typed one uses. That matters more than it sounds:
+ * a scripted turn that appended its own bytes would leave the composer holding whatever
+ * had been typed, would never open or close a turn on the session row, and would leave
+ * the Transcript tab and the scan timeline telling a different story from the pane beside
+ * them. One path, two callers.
+ */
+function streamAndClose(id: string, ask: string, reply: Reply, startDelay: number): void {
+  reply.chunks.forEach((chunk, index) => {
+    window.setTimeout(() => {
+      if (!session(id)) { busy.delete(id); return }
+      appendOutput(id, chunk)
+      if (index !== reply.chunks.length - 1) return
+      busy.delete(id)
+      const finished = session(id)
+      const ended = Math.floor(Date.now() / 1000)
+      apply({
+        kind: 'session-patch', id,
+        patch: {
+          state: 'idle', state_since: ended,
+          turn_started_at: null,
+          turn_seq: (finished?.turn_seq ?? 0) + 1,
+          last_turn_end_ts: ended,
+          last_activity_ts: ended,
+          // The demo's own stream, not the global: this number ends up in the session
+          // row and in the workload telemetry, which makes it fixture data.
+          tokens_in: (finished?.tokens_in ?? 0) + 800 + Math.floor(demoRandom() * 600),
+          cost_usd: Math.round(((finished?.cost_usd ?? 0) + 0.03) * 100) / 100,
+        },
+      })
+      repaintComposers(id, false)
+      recordReply(id, ask, reply.plain, reply.tools)
+    }, startDelay + index * reply.pace)
+  })
+}
+
+function runTurn(id: string, submitted: string, reply: Reply, startDelay: number): void {
+  const target = session(id)
+  if (!target) return
+  const kind = demoBackendKind(target.backend)
+  appendOutput(id, `${promptFor(kind)}${submitted}\r\n`)
+  recordPrompt(id, submitted)
+  const opened = Math.floor(Date.now() / 1000)
+  apply({
+    kind: 'session-patch', id,
+    patch: { state: 'working', state_since: opened, turn_started_at: opened },
+  })
+  // The box stays under the reply while it streams, saying what the pane is
+  // doing - which is what the real CLI shows for the whole of a turn.
+  repaintComposers(id, true)
+  streamAndClose(id, submitted, reply, startDelay)
+}
+
+/**
+ * Finish a turn that is already open, rather than starting one.
+ *
+ * The demo seeds two panes permanently mid-turn, and "the agent finishes" is the opening
+ * beat of the queue scenario - so the director needs the second half of a turn without
+ * the first. Reprinting the prompt line to get there would be the demo contradicting its
+ * own scrollback, which already shows the ask several lines up.
+ */
+export function scriptedCompletion(input: {
+  id: string
+  /** The ask this reply answers, for the transcript and the scan record. */
+  ask: string
+  reply: string[]
+  pace?: number
+  startDelay?: number
+}): void {
+  const target = session(input.id)
+  if (!target || demoBackendKind(target.backend) === 'shell') return
+  busy.add(input.id)
+  streamAndClose(
+    input.id,
+    input.ask,
+    authoredReply(demoBackendKind(target.backend), input.reply, input.pace ?? 190),
+    input.startDelay ?? 300,
+  )
+}
+
+/**
+ * A turn the director wrote, rather than one the joke responder invented.
+ *
+ * The leading Ctrl-C is not decoration: the visitor (or the script) has usually just
+ * typed into the composer, that buffer is shared state every attached frame draws from,
+ * and a scripted turn that cleared only its own copy would leave the phone beside the
+ * desktop showing a box full of text nobody is going to send. `\x03` is the keystroke
+ * that already means "clear the line", it travels as an ordinary mutation, and every
+ * frame honours it.
+ */
+export function scriptedTurn(input: {
+  id: string
+  prompt: string
+  /** Authored lines in `terminalSim`'s placeholder dialect: `●` bullet, `§bold§`, `¶dim¶`. */
+  reply: string[]
+  pace?: number
+  startDelay?: number
+}): void {
+  const target = session(input.id)
+  if (!target || demoBackendKind(target.backend) === 'shell') return
+  apply({ kind: 'term-input', id: input.id, data: '\x03' })
+  busy.add(input.id)
+  runTurn(
+    input.id,
+    input.prompt,
+    authoredReply(demoBackendKind(target.backend), input.reply, input.pace ?? 190),
+    input.startDelay ?? 500,
+  )
+}
+
 function streamReply(id: string, submitted: string): void {
   const target = session(id)
   if (!target) return
@@ -394,7 +509,11 @@ function streamReply(id: string, submitted: string): void {
   // A permanently-working pane answers rather than running the joke responder,
   // and never leaves `working`: it is the demo's stand-in for a turn in flight,
   // which is exactly the state the real product will not interleave input into.
-  if (BUSY_SESSION_IDS.includes(id)) {
+  //
+  // Gated on the *live* state rather than on membership alone, because a scenario can
+  // end one of these turns. Once it has, the pane is an ordinary idle agent and answering
+  // a prompt with "still working" would be the demo contradicting its own session row.
+  if (BUSY_SESSION_IDS.includes(id) && target.state === 'working') {
     openTurn()
     const refusal = busyReply(kind)
     // Still a turn, so the conversation records it: the refusal is what the pane
@@ -412,45 +531,17 @@ function streamReply(id: string, submitted: string): void {
     return
   }
   busy.add(id)
-  openTurn()
   const reply = buildReply(kind, submitted)
-  const startDelay = agent ? 900 : 120
-  if (agent) recordPrompt(id, submitted)
-  if (agent) {
-    const now = Math.floor(Date.now() / 1000)
-    apply({
-      kind: 'session-patch', id,
-      patch: { state: 'working', state_since: now, turn_started_at: now },
-    })
-    // The box stays under the reply while it streams, saying what the pane is
-    // doing - which is what the real CLI shows for the whole of a turn.
-    repaintComposers(id, true)
-  }
+  if (agent) { runTurn(id, submitted, reply, 900); return }
+  // A shell echoes at its prompt and never opens a turn: it has no composer, no
+  // conversation and no state to move, and the contrast with the pane beside it is worth
+  // keeping rather than smoothing over.
   reply.chunks.forEach((chunk, index) => {
     window.setTimeout(() => {
       if (!session(id)) { busy.delete(id); return }
       appendOutput(id, chunk)
-      if (index === reply.chunks.length - 1) {
-        busy.delete(id)
-        if (agent) {
-          const finished = session(id)
-          apply({
-            kind: 'session-patch', id,
-            patch: {
-              state: 'idle', state_since: Math.floor(Date.now() / 1000),
-              turn_started_at: null,
-              turn_seq: (finished?.turn_seq ?? 0) + 1,
-              last_turn_end_ts: Math.floor(Date.now() / 1000),
-              last_activity_ts: Math.floor(Date.now() / 1000),
-              tokens_in: (finished?.tokens_in ?? 0) + 800 + Math.floor(Math.random() * 600),
-              cost_usd: Math.round(((finished?.cost_usd ?? 0) + 0.03) * 100) / 100,
-            },
-          })
-          restoreComposer(false)
-          recordReply(id, submitted, reply.plain, reply.tools)
-        }
-      }
-    }, startDelay + index * reply.pace)
+      if (index === reply.chunks.length - 1) busy.delete(id)
+    }, 120 + index * reply.pace)
   })
 }
 
@@ -503,6 +594,30 @@ onMutation((mutation, local) => {
       for (const socket of attached) socket.sendExit(undefined)
       ptySockets.delete(mutation.id)
     }
+  }
+  // The control plane's surfaces refetch on *named* events, not on the generic changed
+  // frame: the Queue tab listens for `queue_updated`, the Git tab's land strip for
+  // `land_changed`, and the notification toast fires only on `notification_created`. A
+  // mutation that produced `demo_state_changed` alone left every one of them a beat
+  // behind the pane beside it - visibly, in the first capture: a message the scenario had
+  // just delivered was still drawn as armed.
+  if (mutation.kind === 'queue-add' || mutation.kind === 'queue-patch' || mutation.kind === 'queue-remove') {
+    const target = 'message' in mutation
+      ? mutation.message.target_session_id
+      : state.queue.find(item => item.id === mutation.id)?.target_session_id ?? ''
+    broadcastEvent('queue_updated', target)
+  }
+  if (mutation.kind === 'auto-delivery-set') broadcastEvent('queue_updated', mutation.id)
+  if (mutation.kind === 'notification-add') broadcastEvent('notification_created', mutation.notification.session_id ?? '')
+  if (mutation.kind === 'spawn-request-add') {
+    broadcastEvent('spawn_request_drafted', '', { project_id: mutation.request.project_id })
+  }
+  if (mutation.kind === 'spawn-request-patch') {
+    const request = state.spawnRequests.find(item => item.id === mutation.id)
+    broadcastEvent('spawn_request_decided', '', { project_id: request?.project_id ?? '' })
+  }
+  if (mutation.kind === 'land-add' || mutation.kind === 'land-patch' || mutation.kind === 'land-remove') {
+    broadcastEvent('land_changed', '')
   }
   // Everything except pure terminal traffic (which returned above) nudges the
   // event bus - that is what makes the *other* frame (the phone beside the

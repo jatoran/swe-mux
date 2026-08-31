@@ -17,61 +17,11 @@ import { nowSeconds, state } from './store.ts'
 
 const HOUR = 3600
 
-// ---------------------------------------------------------------- prompt queue
-
-export function queueSummaryPayload(): unknown {
-  return { targets: [] }
-}
-
-export function queueAutoPayload(): unknown {
-  return {
-    master_enabled: false,
-    paused: false,
-    quiet_hours: { start: '', end: '', active: false },
-    stable_seconds: 8,
-    max_consecutive: 10,
-    session_ttl_minutes: 120,
-    reply_window_minutes: 60,
-    sessions: [],
-    counters: {},
-    promotion: {
-      criteria: {}, met: false, auto_sends: 0, unsafe_reports: 0,
-      proving_days: 0, required_sends: 50, required_days: 7, fixture_classes: [],
-    },
-    last_error: '',
-  }
-}
-
-export function queueMessagesPayload(sessionId: string): unknown {
-  const session = state.sessions.find(item => item.id === sessionId)
-  return {
-    target: {
-      session_id: sessionId,
-      live: Boolean(session),
-      agent_run_id: session?.agent_run_id ?? null,
-      label: session?.name ?? null,
-      state: session?.state ?? null,
-      delivery_readiness: session?.delivery_readiness ?? null,
-    },
-    messages: [],
-    pending: 0,
-  }
-}
-
-export function queueMailboxPayload(author: string): unknown {
-  return {
-    author,
-    messages: [],
-    spawn_requests: [],
-    spawn_request_errors: [],
-    control_requests: [],
-    targets: state.sessions.map(session => ({
-      target_session_id: session.id,
-      label: session.name,
-      project_id: session.project_id,
-    })),
-  }
-}
+// The prompt queue, the notification history and the land queue used to answer from here
+// with a correct, permanently empty shape. They are state now (`controlPlane.ts`), because
+// the scenario director needed them to move and a surface that cannot change cannot
+// demonstrate the half of the product that is not a terminal. Everything remaining in this
+// file is still genuinely nothing, and says so in its own diagnostic.
 
 // ------------------------------------------------------------------- library
 

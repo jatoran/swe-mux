@@ -12,7 +12,7 @@
  * real repository.
  */
 import {
-  DEMO_PROJECT2_ID, DEMO_PROJECT_ID, DEMO_ROOT, DEMO_ROOT2,
+  DEMO_PROJECT2_ID, DEMO_ROOT, DEMO_ROOT2,
   DEMO_WORKTREE_COUPON, DEMO_WORKTREE_PROFILE,
 } from './fixtures.ts'
 import { nowSeconds, state } from './store.ts'
@@ -391,34 +391,10 @@ export function sweMuxSetupPayload(): unknown {
 }
 
 /** `GET /api/land?project_id=`: one finished request, so the strip has a trail. */
-export function landPayload(projectId: string): unknown {
-  const now = nowSeconds()
-  return {
-    hourly_budget: 12,
-    hold_timeout_seconds: 1800,
-    retry_verification: false,
-    installed_enabled: true,
-    project_enabled: projectId === DEMO_PROJECT_ID,
-    agent_grant: 'draft',
-    verify_grant: 'granted',
-    requests: projectId === DEMO_PROJECT_ID
-      ? [{
-        id: 'land-demo-1',
-        project_id: projectId,
-        branch: 'agent/cart-profile',
-        worktree_root: DEMO_WORKTREE_PROFILE,
-        state: 'landed',
-        requested_by: 's-codex',
-        requested_by_name: sessionLabel('s-codex'),
-        created_at: now - 2 * HOUR,
-        updated_at: now - 2 * HOUR + 220,
-        landed_at: now - 2 * HOUR + 220,
-        verification: { kind: 'skipped', reason: 'documentation only', duration_s: 0 },
-        events: [],
-      }]
-      : [],
-  }
-}
+// `landPayload` used to live here as a constant with one finished row in it. It moved to
+// `controlPlane.ts` when the land queue became state: the interesting thing about a
+// landing is the sequence queued → reconciling → verifying → landed, and a builder that
+// invented its own row could never show a second one arriving beside the first.
 
 /** `GET /api/land/verify-command`. */
 export function verifyCommandPayload(): unknown {

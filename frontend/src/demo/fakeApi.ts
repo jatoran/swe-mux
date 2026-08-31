@@ -11,9 +11,9 @@ import { HARNESS_REGISTRY_SEED } from '../harnessRegistrySeed.ts'
 import type { Preview } from '../processFleet.ts'
 import type { PaneLayout, PaneLeaf, PaneNode } from '../layout.ts'
 import type { Session } from '../types.ts'
-import { PREVIEW_PAGE_IDS } from './fixtures.ts'
+import { hashText, PREVIEW_PAGE_IDS } from './fixtures.ts'
 import {
-  commitChangesPayload, graphPayload, landPayload, provenancePayload,
+  commitChangesPayload, graphPayload, provenancePayload,
   sweMuxSetupPayload, verifyCommandPayload, worktreesPayload,
 } from './gitFixtures.ts'
 import {
@@ -23,15 +23,27 @@ import {
   agentEnvironmentPayload, attentionInboxPayload, automationDashboardPayload,
   automationMatrixPayload, clipboardPayload, filesTreePayload, grantsPayload,
   historyProjectsPayload, injectionSafetyPayload, lastReplyPayload, projectAutomationsPayload,
-  projectConfigPayload, promptsPayload, providerAccountsPayload, queueAutoPayload,
-  queueMailboxPayload, queueMessagesPayload, queueSummaryPayload, schedulesPayload,
+  projectConfigPayload, promptsPayload, providerAccountsPayload, schedulesPayload,
   skillsPayload, usagePayload,
 } from './supportPayloads.ts'
+import {
+  deliverQueuedMessage, landEventsPayload, landPayload, makeLandRequest, makeQueueMessage,
+  notificationsPayload, queueAutoPayload, queueMailboxPayload, queueMessagesPayload,
+  queueSummaryPayload,
+} from './controlPlane.ts'
 import { KEYMAP_FIXTURE } from './keymapFixture.ts'
 import { apply, demoId, nowSeconds, project, session, state } from './store.ts'
 import { composerInfo, spawnScrollback } from './terminalSim.ts'
 
-const realFetch = window.fetch.bind(window)
+/**
+ * The page's own `fetch`, captured at install time rather than at module load.
+ *
+ * `installFakeFetch()` is the first thing `main.tsx` runs, so the two are the same
+ * instant in the browser - but only one of them lets this module be imported outside one.
+ * The unit suite reads the scenario catalogue, which reaches here through two hops, and a
+ * module-scope `window.fetch` made that a `ReferenceError` in Node.
+ */
+let realFetch: typeof fetch = (...args) => window.fetch(...args)
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -188,7 +200,10 @@ function placeLeafBeside(layout: PaneLayout, anchorId: string, leaf: PaneLeaf): 
   return { version: 7, root }
 }
 
-function spawnSession(body: Record<string, unknown>): unknown {
+/** Exported for the scenario director, which spawns panes as a *daemon* act (an approved
+ *  request, a scripted orchestration) rather than by pressing the Run menu. Same function
+ *  the route calls, so a scripted spawn and a visitor's spawn cannot diverge. */
+export function spawnSession(body: Record<string, unknown>): unknown {
   const backend = String(body.backend ?? 'shell')
   const projectId = String(body.project_id ?? state.projects[0]?.id ?? '')
   const target = project(projectId)
@@ -199,7 +214,10 @@ function spawnSession(body: Record<string, unknown>): unknown {
     id, name: backend === 'shell' ? 'shell' : `${backend} session`,
     project_id: projectId, backend,
     native_session_id: `native-${id}`, cwd: target.root, exe: backend, args: [],
-    pid: 50000 + Math.floor(Math.random() * 9000), created_at: created,
+    // Derived from the id rather than drawn, which is what the seeded sessions already do
+    // (`fixtures.makeSession`). A pid in an invented install is data about that session,
+    // not a random number - and a drawn one made a scripted spawn unreproducible.
+    pid: 50000 + (Math.abs(hashText(id)) % 9000), created_at: created,
     state: 'running', state_since: created,
     tokens_in: 0, tokens_out: 0, tokens_cache_read: 0, tokens_cache_write: 0, cost_usd: 0,
     context_window: 200000, context_pct: 0, context_peak_pct: 0,
@@ -224,7 +242,9 @@ function spawnSession(body: Record<string, unknown>): unknown {
   return newSession
 }
 
-function createPreview(body: Record<string, unknown>): unknown {
+/** Exported for the same reason as `spawnSession`: the preview scenario registers a
+ *  listener the way the daemon does, through the one function the route also uses. */
+export function createPreview(body: Record<string, unknown>): unknown {
   const sessionId = String(body.session_id ?? '')
   const owner = session(sessionId) ?? state.sessions[0]
   if (!owner) return error(404, 'No session to attach the preview to.')
@@ -322,9 +342,25 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: /^\/api\/config$/, handler: () => state.config },
   { method: 'GET', pattern: /^\/api\/voice$/, handler: () => voicePayload() },
   { method: 'GET', pattern: /^\/api\/profiles$/, handler: () => profilesPayload() },
+  { method: 'GET', pattern: /^\/api\/notifications$/, handler: () => notificationsPayload() },
   {
-    method: 'GET', pattern: /^\/api\/notifications$/,
-    handler: () => ({ notifications: [], deliveries: [], automation: [] }),
+    method: 'PATCH', pattern: /^\/api\/automation\/notifications$/,
+    handler: (_match, body) => {
+      apply({ kind: 'notification-read-all', read: (body as Record<string, unknown>)?.read !== false })
+      return { ok: true }
+    },
+  },
+  {
+    method: 'PATCH', pattern: /^\/api\/automation\/notifications\/([^/]+)$/,
+    handler: (match, body) => {
+      const id = decodeURIComponent(match[1])
+      const read = (body as Record<string, unknown>)?.read !== false
+      apply({
+        kind: 'notification-patch', id,
+        patch: read ? { read_at: nowSeconds() } : { read_at: undefined },
+      })
+      return { ok: true }
+    },
   },
   {
     method: 'GET', pattern: /^\/api\/notes$/,
@@ -599,6 +635,96 @@ const ROUTES: Route[] = [
     method: 'GET', pattern: /^\/api\/queue\/mailbox$/,
     handler: (_match, _body, url) => queueMailboxPayload(url.searchParams.get('author') || 'non_human'),
   },
+  {
+    method: 'POST', pattern: /^\/api\/queue\/messages$/,
+    handler: (_match, body) => {
+      const request = (body ?? {}) as Record<string, unknown>
+      const targetSessionId = String(request.target_session_id ?? '')
+      if (!session(targetSessionId)) return error(404, 'Unknown session.')
+      const message = makeQueueMessage({
+        targetSessionId,
+        body: String(request.body ?? ''),
+        state: request.armed === true ? 'armed' : 'draft',
+      })
+      apply({ kind: 'queue-add', message })
+      return message
+    },
+  },
+  {
+    method: 'PATCH', pattern: /^\/api\/queue\/messages\/([^/]+)$/,
+    handler: (match, body) => {
+      const id = decodeURIComponent(match[1])
+      const existing = state.queue.find(item => item.id === id)
+      if (!existing) return error(404, 'Unknown message.')
+      const request = (body ?? {}) as Record<string, unknown>
+      // The revision check is the one thing about the real queue worth reproducing
+      // exactly: two devices editing one row is the case it exists for, and a demo that
+      // accepted any revision would be showing a field that means nothing.
+      if (typeof request.revision === 'number' && request.revision !== existing.revision) {
+        return { __status: 409, error: 'That message changed since you read it.', code: 'revision_conflict', revision: existing.revision }
+      }
+      const patch: Record<string, unknown> = {}
+      if (typeof request.body === 'string') { patch.body = request.body; patch.edited_at = nowSeconds() }
+      if (typeof request.armed === 'boolean') {
+        patch.state = request.armed ? 'armed' : 'draft'
+        patch.armed_at = request.armed ? nowSeconds() : null
+      }
+      if ('constraints' in request) patch.constraints = request.constraints ?? null
+      if (typeof request.retarget_session_id === 'string') {
+        patch.target_session_id = request.retarget_session_id
+        patch.retargeted_from = { session_id: existing.target_session_id, label: existing.target_label }
+      }
+      apply({ kind: 'queue-patch', id, patch })
+      return state.queue.find(item => item.id === id)
+    },
+  },
+  {
+    method: 'POST', pattern: /^\/api\/queue\/messages\/([^/]+)\/cancel$/,
+    handler: (match, body) => {
+      const id = decodeURIComponent(match[1])
+      if (!state.queue.some(item => item.id === id)) return error(404, 'Unknown message.')
+      const kind = String((body as Record<string, unknown>)?.kind ?? 'cancelled')
+      apply({
+        kind: 'queue-patch', id,
+        patch: { state: 'cancelled', cancel_kind: kind as 'cancelled' | 'skipped' | 'revoked' },
+      })
+      return state.queue.find(item => item.id === id)
+    },
+  },
+  {
+    method: 'DELETE', pattern: /^\/api\/queue\/messages\/([^/]+)$/,
+    handler: match => {
+      const id = decodeURIComponent(match[1])
+      const known = state.queue.some(item => item.id === id)
+      if (known) apply({ kind: 'queue-remove', id })
+      return { deleted: true, message_id: id, already_deleted: !known }
+    },
+  },
+  {
+    method: 'POST', pattern: /^\/api\/queue\/send-next$/,
+    handler: (_match, body) => {
+      const request = (body ?? {}) as Record<string, unknown>
+      const id = String(request.message_id ?? '')
+      const message = state.queue.find(item => item.id === id)
+      if (!message) return error(404, 'Unknown message.')
+      if (typeof request.revision === 'number' && request.revision !== message.revision) {
+        return { __status: 409, error: 'That message changed since you read it.', code: 'revision_conflict', revision: message.revision }
+      }
+      return deliverQueuedMessage(id)
+        ? { status: 'sent', confirmed: true }
+        : error(409, 'That message is no longer deliverable.')
+    },
+  },
+  {
+    method: 'PUT', pattern: /^\/api\/queue\/auto\/sessions\/([^/]+)$/,
+    handler: (match, body) => {
+      const id = decodeURIComponent(match[1])
+      const enabled = (body as Record<string, unknown>)?.enabled
+      if (typeof enabled === 'boolean') apply({ kind: 'auto-delivery-set', id, enabled })
+      return queueAutoPayload()
+    },
+  },
+  { method: 'POST', pattern: /^\/api\/queue\/auto\/pause$/, handler: () => queueAutoPayload() },
 
   // ------------------------------------------------------------- the fleet's
   // conversation surfaces, both read out of the same store the panes write to.
@@ -690,6 +816,63 @@ const ROUTES: Route[] = [
     handler: (_match, _body, url) => landPayload(url.searchParams.get('project_id') || ''),
   },
   { method: 'GET', pattern: /^\/api\/land\/verify-command$/, handler: () => verifyCommandPayload() },
+  {
+    method: 'GET', pattern: /^\/api\/land\/([^/]+)\/events$/,
+    handler: match => landEventsPayload(decodeURIComponent(match[1])),
+  },
+  {
+    method: 'POST', pattern: /^\/api\/land$/,
+    handler: (_match, body) => {
+      const request = (body ?? {}) as Record<string, unknown>
+      const worktreeRoot = String(request.worktree_root ?? '')
+      const projectId = String(request.project_id ?? '')
+      // The branch is read off whichever session is standing in that checkout, which is
+      // also how the daemon knows: a landing is about a worktree, and the session in it
+      // is the thing that can say what branch it is on.
+      const standing = state.sessions.find(item => item.runtime_cwd === worktreeRoot || item.cwd === worktreeRoot)
+      if (!standing) return error(400, 'No session is standing in that checkout.')
+      apply({
+        kind: 'land-add',
+        request: makeLandRequest({
+          projectId,
+          branch: standing.git?.branch || 'detached',
+          worktreeRoot,
+          requestedBy: standing.id,
+        }),
+      })
+      return { ok: true }
+    },
+  },
+  {
+    method: 'DELETE', pattern: /^\/api\/land\/([^/]+)$/,
+    handler: match => {
+      apply({ kind: 'land-remove', id: decodeURIComponent(match[1]) })
+      return { ok: true }
+    },
+  },
+  {
+    // Spawn and control requests share one decision endpoint. Approving a spawn is what
+    // starts a session; drafting one never does, and that boundary is the whole reason
+    // the surface exists.
+    method: 'POST', pattern: /^\/api\/projects\/([^/]+)\/observations\/([^/]+)\/decide$/,
+    handler: (match, body) => {
+      const requestId = decodeURIComponent(match[2])
+      const request = state.spawnRequests.find(item => item.id === requestId)
+      if (!request) return error(404, 'Unknown request.')
+      const approve = String((body as Record<string, unknown>)?.decision ?? '') === 'approve'
+      if (!approve) {
+        apply({ kind: 'spawn-request-patch', id: requestId, patch: { done: true, status: 'dismissed', decided_by: 'you' } })
+        return {}
+      }
+      const created = spawnSession({ backend: request.backend, project_id: request.project_id }) as { id?: string }
+      if (created?.id) apply({ kind: 'session-patch', id: created.id, patch: { name: request.name } })
+      apply({
+        kind: 'spawn-request-patch', id: requestId,
+        patch: { done: true, status: 'approved', decided_by: 'you', session_id: created?.id ?? null },
+      })
+      return { session: created?.id ? { id: created.id, name: request.name } : undefined }
+    },
+  },
 
   // ------------------------------------------------------- money and policy
   { method: 'GET', pattern: /^\/api\/usage$/, handler: () => usagePayload() },
@@ -743,6 +926,7 @@ const ROUTES: Route[] = [
 // ------------------------------------------------------------------ install
 
 export function installFakeFetch(): void {
+  realFetch = window.fetch.bind(window)
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input instanceof URL ? input.toString() : input, init)
     const url = new URL(request.url, location.href)
