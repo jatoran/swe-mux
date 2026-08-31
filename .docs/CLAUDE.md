@@ -71,7 +71,7 @@
 - Changing trusted task imports, the Project Run menu, or task launch:
   `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`.
-- Planning or implementing third-party plugin manifests, lifecycle, actions, panes, event hooks,
+- Changing the plugin host's manifest contract, lifecycle, actions, panes, event adapter,
   callback authority, or marketplace discovery: `development/ROADMAP.md` Phase 25 and
   `development/PLUGIN_SYSTEM_FINDINGS.md`, then the affected substrate documents:
   `design/features/automation.md`, `design/features/meta-hooks.md`,
@@ -82,6 +82,11 @@
   The boundary is subprocess-only, and plugin event commands are separately approved EventBus
   consumers rather than legacy meta-hooks or a widening of canonical Universal hooks.
   Current shipped behavior and implementation paths are in `design/features/plugins.md`.
+- Authoring or maintaining a standalone plugin: `design/features/plugins.md`, then
+  `technical/plugin-authoring.md`.
+  This route applies to any human, Claude, Codex, or other coding agent.
+  The plugin stays in its own repository; do not edit the swe-mux host unless a missing public
+  capability is the explicit task.
   **`.swe-mux/` and `.vscode/` are untracked as of 2026-08-28** and `.gitignore` now ignores
   each of them whole. Nothing under either - including the repository-authored
   `actions.toml`, `project-context.md`, and `prompts/`, which used to be deliberate
