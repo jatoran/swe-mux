@@ -365,6 +365,7 @@ class LandQueueService:
         origin_session_id: str = "",
         origin_run_id: str = "",
         reason: str = "",
+        report_success: bool = False,
         resumed_from: str = "",
     ) -> dict[str, Any]:
         """Enqueue a land or a verify-only run, or draft it for a human, or refuse it.
@@ -393,6 +394,18 @@ class LandQueueService:
         approved. There is nothing for a human to decide in advance about that, and
         drafting it would put the cheap half of the pipeline behind the approval the
         expensive half exists to protect.
+
+        `report_success` asks for the one outcome that never spoke. A conflict, a failed
+        gate, a hold that expired and a refusal all answer their author; a *land* did
+        not, on the argument that it announces itself by the trunk moving - which is
+        true for a human watching the Git tab and false for the session that asked,
+        because "waiting for a land" is precisely being idle and not looking. It is
+        opt-in rather than always-on for the reason the silence was defensible in the
+        first place: a fleet landing six branches would otherwise interrupt six agents
+        that have moved on, and only the requester knows whether it has work gated on
+        the land. It grants nothing new - the reply rides `_solicited_reply` under every
+        bound a handback does, and spends the same single armed reply, which a land that
+        succeeded has no other use for. Inert for `verify`, whose pass already reports.
         """
         if kind not in ("land", "verify"):
             raise LandRefusal("unknown_kind", f"unknown request kind: {kind}")
@@ -434,6 +447,7 @@ class LandQueueService:
                     origin_session_id=origin_session_id,
                     origin_run_id=origin_run_id,
                     reason=reason,
+                    report_success=report_success,
                 )
 
         facts = await read_repository_facts(worktree_root, project_root)
@@ -481,6 +495,7 @@ class LandQueueService:
                 origin_session_id=origin_session_id,
                 origin_run_id=origin_run_id,
                 correlation_id=f"land:{uuid.uuid4().hex[:12]}",
+                report_success=report_success,
                 # The claim and the trail's opening entry in one commit; the row
                 # carries the branch and OID it claimed, so an event written
                 # afterwards could have described a claim that never happened.
@@ -492,6 +507,10 @@ class LandQueueService:
                         "kind": kind,
                         "branch": facts.worktree_branch,
                         "oid": facts.worktree_head,
+                        # In the trail because a message the queue sent, or did not
+                        # send, has to be accountable to something the request asked
+                        # for rather than to a default that may have changed since.
+                        **({"report_success": True} if report_success else {}),
                         # The link back to the refusal this replaces. A redo is a new
                         # id by design - nothing reopens a terminal row, because the
                         # trail has to go on saying the refusal happened - so without
@@ -596,6 +615,10 @@ class LandQueueService:
                     origin=str(row.get("origin") or "operator"),
                     origin_session_id=str(row.get("origin_session_id") or ""),
                     origin_run_id=str(row.get("origin_run_id") or ""),
+                    # Inherited, because the redo is the same request: a session that
+                    # asked to be told, and was told only that its land was refused,
+                    # is owed the answer once the block is cleared.
+                    report_success=bool(row.get("report_success")),
                     resumed_from=str(row["id"]),
                 )
             except LandRefusal as refusal:
@@ -624,11 +647,17 @@ class LandQueueService:
         origin_session_id: str,
         origin_run_id: str = "",
         reason: str = "",
+        report_success: bool = False,
     ) -> dict[str, Any]:
         """Write an inert approval request instead of acting.
 
         The default. A drafted land starts nothing: a human is what turns it into a
         queued request, exactly as they do for `interrupt` and `end_session`.
+
+        `report_success` travels with the draft because it is part of what the session
+        asked for, and the approval is meant to enqueue *that* request rather than a
+        similar one. Dropping it here would make the flag silently conditional on the
+        Project's grant, which is a different feature than the one it is.
         """
         if self._draft_request is None:
             raise LandRefusal("draft_unavailable", "drafted land requests are not available here")
@@ -644,6 +673,7 @@ class LandQueueService:
             origin_session_id=origin_session_id,
             origin_run_id=origin_run_id,
             reason=reason,
+            report_success=report_success,
         )
         return {
             "state": "drafted",
@@ -1290,6 +1320,19 @@ class LandQueueService:
                 detail={"trunk_before": trunk_before},
             )
         trunk_after = await self._head(row["project_root"])
+        # The one outcome that used to say nothing, and only when the request asked.
+        # Composed before the transition, exactly as a handback is: the request has to
+        # still be open for its own reply window to be holding the author's grant off
+        # the idle lapse, which is the half without which arming is not delivery.
+        reported = bool(row.get("report_success"))
+        body = (
+            self._landed_body(row, trunk_before=trunk_before, trunk_after=trunk_after)
+            if reported
+            else ""
+        )
+        message_id, armed, arming_reason = (
+            await self._solicited_reply(row, body) if reported else ("", False, "")
+        )
         landed = await self._store.transition(
             request_id,
             expect=("landing",),
@@ -1297,10 +1340,31 @@ class LandQueueService:
             reason="",
             trunk_before=trunk_before,
             landed_oid=trunk_after,
+            # Named for the handback it was added for, but it is the id of whatever
+            # message this request produced, and a reported land produces one.
+            handback_message_id=message_id,
             event=LandEvent(
                 step="land",
                 outcome="landed",
-                detail={"trunk_before": trunk_before, "trunk_after": trunk_after},
+                detail={
+                    "trunk_before": trunk_before,
+                    "trunk_after": trunk_after,
+                    **(
+                        {
+                            "message_id": message_id,
+                            # A draft nobody delivered reads, from the trail alone,
+                            # exactly like an answer that arrived - the same defect the
+                            # handback's arming record exists for.
+                            "armed": armed,
+                            "arming_reason": arming_reason,
+                            # And the trail records what was *said*, not only that
+                            # something was.
+                            "body": body,
+                        }
+                        if reported
+                        else {}
+                    ),
+                },
             ),
             now=self._clock(),
         )
@@ -1724,6 +1788,42 @@ class LandQueueService:
                 f"Nothing was committed, merged, or left behind. Address the cause above "
                 f"and request the {what} again."
             )
+        return "\n".join(lines)
+
+    def _landed_body(
+        self, row: dict[str, Any], *, trunk_before: str, trunk_after: str
+    ) -> str:
+        """A fixed template for a land whose author asked to be told it happened.
+
+        Written only for a request that set `report_success`, and it says the two facts
+        a waiting session cannot see for itself: that the trunk moved, and what it moved
+        to. It names the gate the same way the verify-only pass does, because "it
+        landed" and "it landed without the gate being run" are different statements and
+        the second is the one worth reading. No model writes any part of it.
+        """
+        gate = str(row.get("verify_gate") or "")
+        proven = {
+            "full": "The verification command passed.",
+            "docs_only": (
+                "The change set was documentation only, so the gate was skipped."
+            ),
+            "reused": (
+                "These exact bytes had already passed on this exact tree in this "
+                "queue, so the gate was not run again."
+            ),
+        }.get(gate, "")
+        lines = [
+            f"`{row['branch']}` landed on `{row['trunk_ref'] or 'the trunk'}`.",
+            "",
+            *([proven, ""] if proven else []),
+            f"Worktree: `{row['worktree_root']}`",
+            f"Target: `{row['project_root']}`",
+            f"Trunk: `{trunk_before[:12]}` → `{trunk_after[:12]}`",
+            "",
+            "Your worktree is untouched and still on its branch, which now contains "
+            "the merge of the trunk the queue made in order to verify it. Nothing "
+            "further is required for the land itself.",
+        ]
         return "\n".join(lines)
 
     def _verified_body(

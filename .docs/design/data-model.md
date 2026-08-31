@@ -435,6 +435,13 @@
   claimed by a conditional `UPDATE`: the consent a `request_land` carries is for the answer to
   *that* request, so the cap is denominated per request rather than left to the state machine
   happening to allow one handback (`features/land-queue.md`).
+  `report_success` is that consent asked for the one outcome that never spoke: a land answers its
+  author only when the request asked it to, because the queue's promise is that many branches land
+  while a human touches only the one that conflicted, and a success report delivered to every
+  requester would interrupt all of them.
+  It is a column rather than a caller's variable because the answer is written minutes later by the
+  pipeline, possibly across a daemon restart, and it travels with a drafted request and is inherited
+  by a resumed one, so approval and re-queueing enqueue the request the session actually made.
   `land_events` records `step`, `outcome`, `reason`, and a detail payload per transition, and is
   the authoritative trail; a step is additionally mirrored into Tier 0 only when the request has
   an originating session to attribute it to.

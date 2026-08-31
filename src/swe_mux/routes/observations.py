@@ -176,6 +176,10 @@ async def _approve_land_request(
             origin_session_id=str(req.get("from_session") or ""),
             origin_run_id=str(req.get("from_run_id") or ""),
             reason=str(req.get("reason") or ""),
+            # Part of what the session asked for, not part of what the human decides:
+            # approval says the land may run, and the requester's own request says
+            # whether it wants to be told that it did.
+            report_success=bool(req.get("report_success")),
         )
     except LandRefusal as exc:
         return json_response({"error": exc.message, "code": exc.code}, 409)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -2688,5 +2689,293 @@ async def test_an_already_landed_branch_has_nothing_to_verify(
             )
         assert caught.value.code == "already_landed"
         assert "nothing to verify" in caught.value.message
+    finally:
+        store.close()
+
+
+# -- reporting a land that worked -------------------------------------------
+#
+# The asymmetry these close: a conflict, a failed gate, an expired hold and a refusal
+# all answer their author, and a *land* answered nobody. The argument for that silence
+# - a land announces itself by the trunk moving - is true for a human watching the Git
+# tab and false for the session that asked, because waiting for a land is precisely
+# being idle and not looking. So it is opt-in, under exactly the bounds a handback
+# already rides and with no new one.
+
+
+async def test_a_land_that_worked_is_silent_unless_its_author_asked(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The default stays silence, and the default is the design.
+
+    A queue whose promise is that N branches land while the operator touches only the
+    one that conflicted must not interrupt N agents to say so.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+        assert queue.messages == []
+        landed = next(
+            item for item in await store.events(row["id"]) if item["outcome"] == "landed"
+        )
+        # Not merely absent from the queue: the trail says nothing was written either,
+        # so a silent land cannot be mistaken for one whose message went missing.
+        assert "message_id" not in landed["detail"]
+        stored = await store.get(row["id"])
+        assert stored is not None
+        assert stored["report_success"] is False
+        assert stored["armed_replies"] == 0
+    finally:
+        store.close()
+
+
+async def test_a_database_written_before_the_flag_gains_it_on_open(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """`CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists.
+
+    So a column added to the schema reaches a fresh install and no other, and the
+    migration is the only thing that reaches an upgrade. The row it backfills reads
+    `False`, which is a fact about the column rather than about history: nothing could
+    ask to be told about a success, so none of those rows asked.
+    """
+    path = tmp_path / "land.sqlite3"
+    store = LandStore(path)
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    row = await store.enqueue(
+        project_id="p",
+        project_root=str(trunk),
+        worktree_root=str(worktree),
+        branch="worktree-alpha",
+        requested_oid="a" * 40,
+        trunk_ref="main",
+        report_success=True,
+    )
+    store.close()
+
+    # The shape a database written before this column has.
+    raw = sqlite3.connect(path)
+    raw.execute("ALTER TABLE land_requests DROP COLUMN report_success")
+    raw.commit()
+    raw.close()
+
+    reopened = LandStore(path)
+    try:
+        stored = await reopened.get(row["id"])
+        assert stored is not None
+        assert stored["report_success"] is False
+    finally:
+        reopened.close()
+
+
+async def test_a_reported_land_arms_for_the_session_that_asked(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The opt-in, under every bound a handback carries.
+
+    Armed *and* naming the request that solicited it, because arming is never the
+    sender's claim - `solicited_by` is what the queue's floor reads before it lets a
+    `rule` sender arrive armed at all. It spends the same single armed reply, which a
+    land that succeeded has no other use for.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+            report_success=True,
+        )
+        # The request records what it asked for, so a message the pipeline writes
+        # minutes later is accountable to the request rather than to a default that
+        # may have changed since.
+        opening = [
+            item for item in await store.events(row["id"]) if item["step"] == "request"
+        ]
+        assert opening[0]["detail"]["report_success"] is True
+
+        assert (await service.tick())[0]["state"] == "landed"
+        assert len(queue.messages) == 1
+        message = queue.messages[0]
+        assert message["target_session_id"] == "sess_1"
+        assert message["armed"] is True
+        assert message["solicited_by"] == row["id"]
+        assert message["sender_kind"] == "rule"
+        # The two facts a waiting session cannot see for itself: that the trunk moved,
+        # and what it moved to.
+        assert "landed" in message["body"]
+        assert "worktree-alpha" in message["body"]
+        assert "→" in message["body"]
+
+        stored = await store.get(row["id"])
+        assert stored is not None
+        assert stored["report_success"] is True
+        assert stored["armed_replies"] == 1
+        # The row points at the message, so a reported land is as traceable as a
+        # handback is - the column is named for the outcome it was added for, not for
+        # the only outcome allowed to use it.
+        assert stored["handback_message_id"] == "msg_1"
+        landed = next(
+            item for item in await store.events(row["id"]) if item["outcome"] == "landed"
+        )
+        assert landed["detail"]["armed"] is True
+        # The trail records what was said, not only that something was.
+        assert landed["detail"]["body"] == message["body"]
+    finally:
+        store.close()
+
+
+async def test_a_reported_land_says_which_gate_ran(tmp_path: Path, trunk: Path) -> None:
+    """A land and a land whose gate was skipped are different statements.
+
+    The second is the one worth reading, so the report names the classification exactly
+    the way a verify-only pass does.
+    """
+    docs_trunk(trunk)
+    worktree = add_worktree(trunk, "docs")
+    commit(worktree, "README.md", "# docs\n", "docs work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        row = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+            report_success=True,
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+        stored = await store.get(row["id"])
+        assert stored is not None
+        assert stored["verify_gate"] == "docs_only"
+        assert "documentation only" in queue.messages[0]["body"]
+    finally:
+        store.close()
+
+
+async def test_an_operator_land_reports_to_nobody(tmp_path: Path, trunk: Path) -> None:
+    """There is no origin session, so the flag has nobody to answer.
+
+    The same rule the operator's handback and the operator's verify already follow: a
+    land started from a surface the operator is looking at authorizes no write into
+    anybody's terminal, and asking for one changes nothing about that.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree)
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(tmp_path, trunk, queue=queue)
+    try:
+        approve(approvals, worktree, trunk)
+        await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            report_success=True,
+        )
+        assert (await service.tick())[0]["state"] == "landed"
+        assert queue.messages == []
+    finally:
+        store.close()
+
+
+async def test_a_drafted_land_carries_the_report_its_author_asked_for(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Approval decides whether the land runs, never whether its author may hear.
+
+    Dropping the flag at the draft would make it silently conditional on the Project's
+    grant, which is a different feature than the one it is.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    drafts: list[dict[str, Any]] = []
+    service, store, _ = build_service(tmp_path, trunk, grant="draft", drafts=drafts)
+    try:
+        result = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+            report_success=True,
+        )
+        assert result["state"] == "draft_requested"
+        assert drafts[0]["report_success"] is True
+        # And nothing was enqueued: a drafted land starts nothing, flag or no flag.
+        assert await store.list_requests(project_id="p") == []
+    finally:
+        store.close()
+
+
+async def test_a_resumed_land_inherits_the_report_the_refusal_ended(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """A redo is the same request.
+
+    A session that asked to be told, and was told only that its land was refused, is
+    owed the answer once the block is cleared.
+    """
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    queue = FakeQueue()
+    service, store, approvals = build_service(
+        tmp_path, trunk, queue=queue, verify_grant="draft"
+    )
+    try:
+        first = await service.request(
+            project_id="p",
+            project_root=str(trunk),
+            worktree_root=str(worktree),
+            origin="agent",
+            origin_session_id="sess_1",
+            origin_run_id="run_1",
+            report_success=True,
+        )
+        assert (await service.tick())[0]["state"] == "refused"
+
+        info = describe_verify_command(worktree, {}, approvals, project_root=str(trunk))
+        assert info.digest is not None
+        approvals.approve(str(trunk), info.digest, snapshot=info.current_source)
+        resumed = await service.resume_verification_blocked(
+            project_id="p",
+            project_root=first["project_root"],
+            worktree_root=str(worktree),
+            digest=info.digest,
+        )
+        assert len(resumed) == 1
+        assert resumed[0]["report_success"] is True
+        assert (await service.tick())[0]["state"] == "landed"
+        # Two messages, one per request: the refusal's, then the land's. The armed-reply
+        # cap is per request, so the redo has its own to spend.
+        assert len(queue.messages) == 2
+        assert "landed" in queue.messages[1]["body"]
     finally:
         store.close()
