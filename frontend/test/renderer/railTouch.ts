@@ -52,6 +52,9 @@ export async function keyPoint(page: Page, selector: string): Promise<{ x: numbe
 }
 
 export const sends = (page: Page): Promise<string[]> => page.evaluate(() => window.railSends)
+/** How many sequences had been written when the finger last came up. See the harness. */
+export const sendsAtLift = (page: Page): Promise<number> =>
+  page.evaluate(() => window.railSendsAtLift)
 export const claims = (page: Page): Promise<boolean[]> => page.evaluate(() => window.railClaims)
 export const scrollLeft = (page: Page): Promise<number> =>
   page.evaluate(() => document.querySelector('.terminal-action-scroll')!.scrollLeft)
@@ -71,4 +74,8 @@ export async function dragBy(
 
 /** Reset the harness's recorders without reloading it. */
 export const clearRecorders = (page: Page): Promise<void> =>
-  page.evaluate(() => { window.railSends.length = 0; window.railClaims.length = 0 })
+  page.evaluate(() => {
+    window.railSends.length = 0
+    window.railClaims.length = 0
+    window.railSendsAtLift = 0
+  })

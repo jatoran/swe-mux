@@ -32,6 +32,17 @@ declare global {
      *  mobile recognizer would otherwise classify the same motion as the rail's
      *  swipe-up-opens-the-menu gesture. Sampling mid-drag is the only way to see it. */
     railClaims: boolean[]
+    /**
+     * How many sequences had been written at the instant the finger came up.
+     *
+     * Sampled here for the same reason `railClaims` is: a spec cannot take it. Reading the
+     * count over CDP is a round trip, and on a loaded runner that round trip is longer than
+     * one repeat interval - so a hold's own next repetition lands between the read and the
+     * lift and reads as "lifting added a tap" (seen on CI: 6 sampled, 7 after). A tap
+     * synthesised *by* the lift is dispatched after `pointerup`, so it lands after this
+     * snapshot and is still caught, which is the thing the assertion is actually about.
+     */
+    railSendsAtLift: number
     /** The production dismissal call, so a spec can put the keyboard away *deliberately*
      *  mid-gesture. That is the one thing `restoreSoftKeyboard` must not undo, and it is a
      *  counter rather than an event, so there is no other way to reach it from a page. */
@@ -40,8 +51,15 @@ declare global {
 }
 window.railSends = []
 window.railClaims = []
+window.railSendsAtLift = 0
 window.railDismissKeyboard = dismissSoftKeyboard
 window.addEventListener('pointermove', () => { window.railClaims.push(pointerDragOwnsPointer()) })
+// Capture phase, so the snapshot precedes anything a component does on the same lift.
+window.addEventListener(
+  'pointerup',
+  () => { window.railSendsAtLift = window.railSends.length },
+  true,
+)
 
 const ARROWS = [
   { id: 'up', label: '↑', title: 'Up', bytes: '\x1b[A' },
