@@ -1064,18 +1064,28 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.0...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.1...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
+      <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.1">0.2.1</a></h2>
+        <span class="when">2026-09-01</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.1">release notes</a>
+      </div>
       <div class="relgroups">
-        <div><span class="k">Added</span> <span class="sep">3 entries</span></div>
-        <div><span class="k">Changed</span> <span class="sep">5 entries</span></div>
-        <div><span class="k">Fixed</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Added</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">7 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">5 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 12 entries</summary>
+        <summary>all 16 entries</summary>
         <div class="changetype">Added</div>
         <ul class="bullets">
+          <li><span><b>swemux.dev now carries an interactive demo of the real app.</b> The landing page runs the unmodified frontend against an in-page fake daemon, on a desktop frame and a phone frame that mirror one fleet, with a guided walkthrough and seven further scenarios - the prompt queue, orchestration, previews, landing a branch, the command palette, keymap presets, and the assistant - that label the parts of the screen they are talking about. Nothing in it listens, speaks, or reaches a real daemon.</span></li>
           <li><span><b>Automations now have an install-wide default that new and existing Projects inherit.</b> The Automation → Policy matrix's Global cell gained a <code>default</code> checkbox beside the existing "off everywhere" lock, with a line under it saying how many Projects that default actually reaches ("12 inherit · 3 custom") before you click it. A Project that never wrote an automation down follows the default and keeps following it as you change your mind; a Project that wrote one still wins. The per-Project control gained a third position, <code>Follow global</code>, so a Project can go back to inheriting instead of being pinned to whatever it was set to once. <code>scan_timeline_auto_enable</code> - whether a new conversation arms the timeline by itself - inherits the same way.</span></li>
         </ul>
         <ul class="bullets">
@@ -1089,6 +1099,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <li><span><b>The Files tab now opens files into itself, as tabs, instead of into a workspace pane.</b> A second rail below <code>File Explorer | Recent</code> holds what you have open; a plain click on a tree row, a search hit, or a Recent row lands there, and the side panel stays open over the session you were reading. A file moves into a pane on request - <code>⇥</code> beside the rail, <code>Open in a pane</code> on its tab or on its row in the tree, ctrl/cmd-click on a row, or the row drag that already worked - and it lives in exactly one of the two places at a time. This also fixes a real cross-device fault: opening a file used to insert a tab into the Project layout, which is shared, so browsing files on a phone permanently rearranged the desktop's panes. Open files are remembered per Project on the device, capped at eight, evicted by least-recent use, never evicted while they hold unsaved edits, and marked and guarded when they do.</span></li>
           <li><span><b>Plugins is now a first-class app-menu destination.</b> The row opens plugin management directly, while Project-scoped plugin tools remain in each Project's Run menu.</span></li>
           <li><span><b>Plugin marketplace selection now fills an immutable release tag, and manual installation exposes an optional ref field.</b> Expanded plugin details show the selected channel and resolved revision, while acquisition, approval, and enablement remain separate.</span></li>
+          <li><span><b>The account switcher's quota rows are narrower.</b> Each account's <code>5h</code>, weekly, and Fable figures sit closer together, divided by a hairline instead of a bullet in a wide gap, with a small breath between a percentage and its reset time, which there was none of before. Percentages still line up across stacked accounts.</span></li>
+          <li><span><b>The default desktop command rail leads with what a terminal has no key for.</b> Approve-once sat fourth, spending a visible slot on a control that is inert except while a turn is asking; the front of the row is now attach, both clipboard directions, the code fence, the resume command, Branch, clipboard history, and the skills picker. Copy-input renders its label rather than an icon that shared a silhouette with Copy reply. Your own rail configuration is untouched.</span></li>
         </ul>
         <div class="changetype">Fixed</div>
         <ul class="bullets">
@@ -1096,6 +1108,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <li><span><b>A linked plugin whose manifest identity changed can still be uninstalled.</b> Uninstall no longer reloads a broken or renamed manifest merely to disable and unregister its existing record.</span></li>
           <li><span><b>The desktop app is no longer reported as one of its own sessions' orphaned processes.</b> Rebuilding and relaunching the app from inside a swe-mux session left the desktop window attributed to that session; when the session ended, the live UI appeared in the process fleet as a suspected orphan with Terminate offered on it. swe-mux now recognizes its own shell, daemon and PTY supervisor by identity rather than by descent, and the terminate actions refuse a process that is swe-mux itself regardless of what the fleet believes owns it.</span></li>
           <li><span><b>The "swe-mux runtime" row now reports swe-mux's whole footprint.</b> It counted only the daemon and its descendants, so the desktop window, its embedded browser, and the supervisor were reported as nothing at all.</span></li>
+          <li><span><b>Switching Claude accounts no longer tells you that your running sessions kept the old login.</b> The account switcher put the same sentence under every non-selected account's session count: "Switching is not retroactive - a session keeps the login it started with until it is restarted." That is true of Codex, whose CLI reads its login once at startup, and false of Claude Code, which re-reads its credential file when the file changes and sends its next request as the new account. The daemon now declares per provider whether a switch reaches sessions already running, and the notice says which: a muted "started under X, spending the selected account now" for Claude Code, whose only stale surface is its own <code>/status</code> line, and the amber "keeps spending X until restarted" for Codex. The Settings disclosure says the same, and the <code>selected</code> audit entry records which of the two the live sessions got.</span></li>
         </ul>
       </details>
     </div>
