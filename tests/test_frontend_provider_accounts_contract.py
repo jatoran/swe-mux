@@ -39,10 +39,17 @@ def test_provider_account_ui_surfaces_identity_verification_and_duplicates() -> 
     assert "'/api/provider-accounts/verify'" in source
     # Switching is unconditional: no force flag, no "switch anyway" confirmation.
     assert "force" not in source
-    # And it says so without claiming the switch reaches processes already running,
-    # which it does not: a CLI reads its credential file at startup, and Codex keeps
-    # the account it read. The count in the popover is what replaced the claim.
-    assert "It is never blocked and never confirmed, but it is not retroactive" in source
+    # And it says what a switch does to processes already running per CLI rather than
+    # for both at once: Claude Code re-reads its credential file on an mtime change
+    # and follows; Codex keeps the token it read at startup. The disclosure has been
+    # wrong in both directions before, so both halves are pinned.
+    assert (
+        "It is never blocked and never confirmed. "
+        "Whether it reaches sessions already running is up to the CLI"
+    ) in source
+    assert "Claude Code re-reads its credential file when the file changes" in source
+    assert "Codex reads its login once at startup" in source
+    assert "not retroactive" not in source
     assert "Sessions already running follow the switch" not in source
     assert ".account-conflict{" in css
     assert ".account-identity.verified{" in css
@@ -123,7 +130,7 @@ def test_account_settings_states_policy_once_and_only_where_it_acts() -> None:
     # Reference, not instruction: folded, but still the same sentences.
     assert 'class="account-explainer"' in source
     assert "<summary>How switching works</summary>" in source
-    assert "keep spending the outgoing account until it is restarted" in source
+    assert "keeps spending the outgoing account until it is restarted" in source
     assert "startup never restores an older saved account" in source
     # Only drawn when it is not simply restating the row marked ◆ active below it.
     assert "current?.state!=='saved'&&<div class={`account-current" in source
@@ -334,10 +341,14 @@ def test_the_account_invitation_is_dismissed_machine_side_and_answers_itself() -
 
 
 def test_the_popover_counts_sessions_per_account_without_claiming_identity() -> None:
-    """A switch is not retroactive, so the count is what makes that visible.
+    """The count says where each session started; the daemon says what a switch did to it.
 
     Deliberately "spawned under", never "using": mux stamps what it had selected
-    when the process started, and cannot see a `/login` typed inside a pane.
+    when the process started, and cannot see a `/login` typed inside a pane. Whether
+    the process then follows a switch is the CLI's behaviour, so the sentence under
+    the count reads `switch_reaches_live` from the payload rather than assuming one
+    answer for both providers - the assumption that put a false sentence under every
+    Claude count.
     """
     display = (ROOT / "frontend" / "src" / "providerAccountDisplay.ts").read_text(
         encoding="utf-8"
@@ -355,6 +366,17 @@ def test_the_popover_counts_sessions_per_account_without_claiming_identity() -> 
     assert "spawnedSessionCount(status?.sessions,account.id)" in source
     assert "strandedSessions(status,provider).map" in source
     assert "not proof of what it authenticates as now" in source
-    assert "Switching is not retroactive" in display
+    # Three sentences, chosen by the daemon's per-provider fact and never by a
+    # provider name in the browser: follows, does not, and unknown.
+    assert "switch_reaches_live?:Record<ProviderName,boolean>" in source
+    assert "reachesLive=status?.switch_reaches_live?.[provider]" in source
+    assert "cli:harnessDisplayName(provider)" in source
+    assert "if(reach.reachesLive===true)" in display
+    assert "if(reach.reachesLive===false)" in display
+    assert "spending the selected account now" in display
+    assert "until restarted." in display
+    assert "restart to be sure." in display
+    assert "not retroactive" not in display
     assert ".account-popover .account-session-count{" in css
     assert ".account-popover .account-session-notice{" in css
+    assert ".account-popover .account-session-notice.follows{" in css

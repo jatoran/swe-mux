@@ -196,12 +196,15 @@ export const spawnedSessionCount=(counts:SessionCountsDisplay|null|undefined,acc
 
 export type StrandedSessions={label:string;count:number}
 
-/** Live sessions of a provider that are **not** on the account selected right now.
+/** Live sessions of a provider that were **not** started under the account selected
+ *  right now.
  *
- *  The reason the count is worth drawing at all. A switch is not retroactive: a CLI
- *  reads its credential file at startup, so a session that began before the switch
- *  keeps spending the outgoing account until it is restarted. Named per account rather
- *  than totalled, because "3 elsewhere" does not say which login is still being spent.
+ *  The reason the count is worth drawing at all. What the number means depends on the
+ *  provider's CLI, which is why `strandedSessionNotice` takes that fact from the daemon
+ *  rather than assuming it: one CLI re-reads its credential file and follows the switch
+ *  on its next request, another keeps the login it read at startup and goes on spending
+ *  the outgoing account until it is restarted. Named per account rather than totalled,
+ *  because "3 elsewhere" does not say which login they started on.
  *
  *  Sessions started on a login mux had not saved are one unnamed row: there is no slot
  *  to name them by, and leaving them out would make the numbers not add up on exactly
@@ -224,8 +227,21 @@ export function strandedSessions(
   return rows
 }
 
-export const strandedSessionNotice=(row:StrandedSessions):string=>
-  `${row.count} live session${row.count===1?'':'s'} on ${row.label}. Switching is not retroactive - a session keeps the login it started with until it is restarted.`
+/** What a switch did to sessions already running, as the daemon declares it per
+ *  provider (`switch_reaches_live` on the accounts payload) and the CLI's own name.
+ *  `reachesLive` is absent when the daemon predates the field, and the sentence says
+ *  so rather than picking a side. */
+export type SwitchReach={reachesLive?:boolean;cli:string}
+
+export const strandedSessionNotice=(row:StrandedSessions,reach:SwitchReach):string=>{
+  const one=row.count===1
+  const sessions=`${row.count} live session${one?'':'s'}`
+  if(reach.reachesLive===true)
+    return `${sessions} started under ${row.label}. ${reach.cli} picks up a credential change on its next request, so ${one?'it is':'they are'} spending the selected account now; only ${one?'its':'their'} own /status keeps the old name until restarted.`
+  if(reach.reachesLive===false)
+    return `${sessions} on ${row.label}. ${reach.cli} reads its login at startup, so ${one?'it keeps':'they keep'} spending ${row.label} until restarted.`
+  return `${sessions} started under ${row.label}. Whether ${one?'it':'they'} followed the switch depends on ${reach.cli}; restart to be sure.`
+}
 
 // A `chipUsageBand` once banded a chip by its *hottest* window so the border could escalate on
 // a window the chip was not printing. It went out with the mobile toolbar's multi-window chip:
