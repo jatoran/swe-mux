@@ -60,6 +60,14 @@ export type AutomationRegistryEntry = {
    *  read only the explicit `requested` map must fall back to this, or they
    *  render a switch the daemon honours as on as if it were off. */
   default_on?: boolean
+  /** What a Project that never wrote this id down actually inherits on *this*
+   *  install: the operator's `automation_project_defaults` merged over the
+   *  registry's `default_on`, dependency closure completed. This is the fallback
+   *  a consumer wants; `default_on` alone answers only what the registry ships
+   *  with, so reading it would show an inherited automation as off. Absent on
+   *  payloads served without a config to resolve against, which is a different
+   *  fact from `false` and must not be rendered as one. */
+  install_default?: boolean
   /** The dedicated install switch that is this row's global ceiling, where one
    *  exists (`scan_timeline_enabled` and friends) - the Global toggle writes
    *  that key and never an `automation_global_allow` entry. */
@@ -68,6 +76,24 @@ export type AutomationRegistryEntry = {
    *  closure are allowed anywhere at all. Absent on payloads served without a
    *  config to resolve against. */
   globally_allowed?: boolean
+}
+
+/** What an id a Project never mentioned resolves to, install defaults included.
+ *
+ *  One function because five surfaces ask it and each of them getting it subtly
+ *  wrong is how "inherit" stops being visible: `install_default` is the daemon's
+ *  answer and `default_on` is only the registry's, so a consumer that reads the
+ *  second alone renders every inherited automation as off. */
+export const inheritedDefault = (entry?: {install_default?: boolean; default_on?: boolean}): boolean =>
+  entry?.install_default ?? entry?.default_on === true
+
+/** Whether a Project has this automation on, its own answer first. */
+export const automationRequested = (
+  requested: Record<string, boolean> | undefined,
+  entry?: {id?: string; install_default?: boolean; default_on?: boolean},
+): boolean => {
+  const own = entry?.id ? requested?.[entry.id] : undefined
+  return own ?? inheritedDefault(entry)
 }
 
 /**

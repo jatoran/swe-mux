@@ -1016,6 +1016,31 @@ class Config:
     # load (a registry that retired an id must not brick the config) and
     # refused on write (a typo must fail loudly, not silently allow).
     automation_global_allow: dict[str, bool] = field(default_factory=dict)
+    # Install-wide *default* for the per-Project automation opt-ins: automation
+    # id -> bool. It applies only where a Project's `.swe-mux/config.toml` left
+    # the id alone, so it can never change what a Project that wrote the id
+    # already does, and an empty map reproduces the registry's own
+    # `DEFAULT_ON_AUTOMATIONS` exactly. `automation_registry.install_defaults`
+    # is the one place the two layers are merged, and it completes the
+    # dependency closure of everything it leaves on - a default naming a
+    # consumer without its substrate would resolve to `blocked` and do nothing.
+    #
+    # Separate from the ceiling above because they answer different questions:
+    # "what should an undecided Project do" against "what may no Project on this
+    # machine do, whatever its file says". Exactly the split
+    # `agent_authority_default`/`agent_authority_ceiling` already draws for the
+    # authority fields, and for the same reason - one map with a precedence rule
+    # would make the first silently mean the second for Projects that decided.
+    # Unknown and unimplemented ids are scrubbed on load and refused on write.
+    automation_project_defaults: dict[str, bool] = field(default_factory=dict)
+    # Install-wide default for a Project's `scan_timeline_auto_enable`, which
+    # decides whether a new conversation arms the timeline on its own or waits
+    # to be armed from its Timeline tab. Here rather than only per-Project for
+    # the same reason as the map above: it was written into each Project's file
+    # by the creation form, so an operator who wanted it everywhere had to say
+    # so once per Project and could never change their mind in one place. A
+    # Project that wrote the field still wins.
+    scan_timeline_auto_enable_default: bool = False
     # Install-wide *default* for the per-Project agent authority fields
     # (`agent_authority.AUTHORITY_FIELDS`): field id -> level. It applies only
     # where a Project left the field unset, so it can never change what a
@@ -1485,8 +1510,9 @@ class Config:
     def scrub_registry_maps(self) -> None:
         """Drop map entries naming something this build's registries do not have.
 
-        Three maps key off a registry that can retire an id: the automation
-        ceiling and the two agent-authority maps. A config file that outlived
+        Four maps key off a registry that can retire an id: the automation
+        ceiling, the automation default template, and the two agent-authority
+        maps. A config file that outlived
         one of those retirements must still *load* - the alternative is a daemon
         that will not start because a setting mentions a feature that no longer
         exists - while a typo written over the API must fail loudly rather than
@@ -1517,6 +1543,21 @@ class Config:
                 and isinstance(flag, bool)
                 and name in _registry.REGISTRY
                 and name not in _registry.DEDICATED_INSTALL_SWITCHES
+            }
+        if isinstance(self.automation_project_defaults, dict):
+            # Unlike the ceiling this one keeps the dedicated-switch ids: the
+            # switch is that automation's ceiling, and "what does an undecided
+            # Project do" is a different question the switch does not answer.
+            # A default-on entry for an id this build has not implemented is
+            # dropped rather than kept, so a reserved id that never shipped
+            # cannot sit in the template reading as on.
+            self.automation_project_defaults = {
+                name: flag
+                for name, flag in self.automation_project_defaults.items()
+                if isinstance(name, str)
+                and isinstance(flag, bool)
+                and name in _registry.REGISTRY
+                and (not flag or _registry.REGISTRY[name].implemented)
             }
         for map_name in ("agent_authority_default", "agent_authority_ceiling"):
             current = getattr(self, map_name)
@@ -2044,6 +2085,65 @@ def _tool_path_errors(config: Config) -> dict[str, str]:
     return {}
 
 
+def _automation_policy_errors(config: Config) -> dict[str, str]:
+    """Validate the two install-wide automation maps, ceiling and default template.
+
+    Its own function for the same reason as `_tool_path_errors` above: `_validate`
+    is the function the repository's C901 cap is measured against, and adding the
+    default template's branches to it in place would have pushed it past the cap -
+    which the rule says to fix by taking branches out, never by raising the number.
+
+    Both use the loud-on-write half of the asymmetry `scrub_registry_maps` owns
+    the other half of: a typo must fail here rather than silently allow, while a
+    build that retired an id must still load.
+    """
+    from . import automation_registry as _registry
+
+    errors: dict[str, str] = {}
+    allow_map = config.automation_global_allow
+    if not isinstance(allow_map, dict) or any(
+        not isinstance(name, str) or not isinstance(flag, bool) for name, flag in allow_map.items()
+    ):
+        errors["automation_global_allow"] = "must map automation ids to booleans"
+    elif unknown_ids := set(allow_map) - set(_registry.REGISTRY):
+        errors["automation_global_allow"] = "unknown automations: " + ", ".join(
+            sorted(unknown_ids)
+        )
+    elif switched := set(allow_map) & set(_registry.DEDICATED_INSTALL_SWITCHES):
+        # One switch, one key: these ids are governed by their dedicated install
+        # switches, and a second entry here would be a second owner.
+        errors["automation_global_allow"] = "governed by dedicated switches: " + ", ".join(
+            sorted(f"{name} ({_registry.DEDICATED_INSTALL_SWITCHES[name]})" for name in switched)
+        )
+
+    defaults_map = config.automation_project_defaults
+    if not isinstance(defaults_map, dict) or any(
+        not isinstance(name, str) or not isinstance(flag, bool)
+        for name, flag in defaults_map.items()
+    ):
+        errors["automation_project_defaults"] = "must map automation ids to booleans"
+        return errors
+    # The dedicated-switch ids are deliberately allowed here, unlike in the
+    # ceiling above: the switch is that automation's ceiling, and "what does an
+    # undecided Project do" is a different question it does not answer.
+    if unknown_defaults := set(defaults_map) - set(_registry.REGISTRY):
+        errors["automation_project_defaults"] = "unknown automations: " + ", ".join(
+            sorted(unknown_defaults)
+        )
+    elif unimplemented := {
+        name
+        for name, flag in defaults_map.items()
+        if flag and not _registry.REGISTRY[name].implemented
+    }:
+        # The same refusal the Project write and the grant path make, for the same
+        # reason: a template entry that reads as on and does nothing is worse than
+        # one that would not go on.
+        errors["automation_project_defaults"] = "not implemented yet: " + ", ".join(
+            sorted(unimplemented)
+        )
+    return errors
+
+
 def _validate(config: Config) -> None:
     errors: dict[str, str] = {}
     # Every spending cap validates through one implementation against the bounds
@@ -2185,28 +2285,7 @@ def _validate(config: Config) -> None:
             unknown = set(value) - set(HARNESSES)
             if unknown:
                 errors[field_name] = "unknown harnesses: " + ", ".join(sorted(unknown))
-    allow_map = config.automation_global_allow
-    if not isinstance(allow_map, dict) or any(
-        not isinstance(name, str) or not isinstance(flag, bool) for name, flag in allow_map.items()
-    ):
-        errors["automation_global_allow"] = "must map automation ids to booleans"
-    else:
-        from . import automation_registry as _registry
-
-        unknown_ids = set(allow_map) - set(_registry.REGISTRY)
-        switched = set(allow_map) & set(_registry.DEDICATED_INSTALL_SWITCHES)
-        if unknown_ids:
-            errors["automation_global_allow"] = "unknown automations: " + ", ".join(
-                sorted(unknown_ids)
-            )
-        elif switched:
-            # One switch, one key: these ids are governed by their dedicated
-            # install switches, and a second entry here would be a second owner.
-            errors["automation_global_allow"] = "governed by dedicated switches: " + ", ".join(
-                sorted(
-                    f"{name} ({_registry.DEDICATED_INSTALL_SWITCHES[name]})" for name in switched
-                )
-            )
+    errors.update(_automation_policy_errors(config))
     from .agent_authority import AUTHORITY_FIELDS as _authority_fields
 
     for map_name in ("agent_authority_default", "agent_authority_ceiling"):

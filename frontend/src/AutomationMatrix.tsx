@@ -5,35 +5,55 @@ import type { AuthorityFieldSpec } from './AutomationAuthority'
 import { Dropdown } from './Dropdown'
 import { SettingLink } from './SettingLink'
 import { automationSetting } from './settingTargets'
-import { forgetProjectAutomations } from './projectAutomations'
+import { automationRequested, forgetProjectAutomations, inheritedDefault } from './projectAutomations'
 import type { AutomationRegistryEntry } from './projectAutomations'
 import { projectDropdownOptions } from './projectOptions'
 import { ProjectContextEditor } from './ProjectContextEditor'
 import type { StartingSetCatalog } from './projectCreate'
 
-// The policy matrix: every automation is one row, its install-wide ceiling and
-// the selected Project's opt-in side by side, with a fleet column saying how
+// The policy matrix: every automation is one row, the install-wide answer and
+// the selected Project's own answer side by side, with a fleet column saying how
 // many Projects run it. This is THE editor for both scopes - the one surface
 // that may turn an automation off - so the additive-only grant rule elsewhere
 // stays sound.
+//
+// The Global cell holds *two* controls, exactly as the authority rows below it
+// do, because the install has two different things to say about an automation:
+//
+// - the **default** checkbox, what a Project that never wrote this id down
+//   inherits (`automation_project_defaults`). It only ever reaches undecided
+//   Projects, so ticking it can never contradict a Project that decided.
+// - the **off everywhere** lock, the ceiling (`automation_global_allow`, or a
+//   dedicated install switch for three rows). It reaches every Project whatever
+//   its file says, cascades over dependents, and only ever subtracts.
+//
+// They were one checkbox until 2026-08-31, and the missing half is why a new
+// Project inherited nothing: the only thing an operator could say install-wide
+// was "no", so every "yes" had to be repeated per Project at creation time and
+// could never be revised in one place. The `reach` line under the pair renders
+// what the default currently decides ("12 inherit · 3 custom"), so a fleet-wide
+// change is visible before the click rather than after.
 //
 // Cascade greying is drawn from the same resolution the daemon enforces:
 // `globally_allowed` on each registry entry is the resolved ceiling (closure
 // included), and a Project cell under a blocked ceiling is disabled rather
 // than rendered as merely off - the Project's own choice is retained on disk.
 //
-// Three rows' Global cells write dedicated install switches
-// (`scan_timeline_enabled`, `scheduled_runs_enabled`, `land_queue_enabled`)
-// and every other row's writes the `automation_global_allow` map - one switch,
-// one key, decided by the registry's `install_switch` field rather than by
-// this file remembering which is which.
+// The Project cell is a three-position dropdown rather than a checkbox for the
+// same reason the authority rows' is: "follow global" and "explicitly off" are
+// different states, and collapsing them makes the install default unreachable
+// once anything has touched the Project. Follow global *removes* the key.
 
 export type MatrixProject={
   project_id:string;project_name:string;status:string;revision:string
   requested:Record<string,boolean>;enabled:string[];blocked:Record<string,string[]>
   unverified?:string[];globally_disabled?:string[]
   llm?:{ready:boolean;reason:string}|null
+  /** The effective answer, install default layered under the Project's own. */
   scan_timeline_auto_enable:boolean
+  /** What this Project's file says, null where it left the field alone - the
+   *  same two readings the authority pair carries, and for the same reason. */
+  scan_timeline_auto_enable_own?:boolean|null
   // What this Project's own file says (null = unset, which is what lets the
   // Project cell offer "Follow global" as a real third position) and what the
   // daemon resolves after the install default and ceiling are layered on.
@@ -44,6 +64,12 @@ export type MatrixData={
   automations:AutomationRegistryEntry[]
   projects:MatrixProject[]
   global_allow:Record<string,boolean>
+  /** The install's inherited default template, as stored. Only the ids the
+   *  operator named: the resolved answer per row is the registry entry's
+   *  `install_default`, and writing this map back wholesale is what keeps an
+   *  untouched row untouched. */
+  project_defaults?:Record<string,boolean>
+  scan_timeline_auto_enable_default?:boolean
   install_switches:{automation_enabled:boolean;scan_timeline_enabled:boolean;scheduled_runs_enabled:boolean;land_queue_enabled:boolean}
   authority_fields:AuthorityFieldSpec[]
   authority_default:Record<string,string>
@@ -56,7 +82,11 @@ const markPresetsSeen=():void=>{try{localStorage.setItem(PRESETS_SEEN_KEY,'1')}c
 
 const PRESET_COPY:Record<string,{name:string;description:string;cost:string}>={
   recommended:{name:'Free basics',description:'Model-free health checks over what agents actually did: stuck loops, unverified claims, change provenance, doc debt, code structure.',cost:'free - never calls a model'},
-  llm:{name:'AI timeline',description:'A model keeps a readable play-by-play of every session: the scan timeline armed per run, adaptive titles, attention narration.',cost:'costs money - bounded by the global budget'},
+  // "re-titles", not "titles": naming a pane is the built-in Session titler, an
+  // install-wide switch under Automation that runs whatever a Project opted into.
+  // Two features whose descriptions both said "titles" made this preset read as
+  // the one that turns titling on, so declining it looked like declining titles.
+  llm:{name:'AI timeline',description:'A model keeps a readable play-by-play of every session: the scan timeline armed per run, sessions re-titled when their scope changes, attention narration.',cost:'costs money - bounded by the global budget'},
   autonomy:{name:'Agent autonomy',description:'Agents may interrupt or end sessions and land finished branches through the queue; whatever still drafts gets its review surface.',cost:'free - each act is bounded and logged'},
 }
 
@@ -90,7 +120,14 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     return seen
   }
   const requestedOn=(item:AutomationRegistryEntry):boolean=>
-    project?(project.requested[item.id]??(item.default_on===true)):false
+    project?automationRequested(project.requested,item):false
+  /** What this Project's own file says about a row: on, off, or nothing at all. */
+  const ownState=(item:AutomationRegistryEntry):'inherit'|'on'|'off'=>{
+    const own=project?.requested[item.id]
+    return own===undefined?'inherit':own?'on':'off'
+  }
+  const defaults=data.project_defaults||{}
+  const defaultOn=(item:AutomationRegistryEntry):boolean=>inheritedDefault(item)
 
   const patchConfig=async(changes:Record<string,unknown>)=>{
     setSaving(true)
@@ -103,7 +140,11 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     }catch(cause){onError(cause instanceof Error?cause.message:String(cause))}
     finally{setSaving(false)}
   }
-  const toggleGlobal=(item:AutomationRegistryEntry)=>{
+  // The ceiling half of the Global cell: "not anywhere". Three rows write their
+  // dedicated install switch and every other row an `automation_global_allow`
+  // entry - one switch, one key, decided by the registry payload rather than by
+  // this file remembering which is which.
+  const toggleCeiling=(item:AutomationRegistryEntry)=>{
     if(item.install_switch){
       const key=item.install_switch as keyof MatrixData['install_switches']
       void patchConfig({[item.install_switch]:!data.install_switches[key]})
@@ -114,13 +155,39 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     else next[item.id]=false
     void patchConfig({automation_global_allow:next})
   }
+  // The default half: what an undecided Project inherits. Cascades exactly like
+  // the Project cell does, and for the same reason - a default naming a consumer
+  // without its substrate would resolve to blocked, and a default left on a
+  // substrate whose readers were just withdrawn is a switch that appears to do
+  // nothing. The daemon completes the closure too; doing it here as well is what
+  // makes the stored map say what it means.
+  const toggleDefault=(item:AutomationRegistryEntry)=>{
+    const next={...defaults}
+    const on=defaultOn(item)
+    const clear=(id:string)=>{
+      // An id the registry itself defaults on needs an explicit false to be
+      // withdrawn; anything else is withdrawn by having no entry at all.
+      if(byId.get(id)?.default_on)next[id]=false
+      else delete next[id]
+    }
+    if(on){
+      clear(item.id)
+      for(const other of data.automations)
+        if(other.id!==item.id&&closure(other.id,new Set()).has(item.id)&&defaultOn(other))clear(other.id)
+    }else{
+      for(const id of closure(item.id))next[id]=true
+    }
+    void patchConfig({automation_project_defaults:next})
+  }
   const writeProject=async(automations:Record<string,boolean>)=>{
     if(!project)return
     setSaving(true)
     try{
       await api('PUT',`/api/projects/${project.project_id}/automations`,{
         automations,
-        scan_timeline_auto_enable:project.scan_timeline_auto_enable,
+        // The Project's *own* answer, null included: echoing the effective one
+        // would pin the inherited value into the file on any unrelated edit.
+        scan_timeline_auto_enable:project.scan_timeline_auto_enable_own??null,
         revision:project.revision,
       })
       forgetProjectAutomations(project.project_id)
@@ -147,29 +214,33 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     }catch(cause){onError(cause instanceof Error?cause.message:String(cause))}
     finally{setSaving(false)}
   }
-  const toggleProject=(item:AutomationRegistryEntry)=>{
+  /** Move one row to one of its three positions in this Project.
+   *
+   *  `inherit` deletes the key, which is the only spelling of "follow global"
+   *  the file has; `off` writes an explicit false, which the daemon now persists
+   *  for every id rather than only for the default-on ones, because absence has
+   *  stopped meaning off and started meaning inherit. */
+  const setProjectState=(item:AutomationRegistryEntry,state:'inherit'|'on'|'off')=>{
     if(!project)return
     const next={...project.requested}
-    const switchOff=(id:string)=>{
-      // Off is an explicit `false` for a default-on automation - absent means
-      // on there - and absence for everything else, where absent already means
-      // off and a false entry is noise the daemon strips anyway.
-      if(byId.get(id)?.default_on)next[id]=false
-      else delete next[id]
-    }
-    if(requestedOn(item)){
-      switchOff(item.id)
-      // Turning substrate off turns off everything that reads from it, rather
-      // than leaving dependents enabled-but-inert.
-      for(const other of data.automations)if(closure(other.id,new Set()).has(item.id)&&other.id!==item.id)switchOff(other.id)
-    }else{
+    if(state==='inherit')delete next[item.id]
+    else if(state==='on'){
       // Enabling a consumer enables its whole transitive closure: the
       // alternative is a toggle that appears on and silently does nothing.
       for(const id of closure(item.id))next[id]=true
+    }else{
+      next[item.id]=false
+      // Turning substrate off turns off everything that reads from it, rather
+      // than leaving dependents enabled-but-inert. A dependent that was only
+      // inheriting is left inheriting: it is already off through this one, and
+      // pinning it would outlive the choice that caused it.
+      for(const other of data.automations)
+        if(other.id!==item.id&&closure(other.id,new Set()).has(item.id)&&project.requested[other.id])
+          next[other.id]=false
     }
     void writeProject(next)
   }
-  const toggleAutoArm=(value:boolean)=>{
+  const setAutoArm=(value:boolean|null)=>{
     if(!project)return
     setSaving(true)
     void (async()=>{
@@ -237,9 +308,14 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
         // Withdrawal is this editor's alone, so "turn off" clears exactly the
         // ids the preset named and leaves the substrate under them - substrate
         // records and never acts, and another consumer may still read it.
+        //
+        // An id the install defaults on is written explicitly false rather than
+        // deleted: deleting it would hand it straight back through inheritance,
+        // which is a "turn off" button that does not.
         const next={...project.requested}
         for(const id of set.automations){
-          if(byId.get(id)?.default_on)next[id]=false
+          const entry=byId.get(id)
+          if(entry&&inheritedDefault(entry))next[id]=false
           else delete next[id]
         }
         await writeProject(next)
@@ -255,13 +331,23 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     finally{setSaving(false)}
   }
 
+  // How many Projects the Default checkbox actually decides, rendered before the
+  // click rather than discovered after it. A locked row reaches every Project;
+  // an unlocked one reaches only those that never wrote the id down.
+  const pinned=(id:string):number=>data.projects.filter(row=>row.requested[id]!==undefined).length
+
   const row=(item:AutomationRegistryEntry)=>{
     const ceilingOff=!globallyAllowed(item)
     const busy=saving||!item.implemented
-    const projectOn=requestedOn(item)
-    const globalOn=item.install_switch
-      ?data.install_switches[item.install_switch as keyof MatrixData['install_switches']]
-      :data.global_allow[item.id]!==false
+    const own=ownState(item)
+    const inherited=defaultOn(item)
+    const ceilingLocked=item.install_switch
+      ?!data.install_switches[item.install_switch as keyof MatrixData['install_switches']]
+      :data.global_allow[item.id]===false
+    const custom=pinned(item.id)
+    const reach=ceilingLocked
+      ?`${data.projects.length} off`
+      :`${data.projects.length-custom} inherit${custom?` · ${custom} custom`:''}`
     return <div class={`automation-matrix-row${ceilingOff?' globally-off':''}`} key={item.id} role="row">
       <div class="automation-matrix-name" style={`--depth:${depth(item)}`}>
         <span class="project-setting-name"><b>{item.label}</b>
@@ -280,14 +366,31 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
           <SettingLink target="accounts.llmProvider" variant="link">Choose or verify one</SettingLink>
         </p>}
       </div>
-      <label class="check automation-matrix-cell" data-setting={item.install_switch||undefined} title="Allowed anywhere at all - the install-wide ceiling">
-        <input type="checkbox" disabled={busy||upstreamBlocked(item)} checked={globalOn}
-          onChange={()=>toggleGlobal(item)}/>
-      </label>
-      <label class="check automation-matrix-cell" data-setting={automationSetting(item.id)} title={ceilingOff?'Disabled install-wide; the Project choice is kept':'This Project opted in'}>
-        <input type="checkbox" disabled={busy||ceilingOff||!project||project.status==='read-only'} checked={projectOn}
-          onChange={()=>toggleProject(item)}/>
-      </label>
+      <div class="automation-matrix-cell automation-authority-global">
+        <label class="check" title="What a Project that has not decided inherits">
+          <input type="checkbox" disabled={busy||ceilingOff||upstreamBlocked(item)} checked={inherited&&!ceilingOff}
+            onChange={()=>toggleDefault(item)}/>
+          <span>default</span>
+        </label>
+        <div class="automation-authority-meta">
+          <label class="check" data-setting={item.install_switch||undefined} title="Off in every Project, whatever its file says">
+            <input type="checkbox" disabled={busy||upstreamBlocked(item)} checked={ceilingLocked}
+              onChange={()=>toggleCeiling(item)}/>
+            <span>off everywhere</span>
+          </label>
+          <small>{reach}</small>
+        </div>
+      </div>
+      <div class="automation-matrix-cell" data-setting={automationSetting(item.id)}>
+        <Dropdown ariaLabel={`${item.label} in this Project`} value={own==='inherit'?'':own}
+          disabled={busy||ceilingOff||!project||project.status==='read-only'}
+          options={[
+            {value:'',label:`Follow global (${inherited?'on':'off'})`},
+            {value:'on',label:'On'},
+            {value:'off',label:'Off'},
+          ]}
+          onChange={value=>setProjectState(item,(value||'inherit') as 'inherit'|'on'|'off')}/>
+      </div>
       <span class="automation-matrix-fleet"><b>{fleetCount(item.id)}</b>/{data.projects.length}</span>
     </div>
   }
@@ -324,12 +427,17 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       <button class="automation-preset-dismiss" onClick={()=>{markPresetsSeen();setPresetsOpen(false)}}>{presetsSeen()?'close':"skip, I'll use the switches below"}</button>
     </section>}
     <p class="automation-matrix-legend">
-      <b>Global</b> = allowed anywhere at all (the ceiling) · <b>{project?.project_name||'Project'}</b> = this Project opted in ·
-      a greyed Project switch is blocked by the ceiling and keeps the Project's own choice ·
+      <b>default</b> = what a Project that has not decided inherits · <b>off everywhere</b> = the ceiling, whatever a Project's file says ·
+      <b>{project?.project_name||'Project'}</b> = this Project's own answer, or <i>Follow global</i> to keep inheriting ·
+      a greyed Project control is blocked by the ceiling and keeps the Project's own choice ·
       <em class="project-setting-chip spends">spends</em> = uses a paid model
     </p>
     <div class="automation-matrix-grid" role="table" aria-label="Automation policy matrix" data-setting="automation_global_allow">
-      <div class="automation-matrix-head" role="row" data-setting="automations"><span>automation</span><span>global</span><span>{project?.project_name||'project'}</span><span>projects on</span></div>
+      {/* The Default column has no single control to mark - it is one checkbox per
+          row - so the column header is its anchor, which is also the right place
+          for a deep link to land: the whole column is the answer to "where do new
+          Projects get this from". */}
+      <div class="automation-matrix-head" role="row" data-setting="automations"><span>automation</span><span data-setting="automation_project_defaults">global</span><span>{project?.project_name||'project'}</span><span>projects on</span></div>
       {groups.map(([title,hint,items])=>items.length?<div key={title}>
         <h5 class="project-automation-group">{title}<span>{hint}</span></h5>
         {items.map(row)}
@@ -338,12 +446,32 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
             <span class="project-setting-name" data-setting="scan_timeline_auto_enable">Arm every new conversation</span>
             <p class="project-automation-deps">Off, each conversation starts unscanned and is armed in the Timeline tab. On, a new conversation arms itself on its first turn.</p>
           </div>
-          <span class="automation-matrix-cell"/>
-          <label class="check automation-matrix-cell">
-            <input type="checkbox" disabled={saving||!requestedOn(byId.get('scan_timeline')||({} as never))||globallyDisabled.has('scan_timeline')}
-              checked={!!project.scan_timeline_auto_enable&&requestedOn(byId.get('scan_timeline')||({} as never))}
-              onChange={event=>toggleAutoArm(event.currentTarget.checked)}/>
-          </label>
+          {/* The one Project field that qualifies an opt-in rather than being
+              one, so it gets the same two scopes as the rows above: an install
+              default and a three-position Project answer. It used to be written
+              into every Project the creation form armed, which is exactly why
+              an operator could not change their mind about it in one place. */}
+          <div class="automation-matrix-cell automation-authority-global">
+            <label class="check" data-setting="scan_timeline_auto_enable_default" title="What a Project that has not decided inherits">
+              <input type="checkbox" disabled={saving} checked={!!data.scan_timeline_auto_enable_default}
+                onChange={event=>void patchConfig({scan_timeline_auto_enable_default:event.currentTarget.checked})}/>
+              <span>default</span>
+            </label>
+            <div class="automation-authority-meta">
+              <small>{data.projects.filter(row=>row.scan_timeline_auto_enable_own==null).length} inherit</small>
+            </div>
+          </div>
+          <div class="automation-matrix-cell">
+            <Dropdown ariaLabel="Arm every new conversation in this Project"
+              value={project.scan_timeline_auto_enable_own==null?'':project.scan_timeline_auto_enable_own?'on':'off'}
+              disabled={saving||!requestedOn(byId.get('scan_timeline')||({} as never))||globallyDisabled.has('scan_timeline')}
+              options={[
+                {value:'',label:`Follow global (${data.scan_timeline_auto_enable_default?'on':'off'})`},
+                {value:'on',label:'On'},
+                {value:'off',label:'Off'},
+              ]}
+              onChange={value=>setAutoArm(value===''?null:value==='on')}/>
+          </div>
           <span class="automation-matrix-fleet">{data.projects.filter(row=>row.scan_timeline_auto_enable).length}/{data.projects.length}</span>
         </div>}
       </div>:null)}

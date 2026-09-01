@@ -2845,18 +2845,27 @@ that a different credential produced.
 `GET /api/automation/projects` is the read-only fleet aggregation of per-Project automation
 enablement: the registry (id, kind, label, `requires`, `implemented`, `spends`, `needs_llm`,
 `default_on`, `install_switch` — the dedicated Config switch that is this row's install
-ceiling, where one exists — and `globally_allowed`, the resolved install-wide ceiling over
-the id and its whole dependency closure)
+ceiling, where one exists — `globally_allowed`, the resolved install-wide ceiling over
+the id and its whole dependency closure, and `install_default`, the resolved answer for an
+id a Project never wrote down: the operator's `automation_project_defaults` merged over the
+registry's own `default_on`, dependency closure completed)
 once, plus one row per registered Project in sidebar order — `project_id`, `project_name`,
 config `status`, the `requested` table, the resolved `enabled` list, `blocked`
 (id → missing dependencies), `unverified` (opted in, dependencies met, held back by an unproven
 model provider), `globally_disabled` (opted in, turned off by the install-wide ceiling — its
 own field for the same one-actionable-answer reason: the fix is global policy, not a grant,
-and the Project's stored choice is retained), the `llm` verdict the row was resolved under, and
-`scan_timeline_auto_enable` — plus `global_allow` (the `automation_global_allow` map as
-stored, which the matrix's Global column writes through `PATCH /api/config`) and
-`install_switches` (`automation_enabled`, `scan_timeline_enabled`, `scheduled_runs_enabled`,
-`land_queue_enabled`). `GET /api/projects/{project_id}/automations` carries the same
+and the Project's stored choice is retained), the `llm` verdict the row was resolved under,
+`scan_timeline_auto_enable` (the effective answer, install default included) and
+`scan_timeline_auto_enable_own` (what this Project's file says, `null` where it said nothing)
+— plus `global_allow` (the `automation_global_allow` map as stored, which the matrix's
+"off everywhere" lock writes through `PATCH /api/config`), `project_defaults` (the
+`automation_project_defaults` map as stored, which the Default checkbox writes),
+`scan_timeline_auto_enable_default`, and `install_switches` (`automation_enabled`,
+`scan_timeline_enabled`, `scheduled_runs_enabled`, `land_queue_enabled`).
+Both readings of each install layer ship because neither is derivable from the other: the
+resolved one is what a Project inherits, the stored one is what the operator actually said,
+and a surface with only the resolved one cannot tell a row somebody set from one the registry
+ships. `GET /api/projects/{project_id}/automations` carries the same
 per-Project fields for one Project. `unverified` is separate from `blocked` because `blocked` values are
 ids a grant can switch on and no automation's enabling fixes an unproven endpoint. Projects that opted into nothing are listed rather than omitted.
 Drawn by the Automation dashboard's Policy matrix; the Project half's write stays the
@@ -2891,10 +2900,14 @@ automation state, and emits one `grant_applied` audit event listing every scope-
 with an unproven provider — the opt-in is a real permission and withholding it would mean
 granting twice — and reporting only success would hand back exactly the enabled-and-does-nothing
 state the enablement design exists to prevent. `GET /api/grants` returns the same allowlists
-plus the registry, `recommended_project_automations`, `project_starting_sets` (the three named
-creation-form sets — `recommended`, `llm`, `autonomy` — each `{automations, values}`, rendered
-by the create dialog straight from this payload), and `llm`, and is the contract
-`frontend/test/grants.test.ts` holds the browser's catalogue against.
+plus the registry (each entry carrying `install_default`), `project_defaults` (the stored
+template, which the create dialog needs beside the resolved answer: an id defaulted off and
+an id the install has no opinion about both resolve to `false`, and only the second may be
+pre-ticked on a new Project), `recommended_project_automations`, `project_starting_sets` (the
+three named sets — `recommended`, `llm`, `autonomy` — each `{automations, values}`; the create
+dialog offers the last two as checkboxes and uses the first to seed its inherited defaults),
+and `llm`, and is the contract `frontend/test/grants.test.ts` holds the browser's catalogue
+against.
 
 `GET /api/annotations` is the human Findings read over the deterministic consumers' output (Phase 7.10).
 It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).

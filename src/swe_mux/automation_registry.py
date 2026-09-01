@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 # The enablement DAG for the control-plane substrate and consumers.
@@ -97,14 +97,23 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # its own consumer id rather than a read over another automation's output. It
     # needs Tier 0 as the base fact record the experience corpus is derived from.
     Automation("prior_resolutions", CONSUMER, "Prior resolutions", ("tier0",)),
-    # Phase 7.7: adaptive session title. It broadens an auto-named run's title
-    # only on a genuine scope pivot detected over that run's scan records, so it
-    # reads the scan timeline. Off by default and independently toggleable; with
-    # it off, titling stays the one-shot behaviour.
+    # Phase 7.7: re-title a session when its scope changes. It broadens an
+    # auto-named run's title only on a genuine scope pivot detected over that
+    # run's scan records, so it reads the scan timeline. Off by default and
+    # independently toggleable; with it off, titling stays the one-shot
+    # behaviour.
+    #
+    # The label says "re-title", not "session title", on purpose. Naming a pane
+    # in the first place is the built-in **Session titler**
+    # (`Config.observer_titler_enabled`, `automation.BUILTIN_OBSERVER_CATALOG`),
+    # which is an install-wide switch gated by no Project opt-in at all - it runs
+    # on a Project that ticked nothing here. Two features whose labels both began
+    # "session title" made this checkbox read as the one that turns session
+    # titling on, so declining it looked like declining titles.
     Automation(
         "continuous_title",
         CONSUMER,
-        "Adaptive session title",
+        "Re-title on scope change",
         ("scan_timeline",),
         spends=True,
         needs_llm=True,
@@ -252,12 +261,79 @@ def effective_global_allow(
     effective["scan_timeline"] = scan_timeline_enabled
     return effective
 
-#: The inherited default template every resolution starts from. A Project's own
-#: map overrides it entry by entry, so `session_control = false` in one
-#: `.swe-mux/config.toml` still switches that Project off.
+#: The registry's own default template - layer 3 of the four (see
+#: `install_defaults`). A Project's own map overrides it entry by entry, so
+#: `session_control = false` in one `.swe-mux/config.toml` still switches that
+#: Project off.
 DEFAULT_ON_AUTOMATIONS: dict[str, bool] = {
     automation.id: True for automation in _AUTOMATIONS if automation.default_on
 }
+
+
+def install_defaults(configured: Mapping[str, bool] | None = None) -> dict[str, bool]:
+    """What an id a Project never wrote down means on *this* install.
+
+    Four layers decide whether an automation runs in a Project, and they are
+    deliberately the same four `agent_authority` already uses for the authority
+    fields - one shape to learn, not two:
+
+    1. The Project's own explicit entry in ``.swe-mux/config.toml``.
+    2. **This function's `configured` argument** (``Config.automation_project_defaults``):
+       what an operator says an undecided Project should do on this machine.
+    3. `DEFAULT_ON_AUTOMATIONS`, the registry's built-in answer, which is what an
+       install that configures nothing keeps doing.
+    4. `effective_global_allow`, the ceiling, which only ever subtracts and is
+       applied later by `resolve`.
+
+    Layer 2 may say `False` as well as `True`: withdrawing a built-in default
+    install-wide is a decision an operator is entitled to make, and it is not the
+    same act as the ceiling's "not anywhere" (which cascades over dependents and
+    greys the Project cell). A `False` here simply means an undecided Project
+    stays off, which a Project can still override for itself.
+
+    **The closure is completed here rather than trusted to the writer.** A
+    default naming a consumer whose substrate is not also on would resolve to
+    `blocked` and do nothing - a switch that reads on and has no effect, the one
+    outcome this whole design exists to prevent. So an id left on pulls its whole
+    dependency closure in with it, exactly as ticking a consumer in the matrix
+    does. An explicit `False` anywhere in that closure stops the completion for
+    that id instead of being overridden: the narrower statement wins, and the
+    dependent then resolves as `blocked`, which is the honest reading of "run
+    doc debt but never capture Tier 0".
+
+    Unknown and unimplemented ids are dropped rather than trusted. The map is
+    validated on write (a typo must fail loudly), and this is also fed from
+    stored configs that outlived a registry change and from test fixtures.
+    """
+    merged: dict[str, bool] = dict(DEFAULT_ON_AUTOMATIONS)
+    for name, flag in (configured or {}).items():
+        entry = REGISTRY.get(name)
+        if entry is None or not isinstance(flag, bool):
+            continue
+        if flag and not entry.implemented:
+            continue
+        merged[name] = flag
+    for name in sorted(item for item, flag in merged.items() if flag):
+        closure = dependency_closure(name)
+        if any(merged.get(dependency) is False for dependency in closure):
+            continue
+        for dependency in closure:
+            merged[dependency] = True
+    return merged
+
+
+def resolve_scan_auto_enable(project_value: object, *, default: bool) -> bool:
+    """Whether a new conversation arms the scan timeline by itself.
+
+    The same layer-1-over-layer-2 rule `install_defaults` applies to the opt-ins,
+    for the one Project field that qualifies an opt-in rather than being one. It
+    lives here so both readers - the daemon's `ScanContext` and the matrix
+    payload - answer it the same way, and so "unset" keeps meaning *inherit*
+    rather than *false*: the creation form used to write this into every Project
+    it armed, which is precisely why an operator could not change their mind
+    about it in one place.
+    """
+    return project_value if isinstance(project_value, bool) else default
 
 
 def _validate_registry() -> None:
@@ -367,8 +443,10 @@ def requested_from_config(
     by entry, so an explicit ``false`` beats a default-on. ``defaults`` omitted
     means the registry's own `DEFAULT_ON_AUTOMATIONS` - every resolution path
     (the daemon gate, the matrix, the Projects editor) goes through here, which
-    is what keeps them agreeing on what an unset id means. Unknown ids are
-    dropped so a stale config never enables a phantom automation.
+    is what keeps them agreeing on what an unset id means. A caller that holds
+    the daemon `Config` passes `install_defaults(config.automation_project_defaults)`
+    instead, which is the same template with the operator's own layer over it.
+    Unknown ids are dropped so a stale config never enables a phantom automation.
     """
     template = DEFAULT_ON_AUTOMATIONS if defaults is None else defaults
     merged: dict[str, bool] = {**template, **(project_map or {})}

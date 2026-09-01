@@ -16,7 +16,7 @@ from .. import (
 from .. import (
     app_keys as keys,
 )
-from ..automation_registry import effective_global_allow
+from ..automation_registry import effective_global_allow, install_defaults
 from ..automation_registry import resolve_config as resolve_automation_config
 from ..config import Config, update_config
 from ..configurator import (
@@ -187,6 +187,7 @@ async def _configurator_project_settings(
     config = app[keys.CONFIG]
     resolution = resolve_automation_config(
         opt_ins if isinstance(opt_ins, dict) else {},
+        install_defaults(config.automation_project_defaults),
         llm_ready=readiness.ready,
         global_allow=effective_global_allow(
             config.automation_global_allow,

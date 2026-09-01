@@ -81,6 +81,19 @@ def test_the_matrix_is_the_one_editor_and_greys_the_ceiling_rather_than_hiding_i
     assert "globally_allowed" in matrix, "the ceiling must come from the resolved payload"
     assert "globally-off" in matrix
     assert "install_switch" in matrix, "dedicated switches write their own keys"
+    # The install has two things to say about a row and they are two controls,
+    # the same split the authority rows below already draw. They were one
+    # checkbox until 2026-08-31, and the missing half is why a new Project
+    # inherited nothing: the only thing an operator could say install-wide was
+    # "no", so every "yes" had to be repeated per Project at creation time.
+    assert "automation_project_defaults" in matrix, "the Default column writes the template"
+    assert "install_default" in matrix, "the default is the daemon's resolved answer"
+    assert "off everywhere" in matrix, "the ceiling half must say what it does"
+    # Three positions on the Project cell, not two. "Follow global" and
+    # "explicitly off" are different states, and collapsing them is what makes
+    # an install default unreachable once anything has touched the Project.
+    assert "Follow global" in matrix
+    assert "inherit" in matrix, "a Default checkbox must say how far it reaches"
     assert "PUT',`/api/projects/${project.project_id}/automations`" in matrix
     assert "'POST','/api/grants'" in matrix, "presets apply through the ordinary grant"
     # The starting-set presets live here: full-screen on a first run, a button after.
