@@ -396,15 +396,39 @@ export function sweMuxSetupPayload(): unknown {
 // landing is the sequence queued → reconciling → verifying → landed, and a builder that
 // invented its own row could never show a second one arriving beside the first.
 
-/** `GET /api/land/verify-command`. */
+/**
+ * `GET /api/land/verify-command`.
+ *
+ * The field names are `parseLandVerifyCommand`'s, and they were not: this answered
+ * `command`/`grant`/`approved_digest`, none of which that parser reads, so every field it
+ * cares about fell back to the empty gate and the Git tab told every visitor "No
+ * verification command - a land here would be refused rather than run" while the land
+ * scenario beside it narrated the gate passing. A payload whose *keys* are wrong is worse
+ * than a missing route, because it answers 200 and the surface renders a confident
+ * falsehood; `demoDirector.test.ts` now parses this with the app's own parser rather than
+ * trusting the shape.
+ */
 export function verifyCommandPayload(): unknown {
   return {
-    command: '.worktree-verify',
-    approved: true,
-    approved_digest: 'demo',
-    current_digest: 'demo',
-    author: 'this machine',
+    configured: true,
     source: 'repository',
-    grant: 'granted',
+    display: '.worktree-verify',
+    digest: 'demo-digest',
+    approved: true,
+    previously_approved: true,
+    approved_source: '.worktree-verify',
+    current_source: '.worktree-verify',
+    config_command: '',
+    config_revision: 'demo',
+    config_status: 'clean',
+    config_path: '',
+    script_name: '.worktree-verify',
+    script_present: true,
+    plan: null,
+    verify_grant: 'granted',
+    provenance: null,
+    // Granted, and authored by this machine, which is the posture the demo's own Project
+    // is in: the gate runs without stopping to ask before every land.
+    runs_without_approval: true,
   }
 }

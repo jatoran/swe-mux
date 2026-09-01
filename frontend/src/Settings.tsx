@@ -1730,11 +1730,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                   whatever selected on it, and the demo drives this nav to show the keymap
                   presets. */}
               <button role="tab" data-settings-tab={tab.id} aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>
-              {!!entries.length&&<button type="button" class="settings-tab-expand" aria-label={`${expanded?'Collapse':'Expand'} ${tab.label} pages`} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded?'▾':'▸'}</button>}
+              {!!entries.length&&<button type="button" data-settings-tab-expand={tab.id} class="settings-tab-expand" aria-label={`${expanded?'Collapse':'Expand'} ${tab.label} pages`} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded?'▾':'▸'}</button>}
             </div>
             {expanded&&<div class="settings-subtabs" role="group" aria-label={`${tab.label} pages`}>
               {pages.length
-                ?pages.map(page=><button key={page.id} type="button" class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>)
+                ?pages.map(page=><button key={page.id} type="button" data-settings-subpage-nav={page.id} class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>)
                 :sections.map(section=><button key={section.id} type="button" class={tab.id===activeTab&&activeSection===section.id?'active':''} onClick={()=>openSection(tab.id,section.id)}>{section.label}</button>)}
             </div>}
           </Fragment>

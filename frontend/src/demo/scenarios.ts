@@ -25,6 +25,9 @@
  * invariants below (unique ids, ordered beats, a gate on every walkthrough beat) had
  * nothing asserting them. Markup in a data file bought nothing and cost the tests.
  */
+import {
+  assistantDone, assistantHeard, assistantProposes, assistantResolved, assistantSays,
+} from './assistantFixture.ts'
 import type { Show } from './callouts.ts'
 import { createPreview, spawnSession } from './fakeApi.ts'
 import { scriptedCompletion, scriptedTurn } from './fakeSocket.ts'
@@ -203,7 +206,7 @@ function tourDesktop(): Beat[] {
         sweep: ['.sidebar'],
         crt: true,
         notes: [
-          { at: rowPart('s-working', '.state-indicator'), label: 'state', sub: 'ring is context left' },
+          { at: rowPart('s-working', '.state-indicator'), label: 'state', sub: 'and context left' },
           { at: rowField('s-working', 'badges'), label: 'subagents it started' },
           { at: rowField('s-working', 'duration'), label: 'this turn, still running' },
           { at: rowField('s-working', 'worktree'), label: 'its own checkout' },
@@ -551,15 +554,16 @@ function orchestrateBeats(): Beat[] {
       say: 'Both requests land in the fleet queue, where a person decides.',
       command: 'queue.fleet',
       spotlight: ['[role="dialog"][aria-label="Fleet queue"]'],
-      // Blueprint rather than glitch: this is the boundary the whole scenario exists to
-      // show, the card is dense, and a still of it should read on its own.
+      // A walk rather than a diagram, and only narrow targets. The card is nearly as wide
+      // as the frame, so a shared gutter column would sit in the sixty pixels left over
+      // beside it with leader lines running the whole way across; one label at a time is
+      // placed against its own target and lands beside it.
       show: {
-        reveal: 'blueprint',
+        reveal: 'walk',
         notes: [
           { at: ['.observation-request-tag'], label: 'a request', sub: 'not a session' },
-          { at: ['.observation-request-reason'], label: 'why it asked' },
-          { at: ['.observation-request-prompt'], label: 'the exact prompt it would run' },
-          { at: ['.observation-request-actions .primary'], label: 'the human decides here' },
+          { at: ['.observation-request-status'], label: 'waiting on a person' },
+          { at: ['.observation-request-actions .primary'], label: 'who decides here' },
         ],
       },
     },
@@ -734,6 +738,17 @@ function landBeats(): Beat[] {
     {
       at: 8_000,
       say: 'Then the gate, on the reconciled tree rather than on what was pushed.',
+      // The landing strip's three steps, which are drawn whether or not the section is
+      // expanded - the expanded body is a scroll away and a callout must point at
+      // something a visitor can see without one.
+      show: {
+        reveal: 'glitch',
+        notes: [
+          { at: ['.git-land-pipeline-step.gate'], label: 'the gate', sub: 'and who approved its bytes' },
+          { at: ['.git-land-pipeline-step.run'], label: 'what is landing now' },
+          { at: ['.git-land-pipeline-step.queue'], label: 'and what is behind it' },
+        ],
+      },
       mutate: () => {
         apply({
           kind: 'land-patch', id,
@@ -747,11 +762,8 @@ function landBeats(): Beat[] {
       say: 'Green, so the fast-forward is allowed. Red would have come back to the session that asked.',
       show: {
         reveal: 'blueprint',
-        notes: [
-          { at: ['.git-land-progress-head'], label: 'reconcile, verify, fast-forward' },
-          { at: ['.git-land-steps'], label: 'every step, on the record' },
-          { at: ['.git-land-reason'], label: 'and who asked for it' },
-        ],
+        notes: [{ at: ['.git-landing-headline'], label: 'the branch, and where it got to' }],
+        shimmer: [['.git-land-pipeline-step.run']],
       },
       mutate: () => {
         apply({
@@ -869,12 +881,19 @@ function keymapBeats(): Beat[] {
     },
     {
       at: 1_600,
-      click: ['[data-settings-tab="input"]'],
-      spotlight: ['.keymap-presets'],
       say: 'They are documents the daemon owns, not a handful of chords the demo invented.',
+      // Through the panel's own search rather than three presses down its nav. Both are
+      // real paths a visitor has; this one is one act instead of three, and it does not
+      // depend on the shape of a tab list that exists to be reorganised.
+      field: { at: ['.settings-search input'], text: 'keyboard preset' },
     },
     {
-      at: 4_200,
+      at: 3_800,
+      click: ['#settings-search-results [role="option"]'],
+      spotlight: ['.keymap-presets'],
+    },
+    {
+      at: 5_400,
       show: {
         reveal: 'blueprint',
         notes: [
@@ -906,6 +925,96 @@ function keymapBeats(): Beat[] {
     {
       at: 16_400,
       say: 'A chord a tab cannot receive is marked desktop-only in the preset itself, so it is never drawn as live here.',
+    },
+  ]
+}
+
+// --------------------------------------------------------------------- 8. the voice
+
+/**
+ * The assistant, as a conversation rather than as a microphone.
+ *
+ * There is no speech here in either direction and that is the design, not a gap: asking a
+ * marketing page's visitor for microphone permission is a bad trade, and a demo whose
+ * point depended on audio would fail silently on every phone with autoplay locked down.
+ * What is worth showing is what happens after it understands - it answers out of the live
+ * fleet, and anything it wants to *do* to that fleet becomes a card a person resolves
+ * inside a visible window. All of that is on screen, so all of that is what this plays.
+ */
+function voiceBeats(): Beat[] {
+  const target = 's-migrate'
+  let proposed = ''
+  return [
+    {
+      at: 0,
+      eyebrow: 'TALKING TO THE MULTIPLEXER',
+      say: 'Ask the fleet something, out loud.',
+      command: 'assistant.toggle',
+      spotlight: ['.assistant-panel', '.voice-dock-anchor'],
+      show: { keys: ['ctrl', 'shift', 'space', 'x', 'a'], crt: true },
+    },
+    {
+      at: 1_800,
+      say: 'The question is a sentence, not a command it had to be taught.',
+      mutate: () => { assistantHeard('what is blocked right now?') },
+    },
+    {
+      at: 3_400,
+      mutate: () => {
+        assistantSays(`One thing. "${nameOf(target)}" is waiting on a decision:`
+          + ' who owns invalidation when a file is replaced on disk.')
+      },
+    },
+    {
+      at: 6_000,
+      say: 'It answers from the fleet in front of you, not from a script it was given.',
+      mutate: () => {
+        assistantSays('Everything else is moving: two turns running, one branch already'
+          + ' landed, nothing else waiting on you.')
+      },
+    },
+    {
+      at: 8_600,
+      say: 'And anything it wants to do about that becomes a card, with a window to stop it.',
+      mutate: () => {
+        proposed = assistantProposes({
+          kind: 'queue_message',
+          restatement: `send that decision to "${nameOf(target)}" as a queued prompt`,
+          arguments: { target_session_id: target, body: 'the file owner invalidates; treat a replaced file as a write' },
+        }).id
+      },
+      show: {
+        reveal: 'blueprint',
+        notes: [
+          { at: ['.assistant-action p strong'], label: 'about to, not doing' },
+          { at: ['.assistant-countdown'], label: 'the window', sub: 'it runs when this ends' },
+          { at: ['.assistant-action .cancel'], label: 'and the way out of it' },
+        ],
+      },
+    },
+    {
+      at: 13_000,
+      say: 'Left alone, it runs - and what it does is put a prompt in a queue, not keystrokes in a pane.',
+      mutate: () => {
+        if (proposed) assistantResolved(proposed, `Queued one prompt for "${nameOf(target)}".`)
+        assistantDone()
+        apply({
+          kind: 'queue-add',
+          message: makeQueueMessage({
+            targetSessionId: target,
+            senderKind: 'agent',
+            senderLabel: 'the assistant',
+            body: 'the file owner invalidates; treat a replaced file as a write',
+            reason: 'answering a question you asked out loud',
+            state: 'armed',
+          }),
+        })
+      },
+      show: { shimmer: [rowField(target, 'queue')], arrive: [DRAWER_TAB('Queue')] },
+    },
+    {
+      at: 17_000,
+      say: 'The listening half needs a microphone, so this page does not ask for one. Everything above it is real.',
     },
   ]
 }
@@ -963,6 +1072,13 @@ export const SCENARIOS: Scenario[] = [
     blurb: 'Five presets, applied live, and which chords a browser tab keeps.',
     interruptible: true,
     beats: keymapBeats(),
+  },
+  {
+    id: 'voice',
+    label: 'ask the fleet a question',
+    blurb: 'A spoken turn, answered from the live fleet, ending in a card a person resolves.',
+    interruptible: true,
+    beats: voiceBeats(),
   },
 ]
 

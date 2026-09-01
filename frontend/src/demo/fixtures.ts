@@ -485,8 +485,12 @@ export function demoConfig(): Record<string, unknown> {
     custom_llm_base_url: '',
     custom_llm_model: '',
     custom_llm_catalog_url: '',
-    assistant_enabled: false,
-    assistant_model: '',
+    // On, unlike the product's default, because the voice scenario is the one part of
+    // swe-mux a visitor cannot discover by clicking: the dock is a chip until something
+    // has been said into it. The demo's assistant answers from the fixture fleet and
+    // reaches nothing outside the page.
+    assistant_enabled: true,
+    assistant_model: 'demo-assistant',
     assistant_daily_budget: { tokens: null, usd: 2.0, mode: 'usd' },
     assistant_max_output_tokens: 700,
     assistant_context_messages: 30,
@@ -665,8 +669,11 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
   }
 }
 
+/** The conversation the voice scenario starts from: one dialog, nothing said yet. */
+export const DEMO_DIALOG_ID = 'dlg-demo'
+
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 13
+export const DEMO_STATE_VERSION = 14
 
 export function initialDemoState(): DemoState {
   return {
@@ -678,6 +685,14 @@ export function initialDemoState(): DemoState {
     notes: NOTES.map(item => ({ ...item })),
     config: demoConfig(),
     keymapPreset: 'swemux',
+    assistant: {
+      dialogId: DEMO_DIALOG_ID,
+      createdAt: now,
+      title: 'Demo conversation',
+      messages: [],
+      actions: [],
+      turnRunning: false,
+    },
     // Transcript only. The composer is screen state each attached pane draws for
     // itself at its own size (`fakeSocket.ts`), which is what pins it to the bottom of
     // the pane and lets a desktop and a phone show one session at two heights.

@@ -11,6 +11,9 @@ import { HARNESS_REGISTRY_SEED } from '../harnessRegistrySeed.ts'
 import type { Preview } from '../processFleet.ts'
 import type { PaneLayout, PaneLeaf, PaneNode } from '../layout.ts'
 import type { Session } from '../types.ts'
+import {
+  assistantDialogId, assistantDialogPayload, assistantStatusPayload,
+} from './assistantFixture.ts'
 import { hashText, PREVIEW_PAGE_IDS } from './fixtures.ts'
 import {
   commitChangesPayload, graphPayload, provenancePayload,
@@ -551,6 +554,76 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: /^\/api\/diagnostics\/network$/, handler: () => networkPayload() },
   { method: 'DELETE', pattern: /^\/api\/diagnostics\/network$/, handler: () => ({ ok: true }) },
   { method: 'GET', pattern: /^\/api\/diagnostics\/storage$/, handler: () => storagePayload() },
+  // The assistant. Its dialog is daemon-owned in the product and store-owned here, so
+  // these routes are all projections of one slice - and the panel, which rebuilds from
+  // the detail read and then advances on events, cannot tell the difference.
+  { method: 'GET', pattern: /^\/api\/assistant$/, handler: () => assistantStatusPayload() },
+  {
+    method: 'POST', pattern: /^\/api\/assistant\/dialogs$/,
+    handler: () => ({ id: assistantDialogId() }),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/assistant\/dialogs\/([^/]+)$/,
+    handler: () => assistantDialogPayload(),
+  },
+  {
+    // A turn a visitor types into the panel themselves. It is answered rather than
+    // ignored - an unanswered send leaves the panel with a bubble and a spinner that
+    // never resolves - but the answer says what it is, because the demo has no model
+    // behind it and pretending otherwise would be the one dishonest thing here.
+    method: 'POST', pattern: /^\/api\/assistant\/dialogs\/([^/]+)\/turns$/,
+    handler: (_match, body) => {
+      const text = String((body as Record<string, unknown>)?.text ?? '')
+      const turn = demoId('turn')
+      apply({ kind: 'assistant-turn', turnId: turn, text })
+      apply({
+        kind: 'assistant-say',
+        turnId: turn,
+        messageId: `msg-${turn}`,
+        display: 'There is no model behind me in this demo - I am a fixture. Play the'
+          + ' voice scenario above the frame to see a whole turn, including the'
+          + ' confirmation card.',
+      })
+      apply({ kind: 'assistant-done', turnId: turn, messageId: `msg-${turn}` })
+      return { turn_id: turn }
+    },
+  },
+  {
+    method: 'POST', pattern: /^\/api\/assistant\/dialogs\/([^/]+)\/interrupt$/,
+    handler: () => ({ interrupted: true }),
+  },
+  {
+    method: 'POST', pattern: /^\/api\/assistant\/actions\/([^/]+)\/confirm$/,
+    handler: match => {
+      const id = decodeURIComponent(match[1])
+      apply({ kind: 'assistant-resolved', actionId: id, display: 'Done.', status: 'executed' })
+      const action = state.assistant.actions.find(item => item.id === id)
+      return action ? { result: null, action } : error(404, 'Unknown action.')
+    },
+  },
+  {
+    method: 'POST', pattern: /^\/api\/assistant\/actions\/([^/]+)\/cancel$/,
+    handler: match => {
+      const id = decodeURIComponent(match[1])
+      apply({
+        kind: 'assistant-resolved', actionId: id, status: 'cancelled',
+        display: 'Cancelled, and nothing ran.',
+      })
+      const action = state.assistant.actions.find(item => item.id === id)
+      return action ? { action } : error(404, 'Unknown action.')
+    },
+  },
+  {
+    method: 'POST', pattern: /^\/api\/assistant\/actions\/([^/]+)\/announced$/,
+    handler: match => {
+      const action = state.assistant.actions.find(item => item.id === decodeURIComponent(match[1]))
+      return action ? { extended: true, action } : error(404, 'Unknown action.')
+    },
+  },
+  {
+    method: 'POST', pattern: /^\/api\/assistant\/actions\/([^/]+)\/ui-result$/,
+    handler: () => ({ accepted: true }),
+  },
   { method: 'GET', pattern: /^\/api\/keybindings$/, handler: () => keybindingsPayload() },
   {
     method: 'PUT', pattern: /^\/api\/keybindings$/,

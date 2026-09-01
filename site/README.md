@@ -239,9 +239,10 @@ The rules it lives under:
   Every route a visitor can reach is now answered with the shape its reader expects, even when the content is deliberately nothing (`frontend/src/demo/supportPayloads.ts`), and `main.tsx` wraps the app in an error boundary so the next gap degrades to a named message with a reload button instead of a wedge.
   When adding a surface to the demo, answer its route explicitly; do not rely on the fallback.
 
-- **Two device settings are seeded rather than defaulted** (`demoDeviceSettings` in `fixtures.ts`, served by `/api/settings`).
+- **Three device settings are seeded rather than defaulted** (`demoDeviceSettings` in `fixtures.ts`, served by `/api/settings`).
   The session top bar drops its approval control - it is a live chooser for what an agent may do without asking, and offering it over a fixture is theatre on the one control where theatre is least appropriate - and the phone's Actions rail keeps only its first row, because the product ships two on the reasoning that the rail *is* the keyboard on a real phone, which a demo frame is not.
-  Both are derived from the app's own defaults and then edited, so a default that moves reaches the demo instead of being frozen into a copy here; `demoDirector.test.ts` asserts the edits still bite, because a renamed action id would leave the derivation running happily and silently stop editing anything.
+  The third is the sidebar row layout, which promotes `worktree` and `badges` from `notable` to `always`: they are occasional facts in the product and right to ship that way, but the walkthrough names both by hand and a callout whose field is not drawn is a label that goes quietly missing.
+  All three are derived from the app's own defaults and then edited, so a default that moves reaches the demo instead of being frozen into a copy here; `demoDirector.test.ts` asserts the edits still bite, because a renamed action id would leave the derivation running happily and silently stop editing anything.
   `ui_scale_desktop` and `ui_scale_mobile` are seeded at 1.1 for a related reason: both frames are drawn smaller than the device they stand for, and chrome that reads well on a monitor is a smudge at 0.66.
 - **The configurator launcher reports nothing to launch into**, which is the truth about this install rather than a way of greying a button out: it opens a real agent CLI in a conversation about the operator's own config and health report, and the demo has none of those.
   Its launch route is answered anyway rather than left to the fallback, because "nothing reaches it" is an assumption and the failure if it were wrong is the bad one - an unmatched mutation answers `{ok:true}`, and the spawn path reads `id` off that and mints a pane leaf pointing at `undefined`, which then persists into the visitor's layout.
@@ -296,7 +297,25 @@ A scripted act gets a ghost cursor, a ripple at the point of action and a captio
 A real visitor's act gets **nothing**: people can see their own cursor, and a UI that flashes while you use it is noise.
 The one exception is `?highlightInput=1`, which only the capture rig sets, so a recorded interaction is legible as one.
 
-The five scenarios, and why those:
+**A beat can also label the chrome it is talking about** (`callouts.ts` for the geometry, `DemoShow.tsx` for the drawing).
+The ring pointed at exactly one thing, which is right for "press this" and useless for "here is what a row is made of": a session row carries seven facts in about forty pixels, and naming them one at a time would be seven stops nobody would sit through.
+So `show.notes` is a list of selector-and-label pairs, drawn as one gutter column of chips with orthogonal leader lines - one column because nine labels scattered around their targets is a ransom note, and orthogonal because nine diagonals cross each other.
+The gutter side is measured from the targets rather than configured, so one beat shape serves the fleet column on the left and the side panel on the right; labels are pushed *down* when two want the same band of pixels, never the ring, because the ring's position is the only part that carries meaning.
+`show.reveal` picks how they arrive: `glitch` (clip steps and a one-frame colour split), `sweep` (a radar band crosses the column once and each label wakes as it passes), `walk` (dim the frame and cut one hole, holding the eye on one target at a time) or `blueprint` (brackets and dimension ticks, no motion, the one that survives a screenshot).
+Beside them are four smaller effects a beat can ask for: `keys` draws the chord that just fired on a keycap HUD, `shimmer` flashes a value that changed under the visitor where it sits, `arrive` marks chrome that has just appeared with a stepped reveal, and `crt` puts scanlines and a vignette over the frame for the length of one beat and no longer - a permanently-CRT demo is a costume, and the pitch is that this is the real interface.
+
+Three rules hold that layer together, and each is one line from being undone:
+
+- **It is `pointer-events: none`, all of it.** A gated walkthrough beat is waiting for a press on the very control a callout is labelling.
+- **It measures the app's DOM and never writes to it.** The shimmer is an overlay wash rather than a class added to a product element, which is what keeps an overlay from being able to break the thing it is pointing at.
+- **Placement is re-measured on DOM change, never on a timer**, because the chrome a label names moves when a panel opens or the sidebar scrolls.
+
+The geometry is a pure function of boxes and a viewport, so the rules above are asserted in `demoDirector.test.ts` without a browser: labels stack rather than overlap, they are placed in target order rather than the order the beat wrote them, the gutter goes on the side away from the chrome, everything clamps into the frame, and the sweep's delays follow the band.
+A callout whose target is not on screen is simply not drawn, which is a real degradation rather than a failure - but a label going quietly missing is exactly the rot that would go unnoticed, so the seeded row config promotes the two fields the tour names (`worktree`, `badges`) to `always`, the fixture actually carries them, and the test asserts every field a callout names is placed in that config.
+`data-row-field` in `SessionRowBody.tsx` is what makes the naming possible at all: the only other handle on a row's model or worktree was a `title` string, which is copy, so a reworded tooltip would silently break whatever selected on it.
+`data-settings-tab` and `data-keymap-preset` exist for the same reason on the surfaces the keymap scenario drives.
+
+The eight scenarios, and why those:
 
 | Scenario | What it demonstrates |
 |---|---|
@@ -305,6 +324,22 @@ The five scenarios, and why those:
 | `orchestrate` | One session drafts two spawn requests, a human approves, the two report back into the requester's queue. The highest pitch value, and it draws the boundary: an agent can ask, only a person can start. |
 | `preview` | A shell starts a dev server and its listener opens as a preview pane. Mostly built already, and the most visual. |
 | `land` | Reconcile, verify, fast-forward, one branch at a time - the state machine, not a finished row. |
+| `palette` | One field, four scopes, and the chord printed beside every answer. It types into the app's own input rather than a pane, so the filter narrowing is the real one. |
+| `keymap` | Five presets applied for real, and then the honest half: this is a browser tab, and the table is resolved for one. |
+| `voice` | A spoken turn answered out of the live fleet, ending in a confirmation card inside a visible window. No microphone and no audio - see below. |
+
+**The keymap fixture is generated, and its generator is now in the repository** (`frontend/scripts/gen_keymap_fixture.py`, run from the root with `uv run python`).
+It emits the daemon's own preset documents, its chord policy, and - the part that was missing - the *resolution* for `host="browser"`: what a tab dispatches on, what it cannot receive, and what it merely shares.
+The demo used to answer an empty `undeliverable` while its own Vim preset warned that a browser tab closes on Ctrl+W before the page ever sees it.
+What the daemon actually answers is subtler and better: those chords are declared `host: "desktop"` in the preset documents and never resolve in a tab at all, which leaves `contested` - Ctrl+Shift+P against Firefox's private window among them, on the palette's own binding.
+A demo that draws a dead chord as though it were live is worse than one that does not offer the switch.
+
+**The voice scenario has no microphone and no speech, and both are the design.**
+Asking a marketing page's visitor for microphone permission is a bad trade for a demonstration, and a demo whose point depended on audio playing would fail silently on every phone with autoplay locked down.
+What is worth showing is not that it hears you - everything hears you now - but what happens after it understands: it answers out of the fleet in front of you, and anything it wants to *do* to that fleet becomes a card a person resolves before it runs.
+All of that is on screen, so all of that is what plays.
+The dialog is a slice of the demo store rather than module state beside the panel (`assistantFixture.ts`), for the same reason everything else here is: the desktop and phone frames are separate realms, and a conversation only one of them could see would contradict the claim the scenario is making.
+`assistant_enabled` is therefore `true` in the demo's config where the product ships it off.
 
 **The four control-plane surfaces are state now** (`controlPlane.ts`), where they were correctly-shaped constants.
 That was right while nothing could fill them, and wrong the moment a scenario needed one to move: a surface that cannot change cannot demonstrate anything, and a payload builder mutating a module-level value would not reach the other frame.
