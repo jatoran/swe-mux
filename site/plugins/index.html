@@ -450,6 +450,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
    frame is offered. */
 @media (max-width: 700px) {
   .demo-tabs { display: none; }
+  /* One row, on a 360px screen. The kick label is the only thing here that says nothing a
+     visitor needs, the scenarios menu is the widest control and is capped rather than
+     dropped, and the two trailing controls lose their longer wording. Wrapping is left on:
+     it is the safety net for a very small screen or a large font, not the layout. */
+  .demo-head { gap: 6px; padding: 6px 8px; font-size: 11px; }
+  .demo-kick { display: none; }
+  .demo-pick select { max-width: 40vw; text-overflow: ellipsis; padding: 3px 4px; }
+  .demo-full, .demo-reset { padding: 3px 5px; }
   .demo-stage .demo-desktop { display: none !important; }
   /* A drawn handset, on a handset, at 74% of its height, is the worst of both: smaller
      than the device it is standing in for and still not it. Here the bezel, the lens and

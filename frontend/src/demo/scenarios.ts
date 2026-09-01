@@ -311,7 +311,7 @@ function tourMobile(): Beat[] {
       body: [
         'This is the same frontend the desktop runs, laid out for a thumb. The sessions'
         + ' are invented; the interface is not.',
-        'Six stops, and two of them are gestures worth knowing.',
+        'Seven stops, and two of them are gestures worth knowing.',
       ],
     },
     {
@@ -324,6 +324,32 @@ function tourMobile(): Beat[] {
       body: [
         'Both panels live off the edges of the screen. Swipe right anywhere over the'
         + ' terminal and the session list comes in.',
+      ],
+    },
+    {
+      at: 200,
+      eyebrow: 'THE FLEET',
+      say: 'Every session, in one column - and every row says this much.',
+      gate: { kind: 'next' },
+      // A walk rather than the desktop's swept column: an open panel covers most of a
+      // phone, so there is no gutter to lay six labels out in, and the targets that stay
+      // narrow enough to point at individually are the ones worth naming anyway. The
+      // cutout dims what is not being talked about, which a 390px screen needs more than
+      // a monitor does.
+      show: {
+        reveal: 'walk',
+        crt: true,
+        notes: [
+          { at: rowPart('s-working', '.state-indicator'), label: 'state', sub: 'and context left' },
+          { at: rowField('s-working', 'badges'), label: 'subagents' },
+          { at: rowField('s-working', 'duration'), label: 'this turn' },
+          { at: rowField('s-working', 'model'), label: 'model' },
+        ],
+      },
+      body: [
+        'The same row the desktop draws, at a width that has to earn every token: live'
+        + ' state with the context left around it, what it started, how long this turn has'
+        + ' been running, and what it is running on.',
       ],
     },
     {

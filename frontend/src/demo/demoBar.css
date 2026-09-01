@@ -1,0 +1,92 @@
+/*
+ * The full-screen demo's own bar. See `DemoBar.tsx` for why it exists at all.
+ *
+ * One row at every width, including a 360px phone: the exit and the scenarios menu are
+ * the two controls that must always fit, so the kick label goes first and the menu is
+ * capped rather than dropped. Nothing here wraps, because a second row would eat the
+ * app's height on the screen that has least of it.
+ */
+
+.demo-bar {
+  --demo-bar-h: 34px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 950;
+  height: var(--demo-bar-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  background: var(--panel2, #13161a);
+  border-bottom: 1px solid var(--line, #2a2e34);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted, #848b94);
+  white-space: nowrap;
+}
+
+/* The app sits under the bar rather than behind it. `--app-height` is written by the app
+   from the visual viewport and rewritten on every keyboard open, so the subtraction has to
+   live here, on a rule specific enough to win. */
+body.demo-framed .app-shell {
+  height: calc(var(--app-height, 100dvh) - 34px);
+  margin-top: 34px;
+}
+
+.demo-bar a,
+.demo-bar button,
+.demo-bar select {
+  font: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--muted, #848b94);
+  padding: 3px 7px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.demo-bar a:hover,
+.demo-bar button:hover,
+.demo-bar select:hover {
+  color: var(--text, #d9dde2);
+  border-color: var(--line, #2a2e34);
+}
+
+.demo-bar-exit { color: var(--accent, #8bd450); }
+.demo-bar-kick { letter-spacing: .16em; font-size: 11px; }
+
+/* Pushed to the right so the exit stays where a thumb expects it, on the left. */
+.demo-bar-pick {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The label names the control for a screen reader; the closed select already reads
+   "scenarios", so showing both would say it twice. */
+.demo-bar-pick > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.demo-bar-pick select {
+  background: var(--panel, #0d0f12);
+  max-width: 42vw;
+  text-overflow: ellipsis;
+}
+
+.demo-bar-stop { color: var(--accent, #8bd450); }
+
+@media (max-width: 700px) {
+  .demo-bar { gap: 6px; padding: 0 6px; font-size: 11px; }
+  .demo-bar-kick { display: none; }
+  .demo-bar a, .demo-bar button, .demo-bar select { padding: 3px 5px; }
+}
