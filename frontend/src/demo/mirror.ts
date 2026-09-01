@@ -266,9 +266,31 @@ let takenAt = 0
  *  short enough that a replay minutes later is a fresh election. */
 const CLAIM_TTL_MS = 4_000
 
+/**
+ * The channel this page's frames talk on.
+ *
+ * A `BroadcastChannel` is scoped to the *origin*, not to the page, which is right for the
+ * demo store (a second tab of the site showing the same fleet is a feature) and wrong for
+ * the director's election: two tabs are two pages, and one page's leader has no business
+ * refusing the other page's frames. Left unscoped it does exactly that, and the symptom is
+ * the worst kind - a visitor picks a scenario in the tab they are looking at and nothing
+ * happens, with nothing on screen to explain why.
+ *
+ * The landing page hands each of its frames the same `peer` and every page a different
+ * one, so frames of one page still elect between themselves and frames of another are not
+ * even audible. A page with no `peer` (the full-screen demo, the capture rig) keeps the
+ * bare name, which is what it wants: it is the only frame there is.
+ */
+function channelName(): string {
+  try {
+    const peer = new URLSearchParams(location.search).get('peer')
+    return peer ? `${CHANNEL_NAME}:${peer}` : CHANNEL_NAME
+  } catch { return CHANNEL_NAME }
+}
+
 export function installViewMirror(): void {
   if (typeof BroadcastChannel !== 'function') return
-  const channel = new BroadcastChannel(CHANNEL_NAME)
+  const channel = new BroadcastChannel(channelName())
   mirrorChannel = channel
   let published: ViewState | null = null
   let desired: ViewState | null = null

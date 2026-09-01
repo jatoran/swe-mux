@@ -227,7 +227,13 @@ The rules it lives under:
   The app fits *under* it rather than behind it: `demoBar.css` shortens `.app-shell` by the bar's height, which has to be done in CSS because the app rewrites `--app-height` from the visual viewport on every keyboard open.
 - **A frame nobody can see gives the director's lead back**, and not doing so was a real bug: switching the embed from desktop to phone left the desktop frame alive, `display: none`, mid-scenario, and still answering every claim with "taken" - so the phone frame claimed, lost, and the visitor's scenario silently did nothing (measured on the live site: the hidden frame ran on to `queue 5/8` while the visible one sat at `0/0`).
   The landing page now reports presence **per frame** rather than per stage, and `swemux-demo:hidden` stops the run, which releases the lead.
-  The same fix covers the worse-to-debug shape of it: the channel is per origin, not per page, so a forgotten second tab of the site used to hold the lead over the tab being used.
+  A second tab of the site was the same bug wearing a disguise, and it needed its own fix: a `BroadcastChannel` is scoped to the **origin**, not to the page, so one tab's leader was refusing another tab's frames.
+  Each page now mints a `peer` id and hands it to both of its frames (`demo/?peer=…`), and `mirror.ts` puts it in the channel name - frames of one page still elect between themselves, frames of another are not even audible.
+  The full-screen demo passes no `peer` and keeps the bare name, which is right: it is the only frame there is.
+- **And the picker no longer trusts that the ask arrived.**
+  There is more than one way for a scenario not to start - a lost election, a frame mid-navigation, modules that have not evaluated - and from the page every one of them looks identical: nothing happens, with nothing on screen to say why.
+  So after dispatching, it checks whether that frame is really running what was asked for, and if not reloads it with the scenario in the URL, which is the one path that cannot fail for any of those reasons because it is a fresh page.
+  That is what a cold frame already did; it is now what any frame does when the event did not take.
 - **Below 700px the demo stops drawing a phone.**
   A handset, drawn on a handset, at 74% of its height, is smaller than the device it stands for and still not it.
   The bezel, the lens and the scale all go, the frame takes the full width, and `fitDemoFrames` pins `--demo-scale` to 1 - so the app renders at *this* phone's viewport rather than at an idealised 390 shrunk to fit.

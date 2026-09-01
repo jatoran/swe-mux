@@ -23,6 +23,54 @@ const HOUR = 3600
 // demonstrate the half of the product that is not a terminal. Everything remaining in this
 // file is still genuinely nothing, and says so in its own diagnostic.
 
+// ------------------------------------------------------- update and plugins
+
+/**
+ * `GET /api/update`.
+ *
+ * The demo is a published build of a released version and has no daemon to ask, so the
+ * honest answer is "checked, nothing newer" - and `banner: false` is the load-bearing
+ * field, because a marketing page must not grow an update banner for a product the
+ * visitor has not installed. Answered explicitly rather than left to the unmatched-route
+ * fallback for the usual reason: `{}` reaches `shouldShowUpdateBanner` and every reader
+ * of `latest`, and the failure mode of a wrong shape is a torn-down render, not a gap.
+ */
+export function updatePayload(): unknown {
+  return {
+    enabled: false,
+    status: 'disabled',
+    current_version: 'demo',
+    checked_at: null,
+    next_check_at: null,
+    update_available: false,
+    latest: null,
+    dismissed: [],
+    banner: false,
+  }
+}
+
+/**
+ * `GET /api/plugins` and its development scan.
+ *
+ * Genuinely empty, like the automations: a demo that invented installed plugins would be
+ * claiming something about a machine that does not exist. Execution is off, which is also
+ * what the Settings page needs to explain itself rather than offer controls that cannot
+ * do anything here.
+ */
+export function pluginsPayload(): unknown {
+  return { execution_enabled: false, host_capabilities: [], development_root: '', plugins: [] }
+}
+
+export function pluginDevelopmentPayload(): unknown {
+  return {
+    root: '',
+    exists: false,
+    candidates: [],
+    truncated: false,
+    diagnostic: 'The demo has no filesystem to scan for plugins in development.',
+  }
+}
+
 // ------------------------------------------------------------------- library
 
 export function promptsPayload(): unknown {

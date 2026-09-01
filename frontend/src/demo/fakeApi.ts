@@ -26,8 +26,8 @@ import {
   agentEnvironmentPayload, attentionInboxPayload, automationDashboardPayload,
   automationMatrixPayload, clipboardPayload, filesTreePayload, grantsPayload,
   historyProjectsPayload, injectionSafetyPayload, lastReplyPayload, projectAutomationsPayload,
-  projectConfigPayload, promptsPayload, providerAccountsPayload, schedulesPayload,
-  skillsPayload, usagePayload,
+  pluginDevelopmentPayload, pluginsPayload, projectConfigPayload, promptsPayload,
+  providerAccountsPayload, schedulesPayload, skillsPayload, updatePayload, usagePayload,
 } from './supportPayloads.ts'
 import {
   deliverQueuedMessage, landEventsPayload, landPayload, makeLandRequest, makeQueueMessage,
@@ -720,6 +720,15 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: /^\/api\/grants$/, handler: () => grantsPayload() },
   { method: 'GET', pattern: /^\/api\/clipboard$/, handler: () => clipboardPayload() },
   { method: 'GET', pattern: /^\/api\/prompts$/, handler: () => promptsPayload() },
+  // Three routes the app asks for on its own schedule rather than on a visitor's press,
+  // which is why they were the ones still falling through to `{}` in a live console.
+  { method: 'GET', pattern: /^\/api\/update$/, handler: () => updatePayload() },
+  { method: 'POST', pattern: /^\/api\/update\/(check|dismiss)$/, handler: () => updatePayload() },
+  { method: 'GET', pattern: /^\/api\/plugins$/, handler: () => pluginsPayload() },
+  { method: 'GET', pattern: /^\/api\/plugins\/development$/, handler: () => pluginDevelopmentPayload() },
+  // The workspace tells the daemon which Project it is watching. Nothing to record here -
+  // the demo has one visitor - but an explicit `{ok:true}` says that was considered.
+  { method: 'PUT', pattern: /^\/api\/projects\/([^/]+)\/watch$/, handler: () => ({ ok: true }) },
   { method: 'GET', pattern: /^\/api\/history$/, handler: () => ({ items: [], total: 0 }) },
   { method: 'GET', pattern: /^\/api\/history\/projects$/, handler: () => historyProjectsPayload() },
   { method: 'GET', pattern: /^\/api\/history\/backfills$/, handler: () => ({ items: [] }) },
